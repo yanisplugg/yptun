@@ -166,10 +166,10 @@ Standing on the shoulders of giants:
 
 <br><br>
 
-> *«Я из повиновения вышел — за флажки: жажда жизни сильней!»*
-> *"I broke out of obedience — past the flags: the thirst for life is stronger!"*
+> *"A nation that is afraid to let its people judge the truth and falsehood in an open market is a nation that is afraid of its people."*
+> *«Нация, которая боится позволить своему народу судить о правде и лжи на открытом рынке, — это нация, которая боится своего народа.»*
 >
-> — **Владимир Высоцкий**, «Охота на волков»
+> — **John F. Kennedy**
 
 <br>
 
