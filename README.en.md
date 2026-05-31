@@ -4,7 +4,7 @@
 
 ### Fast, censorship-resistant VPN for Android
 
-*VLESS · Reality · XHTTP over **Xray** & **sing-box** — and, above all, the signature **olcRTC** transport that makes your traffic look like a video call.*
+*VLESS · Reality · XHTTP over **Xray** & **sing-box** — and, above all, sheer versatility: even **olcRTC** support that makes your traffic look like a video call.*
 
 <br>
 
@@ -27,9 +27,9 @@
 ## ✨ Why YPtun?
 
 Most VPN clients give you one engine and one way to connect. **YPtun gives you a toolbox.**
-It bundles **two proxy cores** and the signature **olcRTC** transport in one app, so when one method gets blocked, you switch and keep going.
+It bundles **two proxy cores** plus **olcRTC** support in one app, so when one method gets blocked, you switch and keep going.
 
-> ⭐ **The standout feature is olcRTC** — the project's own transport that routes traffic through real video-conferencing services (Jazz, Telemost, WB Stream, Jitsi). To DPI it's an ordinary call, not a proxy — so it keeps working where plain protocols already get cut.
+> ⭐ **The standout is sheer versatility.** Xray and sing-box, every common protocol and transport, import almost anything — plus support for **olcRTC** ([openlibrecommunity/olcrtc](https://github.com/openlibrecommunity/olcrtc)), which routes traffic through real video-conferencing services (Jazz, Telemost, WB Stream, Jitsi) so it looks like an ordinary call to DPI. Block one path and there are several more right next to it.
 
 > Built for places where the internet fights back. 🌐
 
@@ -44,7 +44,7 @@ It bundles **two proxy cores** and the signature **olcRTC** transport in one app
 | 🔀 **Dual cores** | Runs on **Xray** *or* **sing-box** — auto-picked per protocol, or force one. |
 | 🧬 **Protocols** | VLESS · VMess · Trojan · Shadowsocks |
 | 🚇 **Transports** | TCP · WS · gRPC · HTTPUpgrade · **XHTTP** · TLS · **Reality** · uTLS fingerprints |
-| ⭐ **olcRTC** *(the standout)* | The signature transport ([olcRTC](https://github.com/openlibrecommunity/olcrtc)) — traffic rides real video-call services, so to DPI it's an ordinary call, not a proxy. |
+| 🎭 **olcRTC support** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport (by openlibrecommunity) — traffic rides real video-call services, so to DPI it's an ordinary call, not a proxy. |
 | 📥 **Smart import** | vless/vmess/trojan/ss links, base64 blobs, panel JSON, **full raw Xray / sing-box configs**, and olcRTC URIs. |
 | 🧭 **DNS & routing** | Import a full Xray config (honored *verbatim*), or flip the built-in **"Block RU domains"** switch. |
 | 🧱 **DPI evasion** | TLS fragmentation + connection multiplexing. |
@@ -133,7 +133,7 @@ over previous versions.
 ```
 YPtun/      Kotlin Multiplatform app — Compose UI, Android VpnService, engine wiring
 cores/      Go glue: one gomobile AAR bundling sing-box (libbox) + olcRTC + Xray bridge
-olcrtc/     olcRTC — the signature transport  (vendored)
+olcrtc/     olcRTC — disguise transport       (third-party, vendored)
 sing-box/   sing-box / libbox, pinned v1.12.25 (vendored)
 ```
 
