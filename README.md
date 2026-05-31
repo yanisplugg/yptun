@@ -161,5 +161,18 @@ Standing on the shoulders of giants:
 
 <div align="center">
 <br>
+
+<img src="docs/no-rkn.svg" alt="No RKN" width="140">
+
+<br><br>
+
+> *«Я из повиновения вышел — за флажки: жажда жизни сильней!»*
+> *"I broke out of obedience — past the flags: the thirst for life is stronger!"*
+>
+> — **Владимир Высоцкий**, «Охота на волков»
+
+<br>
+
 <sub>Made for a freer internet. ⭐ the repo if it helps you.</sub>
+
 </div>
