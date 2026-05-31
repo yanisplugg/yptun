@@ -31,6 +31,8 @@ It bundles **two proxy cores** and a **stealth transport** in one app, so when o
 
 > Built for places where the internet fights back. 🌐
 
+> 🖥️ **Desktop coming soon** — native **Windows** and **Linux** builds are in the works.
+
 ---
 
 ## 🚀 Features
@@ -132,6 +134,16 @@ cores/      Go glue: one gomobile AAR bundling sing-box (libbox) + olcRTC + Xray
 olcrtc/     WebRTC stealth transport          (vendored)
 sing-box/   sing-box / libbox, pinned v1.12.25 (vendored)
 ```
+
+---
+
+## 🗺️ Roadmap
+
+- [x] Android release
+- [ ] 🪟 **Windows** desktop build — *coming soon*
+- [ ] 🐧 **Linux** desktop build — *coming soon*
+
+> The shared engine already runs on the JVM (`desktopApp`), so desktop builds are next in line.
 
 ---
 
