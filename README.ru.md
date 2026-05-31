@@ -162,7 +162,7 @@ sing-box/   sing-box / libbox, пин v1.12.25   (вендорено)
 <div align="center">
 <br>
 
-<img src="docs/no-rkn.svg" alt="Нет РКН" width="140">
+<img src="docs/no-rkn.jpg" alt="Нет РКН" width="150">
 
 <br><br>
 

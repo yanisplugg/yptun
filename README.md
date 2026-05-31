@@ -162,7 +162,7 @@ Standing on the shoulders of giants:
 <div align="center">
 <br>
 
-<img src="docs/no-rkn.svg" alt="No RKN" width="140">
+<img src="docs/no-rkn.jpg" alt="No RKN" width="150">
 
 <br><br>
 
