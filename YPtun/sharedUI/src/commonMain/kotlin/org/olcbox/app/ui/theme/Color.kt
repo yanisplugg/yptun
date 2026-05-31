@@ -1,0 +1,76 @@
+package org.olcbox.app.ui.theme
+
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.graphics.Color
+
+// Default black theme (v2rayTun-like): pure-black background, dark grey cards, blue accent.
+internal val OlcboxDarkColorScheme = darkColorScheme(
+    primary = Color(0xFF3B8EF7),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFF12395F),
+    onPrimaryContainer = Color(0xFFD3E4FF),
+    inversePrimary = Color(0xFF2E6FC0),
+    secondary = Color(0xFF9FC0E8),
+    onSecondary = Color(0xFF0E2236),
+    secondaryContainer = Color(0xFF21384E),
+    onSecondaryContainer = Color(0xFFD3E4FF),
+    tertiary = Color(0xFF9FCAFF),
+    onTertiary = Color(0xFF00325A),
+    tertiaryContainer = Color(0xFF1B3A5B),
+    onTertiaryContainer = Color(0xFFD3E4FF),
+    background = Color(0xFF000000),
+    onBackground = Color(0xFFECEDEF),
+    surface = Color(0xFF000000),
+    onSurface = Color(0xFFECEDEF),
+    surfaceVariant = Color(0xFF2A2C2F),
+    onSurfaceVariant = Color(0xFFAEB1B6),
+    surfaceContainerLowest = Color(0xFF000000),
+    surfaceContainerLow = Color(0xFF0E0F11),
+    surfaceContainer = Color(0xFF161719),
+    surfaceContainerHigh = Color(0xFF1F2123),
+    surfaceContainerHighest = Color(0xFF2A2C2E),
+    inverseSurface = Color(0xFFECEDEF),
+    inverseOnSurface = Color(0xFF2E3133),
+    outline = Color(0xFF3C3E42),
+    outlineVariant = Color(0xFF2A2C2E),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6)
+)
+
+internal val OlcboxLightColorScheme = lightColorScheme(
+    primary = Color(0xFF904B49),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFFFDAD6),
+    onPrimaryContainer = Color(0xFF3B0808),
+    inversePrimary = Color(0xFFFFB4AB),
+    secondary = Color(0xFF775653),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFFFDAD6),
+    onSecondaryContainer = Color(0xFF2C1513),
+    tertiary = Color(0xFF735A2C),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFFFDDB0),
+    onTertiaryContainer = Color(0xFF281800),
+    background = Color(0xFFFFF8F7),
+    onBackground = Color(0xFF231918),
+    surface = Color(0xFFFFF8F7),
+    onSurface = Color(0xFF231918),
+    surfaceVariant = Color(0xFFF5DDDA),
+    onSurfaceVariant = Color(0xFF534341),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFFFF0EE),
+    surfaceContainer = Color(0xFFFFE9E7),
+    surfaceContainerHigh = Color(0xFFF9DEDB),
+    surfaceContainerHighest = Color(0xFFF1D6D3),
+    inverseSurface = Color(0xFF392E2D),
+    inverseOnSurface = Color(0xFFFFEDEA),
+    outline = Color(0xFF857370),
+    outlineVariant = Color(0xFFD8C2BF),
+    error = Color(0xFFBA1A1A),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFFFDAD6),
+    onErrorContainer = Color(0xFF410002)
+)

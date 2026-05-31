@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Quick Settings tile -->
+    <string name="qs_tile_label">YPtun</string>
+    <string name="qs_tile_connected">Connected</string>
+    <string name="qs_tile_connecting">Connecting…</string>
+    <string name="qs_tile_disconnected">Disconnected</string>
+</resources>

@@ -1,0 +1,336 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		9A0000010000000000000001 /* OlcboxIosApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0000010000000000000011 /* OlcboxIosApp.swift */; };
+		9A0000010000000000000002 /* SwiftPlatformBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0000010000000000000012 /* SwiftPlatformBridge.swift */; };
+		9A0000010000000000000003 /* SwiftOlcRtcManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0000010000000000000013 /* SwiftOlcRtcManager.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		9A0000010000000000000010 /* iosApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iosApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9A0000010000000000000011 /* OlcboxIosApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OlcboxIosApp.swift; sourceTree = "<group>"; };
+		9A0000010000000000000012 /* SwiftPlatformBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftPlatformBridge.swift; sourceTree = "<group>"; };
+		9A0000010000000000000013 /* SwiftOlcRtcManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftOlcRtcManager.swift; sourceTree = "<group>"; };
+		9A0000010000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		9A0000010000000000000020 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		9A0000010000000000000030 = {
+			isa = PBXGroup;
+			children = (
+				9A0000010000000000000031 /* iosApp */,
+				9A0000010000000000000032 /* Frameworks */,
+				9A0000010000000000000033 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9A0000010000000000000031 /* iosApp */ = {
+			isa = PBXGroup;
+			children = (
+				9A0000010000000000000011 /* OlcboxIosApp.swift */,
+				9A0000010000000000000012 /* SwiftPlatformBridge.swift */,
+				9A0000010000000000000013 /* SwiftOlcRtcManager.swift */,
+				9A0000010000000000000014 /* Info.plist */,
+			);
+			path = iosApp;
+			sourceTree = "<group>";
+		};
+		9A0000010000000000000032 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		9A0000010000000000000033 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				9A0000010000000000000010 /* iosApp.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		9A0000010000000000000040 /* iosApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9A0000010000000000000080 /* Build configuration list for PBXNativeTarget "iosApp" */;
+			buildPhases = (
+				9A0000010000000000000050 /* Build Shared Frameworks */,
+				9A0000010000000000000060 /* Sources */,
+				9A0000010000000000000020 /* Frameworks */,
+				9A0000010000000000000070 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = iosApp;
+			productName = iosApp;
+			productReference = 9A0000010000000000000010 /* iosApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9A0000010000000000000090 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					9A0000010000000000000040 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = 9A0000010000000000000091 /* Build configuration list for PBXProject "iosApp" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 9A0000010000000000000030;
+			productRefGroup = 9A0000010000000000000033 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				9A0000010000000000000040 /* iosApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		9A0000010000000000000070 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		9A0000010000000000000050 /* Build Shared Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build Shared Frameworks";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nexport PATH=\"$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\nif [ -z \"$ARCHS\" ] || [ \"$ARCHS\" = \"undefined_arch\" ]; then\n  export ARCHS=arm64\nfi\nGRADLE_VERSION_ARGS=\"\"\nif [ -n \"$OLCBOX_VERSION\" ]; then\n  GRADLE_VERSION_ARGS=\"-Polcbox.version=$OLCBOX_VERSION\"\nfi\ncd \"$SRCROOT/..\"\n./gradlew $GRADLE_VERSION_ARGS :sharedUI:buildOlcrtcIosXcframework :sharedUI:embedAndSignAppleFrameworkForXcode --no-configuration-cache\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		9A0000010000000000000060 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9A0000010000000000000001 /* OlcboxIosApp.swift in Sources */,
+				9A0000010000000000000002 /* SwiftPlatformBridge.swift in Sources */,
+				9A0000010000000000000003 /* SwiftOlcRtcManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		9A00000100000000000000A0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		9A00000100000000000000A1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		9A00000100000000000000B0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+				);
+				"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../sharedUI/build/generated/olcrtc/ios/OlcRtcMobile.xcframework/ios-arm64",
+					"$(SRCROOT)/../sharedUI/build/bin/iosArm64/$(KOTLIN_FRAMEWORK_BUILD_TYPE)Framework",
+				);
+				"FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../sharedUI/build/generated/olcrtc/ios/OlcRtcMobile.xcframework/ios-arm64_x86_64-simulator",
+					"$(SRCROOT)/../sharedUI/build/bin/iosSimulatorArm64/$(KOTLIN_FRAMEWORK_BUILD_TYPE)Framework",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iosApp/Info.plist;
+				KOTLIN_FRAMEWORK_BUILD_TYPE = debug;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-framework",
+					SharedUI,
+					"-framework",
+					OlcRtcMobile,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.olcbox.app.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		9A00000100000000000000B1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+				);
+				"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../sharedUI/build/generated/olcrtc/ios/OlcRtcMobile.xcframework/ios-arm64",
+					"$(SRCROOT)/../sharedUI/build/bin/iosArm64/$(KOTLIN_FRAMEWORK_BUILD_TYPE)Framework",
+				);
+				"FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../sharedUI/build/generated/olcrtc/ios/OlcRtcMobile.xcframework/ios-arm64_x86_64-simulator",
+					"$(SRCROOT)/../sharedUI/build/bin/iosSimulatorArm64/$(KOTLIN_FRAMEWORK_BUILD_TYPE)Framework",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iosApp/Info.plist;
+				KOTLIN_FRAMEWORK_BUILD_TYPE = release;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-framework",
+					SharedUI,
+					"-framework",
+					OlcRtcMobile,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.olcbox.app.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		9A0000010000000000000080 /* Build configuration list for PBXNativeTarget "iosApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9A00000100000000000000B0 /* Debug */,
+				9A00000100000000000000B1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9A0000010000000000000091 /* Build configuration list for PBXProject "iosApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9A00000100000000000000A0 /* Debug */,
+				9A00000100000000000000A1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9A0000010000000000000090 /* Project object */;
+}

@@ -1,0 +1,39 @@
+*.iml
+.gradle
+.idea
+.kotlin
+.DS_Store
+build
+*/build
+captures
+.externalNativeBuild
+.cxx
+local.properties
+xcuserdata/
+Pods/
+*.jks
+*.gpg
+*yarn.lock
+dist/
+
+# Android build artifacts
+*.apk
+*.aar
+*.ap_
+
+# VPN Configs & Caches
+*_cached.json
+*_cached.binary
+config.json
+tun2socks.yaml
+tun2socks.conf
+
+# Native build
+.externalNativeBuild
+.cxx
+obj/
+bin/
+keystore.properties
+release-keystore.jks
+.!80165!.DS_Store
+.zed

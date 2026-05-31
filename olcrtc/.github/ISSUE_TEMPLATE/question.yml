@@ -1,0 +1,73 @@
+name: Question / Вопрос
+description: Вопрос по работе, конфигурации, поведению olcrtc.
+title: "[question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Перед заполнением:
+        - Прочти [docs/configuration.md](https://github.com/openlibrecommunity/olcrtc/blob/main/docs/configuration.md), [docs/fast.md](https://github.com/openlibrecommunity/olcrtc/blob/main/docs/fast.md), [docs/manual.md](https://github.com/openlibrecommunity/olcrtc/blob/main/docs/manual.md).
+        - Общие "как запустить" - [Telegram-чат](https://t.me/openlibrecommunitychat/91706), там быстрее ответят.
+        - Если поведение похоже на баг (отвалы, таймауты, краши) - заводи Bug report.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Pre-flight
+      options:
+        - label: Я прочитал документацию в [docs](https://github.com/openlibrecommunity/olcrtc/tree/main/docs) и не нашёл ответа.
+          required: true
+        - label: Я искал похожие issue (открытые и закрытые) и не нашёл дубликата.
+          required: true
+        - label: Это относится к ядру `olcrtc`, а не к GUI-клиенту.
+          required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Вопрос
+      description: Сформулируй конкретно, одним абзацем.
+      placeholder: |
+        Как корректно настроить failover между jitsi+datachannel и wbstream+vp8channel, если...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: auth.provider
+      description: Если вопрос привязан к конкретному провайдеру.
+      options:
+        - jitsi
+        - telemost
+        - wbstream
+        - other
+        - не относится
+    validations:
+      required: false
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: net.transport
+      description: Если вопрос привязан к конкретному транспорту.
+      options:
+        - datachannel
+        - vp8channel
+        - seichannel
+        - videochannel
+        - не относится
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Контекст
+      description: |
+        Что ты уже сделал, какая ОС, что ожидаешь увидеть.
+        Если есть конфиг - приложи (с вычищенными `crypto.key`, `room.id`, токенами и кредами).
+      render: yaml
+    validations:
+      required: false

@@ -1,0 +1,76 @@
+name: Feature request / Фича
+description: Предложить новую функциональность, провайдер, транспорт, интеграцию.
+title: "[feat]: "
+labels: ["enhancement"]
+type: Feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Перед заполнением:
+        - Проверь, что фичи ещё нет в ветке `master` или в [закрепленных задачах](https://github.com/openlibrecommunity/olcrtc/issues).
+        - Не предлагай бред вида "сделайте клиент под iOS / встройте в openwrt люси-плагин".
+        - Кастомные/нишевые интеграции можно и нужно предлагать .
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Pre-flight
+      options:
+        - label: Я искал похожие issue (открытые и закрытые) и не нашёл дубликата.
+          required: true
+        - label: Это относится к ядру `olcrtc`, а не к GUI-клиенту.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Проблема / use-case
+      description: Что не работает или работает неудобно сейчас.
+      placeholder: |
+        Сейчас приходится запускать отдельный процесс на каждую room - это неудобно когда...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое решение
+      description: Конкретно, что добавить/изменить. Желательно с уровнем деталей "какой пакет/конфиг/API".
+      placeholder: |
+        Перенести `internal/app/session` в `pkg/session` и сделать стабильным API для встраивания.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы
+      description: Что ты пробовал/рассматривал и почему оно не подходит.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Область
+      multiple: true
+      options:
+        - auth provider (jitsi/telemost/wbstream/новый)
+        - net transport (datachannel/vp8/sei/video/новый)
+        - mux / control / liveness
+        - конфиг / CLI / URI / sub
+        - сборка / CI / пакетирование
+        - документация
+        - библиотечный API (`pkg/`)
+        - другое
+    validations:
+      required: true
+
+  - type: textarea
+    id: contribution
+    attributes:
+      label: Готов ли сделать PR
+      placeholder: "Да / Нет / Могу помочь с тестами"
+    validations:
+      required: true

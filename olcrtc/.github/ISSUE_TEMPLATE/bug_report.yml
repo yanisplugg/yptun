@@ -1,0 +1,210 @@
+name: Bug report / Баг
+description: Сообщить о неработающем сценарии, отвале туннеля, таймауте, краше и т.п.
+title: "[bug]: "
+labels: ["bug"]
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за репорт.
+
+        **Перед заполнением:**
+        - Проверь, что используешь актуальную версию (`master` или последний релиз).
+        - Если воспроизводишь на форке/старой ветке - обнови и проверь снова.
+        - Не сообщай о багах GUI-клиентов (olcbox, мобильные приложения) сюда - это баги ядра, GUI живёт в своих репозиториях.
+        - Если описание будет без логов и конфига, issue будет закрыт без разбора.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Pre-flight checklist
+      options:
+        - label: Я искал похожие issue (открытые и закрытые) и не нашёл дубликата.
+          required: true
+        - label: Я проверил баг на актуальной версии (`master` или последний релиз).
+          required: true
+        - label: Это баг ядра `olcrtc`, а не GUI-клиента (olcbox/мобильное приложение).
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Версия olcrtc
+      description: Тег релиза, имя ветки и git commit (`git rev-parse --short HEAD`). Если собирал из docker - пиши тег образа.
+      placeholder: "main @ a1b2c3d  /  v0.x.y  /  refactor/universal-carrier @ ef01234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: Способ сборки/запуска
+      options:
+        - Native
+        - Docker / docker compose
+        - Podman / script
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: ОС / платформа
+      multiple: true
+      options:
+        - Linux
+        - Windows
+        - MacOS
+        - Android
+        - FreeBsd
+        - OpenBSD
+        - Haiku
+        - SeL4
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: Версия ОС / архитектура
+      placeholder: "Ubuntu 24.04 x86_64 / Windows 11 24H2 / Android 14 arm64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: auth.provider
+      options:
+        - jitsi
+        - telemost
+        - wbstream
+        - other 
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: net.transport
+      options:
+        - datachannel
+        - vp8channel
+        - seichannel
+        - videochannel
+    validations:
+      required: true
+
+  - type: dropdown
+    id: side
+    attributes:
+      label: На какой стороне проявляется
+      multiple: true
+      options:
+        - srv (сервер)
+        - cnc (клиент)
+        - gen (генератор комнат)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Описание проблемы
+      description: Что происходит, что ожидалось, как часто воспроизводится.
+      placeholder: |
+        После N минут работы туннель отваливается, перезапуск клиента не помогает, лечится только перезапуском сервера.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. Запустить сервер с конфигом из вложения
+        2. Подключить клиент
+        3. Подождать ~15 минут / усыпить телефон
+        4. Попробовать открыть страницу через SOCKS - таймаут
+    validations:
+      required: true
+
+  - type: textarea
+    id: server_config
+    attributes:
+      label: Конфиг сервера (server.yaml)
+      description: |
+        **Обязательно вычисти `crypto.key`, `room.id`, `engine.token`, креды SOCKS, токены и любые другие секреты.**
+        Формат - code block YAML.
+      render: yaml
+      placeholder: |
+        mode: srv
+        auth:
+          provider: telemost
+        room:
+          id: "<REDACTED>"
+        crypto:
+          key: "<REDACTED>"
+        net:
+          transport: vp8channel
+          dns: "1.1.1.1:53"
+        data: data
+    validations:
+      required: true
+
+  - type: textarea
+    id: client_config
+    attributes:
+      label: Конфиг клиента (client.yaml)
+      description: Тот же конфиг с вычищенными секретами. Если воспроизводится только на одной стороне - допустимо вписать "не используется".
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: server_logs
+    attributes:
+      label: Логи сервера
+      description: |
+        Полные логи с момента запуска до момента ошибки.
+        Если запуск через systemd - `journalctl -u olcrtc -n 500 --no-pager`. 
+        Если docker - `docker logs <container>`.
+        Если запуск через podman - `podman logs -f <container> `.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: client_logs
+    attributes:
+      label: Логи клиента
+      description: Полные логи клиента (включая `rtc:` строки) до момента ошибки.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: network
+    attributes:
+      label: Сетевое окружение
+      description: |
+        Что между клиентом и сервером? 
+      placeholder: |
+        - Провайдер клиента: <название, страна/город>
+        - Провайдер/хостинг сервера: <Aeza / Play2Go / Дома>
+        - DPI/блокировки на клиенте: да/нет, что именно блокируется
+        - NAT/CGNAT: да/нет
+        - IPv6 на клиенте/сервере: да/нет
+        - Используется ли upstream SOCKS (`socks.proxy_addr`): да/нет
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Дополнительно
+      description: Что ещё может быть полезно - версия podman/docker, нестандартный конфиг (failover, traffic shaping, lifecycle), временные паттерны (бьёт раз в сутки, после сна и т.п.), известные обходы.
+    validations:
+      required: false

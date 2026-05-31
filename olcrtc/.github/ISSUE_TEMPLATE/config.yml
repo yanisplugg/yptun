@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Чат сообщества (Telegram)
+    url: https://t.me/openlibrecommunity
+    about: Общие вопросы, помощь по запуску, обсуждения. Перед созданием issue загляни сюда.
+  - name: Документация
+    url: https://github.com/openlibrecommunity/olcrtc/tree/main/docs
+    about: Конфигурация, быстрый старт, формат URI, примеры YAML.
+  - name: olcbox (UI клиент)
+    url: https://github.com/alananisimov/olcbox/issues
+    about: Баги интерфейса/мобильного клиента сообщай туда, ядро olcrtc их не чинит.

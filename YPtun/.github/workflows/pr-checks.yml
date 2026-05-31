@@ -1,0 +1,78 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Gradle checks
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_NDK_VERSION: "28.2.13676358"
+
+    steps:
+      - name: Checkout olcbox
+        uses: actions/checkout@v6
+        with:
+          path: olcbox
+
+      - name: Checkout olcrtc
+        uses: actions/checkout@v6
+        with:
+          repository: alananisimov/olcrtc
+          ref: master
+          path: olcrtc
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache-dependency-path: olcrtc/go.sum
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Go mobile tooling
+        run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install github.com/magefile/mage@latest
+
+      - name: Initialize gomobile
+        working-directory: olcrtc
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+          gomobile init
+
+      - name: Run checks
+        working-directory: olcbox
+        run: |
+          export OLCRTC_REPO="${{ github.workspace }}/olcrtc"
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+          ./gradlew :sharedUI:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug --stacktrace

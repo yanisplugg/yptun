@@ -1,0 +1,652 @@
+name: Build Olcbox Releases
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, universal-carrier ]
+
+permissions:
+  contents: read
+
+env:
+  OLCBOX_VERSION_MAJOR_MINOR: "1.0"
+  # Keep release builds on the matching olcrtc ref until the universal carrier
+  # changes land in olcrtc master.
+  OLCBOX_OLCRTC_REF: "master"
+  # The alananisimov/olcbox workflow was recreated after 1.0.69, so
+  # github.run_number restarted. Run #6 must publish Android versionCode 70.
+  OLCBOX_RELEASE_RUN_NUMBER_BASE: "5"
+  OLCBOX_RELEASE_PATCH_BASE: "69"
+
+jobs:
+  release_version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_code: ${{ steps.version.outputs.version_code }}
+      olcrtc_ref: ${{ steps.version.outputs.olcrtc_ref }}
+      nightly_tag: ${{ steps.version.outputs.nightly_tag }}
+      nightly_title: ${{ steps.version.outputs.nightly_title }}
+
+    steps:
+      - name: Resolve release version
+        id: version
+        run: |
+          patch=$((OLCBOX_RELEASE_PATCH_BASE + GITHUB_RUN_NUMBER - OLCBOX_RELEASE_RUN_NUMBER_BASE))
+
+          if [ "$patch" -le "$OLCBOX_RELEASE_PATCH_BASE" ]; then
+            echo "Computed Android versionCode ${patch} is not greater than ${OLCBOX_RELEASE_PATCH_BASE}" >&2
+            exit 1
+          fi
+
+          echo "version=${OLCBOX_VERSION_MAJOR_MINOR}.${patch}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${patch}" >> "$GITHUB_OUTPUT"
+
+          if [ "${GITHUB_REF_NAME}" = "universal-carrier" ]; then
+            echo "olcrtc_ref=${OLCBOX_OLCRTC_REF}" >> "$GITHUB_OUTPUT"
+            echo "nightly_tag=nightly-universal-carrier" >> "$GITHUB_OUTPUT"
+            echo "nightly_title=Nightly Olcbox universal-carrier builds" >> "$GITHUB_OUTPUT"
+          else
+            echo "olcrtc_ref=${OLCBOX_OLCRTC_REF}" >> "$GITHUB_OUTPUT"
+            echo "nightly_tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "nightly_title=Nightly Olcbox builds" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-windows:
+    needs: release_version
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      OLCBOX_VERSION: ${{ needs.release_version.outputs.version }}
+      OLCBOX_VERSION_CODE: ${{ needs.release_version.outputs.version_code }}
+      WINDOWS_CODESIGN_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_BASE64 }}
+      WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
+      WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+
+    steps:
+      - name: Checkout olcbox
+        uses: actions/checkout@v6
+        with:
+          path: olcbox
+
+      - name: Checkout olcrtc
+        uses: actions/checkout@v6
+        with:
+          repository: openlibrecommunity/olcrtc
+          ref: ${{ needs.release_version.outputs.olcrtc_ref }}
+          path: olcrtc
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          architecture: x64
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: olcrtc/go.sum
+
+      - name: Build Windows installers and portable zip
+        shell: pwsh
+        working-directory: olcbox
+        run: |
+          $env:OLCRTC_REPO="${{ github.workspace }}\olcrtc"
+          .\gradlew.bat "-Polcbox.version=$env:OLCBOX_VERSION" :desktopApp:packageReleaseExe :desktopApp:packageReleaseMsi :desktopApp:packageReleasePortableZip --stacktrace
+
+      - name: Prepare asset
+        shell: pwsh
+        working-directory: olcbox
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $exe = Get-ChildItem "desktopApp/build/compose/binaries/main-release/exe/*.exe" | Select-Object -First 1
+          $msi = Get-ChildItem "desktopApp/build/compose/binaries/main-release/msi/*.msi" | Select-Object -First 1
+          $zip = Get-ChildItem "desktopApp/build/compose/binaries/main-release/portable/*.zip" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $zip) {
+            $portableDir = "desktopApp/build/compose/binaries/main-release/portable"
+            $appRoot = "desktopApp/build/compose/binaries/main-release/app"
+            $appImage = Get-ChildItem $appRoot -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -eq $appImage) {
+              throw "Portable app image not found under $appRoot"
+            }
+            New-Item -ItemType Directory -Force $portableDir | Out-Null
+            $portableZip = Join-Path $portableDir "Olcbox-windows-amd64-portable.zip"
+            Compress-Archive -Path $appImage.FullName -DestinationPath $portableZip -Force
+            $zip = Get-Item $portableZip
+          }
+          Copy-Item $exe.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-amd64.exe"
+          Copy-Item $msi.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-amd64.msi"
+          Copy-Item $zip.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-amd64-portable.zip"
+
+      - name: Sign Windows release assets
+        shell: pwsh
+        working-directory: olcbox
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)) {
+            Write-Host "Windows code signing secrets are not configured; publishing unsigned assets."
+            exit 0
+          }
+
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signtool) {
+            throw "signtool.exe was not found on the Windows runner"
+          }
+
+          $certPath = Join-Path $env:RUNNER_TEMP "olcbox-windows-codesign.pfx"
+          [IO.File]::WriteAllBytes(
+            $certPath,
+            [Convert]::FromBase64String(($env:WINDOWS_CODESIGN_CERTIFICATE_BASE64 -replace '\s', ''))
+          )
+
+          function Sign-File([string]$Path) {
+            & $signtool.FullName sign `
+              /fd SHA256 `
+              /tr $env:WINDOWS_CODESIGN_TIMESTAMP_URL `
+              /td SHA256 `
+              /f $certPath `
+              /p $env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD `
+              $Path
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to sign $Path"
+            }
+          }
+
+          $exeAsset = Get-ChildItem "dist/Olcbox-*-windows-amd64.exe" | Select-Object -First 1
+          $msiAsset = Get-ChildItem "dist/Olcbox-*-windows-amd64.msi" | Select-Object -First 1
+          Sign-File $exeAsset.FullName
+          Sign-File $msiAsset.FullName
+
+          $portableZip = (Get-ChildItem "dist/Olcbox-*-windows-amd64-portable.zip" | Select-Object -First 1).FullName
+          $portableDir = Join-Path $env:RUNNER_TEMP "olcbox-portable-sign"
+          Remove-Item $portableDir -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $portableZip -DestinationPath $portableDir
+          Get-ChildItem $portableDir -Recurse -Filter *.exe | ForEach-Object {
+            Sign-File $_.FullName
+          }
+          Remove-Item $portableZip -Force
+          Compress-Archive -Path (Join-Path $portableDir '*') -DestinationPath $portableZip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Olcbox-windows-amd64
+          path: |
+            olcbox/dist/Olcbox-*-windows-amd64.exe
+            olcbox/dist/Olcbox-*-windows-amd64.msi
+            olcbox/dist/Olcbox-*-windows-amd64-portable.zip
+
+  build-macos:
+    needs: release_version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      OLCBOX_VERSION: ${{ needs.release_version.outputs.version }}
+      OLCBOX_VERSION_CODE: ${{ needs.release_version.outputs.version_code }}
+
+    steps:
+      - name: Checkout olcbox
+        uses: actions/checkout@v6
+        with:
+          path: olcbox
+
+      - name: Checkout olcrtc
+        uses: actions/checkout@v6
+        with:
+          repository: openlibrecommunity/olcrtc
+          ref: ${{ needs.release_version.outputs.olcrtc_ref }}
+          path: olcrtc
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: olcrtc/go.sum
+
+      - name: Build macOS DMG
+        working-directory: olcbox
+        run: |
+          export OLCRTC_REPO="${{ github.workspace }}/olcrtc"
+          ./gradlew -Polcbox.version="${OLCBOX_VERSION}" :desktopApp:packageReleaseDmg --stacktrace
+
+      - name: Prepare asset
+        working-directory: olcbox
+        run: |
+          mkdir -p dist
+          cp desktopApp/build/compose/binaries/main-release/dmg/*.dmg "dist/Olcbox-${OLCBOX_VERSION}-macos-${{ matrix.arch }}.dmg"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Olcbox-macos-${{ matrix.arch }}-dmg
+          path: olcbox/dist/Olcbox-*-macos-${{ matrix.arch }}.dmg
+
+  build-linux:
+    needs: release_version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OLCBOX_VERSION: ${{ needs.release_version.outputs.version }}
+      OLCBOX_VERSION_CODE: ${{ needs.release_version.outputs.version_code }}
+
+    steps:
+      - name: Checkout olcbox
+        uses: actions/checkout@v6
+        with:
+          path: olcbox
+
+      - name: Checkout olcrtc
+        uses: actions/checkout@v6
+        with:
+          repository: openlibrecommunity/olcrtc
+          ref: ${{ needs.release_version.outputs.olcrtc_ref }}
+          path: olcrtc
+          submodules: recursive
+
+      - name: Install Linux packaging deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y file
+
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: olcrtc/go.sum
+
+      - name: Setup appimagetool
+        run: |
+          curl -L -o /tmp/appimagetool.AppImage \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool.AppImage
+
+      - name: Build Linux AppImage
+        working-directory: olcbox
+        run: |
+          export OLCRTC_REPO="${{ github.workspace }}/olcrtc"
+          export APPIMAGETOOL=/tmp/appimagetool.AppImage
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          ./gradlew -Polcbox.version="${OLCBOX_VERSION}" :desktopApp:packageReleaseLinuxAppImage --stacktrace
+
+      - name: Prepare asset
+        working-directory: olcbox
+        run: |
+          mkdir -p dist
+          cp desktopApp/build/compose/binaries/main-release/appimage/*.AppImage "dist/Olcbox-${OLCBOX_VERSION}-linux-amd64.AppImage"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Olcbox-linux-amd64-appimage
+          path: olcbox/dist/Olcbox-*-linux-amd64.AppImage
+
+  build-android:
+    needs: release_version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      OLCBOX_VERSION: ${{ needs.release_version.outputs.version }}
+      OLCBOX_VERSION_CODE: ${{ needs.release_version.outputs.version_code }}
+      ANDROID_NDK_VERSION: "28.2.13676358"
+      ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+      ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout olcbox
+        uses: actions/checkout@v6
+        with:
+          path: olcbox
+
+      - name: Checkout olcrtc
+        uses: actions/checkout@v6
+        with:
+          repository: openlibrecommunity/olcrtc
+          ref: ${{ needs.release_version.outputs.olcrtc_ref }}
+          path: olcrtc
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: olcrtc/go.sum
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Go mobile tooling
+        run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install github.com/magefile/mage@latest
+
+      - name: Initialize gomobile
+        working-directory: olcrtc
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+          gomobile init
+
+      - name: Configure Android release signing
+        working-directory: olcbox
+        run: |
+          if [ -n "${ANDROID_RELEASE_KEYSTORE_BASE64}" ] &&
+             [ -n "${ANDROID_RELEASE_STORE_PASSWORD}" ] &&
+             [ -n "${ANDROID_RELEASE_KEY_ALIAS}" ] &&
+             [ -n "${ANDROID_RELEASE_KEY_PASSWORD}" ]; then
+            printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | tr -d '\r\n' | base64 --decode > release-keystore.jks
+            cat > keystore.properties <<EOF
+          storeFile=release-keystore.jks
+          storePassword=${ANDROID_RELEASE_STORE_PASSWORD}
+          keyAlias=${ANDROID_RELEASE_KEY_ALIAS}
+          keyPassword=${ANDROID_RELEASE_KEY_PASSWORD}
+          EOF
+          else
+            echo "Android production APK requires signing secrets:"
+            echo "ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_STORE_PASSWORD, ANDROID_RELEASE_KEY_ALIAS, ANDROID_RELEASE_KEY_PASSWORD"
+            exit 1
+          fi
+
+      - name: Build production APK
+        working-directory: olcbox
+        run: |
+          export OLCRTC_REPO="${{ github.workspace }}/olcrtc"
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+          ./gradlew -Polcbox.version="${OLCBOX_VERSION}" -Polcbox.versionCode="${OLCBOX_VERSION_CODE}" :sharedUI:jvmTest :androidApp:assembleRelease --stacktrace
+
+      - name: Prepare universal Android release asset
+        working-directory: olcbox
+        run: |
+          mkdir -p dist
+          release_apk="$(find androidApp/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | sort | head -n 1)"
+          if [ -z "${release_apk}" ]; then
+            echo "Android release APK was not found" >&2
+            exit 1
+          fi
+          cp "${release_apk}" "dist/Olcbox-${OLCBOX_VERSION}-android-release.apk"
+
+      - name: Build armeabi-v7a production APK
+        working-directory: olcbox
+        run: |
+          export OLCRTC_REPO="${{ github.workspace }}/olcrtc"
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+          ./gradlew -Polcbox.version="${OLCBOX_VERSION}" -Polcbox.versionCode="${OLCBOX_VERSION_CODE}" -Polcbox.android.abiFilters=armeabi-v7a :androidApp:clean :androidApp:assembleRelease --stacktrace
+
+      - name: Prepare armeabi-v7a Android release asset
+        working-directory: olcbox
+        run: |
+          release_apk="$(find androidApp/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | sort | head -n 1)"
+          if [ -z "${release_apk}" ]; then
+            echo "Android armeabi-v7a release APK was not found" >&2
+            exit 1
+          fi
+          cp "${release_apk}" "dist/Olcbox-${OLCBOX_VERSION}-android-armeabi-v7a-release.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Olcbox-android-apks
+          path: |
+            olcbox/dist/Olcbox-*-android-release.apk
+            olcbox/dist/Olcbox-*-android-armeabi-v7a-release.apk
+
+  build-ios:
+    needs: release_version
+    runs-on: macos-latest
+    permissions:
+      contents: read
+
+    env:
+      OLCBOX_VERSION: ${{ needs.release_version.outputs.version }}
+      OLCBOX_VERSION_CODE: ${{ needs.release_version.outputs.version_code }}
+
+    steps:
+      - name: Checkout olcbox
+        uses: actions/checkout@v6
+        with:
+          path: olcbox
+
+      - name: Checkout olcrtc
+        uses: actions/checkout@v6
+        with:
+          repository: openlibrecommunity/olcrtc
+          ref: ${{ needs.release_version.outputs.olcrtc_ref }}
+          path: olcrtc
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Select Xcode 26
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '^26.0'
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: olcrtc/go.sum
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Go mobile tooling
+        run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+
+      - name: Initialize gomobile
+        working-directory: olcrtc
+        run: |
+          gomobile init
+
+      - name: Build unsigned iOS app
+        working-directory: olcbox
+        run: |
+          export OLCRTC_REPO="${{ github.workspace }}/olcrtc"
+          xcodebuild \
+            -project iosApp/iosApp.xcodeproj \
+            -scheme iosApp \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build/ios-ipa/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        working-directory: olcbox
+        run: |
+          app_path="build/ios-ipa/DerivedData/Build/Products/Release-iphoneos/iosApp.app"
+          if [ ! -d "$app_path" ]; then
+            echo "iOS app product was not found at $app_path" >&2
+            exit 1
+          fi
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${OLCBOX_VERSION}" "$app_path/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${OLCBOX_VERSION_CODE}" "$app_path/Info.plist"
+
+          rm -rf build/ios-ipa/package dist
+          mkdir -p build/ios-ipa/package/Payload dist
+          cp -R "$app_path" build/ios-ipa/package/Payload/
+          (cd build/ios-ipa/package && /usr/bin/zip -qry "${GITHUB_WORKSPACE}/olcbox/dist/Olcbox-${OLCBOX_VERSION}-ios-unsigned.ipa" Payload)
+          unzip -t "dist/Olcbox-${OLCBOX_VERSION}-ios-unsigned.ipa"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Olcbox-ios-unsigned-ipa
+          path: olcbox/dist/Olcbox-${{ env.OLCBOX_VERSION }}-ios-unsigned.ipa
+
+  publish-nightly:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    needs:
+      - release_version
+      - build-windows
+      - build-macos
+      - build-linux
+      - build-android
+      - build-ios
+    concurrency:
+      group: publish-${{ github.repository }}-${{ needs.release_version.outputs.nightly_tag }}
+      cancel-in-progress: false
+    env:
+      OLCBOX_VERSION: ${{ needs.release_version.outputs.version }}
+      OLCBOX_VERSION_CODE: ${{ needs.release_version.outputs.version_code }}
+      OLCBOX_OLCRTC_REF: ${{ needs.release_version.outputs.olcrtc_ref }}
+      OLCBOX_NIGHTLY_TAG: ${{ needs.release_version.outputs.nightly_tag }}
+      OLCBOX_NIGHTLY_TITLE: ${{ needs.release_version.outputs.nightly_title }}
+
+    steps:
+      - name: Checkout olcbox
+        uses: actions/checkout@v6
+
+      - name: Clear release staging dir
+        run: rm -rf dist
+
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+
+      - name: Generate checksums and release notes
+        run: |
+          checksum_file="dist/SHA256SUMS.txt"
+          find dist -type f ! -name "SHA256SUMS.txt" | sort | while IFS= read -r file; do
+            sha256sum "$file" | awk -v name="$(basename "$file")" '{print $1 "  " name}'
+          done > "$checksum_file"
+
+          mapfile -t assets < <(find dist -type f | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release assets found"
+            exit 1
+          fi
+
+          {
+            echo "Latest desktop, Android, and iOS builds from public GitHub Actions CI."
+            echo
+            echo "- Source commit: \`${GITHUB_SHA}\`"
+            echo "- Source branch: \`${GITHUB_REF_NAME}\`"
+            echo "- olcrtc branch: \`${OLCBOX_OLCRTC_REF}\`"
+            echo "- App version: \`${OLCBOX_VERSION}\`"
+            echo "- Android versionCode: \`${OLCBOX_VERSION_CODE}\`"
+            echo "- Android APKs: universal and \`armeabi-v7a\`"
+            echo "- Workflow: \`.github/workflows/release.yml\`"
+            echo "- Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "### SHA256"
+            echo
+            echo "| Asset | SHA256 |"
+            echo "| --- | --- |"
+            awk '{printf "| `%s` | `%s` |\n", $2, $1}' "$checksum_file"
+          } > release-notes.md
+
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/**
+
+      - name: Publish public GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mapfile -t assets < <(find dist -type f | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release assets found"
+            exit 1
+          fi
+
+          if gh release view "$OLCBOX_NIGHTLY_TAG" >/dev/null 2>&1; then
+            gh release delete "$OLCBOX_NIGHTLY_TAG" --yes --cleanup-tag
+          fi
+
+          git tag -f "$OLCBOX_NIGHTLY_TAG" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$OLCBOX_NIGHTLY_TAG"
+
+          gh release create "$OLCBOX_NIGHTLY_TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$OLCBOX_NIGHTLY_TITLE" \
+            --notes-file release-notes.md \
+            --prerelease \
+            --draft
+
+          # Give GitHub a moment to make the draft release available for asset uploads.
+          sleep 5
+
+          for asset in "${assets[@]}"; do
+            echo "Uploading ${asset}"
+            for attempt in 1 2 3; do
+              if gh release upload "$OLCBOX_NIGHTLY_TAG" "$asset" --clobber; then
+                break
+              fi
+
+              if [ "$attempt" -eq 3 ]; then
+                echo "Failed to upload ${asset} after ${attempt} attempts" >&2
+                exit 1
+              fi
+
+              echo "Upload failed for ${asset}; retrying in 10 seconds" >&2
+              sleep 10
+            done
+          done
+
+          gh release edit "$OLCBOX_NIGHTLY_TAG" --draft=false --prerelease
