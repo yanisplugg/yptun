@@ -1,10 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240" role="img" aria-label="No Roskomnadzor">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="No Roskomnadzor">
   <title>No RKN</title>
-  <!-- struck-out label -->
-  <text x="120" y="128" text-anchor="middle" dominant-baseline="middle"
-        font-family="Segoe UI, Arial, sans-serif" font-size="70" font-weight="700"
-        fill="#8b949e" letter-spacing="2">РКН</text>
-  <!-- prohibition roundel -->
-  <circle cx="120" cy="120" r="104" fill="none" stroke="#e5484d" stroke-width="18"/>
-  <line x1="46.5" y1="46.5" x2="193.5" y2="193.5" stroke="#e5484d" stroke-width="18" stroke-linecap="round"/>
+
+  <!-- Roskomnadzor mark: two interlocked diamond links + center diamond -->
+  <!-- light-blue link (upper-left) -->
+  <path fill-rule="evenodd" fill="#2f8ed0"
+        d="M112,34 L190,112 L112,190 L34,112 Z
+           M112,72 L152,112 L112,152 L72,112 Z"/>
+  <!-- dark-blue link (lower-right) -->
+  <path fill-rule="evenodd" fill="#16467f"
+        d="M144,66 L222,144 L144,222 L66,144 Z
+           M144,104 L184,144 L144,184 L104,144 Z"/>
+  <!-- center diamond -->
+  <path fill="#16467f" d="M128,98 L158,128 L128,158 L98,128 Z"/>
+
+  <!-- strike-through (crossed out) -->
+  <line x1="40" y1="40" x2="216" y2="216" stroke="#ffffff" stroke-width="30" stroke-linecap="round"/>
+  <line x1="40" y1="40" x2="216" y2="216" stroke="#e5333a" stroke-width="20" stroke-linecap="round"/>
 </svg>
