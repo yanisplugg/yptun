@@ -1,46 +1,97 @@
-<h1 align="center">YPtun</h1>
+<div align="center">
 
-<p align="center">
-  <b>Fast, censorship-resistant VPN client for Android.</b><br>
-  VLESS / Reality / XHTTP over <a href="https://github.com/XTLS/Xray-core">Xray</a> &amp;
-  <a href="https://github.com/SagerNet/sing-box">sing-box</a>, with an optional WebRTC stealth transport.
-</p>
+# 🛡️ YPtun
+
+### Fast, censorship-resistant VPN for Android
+
+*VLESS · Reality · XHTTP over **Xray** & **sing-box** — with a WebRTC stealth transport that makes your traffic look like a video call.*
+
+<br>
+
+[![Latest release](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043)](https://github.com/yanisplugg/olcvpn-client/releases)
+[![Stars](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
+
+![Platform](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
+![Cores](https://img.shields.io/badge/cores-Xray%20%2B%20sing--box-blueviolet?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
+
+<br>
+
+**🌍 English** · [**Русский**](README.ru.md)
+
+</div>
 
 ---
 
-## Download
+## ✨ Why YPtun?
 
-Grab the latest signed APK from the [**Releases**](../../releases) page.
+Most VPN clients give you one engine and one way to connect. **YPtun gives you a toolbox.**
+It bundles **two proxy cores** and a **stealth transport** in one app, so when one method gets blocked, you switch and keep going.
 
-| Build | Who it's for |
-|-------|--------------|
-| `YPtun-vX.Y.Z-arm64-v8a.apk`   | Modern phones (recommended) |
-| `YPtun-vX.Y.Z-armeabi-v7a.apk` | Older 32-bit devices |
-| `YPtun-vX.Y.Z-x86_64.apk`      | Emulators / x86 tablets |
-| `YPtun-vX.Y.Z-universal.apk`   | One file that runs anywhere (largest) |
+> Built for places where the internet fights back. 🌐
 
-If you're not sure, take **arm64-v8a** (or **universal**).
+---
 
-## Features
+## 🚀 Features
 
-- **Protocols:** VLESS, VMess, Trojan, Shadowsocks — TCP / WS / gRPC / HTTPUpgrade / **XHTTP**, with TLS, **Reality** and uTLS fingerprints.
-- **Two cores:** runs on **Xray** or **sing-box**, picked automatically per transport.
-- **Stealth transport:** tunnel proxy traffic inside a WebRTC data channel ([olcRTC](https://github.com/openlibrecommunity/olcrtc)) to look like a video call.
-- **Subscriptions:** vless/vmess/trojan/ss links, base64 blobs, panel JSON, full raw Xray / sing-box configs, and olcRTC URIs.
-- **Custom DNS & routing:** import a full Xray config (honored verbatim) or flip the built-in **"Block RU domains"** switch.
-- **DPI evasion:** TLS fragmentation and multiplexing.
-- **Leak-safe:** captures both IPv4 and IPv6 so nothing escapes the tunnel.
-- **Per-app split tunneling.**
+| | |
+|---|---|
+| 🔀 **Dual cores** | Runs on **Xray** *or* **sing-box** — auto-picked per protocol, or force one. |
+| 🧬 **Protocols** | VLESS · VMess · Trojan · Shadowsocks |
+| 🚇 **Transports** | TCP · WS · gRPC · HTTPUpgrade · **XHTTP** · TLS · **Reality** · uTLS fingerprints |
+| 🎭 **Stealth mode** | Tunnel inside a **WebRTC** data channel ([olcRTC](https://github.com/openlibrecommunity/olcrtc)) — looks like a video call to DPI. |
+| 📥 **Smart import** | vless/vmess/trojan/ss links, base64 blobs, panel JSON, **full raw Xray / sing-box configs**, and olcRTC URIs. |
+| 🧭 **DNS & routing** | Import a full Xray config (honored *verbatim*), or flip the built-in **"Block RU domains"** switch. |
+| 🧱 **DPI evasion** | TLS fragmentation + connection multiplexing. |
+| 🔒 **Leak-safe** | Captures **both IPv4 and IPv6** — nothing escapes the tunnel. |
+| 📱 **Split tunneling** | Pick exactly which apps go through the VPN. |
+| 🗂️ **Subscriptions** | Auto-refresh, traffic/usage display, multi-location lists. |
 
-## Build from source
+---
 
-Everything needed is vendored in this repo (`cores`, `olcrtc`, `sing-box`). You need:
+## 📦 Download
 
-- JDK 17 (the one bundled with Android Studio works)
-- Android SDK (set `sdk.dir` in `YPtun/local.properties`) + NDK `28.2.13676358`
-- Go + [`gomobile`](https://pkg.go.dev/golang.org/x/mobile/cmd/gomobile) on your `PATH` (the cores are built via `gomobile bind`)
+Grab the latest signed APK from the **[Releases page](https://github.com/yanisplugg/olcvpn-client/releases/latest)**.
 
-> ⚠️ `gomobile` shells out to `javac`, so make sure the JDK's `bin` is on your `PATH`, not just `JAVA_HOME`.
+| Build | Best for |
+|-------|----------|
+| 🟢 **`arm64-v8a`** | Modern phones — **pick this if unsure** |
+| 🟡 `armeabi-v7a` | Older 32-bit devices |
+| 🔵 `x86_64` | Emulators / x86 tablets |
+| ⚪ `universal` | One file that runs on anything (largest) |
+
+> 💡 Not sure? Download **arm64-v8a** or **universal**.
+
+---
+
+## 🧠 How it works
+
+```
+┌─────────────┐   packets   ┌───────────────┐   SOCKS5   ┌────────────────────────┐
+│  Your apps  │ ──────────▶ │  Android TUN  │ ─────────▶ │  Engine (one process)  │
+└─────────────┘             │  (IPv4+IPv6)  │            │  ┌──────────────────┐  │
+                            └───────────────┘            │  │ Xray / sing-box  │  │
+                                                         │  │  + olcRTC stealth│  │
+                                                         │  └──────────────────┘  │
+                                                         └───────────┬────────────┘
+                                                                     ▼
+                                                              🌍 the open internet
+```
+
+All native cores are compiled into **one** `gomobile` library (a single Go runtime), so Xray, sing-box and olcRTC coexist without conflicts.
+
+---
+
+## 🛠️ Build from source
+
+Everything you need is vendored here (`cores`, `olcrtc`, `sing-box`). You'll need:
+
+- **JDK 17** (the one bundled with Android Studio is fine)
+- **Android SDK** (set `sdk.dir` in `YPtun/local.properties`) + **NDK `28.2.13676358`**
+- **Go** + [`gomobile`](https://pkg.go.dev/golang.org/x/mobile/cmd/gomobile) on your `PATH`
+
+> ⚠️ `gomobile` shells out to `javac`, so make sure the JDK's `bin/` is on your `PATH` — not just `JAVA_HOME`.
 
 ```bash
 cd YPtun
@@ -50,31 +101,53 @@ cd YPtun
 
 APKs land in `YPtun/androidApp/build/outputs/apk/release/`.
 
-To produce signed release builds, create `YPtun/keystore.properties`:
+<details>
+<summary>🔑 Signing your own release builds (optional, for maintainers)</summary>
+
+<br>
+
+By default Gradle builds debug-signed APKs. If you want to publish your **own** signed
+releases, create a keystore and point Gradle at it with `YPtun/keystore.properties`:
 
 ```properties
 storeFile=release.keystore
-storePassword=********
-keyAlias=********
-keyPassword=********
+storePassword=your-password
+keyAlias=your-alias
+keyPassword=your-password
 ```
 
-## Project layout
+This file (and the `.keystore` itself) is **gitignored and never committed** — it only lives
+on your machine. Keep your keystore safe: you need the same one to ship updates that install
+over previous versions.
+
+</details>
+
+---
+
+## 🗂️ Project layout
 
 ```
-YPtun/      Kotlin Multiplatform app (Compose UI, Android VpnService, engines)
-cores/      Go glue: one gomobile AAR bundling sing-box (libbox) + olcRTC + an Xray bridge
-olcrtc/     WebRTC stealth transport (vendored)
-sing-box/   sing-box / libbox (vendored, pinned v1.12.25)
+YPtun/      Kotlin Multiplatform app — Compose UI, Android VpnService, engine wiring
+cores/      Go glue: one gomobile AAR bundling sing-box (libbox) + olcRTC + Xray bridge
+olcrtc/     WebRTC stealth transport          (vendored)
+sing-box/   sing-box / libbox, pinned v1.12.25 (vendored)
 ```
 
-## Credits
+---
 
-Built on the shoulders of [Xray-core](https://github.com/XTLS/Xray-core),
-[sing-box](https://github.com/SagerNet/sing-box) and
-[olcRTC](https://github.com/openlibrecommunity/olcrtc). Thanks to their authors.
+## 🙏 Credits
 
-## License
+Standing on the shoulders of giants:
+[Xray-core](https://github.com/XTLS/Xray-core) ·
+[sing-box](https://github.com/SagerNet/sing-box) ·
+[olcRTC](https://github.com/openlibrecommunity/olcrtc).
 
-See [LICENSE](LICENSE). Vendored components retain their own licenses
+## 📄 License
+
+[MIT](LICENSE) for the app. Vendored components keep their own licenses
 (`sing-box/LICENSE`, `olcrtc/LICENSE`).
+
+<div align="center">
+<br>
+<sub>Made for a freer internet. ⭐ the repo if it helps you.</sub>
+</div>
