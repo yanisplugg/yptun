@@ -418,24 +418,34 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      * meaningful while connected; returns null otherwise (shown as "unknown", not offline).
      */
     private suspend fun vkTurnTunnelPing(): Long? = withContext(Dispatchers.IO) {
-        if (status.value !is VpnStatus.Connected && status.value !is VpnStatus.Reconnecting) {
+        val st = status.value
+        if (st !is VpnStatus.Connected && st !is VpnStatus.Reconnecting) {
             return@withContext null
         }
         val proxy = _proxySettings.value
         val host = AndroidSocksProxySettings.connectHost(proxy.host)
         var best: Long? = null
+        var lastError: String? = null
         repeat(TCP_PING_ATTEMPTS) {
-            val elapsed = runCatching {
+            val result = runCatching {
                 socksConnectRtt(
                     proxyHost = host,
                     proxyPort = proxy.port,
                     username = proxy.username,
                     password = proxy.password,
                     targetHost = TUNNEL_PROBE_HOST,
-                    targetPort = TUNNEL_PROBE_PORT
+                    targetPort = TUNNEL_PROBE_PORT,
+                    timeoutMs = TUNNEL_PING_TIMEOUT_MS
                 )
-            }.getOrNull()
+            }
+            val elapsed = result.getOrNull()
             if (elapsed != null && (best == null || elapsed < best!!)) best = elapsed
+            if (elapsed == null) {
+                lastError = result.exceptionOrNull()?.message ?: "socks connect returned null"
+            }
+        }
+        if (best == null) {
+            OlcboxVpnState.addLog("VK-TURN ping failed via $host:${proxy.port} → ${TUNNEL_PROBE_HOST}:${TUNNEL_PROBE_PORT}: $lastError")
         }
         best
     }
@@ -447,11 +457,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         username: String,
         password: String,
         targetHost: String,
-        targetPort: Int
+        targetPort: Int,
+        timeoutMs: Int = TCP_PING_TIMEOUT_MS
     ): Long? {
         java.net.Socket().use { socket ->
-            socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), TCP_PING_TIMEOUT_MS)
-            socket.soTimeout = TCP_PING_TIMEOUT_MS
+            socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), timeoutMs)
+            socket.soTimeout = timeoutMs
             val out = socket.getOutputStream()
             val inp = socket.getInputStream()
             val start = System.nanoTime()
@@ -484,14 +495,27 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 else -> return null
             }
 
-            // CONNECT to targetHost:targetPort as a domain name (ATYP=0x03).
-            val hostBytes = targetHost.encodeToByteArray()
-            val req = ByteArray(5 + hostBytes.size + 2)
-            req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03
-            req[4] = hostBytes.size.toByte()
-            hostBytes.copyInto(req, 5)
-            req[5 + hostBytes.size] = ((targetPort shr 8) and 0xFF).toByte()
-            req[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
+            // CONNECT to targetPort. Prefer a raw IPv4 literal (ATYP=0x01) so the proxy doesn't
+            // resolve a hostname; fall back to a domain (ATYP=0x03) for non-IPv4 targets.
+            val ipv4 = targetHost.split('.').mapNotNull { it.toIntOrNull()?.takeIf { n -> n in 0..255 } }
+                .takeIf { it.size == 4 }
+            val req = if (ipv4 != null) {
+                ByteArray(10).also { r ->
+                    r[0] = 0x05; r[1] = 0x01; r[2] = 0x00; r[3] = 0x01
+                    for (i in 0..3) r[4 + i] = ipv4[i].toByte()
+                    r[8] = ((targetPort shr 8) and 0xFF).toByte()
+                    r[9] = (targetPort and 0xFF).toByte()
+                }
+            } else {
+                val hostBytes = targetHost.encodeToByteArray()
+                ByteArray(7 + hostBytes.size).also { r ->
+                    r[0] = 0x05; r[1] = 0x01; r[2] = 0x00; r[3] = 0x03
+                    r[4] = hostBytes.size.toByte()
+                    hostBytes.copyInto(r, 5)
+                    r[5 + hostBytes.size] = ((targetPort shr 8) and 0xFF).toByte()
+                    r[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
+                }
+            }
             out.write(req); out.flush()
 
             // Reply: VER REP RSV ATYP ... — REP 0x00 = success.
@@ -653,6 +677,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         // End-to-end tunnel latency probe target (TCP DNS is widely reachable and lightweight).
         const val TUNNEL_PROBE_HOST = "1.1.1.1"
         const val TUNNEL_PROBE_PORT = 53
+        // The probe traverses VK relay + WireGuard, so allow more time than a direct TCP ping.
+        const val TUNNEL_PING_TIMEOUT_MS = 6_000
         val random = SecureRandom()
     }
 }

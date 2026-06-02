@@ -877,7 +877,7 @@ class OlcboxVpnService : VpnService() {
                 }
             })
             val listenAddr = "127.0.0.1:${vk.listenPort}"
-            addLog("Starting VK-TURN freeturn listener on $listenAddr")
+            addLog("Starting VK-TURN freeturn listener on $listenAddr (streams=${vk.streams.takeIf { it > 0 } ?: "default 10"})")
             Freeturn.start(vk.uri, listenAddr, vk.vkLink, vk.streams.toLong())
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) return false
