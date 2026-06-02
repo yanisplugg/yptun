@@ -33,15 +33,22 @@ class AndroidConfigImporter(private val context: Context) : ConfigImporter {
     override suspend fun readTextFromSource(source: Any): String? {
         if (source is Uri) {
             return try {
-                context.contentResolver.openInputStream(source)?.use { inputStream ->
+                val text = context.contentResolver.openInputStream(source)?.use { inputStream ->
                     BufferedReader(InputStreamReader(inputStream)).use { reader ->
                         reader.readText()
                     }
                 }
+                org.olcbox.app.vpn.service.OlcboxVpnState.addLog(
+                    "import: read file ${text?.length ?: -1} chars, head=\"" +
+                        (text?.take(40)?.replace("\n", " ") ?: "<null>") + "\""
+                )
+                text
             } catch (e: Exception) {
+                org.olcbox.app.vpn.service.OlcboxVpnState.addLog("import: read file FAILED: ${e.message}")
                 null
             }
         }
+        org.olcbox.app.vpn.service.OlcboxVpnState.addLog("import: source is not a Uri (${source::class.simpleName})")
         return null
     }
 }

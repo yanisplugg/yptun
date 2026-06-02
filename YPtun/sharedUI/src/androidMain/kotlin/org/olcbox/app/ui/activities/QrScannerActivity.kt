@@ -74,9 +74,9 @@ class QrScannerActivity : ComponentActivity() {
         setHints(
             mapOf(
                 DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-                // TRY_HARDER doubles per-frame work; QR finder patterns decode fine without it,
-                // so leaving it off makes scanning noticeably snappier.
-                DecodeHintType.TRY_HARDER to false
+                // TRY_HARDER maximizes decode reliability; combined with center autofocus the scan
+                // is both fast and dependable.
+                DecodeHintType.TRY_HARDER to true
             )
         )
     }
@@ -149,8 +149,6 @@ class QrScannerActivity : ComponentActivity() {
                 }
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    // 720p is plenty for QR and decodes far faster than full sensor resolution.
-                    .setTargetResolution(android.util.Size(1280, 720))
                     .build()
                     .also { imageAnalysis ->
                         imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -309,7 +307,7 @@ class QrScannerActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_QR_TEXT = "org.olcbox.app.QR_TEXT"
-        private const val QR_ROTATION_ATTEMPTS = 2
+        private const val QR_ROTATION_ATTEMPTS = 4
     }
 }
 
