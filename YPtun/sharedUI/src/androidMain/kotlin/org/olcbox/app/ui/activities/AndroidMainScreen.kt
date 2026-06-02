@@ -434,6 +434,12 @@ fun AndroidMainScreen(
             appSettingsInitialRoute = AppSettingsInitialRoute.SplitTunneling
             vpnManager.refreshInstalledApps()
             isAppSettingsOpen = true
+        },
+        onUnlockExperimental = {
+            if (!appBehavior.experimentalUnlocked) {
+                vpnManager.setAppBehavior(appBehavior.copy(experimentalUnlocked = true))
+                Toast.makeText(context, "Экспериментальные настройки разблокированы", Toast.LENGTH_LONG).show()
+            }
         }
     )
 

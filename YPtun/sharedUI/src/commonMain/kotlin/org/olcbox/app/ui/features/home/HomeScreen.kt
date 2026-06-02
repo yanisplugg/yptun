@@ -3,6 +3,7 @@ package org.olcbox.app.ui.features.home
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -74,7 +75,8 @@ fun HomeScreen(
     onSplitTunnelingClick: () -> Unit = {},
     onOpenLocationSettings: (String?) -> Unit,
     onAddLocation: () -> Unit,
-    confirmBeforeDelete: Boolean = true
+    confirmBeforeDelete: Boolean = true,
+    onUnlockExperimental: () -> Unit = {}
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
@@ -188,7 +190,7 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            ConnectionTimer(isConnected = state.isVpnConnected)
+            ConnectionTimer(isConnected = state.isVpnConnected, onSecretTap = onUnlockExperimental)
 
             Spacer(modifier = Modifier.height(6.dp))
 
@@ -360,7 +362,7 @@ private sealed interface PendingDelete {
 }
 
 @Composable
-private fun ConnectionTimer(isConnected: Boolean) {
+private fun ConnectionTimer(isConnected: Boolean, onSecretTap: () -> Unit = {}) {
     var elapsed by remember { mutableStateOf(0L) }
     LaunchedEffect(isConnected) {
         if (isConnected) {
@@ -378,6 +380,7 @@ private fun ConnectionTimer(isConnected: Boolean) {
     val seconds = elapsed % 60
     val time = "${hours.pad()}:${minutes.pad()}:${seconds.pad()}"
 
+    var taps by remember { mutableStateOf(0) }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = LocalStrings.current.connectionTime,
@@ -390,7 +393,18 @@ private fun ConnectionTimer(isConnected: Boolean) {
             color = MaterialTheme.colorScheme.onSurface,
             fontSize = 32.sp,
             fontWeight = FontWeight.SemiBold,
-            letterSpacing = 2.sp
+            letterSpacing = 2.sp,
+            // Tap the timer 5× to unlock Experimental settings (Android dev-options style).
+            modifier = Modifier.clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) {
+                taps++
+                if (taps >= 5) {
+                    taps = 0
+                    onSecretTap()
+                }
+            }
         )
     }
 }

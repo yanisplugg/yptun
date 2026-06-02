@@ -35,7 +35,8 @@ fun OlcboxAppContent(
     canScanQr: Boolean = false,
     onAppSettingsClick: () -> Unit,
     onSplitTunnelingClick: () -> Unit = {},
-    confirmBeforeDelete: Boolean = true
+    confirmBeforeDelete: Boolean = true,
+    onUnlockExperimental: () -> Unit = {}
 ) {
     val homeScrollState = rememberScrollState()
 
@@ -94,7 +95,8 @@ fun OlcboxAppContent(
                         locationViewModel.startEditing(null)
                         onNavigate(AppScreen.LocationSettings(null))
                     },
-                    confirmBeforeDelete = confirmBeforeDelete
+                    confirmBeforeDelete = confirmBeforeDelete,
+                    onUnlockExperimental = onUnlockExperimental
                 )
             }
 
