@@ -21,6 +21,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.CurrentAppInfo
+import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
@@ -617,6 +618,13 @@ class LocationsRepositoryImpl(
             return ParsedImport(it, ImportMode.Additive)
         }
 
+        // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
+        // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
+        // and would not see the multi-line config).
+        parseAmneziaWgText(text, subscriptionUrl)?.let {
+            return ParsedImport(it, ImportMode.Additive)
+        }
+
         // Proxy share links / subscriptions (vless, vmess, trojan, ss, base64 blobs and
         // JSON panels with a "links" array) become sing-box (Standard) locations.
         parseProxyText(text, subscriptionUrl, subscriptionMetadata)?.let {
@@ -1046,6 +1054,30 @@ class LocationsRepositoryImpl(
             activeLocationId = entry.storageId,
             locations = listOf(entry)
         )
+    }
+
+    /** Parses a whole AmneziaWG wg-quick .conf into a [EngineType.Standard] location. */
+    private fun parseAmneziaWgText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
+        val trimmed = text.trim()
+        if (!AmneziaWgParser.looksLikeAmneziaWg(trimmed)) return null
+        val profile = AmneziaWgParser.parse(trimmed) ?: return null
+        val name = profile.tag.ifBlank { "AmneziaWG" }
+        val location = LocationConfig(
+            name = name,
+            engine = EngineType.Standard,
+            proxy = profile,
+        ).normalized()
+        val base = "${profile.server}_${profile.serverPort}"
+            .lowercase()
+            .map { if (it.isLetterOrDigit()) it else '_' }
+            .joinToString("")
+        val storageId = uniqueStorageId("imported_awg_$base", mutableSetOf())
+        val entry = LocationEntry.from(
+            storageId = storageId,
+            location = location,
+            subscriptionUrl = subscriptionUrl,
+        )
+        return LocationBundleV4(activeLocationId = entry.storageId, locations = listOf(entry))
     }
 
     private fun parseProxyText(

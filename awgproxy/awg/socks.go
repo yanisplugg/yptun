@@ -102,8 +102,8 @@ func socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 	}
 
 	// Per-target UDP conns through the tunnel; return packets are wrapped back to the client addr.
-	conns := make(map[string]*net.UDPConn)
-	var clientAddr *net.UDPAddr
+	// The netstack Dial returns a gVisor gonet conn (net.Conn), NOT *net.UDPConn — never assert.
+	conns := make(map[string]net.Conn)
 	defer func() {
 		for _, c := range conns {
 			_ = c.Close()
@@ -119,7 +119,6 @@ func socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 		if err != nil {
 			return
 		}
-		clientAddr = from
 		dstHost, dstPort, payload, ok := parseUDPRequest(buf[:n])
 		if !ok {
 			continue
@@ -131,17 +130,16 @@ func socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 			if derr != nil {
 				continue
 			}
-			uc = rc.(*net.UDPConn)
+			uc = rc
 			conns[target] = uc
 			go udpReturn(relay, uc, from, dstHost, dstPort)
 		}
 		_, _ = uc.Write(payload)
-		_ = clientAddr
 	}
 }
 
 // udpReturn reads replies from the tunnel UDP conn and forwards them (SOCKS5-wrapped) to client.
-func udpReturn(relay *net.UDPConn, uc *net.UDPConn, client *net.UDPAddr, host string, port int) {
+func udpReturn(relay *net.UDPConn, uc net.Conn, client *net.UDPAddr, host string, port int) {
 	buf := make([]byte, 64*1024)
 	for {
 		_ = uc.SetReadDeadline(time.Now().Add(60 * time.Second))

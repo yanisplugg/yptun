@@ -74,7 +74,9 @@ class QrScannerActivity : ComponentActivity() {
         setHints(
             mapOf(
                 DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-                DecodeHintType.TRY_HARDER to true
+                // TRY_HARDER doubles per-frame work; QR finder patterns decode fine without it,
+                // so leaving it off makes scanning noticeably snappier.
+                DecodeHintType.TRY_HARDER to false
             )
         )
     }
@@ -180,7 +182,9 @@ class QrScannerActivity : ComponentActivity() {
                 decodeQr(imageProxy.toLuminanceSource())
             }.getOrNull()
 
-            if (rawValue != null && handled.compareAndSet(false, true)) {
+            // Only accept QR codes that actually look like a supported config/link — otherwise the
+            // scanner keeps running instead of returning a random QR (URLs, vCards, etc.).
+            if (rawValue != null && isAcceptableQr(rawValue) && handled.compareAndSet(false, true)) {
                 setResult(
                     Activity.RESULT_OK,
                     Intent().putExtra(EXTRA_QR_TEXT, rawValue)
@@ -190,6 +194,18 @@ class QrScannerActivity : ComponentActivity() {
         } finally {
             imageProxy.close()
         }
+    }
+
+    private fun isAcceptableQr(text: String): Boolean {
+        val t = text.trim()
+        val lower = t.lowercase()
+        val schemes = listOf(
+            "olcrtc://", "freeturn://", "vless://", "vmess://", "trojan://", "ss://",
+            "http://", "https://"
+        )
+        if (schemes.any { lower.startsWith(it) }) return true
+        if (t.startsWith("{")) return true // raw sing-box / panel JSON
+        return t.contains("[Interface]", ignoreCase = true) // AmneziaWG / WireGuard config
     }
 
     private fun decodeQr(source: LuminanceSource): String? {
@@ -271,7 +287,7 @@ class QrScannerActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_QR_TEXT = "org.olcbox.app.QR_TEXT"
-        private const val QR_ROTATION_ATTEMPTS = 4
+        private const val QR_ROTATION_ATTEMPTS = 2
     }
 }
 

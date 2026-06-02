@@ -141,8 +141,18 @@ type wgConfig struct {
 	addresses     []netip.Addr
 	dns           []netip.Addr
 	mtu           int
-	// Amnezia obfuscation
-	jc, jmin, jmax, s1, s2, h1, h2, h3, h4 string
+	// Amnezia obfuscation knobs (jc/jmin/jmax/s1..s4/h1..h4/i1..i5/j1..j3/itime), preserved in
+	// input order with their raw values (e.g. i-packets are "<b 0x...>").
+	awgParams [][2]string
+}
+
+// awgKnobs are the AmneziaWG obfuscation keys passed through verbatim to the device UAPI.
+var awgKnobs = map[string]bool{
+	"jc": true, "jmin": true, "jmax": true,
+	"s1": true, "s2": true, "s3": true, "s4": true,
+	"h1": true, "h2": true, "h3": true, "h4": true,
+	"i1": true, "i2": true, "i3": true, "i4": true, "i5": true,
+	"j1": true, "j2": true, "j3": true, "itime": true,
 }
 
 func parseConfig(ini string) (*wgConfig, error) {
@@ -199,24 +209,10 @@ func parseConfig(ini string) (*wgConfig, error) {
 			if m, err := strconv.Atoi(val); err == nil && m > 0 {
 				c.mtu = m
 			}
-		case "jc":
-			c.jc = val
-		case "jmin":
-			c.jmin = val
-		case "jmax":
-			c.jmax = val
-		case "s1":
-			c.s1 = val
-		case "s2":
-			c.s2 = val
-		case "h1":
-			c.h1 = val
-		case "h2":
-			c.h2 = val
-		case "h3":
-			c.h3 = val
-		case "h4":
-			c.h4 = val
+		default:
+			if awgKnobs[key] && val != "" {
+				c.awgParams = append(c.awgParams, [2]string{key, val})
+			}
 		}
 	}
 	if c.privateKeyHex == "" || c.peerPublicHex == "" || c.endpoint == "" {
@@ -242,14 +238,10 @@ func (c *wgConfig) uapi() (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "private_key=%s\n", c.privateKeyHex)
-	// Amnezia params must precede the peer to take effect for the handshake.
-	for k, v := range map[string]string{
-		"jc": c.jc, "jmin": c.jmin, "jmax": c.jmax,
-		"s1": c.s1, "s2": c.s2, "h1": c.h1, "h2": c.h2, "h3": c.h3, "h4": c.h4,
-	} {
-		if v != "" {
-			fmt.Fprintf(&b, "%s=%s\n", k, v)
-		}
+	// Amnezia params must precede the peer to take effect for the handshake; emit in input order
+	// with raw values (i-packets are "<b 0x...>" tokens the device parses itself).
+	for _, kv := range c.awgParams {
+		fmt.Fprintf(&b, "%s=%s\n", kv[0], kv[1])
 	}
 	fmt.Fprintf(&b, "public_key=%s\n", c.peerPublicHex)
 	fmt.Fprintf(&b, "endpoint=%s\n", ep)
