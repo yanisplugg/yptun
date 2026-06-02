@@ -292,15 +292,18 @@ fun AndroidMainScreen(
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
+        ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let {
-            viewModel.onFileSelected(
-                fileSource = it,
-                onComplete = { reloadLocationsAfterImport() },
-                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
-            )
+        org.olcbox.app.vpn.service.OlcboxVpnState.addLog("import: file picker result uri=$uri")
+        if (uri == null) {
+            Toast.makeText(context, "No file selected", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
         }
+        viewModel.onFileSelected(
+            fileSource = uri,
+            onComplete = { reloadLocationsAfterImport() },
+            onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
+        )
     }
 
     val qrScannerLauncher = rememberLauncherForActivityResult(
@@ -390,7 +393,12 @@ fun AndroidMainScreen(
             }
         },
         onImportFileRequested = {
-            filePickerLauncher.launch("*/*")
+            org.olcbox.app.vpn.service.OlcboxVpnState.addLog("import: launching file picker")
+            runCatching { filePickerLauncher.launch(arrayOf("*/*")) }
+                .onFailure {
+                    org.olcbox.app.vpn.service.OlcboxVpnState.addLog("import: launch failed: ${it.message}")
+                    Toast.makeText(context, "Cannot open file picker: ${it.message}", Toast.LENGTH_LONG).show()
+                }
         },
         onImportFromClipboardRequested = { onImported, onError ->
             viewModel.onPasteFromClipboard(
