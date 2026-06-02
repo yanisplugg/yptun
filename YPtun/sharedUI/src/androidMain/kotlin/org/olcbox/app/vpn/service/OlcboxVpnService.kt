@@ -47,6 +47,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
+import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
 import org.olcbox.app.vpn.xray.XrayConfig
@@ -877,22 +878,63 @@ class OlcboxVpnService : VpnService() {
             })
             val listenAddr = "127.0.0.1:${vk.listenPort}"
             addLog("Starting VK-TURN freeturn listener on $listenAddr")
-            Freeturn.start(vk.uri, listenAddr, vk.vkLink)
+            Freeturn.start(vk.uri, listenAddr, vk.vkLink, vk.streams.toLong())
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) return false
 
-            // 2. sing-box WireGuard outbound dialling the local freeturn listener.
+            // Order the WireGuard bring-up behind the VK TURN relay: wait for the freeturn
+            // client to establish at least one TURN stream (DTLS handshake + TURN allocation)
+            // so the tunnel uplink is live before WireGuard starts handshaking. Otherwise the
+            // WireGuard outbound can exhaust its handshake attempts and report offline while the
+            // relay is still coming up (only masked on a fast same-LAN path). Best-effort: if the
+            // relay does not report ready in time we proceed anyway and let WireGuard retry.
+            if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
+                addLog("VK-TURN relay up (${Freeturn.connectedStreams()} stream(s)); starting WireGuard")
+            } else {
+                addLog("VK-TURN relay not ready yet; starting WireGuard anyway (will retry)")
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) return false
+
+            // 2. sing-box WireGuard outbound dialling the local freeturn listener. Optionally a
+            //    proxy (vless/…) chained ON TOP: it dials its server THROUGH the WireGuard tunnel.
             activeProxyCore = ProxyCore.SingBox
-            val json = SingBoxConfig.build(
-                profile = profile,
-                listenPort = socksListenPort,
-                listenHost = socksListenHost,
-                socksUsername = socksUsername,
-                socksPassword = socksPassword,
-                autoDetectInterface = true,
-                routing = loadRouting(),
-                traffic = loadTrafficSettings(),
-            )
+            val chainProxy = vk.chainProxyLink.takeIf { it.isNotBlank() }
+                ?.let { ShareLinkParser.parse(it) }
+                ?.takeIf { it.isComplete() }
+            val json = if (chainProxy != null) {
+                addLog("VK-TURN chaining proxy ${chainProxy.displayName()} over WireGuard")
+                SingBoxConfig.build(
+                    profile = chainProxy,
+                    wireguardBase = profile,
+                    listenPort = socksListenPort,
+                    listenHost = socksListenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    autoDetectInterface = true,
+                    routing = loadRouting(),
+                    traffic = loadTrafficSettings(),
+                    logLevel = "info",
+                    dnsStrategyOverride = "ipv4_only",
+                )
+            } else {
+                SingBoxConfig.build(
+                    profile = profile,
+                    listenPort = socksListenPort,
+                    listenHost = socksListenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    autoDetectInterface = true,
+                    routing = loadRouting(),
+                    traffic = loadTrafficSettings(),
+                    // info level surfaces the WireGuard handshake so a dead server→client relay
+                    // path (handshake never completes → all traffic times out) is visible.
+                    logLevel = "info",
+                    // WG tunnel is IPv4-only; force A-only resolution so dual-stack sites don't
+                    // attempt IPv6 (which has no route through the tunnel → "no route to host").
+                    dnsStrategyOverride = "ipv4_only",
+                )
+            }
             addLog("Starting sing-box (VK-TURN WireGuard) via $listenAddr")
             singBoxEngine().start(json)
 
@@ -965,6 +1007,17 @@ class OlcboxVpnService : VpnService() {
         return false
     }
 
+    /** Waits for the freeturn client to bring up at least one TURN relay stream. */
+    private suspend fun awaitVkTurnRelayReady(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (!Freeturn.isRunning()) return false
+            if (Freeturn.connectedStreams() > 0) return true
+            delay(VKTURN_RELAY_POLL_MS)
+        }
+        return Freeturn.connectedStreams() > 0
+    }
+
     private suspend fun waitForJitsiRoomCleanup(provider: String) {
         if (LocationConfig.normalizeProvider(provider) != LocationConfig.PROVIDER_JITSI) return
 
@@ -1027,11 +1080,15 @@ class OlcboxVpnService : VpnService() {
                 .setMtu(activeMtu)
                 .addAddress(TUN_IPV4_ADDRESS, IPV4_PREFIX_LENGTH)
                 .addRoute("0.0.0.0", 0)
-                // Capture IPv6 as well so it can't leak past the tunnel (issue #3).
-                .addAddress(TUN_IPV6_ADDRESS, IPV6_PREFIX_LENGTH)
-                .addRoute("::", 0)
                 .addDnsServer(MAPDNS_ADDRESS)
                 .setBlocking(true)
+            // VK-TURN's WireGuard tunnel is IPv4-only. Advertising IPv6 in the TUN makes dual-stack
+            // apps route IPv6 into a tunnel with no IPv6 path → endless "no route to host" and dead
+            // sites. Omit IPv6 for VK-TURN so the OS keeps apps on IPv4; other engines still capture
+            // IPv6 (addRoute ::/0) to prevent leaks past the tunnel (issue #3).
+            if (engineType != EngineType.VkTurn) {
+                builder.addAddress(TUN_IPV6_ADDRESS, IPV6_PREFIX_LENGTH).addRoute("::", 0)
+            }
 
             if (!applySplitTunneling(builder)) return null
 
@@ -2033,6 +2090,8 @@ class OlcboxVpnService : VpnService() {
         private const val SOCKS_RELEASE_TIMEOUT_MS = 2_500L
         private const val SOCKS_RELEASE_QUICK_TIMEOUT_MS = 500L
         private const val SOCKS_RELEASE_POLL_MS = 100L
+        private const val VKTURN_RELAY_READY_TIMEOUT_MS = 20_000L
+        private const val VKTURN_RELAY_POLL_MS = 200L
         private const val SOCKET_CONNECT_TIMEOUT_MS = 150
         private const val WAKE_LOCK_REFRESH_INTERVAL_MS = 30_000L
         private const val WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L

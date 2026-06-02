@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,6 +59,10 @@ var (
 	cancel  context.CancelFunc
 	done    chan struct{}
 	debug   atomic.Bool
+	// streams tracks live TURN relay streams of the current session. >0 means the
+	// VK TURN path (DTLS + TURN allocation) is up, so the WireGuard outbound can be
+	// started against the local listener. Exposed via ConnectedStreams.
+	streams atomic.Int32
 )
 
 // SetLogWriter routes the freeturn client logs (standard log package) to w.
@@ -76,27 +81,42 @@ func SetDebug(enabled bool) { debug.Store(enabled) }
 // IsRunning reports whether a freeturn client is currently active.
 func IsRunning() bool { return running.Load() }
 
+// ConnectedStreams reports the number of live TURN relay streams. A value >0 means
+// the VK TURN path is established (DTLS handshake + TURN allocation succeeded), so
+// the WireGuard outbound dialling the local listener has a working uplink. Callers
+// poll this after Start to order WireGuard bring-up behind the relay.
+func ConnectedStreams() int { return int(streams.Load()) }
+
 // Start launches the freeturn client described by uri (a freeturn://... share
 // link). listenAddr is the local ip:port the client raises (WireGuard/Xray
 // entry, e.g. 127.0.0.1:9000); vkLink is the VK Calls join link (per-client,
-// not carried in the URI). It validates the configuration synchronously and
-// runs the blocking relay loop in a background goroutine. Returns an error only
-// for invalid configuration; runtime failures are logged and end the session
+// not carried in the URI). streams is the number of parallel TURN relay streams
+// (-n); pass <=0 to keep the client default (10) — more streams trade VK-call
+// churn for throughput. It validates the configuration synchronously and runs
+// the blocking relay loop in a background goroutine. Returns an error only for
+// invalid configuration; runtime failures are logged and end the session
 // (observable via IsRunning).
-func Start(uri, listenAddr, vkLink string) error {
+func Start(uri, listenAddr, vkLink string, nStreams int) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if running.Load() {
 		return errors.New("freeturn already running")
 	}
 
-	args := []string{uri, "-listen", listenAddr}
+	// Flags MUST precede the positional URI: Go's flag package stops parsing flags at
+	// the first non-flag argument, so a leading URI would swallow -listen/-link/-debug
+	// (ParseClient then fails with "need -link"). Keep the freeturn:// URI last.
+	args := []string{"-listen", listenAddr}
 	if vkLink != "" {
 		args = append(args, "-link", vkLink)
+	}
+	if nStreams > 0 {
+		args = append(args, "-n", strconv.Itoa(nStreams))
 	}
 	if debug.Load() {
 		args = append(args, "-debug")
 	}
+	args = append(args, uri)
 
 	cfg, err := config.ParseClient(args, io.Discard)
 	if err != nil {
@@ -109,9 +129,11 @@ func Start(uri, listenAddr, vkLink string) error {
 	done = doneCh
 	running.Store(true)
 
+	streams.Store(0)
 	go func() {
 		defer close(doneCh)
 		defer running.Store(false)
+		defer streams.Store(0)
 		if rerr := run(ctx, cfg); rerr != nil && !errors.Is(rerr, context.Canceled) {
 			log.Printf("[freeturn] stopped: %v", rerr)
 		}
@@ -153,8 +175,8 @@ func run(ctx context.Context, cfg *config.Client) error {
 		return fmt.Errorf("resolve peer addr: %w", err)
 	}
 
-	var connectedStreams atomic.Int32
-	prov, err := buildProvider(cfg, appDialer, &connectedStreams, logger)
+	connectedStreams := &streams
+	prov, err := buildProvider(cfg, appDialer, connectedStreams, logger)
 	if err != nil {
 		return fmt.Errorf("provider init: %w", err)
 	}
@@ -204,7 +226,7 @@ func run(ctx context.Context, cfg *config.Client) error {
 		GetCreds:     udprelay.GetCredsFunc(getCreds),
 		ClientID:     cfg.ClientID,
 	}
-	return udprelay.Run(ctx, udpDtlsDialer, prov, logger, &connectedStreams, udpParams, peer, cfg.Proxy.Listen, cfg.TURN.N)
+	return udprelay.Run(ctx, udpDtlsDialer, prov, logger, connectedStreams, udpParams, peer, cfg.Proxy.Listen, cfg.TURN.N)
 }
 
 // buildProvider mirrors cmd/client/main.go.

@@ -1,5 +1,6 @@
 package org.olcbox.app.data.share
 
+import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 
@@ -8,6 +9,10 @@ object ConfigShareService {
 
     fun olcRtcUri(config: LocationConfig): String {
         val normalized = config.normalized()
+        // VK-TURN locations share their freeturn:// link verbatim (it carries the WG config).
+        if (normalized.engine == EngineType.VkTurn) {
+            return normalized.vkturn?.uri.orEmpty()
+        }
         val transport = when (normalized.transport) {
             LocationConfig.TRANSPORT_VP8CHANNEL -> {
                 "vp8channel<vp8-fps=${normalized.vp8Fps}&vp8-batch=${normalized.vp8Batch}>"

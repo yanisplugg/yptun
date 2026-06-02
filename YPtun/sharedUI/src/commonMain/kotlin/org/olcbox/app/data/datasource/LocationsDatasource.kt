@@ -1356,7 +1356,7 @@ class LocationsRepositoryImpl(
                     }
                 }
                 .normalized()
-                .takeIf { it.location.isComplete() }
+                .takeIf { it.location.isStorable() }
         }.getOrNull()
     }
 

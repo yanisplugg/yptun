@@ -21,13 +21,14 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.data.importer.ShareLinkParser
+import org.olcbox.app.data.importer.VkTurnComposer
+import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
-import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 
 data class LocationItem(
@@ -104,6 +105,10 @@ class LocationViewModel(
     var editingProxyLink by mutableStateOf("")
         private set
 
+    /** Editable VK-TURN (freeturn + WireGuard) fields for the [EngineType.VkTurn] engine. */
+    var editingVkTurn by mutableStateOf(VkTurnDraft())
+        private set
+
     var proxyError by mutableStateOf<String?>(null)
         private set
 
@@ -111,12 +116,26 @@ class LocationViewModel(
         get() = serverError == null && keyError == null &&
                 editingConfig.id.isNotBlank() && editingConfig.key.isNotBlank()
 
+    /**
+     * The freeturn peer + WireGuard keys needed to reach the tunnel. The per-client VK call link
+     * is filled in separately and is not required to save (see [LocationConfig.isStorable]).
+     */
+    private val vkTurnFieldsValid: Boolean
+        get() = with(editingVkTurn) {
+            peerHost.isNotBlank() &&
+                (peerPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
+                (listenPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
+                wgPrivateKey.isNotBlank() &&
+                wgPeerPublicKey.isNotBlank() &&
+                wgAddress.isNotBlank()
+        }
+
     val isFormValid: Boolean
         get() = nameError == null && editingName.isNotBlank() && when (editingConfig.engine) {
             EngineType.Stealth -> olcrtcFieldsValid
             EngineType.Standard -> editingConfig.proxy?.isComplete() == true
             EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
-            EngineType.VkTurn -> editingConfig.isComplete()
+            EngineType.VkTurn -> vkTurnFieldsValid
         }
 
     init {
@@ -368,6 +387,11 @@ class LocationViewModel(
                     ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS
                 ).toString()
         }
+        editingVkTurn = if (editingConfig.engine == EngineType.VkTurn) {
+            VkTurnComposer.decompose(editingConfig.vkturn, editingConfig.proxy)
+        } else {
+            VkTurnDraft()
+        }
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
             LocationConfig.DEFAULT_BYPASS_PROVIDER
@@ -383,6 +407,10 @@ class LocationViewModel(
     fun onNameChanged(value: String) {
         editingName = value
         validateName(value)
+        // Keep the derived VK-TURN proxy tag in step with the location name.
+        if (editingConfig.engine == EngineType.VkTurn) {
+            updateVkTurnDraft { it }
+        }
     }
 
     fun onServerChanged(value: String) {
@@ -403,16 +431,37 @@ class LocationViewModel(
 
     /** Per-client VK Calls join link for a VK-TURN location (not carried in the share link). */
     fun onVkLinkChanged(value: String) {
-        val current = editingConfig.vkturn ?: VkTurnConfig()
-        editingConfig = editingConfig.copy(vkturn = current.copy(vkLink = value.trim()))
+        updateVkTurnDraft { it.copy(vkLink = value) }
+    }
+
+    /**
+     * Applies an edit to the VK-TURN draft and rebuilds the derived freeturn:// URI + WireGuard
+     * outbound so [editingConfig] stays in sync for saving and validation.
+     */
+    fun updateVkTurnDraft(transform: (VkTurnDraft) -> VkTurnDraft) {
+        val updated = transform(editingVkTurn)
+        editingVkTurn = updated
+        val (vkturn, proxy) = VkTurnComposer.compose(updated, editingName.ifBlank { "VK-TURN" })
+        editingConfig = editingConfig.copy(vkturn = vkturn, proxy = proxy)
     }
 
     fun onEngineChanged(engine: EngineType) {
+        val previous = editingConfig.engine
         editingConfig = editingConfig.copy(engine = engine)
         // Clear olcRTC field errors when they are no longer required.
         if (engine == EngineType.Standard) {
             serverError = null
             keyError = null
+        }
+        if (engine == EngineType.VkTurn) {
+            // Materialize the freeturn URI + WireGuard outbound from the current draft so a freshly
+            // picked VK-TURN location is immediately consistent.
+            updateVkTurnDraft { it }
+        } else if (previous == EngineType.VkTurn) {
+            // Drop the derived WireGuard outbound so it does not leak into proxy-based engines.
+            editingConfig = editingConfig.copy(vkturn = null, proxy = null)
+            editingProxyLink = ""
+            proxyError = null
         }
     }
 

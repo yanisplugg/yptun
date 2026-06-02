@@ -384,8 +384,14 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     override suspend fun ping(locationConfig: LocationConfig): Long? {
         // VLESS/standard locations have no olcRTC room/key — pinging them via olcRTC is unstable.
         // Use a plain TCP latency probe to the proxy server instead (like typical proxy clients).
-        if (locationConfig.engine == EngineType.Standard || locationConfig.engine == EngineType.VkTurn) {
+        if (locationConfig.engine == EngineType.Standard) {
             return tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
+        }
+        // VK-TURN exposes only an obfuscated UDP/DTLS listener, so a direct TCP probe always fails.
+        // The only meaningful measurement is end-to-end latency through the live tunnel, so we
+        // probe via the local SOCKS proxy when connected; otherwise latency is unknown.
+        if (locationConfig.engine == EngineType.VkTurn) {
+            return vkTurnTunnelPing()
         }
         return OlcRtcConnectionChecker.ping(
             locationConfig = locationConfig,
@@ -394,13 +400,124 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
-        if (locationConfig.engine == EngineType.Standard || locationConfig.engine == EngineType.VkTurn) {
+        if (locationConfig.engine == EngineType.Standard) {
             return tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
+        }
+        if (locationConfig.engine == EngineType.VkTurn) {
+            return vkTurnTunnelPing()
         }
         return OlcRtcConnectionChecker.check(
             locationConfig = locationConfig,
             deviceId = deviceIdentityProvider.hwid()
         )
+    }
+
+    /**
+     * Latency of the VK-TURN tunnel measured end-to-end: a SOCKS5 CONNECT through the local proxy
+     * to a reliable host (1.1.1.1:53) — the round trip traverses WireGuard over the VK relay. Only
+     * meaningful while connected; returns null otherwise (shown as "unknown", not offline).
+     */
+    private suspend fun vkTurnTunnelPing(): Long? = withContext(Dispatchers.IO) {
+        if (status.value !is VpnStatus.Connected && status.value !is VpnStatus.Reconnecting) {
+            return@withContext null
+        }
+        val proxy = _proxySettings.value
+        val host = AndroidSocksProxySettings.connectHost(proxy.host)
+        var best: Long? = null
+        repeat(TCP_PING_ATTEMPTS) {
+            val elapsed = runCatching {
+                socksConnectRtt(
+                    proxyHost = host,
+                    proxyPort = proxy.port,
+                    username = proxy.username,
+                    password = proxy.password,
+                    targetHost = TUNNEL_PROBE_HOST,
+                    targetPort = TUNNEL_PROBE_PORT
+                )
+            }.getOrNull()
+            if (elapsed != null && (best == null || elapsed < best!!)) best = elapsed
+        }
+        best
+    }
+
+    /** Performs a SOCKS5 CONNECT through proxyHost:proxyPort to target and returns the RTT in ms. */
+    private fun socksConnectRtt(
+        proxyHost: String,
+        proxyPort: Int,
+        username: String,
+        password: String,
+        targetHost: String,
+        targetPort: Int
+    ): Long? {
+        java.net.Socket().use { socket ->
+            socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), TCP_PING_TIMEOUT_MS)
+            socket.soTimeout = TCP_PING_TIMEOUT_MS
+            val out = socket.getOutputStream()
+            val inp = socket.getInputStream()
+            val start = System.nanoTime()
+
+            // Greeting: offer no-auth and (if creds present) username/password.
+            val useAuth = username.isNotBlank()
+            if (useAuth) {
+                out.write(byteArrayOf(0x05, 0x02, 0x00, 0x02))
+            } else {
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+            }
+            out.flush()
+            val method = readN(inp, 2)
+            if (method[0].toInt() != 0x05) return null
+            when (method[1].toInt() and 0xFF) {
+                0x00 -> {} // no auth
+                0x02 -> {
+                    val u = username.encodeToByteArray()
+                    val p = password.encodeToByteArray()
+                    val auth = ByteArray(3 + u.size + p.size)
+                    auth[0] = 0x01
+                    auth[1] = u.size.toByte()
+                    u.copyInto(auth, 2)
+                    auth[2 + u.size] = p.size.toByte()
+                    p.copyInto(auth, 3 + u.size)
+                    out.write(auth); out.flush()
+                    val authReply = readN(inp, 2)
+                    if (authReply[1].toInt() != 0x00) return null
+                }
+                else -> return null
+            }
+
+            // CONNECT to targetHost:targetPort as a domain name (ATYP=0x03).
+            val hostBytes = targetHost.encodeToByteArray()
+            val req = ByteArray(5 + hostBytes.size + 2)
+            req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03
+            req[4] = hostBytes.size.toByte()
+            hostBytes.copyInto(req, 5)
+            req[5 + hostBytes.size] = ((targetPort shr 8) and 0xFF).toByte()
+            req[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
+            out.write(req); out.flush()
+
+            // Reply: VER REP RSV ATYP ... — REP 0x00 = success.
+            val head = readN(inp, 4)
+            if (head[1].toInt() != 0x00) return null
+            val addrLen = when (head[3].toInt() and 0xFF) {
+                0x01 -> 4
+                0x04 -> 16
+                0x03 -> readN(inp, 1)[0].toInt() and 0xFF
+                else -> return null
+            }
+            readN(inp, addrLen + 2) // consume bound addr + port
+            return (System.nanoTime() - start) / 1_000_000L
+        }
+    }
+
+    /** Reads exactly n bytes or throws. */
+    private fun readN(inp: java.io.InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n)
+        var off = 0
+        while (off < n) {
+            val r = inp.read(buf, off, n - off)
+            if (r < 0) throw java.io.EOFException("socks short read")
+            off += r
+        }
+        return buf
     }
 
     /** TCP-connect latency to host:port in ms, best of a few attempts, or null if unreachable. */
@@ -533,6 +650,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
         const val TCP_PING_ATTEMPTS = 2
         const val TCP_PING_TIMEOUT_MS = 3_000
+        // End-to-end tunnel latency probe target (TCP DNS is widely reachable and lightweight).
+        const val TUNNEL_PROBE_HOST = "1.1.1.1"
+        const val TUNNEL_PROBE_PORT = 53
         val random = SecureRandom()
     }
 }

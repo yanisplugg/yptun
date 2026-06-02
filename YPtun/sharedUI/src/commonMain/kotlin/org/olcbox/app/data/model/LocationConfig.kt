@@ -28,9 +28,25 @@ data class VkTurnConfig(
     val vkLink: String = "",
     @SerialName("listen_port")
     val listenPort: Int = LocationConfig.DEFAULT_FREETURN_PORT,
+    /** Parallel TURN relay streams (freeturn -n); 0 keeps the client default (10). */
+    val streams: Int = 0,
+    /**
+     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the WG-over-VK tunnel:
+     * the proxy server is dialed THROUGH WireGuard (sing-box detour). Blank = plain WG only.
+     */
+    @SerialName("chain_proxy_link")
+    val chainProxyLink: String = "",
 ) {
     fun isComplete(): Boolean =
-        uri.startsWith("freeturn://") && vkLink.isNotBlank() && listenPort in 1..65535
+        isStorable() && vkLink.isNotBlank()
+
+    /**
+     * True when the freeturn link + WG transport are present. The per-client [vkLink]
+     * is filled in by the user via the location settings after import, so a location
+     * is storable (and shown in the list) before [isComplete] is satisfied.
+     */
+    fun isStorable(): Boolean =
+        uri.startsWith("freeturn://") && listenPort in 1..65535
 }
 
 @Serializable
@@ -95,6 +111,16 @@ data class LocationConfig(
         EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
         // VK-TURN needs the freeturn link, the per-client VK call link and the WireGuard outbound.
         EngineType.VkTurn -> vkturn?.isComplete() == true && !proxy?.rawOutbound.isNullOrBlank()
+    }
+
+    /**
+     * True when this config has enough to persist in the location list. Matches
+     * [isComplete] for every engine except VK-TURN, where the per-client VK call
+     * link is filled in after import, so the location is kept (and shown) without it.
+     */
+    fun isStorable(): Boolean = when (engine) {
+        EngineType.VkTurn -> vkturn?.isStorable() == true && !proxy?.rawOutbound.isNullOrBlank()
+        else -> isComplete()
     }
 
     fun displayName(): String = name.ifBlank { id }
@@ -482,6 +508,7 @@ data class LocationEntry(
             engine = config.engine,
             proxy = config.proxy,
             core = config.core,
+            vkturn = config.vkturn,
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
             metadata = metadata
@@ -536,7 +563,7 @@ data class LocationBundleV4(
     fun normalized(): LocationBundleV4 {
         val normalizedLocations = locations
             .map { it.normalized() }
-            .filter { it.storageId.isNotBlank() && it.location.isComplete() }
+            .filter { it.storageId.isNotBlank() && it.location.isStorable() }
             .distinctBy { it.storageId }
 
         val active = activeLocationId

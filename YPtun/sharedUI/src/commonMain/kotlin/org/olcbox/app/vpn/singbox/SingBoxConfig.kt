@@ -28,6 +28,7 @@ object SingBoxConfig {
 
     private const val PROXY_TAG = "proxy"
     private const val OLCRTC_TAG = "olcrtc-out"
+    private const val WG_BASE_TAG = "wireguard-base"
     private const val SOCKS_IN_TAG = "socks-in"
 
     /** Raw-outbound types that do not support sing-box smux and must not get a multiplex block. */
@@ -51,6 +52,11 @@ object SingBoxConfig {
         autoDetectInterface: Boolean = false,
         routing: RoutingRules = RoutingRules(),
         traffic: TrafficSettings = TrafficSettings(),
+        // VK-TURN chain: when set, [profile] is the chained proxy and this WireGuard profile is
+        // added as the base outbound; the proxy dials its server THROUGH WireGuard (detour).
+        wireguardBase: ProxyProfile? = null,
+        // Overrides the DNS resolution strategy (e.g. "ipv4_only" for an IPv4-only WG tunnel).
+        dnsStrategyOverride: String? = null,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") {
@@ -80,7 +86,10 @@ object SingBoxConfig {
                     }
                 }
                 put("final", "remote")
-                put("strategy", traffic.domainStrategy)
+                // ipv4_only override (VK-TURN): the WireGuard tunnel is IPv4-only, so resolving
+                // AAAA would make dual-stack sites attempt IPv6 → "no route to host". Forcing A-only
+                // keeps all traffic on IPv4 through the tunnel.
+                put("strategy", dnsStrategyOverride ?: traffic.domainStrategy)
             }
 
             putJsonArray("inbounds") {
@@ -101,7 +110,18 @@ object SingBoxConfig {
             }
 
             putJsonArray("outbounds") {
-                add(buildProxyOutbound(profile, chained = olcrtcChainPort != null, traffic = traffic))
+                val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
+                add(
+                    buildProxyOutbound(
+                        profile,
+                        chained = olcrtcChainPort != null,
+                        traffic = traffic,
+                        detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null
+                    )
+                )
+                if (wgBaseOutbound != null) {
+                    add(wgBaseOutbound)
+                }
                 if (olcrtcChainPort != null) {
                     addJsonObject {
                         put("type", "socks")
@@ -197,8 +217,12 @@ object SingBoxConfig {
     private fun buildProxyOutbound(
         profile: ProxyProfile,
         chained: Boolean,
-        traffic: TrafficSettings = TrafficSettings()
+        traffic: TrafficSettings = TrafficSettings(),
+        // When set, the proxy is chained over this outbound tag (e.g. the WireGuard base for
+        // VK-TURN). Takes precedence over the olcRTC [chained] detour.
+        detourTagOverride: String? = null
     ): JsonObject {
+        val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         // Catch-all: a raw sing-box outbound is used verbatim (tag/detour injected).
         profile.rawOutbound?.takeIf { it.isNotBlank() }?.let { raw ->
             val rawObj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
@@ -210,7 +234,7 @@ object SingBoxConfig {
                 return buildJsonObject {
                     rawObj.forEach { (k, v) -> if (k != "tag" && k != "detour") put(k, v) }
                     put("tag", PROXY_TAG)
-                    if (chained) put("detour", OLCRTC_TAG)
+                    if (detourTag != null) put("detour", detourTag)
                     if (!muxUnsupported && raw.indexOf("multiplex") < 0) {
                         buildMultiplex(traffic)?.let { put("multiplex", it) }
                     }
@@ -256,8 +280,18 @@ object SingBoxConfig {
                 buildTransport(profile)?.let { put("transport", it) }
             }
 
-            if (chained) put("detour", OLCRTC_TAG)
+            if (detourTag != null) put("detour", detourTag)
             buildMultiplex(traffic)?.let { put("multiplex", it) }
+        }
+    }
+
+    /** A raw WireGuard outbound used as a chain base (tagged [WG_BASE_TAG], no mux/detour). */
+    private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {
+        val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
+        val rawObj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        return buildJsonObject {
+            rawObj.forEach { (k, v) -> if (k != "tag" && k != "detour") put(k, v) }
+            put("tag", WG_BASE_TAG)
         }
     }
 

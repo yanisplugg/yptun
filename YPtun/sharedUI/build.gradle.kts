@@ -150,6 +150,10 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         coresRepoDir.resolve("bind.go")
     )
     inputs.dir(coresRepoDir.resolve("xraybridge"))
+    // free-turn-proxy is a sibling replace module; track its bound sources so edits there
+    // (e.g. the freeturn wrapper / relay) re-trigger the gomobile bind.
+    inputs.dir(coresRepoDir.resolve("../free-turn-proxy/freeturn"))
+    inputs.dir(coresRepoDir.resolve("../free-turn-proxy/internal"))
     inputs.property("tags", libboxBuildTags)
     outputs.file(coresAndroidAar)
 

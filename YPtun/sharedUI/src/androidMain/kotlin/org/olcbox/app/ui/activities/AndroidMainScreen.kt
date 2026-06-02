@@ -9,7 +9,17 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -421,6 +431,14 @@ fun AndroidMainScreen(
         )
     }
 
+    homeState.vkTurnLinkPrompt?.let { prompt ->
+        VkTurnLinkPromptDialog(
+            locationName = prompt.locationName,
+            onLater = { viewModel.dismissVkTurnLinkPrompt() },
+            onNext = { link -> viewModel.submitVkTurnLink(prompt.storageId, link) }
+        )
+    }
+
     updateOffer?.let { info ->
         ApplicationUpdateOfferSheet(
             info = info,
@@ -551,4 +569,48 @@ fun AndroidMainScreen(
 private sealed class PendingVpnPermissionAction {
     object Toggle : PendingVpnPermissionAction()
     data class RestartWithMode(val mode: AndroidConnectionMode) : PendingVpnPermissionAction()
+}
+
+/**
+ * Asks for the per-client VK Calls link right after a VK-TURN location is imported. "Later" defers
+ * (the link can be added from location settings); "Next" saves it so the location can connect.
+ */
+@Composable
+private fun VkTurnLinkPromptDialog(
+    locationName: String,
+    onLater: () -> Unit,
+    onNext: (String) -> Unit
+) {
+    var link by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onLater,
+        title = { Text("VK call link") },
+        text = {
+            Column {
+                Text("Paste your personal VK Calls join link for \"$locationName\" to finish setup.")
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = link,
+                    onValueChange = { link = it },
+                    singleLine = true,
+                    placeholder = { Text("https://vk.com/call/join/…") },
+                    isError = link.isNotBlank() && !link.contains("/call/join/"),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onNext(link) },
+                enabled = link.contains("/call/join/")
+            ) {
+                Text("Next")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onLater) {
+                Text("Later")
+            }
+        }
+    )
 }

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -45,6 +46,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -65,6 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
+import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
@@ -185,15 +188,12 @@ fun LocationSettingsScreen(
                 )
             }
 
-            // VK-TURN locations are created by importing a freeturn:// link, not picked manually.
-            if (config.engine != EngineType.VkTurn) {
-                item {
-                    EngineSelector(
-                        selected = config.engine,
-                        enabled = !isSaving,
-                        onSelected = viewModel::onEngineChanged
-                    )
-                }
+            item {
+                EngineSelector(
+                    selected = config.engine,
+                    enabled = !isSaving,
+                    onSelected = viewModel::onEngineChanged
+                )
             }
 
             if (config.engine == EngineType.Standard || config.engine == EngineType.Chain) {
@@ -216,14 +216,11 @@ fun LocationSettingsScreen(
             }
 
             if (config.engine == EngineType.VkTurn) {
-                item {
-                    VkTurnLinkField(
-                        vkLink = config.vkturn?.vkLink.orEmpty(),
-                        serverIp = config.proxy?.server.orEmpty(),
-                        enabled = !isSaving,
-                        onChange = viewModel::onVkLinkChanged
-                    )
-                }
+                vkTurnSection(
+                    draft = viewModel.editingVkTurn,
+                    enabled = !isSaving,
+                    onChange = viewModel::updateVkTurnDraft
+                )
             }
 
             if (config.engine == EngineType.Stealth || config.engine == EngineType.Chain) {
@@ -344,7 +341,12 @@ private fun EngineSelector(
     enabled: Boolean,
     onSelected: (EngineType) -> Unit
 ) {
-    val options = listOf(EngineType.Stealth, EngineType.Standard, EngineType.Chain)
+    val options = listOf(
+        EngineType.Stealth,
+        EngineType.Standard,
+        EngineType.Chain,
+        EngineType.VkTurn
+    )
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -406,36 +408,270 @@ private fun ProxyField(
     }
 }
 
-@Composable
-private fun VkTurnLinkField(
-    vkLink: String,
-    serverIp: String,
+/**
+ * Detailed VK-TURN (freeturn + WireGuard) editor. Every field feeds [VkTurnDraft]; the view model
+ * rebuilds the freeturn:// link and the sing-box WireGuard outbound from it on each change.
+ */
+private fun LazyListScope.vkTurnSection(
+    draft: VkTurnDraft,
     enabled: Boolean,
-    onChange: (String) -> Unit
+    onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        SectionTitle(
-            title = "VK-TURN",
-            subtitle = if (serverIp.isNotBlank()) {
-                "WireGuard over a VK TURN tunnel · $serverIp"
-            } else {
-                "WireGuard over a VK TURN tunnel"
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "VK call link",
+                subtitle = "Your personal VK Calls join link (required to connect)"
+            )
+            VkTurnField(
+                value = draft.vkLink,
+                onValueChange = { v -> onChange { it.copy(vkLink = v) } },
+                label = "VK call link",
+                placeholder = "https://vk.com/call/join/…",
+                enabled = enabled,
+                isError = draft.vkLink.isNotBlank() && !draft.vkLink.contains("/call/join/")
+            )
+        }
+    }
+
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "Freeturn transport",
+                subtitle = "VK TURN relay endpoint and obfuscation"
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                VkTurnField(
+                    value = draft.peerHost,
+                    onValueChange = { v -> onChange { it.copy(peerHost = v) } },
+                    label = "Server host",
+                    placeholder = "203.0.113.7",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Uri,
+                    modifier = Modifier.weight(2f)
+                )
+                VkTurnField(
+                    value = draft.peerPort,
+                    onValueChange = { v -> onChange { it.copy(peerPort = v.filter(Char::isDigit)) } },
+                    label = "Port",
+                    placeholder = "56000",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number,
+                    modifier = Modifier.weight(1f)
+                )
             }
-        )
-        OutlinedTextField(
-            value = vkLink,
-            onValueChange = onChange,
-            label = { Text("VK call link") },
-            placeholder = { Text("https://vk.com/call/join/…") },
-            enabled = enabled,
-            isError = vkLink.isNotBlank() && !vkLink.contains("/call/join/"),
-            supportingText = { Text("Paste your personal VK Calls join link") },
-            minLines = 1,
-            modifier = Modifier.fillMaxWidth()
-        )
+            SettingsDropdown(
+                label = "Transport (to TURN relay)",
+                selectedValue = draft.transport.ifBlank { "tcp" },
+                options = listOf("tcp", "udp"),
+                enabled = enabled,
+                onValueSelected = { v -> onChange { it.copy(transport = v) } },
+                valueLabel = { it }
+            )
+            SettingsDropdown(
+                label = "Mode (tunnel payload)",
+                selectedValue = draft.mode.ifBlank { "udp" },
+                options = listOf("udp", "tcp"),
+                enabled = enabled,
+                onValueSelected = { v -> onChange { it.copy(mode = v) } },
+                valueLabel = { m -> if (m == "udp") "udp (WireGuard)" else "tcp (proxy)" }
+            )
+            SettingsDropdown(
+                label = "Obfuscation profile",
+                selectedValue = draft.obfProfile.ifBlank { "rtpopus" },
+                options = listOf("none", "rtpopus"),
+                enabled = enabled,
+                onValueSelected = { v -> onChange { it.copy(obfProfile = v) } },
+                valueLabel = { it }
+            )
+            VkTurnField(
+                value = draft.obfKey,
+                onValueChange = { v -> onChange { it.copy(obfKey = v) } },
+                label = "Obfuscation key",
+                placeholder = "64 hex characters",
+                enabled = enabled
+            )
+            VkTurnField(
+                value = draft.streams,
+                onValueChange = { v -> onChange { it.copy(streams = v.filter(Char::isDigit)) } },
+                label = "Streams (parallel relays)",
+                placeholder = "10 (default) — more = faster, more VK churn",
+                enabled = enabled,
+                keyboardType = KeyboardType.Number
+            )
+            VkTurnSwitchRow(
+                label = "Bonding (multipath)",
+                checked = draft.bond,
+                enabled = enabled,
+                onCheckedChange = { v -> onChange { it.copy(bond = v) } }
+            )
+        }
+    }
+
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "WireGuard",
+                subtitle = "The tunnel sing-box dials through the local freeturn listener"
+            )
+            VkTurnField(
+                value = draft.wgPrivateKey,
+                onValueChange = { v -> onChange { it.copy(wgPrivateKey = v.trim()) } },
+                label = "Private key",
+                placeholder = "client private key (base64)",
+                enabled = enabled
+            )
+            VkTurnField(
+                value = draft.wgPeerPublicKey,
+                onValueChange = { v -> onChange { it.copy(wgPeerPublicKey = v.trim()) } },
+                label = "Peer public key",
+                placeholder = "server public key (base64)",
+                enabled = enabled
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                VkTurnField(
+                    value = draft.wgAddress,
+                    onValueChange = { v -> onChange { it.copy(wgAddress = v.trim()) } },
+                    label = "Address",
+                    placeholder = "10.7.1.2/32",
+                    enabled = enabled,
+                    modifier = Modifier.weight(2f)
+                )
+                VkTurnField(
+                    value = draft.wgMtu,
+                    onValueChange = { v -> onChange { it.copy(wgMtu = v.filter(Char::isDigit)) } },
+                    label = "MTU",
+                    placeholder = "1280",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                VkTurnField(
+                    value = draft.wgDns,
+                    onValueChange = { v -> onChange { it.copy(wgDns = v.trim()) } },
+                    label = "DNS",
+                    placeholder = "1.1.1.1",
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f)
+                )
+                VkTurnField(
+                    value = draft.listenPort,
+                    onValueChange = { v -> onChange { it.copy(listenPort = v.filter(Char::isDigit)) } },
+                    label = "Listen port",
+                    placeholder = "9000",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                VkTurnField(
+                    value = draft.wgAllowedIps,
+                    onValueChange = { v -> onChange { it.copy(wgAllowedIps = v.trim()) } },
+                    label = "Allowed IPs",
+                    placeholder = "0.0.0.0/0",
+                    enabled = enabled,
+                    modifier = Modifier.weight(2f)
+                )
+                VkTurnField(
+                    value = draft.wgKeepalive,
+                    onValueChange = { v -> onChange { it.copy(wgKeepalive = v.filter(Char::isDigit)) } },
+                    label = "Keepalive",
+                    placeholder = "25",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "Proxy over VK-TURN (optional)",
+                subtitle = "Chain a vless/vmess/trojan/ss proxy on top of the WireGuard tunnel"
+            )
+            OutlinedTextField(
+                value = draft.chainProxyLink,
+                onValueChange = { v -> onChange { it.copy(chainProxyLink = v) } },
+                label = { Text("Proxy link") },
+                placeholder = { Text("vless://…  (leave empty for plain WireGuard)") },
+                enabled = enabled,
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun VkTurnField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String,
+    enabled: Boolean,
+    isError: Boolean = false,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    modifier: Modifier = Modifier
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        placeholder = { Text(placeholder) },
+        enabled = enabled,
+        isError = isError,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = keyboardType,
+            imeAction = ImeAction.Next
+        ),
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun VkTurnSwitchRow(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodyLarge)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 
