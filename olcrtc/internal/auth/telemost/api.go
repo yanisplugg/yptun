@@ -21,6 +21,13 @@ import (
 //nolint:gochecknoglobals // overridable base URL for tests
 var apiBase = "https://cloud-api.yandex.ru/telemost_front/v2/telemost"
 
+//nolint:gochecknoglobals // optional Yandex auth cookies, set from the mobile binding
+var cookies string
+
+// SetCookies stores the Yandex auth cookie header (e.g. "Session_id=...; yandexuid=...") sent with
+// Telemost API requests. Empty disables it. Lets a signed-in account join restricted conferences.
+func SetCookies(c string) { cookies = c }
+
 // ErrAPI marks failures returned by the Telemost HTTP API.
 var ErrAPI = errors.New("api error")
 
@@ -59,6 +66,9 @@ func GetConnectionInfo(ctx context.Context, roomURL, displayName string) (*Conne
 	req.Header.Set("Idempotency-Key", uuid.New().String())
 	req.Header.Set("Origin", "https://telemost.yandex.ru")
 	req.Header.Set("Referer", "https://telemost.yandex.ru/")
+	if cookies != "" {
+		req.Header.Set("Cookie", cookies)
+	}
 
 	client := protect.NewHTTPClient()
 	resp, err := client.Do(req)

@@ -71,8 +71,10 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PORT
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME
 import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING
+import org.olcbox.app.vpn.data.KEY_ANDROID_APP_BEHAVIOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_TRAFFIC
 import org.olcbox.app.data.model.RoutingRules
+import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
 import kotlinx.serialization.json.Json
 import java.io.DataInputStream
@@ -639,6 +641,7 @@ class OlcboxVpnService : VpnService() {
             waitForJitsiRoomCleanup(config.bypassProvider)
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
             configureMobileTransport(config)
+            applyTelemostCookies(config)
             addLog(
                 "Starting olcRTC provider=${config.bypassProvider}, " +
                     "transport=${config.transport}, room=${config.id}"
@@ -732,6 +735,7 @@ class OlcboxVpnService : VpnService() {
                 waitForSocksPortReleased(chainPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
                 installMobileCallbacks()
                 configureMobileTransport(config)
+                applyTelemostCookies(config)
                 addLog("Starting olcRTC (chain) provider=${config.bypassProvider}, room=${config.id}")
                 lastMobileProvider = config.bypassProvider
                 Mobile.startWithTransport(
@@ -1484,6 +1488,24 @@ class OlcboxVpnService : VpnService() {
         return runCatching { Json.decodeFromString(TrafficSettings.serializer(), raw) }
             .getOrDefault(TrafficSettings())
             .normalized()
+    }
+
+    private suspend fun loadAppBehavior(): AppBehaviorSettings {
+        val raw = runCatching {
+            applicationContext.vpnPrefDataStore.data.first()[KEY_ANDROID_APP_BEHAVIOR]
+        }.getOrNull() ?: return AppBehaviorSettings()
+        return runCatching { Json.decodeFromString(AppBehaviorSettings.serializer(), raw) }
+            .getOrDefault(AppBehaviorSettings())
+    }
+
+    /** Applies the stored Yandex Telemost cookies to olcRTC when enabled and the carrier is Telemost. */
+    private suspend fun applyTelemostCookies(config: LocationConfig) {
+        val behavior = loadAppBehavior()
+        val use = behavior.telemostCookiesEnabled &&
+            behavior.telemostCookies.isNotBlank() &&
+            LocationConfig.normalizeProvider(config.bypassProvider) == LocationConfig.PROVIDER_TELEMOST
+        runCatching { Mobile.setTelemostCookies(if (use) behavior.telemostCookies.trim() else "") }
+        if (use) addLog("Applied Telemost cookies")
     }
 
     /** Cryptographically random token for per-session local SOCKS5 credentials (hex, 18 bytes). */

@@ -156,6 +156,10 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
     inputs.dir(coresRepoDir.resolve("../free-turn-proxy/internal"))
     // AmneziaWG SOCKS bridge (sibling module) + its local amneziawg-go fork.
     inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
+    // olcrtc (sibling replace module) bound packages — track so edits (e.g. telemost cookies)
+    // re-trigger the bind.
+    inputs.dir(olcrtcRepoDir.resolve("mobile"))
+    inputs.dir(olcrtcRepoDir.resolve("internal"))
     inputs.property("tags", libboxBuildTags)
     outputs.file(coresAndroidAar)
 

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
+	"github.com/openlibrecommunity/olcrtc/internal/auth/telemost"
 	"github.com/openlibrecommunity/olcrtc/internal/client"
 	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
@@ -122,6 +123,12 @@ func SetTransport(transport string) {
 	defer mu.Unlock()
 	ensureDefaultConfigLocked()
 	defaults.transport = normalizeTransport(transport)
+}
+
+// SetTelemostCookies sets (or clears, when empty) the Yandex auth cookie header sent with Telemost
+// API requests, so a signed-in account can join conferences that require authorization.
+func SetTelemostCookies(cookies string) {
+	telemost.SetCookies(cookies)
 }
 
 // SetDNS selects the DNS server used by the tunnel.

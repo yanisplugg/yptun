@@ -37,6 +37,7 @@ import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.ui.graphics.toArgb
 import org.olcbox.app.ui.theme.ThemeState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -2909,6 +2910,7 @@ private fun ApplicationBehaviorContent(
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        var unlockTaps by remember { mutableStateOf(0) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
@@ -2917,7 +2919,16 @@ private fun ApplicationBehaviorContent(
             Text(
                 text = s.applicationSettings,
                 style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                // Tap the title 5× to unlock Experimental settings (Android dev-options style).
+                modifier = Modifier.clickable(
+                    enabled = !settings.experimentalUnlocked,
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) {
+                    unlockTaps++
+                    if (unlockTaps >= 5) onChanged(settings.copy(experimentalUnlocked = true))
+                }
             )
         }
 
@@ -2947,6 +2958,30 @@ private fun ApplicationBehaviorContent(
                     label = { Text(title) }
                 )
             }
+        }
+
+        if (settings.experimentalUnlocked) {
+            SettingsSectionLabel("Экспериментальные / Experimental")
+            Text(
+                text = "Telemost: cookies авторизованного аккаунта Яндекс (заголовок Cookie, напр. " +
+                    "\"Session_id=…; yandexuid=…\"). Кастомное ядро отдельным бинарём на Android " +
+                    "запустить нельзя — расширенная функция (cookies) встроена в штатное ядро.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            RoutingToggleRow(
+                title = "Использовать Telemost cookies",
+                subtitle = "Подставлять cookies при подключении к Telemost",
+                checked = settings.telemostCookiesEnabled
+            ) { onChanged(settings.copy(telemostCookiesEnabled = it)) }
+            OutlinedTextField(
+                value = settings.telemostCookies,
+                onValueChange = { onChanged(settings.copy(telemostCookies = it)) },
+                label = { Text("Telemost Cookie header") },
+                placeholder = { Text("Session_id=…; yandexuid=…") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
