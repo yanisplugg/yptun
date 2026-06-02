@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
@@ -113,6 +114,42 @@ func Start(iniConfig, listenAddr string) error {
 	go serveSocks(ln, tnet)
 	log.New(logSink, "", 0).Printf("AmneziaWG SOCKS up on %s", listenAddr)
 	return nil
+}
+
+// Probe measures round-trip latency to the AmneziaWG server WITHOUT a full connection: it brings
+// up a throwaway device on a private netstack, forces the WG handshake by dialing a reachable host
+// through the tunnel, returns the elapsed ms, and tears everything down. Returns -1 on failure
+// (unreachable/blocked/bad config). Safe to call while a real session runs (own socket/device).
+func Probe(iniConfig string) int64 {
+	cfg, err := parseConfig(iniConfig)
+	if err != nil {
+		return -1
+	}
+	uapi, err := cfg.uapi()
+	if err != nil {
+		return -1
+	}
+	tunDev, tnet, err := netstack.CreateNetTUN(cfg.addresses, cfg.dns, cfg.mtu)
+	if err != nil {
+		return -1
+	}
+	d := device.NewDevice(tunDev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "[awg-probe] "))
+	defer d.Close()
+	if err := d.IpcSet(uapi); err != nil {
+		return -1
+	}
+	if err := d.Up(); err != nil {
+		return -1
+	}
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	c, err := tnet.DialContext(ctx, "tcp", "1.1.1.1:443")
+	if err != nil {
+		return -1
+	}
+	_ = c.Close()
+	return time.Since(start).Milliseconds()
 }
 
 // Stop tears down the SOCKS listener and the AmneziaWG device.

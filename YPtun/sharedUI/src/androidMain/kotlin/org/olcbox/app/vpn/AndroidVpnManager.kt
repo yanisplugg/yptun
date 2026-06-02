@@ -392,7 +392,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Obfuscated transports whose real endpoint is blocked/hidden (VK-TURN, AmneziaWG):
             // the only meaningful probe is end-to-end through the live tunnel.
             locationConfig.engine == EngineType.VkTurn -> tunnelPing()
-            proxyType == ProxyProfile.TYPE_AMNEZIAWG -> tunnelPing()
+            proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
+                // Connected → measure through the live tunnel; otherwise a standalone WG-handshake
+                // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).
+                if (OlcboxVpnState.activeSocks != null) tunnelPing()
+                else awgProbePing(locationConfig.proxy?.awgConfig.orEmpty())
             // Plain proxies: TCP latency to the (reachable) proxy server.
             locationConfig.engine == EngineType.Standard ->
                 tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
@@ -414,6 +418,13 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      * mode) — without them the handshake is rejected (0xFF) and shows a false "Offline". Returns null
      * only when no core is up (cannot probe an obfuscated/blocked endpoint while disconnected).
      */
+    /** Pre-connection AmneziaWG latency: a throwaway WG handshake via the awgproxy probe. */
+    private suspend fun awgProbePing(awgConfig: String): Long? = withContext(Dispatchers.IO) {
+        if (awgConfig.isBlank()) return@withContext null
+        val ms = runCatching { awg.Awg.probe(awgConfig) }.getOrDefault(-1L)
+        if (ms >= 0) ms else null
+    }
+
     private suspend fun tunnelPing(): Long? = withContext(Dispatchers.IO) {
         val sock = OlcboxVpnState.activeSocks ?: return@withContext null
         val host = AndroidSocksProxySettings.connectHost(sock.host)
