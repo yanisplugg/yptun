@@ -103,6 +103,10 @@ class OlcboxVpnService : VpnService() {
         PersistentDeviceIdentityProvider(LocationsDataSourceImpl(applicationContext))
     }
 
+    private var lastNotificationStatus = ""
+    private var showSpeedInNotif = false
+    private var speedPrevStats: Tun2SocksStats? = null
+
     private var startupJob: Job? = null
     private var watchdogJob: Job? = null
     private var cleanupJob: Job? = null
@@ -612,6 +616,7 @@ class OlcboxVpnService : VpnService() {
     ): Boolean {
         engineType = location.engine
         activeMtu = loadTrafficSettings().mtu
+        showSpeedInNotif = loadAppBehavior().showSpeedInNotification
         return when (location.engine) {
             EngineType.Stealth -> startStealthCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.Standard,
@@ -1243,10 +1248,23 @@ class OlcboxVpnService : VpnService() {
         watchdogJob?.cancel()
         watchdogTunStats = null
         watchdogStalledSamples = 0
+        speedPrevStats = null
         val mode = connectionMode
         watchdogJob = scope.launch {
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
                 delay(WATCHDOG_INTERVAL_MS)
+
+                if (showSpeedInNotif && mode == AndroidConnectionMode.Tun) {
+                    val cur = readTun2SocksStats()
+                    val prev = speedPrevStats
+                    if (cur != null && prev != null) {
+                        val secs = (WATCHDOG_INTERVAL_MS / 1000.0).coerceAtLeast(1.0)
+                        val down = ((cur.rxBytes - prev.rxBytes) / secs).toLong()
+                        val up = ((cur.txBytes - prev.txBytes) / secs).toLong()
+                        updateNotification(lastNotificationStatus.ifBlank { "Подключено" }, speedLine(down, up))
+                    }
+                    speedPrevStats = cur
+                }
                 when {
                     !coreRunning() -> {
                         addLog("Watchdog: transport core stopped")
@@ -1921,16 +1939,20 @@ class OlcboxVpnService : VpnService() {
         )
     }
 
-    private fun updateNotification(status: String) {
+    private fun updateNotification(status: String, speed: CharSequence? = null) {
+        lastNotificationStatus = status
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIFICATION_ID, buildNotification(status))
+            .notify(NOTIFICATION_ID, buildNotification(status, speed))
     }
 
-    private fun buildNotification(status: String) =
+    private fun buildNotification(status: String, speed: CharSequence? = null) =
         NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("YPtun ${activeModeLabel()}")
-            .setContentText(status)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentText(speed ?: status)
+            .apply { if (speed != null) setSubText(status) }
+            // App icon: small icon in the status bar + large icon in the shade.
+            .setSmallIcon(applicationInfo.icon)
+            .also { b -> appIconBitmap()?.let { b.setLargeIcon(it) } }
             .setOngoing(true)
             .setContentIntent(getAppPendingIntent())
             .addAction(
@@ -1945,6 +1967,48 @@ class OlcboxVpnService : VpnService() {
             )
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+
+    private fun appIconBitmap(): android.graphics.Bitmap? = runCatching {
+        val d = packageManager.getApplicationIcon(packageName)
+        (d as? android.graphics.drawable.BitmapDrawable)?.bitmap ?: run {
+            val w = d.intrinsicWidth.coerceAtLeast(1)
+            val h = d.intrinsicHeight.coerceAtLeast(1)
+            val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bmp)
+            d.setBounds(0, 0, w, h)
+            d.draw(canvas)
+            bmp
+        }
+    }.getOrNull()
+
+    /** "↓ 1.2 MB/s  ↑ 300 KB/s" with a green download arrow and a blue upload arrow. */
+    private fun speedLine(downBytesPerSec: Long, upBytesPerSec: Long): CharSequence {
+        val sb = android.text.SpannableStringBuilder()
+        val downStart = sb.length
+        sb.append("↓ ")
+        sb.setSpan(
+            android.text.style.ForegroundColorSpan(0xFF2E7D32.toInt()), // green
+            downStart, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        sb.append("${formatRate(downBytesPerSec)}   ")
+        val upStart = sb.length
+        sb.append("↑ ")
+        sb.setSpan(
+            android.text.style.ForegroundColorSpan(0xFF1565C0.toInt()), // blue
+            upStart, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        sb.append(formatRate(upBytesPerSec))
+        return sb
+    }
+
+    private fun formatRate(bytesPerSec: Long): String {
+        val b = bytesPerSec.coerceAtLeast(0).toDouble()
+        return when {
+            b >= 1024 * 1024 -> String.format("%.1f MB/s", b / (1024 * 1024))
+            b >= 1024 -> String.format("%.0f KB/s", b / 1024)
+            else -> "${b.toLong()} B/s"
+        }
+    }
 
     private fun getAppPendingIntent(): PendingIntent {
         return PendingIntent.getActivity(

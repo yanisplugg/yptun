@@ -111,6 +111,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
@@ -2954,6 +2956,12 @@ private fun ApplicationBehaviorContent(
             checked = settings.confirmBeforeDelete
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
+        RoutingToggleRow(
+            title = "Скорость в уведомлении",
+            subtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке",
+            checked = settings.showSpeedInNotification
+        ) { onChanged(settings.copy(showSpeedInNotification = it)) }
+
         SettingsSectionLabel(s.language)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val options = listOf(
@@ -3020,7 +3028,41 @@ private fun ExperimentalContent(
             minLines = 2,
             modifier = Modifier.fillMaxWidth()
         )
+        val context = LocalContext.current
+        val cookiePicker = rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            uri ?: return@rememberLauncherForActivityResult
+            val text = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            if (text != null) {
+                onChanged(settings.copy(telemostCookies = cookiesFromFile(text)))
+                android.widget.Toast.makeText(context, "Cookies загружены", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                android.widget.Toast.makeText(context, "Не удалось прочитать файл", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+        OutlinedButton(
+            onClick = { cookiePicker.launch(arrayOf("*/*")) },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Загрузить из файла (cookies.txt)") }
     }
+}
+
+/** Builds a Cookie header from a raw header string or a Netscape cookies.txt export. */
+private fun cookiesFromFile(text: String): String {
+    val trimmed = text.trim()
+    // Netscape cookies.txt: tab-separated lines with domain/flag/path/secure/expiry/name/value.
+    val pairs = trimmed.lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .mapNotNull { line ->
+            val parts = line.split('\t')
+            if (parts.size >= 7 && parts[5].isNotBlank()) "${parts[5]}=${parts[6]}" else null
+        }
+        .toList()
+    return if (pairs.isNotEmpty()) pairs.joinToString("; ") else trimmed
 }
 
 @Composable
