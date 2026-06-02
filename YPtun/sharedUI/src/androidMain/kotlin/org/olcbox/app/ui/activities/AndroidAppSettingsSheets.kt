@@ -263,7 +263,15 @@ internal fun AppSettingsSheet(
                     onUrlSchemesClick = { route = AppSettingsRoute.UrlSchemes },
                     onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
-                    onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs }
+                    onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
+                    experimentalUnlocked = appBehavior.experimentalUnlocked,
+                    onExperimentalClick = { route = AppSettingsRoute.Experimental }
+                )
+
+                AppSettingsRoute.Experimental -> ExperimentalContent(
+                    settings = appBehavior,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onChanged = onAppBehaviorChanged
                 )
 
                 AppSettingsRoute.Routing -> RoutingContent(
@@ -606,7 +614,9 @@ private fun AppSettingsHubContent(
     onUrlSchemesClick: () -> Unit,
     onSubscriptionsSharingClick: () -> Unit,
     onUpdatesClick: () -> Unit,
-    onApplicationLogsClick: () -> Unit
+    onApplicationLogsClick: () -> Unit,
+    experimentalUnlocked: Boolean = false,
+    onExperimentalClick: () -> Unit = {}
 ) {
     val s = LocalStrings.current
     Column(
@@ -710,6 +720,16 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = onApplicationLogsClick
             )
+            if (experimentalUnlocked) {
+                SettingsGroupDivider()
+                SettingsGroupRow(
+                    title = "Экспериментальные",
+                    subtitle = "Telemost cookies и др.",
+                    icon = Icons.Outlined.Tune,
+                    enabled = true,
+                    onClick = onExperimentalClick
+                )
+            }
         }
 
         // --- ИНФОРМАЦИЯ ---
@@ -2910,7 +2930,6 @@ private fun ApplicationBehaviorContent(
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        var unlockTaps by remember { mutableStateOf(0) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
@@ -2919,16 +2938,7 @@ private fun ApplicationBehaviorContent(
             Text(
                 text = s.applicationSettings,
                 style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                // Tap the title 5× to unlock Experimental settings (Android dev-options style).
-                modifier = Modifier.clickable(
-                    enabled = !settings.experimentalUnlocked,
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {
-                    unlockTaps++
-                    if (unlockTaps >= 5) onChanged(settings.copy(experimentalUnlocked = true))
-                }
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
 
@@ -2948,8 +2958,8 @@ private fun ApplicationBehaviorContent(
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val options = listOf(
                 AppLanguage.System to "Авто / Auto",
-                AppLanguage.Russian to "Русский",
-                AppLanguage.English to "English"
+                AppLanguage.Russian to "🇷🇺 Русский",
+                AppLanguage.English to "🇺🇸 English"
             )
             options.forEach { (lang, title) ->
                 FilterChip(
@@ -2959,30 +2969,57 @@ private fun ApplicationBehaviorContent(
                 )
             }
         }
+    }
+}
 
-        if (settings.experimentalUnlocked) {
-            SettingsSectionLabel("Экспериментальные / Experimental")
+/** Hidden Experimental section (unlocked by tapping the connection timer 5×). */
+@Composable
+private fun ExperimentalContent(
+    settings: AppBehaviorSettings,
+    onBack: () -> Unit,
+    onChanged: (AppBehaviorSettings) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
             Text(
-                text = "Telemost: cookies авторизованного аккаунта Яндекс (заголовок Cookie, напр. " +
-                    "\"Session_id=…; yandexuid=…\"). Кастомное ядро отдельным бинарём на Android " +
-                    "запустить нельзя — расширенная функция (cookies) встроена в штатное ядро.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            RoutingToggleRow(
-                title = "Использовать Telemost cookies",
-                subtitle = "Подставлять cookies при подключении к Telemost",
-                checked = settings.telemostCookiesEnabled
-            ) { onChanged(settings.copy(telemostCookiesEnabled = it)) }
-            OutlinedTextField(
-                value = settings.telemostCookies,
-                onValueChange = { onChanged(settings.copy(telemostCookies = it)) },
-                label = { Text("Telemost Cookie header") },
-                placeholder = { Text("Session_id=…; yandexuid=…") },
-                minLines = 2,
-                modifier = Modifier.fillMaxWidth()
+                text = "Экспериментальные",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
+
+        SettingsSectionLabel("Yandex Telemost")
+        Text(
+            text = "Cookies авторизованного аккаунта Яндекс (заголовок Cookie, напр. " +
+                "\"Session_id=…; yandexuid=…\") — для приватных конференций. Кастомное ядро " +
+                "отдельным бинарём на Android запустить нельзя, поэтому эта функция встроена в штатное ядро.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        RoutingToggleRow(
+            title = "Использовать Telemost cookies",
+            subtitle = "Подставлять cookies при подключении к Telemost",
+            checked = settings.telemostCookiesEnabled
+        ) { onChanged(settings.copy(telemostCookiesEnabled = it)) }
+        OutlinedTextField(
+            value = settings.telemostCookies,
+            onValueChange = { onChanged(settings.copy(telemostCookies = it)) },
+            label = { Text("Telemost Cookie header") },
+            placeholder = { Text("Session_id=…; yandexuid=…") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -3064,6 +3101,7 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object UrlSchemes : AppSettingsRoute(1)
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)
+    object Experimental : AppSettingsRoute(1)
     data class AppList(val list: AndroidSplitTunnelList) : AppSettingsRoute(2)
 }
 
