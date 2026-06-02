@@ -422,126 +422,38 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         if (st !is VpnStatus.Connected && st !is VpnStatus.Reconnecting) {
             return@withContext null
         }
-        val proxy = _proxySettings.value
-        val host = AndroidSocksProxySettings.connectHost(proxy.host)
+        val ps = _proxySettings.value
+        val host = AndroidSocksProxySettings.connectHost(ps.host)
         var best: Long? = null
         var lastError: String? = null
         repeat(TCP_PING_ATTEMPTS) {
-            val result = runCatching {
-                socksConnectRtt(
-                    proxyHost = host,
-                    proxyPort = proxy.port,
-                    username = proxy.username,
-                    password = proxy.password,
-                    targetHost = TUNNEL_PROBE_HOST,
-                    targetPort = TUNNEL_PROBE_PORT,
-                    timeoutMs = TUNNEL_PING_TIMEOUT_MS
+            try {
+                // Java's built-in SOCKS5 Socket performs the handshake natively; the unresolved
+                // target makes the proxy (sing-box) do the connect through WireGuard. RTT = the
+                // full client→freeturn→VK→server→target round trip.
+                val proxy = java.net.Proxy(
+                    java.net.Proxy.Type.SOCKS,
+                    java.net.InetSocketAddress(host, ps.port)
                 )
-            }
-            val elapsed = result.getOrNull()
-            if (elapsed != null && (best == null || elapsed < best!!)) best = elapsed
-            if (elapsed == null) {
-                lastError = result.exceptionOrNull()?.message ?: "socks connect returned null"
+                java.net.Socket(proxy).use { socket ->
+                    val start = System.nanoTime()
+                    socket.connect(
+                        java.net.InetSocketAddress.createUnresolved(TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT),
+                        TUNNEL_PING_TIMEOUT_MS
+                    )
+                    val ms = (System.nanoTime() - start) / 1_000_000L
+                    if (best == null || ms < best!!) best = ms
+                }
+            } catch (e: Exception) {
+                lastError = e.message ?: e::class.simpleName
             }
         }
         if (best == null) {
-            OlcboxVpnState.addLog("VK-TURN ping failed via $host:${proxy.port} → ${TUNNEL_PROBE_HOST}:${TUNNEL_PROBE_PORT}: $lastError")
+            OlcboxVpnState.addLog(
+                "VK-TURN ping failed via $host:${ps.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT: $lastError"
+            )
         }
         best
-    }
-
-    /** Performs a SOCKS5 CONNECT through proxyHost:proxyPort to target and returns the RTT in ms. */
-    private fun socksConnectRtt(
-        proxyHost: String,
-        proxyPort: Int,
-        username: String,
-        password: String,
-        targetHost: String,
-        targetPort: Int,
-        timeoutMs: Int = TCP_PING_TIMEOUT_MS
-    ): Long? {
-        java.net.Socket().use { socket ->
-            socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), timeoutMs)
-            socket.soTimeout = timeoutMs
-            val out = socket.getOutputStream()
-            val inp = socket.getInputStream()
-            val start = System.nanoTime()
-
-            // Greeting: offer no-auth and (if creds present) username/password.
-            val useAuth = username.isNotBlank()
-            if (useAuth) {
-                out.write(byteArrayOf(0x05, 0x02, 0x00, 0x02))
-            } else {
-                out.write(byteArrayOf(0x05, 0x01, 0x00))
-            }
-            out.flush()
-            val method = readN(inp, 2)
-            if (method[0].toInt() != 0x05) return null
-            when (method[1].toInt() and 0xFF) {
-                0x00 -> {} // no auth
-                0x02 -> {
-                    val u = username.encodeToByteArray()
-                    val p = password.encodeToByteArray()
-                    val auth = ByteArray(3 + u.size + p.size)
-                    auth[0] = 0x01
-                    auth[1] = u.size.toByte()
-                    u.copyInto(auth, 2)
-                    auth[2 + u.size] = p.size.toByte()
-                    p.copyInto(auth, 3 + u.size)
-                    out.write(auth); out.flush()
-                    val authReply = readN(inp, 2)
-                    if (authReply[1].toInt() != 0x00) return null
-                }
-                else -> return null
-            }
-
-            // CONNECT to targetPort. Prefer a raw IPv4 literal (ATYP=0x01) so the proxy doesn't
-            // resolve a hostname; fall back to a domain (ATYP=0x03) for non-IPv4 targets.
-            val ipv4 = targetHost.split('.').mapNotNull { it.toIntOrNull()?.takeIf { n -> n in 0..255 } }
-                .takeIf { it.size == 4 }
-            val req = if (ipv4 != null) {
-                ByteArray(10).also { r ->
-                    r[0] = 0x05; r[1] = 0x01; r[2] = 0x00; r[3] = 0x01
-                    for (i in 0..3) r[4 + i] = ipv4[i].toByte()
-                    r[8] = ((targetPort shr 8) and 0xFF).toByte()
-                    r[9] = (targetPort and 0xFF).toByte()
-                }
-            } else {
-                val hostBytes = targetHost.encodeToByteArray()
-                ByteArray(7 + hostBytes.size).also { r ->
-                    r[0] = 0x05; r[1] = 0x01; r[2] = 0x00; r[3] = 0x03
-                    r[4] = hostBytes.size.toByte()
-                    hostBytes.copyInto(r, 5)
-                    r[5 + hostBytes.size] = ((targetPort shr 8) and 0xFF).toByte()
-                    r[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
-                }
-            }
-            out.write(req); out.flush()
-
-            // Reply: VER REP RSV ATYP ... — REP 0x00 = success.
-            val head = readN(inp, 4)
-            if (head[1].toInt() != 0x00) return null
-            val addrLen = when (head[3].toInt() and 0xFF) {
-                0x01 -> 4
-                0x04 -> 16
-                0x03 -> readN(inp, 1)[0].toInt() and 0xFF
-                else -> return null
-            }
-            readN(inp, addrLen + 2) // consume bound addr + port
-            return (System.nanoTime() - start) / 1_000_000L
-        }
-    }
-
-    /** Reads exactly n bytes or throws. */
-    private fun readN(inp: java.io.InputStream, n: Int): ByteArray {
-        val buf = ByteArray(n)
-        var off = 0
-        while (off < n) {
-            val r = inp.read(buf, off, n - off)
-            if (r < 0) throw java.io.EOFException("socks short read")
-            off += r
-        }
-        return buf
     }
 
     /** TCP-connect latency to host:port in ms, best of a few attempts, or null if unreachable. */
@@ -674,9 +586,10 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
         const val TCP_PING_ATTEMPTS = 2
         const val TCP_PING_TIMEOUT_MS = 3_000
-        // End-to-end tunnel latency probe target (TCP DNS is widely reachable and lightweight).
+        // End-to-end tunnel latency probe target. 1.1.1.1:443 (HTTPS) accepts TCP universally and
+        // fast; port 53 can be filtered on some paths.
         const val TUNNEL_PROBE_HOST = "1.1.1.1"
-        const val TUNNEL_PROBE_PORT = 53
+        const val TUNNEL_PROBE_PORT = 443
         // The probe traverses VK relay + WireGuard, so allow more time than a direct TCP ping.
         const val TUNNEL_PING_TIMEOUT_MS = 6_000
         val random = SecureRandom()
