@@ -149,6 +149,8 @@ class QrScannerActivity : ComponentActivity() {
                 }
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    // 720p is plenty for QR and decodes far faster than full sensor resolution.
+                    .setTargetResolution(android.util.Size(1280, 720))
                     .build()
                     .also { imageAnalysis ->
                         imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -158,12 +160,13 @@ class QrScannerActivity : ComponentActivity() {
 
                 runCatching {
                     provider.unbindAll()
-                    provider.bindToLifecycle(
+                    val camera = provider.bindToLifecycle(
                         this,
                         CameraSelector.DEFAULT_BACK_CAMERA,
                         preview,
                         analysis
                     )
+                    startContinuousAutoFocus(camera, previewView)
                 }.onFailure {
                     cameraStarted = false
                     Toast.makeText(this, "Camera unavailable", Toast.LENGTH_SHORT).show()
@@ -172,6 +175,25 @@ class QrScannerActivity : ComponentActivity() {
             },
             ContextCompat.getMainExecutor(this)
         )
+    }
+
+    /** Triggers autofocus on the frame centre (where the QR frame is) and lets it re-run. */
+    private fun startContinuousAutoFocus(
+        camera: androidx.camera.core.Camera,
+        previewView: androidx.camera.view.PreviewView
+    ) {
+        previewView.post {
+            runCatching {
+                val w = previewView.width.toFloat().takeIf { it > 0f } ?: return@post
+                val h = previewView.height.toFloat().takeIf { it > 0f } ?: return@post
+                val point = previewView.meteringPointFactory.createPoint(w / 2f, h / 2f)
+                val action = androidx.camera.core.FocusMeteringAction.Builder(
+                    point,
+                    androidx.camera.core.FocusMeteringAction.FLAG_AF
+                ).setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS).build()
+                camera.cameraControl.startFocusAndMetering(action)
+            }
+        }
     }
 
     private fun analyzeImage(imageProxy: ImageProxy) {
