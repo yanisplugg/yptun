@@ -19,6 +19,7 @@ object ShareLinkParser {
             trimmed.startsWith("vmess://", true) -> parseVmess(trimmed)
             trimmed.startsWith("trojan://", true) -> parseTrojan(trimmed)
             trimmed.startsWith("ss://", true) -> parseShadowsocks(trimmed)
+            AmneziaWgParser.looksLikeAmneziaWg(trimmed) -> AmneziaWgParser.parse(trimmed)
             else -> null
         }
     }

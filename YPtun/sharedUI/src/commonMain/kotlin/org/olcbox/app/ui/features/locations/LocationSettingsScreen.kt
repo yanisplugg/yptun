@@ -388,7 +388,7 @@ private fun ProxyField(
     ) {
         SectionTitle(
             title = "Proxy",
-            subtitle = "Paste a vless/vmess/trojan/ss link or a sing-box outbound JSON"
+            subtitle = "Paste a vless/vmess/trojan/ss link, an AmneziaWG config, or a sing-box outbound JSON"
         )
         OutlinedTextField(
             value = link,
@@ -739,6 +739,7 @@ private fun engineProtocolLabel(type: String): String = when (type) {
     ProxyProfile.TYPE_VMESS -> "VMess"
     ProxyProfile.TYPE_TROJAN -> "Trojan"
     ProxyProfile.TYPE_SHADOWSOCKS -> "Shadowsocks"
+    ProxyProfile.TYPE_AMNEZIAWG -> "AmneziaWG"
     else -> type.uppercase()
 }
 

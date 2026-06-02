@@ -33,6 +33,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import awg.Awg
+import awg.LogWriter as AwgLogWriter
 import freeturn.Freeturn
 import freeturn.LogWriter as FreeturnLogWriter
 import mobile.LogWriter
@@ -749,19 +751,23 @@ class OlcboxVpnService : VpnService() {
                 addLog("olcRTC chain ready on 127.0.0.1:$chainPort")
             }
 
-            activeProxyCore = config.resolvedCore()
+            // AmneziaWG: raise the awgproxy SOCKS and route the proxy through it (sing-box only).
+            val effectiveProfile = prepareAmneziaWgProxy(profile)
+            val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
+
+            activeProxyCore = if (isAwg) ProxyCore.SingBox else config.resolvedCore()
             // The RU-domain blocklist is an Xray-only feature (regexp DNS hosts). When it's enabled
             // for a typed proxy that Xray can serve, prefer Xray so the toggle actually takes effect.
             if (activeProxyCore == ProxyCore.SingBox &&
                 loadTrafficSettings().blockRuDomains &&
-                profile.rawOutbound.isNullOrBlank() &&
-                profile.type in XRAY_SUPPORTED_TYPES
+                effectiveProfile.rawOutbound.isNullOrBlank() &&
+                effectiveProfile.type in XRAY_SUPPORTED_TYPES
             ) {
                 activeProxyCore = ProxyCore.Xray
                 addLog("Switching to Xray core for RU-domain blocklist")
             }
             if (activeProxyCore == ProxyCore.Xray) {
-                val rawXray = profile.rawXrayConfig
+                val rawXray = effectiveProfile.rawXrayConfig
                 val json = if (!rawXray.isNullOrBlank()) {
                     // User-supplied full Xray config: run verbatim (honors custom dns/routing/hosts).
                     addLog("Starting Xray with custom config (verbatim)")
@@ -774,7 +780,7 @@ class OlcboxVpnService : VpnService() {
                     )
                 } else {
                     XrayConfig.build(
-                        profile = profile,
+                        profile = effectiveProfile,
                         listenPort = socksListenPort,
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
@@ -785,11 +791,11 @@ class OlcboxVpnService : VpnService() {
                         traffic = loadTrafficSettings(),
                     )
                 }
-                addLog("Starting Xray engine=${config.engine}, server=${profile.server}:${profile.serverPort}")
+                addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 xrayEngine().start(json)
             } else {
                 val json = SingBoxConfig.build(
-                    profile = profile,
+                    profile = effectiveProfile,
                     listenPort = socksListenPort,
                     listenHost = socksListenHost,
                     socksUsername = socksUsername,
@@ -801,7 +807,7 @@ class OlcboxVpnService : VpnService() {
                     routing = loadRouting(),
                     traffic = loadTrafficSettings(),
                 )
-                addLog("Starting sing-box engine=${config.engine}, server=${profile.server}:${profile.serverPort}")
+                addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)
             }
 
@@ -1391,6 +1397,7 @@ class OlcboxVpnService : VpnService() {
         runCatching { singBox?.stop() }
         runCatching { xray?.stop() }
         runCatching { Freeturn.stop() }
+        runCatching { Awg.stop() }
         val provider = lastMobileProvider
         val wasRunning = Mobile.isRunning()
         runCatching { Mobile.stop() }
@@ -1401,6 +1408,42 @@ class OlcboxVpnService : VpnService() {
 
     /** olcRTC's local SOCKS port when chaining; sing-box dials its outbound through it. */
     private val chainOlcrtcPort: Int get() = socksListenPort + 1
+
+    /** AmneziaWG's local SOCKS port (awgproxy) when a proxy uses the AmneziaWG transport. */
+    private val awgLocalPort: Int get() = socksListenPort + 2
+
+    /**
+     * If [profile] is AmneziaWG, raise the awgproxy SOCKS5 from its config and return a SOCKS proxy
+     * pointing at it, so sing-box (standalone or chained) routes through the AmneziaWG tunnel.
+     * Otherwise returns [profile] unchanged.
+     */
+    private suspend fun prepareAmneziaWgProxy(profile: ProxyProfile): ProxyProfile {
+        if (profile.type != ProxyProfile.TYPE_AMNEZIAWG) return profile
+        runCatching { Awg.stop() }
+        Awg.setDebug(false)
+        Awg.setLogWriter(object : AwgLogWriter {
+            override fun writeLog(line: String) {
+                val trimmed = line.trimEnd()
+                addLog("awg: $trimmed")
+                Log.v("awg", trimmed)
+            }
+        })
+        val listen = "127.0.0.1:$awgLocalPort"
+        addLog("Starting AmneziaWG SOCKS on $listen")
+        Awg.start(profile.awgConfig, listen)
+        if (!awaitSocksPortOpen(awgLocalPort, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("AmneziaWG SOCKS port $awgLocalPort did not open")
+        }
+        val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
+            "\"server_port\":$awgLocalPort,\"version\":\"5\"}"
+        return ProxyProfile(
+            tag = profile.tag.ifBlank { "AmneziaWG" },
+            type = "socks",
+            server = "127.0.0.1",
+            serverPort = awgLocalPort,
+            rawOutbound = raw,
+        )
+    }
 
     private suspend fun loadRouting(): RoutingRules {
         val raw = runCatching {

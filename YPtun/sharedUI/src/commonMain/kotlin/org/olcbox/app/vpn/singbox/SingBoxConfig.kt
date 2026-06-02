@@ -32,7 +32,7 @@ object SingBoxConfig {
     private const val SOCKS_IN_TAG = "socks-in"
 
     /** Raw-outbound types that do not support sing-box smux and must not get a multiplex block. */
-    private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint")
+    private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks")
 
     private val json = Json { prettyPrint = true }
 

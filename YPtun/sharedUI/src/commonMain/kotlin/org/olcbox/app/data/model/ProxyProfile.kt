@@ -118,8 +118,16 @@ data class ProxyProfile(
      */
     @SerialName("raw_xray_config")
     val rawXrayConfig: String? = null,
+    /**
+     * AmneziaWG wg-quick INI (with the Jc/Jmin/Jmax/S1/S2/H1..H4 obfuscation knobs) for
+     * [TYPE_AMNEZIAWG]. The awgproxy module raises a local SOCKS5 from it that the proxy is
+     * routed through — works as a standalone outbound and as a chain hop.
+     */
+    @SerialName("awg_config")
+    val awgConfig: String = "",
 ) {
     fun isComplete(): Boolean {
+        if (type == TYPE_AMNEZIAWG) return awgConfig.isNotBlank()
         if (!rawXrayConfig.isNullOrBlank()) return true
         if (!rawOutbound.isNullOrBlank()) return true
         if (server.isBlank() || serverPort !in 1..65535) return false
@@ -138,6 +146,7 @@ data class ProxyProfile(
         const val TYPE_VMESS = "vmess"
         const val TYPE_TROJAN = "trojan"
         const val TYPE_SHADOWSOCKS = "shadowsocks"
+        const val TYPE_AMNEZIAWG = "amneziawg"
 
         const val NETWORK_TCP = "tcp"
         const val NETWORK_WS = "ws"
