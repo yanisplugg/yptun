@@ -820,6 +820,7 @@ class OlcboxVpnService : VpnService() {
                 return false
             }
             addLog("sing-box ready on $socksListenHost:$socksListenPort")
+            publishActiveSocks()
             true
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
@@ -953,6 +954,7 @@ class OlcboxVpnService : VpnService() {
                 return false
             }
             addLog("VK-TURN ready on $socksListenHost:$socksListenPort")
+            publishActiveSocks()
             true
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
@@ -1393,7 +1395,18 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
+    /** Publishes the live SOCKS endpoint + per-session creds so the in-process ping can use them. */
+    private fun publishActiveSocks() {
+        OlcboxVpnState.activeSocks = OlcboxVpnState.SocksEndpoint(
+            host = socksListenHost,
+            port = socksListenPort,
+            username = socksUsername,
+            password = socksPassword,
+        )
+    }
+
     private fun stopMobile() {
+        OlcboxVpnState.activeSocks = null
         runCatching { singBox?.stop() }
         runCatching { xray?.stop() }
         runCatching { Freeturn.stop() }

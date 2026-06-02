@@ -23,6 +23,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalizationState
@@ -381,35 +382,25 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         context.startService(intent)
     }
 
-    override suspend fun ping(locationConfig: LocationConfig): Long? {
-        // VLESS/standard locations have no olcRTC room/key — pinging them via olcRTC is unstable.
-        // Use a plain TCP latency probe to the proxy server instead (like typical proxy clients).
-        if (locationConfig.engine == EngineType.Standard) {
-            return tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
-        }
-        // VK-TURN exposes only an obfuscated UDP/DTLS listener, so a direct TCP probe always fails.
-        // The only meaningful measurement is end-to-end latency through the live tunnel, so we
-        // probe via the local SOCKS proxy when connected; otherwise latency is unknown.
-        if (locationConfig.engine == EngineType.VkTurn) {
-            return vkTurnTunnelPing()
-        }
-        return OlcRtcConnectionChecker.ping(
-            locationConfig = locationConfig,
-            deviceId = deviceIdentityProvider.hwid()
-        )
-    }
+    override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
-    override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
-        if (locationConfig.engine == EngineType.Standard) {
-            return tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
+    override suspend fun checkConnection(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
+
+    private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
+        val proxyType = locationConfig.proxy?.type
+        return when {
+            // Obfuscated transports whose real endpoint is blocked/hidden (VK-TURN, AmneziaWG):
+            // the only meaningful probe is end-to-end through the live tunnel.
+            locationConfig.engine == EngineType.VkTurn -> tunnelPing()
+            proxyType == ProxyProfile.TYPE_AMNEZIAWG -> tunnelPing()
+            // Plain proxies: TCP latency to the (reachable) proxy server.
+            locationConfig.engine == EngineType.Standard ->
+                tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
+            else -> OlcRtcConnectionChecker.ping(
+                locationConfig = locationConfig,
+                deviceId = deviceIdentityProvider.hwid()
+            )
         }
-        if (locationConfig.engine == EngineType.VkTurn) {
-            return vkTurnTunnelPing()
-        }
-        return OlcRtcConnectionChecker.check(
-            locationConfig = locationConfig,
-            deviceId = deviceIdentityProvider.hwid()
-        )
     }
 
     /**
@@ -417,43 +408,31 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      * to a reliable host (1.1.1.1:53) — the round trip traverses WireGuard over the VK relay. Only
      * meaningful while connected; returns null otherwise (shown as "unknown", not offline).
      */
-    private suspend fun vkTurnTunnelPing(): Long? = withContext(Dispatchers.IO) {
-        val ps = _proxySettings.value
-        val host = AndroidSocksProxySettings.connectHost(ps.host)
+    /**
+     * End-to-end latency through the live tunnel: a SOCKS5 CONNECT to 1.1.1.1:443 via the running
+     * core's local SOCKS. Uses the per-session credentials the service publishes (randomized in TUN
+     * mode) — without them the handshake is rejected (0xFF) and shows a false "Offline". Returns null
+     * only when no core is up (cannot probe an obfuscated/blocked endpoint while disconnected).
+     */
+    private suspend fun tunnelPing(): Long? = withContext(Dispatchers.IO) {
+        val sock = OlcboxVpnState.activeSocks ?: return@withContext null
+        val host = AndroidSocksProxySettings.connectHost(sock.host)
 
-        // 1. Try a real end-to-end RTT: SOCKS5 CONNECT through the tunnel to 1.1.1.1:443.
         var best: Long? = null
         var lastError: String? = null
         repeat(TCP_PING_ATTEMPTS) {
             val r = runCatching {
-                socks5ConnectRtt(host, ps.port, ps.username, ps.password,
+                socks5ConnectRtt(host, sock.port, sock.username, sock.password,
                     TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, TUNNEL_PING_TIMEOUT_MS)
             }
             val ms = r.getOrNull()
             if (ms != null && (best == null || ms < best!!)) best = ms
             if (ms == null) lastError = r.exceptionOrNull()?.message ?: "no reply"
         }
-        if (best != null) return@withContext best
-
-        // 2. Fallback: the freeturn relay is a same-process singleton. If its DTLS/TURN streams are
-        //    up the tunnel IS alive even if the end-to-end probe didn't complete — report the local
-        //    round-trip to the SOCKS proxy as a liveness latency instead of a false "Offline".
-        val relayUp = runCatching { freeturn.Freeturn.isRunning() && freeturn.Freeturn.connectedStreams() > 0 }
-            .getOrDefault(false)
-        if (relayUp) {
-            val local = runCatching {
-                java.net.Socket().use { s ->
-                    val start = System.nanoTime()
-                    s.connect(java.net.InetSocketAddress(host, ps.port), TCP_PING_TIMEOUT_MS)
-                    (System.nanoTime() - start) / 1_000_000L
-                }
-            }.getOrNull()
-            OlcboxVpnState.addLog("VK-TURN ping: relay up (${freeturn.Freeturn.connectedStreams()} streams), end-to-end probe failed ($lastError) → reporting liveness")
-            return@withContext local ?: 1L
+        if (best == null) {
+            OlcboxVpnState.addLog("Tunnel ping failed via $host:${sock.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT: $lastError")
         }
-
-        OlcboxVpnState.addLog("VK-TURN ping failed via $host:${ps.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT: $lastError")
-        null
+        best
     }
 
     /** Hand-rolled SOCKS5 CONNECT to an IPv4 target through proxyHost:proxyPort; returns RTT ms. */
