@@ -3,6 +3,7 @@ module kazcores
 go 1.26.3
 
 require (
+	github.com/olc/awgproxy v0.0.0
 	github.com/openlibrecommunity/olcrtc v0.0.0
 	github.com/sagernet/sing-box v1.12.25
 	github.com/samosvalishe/free-turn-proxy v0.0.0
@@ -18,6 +19,7 @@ require (
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa // indirect
+	github.com/amnezia-vpn/amneziawg-go v1.0.4 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/anytls/sing-anytls v0.0.11 // indirect
@@ -158,6 +160,7 @@ require (
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
+	github.com/tevino/abool v1.2.0 // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/twitchtv/twirp v8.1.3+incompatible // indirect
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
@@ -213,3 +216,7 @@ replace github.com/openlibrecommunity/olcrtc => ../olcrtc
 replace github.com/sagernet/sing-box => ../sing-box
 
 replace github.com/samosvalishe/free-turn-proxy => ../free-turn-proxy
+
+replace github.com/olc/awgproxy => ../awgproxy
+
+replace github.com/amnezia-vpn/amneziawg-go => ../amneziawg-go
