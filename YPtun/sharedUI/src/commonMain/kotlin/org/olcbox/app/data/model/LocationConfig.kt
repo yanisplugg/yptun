@@ -49,6 +49,22 @@ data class VkTurnConfig(
         uri.startsWith("freeturn://") && listenPort in 1..65535
 }
 
+/**
+ * Advanced per-location options for the sing-box / Xray proxy core (shown in the editor only when a
+ * specific core is chosen, not Auto). Mux multiplexes many streams over one connection; TCP Fast
+ * Open, destination sniffing and TLS record fragmentation are anti-DPI / performance knobs.
+ */
+@Serializable
+data class AdvancedCoreConfig(
+    @SerialName("mux_enabled") val muxEnabled: Boolean = false,
+    /** sing-box: smux | yamux | h2mux; Xray ignores the value (single mux). */
+    @SerialName("mux_protocol") val muxProtocol: String = "h2mux",
+    @SerialName("mux_max_streams") val muxMaxStreams: Int = 8,
+    @SerialName("tcp_fast_open") val tcpFastOpen: Boolean = false,
+    @SerialName("sniff") val sniff: Boolean = true,
+    @SerialName("tls_fragment") val tlsFragment: Boolean = false,
+)
+
 @Serializable
 data class LocationConfig(
     val name: String = "",
@@ -73,6 +89,8 @@ data class LocationConfig(
      * inside the link lives in [proxy].rawOutbound. Null for other engines.
      */
     val vkturn: VkTurnConfig? = null,
+    /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
+    val advanced: AdvancedCoreConfig? = null,
 ) {
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
@@ -423,6 +441,7 @@ data class LocationEntry(
     val proxy: ProxyProfile? = null,
     val core: ProxyCore? = null,
     val vkturn: VkTurnConfig? = null,
+    val advanced: AdvancedCoreConfig? = null,
     @SerialName("auth_provider")
     val authProvider: String? = null,
     @SerialName("carrier")
@@ -489,6 +508,7 @@ data class LocationEntry(
                 proxy = proxy,
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
+                advanced = advanced,
             ).normalized()
         }
 
@@ -509,6 +529,7 @@ data class LocationEntry(
             proxy = config.proxy,
             core = config.core,
             vkturn = config.vkturn,
+            advanced = config.advanced,
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
             metadata = metadata
@@ -537,6 +558,7 @@ data class LocationEntry(
                 proxy = config.proxy,
                 core = config.core,
                 vkturn = config.vkturn,
+                advanced = config.advanced,
                 authProvider = config.bypassProvider,
                 transport = LocationTransportConfig.from(config),
                 metadata = metadata

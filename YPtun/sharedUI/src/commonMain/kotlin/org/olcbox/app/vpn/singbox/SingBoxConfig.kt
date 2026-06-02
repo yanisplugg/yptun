@@ -12,6 +12,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
@@ -57,6 +58,8 @@ object SingBoxConfig {
         wireguardBase: ProxyProfile? = null,
         // Overrides the DNS resolution strategy (e.g. "ipv4_only" for an IPv4-only WG tunnel).
         dnsStrategyOverride: String? = null,
+        // Per-location advanced core options (mux / tcp_fast_open / sniff). Null = defaults.
+        advanced: AdvancedCoreConfig? = null,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") {
@@ -116,7 +119,8 @@ object SingBoxConfig {
                         profile,
                         chained = olcrtcChainPort != null,
                         traffic = traffic,
-                        detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null
+                        detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null,
+                        advanced = advanced
                     )
                 )
                 if (wgBaseOutbound != null) {
@@ -146,8 +150,10 @@ object SingBoxConfig {
                 put("auto_detect_interface", autoDetectInterface)
 
                 putJsonArray("rules") {
-                    // Sniff destination domain so domain rules match.
-                    addJsonObject { put("action", "sniff") }
+                    // Sniff destination domain so domain rules match (can be disabled in advanced).
+                    if (advanced?.sniff != false) {
+                        addJsonObject { put("action", "sniff") }
+                    }
                     if (routing.bypassLan) {
                         addJsonObject {
                             put("ip_is_private", true)
@@ -220,9 +226,11 @@ object SingBoxConfig {
         traffic: TrafficSettings = TrafficSettings(),
         // When set, the proxy is chained over this outbound tag (e.g. the WireGuard base for
         // VK-TURN). Takes precedence over the olcRTC [chained] detour.
-        detourTagOverride: String? = null
+        detourTagOverride: String? = null,
+        advanced: AdvancedCoreConfig? = null
     ): JsonObject {
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
+        val tfo = advanced?.tcpFastOpen == true
         // Catch-all: a raw sing-box outbound is used verbatim (tag/detour injected).
         profile.rawOutbound?.takeIf { it.isNotBlank() }?.let { raw ->
             val rawObj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
@@ -235,8 +243,9 @@ object SingBoxConfig {
                     rawObj.forEach { (k, v) -> if (k != "tag" && k != "detour") put(k, v) }
                     put("tag", PROXY_TAG)
                     if (detourTag != null) put("detour", detourTag)
+                    if (tfo && !muxUnsupported && raw.indexOf("tcp_fast_open") < 0) put("tcp_fast_open", true)
                     if (!muxUnsupported && raw.indexOf("multiplex") < 0) {
-                        buildMultiplex(traffic)?.let { put("multiplex", it) }
+                        buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
                     }
                 }
             }
@@ -281,7 +290,8 @@ object SingBoxConfig {
             }
 
             if (detourTag != null) put("detour", detourTag)
-            buildMultiplex(traffic)?.let { put("multiplex", it) }
+            if (tfo) put("tcp_fast_open", true)
+            buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
         }
     }
 
@@ -295,7 +305,16 @@ object SingBoxConfig {
         }
     }
 
-    private fun buildMultiplex(traffic: TrafficSettings): JsonObject? {
+    private fun buildMultiplex(traffic: TrafficSettings, advanced: AdvancedCoreConfig?): JsonObject? {
+        // Per-location advanced mux overrides the global traffic setting when present.
+        if (advanced != null) {
+            if (!advanced.muxEnabled) return null
+            return buildJsonObject {
+                put("enabled", true)
+                put("protocol", advanced.muxProtocol)
+                put("max_streams", advanced.muxMaxStreams)
+            }
+        }
         if (!traffic.muxEnabled) return null
         return buildJsonObject {
             put("enabled", true)

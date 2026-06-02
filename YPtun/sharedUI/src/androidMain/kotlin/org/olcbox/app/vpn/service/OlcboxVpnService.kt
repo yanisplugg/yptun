@@ -788,7 +788,17 @@ class OlcboxVpnService : VpnService() {
                         olcrtcChainPort = if (chained) chainPort else null,
                         olcrtcChainUser = if (chained) socksUsername else "",
                         olcrtcChainPass = if (chained) socksPassword else "",
-                        traffic = loadTrafficSettings(),
+                        // Per-location advanced (mux / TLS fragment) override the global traffic knobs.
+                        traffic = loadTrafficSettings().let { t ->
+                            config.advanced?.let {
+                                t.copy(
+                                    muxEnabled = it.muxEnabled,
+                                    muxProtocol = it.muxProtocol,
+                                    muxMaxConnections = it.muxMaxStreams,
+                                    fragmentEnabled = it.tlsFragment,
+                                )
+                            } ?: t
+                        },
                     )
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -806,6 +816,7 @@ class OlcboxVpnService : VpnService() {
                     autoDetectInterface = true,
                     routing = loadRouting(),
                     traffic = loadTrafficSettings(),
+                    advanced = config.advanced,
                 )
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)

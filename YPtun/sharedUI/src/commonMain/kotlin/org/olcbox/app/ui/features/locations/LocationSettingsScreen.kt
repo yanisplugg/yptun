@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.importer.VkTurnDraft
+import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
@@ -212,6 +213,17 @@ fun LocationSettingsScreen(
                         enabled = !isSaving,
                         onSelected = viewModel::onCoreChanged
                     )
+                }
+                // Advanced core options appear only when a specific core (not Auto) is chosen.
+                if (config.core != ProxyCore.Auto) {
+                    item {
+                        AdvancedCoreSection(
+                            core = config.core,
+                            advanced = config.advanced ?: AdvancedCoreConfig(),
+                            enabled = !isSaving,
+                            onChange = viewModel::updateAdvanced
+                        )
+                    }
                 }
             }
 
@@ -675,6 +687,60 @@ private fun VkTurnSwitchRow(
     ) {
         Text(text = label, style = MaterialTheme.typography.bodyLarge)
         Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+    }
+}
+
+/** Per-location advanced options for the chosen proxy core (mux / TFO / sniff / TLS fragment). */
+@Composable
+private fun AdvancedCoreSection(
+    core: ProxyCore,
+    advanced: AdvancedCoreConfig,
+    enabled: Boolean,
+    onChange: ((AdvancedCoreConfig) -> AdvancedCoreConfig) -> Unit
+) {
+    var expanded by remember { mutableStateOf(advanced != AdvancedCoreConfig()) }
+    val coreName = if (core == ProxyCore.Xray) "Xray" else "sing-box"
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        VkTurnSwitchRow("Advanced $coreName settings", expanded, enabled) { expanded = it }
+        if (expanded) {
+            VkTurnSwitchRow("Mux (multiplex)", advanced.muxEnabled, enabled) { v ->
+                onChange { it.copy(muxEnabled = v) }
+            }
+            if (advanced.muxEnabled) {
+                if (core == ProxyCore.SingBox) {
+                    SettingsDropdown(
+                        label = "Mux protocol",
+                        selectedValue = advanced.muxProtocol.ifBlank { "h2mux" },
+                        options = listOf("h2mux", "smux", "yamux"),
+                        enabled = enabled,
+                        onValueSelected = { v -> onChange { it.copy(muxProtocol = v) } },
+                        valueLabel = { it }
+                    )
+                }
+                VkTurnField(
+                    value = advanced.muxMaxStreams.toString(),
+                    onValueChange = { v ->
+                        onChange { it.copy(muxMaxStreams = v.filter(Char::isDigit).toIntOrNull() ?: 8) }
+                    },
+                    label = "Max streams",
+                    placeholder = "8",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number
+                )
+            }
+            VkTurnSwitchRow("TCP Fast Open", advanced.tcpFastOpen, enabled) { v ->
+                onChange { it.copy(tcpFastOpen = v) }
+            }
+            VkTurnSwitchRow("Sniff destination", advanced.sniff, enabled) { v ->
+                onChange { it.copy(sniff = v) }
+            }
+            VkTurnSwitchRow("TLS fragment (anti-DPI, Xray)", advanced.tlsFragment, enabled) { v ->
+                onChange { it.copy(tlsFragment = v) }
+            }
+        }
     }
 }
 

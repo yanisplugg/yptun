@@ -23,6 +23,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.importer.VkTurnDraft
+import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
@@ -427,6 +428,12 @@ class LocationViewModel(
 
     fun onCoreChanged(core: ProxyCore) {
         editingConfig = editingConfig.copy(core = core)
+    }
+
+    /** Applies an edit to the per-location advanced core options (mux / tfo / sniff / fragment). */
+    fun updateAdvanced(transform: (AdvancedCoreConfig) -> AdvancedCoreConfig) {
+        val current = editingConfig.advanced ?: AdvancedCoreConfig()
+        editingConfig = editingConfig.copy(advanced = transform(current))
     }
 
     /** Per-client VK Calls join link for a VK-TURN location (not carried in the share link). */
