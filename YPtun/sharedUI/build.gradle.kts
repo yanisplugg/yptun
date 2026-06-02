@@ -169,6 +169,7 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         coresAndroidAarFile.absolutePath,
         "github.com/openlibrecommunity/olcrtc/mobile",
         "github.com/sagernet/sing-box/experimental/libbox",
+        "github.com/samosvalishe/free-turn-proxy/freeturn",
         "kazcores/xraybridge"
     )
 }

@@ -14,6 +14,25 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
+/**
+ * VK-TURN (freeturn) transport parameters for [EngineType.VkTurn]. [uri] is the
+ * full freeturn:// share link issued by the panel (carries transport/obf params,
+ * the WG config is extracted out of it into ProxyProfile.rawOutbound); [vkLink]
+ * is the per-client VK Calls join link the user pastes; [listenPort] is the local
+ * port the freeturn client raises and the WG Endpoint dials.
+ */
+@Serializable
+data class VkTurnConfig(
+    val uri: String = "",
+    @SerialName("vk_link")
+    val vkLink: String = "",
+    @SerialName("listen_port")
+    val listenPort: Int = LocationConfig.DEFAULT_FREETURN_PORT,
+) {
+    fun isComplete(): Boolean =
+        uri.startsWith("freeturn://") && vkLink.isNotBlank() && listenPort in 1..65535
+}
+
 @Serializable
 data class LocationConfig(
     val name: String = "",
@@ -31,7 +50,13 @@ data class LocationConfig(
     /** Proxy server for the sing-box engine (Standard/Chain). Null for pure Stealth. */
     val proxy: ProxyProfile? = null,
     /** Proxy backend for Standard/Chain: Auto, sing-box or Xray. */
-    val core: ProxyCore = ProxyCore.Auto
+    val core: ProxyCore = ProxyCore.Auto,
+    /**
+     * VK-TURN transport for the [EngineType.VkTurn] engine. Holds the freeturn://
+     * share link and the per-client VK call link; the WireGuard outbound carried
+     * inside the link lives in [proxy].rawOutbound. Null for other engines.
+     */
+    val vkturn: VkTurnConfig? = null,
 ) {
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
@@ -46,7 +71,8 @@ data class LocationConfig(
             vp8Batch = sanitizeVp8Batch(vp8Batch),
             engine = engine,
             proxy = proxy,
-            core = core
+            core = core,
+            vkturn = vkturn,
         )
     }
 
@@ -67,6 +93,8 @@ data class LocationConfig(
         EngineType.Standard -> proxy?.isComplete() == true
         // Chain needs both: a proxy and the olcRTC stealth tunnel to wrap it.
         EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
+        // VK-TURN needs the freeturn link, the per-client VK call link and the WireGuard outbound.
+        EngineType.VkTurn -> vkturn?.isComplete() == true && !proxy?.rawOutbound.isNullOrBlank()
     }
 
     fun displayName(): String = name.ifBlank { id }
@@ -89,6 +117,9 @@ data class LocationConfig(
 
         const val DEFAULT_VP8_FPS = 60
         const val DEFAULT_VP8_BATCH = 64
+
+        /** Local port the freeturn client raises; must match the Endpoint baked into the WG config. */
+        const val DEFAULT_FREETURN_PORT = 9000
 
         val supportedBypassProviders = listOf(
             PROVIDER_JAZZ,
@@ -365,6 +396,7 @@ data class LocationEntry(
     val engine: EngineType? = null,
     val proxy: ProxyProfile? = null,
     val core: ProxyCore? = null,
+    val vkturn: VkTurnConfig? = null,
     @SerialName("auth_provider")
     val authProvider: String? = null,
     @SerialName("carrier")
@@ -429,7 +461,8 @@ data class LocationEntry(
                     ?: LocationConfig.DEFAULT_VP8_BATCH,
                 engine = engine ?: EngineType.Stealth,
                 proxy = proxy,
-                core = core ?: ProxyCore.Auto
+                core = core ?: ProxyCore.Auto,
+                vkturn = vkturn,
             ).normalized()
         }
 
@@ -476,6 +509,7 @@ data class LocationEntry(
                 engine = config.engine,
                 proxy = config.proxy,
                 core = config.core,
+                vkturn = config.vkturn,
                 authProvider = config.bypassProvider,
                 transport = LocationTransportConfig.from(config),
                 metadata = metadata

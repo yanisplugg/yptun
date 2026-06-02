@@ -33,6 +33,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import freeturn.Freeturn
+import freeturn.LogWriter as FreeturnLogWriter
 import mobile.LogWriter
 import mobile.Mobile
 import mobile.SocketProtector
@@ -609,6 +611,7 @@ class OlcboxVpnService : VpnService() {
             EngineType.Stealth -> startStealthCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.Standard,
             EngineType.Chain -> startSingBoxCore(location, upstream, requestedGeneration, setErrorOnFailure)
+            EngineType.VkTurn -> startVkTurnCore(location, upstream, requestedGeneration, setErrorOnFailure)
         }
     }
 
@@ -832,6 +835,98 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
+    /**
+     * VK-TURN: the free-turn-proxy client raises a local WireGuard entry listener
+     * (127.0.0.1:listenPort) tunnelling through VK, and sing-box runs a WireGuard
+     * outbound dialling that listener — the panel's VK-TURN inbound consumed on the
+     * client. Both are started together; the WireGuard handshake retries until the
+     * freeturn listener binds, so a strict ordering barrier is unnecessary.
+     */
+    private suspend fun startVkTurnCore(
+        location: LocationConfig,
+        upstream: Network,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean
+    ): Boolean {
+        val config = location.normalized()
+        val vk = config.vkturn
+        val profile = config.proxy
+        if (vk == null || !vk.isComplete() || profile?.rawOutbound.isNullOrBlank()) {
+            if (setErrorOnFailure) {
+                setStatus(VpnStatus.Error("VK-TURN not configured"))
+                updateNotification("Add a VK call link first")
+            }
+            return false
+        }
+        return try {
+            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+
+            waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+            if (isLocalSocksPortOpen(socksListenPort)) {
+                throw IllegalStateException("SOCKS port $socksListenPort is still in use")
+            }
+
+            // 1. freeturn client: local WireGuard entry listener tunnelling through VK.
+            Freeturn.setDebug(false)
+            Freeturn.setLogWriter(object : FreeturnLogWriter {
+                override fun writeLog(line: String) {
+                    val trimmed = line.trimEnd()
+                    addLog("vkturn: $trimmed")
+                    Log.v("vkturn", trimmed)
+                }
+            })
+            val listenAddr = "127.0.0.1:${vk.listenPort}"
+            addLog("Starting VK-TURN freeturn listener on $listenAddr")
+            Freeturn.start(vk.uri, listenAddr, vk.vkLink)
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) return false
+
+            // 2. sing-box WireGuard outbound dialling the local freeturn listener.
+            activeProxyCore = ProxyCore.SingBox
+            val json = SingBoxConfig.build(
+                profile = profile,
+                listenPort = socksListenPort,
+                listenHost = socksListenHost,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                autoDetectInterface = true,
+                routing = loadRouting(),
+                traffic = loadTrafficSettings(),
+            )
+            addLog("Starting sing-box (VK-TURN WireGuard) via $listenAddr")
+            singBoxEngine().start(json)
+
+            if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                throw IllegalStateException("sing-box SOCKS port $socksListenPort did not open")
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("VK-TURN start superseded")
+                return false
+            }
+            addLog("VK-TURN ready on $socksListenHost:$socksListenPort")
+            true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                addLog("VK-TURN start canceled")
+                stopMobileAndWait()
+            }
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Transport failed"
+            addLog(if (staleRequest) "VK-TURN start canceled: $message" else "VK-TURN start failed: $message")
+            stopMobileAndWait()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification("Connection failed")
+            }
+            false
+        } finally {
+            unbindProcessFromNetwork()
+        }
+    }
+
     private fun singBoxEngine(): SingBoxEngine {
         return singBox ?: SingBoxEngine(
             context = applicationContext,
@@ -858,6 +953,7 @@ class OlcboxVpnService : VpnService() {
         EngineType.Stealth -> Mobile.isRunning()
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> Mobile.isRunning() && proxyCoreRunning()
+        EngineType.VkTurn -> Freeturn.isRunning() && proxyCoreRunning()
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -1237,6 +1333,7 @@ class OlcboxVpnService : VpnService() {
     private fun stopMobile() {
         runCatching { singBox?.stop() }
         runCatching { xray?.stop() }
+        runCatching { Freeturn.stop() }
         val provider = lastMobileProvider
         val wasRunning = Mobile.isRunning()
         runCatching { Mobile.stop() }

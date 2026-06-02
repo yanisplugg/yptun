@@ -185,12 +185,15 @@ fun LocationSettingsScreen(
                 )
             }
 
-            item {
-                EngineSelector(
-                    selected = config.engine,
-                    enabled = !isSaving,
-                    onSelected = viewModel::onEngineChanged
-                )
+            // VK-TURN locations are created by importing a freeturn:// link, not picked manually.
+            if (config.engine != EngineType.VkTurn) {
+                item {
+                    EngineSelector(
+                        selected = config.engine,
+                        enabled = !isSaving,
+                        onSelected = viewModel::onEngineChanged
+                    )
+                }
             }
 
             if (config.engine == EngineType.Standard || config.engine == EngineType.Chain) {
@@ -212,7 +215,18 @@ fun LocationSettingsScreen(
                 }
             }
 
-            if (config.engine != EngineType.Standard) {
+            if (config.engine == EngineType.VkTurn) {
+                item {
+                    VkTurnLinkField(
+                        vkLink = config.vkturn?.vkLink.orEmpty(),
+                        serverIp = config.proxy?.server.orEmpty(),
+                        enabled = !isSaving,
+                        onChange = viewModel::onVkLinkChanged
+                    )
+                }
+            }
+
+            if (config.engine == EngineType.Stealth || config.engine == EngineType.Chain) {
             item {
                 ConnectionTypePicker(
                     selectedProvider = config.bypassProvider,
@@ -392,6 +406,39 @@ private fun ProxyField(
     }
 }
 
+@Composable
+private fun VkTurnLinkField(
+    vkLink: String,
+    serverIp: String,
+    enabled: Boolean,
+    onChange: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        SectionTitle(
+            title = "VK-TURN",
+            subtitle = if (serverIp.isNotBlank()) {
+                "WireGuard over a VK TURN tunnel · $serverIp"
+            } else {
+                "WireGuard over a VK TURN tunnel"
+            }
+        )
+        OutlinedTextField(
+            value = vkLink,
+            onValueChange = onChange,
+            label = { Text("VK call link") },
+            placeholder = { Text("https://vk.com/call/join/…") },
+            enabled = enabled,
+            isError = vkLink.isNotBlank() && !vkLink.contains("/call/join/"),
+            supportingText = { Text("Paste your personal VK Calls join link") },
+            minLines = 1,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CoreSelector(
@@ -438,12 +485,14 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.Stealth -> "Stealth"
     EngineType.Standard -> "Standard"
     EngineType.Chain -> "Chain"
+    EngineType.VkTurn -> "VK-TURN"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {
     EngineType.Stealth -> "olcRTC WebRTC tunnel"
     EngineType.Standard -> "sing-box proxy (VLESS, VMess, Trojan, SS…)"
     EngineType.Chain -> "Proxy wrapped inside the olcRTC tunnel"
+    EngineType.VkTurn -> "WireGuard over a VK TURN tunnel (free-turn-proxy)"
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {

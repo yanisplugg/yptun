@@ -27,6 +27,7 @@ import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
+import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 
 data class LocationItem(
@@ -115,6 +116,7 @@ class LocationViewModel(
             EngineType.Stealth -> olcrtcFieldsValid
             EngineType.Standard -> editingConfig.proxy?.isComplete() == true
             EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
+            EngineType.VkTurn -> editingConfig.isComplete()
         }
 
     init {
@@ -397,6 +399,12 @@ class LocationViewModel(
 
     fun onCoreChanged(core: ProxyCore) {
         editingConfig = editingConfig.copy(core = core)
+    }
+
+    /** Per-client VK Calls join link for a VK-TURN location (not carried in the share link). */
+    fun onVkLinkChanged(value: String) {
+        val current = editingConfig.vkturn ?: VkTurnConfig()
+        editingConfig = editingConfig.copy(vkturn = current.copy(vkLink = value.trim()))
     }
 
     fun onEngineChanged(engine: EngineType) {

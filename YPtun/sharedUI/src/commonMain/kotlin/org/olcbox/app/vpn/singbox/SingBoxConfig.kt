@@ -4,6 +4,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -27,6 +29,9 @@ object SingBoxConfig {
     private const val PROXY_TAG = "proxy"
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val SOCKS_IN_TAG = "socks-in"
+
+    /** Raw-outbound types that do not support sing-box smux and must not get a multiplex block. */
+    private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint")
 
     private val json = Json { prettyPrint = true }
 
@@ -198,11 +203,17 @@ object SingBoxConfig {
         profile.rawOutbound?.takeIf { it.isNotBlank() }?.let { raw ->
             val rawObj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
             if (rawObj != null) {
+                // Transports without sing-box smux support (wireguard, hysteria2, tuic…) must
+                // not get a multiplex block injected — it would fail config parsing.
+                val rawType = rawObj["type"]?.jsonPrimitive?.contentOrNull
+                val muxUnsupported = rawType in RAW_OUTBOUND_NO_MUX
                 return buildJsonObject {
                     rawObj.forEach { (k, v) -> if (k != "tag" && k != "detour") put(k, v) }
                     put("tag", PROXY_TAG)
                     if (chained) put("detour", OLCRTC_TAG)
-                    if (raw.indexOf("multiplex") < 0) buildMultiplex(traffic)?.let { put("multiplex", it) }
+                    if (!muxUnsupported && raw.indexOf("multiplex") < 0) {
+                        buildMultiplex(traffic)?.let { put("multiplex", it) }
+                    }
                 }
             }
         }

@@ -187,6 +187,11 @@ private fun locationSubtitle(location: LocationItem): String {
             config.proxy?.server
         )
 
+        EngineType.VkTurn -> listOfNotNull(
+            "VK-TURN",
+            config.proxy?.server
+        )
+
         else -> listOf(
             config?.providerName()
                 ?: LocationConfig.providerDisplayName(LocationConfig.DEFAULT_BYPASS_PROVIDER),

@@ -10,6 +10,9 @@ import kotlinx.serialization.Serializable
  * - [Standard] uses sing-box with a single proxy outbound (e.g. VLESS).
  * - [Chain] runs sing-box whose outbound dials through olcRTC's SOCKS, i.e. a
  *   normal proxy wrapped inside the WebRTC stealth tunnel.
+ * - [VkTurn] runs the free-turn-proxy client (a local WireGuard entry listener
+ *   tunnelling through VK TURN) and sing-box with a WireGuard outbound pointed
+ *   at that local listener — the panel's VK-TURN inbound consumed on the client.
  */
 @Serializable
 enum class EngineType {
@@ -20,12 +23,16 @@ enum class EngineType {
     Standard,
 
     @SerialName("chain")
-    Chain;
+    Chain,
+
+    @SerialName("vkturn")
+    VkTurn;
 
     companion object {
         fun fromValue(value: String?): EngineType = when (value?.trim()?.lowercase()) {
             "standard", "singbox", "sing-box", "vless" -> Standard
             "chain", "stealth_chain", "stealth+vless" -> Chain
+            "vkturn", "vk-turn", "freeturn" -> VkTurn
             else -> Stealth
         }
     }

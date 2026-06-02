@@ -384,7 +384,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     override suspend fun ping(locationConfig: LocationConfig): Long? {
         // VLESS/standard locations have no olcRTC room/key — pinging them via olcRTC is unstable.
         // Use a plain TCP latency probe to the proxy server instead (like typical proxy clients).
-        if (locationConfig.engine == EngineType.Standard) {
+        if (locationConfig.engine == EngineType.Standard || locationConfig.engine == EngineType.VkTurn) {
             return tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
         }
         return OlcRtcConnectionChecker.ping(
@@ -394,7 +394,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
-        if (locationConfig.engine == EngineType.Standard) {
+        if (locationConfig.engine == EngineType.Standard || locationConfig.engine == EngineType.VkTurn) {
             return tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
         }
         return OlcRtcConnectionChecker.check(
