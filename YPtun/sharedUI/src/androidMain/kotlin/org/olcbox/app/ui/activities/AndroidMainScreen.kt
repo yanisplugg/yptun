@@ -295,9 +295,11 @@ fun AndroidMainScreen(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            viewModel.onFileSelected(it) {
-                reloadLocationsAfterImport()
-            }
+            viewModel.onFileSelected(
+                fileSource = it,
+                onComplete = { reloadLocationsAfterImport() },
+                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
+            )
         }
     }
 
@@ -312,11 +314,15 @@ fun AndroidMainScreen(
 
         if (rawText.isBlank()) return@rememberLauncherForActivityResult
 
-        viewModel.onImportFullConfig(rawText) {
-            reloadLocationsAfterImport {
-                Toast.makeText(context, "QR imported", Toast.LENGTH_SHORT).show()
-            }
-        }
+        viewModel.onImportFullConfig(
+            rawText = rawText,
+            onComplete = {
+                reloadLocationsAfterImport {
+                    Toast.makeText(context, "QR imported", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
+        )
     }
 
     val logSaveLauncher = rememberLauncherForActivityResult(

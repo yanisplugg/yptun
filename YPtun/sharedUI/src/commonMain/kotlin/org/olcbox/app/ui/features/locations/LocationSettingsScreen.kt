@@ -430,26 +430,11 @@ private fun LazyListScope.vkTurnSection(
     onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit
 ) {
     item {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            SectionTitle(
-                title = "VK call link(s)",
-                subtitle = "VK Calls join link (required). Add MORE links — one per line — to spread " +
-                    "the tunnel across several calls and bypass VK's per-call speed cap."
-            )
-            OutlinedTextField(
-                value = draft.vkLink,
-                onValueChange = { v -> onChange { it.copy(vkLink = v) } },
-                label = { Text("VK call link(s) — one per line") },
-                placeholder = { Text("https://vk.com/call/join/…\nhttps://vk.com/call/join/…") },
-                enabled = enabled,
-                isError = draft.vkLink.isNotBlank() && !draft.vkLink.contains("/call/join/"),
-                minLines = 2,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+        VkTurnLinksField(
+            value = draft.vkLink,
+            enabled = enabled,
+            onChange = { v -> onChange { it.copy(vkLink = v) } }
+        )
     }
 
     item {
@@ -642,6 +627,61 @@ private fun LazyListScope.vkTurnSection(
                 minLines = 2,
                 modifier = Modifier.fillMaxWidth()
             )
+        }
+    }
+}
+
+/**
+ * VK call links: one primary field plus a toggle revealing up to 4 more (5 total). The links are
+ * stored newline-joined in [value]; each extra call is an independent VK call → more bandwidth
+ * (freeturn fans the tunnel's TURN streams across them).
+ */
+@Composable
+private fun VkTurnLinksField(
+    value: String,
+    enabled: Boolean,
+    onChange: (String) -> Unit
+) {
+    val maxLinks = 5
+    val lines = value.split("\n")
+    fun line(i: Int) = lines.getOrElse(i) { "" }
+    fun setLine(i: Int, v: String) {
+        val list = MutableList(maxLinks) { line(it) }
+        list[i] = v
+        onChange(list.joinToString("\n").trimEnd('\n'))
+    }
+    var expanded by remember {
+        mutableStateOf((1 until maxLinks).any { value.split("\n").getOrElse(it) { "" }.isNotBlank() })
+    }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        SectionTitle(
+            title = "VK call link(s)",
+            subtitle = "Personal VK Calls join link (required). Add up to 5 — each extra call " +
+                "adds bandwidth (the tunnel is spread across them)."
+        )
+        VkTurnField(
+            value = line(0),
+            onValueChange = { setLine(0, it) },
+            label = "VK call link",
+            placeholder = "https://vk.com/call/join/…",
+            enabled = enabled,
+            isError = line(0).isNotBlank() && !line(0).contains("/call/join/")
+        )
+        VkTurnSwitchRow("Additional calls (up to 4 more — faster)", expanded, enabled) { expanded = it }
+        if (expanded) {
+            for (i in 1 until maxLinks) {
+                VkTurnField(
+                    value = line(i),
+                    onValueChange = { setLine(i, it) },
+                    label = "VK call link ${i + 1} (optional)",
+                    placeholder = "https://vk.com/call/join/…",
+                    enabled = enabled,
+                    isError = line(i).isNotBlank() && !line(i).contains("/call/join/")
+                )
+            }
         }
     }
 }
