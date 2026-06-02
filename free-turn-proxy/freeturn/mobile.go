@@ -22,6 +22,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,12 +104,17 @@ func Start(uri, listenAddr, vkLink string, nStreams int) error {
 		return errors.New("freeturn already running")
 	}
 
+	// vkLink may carry several VK call links (newline/whitespace/comma separated). Each becomes
+	// an independent VK call so the tunnel's streams span multiple calls and aggregate past VK's
+	// per-call bandwidth cap. The first link satisfies config validation; all are used for creds.
+	links := splitLinks(vkLink)
+
 	// Flags MUST precede the positional URI: Go's flag package stops parsing flags at
 	// the first non-flag argument, so a leading URI would swallow -listen/-link/-debug
 	// (ParseClient then fails with "need -link"). Keep the freeturn:// URI last.
 	args := []string{"-listen", listenAddr}
-	if vkLink != "" {
-		args = append(args, "-link", vkLink)
+	if len(links) > 0 {
+		args = append(args, "-link", links[0])
 	}
 	if nStreams > 0 {
 		args = append(args, "-n", strconv.Itoa(nStreams))
@@ -134,7 +140,7 @@ func Start(uri, listenAddr, vkLink string, nStreams int) error {
 		defer close(doneCh)
 		defer running.Store(false)
 		defer streams.Store(0)
-		if rerr := run(ctx, cfg); rerr != nil && !errors.Is(rerr, context.Canceled) {
+		if rerr := run(ctx, cfg, links); rerr != nil && !errors.Is(rerr, context.Canceled) {
 			log.Printf("[freeturn] stopped: %v", rerr)
 		}
 	}()
@@ -158,8 +164,9 @@ func Stop() {
 	}
 }
 
-// run mirrors cmd/client/main.go's runtime path with a cancelable context.
-func run(ctx context.Context, cfg *config.Client) error {
+// run mirrors cmd/client/main.go's runtime path with a cancelable context. links holds all VK
+// call links (>=1); when more than one, credentials are fanned across them via multiProvider.
+func run(ctx context.Context, cfg *config.Client, links []string) error {
 	logger := logx.New(cfg.Log.Debug)
 	logger.Infof("freeturn client starting (listen=%s)", cfg.Proxy.Listen)
 	dnsdial.SetLogger(logger)
@@ -176,11 +183,11 @@ func run(ctx context.Context, cfg *config.Client) error {
 	}
 
 	connectedStreams := &streams
-	prov, err := buildProvider(cfg, appDialer, connectedStreams, logger)
+	prov, err := buildProvider(cfg, links, appDialer, connectedStreams, logger)
 	if err != nil {
 		return fmt.Errorf("provider init: %w", err)
 	}
-	logger.Infof("provider=%s", prov.Name())
+	logger.Infof("provider=%s links=%d", prov.Name(), len(links))
 
 	getCreds := func(ctx context.Context, streamID int) (string, string, string, error) {
 		c, cerr := prov.GetCredentials(ctx, streamID)
@@ -229,20 +236,50 @@ func run(ctx context.Context, cfg *config.Client) error {
 	return udprelay.Run(ctx, udpDtlsDialer, prov, logger, connectedStreams, udpParams, peer, cfg.Proxy.Listen, cfg.TURN.N)
 }
 
-// buildProvider mirrors cmd/client/main.go.
-func buildProvider(cfg *config.Client, dialer net.Dialer, connected *atomic.Int32, logger logx.Logger) (provider.Provider, error) {
+// buildProvider mirrors cmd/client/main.go, but builds one VK provider per link and fans streams
+// across them (multiProvider) when more than one call link is supplied.
+func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connected *atomic.Int32, logger logx.Logger) (provider.Provider, error) {
 	switch cfg.Provider.Name {
 	case config.ProviderVK:
-		return vk.New(vk.Config{
-			Link:            cfg.VK.Link,
-			Dialer:          dialer,
-			ManualOnly:      cfg.VK.ManualCaptcha,
-			StreamsPerCache: cfg.VK.StreamsPerCred,
-			StreamsAlive:    connected.Load,
-			Log:             logger,
-			Debug:           cfg.Log.Debug,
-		}, vk.DefaultManualSolver)
+		if len(links) == 0 {
+			links = []string{cfg.VK.Link}
+		}
+		provs := make([]provider.Provider, 0, len(links))
+		for _, link := range links {
+			p, err := vk.New(vk.Config{
+				Link:            link,
+				Dialer:          dialer,
+				ManualOnly:      cfg.VK.ManualCaptcha,
+				StreamsPerCache: cfg.VK.StreamsPerCred,
+				StreamsAlive:    connected.Load,
+				Log:             logger,
+				Debug:           cfg.Log.Debug,
+			}, vk.DefaultManualSolver)
+			if err != nil {
+				return nil, err
+			}
+			provs = append(provs, p)
+		}
+		if len(provs) == 1 {
+			return provs[0], nil
+		}
+		return &multiProvider{providers: provs}, nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q", cfg.Provider.Name)
 	}
+}
+
+// splitLinks parses one or more VK call links from a single string (newline, comma, or whitespace
+// separated), trimming blanks.
+func splitLinks(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ','
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }

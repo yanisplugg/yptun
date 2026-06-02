@@ -423,16 +423,19 @@ private fun LazyListScope.vkTurnSection(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
-                title = "VK call link",
-                subtitle = "Your personal VK Calls join link (required to connect)"
+                title = "VK call link(s)",
+                subtitle = "VK Calls join link (required). Add MORE links — one per line — to spread " +
+                    "the tunnel across several calls and bypass VK's per-call speed cap."
             )
-            VkTurnField(
+            OutlinedTextField(
                 value = draft.vkLink,
                 onValueChange = { v -> onChange { it.copy(vkLink = v) } },
-                label = "VK call link",
-                placeholder = "https://vk.com/call/join/…",
+                label = { Text("VK call link(s) — one per line") },
+                placeholder = { Text("https://vk.com/call/join/…\nhttps://vk.com/call/join/…") },
                 enabled = enabled,
-                isError = draft.vkLink.isNotBlank() && !draft.vkLink.contains("/call/join/")
+                isError = draft.vkLink.isNotBlank() && !draft.vkLink.contains("/call/join/"),
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }

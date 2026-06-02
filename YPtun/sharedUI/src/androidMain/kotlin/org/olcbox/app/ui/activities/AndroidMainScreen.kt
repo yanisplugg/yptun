@@ -587,14 +587,14 @@ private fun VkTurnLinkPromptDialog(
         title = { Text("VK call link") },
         text = {
             Column {
-                Text("Paste your personal VK Calls join link for \"$locationName\" to finish setup.")
+                Text("Paste your VK Calls join link for \"$locationName\". You can paste several links (one per line) to spread the tunnel across calls for more speed.")
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
                     value = link,
                     onValueChange = { link = it },
-                    singleLine = true,
                     placeholder = { Text("https://vk.com/call/join/…") },
                     isError = link.isNotBlank() && !link.contains("/call/join/"),
+                    minLines = 2,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

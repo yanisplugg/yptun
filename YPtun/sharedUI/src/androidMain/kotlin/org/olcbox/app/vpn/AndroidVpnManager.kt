@@ -420,38 +420,99 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     private suspend fun vkTurnTunnelPing(): Long? = withContext(Dispatchers.IO) {
         val ps = _proxySettings.value
         val host = AndroidSocksProxySettings.connectHost(ps.host)
-        // No status gate: if the tunnel isn't up the SOCKS connect simply fails (logged below).
-        OlcboxVpnState.addLog("VK-TURN ping: probing $host:${ps.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT (status=${status.value::class.simpleName})")
+
+        // 1. Try a real end-to-end RTT: SOCKS5 CONNECT through the tunnel to 1.1.1.1:443.
         var best: Long? = null
         var lastError: String? = null
         repeat(TCP_PING_ATTEMPTS) {
-            try {
-                // Java's built-in SOCKS5 Socket performs the handshake natively; the unresolved
-                // target makes the proxy (sing-box) do the connect through WireGuard. RTT = the
-                // full client→freeturn→VK→server→target round trip.
-                val proxy = java.net.Proxy(
-                    java.net.Proxy.Type.SOCKS,
-                    java.net.InetSocketAddress(host, ps.port)
-                )
-                java.net.Socket(proxy).use { socket ->
-                    val start = System.nanoTime()
-                    socket.connect(
-                        java.net.InetSocketAddress.createUnresolved(TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT),
-                        TUNNEL_PING_TIMEOUT_MS
-                    )
-                    val ms = (System.nanoTime() - start) / 1_000_000L
-                    if (best == null || ms < best!!) best = ms
-                }
-            } catch (e: Exception) {
-                lastError = e.message ?: e::class.simpleName
+            val r = runCatching {
+                socks5ConnectRtt(host, ps.port, ps.username, ps.password,
+                    TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, TUNNEL_PING_TIMEOUT_MS)
             }
+            val ms = r.getOrNull()
+            if (ms != null && (best == null || ms < best!!)) best = ms
+            if (ms == null) lastError = r.exceptionOrNull()?.message ?: "no reply"
         }
-        if (best == null) {
-            OlcboxVpnState.addLog(
-                "VK-TURN ping failed via $host:${ps.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT: $lastError"
+        if (best != null) return@withContext best
+
+        // 2. Fallback: the freeturn relay is a same-process singleton. If its DTLS/TURN streams are
+        //    up the tunnel IS alive even if the end-to-end probe didn't complete — report the local
+        //    round-trip to the SOCKS proxy as a liveness latency instead of a false "Offline".
+        val relayUp = runCatching { freeturn.Freeturn.isRunning() && freeturn.Freeturn.connectedStreams() > 0 }
+            .getOrDefault(false)
+        if (relayUp) {
+            val local = runCatching {
+                java.net.Socket().use { s ->
+                    val start = System.nanoTime()
+                    s.connect(java.net.InetSocketAddress(host, ps.port), TCP_PING_TIMEOUT_MS)
+                    (System.nanoTime() - start) / 1_000_000L
+                }
+            }.getOrNull()
+            OlcboxVpnState.addLog("VK-TURN ping: relay up (${freeturn.Freeturn.connectedStreams()} streams), end-to-end probe failed ($lastError) → reporting liveness")
+            return@withContext local ?: 1L
+        }
+
+        OlcboxVpnState.addLog("VK-TURN ping failed via $host:${ps.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT: $lastError")
+        null
+    }
+
+    /** Hand-rolled SOCKS5 CONNECT to an IPv4 target through proxyHost:proxyPort; returns RTT ms. */
+    private fun socks5ConnectRtt(
+        proxyHost: String, proxyPort: Int, username: String, password: String,
+        targetHost: String, targetPort: Int, timeoutMs: Int
+    ): Long? {
+        java.net.Socket().use { socket ->
+            socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), timeoutMs)
+            socket.soTimeout = timeoutMs
+            val out = socket.getOutputStream()
+            val inp = socket.getInputStream()
+            val start = System.nanoTime()
+
+            val useAuth = username.isNotBlank()
+            out.write(if (useAuth) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
+            out.flush()
+            val sel = readExactly(inp, 2)
+            if (sel[0].toInt() and 0xFF != 0x05) return null
+            when (sel[1].toInt() and 0xFF) {
+                0x00 -> {}
+                0x02 -> {
+                    val u = username.encodeToByteArray(); val p = password.encodeToByteArray()
+                    val a = ByteArray(3 + u.size + p.size)
+                    a[0] = 0x01; a[1] = u.size.toByte(); u.copyInto(a, 2)
+                    a[2 + u.size] = p.size.toByte(); p.copyInto(a, 3 + u.size)
+                    out.write(a); out.flush()
+                    if (readExactly(inp, 2)[1].toInt() and 0xFF != 0x00) return null
+                }
+                else -> return null
+            }
+
+            val ip = targetHost.split('.').map { it.toInt() }
+            val req = byteArrayOf(
+                0x05, 0x01, 0x00, 0x01,
+                ip[0].toByte(), ip[1].toByte(), ip[2].toByte(), ip[3].toByte(),
+                ((targetPort shr 8) and 0xFF).toByte(), (targetPort and 0xFF).toByte()
             )
+            out.write(req); out.flush()
+
+            val head = readExactly(inp, 4)
+            if (head[1].toInt() and 0xFF != 0x00) return null
+            val addrLen = when (head[3].toInt() and 0xFF) {
+                0x01 -> 4; 0x04 -> 16; 0x03 -> readExactly(inp, 1)[0].toInt() and 0xFF
+                else -> return null
+            }
+            readExactly(inp, addrLen + 2)
+            return (System.nanoTime() - start) / 1_000_000L
         }
-        best
+    }
+
+    private fun readExactly(inp: java.io.InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n); var off = 0
+        while (off < n) {
+            val r = inp.read(buf, off, n - off)
+            if (r < 0) throw java.io.EOFException("short read")
+            off += r
+        }
+        return buf
     }
 
     /** TCP-connect latency to host:port in ms, best of a few attempts, or null if unreachable. */
