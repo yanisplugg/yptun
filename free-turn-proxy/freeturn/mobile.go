@@ -247,7 +247,10 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 		provs := make([]provider.Provider, 0, len(links))
 		for _, link := range links {
 			p, err := vk.New(vk.Config{
-				Link:            link,
+				// vkauth prepends "https://vk.com/call/join/", so Link must be the BARE join code;
+				// normalize the same way config.ParseClient does (else the URL gets doubled →
+				// VK error 9008 "Join link is not valid").
+				Link:            normalizeVKLink(link),
 				Dialer:          dialer,
 				ManualOnly:      cfg.VK.ManualCaptcha,
 				StreamsPerCache: cfg.VK.StreamsPerCred,
@@ -267,6 +270,17 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 	default:
 		return nil, fmt.Errorf("unknown provider %q", cfg.Provider.Name)
 	}
+}
+
+// normalizeVKLink extracts the bare VK call join code from a full link (mirrors config.ParseClient):
+// "https://vk.com/call/join/CODE" → "CODE". Idempotent for an already-bare code.
+func normalizeVKLink(s string) string {
+	parts := strings.Split(s, "join/")
+	link := parts[len(parts)-1]
+	if idx := strings.IndexAny(link, "/?#"); idx != -1 {
+		link = link[:idx]
+	}
+	return link
 }
 
 // splitLinks parses one or more VK call links from a single string (newline, comma, or whitespace
