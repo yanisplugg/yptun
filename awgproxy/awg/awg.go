@@ -147,9 +147,11 @@ type wgConfig struct {
 }
 
 // awgKnobs are the AmneziaWG obfuscation keys passed through verbatim to the device UAPI.
+// These are exactly the keys amneziawg-go's UAPI accepts (device/uapi.go). S3/S4 are NOT standard
+// AmneziaWG and are rejected by the device — skip them (configs that carry S3/S4 set them to 0).
 var awgKnobs = map[string]bool{
 	"jc": true, "jmin": true, "jmax": true,
-	"s1": true, "s2": true, "s3": true, "s4": true,
+	"s1": true, "s2": true,
 	"h1": true, "h2": true, "h3": true, "h4": true,
 	"i1": true, "i2": true, "i3": true, "i4": true, "i5": true,
 	"j1": true, "j2": true, "j3": true, "itime": true,
