@@ -418,12 +418,10 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      * meaningful while connected; returns null otherwise (shown as "unknown", not offline).
      */
     private suspend fun vkTurnTunnelPing(): Long? = withContext(Dispatchers.IO) {
-        val st = status.value
-        if (st !is VpnStatus.Connected && st !is VpnStatus.Reconnecting) {
-            return@withContext null
-        }
         val ps = _proxySettings.value
         val host = AndroidSocksProxySettings.connectHost(ps.host)
+        // No status gate: if the tunnel isn't up the SOCKS connect simply fails (logged below).
+        OlcboxVpnState.addLog("VK-TURN ping: probing $host:${ps.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT (status=${status.value::class.simpleName})")
         var best: Long? = null
         var lastError: String? = null
         repeat(TCP_PING_ATTEMPTS) {
