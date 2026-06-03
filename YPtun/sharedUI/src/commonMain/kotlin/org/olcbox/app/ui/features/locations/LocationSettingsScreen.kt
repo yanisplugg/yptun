@@ -685,8 +685,12 @@ private fun LazyListScope.vkTurnSection(
         }
     }
 
-    // Optional proxy chained ON TOP of the WireGuard tunnel (WG outbound only).
+    // Optional proxy chained ON TOP of the WireGuard tunnel (WG outbound only). A toggle enables or
+    // disables it; turning it off clears the link so the composer falls back to plain WireGuard.
     if (draft.outbound == VkTurnConfig.OUTBOUND_WIREGUARD) item {
+        var proxyEnabled by remember(draft.chainProxyLink.isNotBlank()) {
+            mutableStateOf(draft.chainProxyLink.isNotBlank())
+        }
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -695,15 +699,26 @@ private fun LazyListScope.vkTurnSection(
                 title = LocalStrings.current.proxyOverVkturn,
                 subtitle = LocalStrings.current.proxyOverVkturnSubtitle
             )
-            OutlinedTextField(
-                value = draft.chainProxyLink,
-                onValueChange = { v -> onChange { it.copy(chainProxyLink = v) } },
-                label = { Text(LocalStrings.current.proxyLink) },
-                placeholder = { Text("vless://…  (leave empty for plain WireGuard)") },
+            VkTurnSwitchRow(
+                label = LocalStrings.current.enableProxy,
+                checked = proxyEnabled,
                 enabled = enabled,
-                minLines = 2,
-                modifier = Modifier.fillMaxWidth()
+                onCheckedChange = { on ->
+                    proxyEnabled = on
+                    if (!on) onChange { it.copy(chainProxyLink = "") }
+                }
             )
+            if (proxyEnabled) {
+                OutlinedTextField(
+                    value = draft.chainProxyLink,
+                    onValueChange = { v -> onChange { it.copy(chainProxyLink = v) } },
+                    label = { Text(LocalStrings.current.proxyLink) },
+                    placeholder = { Text("vless://… / trojan://… / ss://…") },
+                    enabled = enabled,
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }
@@ -801,7 +816,11 @@ private fun VkTurnSwitchRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f).padding(end = 12.dp)
+        )
         Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }

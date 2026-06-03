@@ -293,6 +293,7 @@ interface Strings {
     val wireguardSubtitle: String
     val proxyOverVkturn: String
     val proxyOverVkturnSubtitle: String
+    val enableProxy: String
     val vkCallLinksSection: String
     val vkCallLinksSubtitle: String
     fun vkCallLinkNumbered(n: Int): String
@@ -592,6 +593,7 @@ object RuStrings : Strings {
     override val proxyOverVkturn = "Прокси поверх VK-TURN (необязательно)"
     override val proxyOverVkturnSubtitle =
         "Добавить прокси vless/vmess/trojan/ss поверх туннеля WireGuard"
+    override val enableProxy = "Включить прокси"
     override val vkCallLinksSection = "Ссылки на звонки VK"
     override val vkCallLinksSubtitle =
         "Личная ссылка-приглашение VK Звонков (обязательно). Можно добавить до 5 — каждый " +
@@ -879,6 +881,7 @@ object EnStrings : Strings {
     override val proxyOverVkturn = "Proxy over VK-TURN (optional)"
     override val proxyOverVkturnSubtitle =
         "Chain a vless/vmess/trojan/ss proxy on top of the WireGuard tunnel"
+    override val enableProxy = "Enable proxy"
     override val vkCallLinksSection = "VK call link(s)"
     override val vkCallLinksSubtitle =
         "Personal VK Calls join link (required). Add up to 5 — each extra call " +
@@ -1166,6 +1169,7 @@ object FaStrings : Strings {
     override val proxyOverVkturn = "پراکسی روی VK-TURN (اختیاری)"
     override val proxyOverVkturnSubtitle =
         "زنجیر کردن یک پراکسی vless/vmess/trojan/ss روی تونل WireGuard"
+    override val enableProxy = "فعال‌سازی پراکسی"
     override val vkCallLinksSection = "پیوند(های) تماس VK"
     override val vkCallLinksSubtitle =
         "پیوند شخصی پیوستن VK Calls (الزامی). تا ۵ مورد اضافه کنید — هر تماس اضافی " +

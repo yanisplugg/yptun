@@ -114,8 +114,15 @@ object VkTurnComposer {
                 // Parse the exit proxy and rewrite its dial target to the local freeturn TCP
                 // listener; TLS SNI / params stay pointed at the real server.
                 val parsed = ShareLinkParser.parse(draft.outboundProxyLink.trim())
-                (parsed ?: ProxyProfile()).copy(
-                    tag = name.ifBlank { parsed?.tag?.ifBlank { "VK-TURN" } ?: "VK-TURN" },
+                val base = parsed ?: ProxyProfile()
+                // BUGFIX: SingBoxConfig sets `server_name = sni.ifBlank { server }`. Since we are
+                // about to overwrite `server` with 127.0.0.1 (the local freeturn listener), a link
+                // WITHOUT an explicit sni= would end up presenting "127.0.0.1" as the TLS SNI and the
+                // handshake to the real relayed server is reset → the proxy "never connects". Pin the
+                // SNI to the original host first so TLS still validates against the real server.
+                base.copy(
+                    tag = name.ifBlank { base.tag.ifBlank { "VK-TURN" } },
+                    sni = base.sni.ifBlank { base.server },
                     server = "127.0.0.1",
                     serverPort = listenPort,
                 )
