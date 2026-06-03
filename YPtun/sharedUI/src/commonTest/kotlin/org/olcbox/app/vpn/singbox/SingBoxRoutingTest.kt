@@ -40,11 +40,16 @@ class SingBoxRoutingTest {
         assertTrue(tags.contains("geosite-ru"))
         assertTrue(tags.contains("geoip-ru"))
 
+        // domain:vk.com → dotted suffix ".vk.com" (matches *.vk.com, never "evilvk.com").
         val suffixRule = directs.firstWith("domain_suffix")!!
-        assertEquals("vk.com", suffixRule["domain_suffix"]!!.jsonArray[0].jsonPrimitive.content)
+        val suffixes = suffixRule["domain_suffix"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue(suffixes.contains(".vk.com"))
 
+        // exact bucket has both the domain:vk.com label itself and the full:exact.example value.
         val exactRule = directs.firstWith("domain")!!
-        assertEquals("exact.example", exactRule["domain"]!!.jsonArray[0].jsonPrimitive.content)
+        val exacts = exactRule["domain"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue(exacts.contains("vk.com"))
+        assertTrue(exacts.contains("exact.example"))
 
         val ipRule = directs.firstWith("ip_cidr")!!
         assertEquals("10.0.0.0/8", ipRule["ip_cidr"]!!.jsonArray[0].jsonPrimitive.content)

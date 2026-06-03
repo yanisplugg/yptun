@@ -145,13 +145,29 @@ object SingBoxRouting {
         when {
             v.startsWith("geosite:", true) -> sel(geosite = listOf(v.substringAfter(':').trim().lowercase()))
             v.startsWith("geoip:", true) -> sel(geoip = listOf(v.substringAfter(':').trim().lowercase()))
-            v.startsWith("domain:", true) -> sel(suffix = listOf(v.substringAfter(':').trim()))
+            // v2ray/Xray `domain:` = match the domain itself AND any subdomain. sing-box has no
+            // single equivalent: domain_suffix is a RAW string suffix (so "ru" would also match
+            // "metaru", and miss the bare label nuance). Emit exact + dotted-suffix to mirror Xray:
+            // `domain:ru` → domain "ru" + domain_suffix ".ru" (all *.ru, not "centaur").
+            v.startsWith("domain:", true) -> domainAndSubdomains(v.substringAfter(':').trim())
             v.startsWith("full:", true) -> sel(exact = listOf(v.substringAfter(':').trim()))
             v.startsWith("keyword:", true) -> sel(keyword = listOf(v.substringAfter(':').trim()))
             v.startsWith("regexp:", true) || v.startsWith("regex:", true) -> sel(regex = listOf(v.substringAfter(':').trim()))
             isCidrOrIp(v) -> sel(cidr = listOf(toCidr(v)))
-            else -> sel(suffix = listOf(v))
+            else -> domainAndSubdomains(v)
         }
+    }
+
+    /**
+     * Mirrors v2ray/Xray `domain:` semantics on sing-box: the exact label plus a dotted suffix so
+     * `ru` matches `ru` and `*.ru` (never `metaru`), and `google.com` matches it and its subdomains
+     * (never `evilgoogle.com`). A value that already starts with `.` is treated as suffix-only.
+     */
+    private fun domainAndSubdomains(value: String): Selectors {
+        val v = value.trim()
+        if (v.isEmpty()) return sel()
+        if (v.startsWith(".")) return sel(suffix = listOf(v))
+        return sel(exact = listOf(v), suffix = listOf(".$v"))
     }
 
     private fun parseIp(selectors: List<String>): List<Selectors> = selectors.mapNotNull { raw ->
