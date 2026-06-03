@@ -81,6 +81,7 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_TRAFFIC
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.data.model.VkTurnConfig
 import kotlinx.serialization.json.Json
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -910,7 +911,15 @@ class OlcboxVpnService : VpnService() {
         val config = location.normalized()
         val vk = config.vkturn
         val profile = config.proxy
-        if (vk == null || !vk.isComplete() || profile?.rawOutbound.isNullOrBlank()) {
+        val outboundType = vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
+            ?: VkTurnConfig.OUTBOUND_WIREGUARD
+        val outboundConfigured = when (outboundType) {
+            VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
+            VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
+                profile.server.isNotBlank() && profile.serverPort in 1..65535
+            else -> !profile?.rawOutbound.isNullOrBlank()
+        }
+        if (vk == null || !vk.isComplete() || !outboundConfigured) {
             if (setErrorOnFailure) {
                 setStatus(VpnStatus.Error("VK-TURN not configured"))
                 updateNotification(ns.notifAddVkLink)
@@ -935,8 +944,12 @@ class OlcboxVpnService : VpnService() {
                 }
             })
             val listenAddr = "127.0.0.1:${vk.listenPort}"
+            // freeturn rejects `bond=1` unless mode==tcp; an old/imported URI carrying it in a udp
+            // (WireGuard/AmneziaWG) tunnel makes the client fail to start. Strip it defensively.
+            val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
+                else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
             addLog("Starting VK-TURN freeturn listener on $listenAddr (streams=${vk.streams.takeIf { it > 0 } ?: "default 10"})")
-            Freeturn.start(vk.uri, listenAddr, vk.vkLink, vk.streams.toLong())
+            Freeturn.start(freeturnUri, listenAddr, vk.vkLink, vk.streams.toLong())
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) return false
 
@@ -954,46 +967,89 @@ class OlcboxVpnService : VpnService() {
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) return false
 
-            // 2. sing-box WireGuard outbound dialling the local freeturn listener. Optionally a
-            //    proxy (vless/…) chained ON TOP: it dials its server THROUGH the WireGuard tunnel.
+            // 2. The exit outbound that dials the local freeturn listener and rides the VK tunnel:
+            //    - WireGuard / AmneziaWG: a UDP tunnel whose Endpoint is the freeturn UDP listener
+            //      (mode=udp). AmneziaWG is raised by the awgproxy module (local SOCKS) and routed
+            //      through. WireGuard may additionally chain a proxy ON TOP (dialled through WG).
+            //    - proxy: a TCP proxy whose server was rewritten to the freeturn TCP listener
+            //      (mode=tcp); sing-box dials it directly through the tunnel.
             activeProxyCore = ProxyCore.SingBox
-            val chainProxy = vk.chainProxyLink.takeIf { it.isNotBlank() }
-                ?.let { ShareLinkParser.parse(it) }
-                ?.takeIf { it.isComplete() }
-            val json = if (chainProxy != null) {
-                addLog("VK-TURN chaining proxy ${chainProxy.displayName()} over WireGuard")
-                SingBoxConfig.build(
-                    profile = chainProxy,
-                    wireguardBase = profile,
-                    listenPort = socksListenPort,
-                    listenHost = socksListenHost,
-                    socksUsername = socksUsername,
-                    socksPassword = socksPassword,
-                    autoDetectInterface = true,
-                    routing = loadRouting(),
-                    traffic = loadTrafficSettings(),
-                    logLevel = "info",
-                    dnsStrategyOverride = "ipv4_only",
-                )
-            } else {
-                SingBoxConfig.build(
-                    profile = profile,
-                    listenPort = socksListenPort,
-                    listenHost = socksListenHost,
-                    socksUsername = socksUsername,
-                    socksPassword = socksPassword,
-                    autoDetectInterface = true,
-                    routing = loadRouting(),
-                    traffic = loadTrafficSettings(),
-                    // info level surfaces the WireGuard handshake so a dead server→client relay
-                    // path (handshake never completes → all traffic times out) is visible.
-                    logLevel = "info",
-                    // WG tunnel is IPv4-only; force A-only resolution so dual-stack sites don't
-                    // attempt IPv6 (which has no route through the tunnel → "no route to host").
-                    dnsStrategyOverride = "ipv4_only",
-                )
+            val exitProfile = requireNotNull(profile)
+            val routing = loadRouting()
+            val traffic = loadTrafficSettings()
+            val json = when (outboundType) {
+                VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
+                    addLog("VK-TURN exit: AmneziaWG over VK")
+                    val awgSocks = prepareAmneziaWgProxy(exitProfile)
+                    SingBoxConfig.build(
+                        profile = awgSocks,
+                        listenPort = socksListenPort,
+                        listenHost = socksListenHost,
+                        socksUsername = socksUsername,
+                        socksPassword = socksPassword,
+                        autoDetectInterface = true,
+                        routing = routing,
+                        traffic = traffic,
+                        logLevel = "info",
+                        dnsStrategyOverride = "ipv4_only",
+                    )
+                }
+
+                VkTurnConfig.OUTBOUND_PROXY -> {
+                    addLog("VK-TURN exit: proxy ${exitProfile.displayName()} over VK (tcp)")
+                    SingBoxConfig.build(
+                        profile = exitProfile,
+                        listenPort = socksListenPort,
+                        listenHost = socksListenHost,
+                        socksUsername = socksUsername,
+                        socksPassword = socksPassword,
+                        autoDetectInterface = true,
+                        routing = routing,
+                        traffic = traffic,
+                        logLevel = "info",
+                    )
+                }
+
+                else -> { // WireGuard, optionally with a proxy chained on top
+                    val chainProxy = vk.chainProxyLink.takeIf { it.isNotBlank() }
+                        ?.let { ShareLinkParser.parse(it) }
+                        ?.takeIf { it.isComplete() }
+                    if (chainProxy != null) {
+                        addLog("VK-TURN chaining proxy ${chainProxy.displayName()} over WireGuard")
+                        SingBoxConfig.build(
+                            profile = chainProxy,
+                            wireguardBase = exitProfile,
+                            listenPort = socksListenPort,
+                            listenHost = socksListenHost,
+                            socksUsername = socksUsername,
+                            socksPassword = socksPassword,
+                            autoDetectInterface = true,
+                            routing = routing,
+                            traffic = traffic,
+                            logLevel = "info",
+                            dnsStrategyOverride = "ipv4_only",
+                        )
+                    } else {
+                        SingBoxConfig.build(
+                            profile = exitProfile,
+                            listenPort = socksListenPort,
+                            listenHost = socksListenHost,
+                            socksUsername = socksUsername,
+                            socksPassword = socksPassword,
+                            autoDetectInterface = true,
+                            routing = routing,
+                            traffic = traffic,
+                            // info level surfaces the WireGuard handshake so a dead server→client
+                            // relay path (handshake never completes) is visible.
+                            logLevel = "info",
+                            // WG tunnel is IPv4-only; force A-only resolution so dual-stack sites
+                            // don't attempt IPv6 (no route through the tunnel → "no route to host").
+                            dnsStrategyOverride = "ipv4_only",
+                        )
+                    }
+                }
             }
-            addLog("Starting sing-box (VK-TURN WireGuard) via $listenAddr")
+            addLog("Starting sing-box (VK-TURN, $outboundType) via $listenAddr")
             singBoxEngine().start(json)
 
             if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
@@ -1993,9 +2049,12 @@ class OlcboxVpnService : VpnService() {
     private fun buildNotification(status: String, speed: CharSequence? = null): Notification {
         val title = "YPtun ${activeModeLabel()}"
         val body: CharSequence = speed ?: status
+        // Status-bar icon: our cat-head silhouette (system tints it monochrome).
+        // Resolved by name because this lives in androidApp's resources, not sharedUI's R.
+        val statIcon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
+            .takeIf { it != 0 } ?: android.R.drawable.ic_lock_lock
         val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            // Status-bar icon (system tints it monochrome — that's fine for the tiny status icon).
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(statIcon)
             .setOngoing(true)
             .setContentIntent(getAppPendingIntent())
             .addAction(

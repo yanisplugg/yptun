@@ -36,9 +36,31 @@ data class VkTurnConfig(
      */
     @SerialName("chain_proxy_link")
     val chainProxyLink: String = "",
+    /**
+     * What rides the VK tunnel and exits to the internet:
+     * - [OUTBOUND_WIREGUARD] / [OUTBOUND_AMNEZIAWG]: a UDP WireGuard(-like) tunnel whose Endpoint is
+     *   the local freeturn listener — requires the freeturn payload mode to be `udp` (udprelay).
+     * - [OUTBOUND_PROXY]: a TCP proxy (vless/vmess/trojan/ss) whose server is dialled THROUGH the
+     *   local freeturn TCP listener — requires the freeturn payload mode to be `tcp` (tcpfwd).
+     * The concrete outbound lives in [LocationConfig.proxy] (WG/proxy → rawOutbound, AWG → awgConfig).
+     */
+    @SerialName("outbound")
+    val outbound: String = OUTBOUND_WIREGUARD,
+    /** Verbatim exit-proxy share link kept for editing when [outbound] == [OUTBOUND_PROXY]. */
+    @SerialName("outbound_proxy_link")
+    val outboundProxyLink: String = "",
 ) {
     fun isComplete(): Boolean =
         isStorable() && vkLink.isNotBlank()
+
+    /** UDP payload (WireGuard/AmneziaWG) needs udprelay; TCP proxy needs tcpfwd. */
+    fun requiredMode(): String = if (outbound == OUTBOUND_PROXY) "tcp" else "udp"
+
+    companion object {
+        const val OUTBOUND_WIREGUARD = "wireguard"
+        const val OUTBOUND_AMNEZIAWG = "amneziawg"
+        const val OUTBOUND_PROXY = "proxy"
+    }
 
     /**
      * True when the freeturn link + WG transport are present. The per-client [vkLink]

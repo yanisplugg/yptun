@@ -76,6 +76,7 @@ import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.ui.components.PingButton
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 
@@ -481,13 +482,28 @@ private fun LazyListScope.vkTurnSection(
                 onValueSelected = { v -> onChange { it.copy(transport = v) } },
                 valueLabel = { it }
             )
+            // Exit outbound. WireGuard/AmneziaWG are UDP (freeturn udprelay); a proxy exit is TCP
+            // (freeturn tcpfwd). The freeturn payload mode is derived from this choice in the
+            // composer, so it is set here too to keep the stored draft consistent.
             SettingsDropdown(
                 label = LocalStrings.current.modeTunnelPayload,
-                selectedValue = draft.mode.ifBlank { "udp" },
-                options = listOf("udp", "tcp"),
+                selectedValue = draft.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD },
+                options = listOf(
+                    VkTurnConfig.OUTBOUND_WIREGUARD,
+                    VkTurnConfig.OUTBOUND_AMNEZIAWG,
+                    VkTurnConfig.OUTBOUND_PROXY,
+                ),
                 enabled = enabled,
-                onValueSelected = { v -> onChange { it.copy(mode = v) } },
-                valueLabel = { m -> if (m == "udp") "udp (WireGuard)" else "tcp (proxy)" }
+                onValueSelected = { v ->
+                    onChange { it.copy(outbound = v, mode = if (v == VkTurnConfig.OUTBOUND_PROXY) "tcp" else "udp") }
+                },
+                valueLabel = { o ->
+                    when (o) {
+                        VkTurnConfig.OUTBOUND_WIREGUARD -> "WireGuard (udp)"
+                        VkTurnConfig.OUTBOUND_AMNEZIAWG -> "AmneziaWG (udp)"
+                        else -> "Proxy · vless/trojan/ss (tcp)"
+                    }
+                }
             )
             SettingsDropdown(
                 label = LocalStrings.current.obfuscationProfile,
@@ -512,22 +528,28 @@ private fun LazyListScope.vkTurnSection(
                 enabled = enabled,
                 keyboardType = KeyboardType.Number
             )
-            VkTurnSwitchRow(
-                label = LocalStrings.current.bondingMultipath,
-                checked = draft.bond,
-                enabled = enabled,
-                onCheckedChange = { v -> onChange { it.copy(bond = v) } }
-            )
+            // Bonding (TCP striping) is only valid for the proxy/tcp exit — freeturn rejects it in
+            // udp mode. For WireGuard/AmneziaWG (udp), aggregation comes from "streams" + multiple
+            // VK call links, so the switch is hidden there to avoid a start failure.
+            if (draft.outbound == VkTurnConfig.OUTBOUND_PROXY) {
+                VkTurnSwitchRow(
+                    label = LocalStrings.current.bondingMultipath,
+                    checked = draft.bond,
+                    enabled = enabled,
+                    onCheckedChange = { v -> onChange { it.copy(bond = v) } }
+                )
+            }
         }
     }
 
-    item {
+    if (draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
+        val isAwg = draft.outbound == VkTurnConfig.OUTBOUND_AMNEZIAWG
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
-                title = "WireGuard",
+                title = if (isAwg) "AmneziaWG" else "WireGuard",
                 subtitle = LocalStrings.current.wireguardSubtitle
             )
             VkTurnField(
@@ -610,10 +632,61 @@ private fun LazyListScope.vkTurnSection(
                     modifier = Modifier.weight(1f)
                 )
             }
+            if (isAwg) {
+                // AmneziaWG obfuscation knobs (Jc/Jmin/Jmax/S1/S2/H1..H4) — must match the server.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    VkTurnField(draft.awgJc, { v -> onChange { it.copy(awgJc = v.filter(Char::isDigit)) } }, "Jc", "4", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgJmin, { v -> onChange { it.copy(awgJmin = v.filter(Char::isDigit)) } }, "Jmin", "40", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgJmax, { v -> onChange { it.copy(awgJmax = v.filter(Char::isDigit)) } }, "Jmax", "70", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    VkTurnField(draft.awgS1, { v -> onChange { it.copy(awgS1 = v.filter(Char::isDigit)) } }, "S1", "0", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgS2, { v -> onChange { it.copy(awgS2 = v.filter(Char::isDigit)) } }, "S2", "0", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    VkTurnField(draft.awgH1, { v -> onChange { it.copy(awgH1 = v.filter(Char::isDigit)) } }, "H1", "1", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH2, { v -> onChange { it.copy(awgH2 = v.filter(Char::isDigit)) } }, "H2", "2", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH3, { v -> onChange { it.copy(awgH3 = v.filter(Char::isDigit)) } }, "H3", "3", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH4, { v -> onChange { it.copy(awgH4 = v.filter(Char::isDigit)) } }, "H4", "4", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                }
+            }
         }
     }
 
-    item {
+    // Proxy exit (vless/vmess/trojan/ss) — used when outbound == proxy; dialled THROUGH the
+    // freeturn TCP listener (mode=tcp).
+    if (draft.outbound == VkTurnConfig.OUTBOUND_PROXY) item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = LocalStrings.current.proxyOverVkturn,
+                subtitle = LocalStrings.current.proxyOverVkturnSubtitle
+            )
+            OutlinedTextField(
+                value = draft.outboundProxyLink,
+                onValueChange = { v -> onChange { it.copy(outboundProxyLink = v) } },
+                label = { Text(LocalStrings.current.proxyLink) },
+                placeholder = { Text("vless://… / trojan://… / ss://…") },
+                enabled = enabled,
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+
+    // Optional proxy chained ON TOP of the WireGuard tunnel (WG outbound only).
+    if (draft.outbound == VkTurnConfig.OUTBOUND_WIREGUARD) item {
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)

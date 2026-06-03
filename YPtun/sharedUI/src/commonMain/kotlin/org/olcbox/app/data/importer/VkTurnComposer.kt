@@ -55,6 +55,20 @@ data class VkTurnDraft(
     val streams: String = "10",
     /** Optional proxy link (vless/vmess/trojan/ss) chained over the WG tunnel; blank = WG only. */
     val chainProxyLink: String = "",
+    /** Tunnel exit: "wireguard" | "amneziawg" | "proxy" (see [VkTurnConfig.outbound]). */
+    val outbound: String = VkTurnConfig.OUTBOUND_WIREGUARD,
+    // AmneziaWG obfuscation knobs (used only when outbound == amneziawg); shipped in the [Interface].
+    val awgJc: String = "4",
+    val awgJmin: String = "40",
+    val awgJmax: String = "70",
+    val awgS1: String = "0",
+    val awgS2: String = "0",
+    val awgH1: String = "1",
+    val awgH2: String = "2",
+    val awgH3: String = "3",
+    val awgH4: String = "4",
+    /** Proxy share link (vless/vmess/trojan/ss) used as the exit when outbound == proxy. */
+    val outboundProxyLink: String = "",
 )
 
 /**
@@ -64,30 +78,70 @@ data class VkTurnDraft(
  */
 object VkTurnComposer {
 
-    /** Builds the freeturn:// URI + WireGuard outbound for [draft]. [name] becomes the proxy tag. */
+    /** Builds the freeturn:// URI + the chosen exit outbound for [draft]. [name] becomes the tag. */
     fun compose(draft: VkTurnDraft, name: String): Pair<VkTurnConfig, ProxyProfile> {
         val listenPort = draft.listenPort.trim().toIntOrNull()
             ?.takeIf { it in 1..65535 }
             ?: LocationConfig.DEFAULT_FREETURN_PORT
         val peerPort = draft.peerPort.trim().toIntOrNull() ?: 0
         val mtu = draft.wgMtu.trim().toIntOrNull() ?: 0
+        val outbound = draft.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
 
-        val wgConf = buildWgConf(draft, listenPort)
-        val wgB64 = encodeBase64Url(wgConf)
+        // The freeturn payload mode is dictated by the outbound transport: WireGuard/AmneziaWG are
+        // UDP (udprelay → udp local listener), a proxy exit is TCP (tcpfwd → tcp local listener).
+        val mode = if (outbound == VkTurnConfig.OUTBOUND_PROXY) "tcp" else "udp"
 
-        val uri = buildUri(draft, peerPort, wgB64)
+        // The wg= INI is only meaningful for the WG/AWG (UDP) paths; for a proxy exit it is omitted.
+        val wgB64 = when (outbound) {
+            VkTurnConfig.OUTBOUND_WIREGUARD -> encodeBase64Url(buildWgConf(draft, listenPort, awg = false))
+            VkTurnConfig.OUTBOUND_AMNEZIAWG -> encodeBase64Url(buildWgConf(draft, listenPort, awg = true))
+            else -> ""
+        }
 
-        val rawOutbound = buildJsonObject {
-            put("type", "wireguard")
-            put("server", "127.0.0.1")
-            put("server_port", listenPort)
-            putJsonArray("local_address") {
-                draft.wgAddress.trim().takeIf { it.isNotBlank() }?.let { add(it) }
+        val uri = buildUri(draft, peerPort, wgB64, mode)
+
+        val proxy = when (outbound) {
+            VkTurnConfig.OUTBOUND_AMNEZIAWG -> ProxyProfile(
+                tag = name.ifBlank { "VK-TURN" },
+                type = ProxyProfile.TYPE_AMNEZIAWG,
+                server = draft.peerHost.trim(),
+                serverPort = peerPort,
+                // awgproxy re-parses this INI; its Endpoint is the local freeturn UDP listener.
+                awgConfig = buildWgConf(draft, listenPort, awg = true),
+            )
+
+            VkTurnConfig.OUTBOUND_PROXY -> {
+                // Parse the exit proxy and rewrite its dial target to the local freeturn TCP
+                // listener; TLS SNI / params stay pointed at the real server.
+                val parsed = ShareLinkParser.parse(draft.outboundProxyLink.trim())
+                (parsed ?: ProxyProfile()).copy(
+                    tag = name.ifBlank { parsed?.tag?.ifBlank { "VK-TURN" } ?: "VK-TURN" },
+                    server = "127.0.0.1",
+                    serverPort = listenPort,
+                )
             }
-            put("private_key", draft.wgPrivateKey.trim())
-            put("peer_public_key", draft.wgPeerPublicKey.trim())
-            if (mtu > 0) put("mtu", mtu)
-        }.toString()
+
+            else -> { // WireGuard
+                val rawOutbound = buildJsonObject {
+                    put("type", "wireguard")
+                    put("server", "127.0.0.1")
+                    put("server_port", listenPort)
+                    putJsonArray("local_address") {
+                        draft.wgAddress.trim().takeIf { it.isNotBlank() }?.let { add(it) }
+                    }
+                    put("private_key", draft.wgPrivateKey.trim())
+                    put("peer_public_key", draft.wgPeerPublicKey.trim())
+                    if (mtu > 0) put("mtu", mtu)
+                }.toString()
+                ProxyProfile(
+                    tag = name.ifBlank { "VK-TURN" },
+                    type = "wireguard",
+                    server = draft.peerHost.trim(),
+                    serverPort = peerPort,
+                    rawOutbound = rawOutbound,
+                )
+            }
+        }
 
         val vkturn = VkTurnConfig(
             uri = uri,
@@ -95,13 +149,8 @@ object VkTurnComposer {
             listenPort = listenPort,
             streams = draft.streams.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
             chainProxyLink = draft.chainProxyLink.trim(),
-        )
-        val proxy = ProxyProfile(
-            tag = name.ifBlank { "VK-TURN" },
-            type = "wireguard",
-            server = draft.peerHost.trim(),
-            serverPort = peerPort,
-            rawOutbound = rawOutbound,
+            outbound = outbound,
+            outboundProxyLink = if (outbound == VkTurnConfig.OUTBOUND_PROXY) draft.outboundProxyLink.trim() else "",
         )
         return vkturn to proxy
     }
@@ -121,33 +170,47 @@ object VkTurnComposer {
                 listenPort = vkturn.listenPort.toString(),
                 streams = vkturn.streams.takeIf { it > 0 }?.toString() ?: "",
                 chainProxyLink = vkturn.chainProxyLink,
+                outbound = vkturn.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD },
+                outboundProxyLink = vkturn.outboundProxyLink,
             )
         }
 
-        // 2. The sing-box WG outbound is authoritative for the keys/address/mtu actually dialled.
-        proxy?.rawOutbound?.let { raw ->
-            runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()?.let { obj ->
-                obj["private_key"]?.jsonPrimitive?.contentOrNull?.let { draft = draft.copy(wgPrivateKey = it) }
-                obj["peer_public_key"]?.jsonPrimitive?.contentOrNull?.let { draft = draft.copy(wgPeerPublicKey = it) }
-                obj["local_address"]?.let { addr ->
-                    runCatching { addr.jsonArray.firstOrNull()?.jsonPrimitive?.contentOrNull }
-                        .getOrNull()?.let { draft = draft.copy(wgAddress = it) }
+        // 2. The stored outbound is authoritative for the keys/address/mtu actually dialled.
+        when (vkturn?.outbound) {
+            VkTurnConfig.OUTBOUND_AMNEZIAWG -> proxy?.awgConfig?.let { ini ->
+                draft = applyWgConf(draft, ini)
+                draft = applyAwgKnobs(draft, ini)
+            }
+            VkTurnConfig.OUTBOUND_PROXY -> { /* peerHost/port come from the URI; link kept above. */ }
+            else -> proxy?.rawOutbound?.let { raw ->
+                runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()?.let { obj ->
+                    obj["private_key"]?.jsonPrimitive?.contentOrNull?.let { draft = draft.copy(wgPrivateKey = it) }
+                    obj["peer_public_key"]?.jsonPrimitive?.contentOrNull?.let { draft = draft.copy(wgPeerPublicKey = it) }
+                    obj["local_address"]?.let { addr ->
+                        runCatching { addr.jsonArray.firstOrNull()?.jsonPrimitive?.contentOrNull }
+                            .getOrNull()?.let { draft = draft.copy(wgAddress = it) }
+                    }
+                    obj["mtu"]?.jsonPrimitive?.intOrNull?.let { draft = draft.copy(wgMtu = it.toString()) }
                 }
-                obj["mtu"]?.jsonPrimitive?.intOrNull?.let { draft = draft.copy(wgMtu = it.toString()) }
             }
         }
-        if (proxy != null && proxy.server.isNotBlank()) {
+        // peerHost/port: for WG/AWG the proxy carries the VPS peer; for a proxy exit the proxy.server
+        // was rewritten to 127.0.0.1, so keep the peer parsed from the URI instead.
+        if (proxy != null && proxy.server.isNotBlank() && vkturn?.outbound != VkTurnConfig.OUTBOUND_PROXY) {
             draft = draft.copy(peerHost = proxy.server, peerPort = proxy.serverPort.toString())
         }
         return draft
     }
 
     /** Mirrors `uri.Config.String()`: assembles the canonical freeturn:// share link. */
-    private fun buildUri(draft: VkTurnDraft, peerPort: Int, wgB64: String): String {
+    private fun buildUri(draft: VkTurnDraft, peerPort: Int, wgB64: String, mode: String): String {
         val params = buildList {
-            draft.mode.trim().takeIf { it.isNotBlank() }?.let { add("mode=$it") }
+            mode.trim().takeIf { it.isNotBlank() }?.let { add("mode=$it") }
             draft.obfProfile.trim().takeIf { it.isNotBlank() }?.let { add("obf-profile=$it") }
-            if (draft.bond) add("bond=1")
+            // freeturn rejects `-bond` unless mode==tcp ("-bond requires -mode tcp"); emitting it in
+            // udp mode (WireGuard/AmneziaWG) makes the client fail to start → the whole tunnel dies.
+            // UDP aggregation is instead achieved via multiple streams (-n) and multiple VK links.
+            if (draft.bond && mode == "tcp") add("bond=1")
             if (wgB64.isNotBlank()) add("wg=$wgB64")
         }
         val transport = draft.transport.trim()
@@ -217,6 +280,35 @@ object VkTurnComposer {
         return result
     }
 
+    /** Pulls WG keys/address/mtu + AmneziaWG obfuscation knobs out of an AmneziaWG INI. */
+    private fun applyAwgKnobs(draft: VkTurnDraft, conf: String): VkTurnDraft {
+        var result = draft
+        for (rawLine in conf.lineSequence()) {
+            val line = rawLine.trim()
+            if (line.isEmpty() || line.startsWith("[") || line.startsWith("#")) continue
+            val eq = line.indexOf('=')
+            if (eq <= 0) continue
+            val key = line.substring(0, eq).trim().lowercase()
+            val value = line.substring(eq + 1).trim()
+            when (key) {
+                "privatekey" -> result = result.copy(wgPrivateKey = value)
+                "publickey" -> result = result.copy(wgPeerPublicKey = value)
+                "address" -> result = result.copy(wgAddress = value.substringBefore(',').trim())
+                "mtu" -> result = result.copy(wgMtu = value)
+                "jc" -> result = result.copy(awgJc = value)
+                "jmin" -> result = result.copy(awgJmin = value)
+                "jmax" -> result = result.copy(awgJmax = value)
+                "s1" -> result = result.copy(awgS1 = value)
+                "s2" -> result = result.copy(awgS2 = value)
+                "h1" -> result = result.copy(awgH1 = value)
+                "h2" -> result = result.copy(awgH2 = value)
+                "h3" -> result = result.copy(awgH3 = value)
+                "h4" -> result = result.copy(awgH4 = value)
+            }
+        }
+        return result
+    }
+
     /** Pulls DNS/keepalive (and any keys not already set) out of a wg-quick INI block. */
     private fun applyWgConf(draft: VkTurnDraft, conf: String): VkTurnDraft {
         var result = draft
@@ -236,13 +328,28 @@ object VkTurnComposer {
         return result
     }
 
-    /** Builds the wg-quick INI carried (base64url) as `wg=` so the shared link re-imports cleanly. */
-    private fun buildWgConf(draft: VkTurnDraft, listenPort: Int): String = buildString {
+    /**
+     * Builds the wg-quick INI carried (base64url) as `wg=` so the shared link re-imports cleanly.
+     * When [awg] is true the AmneziaWG obfuscation knobs (Jc/Jmin/Jmax/S1/S2/H1..H4) are emitted in
+     * the [Interface] so the awgproxy module recognises it as AmneziaWG.
+     */
+    private fun buildWgConf(draft: VkTurnDraft, listenPort: Int, awg: Boolean): String = buildString {
         appendLine("[Interface]")
         appendLine("PrivateKey = ${draft.wgPrivateKey.trim()}")
         appendLine("Address = ${draft.wgAddress.trim()}")
         draft.wgDns.trim().takeIf { it.isNotBlank() }?.let { appendLine("DNS = $it") }
         draft.wgMtu.trim().takeIf { it.isNotBlank() }?.let { appendLine("MTU = $it") }
+        if (awg) {
+            appendLine("Jc = ${draft.awgJc.trim().ifBlank { "4" }}")
+            appendLine("Jmin = ${draft.awgJmin.trim().ifBlank { "40" }}")
+            appendLine("Jmax = ${draft.awgJmax.trim().ifBlank { "70" }}")
+            appendLine("S1 = ${draft.awgS1.trim().ifBlank { "0" }}")
+            appendLine("S2 = ${draft.awgS2.trim().ifBlank { "0" }}")
+            appendLine("H1 = ${draft.awgH1.trim().ifBlank { "1" }}")
+            appendLine("H2 = ${draft.awgH2.trim().ifBlank { "2" }}")
+            appendLine("H3 = ${draft.awgH3.trim().ifBlank { "3" }}")
+            appendLine("H4 = ${draft.awgH4.trim().ifBlank { "4" }}")
+        }
         appendLine()
         appendLine("[Peer]")
         appendLine("PublicKey = ${draft.wgPeerPublicKey.trim()}")

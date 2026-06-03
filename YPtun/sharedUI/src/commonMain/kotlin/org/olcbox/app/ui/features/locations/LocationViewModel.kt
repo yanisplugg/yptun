@@ -30,6 +30,7 @@ import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
+import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 
 data class LocationItem(
@@ -123,12 +124,17 @@ class LocationViewModel(
      */
     private val vkTurnFieldsValid: Boolean
         get() = with(editingVkTurn) {
-            peerHost.isNotBlank() &&
+            val peerOk = peerHost.isNotBlank() &&
                 (peerPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
-                (listenPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
-                wgPrivateKey.isNotBlank() &&
-                wgPeerPublicKey.isNotBlank() &&
-                wgAddress.isNotBlank()
+                (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
+            val exitOk = when (outbound) {
+                // A proxy exit only needs a parseable share link; WG keys are unused.
+                VkTurnConfig.OUTBOUND_PROXY ->
+                    ShareLinkParser.parse(outboundProxyLink.trim())?.isComplete() == true
+                // WireGuard / AmneziaWG need the client keypair + tunnel address.
+                else -> wgPrivateKey.isNotBlank() && wgPeerPublicKey.isNotBlank() && wgAddress.isNotBlank()
+            }
+            peerOk && exitOk
         }
 
     val isFormValid: Boolean
