@@ -805,11 +805,11 @@ class OlcboxVpnService : VpnService() {
             val routingProfile = profilesState.resolve(config.routingProfileId)
 
             activeProxyCore = if (isAwg) ProxyCore.SingBox else config.resolvedCore()
-            // The RU-domain blocklist and geo-based routing profiles are best served by Xray (it reads
-            // geoip.dat/geosite.dat and regexp DNS hosts natively, which sing-box can't). When such a
-            // feature is active for a typed proxy Xray can serve, prefer Xray so the rules take effect.
-            val profileWantsXray = routingProfile != null &&
-                (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty())
+            // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
+            // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
+            // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
+            // the whole profile (incl. domain:ru) and Russian sites would wrongly egress via the VPN.
+            val profileWantsXray = routingProfile != null && routingProfile.dnsHosts.isNotEmpty()
             if (activeProxyCore == ProxyCore.SingBox &&
                 (loadTrafficSettings().blockRuDomains || profileWantsXray) &&
                 effectiveProfile.rawOutbound.isNullOrBlank() &&
@@ -817,7 +817,7 @@ class OlcboxVpnService : VpnService() {
             ) {
                 activeProxyCore = ProxyCore.Xray
                 addLog(
-                    if (profileWantsXray) "Switching to Xray core for routing-profile geo rules"
+                    if (profileWantsXray) "Switching to Xray core for routing-profile DNS hosts"
                     else "Switching to Xray core for RU-domain blocklist"
                 )
             }
@@ -1749,9 +1749,12 @@ class OlcboxVpnService : VpnService() {
      * without the data fails to load. Degrading to no profile keeps the connection working.
      */
     private fun xrayRoutingProfile(profile: RoutingProfile?, assetPath: String): RoutingProfile? {
-        if (profile != null && profile.needsGeoFiles() && assetPath.isEmpty()) {
-            addLog("Routing profile '${profile.displayName()}' skipped on Xray: geo databases unavailable")
-            return null
+        if (profile == null) return null
+        if (profile.needsGeoFiles() && assetPath.isEmpty()) {
+            // Keep the non-geo rules (e.g. domain:ru → direct) rather than dropping everything; an
+            // Xray config that referenced geosite:/geoip: without the .dat would fail to load.
+            addLog("Geo databases unavailable — applying '${profile.displayName()}' without geo selectors")
+            return profile.withoutGeoSelectors()
         }
         return profile
     }

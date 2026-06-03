@@ -56,6 +56,23 @@ data class RoutingProfile(
         (blockSites + directSites + proxySites).any { it.startsWith("geosite:", ignoreCase = true) } ||
             (blockIp + directIp + proxyIp).any { it.startsWith("geoip:", ignoreCase = true) }
 
+    /**
+     * A copy with every `geoip:`/`geosite:` selector removed (plain domains and CIDRs kept). Used as
+     * a fallback on the Xray core when the geo `.dat` files aren't available, so the non-geo rules
+     * (e.g. `domain:ru → direct`) still take effect instead of the whole profile being ignored.
+     */
+    fun withoutGeoSelectors(): RoutingProfile {
+        fun strip(list: List<String>) = list.filterNot {
+            val v = it.trim()
+            v.startsWith("geoip:", ignoreCase = true) || v.startsWith("geosite:", ignoreCase = true)
+        }
+        return copy(
+            blockIp = strip(blockIp), blockSites = strip(blockSites),
+            directIp = strip(directIp), directSites = strip(directSites),
+            proxyIp = strip(proxyIp), proxySites = strip(proxySites),
+        )
+    }
+
     fun displayName(): String = name.ifBlank { "Routing profile" }
 
     /** Total number of selectors across every bucket (for a one-line summary in the UI). */
