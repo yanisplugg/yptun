@@ -92,7 +92,7 @@ class QrScannerActivity : ComponentActivity() {
             hasCameraPermission = true
             maybeStartCamera()
         } else {
-            Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).cameraPermissionDenied, Toast.LENGTH_SHORT).show()
             finish()
         }
     }
@@ -138,7 +138,7 @@ class QrScannerActivity : ComponentActivity() {
                 val provider = runCatching { cameraProviderFuture.get() }
                     .getOrElse {
                         cameraStarted = false
-                        Toast.makeText(this, "Camera unavailable", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).cameraUnavailable, Toast.LENGTH_SHORT).show()
                         finish()
                         return@addListener
                     }
@@ -167,7 +167,7 @@ class QrScannerActivity : ComponentActivity() {
                     startContinuousAutoFocus(camera, previewView)
                 }.onFailure {
                     cameraStarted = false
-                    Toast.makeText(this, "Camera unavailable", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).cameraUnavailable, Toast.LENGTH_SHORT).show()
                     finish()
                 }
             },
@@ -351,12 +351,12 @@ private fun QrScannerTopBar(onClose: () -> Unit) {
         title = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "Scan QR",
+                    text = org.olcbox.app.ui.i18n.LocalStrings.current.scanQrTitle,
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "subscription or location URI",
+                    text = org.olcbox.app.ui.i18n.LocalStrings.current.subscriptionOrLocationUri,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -458,13 +458,13 @@ private fun QrScannerStatusPanel(modifier: Modifier = Modifier) {
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Ready to scan",
+                        text = org.olcbox.app.ui.i18n.LocalStrings.current.readyToScan,
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Subscription or location URI",
+                        text = org.olcbox.app.ui.i18n.LocalStrings.current.subscriptionOrLocationUri,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

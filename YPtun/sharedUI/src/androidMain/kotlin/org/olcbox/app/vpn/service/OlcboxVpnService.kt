@@ -1,5 +1,6 @@
 package org.olcbox.app.vpn.service
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -1989,15 +1990,12 @@ class OlcboxVpnService : VpnService() {
             .notify(NOTIFICATION_ID, buildNotification(status, speed))
     }
 
-    private fun buildNotification(status: String, speed: CharSequence? = null) =
-        NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("YPtun ${activeModeLabel()}")
-            .setContentText(speed ?: status)
-            .apply { if (speed != null) setSubText(status) }
-            // App logo as the small icon: it sits next to the "YPtun" name in the header.
-            // Android renders the small icon as a tinted silhouette, so we use the transparent
-            // logo foreground (alpha = logo shape). No large icon — we don't want it on the right.
-            .setSmallIcon(notificationLogoRes())
+    private fun buildNotification(status: String, speed: CharSequence? = null): Notification {
+        val title = "YPtun ${activeModeLabel()}"
+        val body: CharSequence = speed ?: status
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            // Status-bar icon (system tints it monochrome — that's fine for the tiny status icon).
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
             .setContentIntent(getAppPendingIntent())
             .addAction(
@@ -2011,15 +2009,22 @@ class OlcboxVpnService : VpnService() {
                 )
             )
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
 
-    /**
-     * Resource id of the transparent logo used as the notification small icon, resolved by name to
-     * avoid a cross-module R reference. Falls back to the launcher icon if the logo isn't found.
-     */
-    private fun notificationLogoRes(): Int {
-        val id = resources.getIdentifier("ic_notification_logo", "drawable", packageName)
-        return if (id != 0) id else applicationInfo.icon
+        // Custom content so the COLORED app logo sits right next to the "YPtun" title.
+        val pkg = packageName
+        val layoutId = resources.getIdentifier("notif_olcbox", "layout", pkg)
+        if (layoutId != 0) {
+            val rv = android.widget.RemoteViews(pkg, layoutId)
+            rv.setTextViewText(resources.getIdentifier("notif_title", "id", pkg), title)
+            rv.setTextViewText(resources.getIdentifier("notif_text", "id", pkg), body)
+            val logo = resources.getIdentifier("ic_notification_logo", "drawable", pkg)
+            if (logo != 0) rv.setImageViewResource(resources.getIdentifier("notif_icon", "id", pkg), logo)
+            builder.setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                .setCustomContentView(rv)
+        } else {
+            builder.setContentTitle(title).setContentText(body)
+        }
+        return builder.build()
     }
 
     private fun appIconBitmap(): android.graphics.Bitmap? = runCatching {

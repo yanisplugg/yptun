@@ -1,6 +1,8 @@
 package org.olcbox.app.ui.features.locations
 
 import org.olcbox.app.ui.i18n.LocalStrings
+import org.olcbox.app.ui.i18n.LocalizationState
+import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -302,7 +304,7 @@ fun LocationSettingsScreen(
                 SettingsTextField(
                     value = config.key,
                     onValueChange = viewModel::onPasswordChanged,
-                    label = "Encryption key",
+                    label = LocalStrings.current.encryptionKey,
                     placeholder = "64 hex characters",
                     enabled = !isSaving,
                     isError = viewModel.keyError != null,
@@ -455,7 +457,7 @@ private fun LazyListScope.vkTurnSection(
                 VkTurnField(
                     value = draft.peerHost,
                     onValueChange = { v -> onChange { it.copy(peerHost = v) } },
-                    label = "Server host",
+                    label = LocalStrings.current.serverHost,
                     placeholder = "203.0.113.7",
                     enabled = enabled,
                     keyboardType = KeyboardType.Uri,
@@ -464,7 +466,7 @@ private fun LazyListScope.vkTurnSection(
                 VkTurnField(
                     value = draft.peerPort,
                     onValueChange = { v -> onChange { it.copy(peerPort = v.filter(Char::isDigit)) } },
-                    label = "Port",
+                    label = LocalStrings.current.port,
                     placeholder = "56000",
                     enabled = enabled,
                     keyboardType = KeyboardType.Number,
@@ -472,7 +474,7 @@ private fun LazyListScope.vkTurnSection(
                 )
             }
             SettingsDropdown(
-                label = "Transport (to TURN relay)",
+                label = LocalStrings.current.transportToRelay,
                 selectedValue = draft.transport.ifBlank { "tcp" },
                 options = listOf("tcp", "udp"),
                 enabled = enabled,
@@ -480,7 +482,7 @@ private fun LazyListScope.vkTurnSection(
                 valueLabel = { it }
             )
             SettingsDropdown(
-                label = "Mode (tunnel payload)",
+                label = LocalStrings.current.modeTunnelPayload,
                 selectedValue = draft.mode.ifBlank { "udp" },
                 options = listOf("udp", "tcp"),
                 enabled = enabled,
@@ -488,7 +490,7 @@ private fun LazyListScope.vkTurnSection(
                 valueLabel = { m -> if (m == "udp") "udp (WireGuard)" else "tcp (proxy)" }
             )
             SettingsDropdown(
-                label = "Obfuscation profile",
+                label = LocalStrings.current.obfuscationProfile,
                 selectedValue = draft.obfProfile.ifBlank { "rtpopus" },
                 options = listOf("none", "rtpopus"),
                 enabled = enabled,
@@ -498,20 +500,20 @@ private fun LazyListScope.vkTurnSection(
             VkTurnField(
                 value = draft.obfKey,
                 onValueChange = { v -> onChange { it.copy(obfKey = v) } },
-                label = "Obfuscation key",
+                label = LocalStrings.current.obfuscationKey,
                 placeholder = "64 hex characters",
                 enabled = enabled
             )
             VkTurnField(
                 value = draft.streams,
                 onValueChange = { v -> onChange { it.copy(streams = v.filter(Char::isDigit)) } },
-                label = "Streams (parallel relays)",
+                label = LocalStrings.current.streamsParallel,
                 placeholder = "10 (default) — more = faster, more VK churn",
                 enabled = enabled,
                 keyboardType = KeyboardType.Number
             )
             VkTurnSwitchRow(
-                label = "Bonding (multipath)",
+                label = LocalStrings.current.bondingMultipath,
                 checked = draft.bond,
                 enabled = enabled,
                 onCheckedChange = { v -> onChange { it.copy(bond = v) } }
@@ -531,14 +533,14 @@ private fun LazyListScope.vkTurnSection(
             VkTurnField(
                 value = draft.wgPrivateKey,
                 onValueChange = { v -> onChange { it.copy(wgPrivateKey = v.trim()) } },
-                label = "Private key",
+                label = LocalStrings.current.privateKey,
                 placeholder = "client private key (base64)",
                 enabled = enabled
             )
             VkTurnField(
                 value = draft.wgPeerPublicKey,
                 onValueChange = { v -> onChange { it.copy(wgPeerPublicKey = v.trim()) } },
-                label = "Peer public key",
+                label = LocalStrings.current.peerPublicKey,
                 placeholder = "server public key (base64)",
                 enabled = enabled
             )
@@ -549,7 +551,7 @@ private fun LazyListScope.vkTurnSection(
                 VkTurnField(
                     value = draft.wgAddress,
                     onValueChange = { v -> onChange { it.copy(wgAddress = v.trim()) } },
-                    label = "Address",
+                    label = LocalStrings.current.addressField,
                     placeholder = "10.7.1.2/32",
                     enabled = enabled,
                     modifier = Modifier.weight(2f)
@@ -571,7 +573,7 @@ private fun LazyListScope.vkTurnSection(
                 VkTurnField(
                     value = draft.wgDns,
                     onValueChange = { v -> onChange { it.copy(wgDns = v.trim()) } },
-                    label = "DNS",
+                    label = LocalStrings.current.dns,
                     placeholder = "1.1.1.1",
                     enabled = enabled,
                     modifier = Modifier.weight(1f)
@@ -579,7 +581,7 @@ private fun LazyListScope.vkTurnSection(
                 VkTurnField(
                     value = draft.listenPort,
                     onValueChange = { v -> onChange { it.copy(listenPort = v.filter(Char::isDigit)) } },
-                    label = "Listen port",
+                    label = LocalStrings.current.listenPort,
                     placeholder = "9000",
                     enabled = enabled,
                     keyboardType = KeyboardType.Number,
@@ -593,7 +595,7 @@ private fun LazyListScope.vkTurnSection(
                 VkTurnField(
                     value = draft.wgAllowedIps,
                     onValueChange = { v -> onChange { it.copy(wgAllowedIps = v.trim()) } },
-                    label = "Allowed IPs",
+                    label = LocalStrings.current.allowedIps,
                     placeholder = "0.0.0.0/0",
                     enabled = enabled,
                     modifier = Modifier.weight(2f)
@@ -747,13 +749,13 @@ private fun AdvancedCoreSection(
     ) {
         VkTurnSwitchRow("Advanced $coreName settings", expanded, enabled) { expanded = it }
         if (expanded) {
-            VkTurnSwitchRow("Mux (multiplex)", advanced.muxEnabled, enabled) { v ->
+            VkTurnSwitchRow(LocalStrings.current.muxMultiplex, advanced.muxEnabled, enabled) { v ->
                 onChange { it.copy(muxEnabled = v) }
             }
             if (advanced.muxEnabled) {
                 if (core == ProxyCore.SingBox) {
                     SettingsDropdown(
-                        label = "Mux protocol",
+                        label = LocalStrings.current.muxProtocol,
                         selectedValue = advanced.muxProtocol.ifBlank { "h2mux" },
                         options = listOf("h2mux", "smux", "yamux"),
                         enabled = enabled,
@@ -766,19 +768,19 @@ private fun AdvancedCoreSection(
                     onValueChange = { v ->
                         onChange { it.copy(muxMaxStreams = v.filter(Char::isDigit).toIntOrNull() ?: 8) }
                     },
-                    label = "Max streams",
+                    label = LocalStrings.current.maxStreamsField,
                     placeholder = "8",
                     enabled = enabled,
                     keyboardType = KeyboardType.Number
                 )
             }
-            VkTurnSwitchRow("TCP Fast Open", advanced.tcpFastOpen, enabled) { v ->
+            VkTurnSwitchRow("TCP Fast Open", advanced.tcpFastOpen, enabled) { v -> // technical term, kept
                 onChange { it.copy(tcpFastOpen = v) }
             }
-            VkTurnSwitchRow("Sniff destination", advanced.sniff, enabled) { v ->
+            VkTurnSwitchRow(LocalStrings.current.sniffDestination, advanced.sniff, enabled) { v ->
                 onChange { it.copy(sniff = v) }
             }
-            VkTurnSwitchRow("TLS fragment (anti-DPI, Xray)", advanced.tlsFragment, enabled) { v ->
+            VkTurnSwitchRow(LocalStrings.current.tlsFragmentXray, advanced.tlsFragment, enabled) { v ->
                 onChange { it.copy(tlsFragment = v) }
             }
         }
@@ -822,7 +824,7 @@ private fun CoreSelector(
 }
 
 private fun coreLabel(core: ProxyCore): String = when (core) {
-    ProxyCore.Auto -> "Auto"
+    ProxyCore.Auto -> stringsFor(LocalizationState.effective).coreAuto
     ProxyCore.SingBox -> "sing-box"
     ProxyCore.Xray -> "Xray"
 }

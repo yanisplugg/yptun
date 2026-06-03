@@ -307,6 +307,64 @@ interface Strings {
     val subscriptionDeleted: String
     val subscriptionsDeleted: String
     val configsDeleted: String
+
+    // Home location picker
+    val customLocations: String
+    val addRelaySetup: String
+    val importHint: String
+    val importedFromClipboard: String
+
+    // Ping / connectivity
+    val pingOffline: String
+    val pingChecking: String
+    val pingVerify: String
+    val connectivityCheck: String
+
+    // QR scanner
+    val scanQrTitle: String
+    val readyToScan: String
+    val subscriptionOrLocationUri: String
+    val cameraPermissionDenied: String
+    val cameraUnavailable: String
+
+    // Updates status / share
+    val upToDate: String
+    fun latestAlreadyDownloaded(channel: String): String
+    fun channelUpdateAvailable(channel: String, version: String): String
+    fun checkingChannel(channel: String): String
+    val updateServiceUnavailable: String
+    val updateCheckFailed: String
+    val allowInstallUpdates: String
+    val locationQr: String
+    val subscriptionQr: String
+    val subscriptionUpdated: String
+    val subscriptionNotUpdated: String
+
+    // Connect blocked reasons
+    val addLocationFirst: String
+    val completeActiveLocationFirst: String
+    val addValidLocationFirst: String
+
+    // Custom-location fields & advanced toggles
+    val encryptionKey: String
+    val serverHost: String
+    val transportToRelay: String
+    val modeTunnelPayload: String
+    val obfuscationProfile: String
+    val obfuscationKey: String
+    val streamsParallel: String
+    val bondingMultipath: String
+    val privateKey: String
+    val peerPublicKey: String
+    val addressField: String
+    val listenPort: String
+    val allowedIps: String
+    val muxMultiplex: String
+    val muxProtocol: String
+    val maxStreamsField: String
+    val sniffDestination: String
+    val tlsFragmentXray: String
+    val coreAuto: String
 }
 
 object RuStrings : Strings {
@@ -319,7 +377,7 @@ object RuStrings : Strings {
     override val labelSetup = "НАСТРОИТЬ"
     override val labelStop = "СТОП"
     override val labelStart = "СТАРТ"
-    override val addCustomLocation = "Добавить собственную локацию"
+    override val addCustomLocation = "Добавить локацию"
     override val addSubscription = "Добавить подписку"
     override val delete = "Удалить"
     override val cancel = "Отмена"
@@ -547,6 +605,52 @@ object RuStrings : Strings {
     override val subscriptionDeleted = "Подписка удалена"
     override val subscriptionsDeleted = "Подписки удалены"
     override val configsDeleted = "Конфигурации удалены"
+    override val customLocations = "Свои локации"
+    override val addRelaySetup = "Настройка подключения"
+    override val importHint = "Сканируйте QR, вставьте URI или импортируйте файл"
+    override val importedFromClipboard = "Импортировано из буфера обмена"
+    override val pingOffline = "Не в сети"
+    override val pingChecking = "Проверка…"
+    override val pingVerify = "Нажмите для проверки доступности"
+    override val connectivityCheck = "Проверка соединения"
+    override val scanQrTitle = "Сканирование QR"
+    override val readyToScan = "Готово к сканированию"
+    override val subscriptionOrLocationUri = "Подписка или URI локации"
+    override val cameraPermissionDenied = "Доступ к камере запрещён"
+    override val cameraUnavailable = "Камера недоступна"
+    override val upToDate = "Установлена последняя версия"
+    override fun latestAlreadyDownloaded(channel: String) = "Последняя сборка $channel уже скачана"
+    override fun channelUpdateAvailable(channel: String, version: String) = "Доступно обновление $channel: $version"
+    override fun checkingChannel(channel: String) = "Проверка $channel…"
+    override val updateServiceUnavailable = "Служба обновлений недоступна"
+    override val updateCheckFailed = "Не удалось проверить обновления"
+    override val allowInstallUpdates = "Разрешите YPtun устанавливать обновления и нажмите «Скачать» снова"
+    override val locationQr = "QR локации"
+    override val subscriptionQr = "QR подписки"
+    override val subscriptionUpdated = "Подписка обновлена"
+    override val subscriptionNotUpdated = "Подписка не обновлена"
+    override val addLocationFirst = "Сначала добавьте локацию"
+    override val completeActiveLocationFirst = "Сначала завершите настройку активной локации"
+    override val addValidLocationFirst = "Сначала добавьте корректную локацию"
+    override val encryptionKey = "Ключ шифрования"
+    override val serverHost = "Хост сервера"
+    override val transportToRelay = "Транспорт (до TURN-ретранслятора)"
+    override val modeTunnelPayload = "Режим (нагрузка туннеля)"
+    override val obfuscationProfile = "Профиль обфускации"
+    override val obfuscationKey = "Ключ обфускации"
+    override val streamsParallel = "Потоки (параллельные ретрансляторы)"
+    override val bondingMultipath = "Агрегация каналов (multipath)"
+    override val privateKey = "Приватный ключ"
+    override val peerPublicKey = "Публичный ключ пира"
+    override val addressField = "Адрес"
+    override val listenPort = "Порт прослушивания"
+    override val allowedIps = "Разрешённые IP"
+    override val muxMultiplex = "Mux (мультиплексирование)"
+    override val muxProtocol = "Протокол Mux"
+    override val maxStreamsField = "Макс. потоков"
+    override val sniffDestination = "Определение назначения (sniff)"
+    override val tlsFragmentXray = "Фрагментация TLS (анти-DPI, Xray)"
+    override val coreAuto = "Авто"
 }
 
 object EnStrings : Strings {
@@ -787,4 +891,50 @@ object EnStrings : Strings {
     override val subscriptionDeleted = "Subscription deleted"
     override val subscriptionsDeleted = "Subscriptions deleted"
     override val configsDeleted = "Configurations deleted"
+    override val customLocations = "Custom locations"
+    override val addRelaySetup = "Add relay setup"
+    override val importHint = "Scan QR, paste URI, or import file"
+    override val importedFromClipboard = "Imported from clipboard"
+    override val pingOffline = "Offline"
+    override val pingChecking = "Checking..."
+    override val pingVerify = "Click to verify reachability"
+    override val connectivityCheck = "Connectivity check"
+    override val scanQrTitle = "Scan QR"
+    override val readyToScan = "Ready to scan"
+    override val subscriptionOrLocationUri = "Subscription or location URI"
+    override val cameraPermissionDenied = "Camera permission denied"
+    override val cameraUnavailable = "Camera unavailable"
+    override val upToDate = "YPtun is up to date"
+    override fun latestAlreadyDownloaded(channel: String) = "Latest $channel is already downloaded"
+    override fun channelUpdateAvailable(channel: String, version: String) = "$channel update available: $version"
+    override fun checkingChannel(channel: String) = "Checking $channel..."
+    override val updateServiceUnavailable = "Update service unavailable"
+    override val updateCheckFailed = "Update check failed"
+    override val allowInstallUpdates = "Allow YPtun to install updates, then tap Download again"
+    override val locationQr = "Location QR"
+    override val subscriptionQr = "Subscription QR"
+    override val subscriptionUpdated = "Subscription updated"
+    override val subscriptionNotUpdated = "Subscription not updated"
+    override val addLocationFirst = "Add a location first"
+    override val completeActiveLocationFirst = "Complete active location first"
+    override val addValidLocationFirst = "Add a valid location first"
+    override val encryptionKey = "Encryption key"
+    override val serverHost = "Server host"
+    override val transportToRelay = "Transport (to TURN relay)"
+    override val modeTunnelPayload = "Mode (tunnel payload)"
+    override val obfuscationProfile = "Obfuscation profile"
+    override val obfuscationKey = "Obfuscation key"
+    override val streamsParallel = "Streams (parallel relays)"
+    override val bondingMultipath = "Bonding (multipath)"
+    override val privateKey = "Private key"
+    override val peerPublicKey = "Peer public key"
+    override val addressField = "Address"
+    override val listenPort = "Listen port"
+    override val allowedIps = "Allowed IPs"
+    override val muxMultiplex = "Mux (multiplex)"
+    override val muxProtocol = "Mux protocol"
+    override val maxStreamsField = "Max streams"
+    override val sniffDestination = "Sniff destination"
+    override val tlsFragmentXray = "TLS fragment (anti-DPI, Xray)"
+    override val coreAuto = "Auto"
 }

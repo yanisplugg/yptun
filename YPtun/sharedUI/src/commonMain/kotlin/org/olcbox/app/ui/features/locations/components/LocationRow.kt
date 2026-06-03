@@ -142,7 +142,7 @@ fun LocationRow(
 
             isError -> {
                 Text(
-                    text = "Offline",
+                    text = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.error

@@ -50,12 +50,13 @@ fun PingButton(
     configGetter: () -> LocationConfig? = { null }
 ) {
     var pingState by remember { mutableStateOf<PingState>(PingState.Idle) }
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
 
     val descriptionText = when (pingState) {
-        is PingState.Error -> "Offline"
-        is PingState.Loading -> "Checking..."
-        is PingState.Success -> "Connected ${(pingState as PingState.Success).latency}ms"
-        else -> "Click To Verify Reachability"
+        is PingState.Error -> s.pingOffline
+        is PingState.Loading -> s.pingChecking
+        is PingState.Success -> "${s.notifConnected} ${(pingState as PingState.Success).latency}ms"
+        else -> s.pingVerify
     }
 
     val stateIcon: @Composable () -> Unit = {
@@ -133,7 +134,7 @@ fun PingButton(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Connectivity Check",
+                    text = s.connectivityCheck,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface

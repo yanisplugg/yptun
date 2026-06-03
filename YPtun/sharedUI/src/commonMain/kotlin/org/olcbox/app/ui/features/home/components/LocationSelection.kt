@@ -149,7 +149,7 @@ fun LocationSelectorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         LocationGroupHeader(
-                            title = "Custom locations",
+                            title = org.olcbox.app.ui.i18n.LocalStrings.current.customLocations,
                             modifier = Modifier.weight(1f)
                         )
 
@@ -228,7 +228,7 @@ private fun RelaySetupCard(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
-            text = "Add relay setup",
+            text = org.olcbox.app.ui.i18n.LocalStrings.current.addRelaySetup,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.SemiBold,
@@ -236,16 +236,16 @@ private fun RelaySetupCard(
         )
 
         SetupActionRow(
-            title = "Add subscription",
-            subtitle = "Scan QR, paste URI, or import file",
+            title = org.olcbox.app.ui.i18n.LocalStrings.current.addSubscription,
+            subtitle = org.olcbox.app.ui.i18n.LocalStrings.current.importHint,
             icon = Icons.Outlined.QrCodeScanner,
             prominent = true,
             onClick = onAddSubscriptionClick
         )
 
         SetupActionRow(
-            title = "Create custom location",
-            subtitle = "Enter room, key, provider, and transport",
+            title = org.olcbox.app.ui.i18n.LocalStrings.current.createCustomLocation,
+            subtitle = org.olcbox.app.ui.i18n.LocalStrings.current.createCustomLocationSubtitle,
             icon = Icons.Outlined.Add,
             onClick = onAddLocationClick
         )
@@ -325,7 +325,7 @@ private fun SetupActionRow(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = contentColor.copy(alpha = 0.72f),
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -428,7 +428,7 @@ private fun SubscriptionGroupHeader(
     modifier: Modifier = Modifier
 ) {
     val first = locations.firstOrNull()
-    val title = first?.subscriptionTitle().orEmpty().ifBlank { "Subscriptions" }
+    val title = first?.subscriptionTitle().orEmpty().ifBlank { org.olcbox.app.ui.i18n.LocalStrings.current.subscriptionsSection }
     val details = first?.subscriptionDetails()
 
     Column(modifier = modifier.padding(start = 4.dp, top = 2.dp)) {
@@ -531,7 +531,8 @@ private fun LocationItem.subscriptionTitle(): String {
 
     return listOfNotNull(
         subscription?.icon?.takeIf { it.isNotBlank() },
-        subscription?.name?.takeIf { it.isNotBlank() } ?: "Subscriptions"
+        subscription?.name?.takeIf { it.isNotBlank() }
+            ?: org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).subscriptionsSection
     ).joinToString(" ")
 }
 

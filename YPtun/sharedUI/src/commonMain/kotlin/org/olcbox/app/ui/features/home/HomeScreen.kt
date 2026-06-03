@@ -301,7 +301,7 @@ fun HomeScreen(
                     onImportFromClipboardRequested(
                         {
                             scope.launch {
-                                snackbarHostState.showSnackbar("Imported from clipboard")
+                                snackbarHostState.showSnackbar(s.importedFromClipboard)
                             }
                         },
                         { message ->

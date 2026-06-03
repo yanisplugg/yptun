@@ -176,20 +176,20 @@ fun AndroidMainScreen(
     fun showUpdateResult(info: AppUpdateInfo) {
         if (info.isDownloaded(updateSettings)) {
             updateOffer = null
-            updateStatusText = "Latest ${info.channel.name.lowercase()} is already downloaded"
+            updateStatusText = s.latestAlreadyDownloaded(info.channel.name.lowercase())
         } else if (info.isUpdateAvailable) {
             updateOffer = info
-            updateStatusText = "${info.channel.name} update available: ${info.version}"
+            updateStatusText = s.channelUpdateAvailable(info.channel.name, info.version)
         } else {
             updateOffer = null
-            updateStatusText = "YPtun is up to date"
+            updateStatusText = s.upToDate
         }
     }
 
     fun checkUpdate(manual: Boolean) {
         val service = appUpdateService
         if (service == null) {
-            updateStatusText = "Update service unavailable"
+            updateStatusText = s.updateServiceUnavailable
             return
         }
         scope.launch {
@@ -197,7 +197,7 @@ fun AndroidMainScreen(
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
-            updateStatusText = "Checking ${previousSettings.channel.name.lowercase()}..."
+            updateStatusText = s.checkingChannel(previousSettings.channel.name.lowercase())
             val result = service.check(
                 previousSettings.channel,
                 vpnManager.subscriptionFetchProxy()
@@ -215,7 +215,7 @@ fun AndroidMainScreen(
                     }
                 },
                 onFailure = { error ->
-                    updateStatusText = error.message ?: "Update check failed"
+                    updateStatusText = error.message ?: s.updateCheckFailed
                 }
             )
         }
@@ -225,7 +225,7 @@ fun AndroidMainScreen(
         scope.launch {
             if (!updateInstaller.canRequestPackageInstalls()) {
                 updateInstaller.openUnknownSourcesSettings()
-                updateStatusText = "Allow YPtun to install updates, then tap Download again"
+                updateStatusText = s.allowInstallUpdates
                 Toast.makeText(context, updateStatusText, Toast.LENGTH_LONG).show()
                 return@launch
             }
@@ -416,7 +416,7 @@ fun AndroidMainScreen(
             viewModel.onCopyFullConfigClicked()
         },
         onShareLocationRequested = { config ->
-            shareSheetPayload = "Location QR" to ConfigShareService.olcRtcUri(config)
+            shareSheetPayload = s.locationQr to ConfigShareService.olcRtcUri(config)
         },
         onSaveLogsRequested = { onSaved, onError ->
             pendingLogSaveCallbacks.value = onSaved to onError
@@ -523,7 +523,7 @@ fun AndroidMainScreen(
                 checkUpdate(manual = true)
             },
             onSubscriptionShareClick = { url ->
-                shareSheetPayload = "Subscription QR" to ConfigShareService.subscriptionQrText(url)
+                shareSheetPayload = s.subscriptionQr to ConfigShareService.subscriptionQrText(url)
             },
             onSubscriptionRefreshClick = { url ->
                 viewModel.refreshSubscription(url) { updatedCount ->
@@ -531,7 +531,7 @@ fun AndroidMainScreen(
                         viewModel.restartVpnIfRunning()
                         Toast.makeText(
                             context,
-                            if (updatedCount > 0) "Subscription updated" else "Subscription not updated",
+                            if (updatedCount > 0) s.subscriptionUpdated else s.subscriptionNotUpdated,
                             Toast.LENGTH_SHORT
                         ).show()
                     }
