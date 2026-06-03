@@ -265,17 +265,25 @@ object XrayConfig {
         val addresses = (o["local_address"] as? JsonArray)
             ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
         val mtu = o["mtu"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+        val keepalive = o["persistent_keepalive_interval"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            ?: o["persistent_keepalive"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            ?: 25
         return buildJsonObject {
             put("tag", WG_BASE_TAG)
             put("protocol", "wireguard")
             putJsonObject("settings") {
                 put("secretKey", secret)
                 putJsonArray("address") { addresses.forEach { add(it) } }
+                // The WG-over-VK tunnel is IPv4-only; resolve the chained proxy's server to IPv4 so it
+                // doesn't dial an AAAA address with no route through the tunnel (→ connection reset).
+                put("domainStrategy", "ForceIPv4")
                 putJsonArray("peers") {
                     addJsonObject {
                         put("publicKey", peerPub)
                         put("endpoint", "$server:$port")
                         putJsonArray("allowedIPs") { add("0.0.0.0/0"); add("::/0") }
+                        // Keep the tunnel alive through the TURN relay / NAT (matches wg-quick clients).
+                        put("keepAlive", keepalive)
                     }
                 }
                 if (mtu != null) put("mtu", mtu)
