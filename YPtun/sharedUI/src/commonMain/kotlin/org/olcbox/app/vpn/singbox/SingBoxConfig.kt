@@ -67,6 +67,10 @@ object SingBoxConfig {
         routingProfile: RoutingProfile? = null,
         singboxGeositeBase: String = "",
         singboxGeoipBase: String = "",
+        // Block QUIC (UDP/443 + sniffed quic) so clients fall back to TCP. MUST be false for
+        // UDP-capable tunnels (VK-TURN / WireGuard / AmneziaWG) which carry QUIC natively — blocking
+        // it there breaks those engines and is never wanted.
+        blockQuic: Boolean = true,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") {
@@ -165,14 +169,16 @@ object SingBoxConfig {
                     // TCP-only transport (xhttp / reality / ws) can't carry UDP, so QUIC just dies
                     // with ERR_QUIC_PROTOCOL (Telemost, Wildberries, Google, …). Rejecting it forces
                     // the working TCP path. Matches both the sniffed protocol and raw UDP/443.
-                    addJsonObject {
-                        putJsonArray("protocol") { add("quic") }
-                        put("action", "reject")
-                    }
-                    addJsonObject {
-                        put("network", "udp")
-                        putJsonArray("port") { add(443) }
-                        put("action", "reject")
+                    if (blockQuic) {
+                        addJsonObject {
+                            putJsonArray("protocol") { add("quic") }
+                            put("action", "reject")
+                        }
+                        addJsonObject {
+                            put("network", "udp")
+                            putJsonArray("port") { add(443) }
+                            put("action", "reject")
+                        }
                     }
                     // Routing profile and the advanced toggles are COMBINED (not either/or): the
                     // profile's buckets run alongside the user's verbatim rules and the

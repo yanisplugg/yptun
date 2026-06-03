@@ -1040,6 +1040,7 @@ class OlcboxVpnService : VpnService() {
                         logLevel = "info",
                         traffic = ipv4Traffic,
                         routingProfile = xrayProfile,
+                        blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                     )
                 } else {
                     addLog("VK-TURN chaining proxy ${chainProxy!!.displayName()} over WireGuard (Xray)")
@@ -1053,6 +1054,7 @@ class OlcboxVpnService : VpnService() {
                         logLevel = "info",
                         traffic = ipv4Traffic,
                         routingProfile = xrayProfile,
+                        blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                     )
                 }
                 activeProxyCore = ProxyCore.Xray
@@ -1089,6 +1091,7 @@ class OlcboxVpnService : VpnService() {
                         singboxGeoipBase = profilesState.singboxGeoipBase,
                         logLevel = "info",
                         dnsStrategyOverride = "ipv4_only",
+                        blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                     )
                 }
 
@@ -1111,6 +1114,7 @@ class OlcboxVpnService : VpnService() {
                         // resolution so dual-stack sites don't attempt IPv6 (no v6 path) and the
                         // TUN's captured ::/0 stays a harmless blackhole instead of a dead route.
                         dnsStrategyOverride = "ipv4_only",
+                        blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                     )
                 }
 
@@ -1135,6 +1139,7 @@ class OlcboxVpnService : VpnService() {
                             singboxGeoipBase = profilesState.singboxGeoipBase,
                             logLevel = "info",
                             dnsStrategyOverride = "ipv4_only",
+                            blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                         )
                     } else {
                         SingBoxConfig.build(
@@ -1155,6 +1160,7 @@ class OlcboxVpnService : VpnService() {
                             // WG tunnel is IPv4-only; force A-only resolution so dual-stack sites
                             // don't attempt IPv6 (no route through the tunnel → "no route to host").
                             dnsStrategyOverride = "ipv4_only",
+                            blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                         )
                     }
                 }

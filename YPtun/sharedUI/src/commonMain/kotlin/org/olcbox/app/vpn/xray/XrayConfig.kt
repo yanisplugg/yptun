@@ -52,6 +52,9 @@ object XrayConfig {
         // with geosite:/geoip:/domain: selectors) and its dns.hosts are merged. The referenced
         // geoip.dat/geosite.dat must be present in XRAY_LOCATION_ASSET.
         routingProfile: org.olcbox.app.data.model.RoutingProfile? = null,
+        // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
+        // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
+        blockQuic: Boolean = true,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
@@ -178,14 +181,14 @@ object XrayConfig {
                     val base = XrayRouting.routingObject(routingProfile)
                     put("domainStrategy", base["domainStrategy"] ?: JsonPrimitive("AsIs"))
                     putJsonArray("rules") {
-                        add(quicBlockRule)
+                        if (blockQuic) add(quicBlockRule)
                         if (traffic.blockRuDomains) add(blockZeroRule)
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
                     put("domainStrategy", "AsIs")
                     putJsonArray("rules") {
-                        add(quicBlockRule)
+                        if (blockQuic) add(quicBlockRule)
                         if (traffic.blockRuDomains) add(blockZeroRule)
                     }
                 }
