@@ -3,6 +3,7 @@ package org.olcbox.app.vpn.singbox
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -154,6 +155,8 @@ object SingBoxConfig {
                     if (advanced?.sniff != false) {
                         addJsonObject { put("action", "sniff") }
                     }
+                    // Advanced: verbatim user route.rules take precedence over the toggle-based rules.
+                    parseJsonArray(routing.customRulesJson).forEach { add(it) }
                     if (routing.bypassLan) {
                         addJsonObject {
                             put("ip_is_private", true)
@@ -186,8 +189,10 @@ object SingBoxConfig {
                     }
                 }
 
-                if (routing.blockAds || routing.bypassRussia) {
+                val customRuleSets = parseJsonArray(routing.customRuleSetsJson)
+                if (routing.blockAds || routing.bypassRussia || customRuleSets.isNotEmpty()) {
                     putJsonArray("rule_set") {
+                        customRuleSets.forEach { add(it) }
                         if (routing.blockAds) {
                             addJsonObject {
                                 put("type", "remote")
@@ -218,6 +223,12 @@ object SingBoxConfig {
             }
         }
         return json.encodeToString(config)
+    }
+
+    /** Parses a verbatim JSON array string into its elements; returns empty on blank/invalid input. */
+    private fun parseJsonArray(raw: String): List<kotlinx.serialization.json.JsonElement> {
+        if (raw.isBlank()) return emptyList()
+        return runCatching { Json.parseToJsonElement(raw).jsonArray.toList() }.getOrDefault(emptyList())
     }
 
     private fun buildProxyOutbound(

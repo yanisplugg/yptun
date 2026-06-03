@@ -64,6 +64,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Refresh
@@ -2620,6 +2622,11 @@ private fun RoutingContent(
     var bypassRu by remember(routing) { mutableStateOf(routing.bypassRussia) }
     var directText by remember(routing) { mutableStateOf(RoutingRules.domainsToText(routing.directDomains)) }
     var blockText by remember(routing) { mutableStateOf(RoutingRules.domainsToText(routing.blockDomains)) }
+    var customRules by remember(routing) { mutableStateOf(routing.customRulesJson) }
+    var customRuleSets by remember(routing) { mutableStateOf(routing.customRuleSetsJson) }
+    var advancedExpanded by remember(routing) { mutableStateOf(routing.customRulesJson.isNotBlank() || routing.customRuleSetsJson.isNotBlank()) }
+    val rulesValid = RoutingRules.isValidRulesJson(customRules)
+    val ruleSetsValid = RoutingRules.isValidRulesJson(customRuleSets)
     val s = LocalStrings.current
 
     Column(
@@ -2695,6 +2702,55 @@ private fun RoutingContent(
             modifier = Modifier.fillMaxWidth()
         )
 
+        // Advanced: raw sing-box routing rules for power users.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable { advancedExpanded = !advancedExpanded }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Sing-box routing (advanced)",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                if (advancedExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = null
+            )
+        }
+        if (advancedExpanded) {
+            Text(
+                "Verbatim sing-box JSON. These run before the toggles above. " +
+                    "Rules example: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+            OutlinedTextField(
+                value = customRules,
+                onValueChange = { customRules = it },
+                label = { Text("route.rules (JSON array)") },
+                placeholder = { Text("[{\"domain_suffix\":[\"example.com\"],\"outbound\":\"direct\"}]") },
+                isError = !rulesValid,
+                supportingText = if (!rulesValid) ({ Text("Invalid JSON array") }) else null,
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = customRuleSets,
+                onValueChange = { customRuleSets = it },
+                label = { Text("rule_set (JSON array)") },
+                placeholder = { Text("[{\"type\":\"remote\",\"tag\":\"my-set\",\"format\":\"binary\",\"url\":\"https://…\",\"download_detour\":\"direct\"}]") },
+                isError = !ruleSetsValid,
+                supportingText = if (!ruleSetsValid) ({ Text("Invalid JSON array") }) else null,
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
         Button(
             onClick = {
                 onRoutingChanged(
@@ -2703,12 +2759,14 @@ private fun RoutingContent(
                         blockAds = blockAds,
                         bypassRussia = bypassRu,
                         directDomains = RoutingRules.parseDomains(directText),
-                        blockDomains = RoutingRules.parseDomains(blockText)
+                        blockDomains = RoutingRules.parseDomains(blockText),
+                        customRulesJson = customRules.trim(),
+                        customRuleSetsJson = customRuleSets.trim()
                     )
                 )
                 onBack()
             },
-            enabled = enabled,
+            enabled = enabled && rulesValid && ruleSetsValid,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(s.saveAndApply)
