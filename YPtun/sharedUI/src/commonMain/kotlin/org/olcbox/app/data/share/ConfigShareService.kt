@@ -13,6 +13,13 @@ object ConfigShareService {
         if (normalized.engine == EngineType.VkTurn) {
             return normalized.vkturn?.uri.orEmpty()
         }
+        // Standard/Chain run a sing-box/Xray proxy — share the matching proxy link (vless/…/awg),
+        // NOT an olcrtc:// link (which only makes sense for the Stealth olcRTC engine).
+        if (normalized.engine == EngineType.Standard || normalized.engine == EngineType.Chain) {
+            normalized.proxy?.let { ShareLinkComposer.compose(it) }
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
         val transport = when (normalized.transport) {
             LocationConfig.TRANSPORT_VP8CHANNEL -> {
                 "vp8channel<vp8-fps=${normalized.vp8Fps}&vp8-batch=${normalized.vp8Batch}>"

@@ -19,6 +19,11 @@ object ShareLinkParser {
             trimmed.startsWith("vmess://", true) -> parseVmess(trimmed)
             trimmed.startsWith("trojan://", true) -> parseTrojan(trimmed)
             trimmed.startsWith("ss://", true) -> parseShadowsocks(trimmed)
+            // amneziawg://<base64url(wg-quick INI)> — the compact link form produced by sharing.
+            trimmed.startsWith("amneziawg://", true) -> {
+                val payload = trimmed.substring("amneziawg://".length).substringBefore('#')
+                SubscriptionDecoder.decodeBase64Chunk(payload)?.let { AmneziaWgParser.parse(it) }
+            }
             AmneziaWgParser.looksLikeAmneziaWg(trimmed) -> AmneziaWgParser.parse(trimmed)
             else -> null
         }
