@@ -810,6 +810,13 @@ class OlcboxVpnService : VpnService() {
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
             // the whole profile (incl. domain:ru) and Russian sites would wrongly egress via the VPN.
             val profileWantsXray = routingProfile != null && routingProfile.dnsHosts.isNotEmpty()
+            // A user-supplied full Xray JSON (dns / routing / balancers / custom fields) can ONLY run
+            // verbatim on xray-core. Force Xray so the whole template is honored instead of falling to
+            // sing-box, which would rebuild from the parsed profile and drop everything but the outbound.
+            if (!effectiveProfile.rawXrayConfig.isNullOrBlank()) {
+                if (activeProxyCore != ProxyCore.Xray) addLog("Raw Xray config present → forcing Xray core")
+                activeProxyCore = ProxyCore.Xray
+            }
             if (activeProxyCore == ProxyCore.SingBox &&
                 (loadTrafficSettings().blockRuDomains || profileWantsXray) &&
                 effectiveProfile.rawOutbound.isNullOrBlank() &&
