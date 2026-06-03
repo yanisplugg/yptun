@@ -83,7 +83,7 @@ fun AddConfigurationSheet(
 
                 AddSheetAction(
                     title = s.pasteLink,
-                    value = "vless/vmess/trojan/ss, olcrtc, sub URL, sing-box JSON",
+                    value = "vless/vmess/trojan/ss, olcrtc, sub URL (несколько — по одной в строке), sing-box JSON",
                     icon = Icons.AutoMirrored.Outlined.Input,
                     onClick = onPasteLinkClick
                 )

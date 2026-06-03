@@ -260,6 +260,20 @@ class HomeScreenViewModel(
             onError("No config text found")
             return
         }
+        // Bulk import: several subscription/share URLs pasted at once (one per line). We only treat
+        // it as a batch when EVERY non-empty line is an http(s) URL (≥2 of them) — that's the only
+        // unambiguous case. Multi-line sing-box/xray JSON, base64 blobs and vless:// lists are left
+        // to the single-import path below (which already handles a multi-link block itself).
+        run {
+            val lines = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val allHttp = lines.size >= 2 && lines.all {
+                it.startsWith("http://", true) || it.startsWith("https://", true)
+            }
+            if (allHttp) {
+                importManySubscriptions(lines, onComplete, onError)
+                return
+            }
+        }
         // A happ://routing/add/... link OR raw Happ routing JSON is a routing profile, not a
         // location — hand it off instead of trying to parse it as a config.
         if (org.olcbox.app.data.importer.HappRoutingParser.looksLikeRoutingProfile(rawText)) {
@@ -295,6 +309,41 @@ class HomeScreenViewModel(
                 }
                 onError(message)
             }
+        }
+    }
+
+    /**
+     * Imports a batch of subscription/share URLs, one at a time, reusing the single-import path so
+     * dedup/merge behave exactly as for one paste. Succeeds if at least one URL imported; reports how
+     * many failed otherwise. Runs network I/O off the main thread.
+     */
+    private fun importManySubscriptions(
+        urls: List<String>,
+        onComplete: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            var added = 0
+            var failed = 0
+            withContext(Dispatchers.IO) {
+                for (url in urls) {
+                    val ok = runCatching {
+                        locationsRepository.importText(
+                            text = url,
+                            subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                        )
+                    }.getOrDefault(false)
+                    if (ok) added++ else failed++
+                }
+            }
+            if (added == 0) {
+                onError("No valid subscriptions found ($failed failed)")
+                return@launch
+            }
+            loadCurrentConfigNow()
+            maybePromptForVkTurnLink()
+            onComplete()
+            if (failed > 0) onError("Imported $added, $failed failed")
         }
     }
 
