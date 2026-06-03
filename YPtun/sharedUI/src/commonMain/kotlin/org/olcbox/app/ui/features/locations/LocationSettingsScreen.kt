@@ -1,5 +1,6 @@
 package org.olcbox.app.ui.features.locations
 
+import org.olcbox.app.ui.i18n.LocalStrings
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -84,7 +85,7 @@ fun LocationSettingsTopBar(
     onShare: () -> Unit
 ) {
     TopAppBar(
-        title = { Text("Location settings") },
+        title = { Text(LocalStrings.current.locationSettingsTitle) },
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(
@@ -119,6 +120,7 @@ fun LocationSettingsScreen(
     onShareLocationRequested: (LocationConfig) -> Unit = {},
     onBack: () -> Unit
 ) {
+    val s = LocalStrings.current
     val config = viewModel.editingConfig
     val name = viewModel.editingName
     val isSaving = viewModel.isSaving
@@ -178,8 +180,8 @@ fun LocationSettingsScreen(
                 SettingsTextField(
                     value = name,
                     onValueChange = viewModel::onNameChanged,
-                    label = "Name",
-                    placeholder = "Location name",
+                    label = s.fieldName,
+                    placeholder = s.locationNamePlaceholder,
                     enabled = !isSaving,
                     isError = viewModel.nameError != null,
                     supportingText = viewModel.nameError,
@@ -363,7 +365,7 @@ private fun EngineSelector(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        SectionTitle(title = "Engine", subtitle = engineSubtitle(selected))
+        SectionTitle(title = LocalStrings.current.engineSection, subtitle = engineSubtitle(selected))
 
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             options.forEachIndexed { index, engine ->
@@ -399,13 +401,13 @@ private fun ProxyField(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         SectionTitle(
-            title = "Proxy",
-            subtitle = "Paste a vless/vmess/trojan/ss link, an AmneziaWG config, or a sing-box outbound JSON"
+            title = LocalStrings.current.proxySection,
+            subtitle = LocalStrings.current.proxySectionSubtitle
         )
         OutlinedTextField(
             value = link,
             onValueChange = onChange,
-            label = { Text("Proxy link or config") },
+            label = { Text(LocalStrings.current.proxyLinkOrConfig) },
             placeholder = { Text("vless://…  or  { \"type\": … }") },
             enabled = enabled,
             isError = error != null,
@@ -443,8 +445,8 @@ private fun LazyListScope.vkTurnSection(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
-                title = "Freeturn transport",
-                subtitle = "VK TURN relay endpoint and obfuscation"
+                title = LocalStrings.current.freeturnTransportSection,
+                subtitle = LocalStrings.current.freeturnTransportSubtitle
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -524,7 +526,7 @@ private fun LazyListScope.vkTurnSection(
         ) {
             SectionTitle(
                 title = "WireGuard",
-                subtitle = "The tunnel sing-box dials through the local freeturn listener"
+                subtitle = LocalStrings.current.wireguardSubtitle
             )
             VkTurnField(
                 value = draft.wgPrivateKey,
@@ -615,13 +617,13 @@ private fun LazyListScope.vkTurnSection(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
-                title = "Proxy over VK-TURN (optional)",
-                subtitle = "Chain a vless/vmess/trojan/ss proxy on top of the WireGuard tunnel"
+                title = LocalStrings.current.proxyOverVkturn,
+                subtitle = LocalStrings.current.proxyOverVkturnSubtitle
             )
             OutlinedTextField(
                 value = draft.chainProxyLink,
                 onValueChange = { v -> onChange { it.copy(chainProxyLink = v) } },
-                label = { Text("Proxy link") },
+                label = { Text(LocalStrings.current.proxyLink) },
                 placeholder = { Text("vless://…  (leave empty for plain WireGuard)") },
                 enabled = enabled,
                 minLines = 2,
@@ -658,25 +660,24 @@ private fun VkTurnLinksField(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         SectionTitle(
-            title = "VK call link(s)",
-            subtitle = "Personal VK Calls join link (required). Add up to 5 — each extra call " +
-                "adds bandwidth (the tunnel is spread across them)."
+            title = LocalStrings.current.vkCallLinksSection,
+            subtitle = LocalStrings.current.vkCallLinksSubtitle
         )
         VkTurnField(
             value = line(0),
             onValueChange = { setLine(0, it) },
-            label = "VK call link",
+            label = LocalStrings.current.vkCallLink,
             placeholder = "https://vk.com/call/join/…",
             enabled = enabled,
             isError = line(0).isNotBlank() && !line(0).contains("/call/join/")
         )
-        VkTurnSwitchRow("Additional calls (up to 4 more — faster)", expanded, enabled) { expanded = it }
+        VkTurnSwitchRow(LocalStrings.current.additionalCalls, expanded, enabled) { expanded = it }
         if (expanded) {
             for (i in 1 until maxLinks) {
                 VkTurnField(
                     value = line(i),
                     onValueChange = { setLine(i, it) },
-                    label = "VK call link ${i + 1} (optional)",
+                    label = LocalStrings.current.vkCallLinkNumbered(i + 1),
                     placeholder = "https://vk.com/call/join/…",
                     enabled = enabled,
                     isError = line(i).isNotBlank() && !line(i).contains("/call/join/")
@@ -797,8 +798,8 @@ private fun CoreSelector(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         SectionTitle(
-            title = "Core",
-            subtitle = "Auto picks Xray for xhttp, otherwise sing-box"
+            title = LocalStrings.current.coreSection,
+            subtitle = LocalStrings.current.coreSubtitle
         )
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             options.forEachIndexed { index, core ->
@@ -865,7 +866,7 @@ private fun ConnectionTypePicker(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        SectionTitle(title = "Connection type")
+        SectionTitle(title = LocalStrings.current.connectionType)
 
         SingleChoiceSegmentedButtonRow(
             modifier = Modifier.fillMaxWidth()
@@ -1014,8 +1015,8 @@ private fun Vp8OptionsCard(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         SectionTitle(
-            title = "VP8 options",
-            subtitle = "Fine-tune stream performance"
+            title = LocalStrings.current.vp8Options,
+            subtitle = LocalStrings.current.vp8OptionsSubtitle
         )
 
         Row(
@@ -1145,7 +1146,7 @@ private fun ActionsBar(
             } else {
                 Icon(Icons.Rounded.Check, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Save", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(LocalStrings.current.save, fontSize = 16.sp, fontWeight = FontWeight.Medium)
             }
         }
     }

@@ -50,6 +50,7 @@ internal fun AndroidConfigShareSheet(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val qrBitmap = remember(payload) { createQrBitmap(payload) }
 
@@ -108,13 +109,13 @@ internal fun AndroidConfigShareSheet(
                 OutlinedButton(
                     onClick = {
                         context.copySharePayload(payload)
-                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, s.copied, Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(Icons.Outlined.ContentCopy, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Copy")
+                    Text(s.copy)
                 }
 
                 Button(
@@ -123,7 +124,7 @@ internal fun AndroidConfigShareSheet(
                 ) {
                     Icon(Icons.Outlined.Share, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Share")
+                    Text(s.share)
                 }
             }
         }

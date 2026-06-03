@@ -218,6 +218,95 @@ interface Strings {
     val everyAppUsesYptun: String
     val chooseAppsUseYptun: String
     val chooseAppsBypass: String
+
+    // Theme color picker
+    val themeColor: String
+    val elementColor: String
+    val textColor: String
+    val customColorRgb: String
+
+    // Subscriptions sharing extra
+    val qrShare: String
+    val refresh: String
+
+    // Experimental section
+    val experimental: String
+    val experimentalSubtitle: String
+    val experimentalUnlocked: String
+    val notifSpeed: String
+    val notifSpeedSubtitle: String
+    val telemostCookiesDescription: String
+    val useTelemostCookies: String
+    val useTelemostCookiesSubtitle: String
+    val telemostCookieHeader: String
+    val cookiesLoaded: String
+    val cookiesReadFailed: String
+    val loadFromFile: String
+
+    // Notification / toasts
+    val notifConnected: String
+    fun notifConnectedMode(mode: String): String
+    val notifWaitingNetwork: String
+    val notifReconnecting: String
+    val notifWaitingTransport: String
+    val notifConnecting: String
+    val notifAddLocation: String
+    val notifAddProxy: String
+    val notifAddVkLink: String
+    val notifConnectionFailed: String
+    val notifTunnelFailed: String
+    val notifVpnTunnelError: String
+    val notifSplitTunnelError: String
+    val notifStop: String
+    val noFileSelected: String
+    val qrImported: String
+    fun cannotOpenFilePicker(msg: String): String
+    val configCopied: String
+    val copied: String
+
+    // VK call link dialog
+    val vkCallLink: String
+    fun vkCallLinkBody(name: String): String
+    val next: String
+    val later: String
+    val download: String
+    val updateAvailable: String
+    val sizeUnknown: String
+
+    // Logs detail
+    val noLogEntries: String
+    fun logEntriesCount(n: Int): String
+
+    // Location settings
+    val locationSettingsTitle: String
+    val proxyLinkOrConfig: String
+    val proxyLink: String
+    val fieldName: String
+    val locationNamePlaceholder: String
+    val engineSection: String
+    val proxySection: String
+    val proxySectionSubtitle: String
+    val freeturnTransportSection: String
+    val freeturnTransportSubtitle: String
+    val wireguardSubtitle: String
+    val proxyOverVkturn: String
+    val proxyOverVkturnSubtitle: String
+    val vkCallLinksSection: String
+    val vkCallLinksSubtitle: String
+    fun vkCallLinkNumbered(n: Int): String
+    val additionalCalls: String
+    val coreSection: String
+    val coreSubtitle: String
+    val connectionType: String
+    val vp8Options: String
+    val vp8OptionsSubtitle: String
+
+    // Snackbars
+    fun subscriptionsUpdatedCount(n: Int): String
+    val subscriptionsUpdated: String
+    val subscriptionDeleted: String
+    val subscriptionsDeleted: String
+    val configsDeleted: String
 }
 
 object RuStrings : Strings {
@@ -376,6 +465,88 @@ object RuStrings : Strings {
     override val everyAppUsesYptun = "Все приложения через YPtun"
     override val chooseAppsUseYptun = "Выберите приложения через YPtun"
     override val chooseAppsBypass = "Выберите приложения в обход YPtun"
+    override val themeColor = "Цвет темы"
+    override val elementColor = "Цвет элементов"
+    override val textColor = "Цвет текста"
+    override val customColorRgb = "Произвольный цвет (RGB)"
+    override val qrShare = "QR / поделиться"
+    override val refresh = "Обновить"
+    override val experimental = "Экспериментальные"
+    override val experimentalSubtitle = "Cookies Telemost и прочее"
+    override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
+    override val notifSpeed = "Скорость в уведомлении"
+    override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+    override val telemostCookiesDescription =
+        "Cookies авторизованного аккаунта Яндекса (заголовок Cookie, напр. " +
+            "«Session_id=…; yandexuid=…») — для приватных конференций. Запустить кастомное ядро " +
+            "отдельным бинарём на Android невозможно, поэтому эта функция встроена в штатное ядро."
+    override val useTelemostCookies = "Использовать cookies Telemost"
+    override val useTelemostCookiesSubtitle = "Подставлять cookies при подключении к Telemost"
+    override val telemostCookieHeader = "Заголовок Cookie для Telemost"
+    override val cookiesLoaded = "Cookies загружены"
+    override val cookiesReadFailed = "Не удалось прочитать файл"
+    override val loadFromFile = "Загрузить из файла (cookies.txt)"
+    override val notifConnected = "Подключено"
+    override fun notifConnectedMode(mode: String) = "$mode подключён"
+    override val notifWaitingNetwork = "Ожидание сети…"
+    override val notifReconnecting = "Переподключение…"
+    override val notifWaitingTransport = "Ожидание транспорта…"
+    override val notifConnecting = "Подключение…"
+    override val notifAddLocation = "Сначала добавьте локацию"
+    override val notifAddProxy = "Сначала добавьте прокси"
+    override val notifAddVkLink = "Сначала добавьте ссылку на звонок VK"
+    override val notifConnectionFailed = "Не удалось подключиться"
+    override val notifTunnelFailed = "Сбой туннеля"
+    override val notifVpnTunnelError = "Ошибка VPN-туннеля"
+    override val notifSplitTunnelError = "Ошибка раздельного туннелирования"
+    override val notifStop = "Стоп"
+    override val noFileSelected = "Файл не выбран"
+    override val qrImported = "QR-код импортирован"
+    override fun cannotOpenFilePicker(msg: String) = "Не удалось открыть выбор файла: $msg"
+    override val configCopied = "Конфигурация скопирована"
+    override val copied = "Скопировано"
+    override val vkCallLink = "Ссылка на звонок VK"
+    override fun vkCallLinkBody(name: String) =
+        "Вставьте ссылку-приглашение VK Звонков для «$name». Можно вставить несколько ссылок " +
+            "(по одной на строку), чтобы распределить туннель между звонками и повысить скорость."
+    override val next = "Далее"
+    override val later = "Позже"
+    override val download = "Скачать"
+    override val updateAvailable = "Доступно обновление"
+    override val sizeUnknown = "Размер неизвестен"
+    override val noLogEntries = "Нет записей"
+    override fun logEntriesCount(n: Int) = "Записей: $n"
+    override val locationSettingsTitle = "Настройки локации"
+    override val proxyLinkOrConfig = "Ссылка прокси или конфигурация"
+    override val proxyLink = "Ссылка прокси"
+    override val fieldName = "Название"
+    override val locationNamePlaceholder = "Название локации"
+    override val engineSection = "Движок"
+    override val proxySection = "Прокси"
+    override val proxySectionSubtitle =
+        "Вставьте ссылку vless/vmess/trojan/ss, конфигурацию AmneziaWG или JSON-исходящего sing-box"
+    override val freeturnTransportSection = "Транспорт Freeturn"
+    override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
+    override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
+    override val proxyOverVkturn = "Прокси поверх VK-TURN (необязательно)"
+    override val proxyOverVkturnSubtitle =
+        "Добавить прокси vless/vmess/trojan/ss поверх туннеля WireGuard"
+    override val vkCallLinksSection = "Ссылки на звонки VK"
+    override val vkCallLinksSubtitle =
+        "Личная ссылка-приглашение VK Звонков (обязательно). Можно добавить до 5 — каждый " +
+            "дополнительный звонок прибавляет пропускную способность (туннель распределяется между ними)."
+    override fun vkCallLinkNumbered(n: Int) = "Ссылка на звонок VK $n (необязательно)"
+    override val additionalCalls = "Дополнительные звонки"
+    override val coreSection = "Ядро"
+    override val coreSubtitle = "«Авто» выбирает Xray для xhttp, иначе sing-box"
+    override val connectionType = "Тип подключения"
+    override val vp8Options = "Параметры VP8"
+    override val vp8OptionsSubtitle = "Тонкая настройка производительности потока"
+    override fun subscriptionsUpdatedCount(n: Int) = "Подписки обновлены: $n"
+    override val subscriptionsUpdated = "Подписки обновлены"
+    override val subscriptionDeleted = "Подписка удалена"
+    override val subscriptionsDeleted = "Подписки удалены"
+    override val configsDeleted = "Конфигурации удалены"
 }
 
 object EnStrings : Strings {
@@ -534,4 +705,86 @@ object EnStrings : Strings {
     override val everyAppUsesYptun = "Every app uses YPtun"
     override val chooseAppsUseYptun = "Choose apps that use YPtun"
     override val chooseAppsBypass = "Choose apps that bypass YPtun"
+    override val themeColor = "Theme color"
+    override val elementColor = "Element color"
+    override val textColor = "Text color"
+    override val customColorRgb = "Custom color (RGB)"
+    override val qrShare = "QR / share"
+    override val refresh = "Refresh"
+    override val experimental = "Experimental"
+    override val experimentalSubtitle = "Telemost cookies and more"
+    override val experimentalUnlocked = "Experimental settings unlocked"
+    override val notifSpeed = "Speed in notification"
+    override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+    override val telemostCookiesDescription =
+        "Cookies of a signed-in Yandex account (the Cookie header, e.g. " +
+            "\"Session_id=…; yandexuid=…\") — for private conferences. A custom core cannot be " +
+            "launched as a separate binary on Android, so this feature is built into the stock core."
+    override val useTelemostCookies = "Use Telemost cookies"
+    override val useTelemostCookiesSubtitle = "Attach cookies when connecting to Telemost"
+    override val telemostCookieHeader = "Telemost Cookie header"
+    override val cookiesLoaded = "Cookies loaded"
+    override val cookiesReadFailed = "Couldn't read the file"
+    override val loadFromFile = "Load from file (cookies.txt)"
+    override val notifConnected = "Connected"
+    override fun notifConnectedMode(mode: String) = "$mode Connected"
+    override val notifWaitingNetwork = "Waiting for network..."
+    override val notifReconnecting = "Reconnecting..."
+    override val notifWaitingTransport = "Waiting for transport..."
+    override val notifConnecting = "Connecting..."
+    override val notifAddLocation = "Add a location first"
+    override val notifAddProxy = "Add a proxy first"
+    override val notifAddVkLink = "Add a VK call link first"
+    override val notifConnectionFailed = "Connection failed"
+    override val notifTunnelFailed = "Tunnel failed"
+    override val notifVpnTunnelError = "VPN tunnel error"
+    override val notifSplitTunnelError = "Split tunneling error"
+    override val notifStop = "Stop"
+    override val noFileSelected = "No file selected"
+    override val qrImported = "QR imported"
+    override fun cannotOpenFilePicker(msg: String) = "Cannot open file picker: $msg"
+    override val configCopied = "Config copied"
+    override val copied = "Copied"
+    override val vkCallLink = "VK call link"
+    override fun vkCallLinkBody(name: String) =
+        "Paste your VK Calls join link for \"$name\". You can paste several links " +
+            "(one per line) to spread the tunnel across calls for more speed."
+    override val next = "Next"
+    override val later = "Later"
+    override val download = "Download"
+    override val updateAvailable = "Update available"
+    override val sizeUnknown = "Size unknown"
+    override val noLogEntries = "No entries"
+    override fun logEntriesCount(n: Int) = "$n entries"
+    override val locationSettingsTitle = "Location settings"
+    override val proxyLinkOrConfig = "Proxy link or config"
+    override val proxyLink = "Proxy link"
+    override val fieldName = "Name"
+    override val locationNamePlaceholder = "Location name"
+    override val engineSection = "Engine"
+    override val proxySection = "Proxy"
+    override val proxySectionSubtitle =
+        "Paste a vless/vmess/trojan/ss link, an AmneziaWG config, or a sing-box outbound JSON"
+    override val freeturnTransportSection = "Freeturn transport"
+    override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
+    override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
+    override val proxyOverVkturn = "Proxy over VK-TURN (optional)"
+    override val proxyOverVkturnSubtitle =
+        "Chain a vless/vmess/trojan/ss proxy on top of the WireGuard tunnel"
+    override val vkCallLinksSection = "VK call link(s)"
+    override val vkCallLinksSubtitle =
+        "Personal VK Calls join link (required). Add up to 5 — each extra call " +
+            "adds bandwidth (the tunnel is spread across them)."
+    override fun vkCallLinkNumbered(n: Int) = "VK call link $n (optional)"
+    override val additionalCalls = "Additional calls"
+    override val coreSection = "Core"
+    override val coreSubtitle = "Auto picks Xray for xhttp, otherwise sing-box"
+    override val connectionType = "Connection type"
+    override val vp8Options = "VP8 options"
+    override val vp8OptionsSubtitle = "Fine-tune stream performance"
+    override fun subscriptionsUpdatedCount(n: Int) = "Subscriptions updated: $n"
+    override val subscriptionsUpdated = "Subscriptions updated"
+    override val subscriptionDeleted = "Subscription deleted"
+    override val subscriptionsDeleted = "Subscriptions deleted"
+    override val configsDeleted = "Configurations deleted"
 }

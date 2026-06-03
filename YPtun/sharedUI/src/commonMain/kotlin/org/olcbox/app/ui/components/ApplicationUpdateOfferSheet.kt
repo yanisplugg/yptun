@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.olcbox.app.update.AppUpdateInfo
+import org.olcbox.app.ui.i18n.LocalStrings
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,6 +35,7 @@ fun ApplicationUpdateOfferSheet(
     onLater: () -> Unit,
     onDownload: () -> Unit
 ) {
+    val s = LocalStrings.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -50,7 +52,7 @@ fun ApplicationUpdateOfferSheet(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "Update available",
+                    text = s.updateAvailable,
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -78,7 +80,7 @@ fun ApplicationUpdateOfferSheet(
                         fontSize = 15.sp
                     )
                     Text(
-                        text = info.asset.sizeBytes?.formatBytes() ?: "Size unknown",
+                        text = info.asset.sizeBytes?.formatBytes() ?: s.sizeUnknown,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 13.sp
                     )
@@ -98,14 +100,14 @@ fun ApplicationUpdateOfferSheet(
                     modifier = Modifier.weight(1f),
                     enabled = downloadProgress == null
                 ) {
-                    Text("Later")
+                    Text(s.later)
                 }
                 Button(
                     onClick = onDownload,
                     modifier = Modifier.weight(1f),
                     enabled = downloadProgress == null
                 ) {
-                    Text("Download")
+                    Text(s.download)
                 }
             }
         }

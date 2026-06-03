@@ -395,13 +395,14 @@ private fun ThemeColorSection(
 ) {
     var showAccentPicker by remember { mutableStateOf(false) }
     var showBackgroundPicker by remember { mutableStateOf(false) }
+    val s = LocalStrings.current
 
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = "Theme color",
+            text = s.themeColor,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -423,7 +424,7 @@ private fun ThemeColorSection(
         }
 
         Text(
-            text = "Element color",
+            text = s.elementColor,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -445,7 +446,7 @@ private fun ThemeColorSection(
         }
 
         Text(
-            text = "Text color",
+            text = s.textColor,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -526,12 +527,13 @@ private fun ColorPickerDialog(
     val color = Color(r.toInt(), g.toInt(), b.toInt())
 
     fun syncHex() { hex = rgbToHex(r, g, b) }
+    val s = LocalStrings.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = { onConfirm(color) }) { Text("OK") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        title = { Text("Custom color (RGB)") },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(s.cancel) } },
+        title = { Text(s.customColorRgb) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(
@@ -725,8 +727,8 @@ private fun AppSettingsHubContent(
             if (experimentalUnlocked) {
                 SettingsGroupDivider()
                 SettingsGroupRow(
-                    title = "Экспериментальные",
-                    subtitle = "Telemost cookies и др.",
+                    title = s.experimental,
+                    subtitle = s.experimentalSubtitle,
                     icon = Icons.Outlined.Tune,
                     enabled = true,
                     onClick = onExperimentalClick
@@ -1309,7 +1311,7 @@ private fun ApplicationLogsSettingsContent(
         Row(verticalAlignment = Alignment.CenterVertically) {
             SettingsDetailHeader(
                 title = LocalStrings.current.applicationLogsTitle,
-                subtitle = if (logs.isEmpty()) "No entries" else "${logs.size} entries",
+                subtitle = if (logs.isEmpty()) LocalStrings.current.noLogEntries else LocalStrings.current.logEntriesCount(logs.size),
                 onBack = onBack,
                 modifier = Modifier.weight(1f)
             )
@@ -1318,13 +1320,13 @@ private fun ApplicationLogsSettingsContent(
                 enabled = logs.isNotEmpty(),
                 onClick = onSaveClick
             ) {
-                Text("Save")
+                Text(LocalStrings.current.save)
             }
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onShareClick
             ) {
-                Text("Share")
+                Text(LocalStrings.current.share)
             }
         }
 
@@ -1544,10 +1546,10 @@ private fun SubscriptionShareRow(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onShareClick) {
-                    Text("QR/share")
+                    Text(LocalStrings.current.qrShare)
                 }
                 TextButton(onClick = onRefreshClick) {
-                    Text("Refresh")
+                    Text(LocalStrings.current.refresh)
                 }
             }
         }
@@ -2957,8 +2959,8 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
         RoutingToggleRow(
-            title = "Скорость в уведомлении",
-            subtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке",
+            title = s.notifSpeed,
+            subtitle = s.notifSpeedSubtitle,
             checked = settings.showSpeedInNotification
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
@@ -2987,6 +2989,7 @@ private fun ExperimentalContent(
     onBack: () -> Unit,
     onChanged: (AppBehaviorSettings) -> Unit
 ) {
+    val s = LocalStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -3001,7 +3004,7 @@ private fun ExperimentalContent(
             }
             Spacer(Modifier.width(4.dp))
             Text(
-                text = "Экспериментальные",
+                text = s.experimental,
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -3009,21 +3012,19 @@ private fun ExperimentalContent(
 
         SettingsSectionLabel("Yandex Telemost")
         Text(
-            text = "Cookies авторизованного аккаунта Яндекс (заголовок Cookie, напр. " +
-                "\"Session_id=…; yandexuid=…\") — для приватных конференций. Кастомное ядро " +
-                "отдельным бинарём на Android запустить нельзя, поэтому эта функция встроена в штатное ядро.",
+            text = s.telemostCookiesDescription,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         RoutingToggleRow(
-            title = "Использовать Telemost cookies",
-            subtitle = "Подставлять cookies при подключении к Telemost",
+            title = s.useTelemostCookies,
+            subtitle = s.useTelemostCookiesSubtitle,
             checked = settings.telemostCookiesEnabled
         ) { onChanged(settings.copy(telemostCookiesEnabled = it)) }
         OutlinedTextField(
             value = settings.telemostCookies,
             onValueChange = { onChanged(settings.copy(telemostCookies = it)) },
-            label = { Text("Telemost Cookie header") },
+            label = { Text(s.telemostCookieHeader) },
             placeholder = { Text("Session_id=…; yandexuid=…") },
             minLines = 2,
             modifier = Modifier.fillMaxWidth()
@@ -3038,15 +3039,15 @@ private fun ExperimentalContent(
             }.getOrNull()
             if (text != null) {
                 onChanged(settings.copy(telemostCookies = cookiesFromFile(text)))
-                android.widget.Toast.makeText(context, "Cookies загружены", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, s.cookiesLoaded, android.widget.Toast.LENGTH_SHORT).show()
             } else {
-                android.widget.Toast.makeText(context, "Не удалось прочитать файл", android.widget.Toast.LENGTH_LONG).show()
+                android.widget.Toast.makeText(context, s.cookiesReadFailed, android.widget.Toast.LENGTH_LONG).show()
             }
         }
         OutlinedButton(
             onClick = { cookiePicker.launch(arrayOf("*/*")) },
             modifier = Modifier.fillMaxWidth()
-        ) { Text("Загрузить из файла (cookies.txt)") }
+        ) { Text(s.loadFromFile) }
     }
 }
 

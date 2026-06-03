@@ -104,9 +104,9 @@ fun HomeScreen(
                 viewModel.restartVpnIfRunning()
 
                 val message = if (updatedCount > 0) {
-                    "Подписки обновлены: $updatedCount"
+                    s.subscriptionsUpdatedCount(updatedCount)
                 } else {
-                    "Подписки обновлены"
+                    s.subscriptionsUpdated
                 }
 
                 scope.launch {
@@ -134,11 +134,11 @@ fun HomeScreen(
     fun executeDelete(request: PendingDelete) {
         when (request) {
             is PendingDelete.Subscription ->
-                locationViewModel.deleteLocations(request.ids) { afterDeletion("Подписка удалена") }
+                locationViewModel.deleteLocations(request.ids) { afterDeletion(s.subscriptionDeleted) }
             PendingDelete.AllSubscriptions ->
-                locationViewModel.deleteAllSubscriptions { afterDeletion("Подписки удалены") }
+                locationViewModel.deleteAllSubscriptions { afterDeletion(s.subscriptionsDeleted) }
             PendingDelete.AllConfigs ->
-                locationViewModel.deleteAllLocations { afterDeletion("Конфигурации удалены") }
+                locationViewModel.deleteAllLocations { afterDeletion(s.configsDeleted) }
         }
     }
 

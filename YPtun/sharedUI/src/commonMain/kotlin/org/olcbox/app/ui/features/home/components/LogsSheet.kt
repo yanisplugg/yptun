@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import org.olcbox.app.ui.i18n.LocalStrings
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +81,7 @@ fun LogsContent(
     onShareClick: () -> Unit,
     onCloseClick: () -> Unit
 ) {
+    val s = LocalStrings.current
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -94,7 +96,7 @@ fun LogsContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Application Logs",
+                text = s.applicationLogsTitle,
                 style = MaterialTheme.typography.headlineSmall,
             )
 
@@ -103,13 +105,13 @@ fun LogsContent(
                     enabled = logs.isNotEmpty(),
                     onClick = onSaveClick
                 ) {
-                    Text("Save")
+                    Text(s.save)
                 }
                 TextButton(
                     enabled = logs.isNotEmpty(),
                     onClick = onShareClick
                 ) {
-                    Text("Share")
+                    Text(s.share)
                 }
 
                 IconButton(onClick = onCloseClick) {

@@ -26,6 +26,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -49,6 +51,8 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
+import org.olcbox.app.ui.i18n.LocalizationState
+import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
@@ -104,11 +108,11 @@ class OlcboxVpnService : VpnService() {
     }
 
     private var lastNotificationStatus = ""
-    private var showSpeedInNotif = false
-    private var speedPrevStats: Tun2SocksStats? = null
+    @Volatile private var showSpeedInNotif = false
 
     private var startupJob: Job? = null
     private var watchdogJob: Job? = null
+    private var speedJob: Job? = null
     private var cleanupJob: Job? = null
     private var networkLossJob: Job? = null
     private var recoveryJob: Job? = null
@@ -200,7 +204,7 @@ class OlcboxVpnService : VpnService() {
                     updateUnderlyingNetwork(null)
                     unbindProcessFromNetwork()
                     setStatus(VpnStatus.Reconnecting)
-                    updateNotification("Waiting for network...")
+                    updateNotification(ns.notifWaitingNetwork)
                     addLog("Waiting for upstream network")
                 }
             }
@@ -281,6 +285,31 @@ class OlcboxVpnService : VpnService() {
             .apply { setReferenceCounted(false) }
 
         installMobileCallbacks()
+        observeSpeedNotificationSetting()
+    }
+
+    /**
+     * Keeps [showSpeedInNotif] in sync with the live setting so toggling "speed in notification"
+     * while already connected takes effect immediately (without reconnecting). Turning it off
+     * reposts the plain status to drop the speed line.
+     */
+    private fun observeSpeedNotificationSetting() {
+        scope.launch {
+            applicationContext.vpnPrefDataStore.data
+                .map { prefs ->
+                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map false
+                    runCatching {
+                        Json.decodeFromString(AppBehaviorSettings.serializer(), raw).showSpeedInNotification
+                    }.getOrDefault(false)
+                }
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    showSpeedInNotif = enabled
+                    if (!enabled && OlcboxVpnState.status.value is VpnStatus.Connected) {
+                        updateNotification(connectedNotificationText())
+                    }
+                }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -433,6 +462,7 @@ class OlcboxVpnService : VpnService() {
         val hadPendingStartup = previousStartupJob?.isActive == true
         previousStartupJob?.cancel()
         watchdogJob?.cancel()
+        speedJob?.cancel()
         networkLossJob?.cancel()
         recoveryJob?.cancel()
         recoveryJob = null
@@ -476,7 +506,7 @@ class OlcboxVpnService : VpnService() {
                     val location = active?.location?.normalized()
                     if (location == null || !location.isComplete()) {
                         setStatus(VpnStatus.Error("No active location"))
-                        updateNotification("Add a location first")
+                        updateNotification(ns.notifAddLocation)
                         stopTransportProcesses(closeTun = true, waitForSocksPort = false)
                         return@withLock
                     }
@@ -497,12 +527,12 @@ class OlcboxVpnService : VpnService() {
 
     private suspend fun reconnectTransport(location: LocationConfig, requestedGeneration: Long) {
         setStatus(VpnStatus.Reconnecting)
-        updateNotification("Reconnecting...")
+        updateNotification(ns.notifReconnecting)
         val upstream = findActiveUpstreamNetwork()
         if (upstream == null) {
             updateUnderlyingNetwork(null)
             unbindProcessFromNetwork()
-            updateNotification("Waiting for network...")
+            updateNotification(ns.notifWaitingNetwork)
             addLog("No upstream network; keeping tunnel alive")
             scheduleTransportRetry(requestedGeneration, "no upstream network", NETWORK_RETRY_BASE_DELAY_MS)
             return
@@ -522,7 +552,7 @@ class OlcboxVpnService : VpnService() {
         } else {
             updateUnderlyingNetwork(null)
             setStatus(VpnStatus.Reconnecting)
-            updateNotification("Waiting for transport...")
+            updateNotification(ns.notifWaitingTransport)
             scheduleTransportRetry(requestedGeneration, "transport reconnect failed")
         }
     }
@@ -534,7 +564,7 @@ class OlcboxVpnService : VpnService() {
         isRestart: Boolean
     ) {
         setStatus(if (isMigration || isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
-        updateNotification("Connecting...")
+        updateNotification(ns.notifConnecting)
         stopTransportProcesses(closeTun = true, waitForSocksPort = true)
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
@@ -545,7 +575,7 @@ class OlcboxVpnService : VpnService() {
             unbindProcessFromNetwork()
             addLog("No upstream network")
             setStatus(VpnStatus.Reconnecting)
-            updateNotification("Waiting for network...")
+            updateNotification(ns.notifWaitingNetwork)
             if (isMigration) {
                 scheduleTransportRetry(requestedGeneration, "no upstream network", NETWORK_RETRY_BASE_DELAY_MS)
             }
@@ -557,7 +587,7 @@ class OlcboxVpnService : VpnService() {
             if (isMigration) {
                 updateUnderlyingNetwork(null)
                 setStatus(VpnStatus.Reconnecting)
-                updateNotification("Waiting for transport...")
+                updateNotification(ns.notifWaitingTransport)
                 scheduleTransportRetry(requestedGeneration, "transport start failed")
             }
             return
@@ -694,7 +724,7 @@ class OlcboxVpnService : VpnService() {
             stopMobileAndWait()
             if (!staleRequest && setErrorOnFailure) {
                 setStatus(VpnStatus.Error(message))
-                updateNotification("Connection failed")
+                updateNotification(ns.notifConnectionFailed)
             }
             false
         } finally {
@@ -720,7 +750,7 @@ class OlcboxVpnService : VpnService() {
         if (profile == null || !profile.isComplete()) {
             if (setErrorOnFailure) {
                 setStatus(VpnStatus.Error("No proxy configured"))
-                updateNotification("Add a proxy first")
+                updateNotification(ns.notifAddProxy)
             }
             return false
         }
@@ -855,7 +885,7 @@ class OlcboxVpnService : VpnService() {
             stopMobileAndWait()
             if (!staleRequest && setErrorOnFailure) {
                 setStatus(VpnStatus.Error(message))
-                updateNotification("Connection failed")
+                updateNotification(ns.notifConnectionFailed)
             }
             false
         } finally {
@@ -882,7 +912,7 @@ class OlcboxVpnService : VpnService() {
         if (vk == null || !vk.isComplete() || profile?.rawOutbound.isNullOrBlank()) {
             if (setErrorOnFailure) {
                 setStatus(VpnStatus.Error("VK-TURN not configured"))
-                updateNotification("Add a VK call link first")
+                updateNotification(ns.notifAddVkLink)
             }
             return false
         }
@@ -989,7 +1019,7 @@ class OlcboxVpnService : VpnService() {
             stopMobileAndWait()
             if (!staleRequest && setErrorOnFailure) {
                 setStatus(VpnStatus.Error(message))
-                updateNotification("Connection failed")
+                updateNotification(ns.notifConnectionFailed)
             }
             false
         } finally {
@@ -1071,7 +1101,7 @@ class OlcboxVpnService : VpnService() {
             if (!ensureNativeLibrariesLoaded()) {
                 addLog("tun2socks native libraries are unavailable")
                 setStatus(VpnStatus.Error("tun2socks native libraries are unavailable"))
-                updateNotification("Tunnel failed")
+                updateNotification(ns.notifTunnelFailed)
                 return false
             }
 
@@ -1096,7 +1126,7 @@ class OlcboxVpnService : VpnService() {
         } catch (e: Exception) {
             addLog("tun2socks start failed: ${e.message}")
             setStatus(VpnStatus.Error(e.message ?: "tun2socks failed"))
-            updateNotification("Tunnel failed")
+            updateNotification(ns.notifTunnelFailed)
             false
         }
     }
@@ -1125,7 +1155,7 @@ class OlcboxVpnService : VpnService() {
         } catch (e: Exception) {
             addLog("VPN establish failed: ${e.message}")
             setStatus(VpnStatus.Error(e.message ?: "VPN establish failed"))
-            updateNotification("VPN tunnel error")
+            updateNotification(ns.notifVpnTunnelError)
             null
         }
     }
@@ -1146,7 +1176,7 @@ class OlcboxVpnService : VpnService() {
                 if (packages.isEmpty()) {
                     addLog("Split tunneling proxy list is empty")
                     setStatus(VpnStatus.Error("Select apps for split tunneling"))
-                    updateNotification("Split tunneling error")
+                    updateNotification(ns.notifSplitTunnelError)
                     return false
                 }
 
@@ -1154,7 +1184,7 @@ class OlcboxVpnService : VpnService() {
                 if (applied == 0) {
                     addLog("Split tunneling has no valid proxy apps")
                     setStatus(VpnStatus.Error("Selected apps are unavailable"))
-                    updateNotification("Split tunneling error")
+                    updateNotification(ns.notifSplitTunnelError)
                     false
                 } else {
                     addLog("Split tunneling: $applied selected apps use TUN")
@@ -1244,27 +1274,40 @@ class OlcboxVpnService : VpnService() {
         return file
     }
 
+    /**
+     * Refreshes the download/upload speed line in the notification on a short cadence (independent of
+     * the slower health watchdog) so the rates feel live. Reads [showSpeedInNotif] each tick, so the
+     * setting can be toggled on/off mid-connection. Only Tun mode exposes tun2socks byte counters.
+     */
+    private fun startSpeedUpdater() {
+        speedJob?.cancel()
+        if (connectionMode != AndroidConnectionMode.Tun) return
+        speedJob = scope.launch {
+            var prev: Tun2SocksStats? = null
+            while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
+                val cur = readTun2SocksStats()
+                if (showSpeedInNotif && cur != null && prev != null) {
+                    val secs = (SPEED_INTERVAL_MS / 1000.0).coerceAtLeast(0.5)
+                    val down = ((cur.rxBytes - prev.rxBytes).coerceAtLeast(0L) / secs).toLong()
+                    val up = ((cur.txBytes - prev.txBytes).coerceAtLeast(0L) / secs).toLong()
+                    updateNotification(lastNotificationStatus.ifBlank { ns.notifConnected }, speedLine(down, up))
+                }
+                prev = cur
+                delay(SPEED_INTERVAL_MS)
+            }
+        }
+    }
+
     private fun startWatchdog() {
         watchdogJob?.cancel()
         watchdogTunStats = null
         watchdogStalledSamples = 0
-        speedPrevStats = null
         val mode = connectionMode
+        startSpeedUpdater()
         watchdogJob = scope.launch {
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
                 delay(WATCHDOG_INTERVAL_MS)
 
-                if (showSpeedInNotif && mode == AndroidConnectionMode.Tun) {
-                    val cur = readTun2SocksStats()
-                    val prev = speedPrevStats
-                    if (cur != null && prev != null) {
-                        val secs = (WATCHDOG_INTERVAL_MS / 1000.0).coerceAtLeast(1.0)
-                        val down = ((cur.rxBytes - prev.rxBytes) / secs).toLong()
-                        val up = ((cur.txBytes - prev.txBytes) / secs).toLong()
-                        updateNotification(lastNotificationStatus.ifBlank { "Подключено" }, speedLine(down, up))
-                    }
-                    speedPrevStats = cur
-                }
                 when {
                     !coreRunning() -> {
                         addLog("Watchdog: transport core stopped")
@@ -1333,6 +1376,7 @@ class OlcboxVpnService : VpnService() {
         setStatus(VpnStatus.Stopping)
         startupJob?.cancel()
         watchdogJob?.cancel()
+        speedJob?.cancel()
         networkLossJob?.cancel()
         recoveryJob?.cancel()
         recoveryJob = null
@@ -1702,7 +1746,7 @@ class OlcboxVpnService : VpnService() {
         recoveryJob?.cancel()
         if (setReconnectingImmediately && status is VpnStatus.Connected) {
             setStatus(VpnStatus.Reconnecting)
-            updateNotification("Reconnecting...")
+            updateNotification(ns.notifReconnecting)
         }
 
         recoveryJob = scope.launch {
@@ -1716,7 +1760,7 @@ class OlcboxVpnService : VpnService() {
             recoveryRequestedForGeneration = recoveryGeneration
             if (setReconnectingImmediately && currentStatus is VpnStatus.Connected) {
                 setStatus(VpnStatus.Reconnecting)
-                updateNotification("Reconnecting...")
+                updateNotification(ns.notifReconnecting)
             }
 
             addLog("$reason; reconnecting transport")
@@ -1950,14 +1994,15 @@ class OlcboxVpnService : VpnService() {
             .setContentTitle("YPtun ${activeModeLabel()}")
             .setContentText(speed ?: status)
             .apply { if (speed != null) setSubText(status) }
-            // App icon: small icon in the status bar + large icon in the shade.
-            .setSmallIcon(applicationInfo.icon)
-            .also { b -> appIconBitmap()?.let { b.setLargeIcon(it) } }
+            // App logo as the small icon: it sits next to the "YPtun" name in the header.
+            // Android renders the small icon as a tinted silhouette, so we use the transparent
+            // logo foreground (alpha = logo shape). No large icon — we don't want it on the right.
+            .setSmallIcon(notificationLogoRes())
             .setOngoing(true)
             .setContentIntent(getAppPendingIntent())
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                "Stop",
+                ns.notifStop,
                 PendingIntent.getService(
                     this,
                     0,
@@ -1967,6 +2012,15 @@ class OlcboxVpnService : VpnService() {
             )
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+
+    /**
+     * Resource id of the transparent logo used as the notification small icon, resolved by name to
+     * avoid a cross-module R reference. Falls back to the launcher icon if the logo isn't found.
+     */
+    private fun notificationLogoRes(): Int {
+        val id = resources.getIdentifier("ic_notification_logo", "drawable", packageName)
+        return if (id != 0) id else applicationInfo.icon
+    }
 
     private fun appIconBitmap(): android.graphics.Bitmap? = runCatching {
         val d = packageManager.getApplicationIcon(packageName)
@@ -2030,7 +2084,10 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
-    private fun connectedNotificationText(): String = "${activeModeLabel()} Connected"
+    /** Localized strings for notifications, resolved against the user's current language choice. */
+    private val ns get() = stringsFor(LocalizationState.effective)
+
+    private fun connectedNotificationText(): String = ns.notifConnectedMode(activeModeLabel())
 
     private class AuthenticatedSocksProxy(
         private val listenPort: Int,
@@ -2229,6 +2286,7 @@ class OlcboxVpnService : VpnService() {
         private const val NETWORK_LOSS_GRACE_MS = 2_500L
         private const val NETWORK_STABILITY_GRACE_MS = 1_500L
         private const val WATCHDOG_INTERVAL_MS = 15_000L
+        private const val SPEED_INTERVAL_MS = 2_000L
         private const val WATCHDOG_STALLED_TX_PACKET_DELTA = 8L
         private const val WATCHDOG_STALLED_SAMPLE_LIMIT = 3
         private const val RTC_RECOVERY_GRACE_MS = 2_500L

@@ -81,6 +81,7 @@ fun AndroidMainScreen(
     }
 
     val context = LocalContext.current
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
     val scope = rememberCoroutineScope()
     val connectionMode by vpnManager.connectionMode.collectAsState()
     val proxySettings by vpnManager.proxySettings.collectAsState()
@@ -296,7 +297,7 @@ fun AndroidMainScreen(
     ) { uri: Uri? ->
         org.olcbox.app.vpn.service.OlcboxVpnState.addLog("import: file picker result uri=$uri")
         if (uri == null) {
-            Toast.makeText(context, "No file selected", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, s.noFileSelected, Toast.LENGTH_SHORT).show()
             return@rememberLauncherForActivityResult
         }
         viewModel.onFileSelected(
@@ -321,7 +322,7 @@ fun AndroidMainScreen(
             rawText = rawText,
             onComplete = {
                 reloadLocationsAfterImport {
-                    Toast.makeText(context, "QR imported", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, s.qrImported, Toast.LENGTH_SHORT).show()
                 }
             },
             onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
@@ -397,7 +398,7 @@ fun AndroidMainScreen(
             runCatching { filePickerLauncher.launch(arrayOf("*/*")) }
                 .onFailure {
                     org.olcbox.app.vpn.service.OlcboxVpnState.addLog("import: launch failed: ${it.message}")
-                    Toast.makeText(context, "Cannot open file picker: ${it.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, s.cannotOpenFilePicker(it.message ?: ""), Toast.LENGTH_LONG).show()
                 }
         },
         onImportFromClipboardRequested = { onImported, onError ->
@@ -438,7 +439,7 @@ fun AndroidMainScreen(
         onUnlockExperimental = {
             if (!appBehavior.experimentalUnlocked) {
                 vpnManager.setAppBehavior(appBehavior.copy(experimentalUnlocked = true))
-                Toast.makeText(context, "Экспериментальные настройки разблокированы", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, s.experimentalUnlocked, Toast.LENGTH_LONG).show()
             }
         }
     )
@@ -498,7 +499,7 @@ fun AndroidMainScreen(
             },
             onCopyConfigClick = {
                 viewModel.onCopyFullConfigClicked()
-                Toast.makeText(context, "Config copied", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, s.configCopied, Toast.LENGTH_SHORT).show()
             },
             onSaveLogsClick = {
                 val showToast: (String) -> Unit = { message ->
@@ -602,12 +603,13 @@ private fun VkTurnLinkPromptDialog(
     onNext: (String) -> Unit
 ) {
     var link by remember { mutableStateOf("") }
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
     AlertDialog(
         onDismissRequest = onLater,
-        title = { Text("VK call link") },
+        title = { Text(s.vkCallLink) },
         text = {
             Column {
-                Text("Paste your VK Calls join link for \"$locationName\". You can paste several links (one per line) to spread the tunnel across calls for more speed.")
+                Text(s.vkCallLinkBody(locationName))
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
                     value = link,
@@ -624,12 +626,12 @@ private fun VkTurnLinkPromptDialog(
                 onClick = { onNext(link) },
                 enabled = link.contains("/call/join/")
             ) {
-                Text("Next")
+                Text(s.next)
             }
         },
         dismissButton = {
             TextButton(onClick = onLater) {
-                Text("Later")
+                Text(s.later)
             }
         }
     )
