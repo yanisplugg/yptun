@@ -1,15 +1,15 @@
-# Серверный конфиг: telemost + datachannel
-# Запуск: olcrtc docs/examples/server.telemost.datachannel.yaml
+# Серверный конфиг: wbstream + seichannel
+# Запуск: olcrtc docs/examples/server/server.wbstream.seichannel.yaml
 
 mode: srv
 
 auth:
-  provider: telemost
+  provider: wbstream
 
-# Для telemost: Room ID, который вернул сервис.
+# Для wbstream: Room ID, который вернул сервис.
 # Должен совпадать с клиентом.
 room:
-  id: "REPLACE_WITH_TELEMOST_ROOM_ID"
+  id: "REPLACE_WITH_WB_ROOM_ID"
 
 crypto:
   # 32 байта в hex (64 символа). Сгенерировать: openssl rand -hex 32
@@ -17,7 +17,7 @@ crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с клиентом
 
 net:
-  transport: datachannel
+  transport: seichannel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -30,6 +30,12 @@ socks:
   proxy_port: 0 # например 1080
   proxy_user: "" # необязательная auth для upstream-прокси (RFC 1929)
   proxy_pass: ""
+
+sei:
+  fps: 60
+  batch_size: 64
+  fragment_size: 900
+  ack_timeout_ms: 2000
 
 data: data
 debug: false

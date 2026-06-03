@@ -58,10 +58,10 @@ type streamTransport struct {
 	stream          videoSession
 	track           *webrtc.TrackLocalStaticSample
 	codec           codecSpec
-	encoder         *ffmpegEncoder
+	encoder         *goEncoder
 	encoderMu       sync.Mutex
 	decoderMu       sync.Mutex
-	decoders        map[*ffmpegDecoder]struct{}
+	decoders        map[*goDecoder]struct{}
 	onData          func([]byte)
 	outbound        chan []byte
 	outboundAck     chan []byte
@@ -88,9 +88,6 @@ type streamTransport struct {
 	remoteRole      byte
 	bindingToken    uint32
 	runCtx          context.Context //nolint:containedctx,lll // long-lived context drives idle-frame loops bound to this transport's lifetime
-
-	idleFrame   []byte
-	idleFrameMu sync.Mutex
 }
 
 // New creates a visual videochannel transport backed by a carrier engine.
@@ -157,7 +154,7 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		outboundAck:     make(chan []byte, 64),
 		closeCh:         make(chan struct{}),
 		writerDone:      make(chan struct{}),
-		decoders:        make(map[*ffmpegDecoder]struct{}),
+		decoders:        make(map[*goDecoder]struct{}),
 		fragAcks:        newFragAckTracker(),
 		reassembler:     common.NewReassembler(256),
 		videoW:          opts.Width,
@@ -189,10 +186,7 @@ func (p *streamTransport) Connect(ctx context.Context) error {
 	connectCtx, cancel := context.WithTimeout(ctx, defaultConnectTimeout)
 	defer cancel()
 
-	encoder, err := newFFmpegEncoder(ctx, p.codec, p.videoW, p.videoH, p.videoFPS, p.videoBitrate, p.videoHW)
-	if err != nil {
-		return fmt.Errorf("new encoder: %w", err)
-	}
+	encoder := newGoEncoder(p.videoW, p.videoH, p.videoFPS)
 
 	if err := p.stream.Connect(connectCtx); err != nil {
 		_ = encoder.Close()
@@ -390,32 +384,22 @@ func (p *streamTransport) Features() transport.Features {
 	}
 }
 
-func (p *streamTransport) writeIdleFrame(enc *ffmpegEncoder, frameDuration time.Duration) {
-	p.idleFrameMu.Lock()
-	cached := p.idleFrame
-	p.idleFrameMu.Unlock()
-
-	if cached == nil {
-		rawFrame, err := p.renderFrame(nil)
-		if err != nil {
-			logger.Debugf("videochannel render idle error: %v", err)
-			return
-		}
-		sample, err := enc.EncodeFrame(rawFrame)
-		if err != nil {
-			logger.Warnf("videochannel encoder idle error: %v", err)
-			return
-		}
-		p.idleFrameMu.Lock()
-		p.idleFrame = sample
-		p.idleFrameMu.Unlock()
-		cached = sample
+func (p *streamTransport) writeIdleFrame(enc *goEncoder, frameDuration time.Duration) {
+	rawFrame, err := p.renderFrame(nil)
+	if err != nil {
+		logger.Debugf("videochannel render idle error: %v", err)
+		return
+	}
+	sample, err := enc.EncodeFrame(rawFrame)
+	if err != nil {
+		logger.Warnf("videochannel encoder idle error: %v", err)
+		return
 	}
 
-	_ = p.track.WriteSample(media.Sample{Data: cached, Duration: frameDuration})
+	_ = p.track.WriteSample(media.Sample{Data: sample, Duration: frameDuration})
 }
 
-func (p *streamTransport) writePayloadFrame(enc *ffmpegEncoder, payload []byte, frameDuration time.Duration) {
+func (p *streamTransport) writePayloadFrame(enc *goEncoder, payload []byte, frameDuration time.Duration) {
 	rawFrame, err := p.renderFrame(payload)
 	if err != nil {
 		logger.Debugf("videochannel render error: %v", err)
@@ -521,7 +505,7 @@ func (p *streamTransport) enqueueFrame(frame []byte, priority bool) error {
 	}
 }
 
-func (p *streamTransport) popDecoderFrames(decoder *ffmpegDecoder) {
+func (p *streamTransport) popDecoderFrames(decoder *goDecoder) {
 	defer func() {
 		p.decoderMu.Lock()
 		if p.decoders != nil {
@@ -549,7 +533,7 @@ func (p *streamTransport) popDecoderFrames(decoder *ffmpegDecoder) {
 	}
 }
 
-func (p *streamTransport) readDecoderInput(track *webrtc.TrackRemote, decoder *ffmpegDecoder, codec codecSpec) {
+func (p *streamTransport) readDecoderInput(track *webrtc.TrackRemote, decoder *goDecoder, codec codecSpec) {
 	sb := samplebuilder.New(sampleBuilderMaxLate, codec.depacketizer(), track.Codec().ClockRate)
 	for {
 		select {
@@ -583,11 +567,7 @@ func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc
 		return
 	}
 
-	decoder, err := newFFmpegDecoder(p.runCtx, codec, p.videoW, p.videoH, p.videoFPS, p.videoHW)
-	if err != nil {
-		logger.Warnf("videochannel decoder init failed: %v", err)
-		return
-	}
+	decoder := newGoDecoder(p.videoW, p.videoH)
 
 	p.decoderMu.Lock()
 	if p.closed.Load() || p.decoders == nil {

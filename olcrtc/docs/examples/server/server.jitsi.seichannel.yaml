@@ -1,15 +1,17 @@
-# Серверный конфиг: telemost + seichannel
-# Запуск: olcrtc docs/examples/server.telemost.seichannel.yaml
+# Серверный конфиг: jitsi + seichannel
+# Запуск: olcrtc docs/examples/server/server.jitsi.seichannel.yaml
 
 mode: srv
 
 auth:
-  provider: telemost
+  provider: jitsi
 
-# Для telemost: Room ID, который вернул сервис.
+# Для jitsi: полный URL комнаты (https://host/room или host/room).
 # Должен совпадать с клиентом.
+# Доступные серверы: meet1.arbitr.ru или meet.cryptopro.ru
+# Проверьте в браузере, какой работает в вашей сети.
 room:
-  id: "REPLACE_WITH_TELEMOST_ROOM_ID"
+  id: "https://meet1.arbitr.ru/REPLACE_WITH_ROOM_NAME"
 
 crypto:
   # 32 байта в hex (64 символа). Сгенерировать: openssl rand -hex 32

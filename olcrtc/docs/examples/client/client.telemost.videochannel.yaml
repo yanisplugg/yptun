@@ -1,24 +1,22 @@
-# Клиентский конфиг: jitsi + vp8channel
-# Запуск: olcrtc docs/examples/client.jitsi.vp8channel.yaml
+# Клиентский конфиг: telemost + videochannel
+# Запуск: olcrtc docs/examples/client/client.telemost.videochannel.yaml
 
 mode: cnc
 
 auth:
-  provider: jitsi
+  provider: telemost
 
-# Для jitsi: полный URL комнаты (https://host/room или host/room).
+# Для telemost: Room ID, который вернул сервис.
 # Должен совпадать с сервером.
-# Доступные серверы: meet1.arbitr.ru или meet.cryptopro.ru
-# Проверьте в браузере, какой работает в вашей сети.
 room:
-  id: "https://meet1.arbitr.ru/REPLACE_WITH_ROOM_NAME"
+  id: "REPLACE_WITH_TELEMOST_ROOM_ID"
 
 crypto:
   # Можно использовать key_file: "./olcrtc.key", чтобы не хранить секрет прямо здесь.
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с сервером
 
 net:
-  transport: vp8channel
+  transport: videochannel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -32,9 +30,18 @@ socks:
   user: "" # необязательная входящая auth
   pass: ""
 
-vp8:
-  fps: 60
-  batch_size: 64
+video:
+  width: 1920
+  height: 1080
+  fps: 30
+  bitrate: "2M"
+  hw: none
+  codec: qrcode
+  qr_size: 0
+  qr_recovery: low
+  tile_module: 4
+  tile_rs: 20
 
+ffmpeg: ffmpeg
 data: data
 debug: false

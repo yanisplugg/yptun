@@ -25,7 +25,6 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
 	"github.com/openlibrecommunity/olcrtc/internal/supervisor"
-	"github.com/openlibrecommunity/olcrtc/internal/transport/videochannel"
 )
 
 const modeGen = "gen"
@@ -52,7 +51,6 @@ type loadedConfig struct {
 	failover   failoverConfig
 	dataDir    string
 	debug      bool
-	ffmpegPath string
 }
 
 type failoverConfig struct {
@@ -115,7 +113,6 @@ func loadConfig(path string) (loadedConfig, error) {
 		failover:   failover,
 		dataDir:    f.Data,
 		debug:      f.Debug,
-		ffmpegPath: f.FFmpeg,
 	}, nil
 }
 
@@ -133,10 +130,6 @@ func parseFailoverConfig(f configpkg.Failover) (failoverConfig, error) {
 
 func runWithConfig(cfg loadedConfig) error {
 	configureLogging(cfg.debug)
-
-	if cfg.ffmpegPath != "ffmpeg" && cfg.ffmpegPath != "" {
-		videochannel.FFmpegPath = cfg.ffmpegPath
-	}
 
 	scfg, err := session.ApplyAuthDefaults(cfg.scfg)
 	if err != nil {

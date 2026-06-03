@@ -146,7 +146,7 @@ web_modules/
 .env
 .env.*
 !.env.example
-!docs/examples/.env.telemost.server.example
+!docs/examples/server/.env.telemost.server.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

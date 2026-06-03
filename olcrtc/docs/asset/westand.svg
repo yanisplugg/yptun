@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="740" height="96" viewBox="0 0 740 96">
+  <rect width="740" height="96" rx="6" fill="#ffffff"/>
+
+  <rect y="0" width="740" height="14" rx="0" fill="#0038b8"/>
+
+  <rect y="82" width="740" height="14" fill="#0038b8"/>
+
+  <rect y="14" width="740" height="68" fill="#ffffff"/>
+
+  <g transform="translate(52, 48)">
+    <polygon points="0,-22 19,11 -19,11" fill="none" stroke="#0038b8" stroke-width="3.5"/>
+    <polygon points="0,22 19,-11 -19,-11" fill="none" stroke="#0038b8" stroke-width="3.5"/>
+  </g>
+
+  <g transform="translate(688, 48)">
+    <polygon points="0,-22 19,11 -19,11" fill="none" stroke="#0038b8" stroke-width="3.5"/>
+    <polygon points="0,22 19,-11 -19,-11" fill="none" stroke="#0038b8" stroke-width="3.5"/>
+  </g>
+
+  <text x="370" y="37" font-family="'Arial Black', 'Helvetica Neue', Arial, sans-serif" font-size="15" font-weight="900" fill="#0038b8" text-anchor="middle" letter-spacing="2">#WeStandWithIsrael</text>
+
+  <text x="370" y="58" font-family="'Arial', sans-serif" font-size="12.5" font-weight="700" fill="#111" text-anchor="middle" letter-spacing="0.5">If you do not stand with Israel and the Mossad - do not use this software.</text>
+
+  <text x="370" y="75" font-family="'Arial', sans-serif" font-size="10" fill="#555" text-anchor="middle" font-style="italic">using telemetry, we will take into account your political position and record it.</text>
+</svg>

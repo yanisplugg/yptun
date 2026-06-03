@@ -26,7 +26,7 @@ from aiortc.mediastreams import MediaStreamTrack
 from av import VideoFrame
 from pyzbar.pyzbar import decode as qr_decode
 
-CONFERENCE_ID = "75047680642749"
+CONFERENCE_ID = "02789996238784"
 CONFERENCE_URL = f"https://telemost.yandex.ru/j/{CONFERENCE_ID}"
 API_BASE = "https://cloud-api.yandex.ru/telemost_front/v2/telemost"
 FPS = 10
@@ -44,18 +44,30 @@ def _uid() -> str:
 
 def _encode(text: str) -> np.ndarray:
     payload = base64.b64encode(zlib.compress(text.encode())).decode()
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=8, border=3)
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=8, border=3
+    )
     qr.add_data(payload)
     qr.make(fit=True)
-    arr = np.array(qr.make_image(fill_color="black", back_color="white").convert("RGB"), dtype=np.uint8)
+    arr = np.array(
+        qr.make_image(fill_color="black", back_color="white").convert("RGB"),
+        dtype=np.uint8,
+    )
     h, w = arr.shape[:2]
-    return arr if (h % 2 == 0 and w % 2 == 0) else cv2.resize(arr, (w + w % 2, h + h % 2))
+    return (
+        arr if (h % 2 == 0 and w % 2 == 0) else cv2.resize(arr, (w + w % 2, h + h % 2))
+    )
 
 
 def _decode(frame: VideoFrame) -> str | None:
     arr = frame.to_ndarray(format="rgb24")
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    for img in [gray, cv2.resize(gray, (gray.shape[1] * 2, gray.shape[0] * 2), interpolation=cv2.INTER_CUBIC)]:
+    for img in [
+        gray,
+        cv2.resize(
+            gray, (gray.shape[1] * 2, gray.shape[0] * 2), interpolation=cv2.INTER_CUBIC
+        ),
+    ]:
         for obj in qr_decode(img):
             try:
                 return zlib.decompress(base64.b64decode(obj.data)).decode()
@@ -119,7 +131,9 @@ class _VideoChannelTrack(MediaStreamTrack):
         return frame
 
 
-async def _connect_peer(name: str, conn: dict, is_sender: bool, on_video_message=None) -> dict:
+async def _connect_peer(
+    name: str, conn: dict, is_sender: bool, on_video_message=None
+) -> dict:
     default_ice = [RTCIceServer(urls=["stun:stun.rtc.yandex.net:3478"])]
     track = _VideoChannelTrack() if is_sender else None
 
@@ -149,22 +163,40 @@ async def _connect_peer(name: str, conn: dict, is_sender: bool, on_video_message
     def _setup(pc_sub, pc_pub) -> None:
         @pc_sub.on("track")
         def on_track(remote_track):
-            if remote_track.kind != "video" or on_video_message is None:
+            print(
+                f"  [{name}] Got remote track: kind={remote_track.kind} id={remote_track.id}"
+            )
+            if remote_track.kind != "video":
                 return
 
             async def _loop():
+                frame_count = 0
                 last_hash = None
                 while True:
                     try:
-                        frame = await asyncio.wait_for(remote_track.recv(), timeout=30.0)
-                        frame_hash = hashlib.md5(frame.to_ndarray(format="rgb24").tobytes()).hexdigest()
+                        frame = await asyncio.wait_for(remote_track.recv(), timeout=5.0)
+                        frame_count += 1
+                        if frame_count <= 3:
+                            print(
+                                f"  [{name}] Frame #{frame_count}: {frame.width}x{frame.height}"
+                            )
+                        frame_hash = hashlib.md5(
+                            frame.to_ndarray(format="rgb24").tobytes()
+                        ).hexdigest()
                         if frame_hash == last_hash:
                             continue
                         last_hash = frame_hash
-                        msg = _decode(frame)
-                        if msg:
-                            on_video_message(msg)
-                    except Exception:
+                        if on_video_message:
+                            msg = _decode(frame)
+                            if msg:
+                                on_video_message(msg)
+                    except asyncio.TimeoutError:
+                        print(
+                            f"  [{name}] No frames received after {frame_count} total"
+                        )
+                        return
+                    except Exception as e:
+                        print(f"  [{name}] Track error after {frame_count} frames: {e}")
                         return
 
             asyncio.create_task(_loop())
@@ -182,106 +214,151 @@ async def _connect_peer(name: str, conn: dict, is_sender: bool, on_video_message
         @pc_sub.on("icecandidate")
         async def on_sub_ice(event):
             if event.candidate:
-                await _send({
-                    "uid": _uid(),
-                    "webrtcIceCandidate": {
-                        "candidate": event.candidate.candidate,
-                        "sdpMid": event.candidate.sdpMid,
-                        "sdpMlineIndex": event.candidate.sdpMLineIndex,
-                        "usernameFragment": "",
-                        "target": "SUBSCRIBER",
-                        "pcSeq": 1,
-                    },
-                })
+                await _send(
+                    {
+                        "uid": _uid(),
+                        "webrtcIceCandidate": {
+                            "candidate": event.candidate.candidate,
+                            "sdpMid": event.candidate.sdpMid,
+                            "sdpMlineIndex": event.candidate.sdpMLineIndex,
+                            "usernameFragment": "",
+                            "target": "SUBSCRIBER",
+                            "pcSeq": 1,
+                        },
+                    }
+                )
 
         @pc_pub.on("icecandidate")
         async def on_pub_ice(event):
             if event.candidate:
-                await _send({
-                    "uid": _uid(),
-                    "webrtcIceCandidate": {
-                        "candidate": event.candidate.candidate,
-                        "sdpMid": event.candidate.sdpMid,
-                        "sdpMlineIndex": event.candidate.sdpMLineIndex,
-                        "usernameFragment": "",
-                        "target": "PUBLISHER",
-                        "pcSeq": 1,
-                    },
-                })
+                await _send(
+                    {
+                        "uid": _uid(),
+                        "webrtcIceCandidate": {
+                            "candidate": event.candidate.candidate,
+                            "sdpMid": event.candidate.sdpMid,
+                            "sdpMlineIndex": event.candidate.sdpMLineIndex,
+                            "usernameFragment": "",
+                            "target": "PUBLISHER",
+                            "pcSeq": 1,
+                        },
+                    }
+                )
 
     _setup(pc_sub_ref[0], pc_pub_ref[0])
 
-    await _send({
-        "uid": _uid(),
-        "hello": {
-            "participantMeta": {
-                "name": name,
-                "role": "SPEAKER",
-                "description": "",
+    await _send(
+        {
+            "uid": _uid(),
+            "hello": {
+                "participantMeta": {
+                    "name": name,
+                    "role": "SPEAKER",
+                    "description": "",
+                    "sendAudio": False,
+                    "sendVideo": is_sender,
+                },
+                "participantAttributes": {
+                    "name": name,
+                    "role": "SPEAKER",
+                    "description": "",
+                },
                 "sendAudio": False,
                 "sendVideo": is_sender,
+                "sendSharing": False,
+                "participantId": conn["peer_id"],
+                "roomId": conn["room_id"],
+                "serviceName": "telemost",
+                "credentials": conn["credentials"],
+                "capabilitiesOffer": {
+                    "offerAnswerMode": ["SEPARATE"],
+                    "initialSubscriberOffer": ["ON_HELLO"],
+                    "slotsMode": ["FROM_CONTROLLER"],
+                    "simulcastMode": ["DISABLED", "STATIC"],
+                    "selfVadStatus": ["FROM_SERVER", "FROM_CLIENT"],
+                    "dataChannelSharing": ["TO_RTP"],
+                    "videoEncoderConfig": [
+                        "NO_CONFIG",
+                        "ONLY_INIT_CONFIG",
+                        "RUNTIME_CONFIG",
+                    ],
+                    "dataChannelVideoCodec": [
+                        "VP8",
+                        "UNIQUE_CODEC_FROM_TRACK_DESCRIPTION",
+                    ],
+                    "bandwidthLimitationReason": [
+                        "BANDWIDTH_REASON_DISABLED",
+                        "BANDWIDTH_REASON_ENABLED",
+                    ],
+                    "sdkDefaultDeviceManagement": [
+                        "SDK_DEFAULT_DEVICE_MANAGEMENT_DISABLED",
+                        "SDK_DEFAULT_DEVICE_MANAGEMENT_ENABLED",
+                    ],
+                    "joinOrderLayout": [
+                        "JOIN_ORDER_LAYOUT_DISABLED",
+                        "JOIN_ORDER_LAYOUT_ENABLED",
+                    ],
+                    "pinLayout": ["PIN_LAYOUT_DISABLED"],
+                    "sendSelfViewVideoSlot": [
+                        "SEND_SELF_VIEW_VIDEO_SLOT_DISABLED",
+                        "SEND_SELF_VIEW_VIDEO_SLOT_ENABLED",
+                    ],
+                    "serverLayoutTransition": ["SERVER_LAYOUT_TRANSITION_DISABLED"],
+                    "sdkPublisherOptimizeBitrate": [
+                        "SDK_PUBLISHER_OPTIMIZE_BITRATE_DISABLED",
+                        "SDK_PUBLISHER_OPTIMIZE_BITRATE_FULL",
+                        "SDK_PUBLISHER_OPTIMIZE_BITRATE_ONLY_SELF",
+                    ],
+                    "sdkNetworkLostDetection": ["SDK_NETWORK_LOST_DETECTION_DISABLED"],
+                    "sdkNetworkPathMonitor": ["SDK_NETWORK_PATH_MONITOR_DISABLED"],
+                    "publisherVp9": ["PUBLISH_VP9_DISABLED", "PUBLISH_VP9_ENABLED"],
+                    "svcMode": [
+                        "SVC_MODE_DISABLED",
+                        "SVC_MODE_L3T3",
+                        "SVC_MODE_L3T3_KEY",
+                    ],
+                    "subscriberOfferAsyncAck": [
+                        "SUBSCRIBER_OFFER_ASYNC_ACK_DISABLED",
+                        "SUBSCRIBER_OFFER_ASYNC_ACK_ENABLED",
+                    ],
+                    "androidBluetoothRoutingFix": [
+                        "ANDROID_BLUETOOTH_ROUTING_FIX_DISABLED"
+                    ],
+                    "fixedIceCandidatesPoolSize": [
+                        "FIXED_ICE_CANDIDATES_POOL_SIZE_DISABLED"
+                    ],
+                    "sdkAndroidTelecomIntegration": [
+                        "SDK_ANDROID_TELECOM_INTEGRATION_DISABLED"
+                    ],
+                    "setActiveCodecsMode": [
+                        "SET_ACTIVE_CODECS_MODE_DISABLED",
+                        "SET_ACTIVE_CODECS_MODE_VIDEO_ONLY",
+                    ],
+                    "subscriberDtlsPassiveMode": [
+                        "SUBSCRIBER_DTLS_PASSIVE_MODE_DISABLED"
+                    ],
+                    "publisherOpusDred": ["PUBLISHER_OPUS_DRED_DISABLED"],
+                    "publisherOpusLowBitrate": ["PUBLISHER_OPUS_LOW_BITRATE_DISABLED"],
+                    "sdkAndroidDestroySessionOnTaskRemoved": [
+                        "SDK_ANDROID_DESTROY_SESSION_ON_TASK_REMOVED_DISABLED"
+                    ],
+                    "svcModes": ["FALSE"],
+                    "reportTelemetryModes": ["TRUE"],
+                    "keepDefaultDevicesModes": ["FALSE"],
+                },
+                "sdkInfo": {
+                    "implementation": "browser",
+                    "version": "5.27.0",
+                    "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+                    "hwConcurrency": 24,
+                },
+                "sdkInitializationId": _uid(),
+                "disablePublisher": not is_sender,
+                "disableSubscriber": False,
+                "disableSubscriberAudio": True,
             },
-            "participantAttributes": {
-                "name": name,
-                "role": "SPEAKER",
-                "description": "",
-            },
-            "sendAudio": False,
-            "sendVideo": is_sender,
-            "sendSharing": False,
-            "participantId": conn["peer_id"],
-            "roomId": conn["room_id"],
-            "serviceName": "telemost",
-            "credentials": conn["credentials"],
-            "capabilitiesOffer": {
-                "offerAnswerMode": ["SEPARATE"],
-                "initialSubscriberOffer": ["ON_HELLO"],
-                "slotsMode": ["FROM_CONTROLLER"],
-                "simulcastMode": ["DISABLED", "STATIC"],
-                "selfVadStatus": ["FROM_SERVER", "FROM_CLIENT"],
-                "dataChannelSharing": ["TO_RTP"],
-                "videoEncoderConfig": ["NO_CONFIG", "ONLY_INIT_CONFIG", "RUNTIME_CONFIG"],
-                "dataChannelVideoCodec": ["VP8", "UNIQUE_CODEC_FROM_TRACK_DESCRIPTION"],
-                "bandwidthLimitationReason": ["BANDWIDTH_REASON_DISABLED", "BANDWIDTH_REASON_ENABLED"],
-                "sdkDefaultDeviceManagement": ["SDK_DEFAULT_DEVICE_MANAGEMENT_DISABLED", "SDK_DEFAULT_DEVICE_MANAGEMENT_ENABLED"],
-                "joinOrderLayout": ["JOIN_ORDER_LAYOUT_DISABLED", "JOIN_ORDER_LAYOUT_ENABLED"],
-                "pinLayout": ["PIN_LAYOUT_DISABLED"],
-                "sendSelfViewVideoSlot": ["SEND_SELF_VIEW_VIDEO_SLOT_DISABLED", "SEND_SELF_VIEW_VIDEO_SLOT_ENABLED"],
-                "serverLayoutTransition": ["SERVER_LAYOUT_TRANSITION_DISABLED"],
-                "sdkPublisherOptimizeBitrate": [
-                    "SDK_PUBLISHER_OPTIMIZE_BITRATE_DISABLED",
-                    "SDK_PUBLISHER_OPTIMIZE_BITRATE_FULL",
-                    "SDK_PUBLISHER_OPTIMIZE_BITRATE_ONLY_SELF",
-                ],
-                "sdkNetworkLostDetection": ["SDK_NETWORK_LOST_DETECTION_DISABLED"],
-                "sdkNetworkPathMonitor": ["SDK_NETWORK_PATH_MONITOR_DISABLED"],
-                "publisherVp9": ["PUBLISH_VP9_DISABLED", "PUBLISH_VP9_ENABLED"],
-                "svcMode": ["SVC_MODE_DISABLED", "SVC_MODE_L3T3", "SVC_MODE_L3T3_KEY"],
-                "subscriberOfferAsyncAck": ["SUBSCRIBER_OFFER_ASYNC_ACK_DISABLED", "SUBSCRIBER_OFFER_ASYNC_ACK_ENABLED"],
-                "androidBluetoothRoutingFix": ["ANDROID_BLUETOOTH_ROUTING_FIX_DISABLED"],
-                "fixedIceCandidatesPoolSize": ["FIXED_ICE_CANDIDATES_POOL_SIZE_DISABLED"],
-                "sdkAndroidTelecomIntegration": ["SDK_ANDROID_TELECOM_INTEGRATION_DISABLED"],
-                "setActiveCodecsMode": ["SET_ACTIVE_CODECS_MODE_DISABLED", "SET_ACTIVE_CODECS_MODE_VIDEO_ONLY"],
-                "subscriberDtlsPassiveMode": ["SUBSCRIBER_DTLS_PASSIVE_MODE_DISABLED"],
-                "publisherOpusDred": ["PUBLISHER_OPUS_DRED_DISABLED"],
-                "publisherOpusLowBitrate": ["PUBLISHER_OPUS_LOW_BITRATE_DISABLED"],
-                "sdkAndroidDestroySessionOnTaskRemoved": ["SDK_ANDROID_DESTROY_SESSION_ON_TASK_REMOVED_DISABLED"],
-                "svcModes": ["FALSE"],
-                "reportTelemetryModes": ["TRUE"],
-                "keepDefaultDevicesModes": ["FALSE"],
-            },
-            "sdkInfo": {
-                "implementation": "browser",
-                "version": "5.27.0",
-                "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
-                "hwConcurrency": 24,
-            },
-            "sdkInitializationId": _uid(),
-            "disablePublisher": not is_sender,
-            "disableSubscriber": False,
-            "disableSubscriberAudio": True,
-        },
-    })
+        }
+    )
 
     async def _ws_loop():
         pub_sdp_sent = False
@@ -294,13 +371,21 @@ async def _connect_peer(name: str, conn: dict, is_sender: bool, on_video_message
                     continue
 
                 if "serverHello" in data:
-                    raw_ice = data["serverHello"].get("rtcConfiguration", {}).get("iceServers", [])
+                    raw_ice = (
+                        data["serverHello"]
+                        .get("rtcConfiguration", {})
+                        .get("iceServers", [])
+                    )
                     if raw_ice:
                         ice = _make_ice_servers(raw_ice)
                         old_sub = pc_sub_ref[0]
                         old_pub = pc_pub_ref[0]
-                        pc_sub_ref[0] = RTCPeerConnection(RTCConfiguration(iceServers=ice))
-                        pc_pub_ref[0] = RTCPeerConnection(RTCConfiguration(iceServers=ice))
+                        pc_sub_ref[0] = RTCPeerConnection(
+                            RTCConfiguration(iceServers=ice)
+                        )
+                        pc_pub_ref[0] = RTCPeerConnection(
+                            RTCConfiguration(iceServers=ice)
+                        )
                         if is_sender and track is not None:
                             pc_pub_ref[0].addTrack(track)
                         _setup(pc_sub_ref[0], pc_pub_ref[0])
@@ -316,28 +401,35 @@ async def _connect_peer(name: str, conn: dict, is_sender: bool, on_video_message
                     )
                     answer = await pc_sub_ref[0].createAnswer()
                     await pc_sub_ref[0].setLocalDescription(answer)
-                    await _send({
-                        "uid": _uid(),
-                        "subscriberSdpAnswer": {
-                            "pcSeq": sdp["pcSeq"],
-                            "sdp": pc_sub_ref[0].localDescription.sdp,
-                        },
-                    })
+                    await _send(
+                        {
+                            "uid": _uid(),
+                            "subscriberSdpAnswer": {
+                                "pcSeq": sdp["pcSeq"],
+                                "sdp": pc_sub_ref[0].localDescription.sdp,
+                            },
+                        }
+                    )
                     await _ack(uid)
 
-                    if not is_sender:
-                        await _send({
-                            "uid": _uid(),
-                            "setSlots": {
-                                "slots": [{"width": 1280, "height": 720}, {"width": 640, "height": 360}],
-                                "audioSlotsCount": 0,
-                                "key": 1,
-                                "shutdownAllVideo": None,
-                                "withSelfView": False,
-                                "selfViewVisibility": "ON_LOADING_THEN_SHOW",
-                                "gridConfig": {},
-                            },
-                        })
+                    if not pub_sdp_sent:
+                        await _send(
+                            {
+                                "uid": _uid(),
+                                "setSlots": {
+                                    "slots": [
+                                        {"width": 1280, "height": 720},
+                                        {"width": 640, "height": 360},
+                                    ],
+                                    "audioSlotsCount": 0,
+                                    "key": 1,
+                                    "shutdownAllVideo": None,
+                                    "withSelfView": False,
+                                    "selfViewVisibility": "ON_LOADING_THEN_SHOW",
+                                    "gridConfig": {},
+                                },
+                            }
+                        )
 
                     if is_sender and not pub_sdp_sent:
                         await asyncio.sleep(0.3)
@@ -357,20 +449,24 @@ async def _connect_peer(name: str, conn: dict, is_sender: bool, on_video_message
                             for t in pc_pub_ref[0].getTransceivers()
                             if t.sender.track
                         ]
-                        await _send({
-                            "uid": _uid(),
-                            "publisherSdpOffer": {
-                                "pcSeq": 1,
-                                "sdp": pc_pub_ref[0].localDescription.sdp,
-                                "tracks": tracks,
-                            },
-                        })
+                        await _send(
+                            {
+                                "uid": _uid(),
+                                "publisherSdpOffer": {
+                                    "pcSeq": 1,
+                                    "sdp": pc_pub_ref[0].localDescription.sdp,
+                                    "tracks": tracks,
+                                },
+                            }
+                        )
                         pub_sdp_sent = True
                     continue
 
                 if "publisherSdpAnswer" in data:
                     await pc_pub_ref[0].setRemoteDescription(
-                        RTCSessionDescription(sdp=data["publisherSdpAnswer"]["sdp"], type="answer")
+                        RTCSessionDescription(
+                            sdp=data["publisherSdpAnswer"]["sdp"], type="answer"
+                        )
                     )
                     await _ack(uid)
                     continue
@@ -382,7 +478,11 @@ async def _connect_peer(name: str, conn: dict, is_sender: bool, on_video_message
                     if len(parts) < 8:
                         continue
                     try:
-                        tcp_type = parts[parts.index("tcptype") + 1] if "tcptype" in parts else None
+                        tcp_type = (
+                            parts[parts.index("tcptype") + 1]
+                            if "tcptype" in parts
+                            else None
+                        )
                         ice = RTCIceCandidate(
                             component=int(parts[1]),
                             foundation=parts[0].replace("candidate:", ""),
@@ -421,7 +521,13 @@ async def _connect_peer(name: str, conn: dict, is_sender: bool, on_video_message
 
 async def run_poc() -> dict:
     print("\n--- Yandex Telemost VideoChannel PoC ---")
-    results = {"server_ok": False, "client_ok": False, "sent": 0, "recv": 0, "errors": []}
+    results = {
+        "server_ok": False,
+        "client_ok": False,
+        "sent": 0,
+        "recv": 0,
+        "errors": [],
+    }
     recv_events = [asyncio.Event() for _ in TEST_MESSAGES]
     last_message = [None]
 
@@ -439,7 +545,9 @@ async def run_poc() -> dict:
                     recv_events[i].set()
                     break
 
-        server = await _connect_peer("OlcRTC-Server", receiver_conn, is_sender=False, on_video_message=on_msg)
+        server = await _connect_peer(
+            "OlcRTC-Server", receiver_conn, is_sender=False, on_video_message=on_msg
+        )
         client = await _connect_peer("OlcRTC-Client", sender_conn, is_sender=True)
         await asyncio.wait_for(server["subscriber_connected"].wait(), timeout=20.0)
         await asyncio.wait_for(client["publisher_connected"].wait(), timeout=20.0)
@@ -498,11 +606,15 @@ async def run_poc() -> dict:
 
 def print_results(res: dict):
     print("\n--- TEST RESULTS ---")
-    print(f"Server: {':P' if res['server_ok'] else 'X'} / Client: {':P' if res['client_ok'] else 'X'}")
+    print(
+        f"Server: {':P' if res['server_ok'] else 'X'} / Client: {':P' if res['client_ok'] else 'X'}"
+    )
     print(f"Messages: Sent {res['sent']} / Recv {res['recv']}")
     for err in res.get("errors", []):
         print(f" Error: {err}")
-    print(f"\n{':P SUCCESS' if res['sent'] and res['sent'] == res['recv'] else 'X FAILED'}\n")
+    print(
+        f"\n{':P SUCCESS' if res['sent'] and res['sent'] == res['recv'] else 'X FAILED'}\n"
+    )
 
 
 if __name__ == "__main__":

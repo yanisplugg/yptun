@@ -1,5 +1,5 @@
 # Клиентский конфиг: jitsi + seichannel
-# Запуск: olcrtc docs/examples/client.jitsi.seichannel.yaml
+# Запуск: olcrtc docs/examples/client/client.jitsi.seichannel.yaml
 
 mode: cnc
 

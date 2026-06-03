@@ -1,22 +1,22 @@
-# Клиентский конфиг: wbstream + vp8channel
-# Запуск: olcrtc docs/examples/client.wbstream.vp8channel.yaml
+# Клиентский конфиг: telemost + seichannel
+# Запуск: olcrtc docs/examples/client/client.telemost.seichannel.yaml
 
 mode: cnc
 
 auth:
-  provider: wbstream
+  provider: telemost
 
-# Для wbstream: Room ID, который вернул сервис.
+# Для telemost: Room ID, который вернул сервис.
 # Должен совпадать с сервером.
 room:
-  id: "REPLACE_WITH_WB_ROOM_ID"
+  id: "REPLACE_WITH_TELEMOST_ROOM_ID"
 
 crypto:
   # Можно использовать key_file: "./olcrtc.key", чтобы не хранить секрет прямо здесь.
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с сервером
 
 net:
-  transport: vp8channel
+  transport: seichannel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -30,9 +30,11 @@ socks:
   user: "" # необязательная входящая auth
   pass: ""
 
-vp8:
+sei:
   fps: 60
   batch_size: 64
+  fragment_size: 900
+  ack_timeout_ms: 2000
 
 data: data
 debug: false

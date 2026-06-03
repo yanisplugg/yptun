@@ -1,15 +1,15 @@
-# Клиентский конфиг: wbstream + datachannel
-# Запуск: olcrtc docs/examples/client.wbstream.datachannel.yaml
+# Клиентский конфиг: telemost + datachannel
+# Запуск: olcrtc docs/examples/client/client.telemost.datachannel.yaml
 
 mode: cnc
 
 auth:
-  provider: wbstream
+  provider: telemost
 
-# Для wbstream: Room ID, который вернул сервис.
+# Для telemost: Room ID, который вернул сервис.
 # Должен совпадать с сервером.
 room:
-  id: "REPLACE_WITH_WB_ROOM_ID"
+  id: "REPLACE_WITH_TELEMOST_ROOM_ID"
 
 crypto:
   # Можно использовать key_file: "./olcrtc.key", чтобы не хранить секрет прямо здесь.

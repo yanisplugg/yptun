@@ -252,7 +252,7 @@ func TestOutboundPriorityRenderAndClosedEnqueue(t *testing.T) {
 // per-attempt ack budget covers a full FPS-paced round trip through every
 // fragment. Without this, multi-fragment payloads trigger premature
 // retransmits that pile fragments into the outbound channel and starve
-// the ffmpeg encoder until it is killed.
+// the encoder until it is killed.
 func TestPerAttemptAckTimeoutScalesWithFragments(t *testing.T) {
 	// Tiny payload: floor at defaultAckTimeout.
 	if got := perAttemptAckTimeout(1, 25); got != defaultAckTimeout {

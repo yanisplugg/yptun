@@ -1,15 +1,15 @@
-# Серверный конфиг: wbstream + videochannel
-# Запуск: olcrtc docs/examples/server.wbstream.videochannel.yaml
+# Серверный конфиг: telemost + vp8channel
+# Запуск: olcrtc docs/examples/server/server.telemost.vp8channel.yaml
 
 mode: srv
 
 auth:
-  provider: wbstream
+  provider: telemost
 
-# Для wbstream: Room ID, который вернул сервис.
+# Для telemost: Room ID, который вернул сервис.
 # Должен совпадать с клиентом.
 room:
-  id: "REPLACE_WITH_WB_ROOM_ID"
+  id: "REPLACE_WITH_TELEMOST_ROOM_ID"
 
 crypto:
   # 32 байта в hex (64 символа). Сгенерировать: openssl rand -hex 32
@@ -17,7 +17,7 @@ crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с клиентом
 
 net:
-  transport: videochannel
+  transport: vp8channel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -31,18 +31,9 @@ socks:
   proxy_user: "" # необязательная auth для upstream-прокси (RFC 1929)
   proxy_pass: ""
 
-video:
-  width: 1920
-  height: 1080
-  fps: 30
-  bitrate: "2M"
-  hw: none
-  codec: qrcode
-  qr_size: 0
-  qr_recovery: low
-  tile_module: 4
-  tile_rs: 20
+vp8:
+  fps: 60
+  batch_size: 64
 
-ffmpeg: ffmpeg
 data: data
 debug: false

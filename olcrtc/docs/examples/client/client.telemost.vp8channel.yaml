@@ -1,5 +1,5 @@
-# Клиентский конфиг: telemost + videochannel
-# Запуск: olcrtc docs/examples/client.telemost.videochannel.yaml
+# Клиентский конфиг: telemost + vp8channel
+# Запуск: olcrtc docs/examples/client/client.telemost.vp8channel.yaml
 
 mode: cnc
 
@@ -16,7 +16,7 @@ crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с сервером
 
 net:
-  transport: videochannel
+  transport: vp8channel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -30,18 +30,9 @@ socks:
   user: "" # необязательная входящая auth
   pass: ""
 
-video:
-  width: 1920
-  height: 1080
-  fps: 30
-  bitrate: "2M"
-  hw: none
-  codec: qrcode
-  qr_size: 0
-  qr_recovery: low
-  tile_module: 4
-  tile_rs: 20
+vp8:
+  fps: 60
+  batch_size: 64
 
-ffmpeg: ffmpeg
 data: data
 debug: false

@@ -15,6 +15,7 @@ require (
 	buf.build/go/protovalidate v1.2.0 // indirect
 	buf.build/go/protoyaml v0.7.0 // indirect
 	cel.dev/expr v0.25.2 // indirect
+	codeberg.org/rape4me/kc v0.0.0-20260527074346-4cb2a45790c2 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
@@ -171,8 +172,8 @@ require (
 	github.com/xtaci/kcp-go/v5 v5.6.72 // indirect
 	github.com/xtaci/smux v1.5.57 // indirect
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
-	github.com/zarazaex69/gr v0.1.4 // indirect
-	github.com/zarazaex69/j v0.0.0-20260525090009-ce2ca552a46b // indirect
+	github.com/zarazaex69/gr v0.1.5 // indirect
+	github.com/zarazaex69/j v0.0.0-20260531163510-49ce21cd3cc5 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect

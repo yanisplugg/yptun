@@ -79,7 +79,7 @@ var (
 	)
 	realE2ETelemostRoom = flag.String( //nolint:gochecknoglobals // package-level state intentional
 		"olcrtc.real-telemost-room",
-		"41514917109506",
+		"02789996238784",
 		"Telemost room URL or id for real e2e",
 	)
 	realE2EWBStreamRoom = flag.String( //nolint:gochecknoglobals // package-level state intentional
@@ -660,36 +660,41 @@ func builtInTransportNames() []string {
 func realE2ECaseExpectation(carrierName, transportName string) realE2EExpectation {
 	switch carrierName {
 	case "telemost":
+		// Telemost SFU is video-only: it strips canPublishData and
+		// drops non-media SCTP, so datachannel and seichannel cannot
+		// carry tunnel traffic. Video paths (vp8channel, videochannel)
+		// must work end-to-end.
 		switch transportName {
-		case transportVP8:
-			return realE2EExpectPass
-		case transportVideo:
+		case transportVP8, transportVideo:
 			return realE2EExpectPass
 		default:
 			return realE2EExpectFail
 		}
 	case "wbstream":
+		// wbstream guest tokens carry canPublishData=false, so SCTP
+		// data channels do not route real bytes - the connection
+		// establishes but echoes nothing. We mark this Unstable
+		// rather than ExpectFail because a non-guest token (paid /
+		// authenticated session) does pass; the matrix should not
+		// reward a successful run as "UNEXPECTED SUCCESS" when the
+		// upstream side actually fixes their guest flow.
+		// Video / SEI / VP8 transports must work in both modes.
 		if transportName == transportData {
-			return realE2EExpectFail
-		}
-		return realE2EExpectPass
-	case "jitsi":
-		// Jitsi colibri-ws bridge channel maps cleanly onto the
-		// datachannel transport (raw bytes broadcast through
-		// EndpointMessage). Video transports go through pion's
-		// PeerConnection negotiated via Jingle session-accept.
-		//
-		// Jitsi video-path transports are marked Unstable. They depend on
-		// the external JVB ICE/media path and can flap on self-hosted
-		// instances (e.g. meet1.arbitr.ru): ICE may stay in checking or
-		// the video upstream may be suppressed even though signaling and
-		// the colibri-ws bridge are healthy. Flag the outcome, but don't
-		// fail the suite when these paths flap.
-		switch transportName {
-		case transportVideo, transportSEI, transportVP8:
 			return realE2EExpectUnstable
 		}
 		return realE2EExpectPass
+	case "jitsi":
+		// datachannel works reliably. Video-sending transports
+		// (videochannel, seichannel, vp8channel) are unstable: JVB's
+		// SinglePortUdpHarvester fails ICE for the first endpoint when
+		// both peers send video through the same TURN relay. This is a
+		// server-side issue, not an olcrtc bug.
+		switch transportName {
+		case transportVideo, transportSEI, transportVP8:
+			return realE2EExpectUnstable
+		default:
+			return realE2EExpectPass
+		}
 	default:
 		return realE2EExpectPass
 	}
@@ -729,10 +734,17 @@ func TestRealE2ECaseExpectation(t *testing.T) {
 		transport string
 		want      realE2EExpectation
 	}{
+		// telemost: only vp8 and video work
 		{
 			name:      "telemost datachannel is expected to fail",
 			carrier:   "telemost",
 			transport: transportData,
+			want:      realE2EExpectFail,
+		},
+		{
+			name:      "telemost seichannel is expected to fail",
+			carrier:   "telemost",
+			transport: transportSEI,
 			want:      realE2EExpectFail,
 		},
 		{
@@ -742,11 +754,37 @@ func TestRealE2ECaseExpectation(t *testing.T) {
 			want:      realE2EExpectPass,
 		},
 		{
-			name:      "wbstream datachannel is expected to fail",
+			name:      "telemost videochannel is expected to pass",
+			carrier:   "telemost",
+			transport: transportVideo,
+			want:      realE2EExpectPass,
+		},
+		// wbstream: datachannel is flaky on guest tokens, rest must pass
+		{
+			name:      "wbstream datachannel is unstable",
 			carrier:   "wbstream",
 			transport: transportData,
-			want:      realE2EExpectFail,
+			want:      realE2EExpectUnstable,
 		},
+		{
+			name:      "wbstream videochannel is expected to pass",
+			carrier:   "wbstream",
+			transport: transportVideo,
+			want:      realE2EExpectPass,
+		},
+		{
+			name:      "wbstream seichannel is expected to pass",
+			carrier:   "wbstream",
+			transport: transportSEI,
+			want:      realE2EExpectPass,
+		},
+		{
+			name:      "wbstream vp8channel is expected to pass",
+			carrier:   "wbstream",
+			transport: transportVP8,
+			want:      realE2EExpectPass,
+		},
+		// jitsi: datachannel works; video transports are unstable (JVB ICE bug)
 		{
 			name:      "jitsi datachannel is expected to pass",
 			carrier:   "jitsi",
@@ -902,14 +940,14 @@ func e2eTransportOptions(transportName string) transport.Options {
 			HW:         videoHWNone,
 			QRSize:     512,
 			QRRecovery: "low",
-			Codec:      "qrcode",
+			Codec:      "tile",
 			TileModule: 4,
 			TileRS:     20,
 		}
 	case "vp8channel":
 		return vp8channel.Options{FPS: 60, BatchSize: 64}
 	case "seichannel":
-		return seichannel.Options{FPS: 30, BatchSize: 4, FragmentSize: 512, AckTimeoutMS: 1500}
+		return seichannel.Options{FPS: 60, BatchSize: 64, FragmentSize: 512, AckTimeoutMS: 1500}
 	}
 	return nil
 }

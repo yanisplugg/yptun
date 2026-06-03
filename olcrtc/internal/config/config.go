@@ -51,7 +51,6 @@ type File struct {
 	Failover  Failover  `yaml:"failover"`
 	Data      string    `yaml:"data"`
 	Debug     bool      `yaml:"debug"`
-	FFmpeg    string    `yaml:"ffmpeg"`
 }
 
 // Profile is a failover entry that overrides top-level runtime fields.

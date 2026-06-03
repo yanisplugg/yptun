@@ -1,17 +1,15 @@
-# Серверный конфиг: jitsi + datachannel
-# Запуск: olcrtc docs/examples/server.jitsi.datachannel.yaml
+# Серверный конфиг: wbstream + vp8channel
+# Запуск: olcrtc docs/examples/server/server.wbstream.vp8channel.yaml
 
 mode: srv
 
 auth:
-  provider: jitsi
+  provider: wbstream
 
-# Для jitsi: полный URL комнаты (https://host/room или host/room).
+# Для wbstream: Room ID, который вернул сервис.
 # Должен совпадать с клиентом.
-# Доступные серверы: meet1.arbitr.ru или meet.cryptopro.ru
-# Проверьте в браузере, какой работает в вашей сети.
 room:
-  id: "https://meet1.arbitr.ru/REPLACE_WITH_ROOM_NAME"
+  id: "REPLACE_WITH_WB_ROOM_ID"
 
 crypto:
   # 32 байта в hex (64 символа). Сгенерировать: openssl rand -hex 32
@@ -19,7 +17,7 @@ crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с клиентом
 
 net:
-  transport: datachannel
+  transport: vp8channel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -32,6 +30,10 @@ socks:
   proxy_port: 0 # например 1080
   proxy_user: "" # необязательная auth для upstream-прокси (RFC 1929)
   proxy_pass: ""
+
+vp8:
+  fps: 60
+  batch_size: 64
 
 data: data
 debug: false

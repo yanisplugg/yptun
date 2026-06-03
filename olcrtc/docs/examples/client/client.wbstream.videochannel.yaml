@@ -1,5 +1,5 @@
 # Клиентский конфиг: wbstream + videochannel
-# Запуск: olcrtc docs/examples/client.wbstream.videochannel.yaml
+# Запуск: olcrtc docs/examples/client/client.wbstream.videochannel.yaml
 
 mode: cnc
 

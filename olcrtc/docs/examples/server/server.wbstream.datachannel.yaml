@@ -1,5 +1,5 @@
 # Серверный конфиг: wbstream + datachannel
-# Запуск: olcrtc docs/examples/server.wbstream.datachannel.yaml
+# Запуск: olcrtc docs/examples/server/server.wbstream.datachannel.yaml
 
 mode: srv
 

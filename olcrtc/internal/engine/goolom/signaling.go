@@ -127,6 +127,12 @@ func (s *Session) handleCommonMessages(msg map[string]any, uid string) {
 	if _, ok := msg["updateDescription"]; ok {
 		s.sendAck(uid)
 	}
+	if _, ok := msg["slotsConfig"]; ok {
+		s.sendAck(uid)
+	}
+	if _, ok := msg["slotsMeta"]; ok {
+		s.sendAck(uid)
+	}
 	if _, ok := msg["vadActivity"]; ok {
 		s.sendAck(uid)
 	}

@@ -5,9 +5,8 @@ on:
   pull_request:
     branches: ["main", "master"]
   schedule:
-    # Nightly stress soak - 03:17 UTC keeps it off the hour to avoid
-    # contention with the GitHub Actions hourly stampede.
-    - cron: "17 3 * * *"
+    # Nightly full E2E - 00:17 UTC (03:17 MSK)
+    - cron: "17 0 * * *"
   workflow_dispatch:
 
 jobs:
@@ -195,3 +194,42 @@ jobs:
         with:
           name: olcrtc-android
           path: build/olcrtc.aar
+
+  nightly-soak:
+    name: Nightly Soak (All Carriers × Transports)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+
+      - name: Install media tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Run real soak (all carriers × dc+vp8, 10m each)
+        run: |
+          go test -count=1 -v ./internal/e2e \
+            -run '^TestRealThroughputSoak$' \
+            -timeout=170m \
+            -olcrtc.real-e2e \
+            -olcrtc.real-soak \
+            -olcrtc.real-soak-carrier=telemost,jitsi,wbstream \
+            -olcrtc.real-soak-transport=datachannel,vp8channel \
+            -olcrtc.real-soak-duration=10m
+
+      - name: Run local soak with chaos (all transports, 6m, reconnect every 30s)
+        run: |
+          go test -count=1 -v ./internal/e2e \
+            -run '^TestLocalThroughputSoak$' \
+            -timeout=60m \
+            -olcrtc.local-soak \
+            -olcrtc.local-soak-transport=all \
+            -olcrtc.local-soak-duration=6m \
+            -olcrtc.local-soak-chaos=30s

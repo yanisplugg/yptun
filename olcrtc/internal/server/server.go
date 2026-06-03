@@ -523,11 +523,9 @@ func (s *Server) serveSingle(ctx context.Context) {
 
 		stream, err := sess.AcceptStream()
 		if err != nil {
-			if contextDone(ctx) {
+			if s.handleAcceptError(ctx, sess) {
 				return
 			}
-			logger.Debugf("AcceptStream returned %v - reinstalling session", err)
-			s.reinstallSession(sess)
 			continue
 		}
 
@@ -537,6 +535,20 @@ func (s *Server) serveSingle(ctx context.Context) {
 			s.handleStream(ctx, stream, s.currentSessionID())
 		}()
 	}
+}
+
+// handleAcceptError handles a failed AcceptStream. Returns true if the server should stop.
+func (s *Server) handleAcceptError(ctx context.Context, sess *smux.Session) bool {
+	if contextDone(ctx) {
+		return true
+	}
+	hadSession := s.handshakeReady()
+	logger.Debugf("AcceptStream returned error - reinstalling session")
+	s.reinstallSession(sess)
+	if hadSession && s.ln != nil {
+		s.ln.Reconnect("liveness")
+	}
+	return false
 }
 
 func (s *Server) currentSessionID() string {

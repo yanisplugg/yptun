@@ -1,5 +1,5 @@
 # Клиентский конфиг: jitsi + videochannel
-# Запуск: olcrtc docs/examples/client.jitsi.videochannel.yaml
+# Запуск: olcrtc docs/examples/client/client.jitsi.videochannel.yaml
 
 mode: cnc
 

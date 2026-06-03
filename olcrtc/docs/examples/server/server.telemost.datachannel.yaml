@@ -1,17 +1,15 @@
-# Серверный конфиг: jitsi + videochannel
-# Запуск: olcrtc docs/examples/server.jitsi.videochannel.yaml
+# Серверный конфиг: telemost + datachannel
+# Запуск: olcrtc docs/examples/server/server.telemost.datachannel.yaml
 
 mode: srv
 
 auth:
-  provider: jitsi
+  provider: telemost
 
-# Для jitsi: полный URL комнаты (https://host/room или host/room).
+# Для telemost: Room ID, который вернул сервис.
 # Должен совпадать с клиентом.
-# Доступные серверы: meet1.arbitr.ru или meet.cryptopro.ru
-# Проверьте в браузере, какой работает в вашей сети.
 room:
-  id: "https://meet1.arbitr.ru/REPLACE_WITH_ROOM_NAME"
+  id: "REPLACE_WITH_TELEMOST_ROOM_ID"
 
 crypto:
   # 32 байта в hex (64 символа). Сгенерировать: openssl rand -hex 32
@@ -19,7 +17,7 @@ crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с клиентом
 
 net:
-  transport: videochannel
+  transport: datachannel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -33,18 +31,5 @@ socks:
   proxy_user: "" # необязательная auth для upstream-прокси (RFC 1929)
   proxy_pass: ""
 
-video:
-  width: 1920
-  height: 1080
-  fps: 30
-  bitrate: "2M"
-  hw: none
-  codec: qrcode
-  qr_size: 0
-  qr_recovery: low
-  tile_module: 4
-  tile_rs: 20
-
-ffmpeg: ffmpeg
 data: data
 debug: false

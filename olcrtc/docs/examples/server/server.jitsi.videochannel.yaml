@@ -1,5 +1,5 @@
-# Серверный конфиг: jitsi + vp8channel
-# Запуск: olcrtc docs/examples/server.jitsi.vp8channel.yaml
+# Серверный конфиг: jitsi + videochannel
+# Запуск: olcrtc docs/examples/server/server.jitsi.videochannel.yaml
 
 mode: srv
 
@@ -19,7 +19,7 @@ crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с клиентом
 
 net:
-  transport: vp8channel
+  transport: videochannel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -33,9 +33,18 @@ socks:
   proxy_user: "" # необязательная auth для upstream-прокси (RFC 1929)
   proxy_pass: ""
 
-vp8:
-  fps: 60
-  batch_size: 64
+video:
+  width: 1920
+  height: 1080
+  fps: 30
+  bitrate: "2M"
+  hw: none
+  codec: qrcode
+  qr_size: 0
+  qr_recovery: low
+  tile_module: 4
+  tile_rs: 20
 
+ffmpeg: ffmpeg
 data: data
 debug: false

@@ -1,22 +1,24 @@
-# Клиентский конфиг: wbstream + seichannel
-# Запуск: olcrtc docs/examples/client.wbstream.seichannel.yaml
+# Клиентский конфиг: jitsi + datachannel
+# Запуск: olcrtc docs/examples/client/client.jitsi.datachannel.yaml
 
 mode: cnc
 
 auth:
-  provider: wbstream
+  provider: jitsi
 
-# Для wbstream: Room ID, который вернул сервис.
+# Для jitsi: полный URL комнаты (https://host/room или host/room).
 # Должен совпадать с сервером.
+# Доступные серверы: meet1.arbitr.ru или meet.cryptopro.ru
+# Проверьте в браузере, какой работает в вашей сети.
 room:
-  id: "REPLACE_WITH_WB_ROOM_ID"
+  id: "https://meet1.arbitr.ru/REPLACE_WITH_ROOM_NAME"
 
 crypto:
   # Можно использовать key_file: "./olcrtc.key", чтобы не хранить секрет прямо здесь.
   key: "REPLACE_ME_WITH_64_HEX_CHARS" # должен совпадать с сервером
 
 net:
-  transport: seichannel
+  transport: datachannel
   dns: "8.8.8.8:53"
 
 liveness:
@@ -29,12 +31,6 @@ socks:
   port: 8808
   user: "" # необязательная входящая auth
   pass: ""
-
-sei:
-  fps: 60
-  batch_size: 64
-  fragment_size: 900
-  ack_timeout_ms: 2000
 
 data: data
 debug: false
