@@ -135,6 +135,11 @@ interface Strings {
     val presetRuAds: String
     val presetAllVpn: String
     val presetReset: String
+    val sbRoutingAdvanced: String
+    val sbRoutingAdvancedDesc: String
+    val sbRouteRulesLabel: String
+    val sbRuleSetLabel: String
+    val sbInvalidJsonArray: String
 
     // URL schemes
     val urlSchemeAddConfig: String
@@ -458,6 +463,13 @@ object RuStrings : Strings {
     override val presetRuAds = "Россия + без рекламы"
     override val presetAllVpn = "Всё через VPN"
     override val presetReset = "Сбросить"
+    override val sbRoutingAdvanced = "Маршрутизация sing-box (продвинутое)"
+    override val sbRoutingAdvancedDesc =
+        "Дословный JSON sing-box. Выполняется до переключателей выше. " +
+            "Пример правил: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]"
+    override val sbRouteRulesLabel = "route.rules (JSON-массив)"
+    override val sbRuleSetLabel = "rule_set (JSON-массив)"
+    override val sbInvalidJsonArray = "Некорректный JSON-массив"
     override val urlSchemeAddConfig = "ДОБАВИТЬ КОНФИГ"
     override val urlSchemeAddSubscription = "ДОБАВИТЬ ПОДПИСКУ"
     override val urlSchemeControl = "УПРАВЛЕНИЕ"
@@ -746,6 +758,13 @@ object EnStrings : Strings {
     override val presetRuAds = "Russia + no ads"
     override val presetAllVpn = "All via VPN"
     override val presetReset = "Reset"
+    override val sbRoutingAdvanced = "Sing-box routing (advanced)"
+    override val sbRoutingAdvancedDesc =
+        "Verbatim sing-box JSON. These run before the toggles above. " +
+            "Rules example: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]"
+    override val sbRouteRulesLabel = "route.rules (JSON array)"
+    override val sbRuleSetLabel = "rule_set (JSON array)"
+    override val sbInvalidJsonArray = "Invalid JSON array"
     override val urlSchemeAddConfig = "ADD CONFIG"
     override val urlSchemeAddSubscription = "ADD SUBSCRIPTION"
     override val urlSchemeControl = "CONTROL"
@@ -1034,6 +1053,13 @@ object FaStrings : Strings {
     override val presetRuAds = "روسیه + بدون تبلیغات"
     override val presetAllVpn = "همه از طریق VPN"
     override val presetReset = "بازنشانی"
+    override val sbRoutingAdvanced = "مسیریابی sing-box (پیشرفته)"
+    override val sbRoutingAdvancedDesc =
+        "JSON خام sing-box. پیش از کلیدهای بالا اجرا می‌شود. " +
+            "نمونهٔ قواعد: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]"
+    override val sbRouteRulesLabel = "route.rules (آرایهٔ JSON)"
+    override val sbRuleSetLabel = "rule_set (آرایهٔ JSON)"
+    override val sbInvalidJsonArray = "آرایهٔ JSON نامعتبر"
     override val urlSchemeAddConfig = "افزودن پیکربندی"
     override val urlSchemeAddSubscription = "افزودن اشتراک"
     override val urlSchemeControl = "کنترل"

@@ -1007,6 +1007,10 @@ class OlcboxVpnService : VpnService() {
                         routing = routing,
                         traffic = traffic,
                         logLevel = "info",
+                        // The exit is reached through the IPv4 freeturn TCP listener; force A-only
+                        // resolution so dual-stack sites don't attempt IPv6 (no v6 path) and the
+                        // TUN's captured ::/0 stays a harmless blackhole instead of a dead route.
+                        dnsStrategyOverride = "ipv4_only",
                     )
                 }
 
@@ -1197,13 +1201,12 @@ class OlcboxVpnService : VpnService() {
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer(MAPDNS_ADDRESS)
                 .setBlocking(true)
-            // VK-TURN's WireGuard tunnel is IPv4-only. Advertising IPv6 in the TUN makes dual-stack
-            // apps route IPv6 into a tunnel with no IPv6 path → endless "no route to host" and dead
-            // sites. Omit IPv6 for VK-TURN so the OS keeps apps on IPv4; other engines still capture
-            // IPv6 (addRoute ::/0) to prevent leaks past the tunnel (issue #3).
-            if (engineType != EngineType.VkTurn) {
-                builder.addAddress(TUN_IPV6_ADDRESS, IPV6_PREFIX_LENGTH).addRoute("::", 0)
-            }
+            // Always capture IPv6 (addAddress + addRoute ::/0) so raw IPv6 traffic can NOT leak past
+            // the tunnel to the real interface (was leaking the real IPv6 for VK-TURN). VK-TURN's
+            // WireGuard/AmneziaWG/proxy paths all force ipv4_only DNS, so dual-stack apps never get
+            // AAAA records and won't attempt IPv6 — the captured ::/0 only blackholes rare literal
+            // IPv6, avoiding both the leak AND the old "no route to host" dead-sites problem.
+            builder.addAddress(TUN_IPV6_ADDRESS, IPV6_PREFIX_LENGTH).addRoute("::", 0)
 
             if (!applySplitTunneling(builder)) return null
 

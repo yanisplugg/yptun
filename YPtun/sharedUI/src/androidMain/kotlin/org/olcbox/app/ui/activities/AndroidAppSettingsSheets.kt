@@ -2712,7 +2712,7 @@ private fun RoutingContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "Sing-box routing (advanced)",
+                s.sbRoutingAdvanced,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
@@ -2724,28 +2724,27 @@ private fun RoutingContent(
         }
         if (advancedExpanded) {
             Text(
-                "Verbatim sing-box JSON. These run before the toggles above. " +
-                    "Rules example: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]",
+                s.sbRoutingAdvancedDesc,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall
             )
             OutlinedTextField(
                 value = customRules,
                 onValueChange = { customRules = it },
-                label = { Text("route.rules (JSON array)") },
+                label = { Text(s.sbRouteRulesLabel) },
                 placeholder = { Text("[{\"domain_suffix\":[\"example.com\"],\"outbound\":\"direct\"}]") },
                 isError = !rulesValid,
-                supportingText = if (!rulesValid) ({ Text("Invalid JSON array") }) else null,
+                supportingText = if (!rulesValid) ({ Text(s.sbInvalidJsonArray) }) else null,
                 minLines = 3,
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = customRuleSets,
                 onValueChange = { customRuleSets = it },
-                label = { Text("rule_set (JSON array)") },
+                label = { Text(s.sbRuleSetLabel) },
                 placeholder = { Text("[{\"type\":\"remote\",\"tag\":\"my-set\",\"format\":\"binary\",\"url\":\"https://…\",\"download_detour\":\"direct\"}]") },
                 isError = !ruleSetsValid,
-                supportingText = if (!ruleSetsValid) ({ Text("Invalid JSON array") }) else null,
+                supportingText = if (!ruleSetsValid) ({ Text(s.sbInvalidJsonArray) }) else null,
                 minLines = 2,
                 modifier = Modifier.fillMaxWidth()
             )
