@@ -13,6 +13,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.VkTurnConfig
 
@@ -69,6 +70,7 @@ data class VkTurnDraft(
     val awgH4: String = "4",
     /** Proxy share link (vless/vmess/trojan/ss) used as the exit when outbound == proxy. */
     val outboundProxyLink: String = "",
+    val proxyCore: ProxyCore = ProxyCore.Auto,
 )
 
 /**
@@ -158,6 +160,7 @@ object VkTurnComposer {
             chainProxyLink = draft.chainProxyLink.trim(),
             outbound = outbound,
             outboundProxyLink = if (outbound == VkTurnConfig.OUTBOUND_PROXY) draft.outboundProxyLink.trim() else "",
+            proxyCore = draft.proxyCore,
         )
         return vkturn to proxy
     }
@@ -179,6 +182,7 @@ object VkTurnComposer {
                 chainProxyLink = vkturn.chainProxyLink,
                 outbound = vkturn.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD },
                 outboundProxyLink = vkturn.outboundProxyLink,
+                proxyCore = vkturn.proxyCore,
             )
         }
 

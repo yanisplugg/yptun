@@ -29,6 +29,7 @@ object XrayConfig {
 
     private const val PROXY_TAG = "proxy"
     private const val OLCRTC_TAG = "olcrtc-out"
+    private const val WG_BASE_TAG = "wireguard-base"
 
     private val json = Json { prettyPrint = true }
 
@@ -43,6 +44,10 @@ object XrayConfig {
         olcrtcChainPass: String = "",
         logLevel: String = "warning",
         traffic: TrafficSettings = TrafficSettings(),
+        // VK-TURN chain: when set, [profile] dials its server THROUGH this WireGuard outbound (the
+        // WG-over-VK base). Mirrors SingBoxConfig.wireguardBase. The ProxyProfile carries the
+        // sing-box-format WG outbound in [ProxyProfile.rawOutbound]; we convert it to Xray schema.
+        wireguardBase: ProxyProfile? = null,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
@@ -87,8 +92,17 @@ object XrayConfig {
                 }
             }
 
+            val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
             putJsonArray("outbounds") {
-                add(buildProxyOutbound(profile, chained = olcrtcChainPort != null, traffic = traffic))
+                add(
+                    buildProxyOutbound(
+                        profile,
+                        chained = olcrtcChainPort != null,
+                        traffic = traffic,
+                        detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null,
+                    )
+                )
+                if (wgBaseOutbound != null) add(wgBaseOutbound)
                 addJsonObject {
                     put("tag", "direct")
                     put("protocol", "freedom")
@@ -223,11 +237,47 @@ object XrayConfig {
         return json.encodeToString(newRoot)
     }
 
+    /**
+     * Converts the sing-box WireGuard outbound stored in [profile].rawOutbound into an Xray
+     * `wireguard` outbound (tag [WG_BASE_TAG]) so a chained proxy can dial through the VK tunnel.
+     */
+    private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {
+        val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
+        val o = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        val secret = o["private_key"]?.jsonPrimitive?.contentOrNull ?: return null
+        val peerPub = o["peer_public_key"]?.jsonPrimitive?.contentOrNull ?: return null
+        val server = o["server"]?.jsonPrimitive?.contentOrNull ?: "127.0.0.1"
+        val port = o["server_port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: return null
+        val addresses = (o["local_address"] as? JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+        val mtu = o["mtu"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+        return buildJsonObject {
+            put("tag", WG_BASE_TAG)
+            put("protocol", "wireguard")
+            putJsonObject("settings") {
+                put("secretKey", secret)
+                putJsonArray("address") { addresses.forEach { add(it) } }
+                putJsonArray("peers") {
+                    addJsonObject {
+                        put("publicKey", peerPub)
+                        put("endpoint", "$server:$port")
+                        putJsonArray("allowedIPs") { add("0.0.0.0/0"); add("::/0") }
+                    }
+                }
+                if (mtu != null) put("mtu", mtu)
+            }
+        }
+    }
+
     private fun buildProxyOutbound(
         profile: ProxyProfile,
         chained: Boolean,
-        traffic: TrafficSettings = TrafficSettings()
+        traffic: TrafficSettings = TrafficSettings(),
+        // When set, the proxy dials through this outbound tag (e.g. the VK-TURN WireGuard base);
+        // takes precedence over the olcRTC chain detour.
+        detourTagOverride: String? = null,
     ) = buildJsonObject {
+        val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", PROXY_TAG)
         put("protocol", profile.type)
 
@@ -277,10 +327,10 @@ object XrayConfig {
             }
         }
 
-        put("streamSettings", buildStreamSettings(profile, fragmentDialer = traffic.fragmentEnabled && !chained))
+        put("streamSettings", buildStreamSettings(profile, fragmentDialer = traffic.fragmentEnabled && detourTag == null))
 
-        if (chained) {
-            putJsonObject("proxySettings") { put("tag", OLCRTC_TAG) }
+        if (detourTag != null) {
+            putJsonObject("proxySettings") { put("tag", detourTag) }
         }
 
         if (traffic.muxEnabled) {

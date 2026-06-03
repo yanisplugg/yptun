@@ -977,6 +977,66 @@ class OlcboxVpnService : VpnService() {
             val exitProfile = requireNotNull(profile)
             val routing = loadRouting()
             val traffic = loadTrafficSettings()
+            // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
+            val ipv4Traffic = traffic.copy(domainStrategy = "ipv4_only")
+
+            // Chained proxy on top of WireGuard (parsed once; reused by both cores).
+            val chainProxy = if (outboundType == VkTurnConfig.OUTBOUND_WIREGUARD) {
+                vk.chainProxyLink.takeIf { it.isNotBlank() }
+                    ?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+            } else null
+
+            // The proxy whose core choice matters: the PROXY exit, or the WG chain proxy. AmneziaWG /
+            // plain WireGuard have no typed proxy → always sing-box.
+            val proxyForCore = when (outboundType) {
+                VkTurnConfig.OUTBOUND_PROXY -> exitProfile
+                else -> chainProxy
+            }
+            val useXray = proxyForCore != null &&
+                outboundType != VkTurnConfig.OUTBOUND_AMNEZIAWG &&
+                vk.resolvedProxyCore(proxyForCore) == ProxyCore.Xray
+
+            if (useXray) {
+                val xrayJson = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) {
+                    addLog("VK-TURN exit: proxy ${exitProfile.displayName()} over VK (tcp, Xray)")
+                    XrayConfig.build(
+                        profile = exitProfile,
+                        listenPort = socksListenPort,
+                        listenHost = socksListenHost,
+                        socksUsername = socksUsername,
+                        socksPassword = socksPassword,
+                        logLevel = "info",
+                        traffic = ipv4Traffic,
+                    )
+                } else {
+                    addLog("VK-TURN chaining proxy ${chainProxy!!.displayName()} over WireGuard (Xray)")
+                    XrayConfig.build(
+                        profile = chainProxy,
+                        wireguardBase = exitProfile,
+                        listenPort = socksListenPort,
+                        listenHost = socksListenHost,
+                        socksUsername = socksUsername,
+                        socksPassword = socksPassword,
+                        logLevel = "info",
+                        traffic = ipv4Traffic,
+                    )
+                }
+                activeProxyCore = ProxyCore.Xray
+                addLog("Starting Xray (VK-TURN, $outboundType) via $listenAddr")
+                xrayEngine().start(xrayJson)
+                if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                    throw IllegalStateException("Xray SOCKS port $socksListenPort did not open")
+                }
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) {
+                    addLog("VK-TURN Xray start superseded")
+                    return false
+                }
+                addLog("Xray ready on $socksListenHost:$socksListenPort")
+                publishActiveSocks()
+                return true
+            }
+
             val json = when (outboundType) {
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
                     addLog("VK-TURN exit: AmneziaWG over VK")

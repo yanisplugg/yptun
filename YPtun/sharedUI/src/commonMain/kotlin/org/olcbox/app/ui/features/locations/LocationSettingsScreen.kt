@@ -682,6 +682,11 @@ private fun LazyListScope.vkTurnSection(
                 minLines = 2,
                 modifier = Modifier.fillMaxWidth()
             )
+            CoreSelector(
+                selected = draft.proxyCore,
+                enabled = enabled,
+                onSelected = { v -> onChange { it.copy(proxyCore = v) } }
+            )
         }
     }
 
@@ -717,6 +722,11 @@ private fun LazyListScope.vkTurnSection(
                     enabled = enabled,
                     minLines = 2,
                     modifier = Modifier.fillMaxWidth()
+                )
+                CoreSelector(
+                    selected = draft.proxyCore,
+                    enabled = enabled,
+                    onSelected = { v -> onChange { it.copy(proxyCore = v) } }
                 )
             }
         }

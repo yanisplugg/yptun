@@ -49,12 +49,26 @@ data class VkTurnConfig(
     /** Verbatim exit-proxy share link kept for editing when [outbound] == [OUTBOUND_PROXY]. */
     @SerialName("outbound_proxy_link")
     val outboundProxyLink: String = "",
+    /**
+     * Which core runs the exit/chain proxy (same choice as the Standard engine). [ProxyCore.Auto]
+     * picks Xray for xhttp/splithttp (sing-box can't serve it over VK), otherwise sing-box.
+     */
+    @SerialName("proxy_core")
+    val proxyCore: ProxyCore = ProxyCore.Auto,
 ) {
     fun isComplete(): Boolean =
         isStorable() && vkLink.isNotBlank()
 
     /** UDP payload (WireGuard/AmneziaWG) needs udprelay; TCP proxy needs tcpfwd. */
     fun requiredMode(): String = if (outbound == OUTBOUND_PROXY) "tcp" else "udp"
+
+    /** Resolves [proxyCore]==Auto to a concrete backend for the given exit/chain [profile]. */
+    fun resolvedProxyCore(profile: ProxyProfile?): ProxyCore = when {
+        proxyCore != ProxyCore.Auto -> proxyCore
+        !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
+        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        else -> ProxyCore.SingBox
+    }
 
     companion object {
         const val OUTBOUND_WIREGUARD = "wireguard"
