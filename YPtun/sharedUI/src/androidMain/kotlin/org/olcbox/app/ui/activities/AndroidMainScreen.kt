@@ -89,6 +89,8 @@ fun AndroidMainScreen(
     val dynamicThemeEnabled by vpnManager.dynamicThemeEnabled.collectAsState()
     val hwid by vpnManager.hwid.collectAsState()
     val routing by vpnManager.routing.collectAsState()
+    val routingProfilesState by vpnManager.routingProfiles.collectAsState()
+    val geoUpdateStatus by vpnManager.geoUpdateStatus.collectAsState()
     val trafficSettings by vpnManager.trafficSettings.collectAsState()
     val appBehavior by vpnManager.appBehavior.collectAsState()
     val language by vpnManager.language.collectAsState()
@@ -481,6 +483,14 @@ fun AndroidMainScreen(
             hwid = hwid,
             routing = routing,
             onRoutingChanged = vpnManager::setRouting,
+            routingProfilesState = routingProfilesState,
+            geoUpdateStatus = geoUpdateStatus,
+            onRoutingProfileSaved = { vpnManager.saveRoutingProfile(it) },
+            onRoutingProfileDeleted = vpnManager::deleteRoutingProfile,
+            onGlobalRoutingProfileChanged = vpnManager::setGlobalRoutingProfile,
+            onRoutingProfileLinkImported = vpnManager::importRoutingProfileLink,
+            onGeoSourcesChanged = vpnManager::setGeoSources,
+            onUpdateGeoNow = vpnManager::updateGeoAssetsNow,
             trafficSettings = trafficSettings,
             onTrafficChanged = vpnManager::setTrafficSettings,
             appBehavior = appBehavior,

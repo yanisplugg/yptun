@@ -2,6 +2,9 @@ package org.olcbox.app.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
  * A named routing profile, Happ-compatible. The wire shape mirrors the JSON carried by
@@ -55,8 +58,63 @@ data class RoutingProfile(
 
     fun displayName(): String = name.ifBlank { "Routing profile" }
 
+    /** Total number of selectors across every bucket (for a one-line summary in the UI). */
+    fun ruleCount(): Int =
+        blockIp.size + blockSites.size + directIp.size + directSites.size + proxyIp.size + proxySites.size
+
+    /** Re-encodes this profile to a `happ://routing/add/<base64url-json>` link for sharing/export. */
+    @OptIn(ExperimentalEncodingApi::class)
+    fun toHappLink(): String {
+        // Drop the local-only id before export so the link is portable.
+        val json = exportJson.encodeToString(serializer(), copy(id = ""))
+        val payload = Base64.UrlSafe.encode(json.encodeToByteArray()).trimEnd('=')
+        return "happ://routing/add/$payload"
+    }
+
     companion object {
         /** Buckets in the order named by [routeOrder] (unknown tokens ignored). */
         val DEFAULT_ORDER = listOf("block", "direct", "proxy")
+
+        /** Sentinel id meaning "explicitly no routing profile" (overrides the global default). */
+        const val NONE_ID = "__none__"
+
+        /** Stable id of the built-in convenience profile, seeded on first run. */
+        const val DEFAULT_RU_DIRECT_ID = "default-ru-direct"
+
+        /**
+         * Built-in convenience profile: Russian sites (`.ru`) and Russian IPs go direct (no VPN),
+         * everything else through the proxy. Uses `geoip:ru` (reliable country data in any geoip.dat)
+         * and `domain:ru` (no geo file needed); add `geosite:ru` manually if your geosite.dat has it.
+         */
+        fun russiaDirect(): RoutingProfile = RoutingProfile(
+            name = "Россия напрямую",
+            directSites = listOf("domain:ru"),
+            directIp = listOf("geoip:ru"),
+            globalProxy = true,
+            routeOrder = "block-direct-proxy",
+            id = DEFAULT_RU_DIRECT_ID,
+        )
+
+        /**
+         * Default geo `.dat` sources (v2ray format) for xray-core. The runetfreedom releases track the
+         * Russian blocklists the user routes around; both are overridable in [RoutingProfilesState].
+         */
+        const val DEFAULT_GEOIP_URL =
+            "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat"
+        const val DEFAULT_GEOSITE_URL =
+            "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat"
+
+        /** Accepted dash-separated bucket orderings offered in the editor. */
+        val ROUTE_ORDERS = listOf(
+            "block-direct-proxy",
+            "block-proxy-direct",
+            "direct-block-proxy",
+            "proxy-block-direct",
+        )
+
+        /** Domain-resolution strategies accepted by both cores (mapped per-core at build time). */
+        val DOMAIN_STRATEGIES = listOf("IPIfNonMatch", "IPOnDemand", "AsIs")
+
+        private val exportJson = Json { encodeDefaults = false }
     }
 }

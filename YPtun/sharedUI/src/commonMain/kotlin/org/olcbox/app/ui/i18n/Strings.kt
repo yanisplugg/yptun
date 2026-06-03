@@ -141,6 +141,47 @@ interface Strings {
     val sbRuleSetLabel: String
     val sbInvalidJsonArray: String
 
+    // Routing profiles (Happ-style)
+    val routingProfiles: String
+    val routingProfilesSubtitle: String
+    val routingProfileGlobal: String
+    val routingProfileNone: String
+    val routingProfileGlobalHint: String
+    val routingProfileAdd: String
+    val routingProfileImportLink: String
+    val routingProfilePasteHint: String
+    val routingProfileNewName: String
+    val routingProfileName: String
+    val routingProfileDelete: String
+    val routingProfileShare: String
+    val routingProfileGlobalProxy: String
+    val routingProfileGlobalProxyDesc: String
+    val routingProfileRouteOrder: String
+    val routingProfileDomainStrategy: String
+    val routingProxySites: String
+    val routingProxyIp: String
+    val routingDirectSites: String
+    val routingDirectIp: String
+    val routingBlockSites: String
+    val routingBlockIp: String
+    val routingSelectorsHint: String
+    val routingIpSelectorsHint: String
+    val routingGeoDatabases: String
+    val routingGeoDatabasesDesc: String
+    val routingGeoUpdate: String
+    val routingGeoUpdating: String
+    val routingGeoNever: String
+    val routingGeoipUrl: String
+    val routingGeositeUrl: String
+    val routingProfileSaved: String
+    val routingProfileImported: String
+    val routingProfileInvalidLink: String
+    val routingProfileEmpty: String
+    fun routingGeoUpdated(ts: String): String
+    fun routingProfileRuleCount(n: Int): String
+    val locationRoutingProfile: String
+    val locationRoutingGlobalDefault: String
+
     // URL schemes
     val urlSchemeAddConfig: String
     val urlSchemeAddSubscription: String
@@ -470,6 +511,45 @@ object RuStrings : Strings {
     override val sbRouteRulesLabel = "route.rules (JSON-массив)"
     override val sbRuleSetLabel = "rule_set (JSON-массив)"
     override val sbInvalidJsonArray = "Некорректный JSON-массив"
+    override val routingProfiles = "Профили маршрутизации"
+    override val routingProfilesSubtitle = "Happ-совместимые правила — глобально или для отдельной локации"
+    override val routingProfileGlobal = "Глобальный профиль"
+    override val routingProfileNone = "Без профиля"
+    override val routingProfileGlobalHint = "Применяется ко всем подключениям, если у локации не задан свой профиль"
+    override val routingProfileAdd = "Создать профиль"
+    override val routingProfileImportLink = "Импорт по ссылке happ://"
+    override val routingProfilePasteHint = "happ://routing/add/…"
+    override val routingProfileNewName = "Новый профиль"
+    override val routingProfileName = "Название"
+    override val routingProfileDelete = "Удалить профиль"
+    override val routingProfileShare = "Поделиться ссылкой happ://"
+    override val routingProfileGlobalProxy = "Весь трафик через прокси"
+    override val routingProfileGlobalProxyDesc = "Иначе — напрямую, кроме списков «через прокси»"
+    override val routingProfileRouteOrder = "Порядок правил"
+    override val routingProfileDomainStrategy = "Стратегия доменов"
+    override val routingProxySites = "Через прокси: сайты"
+    override val routingProxyIp = "Через прокси: IP"
+    override val routingDirectSites = "Напрямую: сайты"
+    override val routingDirectIp = "Напрямую: IP"
+    override val routingBlockSites = "Блокировать: сайты"
+    override val routingBlockIp = "Блокировать: IP"
+    override val routingSelectorsHint = "geosite:ru, domain:vk.com — по одному на строку"
+    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — по одному на строку"
+    override val routingGeoDatabases = "Геобазы (geoip.dat / geosite.dat)"
+    override val routingGeoDatabasesDesc = "Нужны для селекторов geoip:/geosite: на ядре Xray. Загружаются из указанных ниже источников."
+    override val routingGeoUpdate = "Обновить геобазы"
+    override val routingGeoUpdating = "Загрузка…"
+    override val routingGeoNever = "Не загружены"
+    override val routingGeoipUrl = "URL geoip.dat"
+    override val routingGeositeUrl = "URL geosite.dat"
+    override val routingProfileSaved = "Профиль сохранён"
+    override val routingProfileImported = "Профиль маршрутизации импортирован"
+    override val routingProfileInvalidLink = "Неверная ссылка маршрутизации"
+    override val routingProfileEmpty = "Профилей пока нет"
+    override fun routingGeoUpdated(ts: String) = "Обновлено: $ts"
+    override fun routingProfileRuleCount(n: Int) = "правил: $n"
+    override val locationRoutingProfile = "Профиль маршрутизации"
+    override val locationRoutingGlobalDefault = "Глобальный (по умолчанию)"
     override val urlSchemeAddConfig = "ДОБАВИТЬ КОНФИГ"
     override val urlSchemeAddSubscription = "ДОБАВИТЬ ПОДПИСКУ"
     override val urlSchemeControl = "УПРАВЛЕНИЕ"
@@ -765,6 +845,45 @@ object EnStrings : Strings {
     override val sbRouteRulesLabel = "route.rules (JSON array)"
     override val sbRuleSetLabel = "rule_set (JSON array)"
     override val sbInvalidJsonArray = "Invalid JSON array"
+    override val routingProfiles = "Routing profiles"
+    override val routingProfilesSubtitle = "Happ-compatible rules — globally or per location"
+    override val routingProfileGlobal = "Global profile"
+    override val routingProfileNone = "No profile"
+    override val routingProfileGlobalHint = "Applied to every connection unless a location sets its own profile"
+    override val routingProfileAdd = "Create profile"
+    override val routingProfileImportLink = "Import happ:// link"
+    override val routingProfilePasteHint = "happ://routing/add/…"
+    override val routingProfileNewName = "New profile"
+    override val routingProfileName = "Name"
+    override val routingProfileDelete = "Delete profile"
+    override val routingProfileShare = "Share happ:// link"
+    override val routingProfileGlobalProxy = "All traffic via proxy"
+    override val routingProfileGlobalProxyDesc = "Otherwise direct, except the “via proxy” lists"
+    override val routingProfileRouteOrder = "Rule order"
+    override val routingProfileDomainStrategy = "Domain strategy"
+    override val routingProxySites = "Via proxy: sites"
+    override val routingProxyIp = "Via proxy: IPs"
+    override val routingDirectSites = "Direct: sites"
+    override val routingDirectIp = "Direct: IPs"
+    override val routingBlockSites = "Block: sites"
+    override val routingBlockIp = "Block: IPs"
+    override val routingSelectorsHint = "geosite:ru, domain:vk.com — one per line"
+    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — one per line"
+    override val routingGeoDatabases = "Geo databases (geoip.dat / geosite.dat)"
+    override val routingGeoDatabasesDesc = "Needed for geoip:/geosite: selectors on the Xray core. Downloaded from the sources below."
+    override val routingGeoUpdate = "Update geo databases"
+    override val routingGeoUpdating = "Downloading…"
+    override val routingGeoNever = "Not downloaded"
+    override val routingGeoipUrl = "geoip.dat URL"
+    override val routingGeositeUrl = "geosite.dat URL"
+    override val routingProfileSaved = "Profile saved"
+    override val routingProfileImported = "Routing profile imported"
+    override val routingProfileInvalidLink = "Invalid routing link"
+    override val routingProfileEmpty = "No profiles yet"
+    override fun routingGeoUpdated(ts: String) = "Updated: $ts"
+    override fun routingProfileRuleCount(n: Int) = "$n rules"
+    override val locationRoutingProfile = "Routing profile"
+    override val locationRoutingGlobalDefault = "Global (default)"
     override val urlSchemeAddConfig = "ADD CONFIG"
     override val urlSchemeAddSubscription = "ADD SUBSCRIPTION"
     override val urlSchemeControl = "CONTROL"
@@ -1060,6 +1179,45 @@ object FaStrings : Strings {
     override val sbRouteRulesLabel = "route.rules (آرایهٔ JSON)"
     override val sbRuleSetLabel = "rule_set (آرایهٔ JSON)"
     override val sbInvalidJsonArray = "آرایهٔ JSON نامعتبر"
+    override val routingProfiles = "نمایه‌های مسیریابی"
+    override val routingProfilesSubtitle = "قواعد سازگار با Happ — سراسری یا برای هر موقعیت"
+    override val routingProfileGlobal = "نمایهٔ سراسری"
+    override val routingProfileNone = "بدون نمایه"
+    override val routingProfileGlobalHint = "برای همهٔ اتصال‌ها اعمال می‌شود مگر موقعیت نمایهٔ خود را داشته باشد"
+    override val routingProfileAdd = "ساخت نمایه"
+    override val routingProfileImportLink = "درون‌ریزی پیوند ‎happ://"
+    override val routingProfilePasteHint = "happ://routing/add/…"
+    override val routingProfileNewName = "نمایهٔ جدید"
+    override val routingProfileName = "نام"
+    override val routingProfileDelete = "حذف نمایه"
+    override val routingProfileShare = "اشتراک پیوند ‎happ://"
+    override val routingProfileGlobalProxy = "همهٔ ترافیک از پراکسی"
+    override val routingProfileGlobalProxyDesc = "در غیر این صورت مستقیم، به‌جز فهرست‌های «از پراکسی»"
+    override val routingProfileRouteOrder = "ترتیب قواعد"
+    override val routingProfileDomainStrategy = "راهبرد دامنه"
+    override val routingProxySites = "از پراکسی: سایت‌ها"
+    override val routingProxyIp = "از پراکسی: IP"
+    override val routingDirectSites = "مستقیم: سایت‌ها"
+    override val routingDirectIp = "مستقیم: IP"
+    override val routingBlockSites = "مسدود: سایت‌ها"
+    override val routingBlockIp = "مسدود: IP"
+    override val routingSelectorsHint = "geosite:ru, domain:vk.com — هر کدام در یک خط"
+    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — هر کدام در یک خط"
+    override val routingGeoDatabases = "پایگاه‌های جغرافیایی (geoip.dat / geosite.dat)"
+    override val routingGeoDatabasesDesc = "برای گزینشگرهای geoip:/geosite: روی هستهٔ Xray لازم است. از منابع زیر دانلود می‌شود."
+    override val routingGeoUpdate = "به‌روزرسانی پایگاه‌های جغرافیایی"
+    override val routingGeoUpdating = "در حال دانلود…"
+    override val routingGeoNever = "دانلود نشده"
+    override val routingGeoipUrl = "نشانی geoip.dat"
+    override val routingGeositeUrl = "نشانی geosite.dat"
+    override val routingProfileSaved = "نمایه ذخیره شد"
+    override val routingProfileImported = "نمایهٔ مسیریابی درون‌ریزی شد"
+    override val routingProfileInvalidLink = "پیوند مسیریابی نامعتبر"
+    override val routingProfileEmpty = "هنوز نمایه‌ای نیست"
+    override fun routingGeoUpdated(ts: String) = "به‌روزرسانی: $ts"
+    override fun routingProfileRuleCount(n: Int) = "$n قاعده"
+    override val locationRoutingProfile = "نمایهٔ مسیریابی"
+    override val locationRoutingGlobalDefault = "سراسری (پیش‌فرض)"
     override val urlSchemeAddConfig = "افزودن پیکربندی"
     override val urlSchemeAddSubscription = "افزودن اشتراک"
     override val urlSchemeControl = "کنترل"

@@ -436,6 +436,11 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(core = core)
     }
 
+    /** Sets this location's routing profile id ("" = global default, NONE_ID = no profile). */
+    fun onRoutingProfileChanged(id: String) {
+        editingConfig = editingConfig.copy(routingProfileId = id)
+    }
+
     /** Applies an edit to the per-location advanced core options (mux / tfo / sniff / fragment). */
     fun updateAdvanced(transform: (AdvancedCoreConfig) -> AdvancedCoreConfig) {
         val current = editingConfig.advanced ?: AdvancedCoreConfig()

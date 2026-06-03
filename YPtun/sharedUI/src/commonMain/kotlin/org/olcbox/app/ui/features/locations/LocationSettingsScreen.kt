@@ -73,6 +73,7 @@ import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
@@ -200,6 +201,19 @@ fun LocationSettingsScreen(
                     enabled = !isSaving,
                     onSelected = viewModel::onEngineChanged
                 )
+            }
+
+            // Routing profile applies wherever a rule-capable core runs (sing-box / Xray): every
+            // engine except pure Stealth (olcRTC has no routing layer).
+            if (config.engine != EngineType.Stealth) {
+                item {
+                    RoutingProfileSelector(
+                        selected = config.routingProfileId,
+                        profiles = homeViewModel.routingProfileChoices(),
+                        enabled = !isSaving,
+                        onSelected = viewModel::onRoutingProfileChanged
+                    )
+                }
             }
 
             if (config.engine == EngineType.Standard || config.engine == EngineType.Chain) {
@@ -929,6 +943,39 @@ private fun coreLabel(core: ProxyCore): String = when (core) {
     ProxyCore.Auto -> stringsFor(LocalizationState.effective).coreAuto
     ProxyCore.SingBox -> "sing-box"
     ProxyCore.Xray -> "Xray"
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RoutingProfileSelector(
+    selected: String,
+    profiles: List<RoutingProfile>,
+    enabled: Boolean,
+    onSelected: (String) -> Unit
+) {
+    val s = LocalStrings.current
+    // "" = follow the global profile; NONE_ID = explicitly none; otherwise a specific profile id.
+    val options = listOf("", RoutingProfile.NONE_ID) + profiles.map { it.id }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        SectionTitle(title = s.locationRoutingProfile)
+        SettingsDropdown(
+            label = s.locationRoutingProfile,
+            selectedValue = if (selected in options) selected else "",
+            options = options,
+            enabled = enabled,
+            onValueSelected = onSelected,
+            valueLabel = { id ->
+                when (id) {
+                    "" -> s.locationRoutingGlobalDefault
+                    RoutingProfile.NONE_ID -> s.routingProfileNone
+                    else -> profiles.firstOrNull { it.id == id }?.displayName() ?: id
+                }
+            }
+        )
+    }
 }
 
 private fun engineLabel(engine: EngineType): String = when (engine) {

@@ -7,6 +7,7 @@ package xraybridge
 import (
 	"bytes"
 	"errors"
+	"os"
 	"sync"
 	"syscall"
 
@@ -38,6 +39,17 @@ func SetProtector(p Protector) {
 			p.Protect(int(fd))
 		})
 	})
+}
+
+// SetAssetPath points xray-core at the directory holding geoip.dat / geosite.dat so geosite:/geoip:
+// routing selectors resolve. xray reads the "xray.location.asset" env flag when loading geodata, so
+// this must be called before Start (it is process-global; harmless to set repeatedly). Empty clears it.
+func SetAssetPath(dir string) {
+	if dir == "" {
+		_ = os.Unsetenv("xray.location.asset")
+		return
+	}
+	_ = os.Setenv("xray.location.asset", dir)
 }
 
 // Start launches Xray with the given JSON config. Returns an error if already running or invalid.

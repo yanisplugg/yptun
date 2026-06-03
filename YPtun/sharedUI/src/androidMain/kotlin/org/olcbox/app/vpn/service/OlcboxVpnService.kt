@@ -76,9 +76,13 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PORT
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME
 import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING
+import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING_PROFILES
 import org.olcbox.app.vpn.data.KEY_ANDROID_APP_BEHAVIOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_TRAFFIC
+import org.olcbox.app.data.model.RoutingProfile
+import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
+import org.olcbox.app.vpn.geo.GeoAssetManager
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.data.model.VkTurnConfig
@@ -796,19 +800,30 @@ class OlcboxVpnService : VpnService() {
             val effectiveProfile = prepareAmneziaWgProxy(profile)
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
 
+            // Happ-style routing profile (per-location override → global default), if any.
+            val profilesState = loadRoutingProfilesState()
+            val routingProfile = profilesState.resolve(config.routingProfileId)
+
             activeProxyCore = if (isAwg) ProxyCore.SingBox else config.resolvedCore()
-            // The RU-domain blocklist is an Xray-only feature (regexp DNS hosts). When it's enabled
-            // for a typed proxy that Xray can serve, prefer Xray so the toggle actually takes effect.
+            // The RU-domain blocklist and geo-based routing profiles are best served by Xray (it reads
+            // geoip.dat/geosite.dat and regexp DNS hosts natively, which sing-box can't). When such a
+            // feature is active for a typed proxy Xray can serve, prefer Xray so the rules take effect.
+            val profileWantsXray = routingProfile != null &&
+                (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty())
             if (activeProxyCore == ProxyCore.SingBox &&
-                loadTrafficSettings().blockRuDomains &&
+                (loadTrafficSettings().blockRuDomains || profileWantsXray) &&
                 effectiveProfile.rawOutbound.isNullOrBlank() &&
                 effectiveProfile.type in XRAY_SUPPORTED_TYPES
             ) {
                 activeProxyCore = ProxyCore.Xray
-                addLog("Switching to Xray core for RU-domain blocklist")
+                addLog(
+                    if (profileWantsXray) "Switching to Xray core for routing-profile geo rules"
+                    else "Switching to Xray core for RU-domain blocklist"
+                )
             }
             if (activeProxyCore == ProxyCore.Xray) {
                 val rawXray = effectiveProfile.rawXrayConfig
+                var assetPath = ""
                 val json = if (!rawXray.isNullOrBlank()) {
                     // User-supplied full Xray config: run verbatim (honors custom dns/routing/hosts).
                     addLog("Starting Xray with custom config (verbatim)")
@@ -820,6 +835,8 @@ class OlcboxVpnService : VpnService() {
                         socksPassword = socksPassword,
                     )
                 } else {
+                    // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
+                    assetPath = ensureGeoAssetPath(routingProfile)
                     XrayConfig.build(
                         profile = effectiveProfile,
                         listenPort = socksListenPort,
@@ -840,10 +857,11 @@ class OlcboxVpnService : VpnService() {
                                 )
                             } ?: t
                         },
+                        routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     )
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
-                xrayEngine().start(json)
+                xrayEngine().start(json, assetPath)
             } else {
                 val json = SingBoxConfig.build(
                     profile = effectiveProfile,
@@ -858,6 +876,9 @@ class OlcboxVpnService : VpnService() {
                     routing = loadRouting(),
                     traffic = loadTrafficSettings(),
                     advanced = config.advanced,
+                    routingProfile = routingProfile,
+                    singboxGeositeBase = profilesState.singboxGeositeBase,
+                    singboxGeoipBase = profilesState.singboxGeoipBase,
                 )
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)
@@ -979,6 +1000,10 @@ class OlcboxVpnService : VpnService() {
             val traffic = loadTrafficSettings()
             // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
             val ipv4Traffic = traffic.copy(domainStrategy = "ipv4_only")
+            // VK-TURN is intentionally EXCLUDED from routing profiles (like olcRTC): it tunnels
+            // everything through the WG-over-VK path, so no per-app routing is applied here.
+            val profilesState = loadRoutingProfilesState()
+            val routingProfile: RoutingProfile? = null
 
             // Chained proxy on top of WireGuard (parsed once; reused by both cores).
             val chainProxy = if (outboundType == VkTurnConfig.OUTBOUND_WIREGUARD) {
@@ -992,11 +1017,18 @@ class OlcboxVpnService : VpnService() {
                 VkTurnConfig.OUTBOUND_PROXY -> exitProfile
                 else -> chainProxy
             }
+            // A geo-based routing profile also forces Xray (sing-box has no native geo selectors), as
+            // long as the relevant proxy is a typed proxy Xray can serve.
+            val profileWantsXray = routingProfile != null &&
+                (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
+                proxyForCore != null && proxyForCore.type in XRAY_SUPPORTED_TYPES
             val useXray = proxyForCore != null &&
                 outboundType != VkTurnConfig.OUTBOUND_AMNEZIAWG &&
-                vk.resolvedProxyCore(proxyForCore) == ProxyCore.Xray
+                (vk.resolvedProxyCore(proxyForCore) == ProxyCore.Xray || profileWantsXray)
 
             if (useXray) {
+                val assetPath = ensureGeoAssetPath(routingProfile)
+                val xrayProfile = xrayRoutingProfile(routingProfile, assetPath)
                 val xrayJson = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) {
                     addLog("VK-TURN exit: proxy ${exitProfile.displayName()} over VK (tcp, Xray)")
                     XrayConfig.build(
@@ -1007,6 +1039,7 @@ class OlcboxVpnService : VpnService() {
                         socksPassword = socksPassword,
                         logLevel = "info",
                         traffic = ipv4Traffic,
+                        routingProfile = xrayProfile,
                     )
                 } else {
                     addLog("VK-TURN chaining proxy ${chainProxy!!.displayName()} over WireGuard (Xray)")
@@ -1019,11 +1052,12 @@ class OlcboxVpnService : VpnService() {
                         socksPassword = socksPassword,
                         logLevel = "info",
                         traffic = ipv4Traffic,
+                        routingProfile = xrayProfile,
                     )
                 }
                 activeProxyCore = ProxyCore.Xray
                 addLog("Starting Xray (VK-TURN, $outboundType) via $listenAddr")
-                xrayEngine().start(xrayJson)
+                xrayEngine().start(xrayJson, assetPath)
                 if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
                     throw IllegalStateException("Xray SOCKS port $socksListenPort did not open")
                 }
@@ -1050,6 +1084,9 @@ class OlcboxVpnService : VpnService() {
                         autoDetectInterface = true,
                         routing = routing,
                         traffic = traffic,
+                        routingProfile = routingProfile,
+                        singboxGeositeBase = profilesState.singboxGeositeBase,
+                        singboxGeoipBase = profilesState.singboxGeoipBase,
                         logLevel = "info",
                         dnsStrategyOverride = "ipv4_only",
                     )
@@ -1066,6 +1103,9 @@ class OlcboxVpnService : VpnService() {
                         autoDetectInterface = true,
                         routing = routing,
                         traffic = traffic,
+                        routingProfile = routingProfile,
+                        singboxGeositeBase = profilesState.singboxGeositeBase,
+                        singboxGeoipBase = profilesState.singboxGeoipBase,
                         logLevel = "info",
                         // The exit is reached through the IPv4 freeturn TCP listener; force A-only
                         // resolution so dual-stack sites don't attempt IPv6 (no v6 path) and the
@@ -1090,6 +1130,9 @@ class OlcboxVpnService : VpnService() {
                             autoDetectInterface = true,
                             routing = routing,
                             traffic = traffic,
+                            routingProfile = routingProfile,
+                            singboxGeositeBase = profilesState.singboxGeositeBase,
+                            singboxGeoipBase = profilesState.singboxGeoipBase,
                             logLevel = "info",
                             dnsStrategyOverride = "ipv4_only",
                         )
@@ -1103,6 +1146,9 @@ class OlcboxVpnService : VpnService() {
                             autoDetectInterface = true,
                             routing = routing,
                             traffic = traffic,
+                            routingProfile = routingProfile,
+                            singboxGeositeBase = profilesState.singboxGeositeBase,
+                            singboxGeoipBase = profilesState.singboxGeoipBase,
                             // info level surfaces the WireGuard handshake so a dead server→client
                             // relay path (handshake never completes) is visible.
                             logLevel = "info",
@@ -1661,6 +1707,53 @@ class OlcboxVpnService : VpnService() {
         }.getOrNull() ?: return RoutingRules()
         return runCatching { Json.decodeFromString(RoutingRules.serializer(), raw) }
             .getOrDefault(RoutingRules())
+    }
+
+    private suspend fun loadRoutingProfilesState(): RoutingProfilesState {
+        val raw = runCatching {
+            applicationContext.vpnPrefDataStore.data.first()[KEY_ANDROID_ROUTING_PROFILES]
+        }.getOrNull() ?: return RoutingProfilesState()
+        return runCatching { Json.decodeFromString(RoutingProfilesState.serializer(), raw) }
+            .getOrDefault(RoutingProfilesState())
+    }
+
+    /** The Happ-style routing profile in effect for [config]: per-location override → global default. */
+    private suspend fun resolveRoutingProfile(config: LocationConfig): RoutingProfile? =
+        loadRoutingProfilesState().resolve(config.routingProfileId)
+
+    /**
+     * When [profile] references geosite:/geoip: selectors, makes sure the geo `.dat` files are present
+     * (downloading from the configured sources if missing) and returns the asset directory for
+     * xray-core. Returns "" when no geo files are needed or the download failed — xray then runs
+     * without geo data (non-geo rules still apply) instead of failing to start.
+     */
+    private suspend fun ensureGeoAssetPath(profile: RoutingProfile?): String {
+        if (profile == null || !profile.needsGeoFiles()) return ""
+        val state = loadRoutingProfilesState()
+        val geoip = profile.geoipUrl.ifBlank { state.geoipUrl }
+        val geosite = profile.geositeUrl.ifBlank { state.geositeUrl }
+        val ok = runCatching { GeoAssetManager.ensureAssets(applicationContext, geoip, geosite) }
+            .getOrDefault(false)
+        return if (ok) {
+            addLog("Geo databases ready for routing profile '${profile.displayName()}'")
+            GeoAssetManager.assetDir(applicationContext).absolutePath
+        } else {
+            addLog("Geo databases unavailable; profile geo rules will be skipped on Xray")
+            ""
+        }
+    }
+
+    /**
+     * The routing profile to hand to xray-core: dropped when it needs `geoip.dat`/`geosite.dat` that
+     * couldn't be downloaded ([assetPath] blank), since an Xray config referencing geosite:/geoip:
+     * without the data fails to load. Degrading to no profile keeps the connection working.
+     */
+    private fun xrayRoutingProfile(profile: RoutingProfile?, assetPath: String): RoutingProfile? {
+        if (profile != null && profile.needsGeoFiles() && assetPath.isEmpty()) {
+            addLog("Routing profile '${profile.displayName()}' skipped on Xray: geo databases unavailable")
+            return null
+        }
+        return profile
     }
 
     private suspend fun loadTrafficSettings(): TrafficSettings {

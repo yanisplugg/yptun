@@ -27,11 +27,16 @@ import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalizationState
+import org.olcbox.app.data.model.RoutingProfile
+import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.data.importer.HappRoutingParser
+import org.olcbox.app.vpn.geo.GeoAssetManager
 import org.olcbox.app.vpn.data.KEY_ANDROID_APP_BEHAVIOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_LANGUAGE
 import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING
+import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING_PROFILES
 import org.olcbox.app.vpn.data.KEY_ANDROID_TRAFFIC
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
@@ -82,6 +87,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val hwid: StateFlow<String> = _hwid.asStateFlow()
     private val _routing = MutableStateFlow(RoutingRules())
     val routing: StateFlow<RoutingRules> = _routing.asStateFlow()
+    private val _routingProfiles = MutableStateFlow(RoutingProfilesState())
+    val routingProfiles: StateFlow<RoutingProfilesState> = _routingProfiles.asStateFlow()
+    /** Transient status of the geo-database download (null = idle). Surfaced in the routing UI. */
+    private val _geoUpdateStatus = MutableStateFlow<GeoUpdateStatus?>(null)
+    val geoUpdateStatus: StateFlow<GeoUpdateStatus?> = _geoUpdateStatus.asStateFlow()
     private val _trafficSettings = MutableStateFlow(TrafficSettings())
     val trafficSettings: StateFlow<TrafficSettings> = _trafficSettings.asStateFlow()
     private val _appBehavior = MutableStateFlow(AppBehaviorSettings())
@@ -146,6 +156,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 _routing.value = preferences[KEY_ANDROID_ROUTING]
                     ?.let { runCatching { Json.decodeFromString(RoutingRules.serializer(), it) }.getOrNull() }
                     ?: RoutingRules()
+                _routingProfiles.value = preferences[KEY_ANDROID_ROUTING_PROFILES]
+                    ?.let { runCatching { Json.decodeFromString(RoutingProfilesState.serializer(), it) }.getOrNull() }
+                    ?: seededRoutingProfilesState()
                 _trafficSettings.value = preferences[KEY_ANDROID_TRAFFIC]
                     ?.let { runCatching { Json.decodeFromString(TrafficSettings.serializer(), it) }.getOrNull() }
                     ?.normalized()
@@ -206,6 +219,97 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             startVpn()
         }
     }
+
+    // --- Happ-style routing profiles ---
+
+    /** Persists the whole routing-profile state (profiles, global selection, geo sources). */
+    fun setRoutingProfilesState(state: RoutingProfilesState) {
+        _routingProfiles.value = state
+        scope.launch {
+            appContext.vpnPrefDataStore.edit { preferences ->
+                preferences[KEY_ANDROID_ROUTING_PROFILES] =
+                    Json.encodeToString(RoutingProfilesState.serializer(), state)
+            }
+        }
+        if (status.value is VpnStatus.Connected || status.value is VpnStatus.Reconnecting) {
+            startVpn()
+        }
+    }
+
+    /** Inserts or replaces a profile (matched by id), assigning a fresh id when blank. Returns its id. */
+    fun saveRoutingProfile(profile: RoutingProfile): String {
+        val id = profile.id.ifBlank { "rp-" + java.util.UUID.randomUUID().toString().take(8) }
+        val withId = profile.copy(id = id)
+        val current = _routingProfiles.value
+        val others = current.profiles.filterNot { it.id == id }
+        setRoutingProfilesState(current.copy(profiles = others + withId))
+        return id
+    }
+
+    fun deleteRoutingProfile(id: String) {
+        val current = _routingProfiles.value
+        setRoutingProfilesState(
+            current.copy(
+                profiles = current.profiles.filterNot { it.id == id },
+                globalProfileId = if (current.globalProfileId == id) "" else current.globalProfileId,
+            )
+        )
+    }
+
+    /** Sets (or clears, with blank) the profile applied to every connection by default. */
+    fun setGlobalRoutingProfile(id: String) {
+        setRoutingProfilesState(_routingProfiles.value.copy(globalProfileId = id))
+    }
+
+    /**
+     * Imports a `happ://routing/add/...` link as a new profile. Returns true when [link] was a valid
+     * routing link (and a profile was saved); the new id is also returned by [importRoutingProfileId]
+     * for callers that want to select it.
+     */
+    override fun importRoutingProfileLink(link: String): Boolean =
+        importRoutingProfileId(link) != null
+
+    override fun routingProfileChoices(): List<RoutingProfile> = _routingProfiles.value.profiles
+
+    /** As [importRoutingProfileLink] but returns the new profile id (or null when not a routing profile). */
+    fun importRoutingProfileId(link: String): String? {
+        val parsed = HappRoutingParser.parseAny(link) ?: return null
+        return saveRoutingProfile(parsed.copy(id = ""))
+    }
+
+    /** Updates the geo-database source URLs (blank restores the defaults at build time). */
+    fun setGeoSources(geoipUrl: String, geositeUrl: String) {
+        setRoutingProfilesState(
+            _routingProfiles.value.copy(geoipUrl = geoipUrl.trim(), geositeUrl = geositeUrl.trim())
+        )
+    }
+
+    /** Downloads the geoip.dat/geosite.dat now (from the configured sources); status flows to [geoUpdateStatus]. */
+    fun updateGeoAssetsNow() {
+        if (_geoUpdateStatus.value is GeoUpdateStatus.Running) return
+        val state = _routingProfiles.value
+        _geoUpdateStatus.value = GeoUpdateStatus.Running
+        scope.launch {
+            val result = GeoAssetManager.download(appContext, state.geoipUrl, state.geositeUrl)
+            if (result.success) {
+                val now = System.currentTimeMillis()
+                setRoutingProfilesState(_routingProfiles.value.copy(geoLastUpdated = now))
+                _geoUpdateStatus.value = GeoUpdateStatus.Success(now, result.bytes)
+            } else {
+                _geoUpdateStatus.value = GeoUpdateStatus.Failed(result.error ?: "download failed")
+            }
+        }
+    }
+
+    fun clearGeoUpdateStatus() {
+        _geoUpdateStatus.value = null
+    }
+
+    /** First-run routing state: the built-in "Russia → direct" profile, applied globally for convenience. */
+    private fun seededRoutingProfilesState() = RoutingProfilesState(
+        profiles = listOf(RoutingProfile.russiaDirect()),
+        globalProfileId = RoutingProfile.DEFAULT_RU_DIRECT_ID,
+    )
 
     fun setTrafficSettings(settings: TrafficSettings) {
         val normalized = settings.normalized()

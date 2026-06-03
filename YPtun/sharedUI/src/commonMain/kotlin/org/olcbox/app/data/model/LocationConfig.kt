@@ -127,6 +127,12 @@ data class LocationConfig(
     val vkturn: VkTurnConfig? = null,
     /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
     val advanced: AdvancedCoreConfig? = null,
+    /**
+     * Routing profile applied to this location: a [RoutingProfile.id]; blank = use the global profile;
+     * [RoutingProfile.NONE_ID] = explicitly no profile. Resolved by [RoutingProfilesState.resolve].
+     */
+    @SerialName("routing_profile_id")
+    val routingProfileId: String = "",
 ) {
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
@@ -143,6 +149,7 @@ data class LocationConfig(
             proxy = proxy,
             core = core,
             vkturn = vkturn,
+            routingProfileId = routingProfileId.trim(),
         )
     }
 
@@ -478,6 +485,8 @@ data class LocationEntry(
     val core: ProxyCore? = null,
     val vkturn: VkTurnConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
+    @SerialName("routing_profile_id")
+    val routingProfileId: String? = null,
     @SerialName("auth_provider")
     val authProvider: String? = null,
     @SerialName("carrier")
@@ -545,6 +554,7 @@ data class LocationEntry(
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
                 advanced = advanced,
+                routingProfileId = routingProfileId.orEmpty(),
             ).normalized()
         }
 
@@ -566,6 +576,7 @@ data class LocationEntry(
             core = config.core,
             vkturn = config.vkturn,
             advanced = config.advanced,
+            routingProfileId = config.routingProfileId.ifBlank { null },
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
             metadata = metadata
@@ -595,6 +606,7 @@ data class LocationEntry(
                 core = config.core,
                 vkturn = config.vkturn,
                 advanced = config.advanced,
+                routingProfileId = config.routingProfileId.ifBlank { null },
                 authProvider = config.bypassProvider,
                 transport = LocationTransportConfig.from(config),
                 metadata = metadata

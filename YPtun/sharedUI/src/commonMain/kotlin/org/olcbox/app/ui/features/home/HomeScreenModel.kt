@@ -247,6 +247,10 @@ class HomeScreenViewModel(
         }
     }
 
+    /** Routing profiles for the per-location selector (empty on platforms without support). */
+    fun routingProfileChoices(): List<org.olcbox.app.data.model.RoutingProfile> =
+        vpnManager.routingProfileChoices()
+
     fun onImportFullConfig(
         rawText: String,
         onComplete: () -> Unit = {},
@@ -254,6 +258,16 @@ class HomeScreenViewModel(
     ) {
         if (rawText.isBlank()) {
             onError("No config text found")
+            return
+        }
+        // A happ://routing/add/... link OR raw Happ routing JSON is a routing profile, not a
+        // location — hand it off instead of trying to parse it as a config.
+        if (org.olcbox.app.data.importer.HappRoutingParser.looksLikeRoutingProfile(rawText)) {
+            if (vpnManager.importRoutingProfileLink(rawText.trim())) {
+                onComplete()
+            } else {
+                onError("Invalid routing profile")
+            }
             return
         }
         viewModelScope.launch {

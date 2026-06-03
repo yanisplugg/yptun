@@ -152,6 +152,14 @@ internal fun AppSettingsSheet(
     hwid: String,
     routing: RoutingRules,
     onRoutingChanged: (RoutingRules) -> Unit,
+    routingProfilesState: org.olcbox.app.data.model.RoutingProfilesState,
+    geoUpdateStatus: org.olcbox.app.vpn.GeoUpdateStatus?,
+    onRoutingProfileSaved: (org.olcbox.app.data.model.RoutingProfile) -> Unit,
+    onRoutingProfileDeleted: (String) -> Unit,
+    onGlobalRoutingProfileChanged: (String) -> Unit,
+    onRoutingProfileLinkImported: (String) -> Boolean,
+    onGeoSourcesChanged: (String, String) -> Unit,
+    onUpdateGeoNow: () -> Unit,
     trafficSettings: TrafficSettings,
     onTrafficChanged: (TrafficSettings) -> Unit,
     appBehavior: AppBehaviorSettings,
@@ -262,6 +270,7 @@ internal fun AppSettingsSheet(
                     onBackgroundColorSelected = onBackgroundColorSelected,
                     onConnectionSettingsClick = { route = AppSettingsRoute.ConnectionSettings },
                     onRoutingClick = { route = AppSettingsRoute.Routing },
+                    onRoutingProfilesClick = { route = AppSettingsRoute.RoutingProfiles },
                     onTrafficClick = { route = AppSettingsRoute.Traffic },
                     onApplicationClick = { route = AppSettingsRoute.Application },
                     onUrlSchemesClick = { route = AppSettingsRoute.UrlSchemes },
@@ -283,6 +292,18 @@ internal fun AppSettingsSheet(
                     enabled = enabled,
                     onBack = { route = AppSettingsRoute.Hub },
                     onRoutingChanged = onRoutingChanged
+                )
+
+                AppSettingsRoute.RoutingProfiles -> RoutingProfilesContent(
+                    state = routingProfilesState,
+                    geoStatus = geoUpdateStatus,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onSaveProfile = onRoutingProfileSaved,
+                    onDeleteProfile = onRoutingProfileDeleted,
+                    onSetGlobal = onGlobalRoutingProfileChanged,
+                    onImportLink = onRoutingProfileLinkImported,
+                    onSetGeoSources = onGeoSourcesChanged,
+                    onUpdateGeo = onUpdateGeoNow,
                 )
 
                 AppSettingsRoute.Traffic -> TrafficSettingsContent(
@@ -615,6 +636,7 @@ private fun AppSettingsHubContent(
     onBackgroundColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onConnectionSettingsClick: () -> Unit,
     onRoutingClick: () -> Unit,
+    onRoutingProfilesClick: () -> Unit,
     onTrafficClick: () -> Unit,
     onApplicationClick: () -> Unit,
     onUrlSchemesClick: () -> Unit,
@@ -658,14 +680,15 @@ private fun AppSettingsHubContent(
             )
         }
 
-        // --- Маршрутизация + настройки трафика ---
+        // --- Маршрутизация (профили) + настройки трафика ---
+        // The legacy standalone "Routing & rules" screen has been folded into routing profiles.
         SettingsGroupCard {
             SettingsGroupRow(
-                title = s.routing,
-                subtitle = s.routingSubtitle,
+                title = s.routingProfiles,
+                subtitle = s.routingProfilesSubtitle,
                 icon = Icons.Outlined.AltRoute,
                 enabled = true,
-                onClick = onRoutingClick
+                onClick = onRoutingProfilesClick
             )
             SettingsGroupDivider()
             SettingsGroupRow(
@@ -3197,6 +3220,7 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object SplitTunneling : AppSettingsRoute(1)
     object SubscriptionsSharing : AppSettingsRoute(1)
     object Routing : AppSettingsRoute(1)
+    object RoutingProfiles : AppSettingsRoute(1)
     object Traffic : AppSettingsRoute(1)
     object Application : AppSettingsRoute(1)
     object UrlSchemes : AppSettingsRoute(1)

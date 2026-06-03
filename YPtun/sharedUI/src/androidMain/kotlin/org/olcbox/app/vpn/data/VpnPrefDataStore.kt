@@ -24,6 +24,7 @@ val KEY_ANDROID_SPLIT_TUNNEL_PROXY_APPS = stringSetPreferencesKey("android_split
 val KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS = stringSetPreferencesKey("android_split_tunnel_bypass_apps")
 val KEY_ANDROID_DYNAMIC_THEME = booleanPreferencesKey("android_dynamic_theme")
 val KEY_ANDROID_ROUTING = stringPreferencesKey("android_routing_json")
+val KEY_ANDROID_ROUTING_PROFILES = stringPreferencesKey("android_routing_profiles_json")
 val KEY_ANDROID_TRAFFIC = stringPreferencesKey("android_traffic_json")
 val KEY_ANDROID_APP_BEHAVIOR = stringPreferencesKey("android_app_behavior_json")
 val KEY_ANDROID_LANGUAGE = stringPreferencesKey("android_language")
