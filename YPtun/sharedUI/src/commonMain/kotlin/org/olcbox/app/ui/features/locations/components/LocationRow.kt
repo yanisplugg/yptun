@@ -126,7 +126,20 @@ fun LocationRow(
             )
         }
         
+        // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),
+        // so show a neutral dash instead of a ms value or a false "Offline".
+        val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
+
         when {
+            isVkTurn -> {
+                Text(
+                    text = "—",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             isLoading -> {
                 ShimmeringPingSkeleton()
             }
