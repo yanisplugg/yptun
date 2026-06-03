@@ -48,14 +48,20 @@ object XrayConfig {
         // WG-over-VK base). Mirrors SingBoxConfig.wireguardBase. The ProxyProfile carries the
         // sing-box-format WG outbound in [ProxyProfile.rawOutbound]; we convert it to Xray schema.
         wireguardBase: ProxyProfile? = null,
+        // When set, the `routing` block is generated from this profile (direct/block/proxy buckets
+        // with geosite:/geoip:/domain: selectors) and its dns.hosts are merged. The referenced
+        // geoip.dat/geosite.dat must be present in XRAY_LOCATION_ASSET.
+        routingProfile: org.olcbox.app.data.model.RoutingProfile? = null,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
 
             putJsonObject("dns") {
-                if (traffic.blockRuDomains) {
+                val profileHosts = routingProfile?.dnsHosts ?: emptyMap()
+                if (traffic.blockRuDomains || profileHosts.isNotEmpty()) {
                     putJsonObject("hosts") {
-                        RuBlocklist.hostRegexps.forEach { put(it, "0.0.0.0") }
+                        if (traffic.blockRuDomains) RuBlocklist.hostRegexps.forEach { put(it, "0.0.0.0") }
+                        profileHosts.forEach { (k, v) -> put(k, v) }
                     }
                 }
                 putJsonArray("servers") {
@@ -107,7 +113,10 @@ object XrayConfig {
                     put("tag", "direct")
                     put("protocol", "freedom")
                 }
-                if (traffic.blockRuDomains) {
+                val profileNeedsBlock = routingProfile?.let {
+                    it.blockSites.isNotEmpty() || it.blockIp.isNotEmpty()
+                } == true
+                if (traffic.blockRuDomains || profileNeedsBlock) {
                     addJsonObject {
                         put("tag", "block")
                         put("protocol", "blackhole")
@@ -151,15 +160,20 @@ object XrayConfig {
                 }
             }
 
-            putJsonObject("routing") {
-                put("domainStrategy", "AsIs")
-                putJsonArray("rules") {
-                    if (traffic.blockRuDomains) {
-                        // Blocked hosts resolve to 0.0.0.0 (above); blackhole anything aimed there.
-                        addJsonObject {
-                            put("type", "field")
-                            putJsonArray("ip") { add("0.0.0.0") }
-                            put("outboundTag", "block")
+            if (routingProfile != null) {
+                // Profile-driven routing (direct/block/proxy buckets with geosite:/geoip:/domain:).
+                put("routing", XrayRouting.routingObject(routingProfile))
+            } else {
+                putJsonObject("routing") {
+                    put("domainStrategy", "AsIs")
+                    putJsonArray("rules") {
+                        if (traffic.blockRuDomains) {
+                            // Blocked hosts resolve to 0.0.0.0 (above); blackhole anything aimed there.
+                            addJsonObject {
+                                put("type", "field")
+                                putJsonArray("ip") { add("0.0.0.0") }
+                                put("outboundTag", "block")
+                            }
                         }
                     }
                 }
