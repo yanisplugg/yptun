@@ -90,8 +90,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val language: StateFlow<AppLanguage> = _language.asStateFlow()
 
     init {
-        LocalizationState.systemLanguage =
-            if (java.util.Locale.getDefault().language == "ru") AppLanguage.Russian else AppLanguage.English
+        LocalizationState.systemLanguage = when (java.util.Locale.getDefault().language) {
+            "ru" -> AppLanguage.Russian
+            "fa" -> AppLanguage.Persian
+            else -> AppLanguage.English
+        }
 
         scope.launch {
             ensureProxySettings()

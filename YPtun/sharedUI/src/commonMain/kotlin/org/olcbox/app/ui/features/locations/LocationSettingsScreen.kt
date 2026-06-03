@@ -820,7 +820,7 @@ private fun AdvancedCoreSection(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        VkTurnSwitchRow("Advanced $coreName settings", expanded, enabled) { expanded = it }
+        VkTurnSwitchRow(LocalStrings.current.advancedCoreSettings(coreName), expanded, enabled) { expanded = it }
         if (expanded) {
             VkTurnSwitchRow(LocalStrings.current.muxMultiplex, advanced.muxEnabled, enabled) { v ->
                 onChange { it.copy(muxEnabled = v) }

@@ -3027,7 +3027,8 @@ private fun ApplicationBehaviorContent(
             val options = listOf(
                 AppLanguage.System to "Авто / Auto",
                 AppLanguage.Russian to "🇷🇺 Русский",
-                AppLanguage.English to "🇺🇸 English"
+                AppLanguage.English to "🇺🇸 English",
+                AppLanguage.Persian to "🇮🇷 فارسی"
             )
             options.forEach { (lang, title) ->
                 FilterChip(
