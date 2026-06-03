@@ -51,6 +51,13 @@ data class RoutingProfile(
     /** Local-only id for our storage; not part of the Happ wire format. */
     @SerialName("_id") val id: String = "",
 ) {
+    /**
+     * True if any bucket carries an IP-based matcher (a CIDR or a `geoip:` selector). sing-box must
+     * `resolve` sniffed domains before such rules can match a domain connection.
+     */
+    fun usesIpRules(): Boolean =
+        (blockIp + directIp + proxyIp).any { it.trim().isNotEmpty() }
+
     /** True if any bucket references a `geoip:`/`geosite:` selector (needs the .dat files). */
     fun needsGeoFiles(): Boolean =
         (blockSites + directSites + proxySites).any { it.startsWith("geosite:", ignoreCase = true) } ||

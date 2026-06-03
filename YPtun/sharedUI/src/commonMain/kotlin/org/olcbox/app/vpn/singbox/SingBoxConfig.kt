@@ -161,87 +161,111 @@ object SingBoxConfig {
                     if (advanced?.sniff != false) {
                         addJsonObject { put("action", "sniff") }
                     }
-                    if (routingProfile != null) {
-                        // Profile-driven routing fully replaces the toggle-based rules. Local/private
-                        // addresses always go direct (Happ profiles assume this; avoids breaking LAN).
+                    // Block QUIC (HTTP/3) so clients fall back to TCP/HTTP2 through the proxy. A
+                    // TCP-only transport (xhttp / reality / ws) can't carry UDP, so QUIC just dies
+                    // with ERR_QUIC_PROTOCOL (Telemost, Wildberries, Google, …). Rejecting it forces
+                    // the working TCP path. Matches both the sniffed protocol and raw UDP/443.
+                    addJsonObject {
+                        putJsonArray("protocol") { add("quic") }
+                        put("action", "reject")
+                    }
+                    addJsonObject {
+                        put("network", "udp")
+                        putJsonArray("port") { add(443) }
+                        put("action", "reject")
+                    }
+                    // Routing profile and the advanced toggles are COMBINED (not either/or): the
+                    // profile's buckets run alongside the user's verbatim rules and the
+                    // bypassRussia/blockAds/block-direct toggles.
+                    // Private/LAN always direct (Happ profiles assume it; bypassLan toggle wants it).
+                    if (routingProfile != null || routing.bypassLan) {
                         addJsonObject {
                             put("ip_is_private", true)
                             put("outbound", "direct")
                         }
+                    }
+                    // sing-box 1.11+: ip_cidr/geoip rules only match a connection that already carries
+                    // an IP. A sniffed domain connection has none, so `geoip:ru → direct` (profile or
+                    // the bypassRussia toggle) is silently skipped and RU sites wrongly use the proxy
+                    // IP. Resolve the sniffed domain to an IP first so IP rules can match. The
+                    // ipv4-only strategy doubles as the IPv6 lever: no AAAA → nothing routes over IPv6.
+                    if (routingProfile?.usesIpRules() == true || routing.bypassRussia) {
+                        addJsonObject {
+                            put("action", "resolve")
+                            put("strategy", dnsStrategyOverride ?: traffic.domainStrategy)
+                        }
+                    }
+                    // Advanced verbatim user rules (highest precedence).
+                    parseJsonArray(routing.customRulesJson).forEach { add(it) }
+                    // Blocking toggles first so ads/blocked domains die even if a profile bucket would proxy them.
+                    if (routing.blockDomains.isNotEmpty()) {
+                        addJsonObject {
+                            putJsonArray("domain_suffix") { routing.blockDomains.forEach { add(it) } }
+                            put("action", "reject")
+                        }
+                    }
+                    if (routing.blockAds) {
+                        addJsonObject {
+                            put("rule_set", "geosite-ads")
+                            put("action", "reject")
+                        }
+                    }
+                    // The selected routing profile's own buckets (ordered by its routeOrder).
+                    if (routingProfile != null) {
                         SingBoxRouting.rules(routingProfile).forEach { add(it) }
-                    } else {
-                        // Advanced: verbatim user route.rules take precedence over the toggle-based rules.
-                        parseJsonArray(routing.customRulesJson).forEach { add(it) }
-                        if (routing.bypassLan) {
-                            addJsonObject {
-                                put("ip_is_private", true)
-                                put("outbound", "direct")
-                            }
+                    }
+                    // Direct conveniences last (a profile proxy rule above still wins on first match).
+                    if (routing.directDomains.isNotEmpty()) {
+                        addJsonObject {
+                            putJsonArray("domain_suffix") { routing.directDomains.forEach { add(it) } }
+                            put("outbound", "direct")
                         }
-                        if (routing.blockDomains.isNotEmpty()) {
-                            addJsonObject {
-                                putJsonArray("domain_suffix") { routing.blockDomains.forEach { add(it) } }
-                                put("action", "reject")
-                            }
-                        }
-                        if (routing.directDomains.isNotEmpty()) {
-                            addJsonObject {
-                                putJsonArray("domain_suffix") { routing.directDomains.forEach { add(it) } }
-                                put("outbound", "direct")
-                            }
-                        }
-                        if (routing.blockAds) {
-                            addJsonObject {
-                                put("rule_set", "geosite-ads")
-                                put("action", "reject")
-                            }
-                        }
-                        if (routing.bypassRussia) {
-                            addJsonObject {
-                                putJsonArray("rule_set") { add("geoip-ru"); add("geosite-ru") }
-                                put("outbound", "direct")
-                            }
+                    }
+                    if (routing.bypassRussia) {
+                        addJsonObject {
+                            putJsonArray("rule_set") { add("geoip-ru"); add("geosite-ru") }
+                            put("outbound", "direct")
                         }
                     }
                 }
 
-                if (routingProfile != null) {
-                    val profileRuleSets = SingBoxRouting.ruleSets(routingProfile, singboxGeositeBase, singboxGeoipBase)
-                    if (profileRuleSets.isNotEmpty()) {
-                        putJsonArray("rule_set") { profileRuleSets.forEach { add(it) } }
+                // rule_set definitions, merged from the profile + the toggles, de-duplicated by tag
+                // (a profile `geoip:ru` and the bypassRussia toggle both want a `geoip-ru` set, and a
+                // duplicate tag is a hard config error in sing-box).
+                val mergedRuleSets = buildList {
+                    if (routingProfile != null) {
+                        SingBoxRouting.ruleSets(routingProfile, singboxGeositeBase, singboxGeoipBase)
+                            .forEach { (it as? JsonObject)?.let(::add) }
                     }
-                } else {
-                    val customRuleSets = parseJsonArray(routing.customRuleSetsJson)
-                    if (routing.blockAds || routing.bypassRussia || customRuleSets.isNotEmpty()) {
-                        putJsonArray("rule_set") {
-                            customRuleSets.forEach { add(it) }
-                            if (routing.blockAds) {
-                                addJsonObject {
-                                    put("type", "remote")
-                                    put("tag", "geosite-ads")
-                                    put("format", "binary")
-                                    put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs")
-                                    put("download_detour", "direct")
-                                }
-                            }
-                            if (routing.bypassRussia) {
-                                addJsonObject {
-                                    put("type", "remote")
-                                    put("tag", "geoip-ru")
-                                    put("format", "binary")
-                                    put("url", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs")
-                                    put("download_detour", "direct")
-                                }
-                                addJsonObject {
-                                    put("type", "remote")
-                                    put("tag", "geosite-ru")
-                                    put("format", "binary")
-                                    put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs")
-                                    put("download_detour", "direct")
-                                }
-                            }
-                        }
+                    parseJsonArray(routing.customRuleSetsJson).forEach { (it as? JsonObject)?.let(::add) }
+                    if (routing.blockAds) {
+                        add(buildJsonObject {
+                            put("type", "remote")
+                            put("tag", "geosite-ads")
+                            put("format", "binary")
+                            put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs")
+                            put("download_detour", "direct")
+                        })
                     }
+                    if (routing.bypassRussia) {
+                        add(buildJsonObject {
+                            put("type", "remote")
+                            put("tag", "geoip-ru")
+                            put("format", "binary")
+                            put("url", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs")
+                            put("download_detour", "direct")
+                        })
+                        add(buildJsonObject {
+                            put("type", "remote")
+                            put("tag", "geosite-ru")
+                            put("format", "binary")
+                            put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs")
+                            put("download_detour", "direct")
+                        })
+                    }
+                }.associateBy { it["tag"]?.jsonPrimitive?.contentOrNull ?: it.toString() }.values
+                if (mergedRuleSets.isNotEmpty()) {
+                    putJsonArray("rule_set") { mergedRuleSets.forEach { add(it) } }
                 }
             }
         }

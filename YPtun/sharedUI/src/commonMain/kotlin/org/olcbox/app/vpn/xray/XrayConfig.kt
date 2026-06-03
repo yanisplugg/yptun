@@ -113,14 +113,11 @@ object XrayConfig {
                     put("tag", "direct")
                     put("protocol", "freedom")
                 }
-                val profileNeedsBlock = routingProfile?.let {
-                    it.blockSites.isNotEmpty() || it.blockIp.isNotEmpty()
-                } == true
-                if (traffic.blockRuDomains || profileNeedsBlock) {
-                    addJsonObject {
-                        put("tag", "block")
-                        put("protocol", "blackhole")
-                    }
+                // Always present: needed by the RU blocklist, profile block buckets AND the QUIC
+                // blackhole rule below.
+                addJsonObject {
+                    put("tag", "block")
+                    put("protocol", "blackhole")
                 }
                 // TLS fragmentation outbound (DPI evasion); proxy dials through it via dialerProxy.
                 if (traffic.fragmentEnabled && olcrtcChainPort == null) {
@@ -160,21 +157,36 @@ object XrayConfig {
                 }
             }
 
-            if (routingProfile != null) {
-                // Profile-driven routing (direct/block/proxy buckets with geosite:/geoip:/domain:).
-                put("routing", XrayRouting.routingObject(routingProfile))
-            } else {
-                putJsonObject("routing") {
+            // QUIC (HTTP/3) over a TCP-only transport (xhttp/reality/ws) can't pass → ERR_QUIC_PROTOCOL
+            // on Telemost/Wildberries/Google. Blackhole UDP/443 so clients fall back to TCP/HTTP2.
+            val quicBlockRule = buildJsonObject {
+                put("type", "field")
+                put("network", "udp")
+                put("port", 443)
+                put("outboundTag", "block")
+            }
+            // Blocked RU hosts resolve to 0.0.0.0 (dns.hosts above); blackhole anything aimed there.
+            val blockZeroRule = buildJsonObject {
+                put("type", "field")
+                putJsonArray("ip") { add("0.0.0.0") }
+                put("outboundTag", "block")
+            }
+            putJsonObject("routing") {
+                if (routingProfile != null) {
+                    // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
+                    // blocklist (item 5): the toggles run alongside the profile, not instead of it.
+                    val base = XrayRouting.routingObject(routingProfile)
+                    put("domainStrategy", base["domainStrategy"] ?: JsonPrimitive("AsIs"))
+                    putJsonArray("rules") {
+                        add(quicBlockRule)
+                        if (traffic.blockRuDomains) add(blockZeroRule)
+                        (base["rules"] as? JsonArray)?.forEach { add(it) }
+                    }
+                } else {
                     put("domainStrategy", "AsIs")
                     putJsonArray("rules") {
-                        if (traffic.blockRuDomains) {
-                            // Blocked hosts resolve to 0.0.0.0 (above); blackhole anything aimed there.
-                            addJsonObject {
-                                put("type", "field")
-                                putJsonArray("ip") { add("0.0.0.0") }
-                                put("outboundTag", "block")
-                            }
-                        }
+                        add(quicBlockRule)
+                        if (traffic.blockRuDomains) add(blockZeroRule)
                     }
                 }
             }
