@@ -1,29 +1,29 @@
-<!-- Thanks for contributing to YPtun! Please target the `Beta` branch. -->
+<!-- Спасибо за вклад в YPtun! PR направляй в ветку `Beta`. -->
 
-## What does this PR do?
+## Что делает этот PR?
 
-<!-- A short description of the change and the problem it solves. -->
+<!-- Кратко: что меняется и какую задачу решает. -->
 
-## Related issue
+## Связанный issue
 
-<!-- e.g. Closes #123 -->
+<!-- например Closes #123 -->
 
-## Type of change
+## Тип изменения
 
-- [ ] 🐛 Bug fix
-- [ ] ✨ New feature
-- [ ] 🌍 Translation / localization
-- [ ] 🧹 Refactor / cleanup
-- [ ] 📝 Documentation
+- [ ] 🐛 Исправление бага
+- [ ] ✨ Новая фича
+- [ ] 🌍 Перевод / локализация
+- [ ] 🧹 Рефакторинг / чистка
+- [ ] 📝 Документация
 
-## Checklist
+## Чеклист
 
-- [ ] Branched from `Beta`
-- [ ] Builds locally (`./gradlew :androidApp:assembleDebug -Polcbox.android.abiFilters=arm64-v8a`)
-- [ ] Unit tests pass (`./gradlew :sharedUI:jvmTest`)
-- [ ] Change is focused on one thing
-- [ ] I tested this on a device/emulator (describe below)
+- [ ] Ответвление от `Beta`
+- [ ] Собирается локально (`./gradlew :androidApp:assembleDebug -Polcbox.android.abiFilters=arm64-v8a`)
+- [ ] Проходят тесты (`./gradlew :sharedUI:jvmTest`)
+- [ ] Изменение сфокусировано на одном
+- [ ] Проверено на устройстве/эмуляторе (опиши ниже)
 
-## Testing notes
+## Как тестировал
 
-<!-- How did you verify it works? Device, Android version, engine/protocol used. -->
+<!-- Как убедился, что работает? Устройство, версия Android, движок/протокол. -->

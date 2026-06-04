@@ -1,23 +1,23 @@
 ---
-name: 💡 Feature request
-about: Suggest an idea or improvement
+name: 💡 Предложить фичу
+about: Идея или улучшение
 title: "[Feature] "
 labels: enhancement
 assignees: ''
 ---
 
-## What problem are you trying to solve?
+## Какую задачу хочешь решить?
 
-A clear description of the problem or use case. <!-- e.g. "My ISP blocks X, so I can't…" -->
+Чёткое описание проблемы или сценария. <!-- например «провайдер блокирует X, и я не могу…» -->
 
-## Proposed solution
+## Предлагаемое решение
 
-What you'd like to see happen.
+Что хотелось бы увидеть.
 
-## Alternatives considered
+## Альтернативы
 
-Any other approaches you've thought about.
+Какие другие варианты ты рассматривал.
 
-## Additional context
+## Дополнительно
 
-Protocol, country/network, or anything else that helps us understand the request.
+Протокол, страна/сеть и всё, что поможет понять запрос.

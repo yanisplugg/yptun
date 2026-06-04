@@ -1,58 +1,57 @@
-# Contributing to YPtun
+# Участие в YPtun
 
-Thanks for taking the time to contribute! 🎉 This project exists to keep the
-internet open, and every bug report, translation, and patch helps.
+Спасибо, что хочешь помочь! 🎉 Проект существует ради свободного интернета,
+и любой баг-репорт, перевод или патч идут в дело.
 
-## Ways to help
+## Чем можно помочь
 
-- 🐛 **Report bugs** — open an [issue](https://github.com/yanisplugg/olcvpn-client/issues)
-  with steps to reproduce, your device/Android version, and (if a connection
-  fails) anonymized logs from the in-app log viewer.
-- 💡 **Suggest features** — open an issue describing the problem you want solved.
-- 🌍 **Translations** — strings live in
+- 🐛 **Сообщить о баге** — открой [issue](https://github.com/yanisplugg/olcvpn-client/issues)
+  с шагами воспроизведения, моделью устройства и версией Android, а если не
+  подключается — приложи обезличенные логи из встроенного просмотрщика (иконка истории).
+- 💡 **Предложить фичу** — открой issue и опиши, какую задачу хочешь решить.
+- 🌍 **Переводы** — строки лежат в
   `YPtun/sharedUI/src/commonMain/kotlin/org/olcbox/app/ui/i18n/Strings.kt`
-  (Russian, English, Persian today). Add a new `Strings` implementation for your locale.
-- 🔧 **Code** — pick an open issue or propose your own change, then send a PR.
+  (сейчас русский, английский, фарси). Добавь свою реализацию `Strings` для новой локали.
+- 🔧 **Код** — возьми открытый issue или предложи своё изменение и пришли PR.
 
-## Project layout
+## Структура проекта
 
-| Path | What |
-|------|------|
-| `YPtun/` | Kotlin Multiplatform app — Compose UI, Android `VpnService`, engine wiring |
-| `cores/` | Go glue: one gomobile AAR (sing-box + olcRTC + Xray + AmneziaWG + VK-TURN) |
-| `olcrtc/`, `sing-box/`, `amneziawg-go/` | vendored third-party cores |
-| `awgproxy/`, `free-turn-proxy/` | Go modules for the AmneziaWG and VK-TURN engines |
+| Путь | Что это |
+|------|---------|
+| `YPtun/` | Kotlin Multiplatform приложение — Compose UI, Android `VpnService`, движки |
+| `cores/` | Go-связка: один gomobile-AAR (sing-box + olcRTC + Xray + AmneziaWG + VK-TURN) |
+| `olcrtc/`, `sing-box/`, `amneziawg-go/` | вендоренные сторонние ядра |
+| `awgproxy/`, `free-turn-proxy/` | Go-модули движков AmneziaWG и VK-TURN |
 
-Most logic is in `commonMain`; Android-only code is in `androidMain`.
+Большая часть логики — в `commonMain`; код только под Android — в `androidMain`.
 
-## Building
+## Сборка
 
-See **[README → Build from source](README.en.md#%EF%B8%8F-build-from-source)** for the full toolchain (JDK 17, Android SDK + NDK `28.2.13676358`, Go + `gomobile`).
+Полный набор инструментов (JDK 17, Android SDK + NDK `28.2.13676358`, Go + `gomobile`)
+описан в **[README → Сборка из исходников](README.md#%EF%B8%8F-%D1%81%D0%B1%D0%BE%D1%80%D0%BA%D0%B0-%D0%B8%D0%B7-%D0%B8%D1%81%D1%85%D0%BE%D0%B4%D0%BD%D0%B8%D0%BA%D0%BE%D0%B2)**.
 
 ```bash
 cd YPtun
-# fast single-ABI debug build for your phone
+# быстрая debug-сборка под свой телефон
 ./gradlew :androidApp:assembleDebug -Polcbox.android.abiFilters=arm64-v8a
-# run the JVM unit tests
+# юнит-тесты на JVM
 ./gradlew :sharedUI:jvmTest
 ```
 
-## Pull requests
+## Пул-реквесты
 
-1. **Branch from `Beta`** — that's where active development happens (`main` is the
-   stable, released branch).
-2. **Keep PRs focused.** One feature or fix per PR makes review easy. Split unrelated
-   changes into separate commits/PRs.
-3. **Match the surrounding style.** Follow the existing naming, formatting, and comment
-   density of the file you're editing.
-4. **Build and test** before pushing — at minimum `assembleDebug` and `jvmTest`.
-5. **Write clear commit messages** (`type: short summary`, e.g. `fix(routing): …`).
-6. Open the PR against `Beta` and fill in the template.
+1. **Ответвляйся от `Beta`** — там идёт активная разработка (`main` — стабильная,
+   релизная ветка).
+2. **Один PR — одно изменение.** Так его проще ревьюить. Несвязанные правки разноси
+   по отдельным коммитам/PR.
+3. **Держись стиля файла**, который правишь: те же имена, форматирование и плотность
+   комментариев, что вокруг.
+4. **Собери и протестируй** перед пушем — как минимум `assembleDebug` и `jvmTest`.
+5. **Понятные сообщения коммитов** (`тип: краткая суть`, например `fix(routing): …`).
+6. Открывай PR в ветку `Beta` и заполни шаблон.
 
-## Reporting security issues
+## Уязвимости
 
-Please **do not** open a public issue for security vulnerabilities — see
-**[SECURITY.md](SECURITY.md)**.
+Пожалуйста, **не** открывай публичный issue по уязвимостям — см. **[SECURITY.md](SECURITY.md)**.
 
-By contributing, you agree that your contributions are licensed under the
-project's [MIT License](LICENSE).
+Внося вклад, ты соглашаешься, что он лицензируется по [MIT](LICENSE) проекта.
