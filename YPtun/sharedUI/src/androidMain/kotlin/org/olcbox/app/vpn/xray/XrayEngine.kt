@@ -23,9 +23,15 @@ class XrayEngine(
 
     val isRunning: Boolean get() = running.get() && runCatching { Xraybridge.isRunning() }.getOrDefault(false)
 
+    /**
+     * @param assetPath directory holding geoip.dat/geosite.dat for geosite:/geoip: routing selectors.
+     *   Blank leaves xray-core's default (no geo data) — passed straight through to the bridge.
+     */
     @Synchronized
-    fun start(configJson: String) {
+    fun start(configJson: String, assetPath: String = "") {
         if (running.get()) stop()
+        runCatching { Xraybridge.setAssetPath(assetPath) }
+            .onFailure { Log.w(TAG, "xray setAssetPath failed", it) }
         Xraybridge.setProtector(object : Protector {
             override fun protect(fd: Long): Boolean = this@XrayEngine.protect(fd.toInt())
         })

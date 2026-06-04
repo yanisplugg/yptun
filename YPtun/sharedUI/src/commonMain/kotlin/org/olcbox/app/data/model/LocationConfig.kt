@@ -14,6 +14,93 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
+/**
+ * VK-TURN (freeturn) transport parameters for [EngineType.VkTurn]. [uri] is the
+ * full freeturn:// share link issued by the panel (carries transport/obf params,
+ * the WG config is extracted out of it into ProxyProfile.rawOutbound); [vkLink]
+ * is the per-client VK Calls join link the user pastes; [listenPort] is the local
+ * port the freeturn client raises and the WG Endpoint dials.
+ */
+@Serializable
+data class VkTurnConfig(
+    val uri: String = "",
+    @SerialName("vk_link")
+    val vkLink: String = "",
+    @SerialName("listen_port")
+    val listenPort: Int = LocationConfig.DEFAULT_FREETURN_PORT,
+    /** Parallel TURN relay streams (freeturn -n); 0 keeps the client default (10). */
+    val streams: Int = 0,
+    /**
+     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the WG-over-VK tunnel:
+     * the proxy server is dialed THROUGH WireGuard (sing-box detour). Blank = plain WG only.
+     */
+    @SerialName("chain_proxy_link")
+    val chainProxyLink: String = "",
+    /**
+     * What rides the VK tunnel and exits to the internet:
+     * - [OUTBOUND_WIREGUARD] / [OUTBOUND_AMNEZIAWG]: a UDP WireGuard(-like) tunnel whose Endpoint is
+     *   the local freeturn listener — requires the freeturn payload mode to be `udp` (udprelay).
+     * - [OUTBOUND_PROXY]: a TCP proxy (vless/vmess/trojan/ss) whose server is dialled THROUGH the
+     *   local freeturn TCP listener — requires the freeturn payload mode to be `tcp` (tcpfwd).
+     * The concrete outbound lives in [LocationConfig.proxy] (WG/proxy → rawOutbound, AWG → awgConfig).
+     */
+    @SerialName("outbound")
+    val outbound: String = OUTBOUND_WIREGUARD,
+    /** Verbatim exit-proxy share link kept for editing when [outbound] == [OUTBOUND_PROXY]. */
+    @SerialName("outbound_proxy_link")
+    val outboundProxyLink: String = "",
+    /**
+     * Which core runs the exit/chain proxy (same choice as the Standard engine). [ProxyCore.Auto]
+     * picks Xray for xhttp/splithttp (sing-box can't serve it over VK), otherwise sing-box.
+     */
+    @SerialName("proxy_core")
+    val proxyCore: ProxyCore = ProxyCore.Auto,
+) {
+    fun isComplete(): Boolean =
+        isStorable() && vkLink.isNotBlank()
+
+    /** UDP payload (WireGuard/AmneziaWG) needs udprelay; TCP proxy needs tcpfwd. */
+    fun requiredMode(): String = if (outbound == OUTBOUND_PROXY) "tcp" else "udp"
+
+    /** Resolves [proxyCore]==Auto to a concrete backend for the given exit/chain [profile]. */
+    fun resolvedProxyCore(profile: ProxyProfile?): ProxyCore = when {
+        proxyCore != ProxyCore.Auto -> proxyCore
+        !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
+        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        else -> ProxyCore.SingBox
+    }
+
+    companion object {
+        const val OUTBOUND_WIREGUARD = "wireguard"
+        const val OUTBOUND_AMNEZIAWG = "amneziawg"
+        const val OUTBOUND_PROXY = "proxy"
+    }
+
+    /**
+     * True when the freeturn link + WG transport are present. The per-client [vkLink]
+     * is filled in by the user via the location settings after import, so a location
+     * is storable (and shown in the list) before [isComplete] is satisfied.
+     */
+    fun isStorable(): Boolean =
+        uri.startsWith("freeturn://") && listenPort in 1..65535
+}
+
+/**
+ * Advanced per-location options for the sing-box / Xray proxy core (shown in the editor only when a
+ * specific core is chosen, not Auto). Mux multiplexes many streams over one connection; TCP Fast
+ * Open, destination sniffing and TLS record fragmentation are anti-DPI / performance knobs.
+ */
+@Serializable
+data class AdvancedCoreConfig(
+    @SerialName("mux_enabled") val muxEnabled: Boolean = false,
+    /** sing-box: smux | yamux | h2mux; Xray ignores the value (single mux). */
+    @SerialName("mux_protocol") val muxProtocol: String = "h2mux",
+    @SerialName("mux_max_streams") val muxMaxStreams: Int = 8,
+    @SerialName("tcp_fast_open") val tcpFastOpen: Boolean = false,
+    @SerialName("sniff") val sniff: Boolean = true,
+    @SerialName("tls_fragment") val tlsFragment: Boolean = false,
+)
+
 @Serializable
 data class LocationConfig(
     val name: String = "",
@@ -31,7 +118,21 @@ data class LocationConfig(
     /** Proxy server for the sing-box engine (Standard/Chain). Null for pure Stealth. */
     val proxy: ProxyProfile? = null,
     /** Proxy backend for Standard/Chain: Auto, sing-box or Xray. */
-    val core: ProxyCore = ProxyCore.Auto
+    val core: ProxyCore = ProxyCore.Auto,
+    /**
+     * VK-TURN transport for the [EngineType.VkTurn] engine. Holds the freeturn://
+     * share link and the per-client VK call link; the WireGuard outbound carried
+     * inside the link lives in [proxy].rawOutbound. Null for other engines.
+     */
+    val vkturn: VkTurnConfig? = null,
+    /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
+    val advanced: AdvancedCoreConfig? = null,
+    /**
+     * Routing profile applied to this location: a [RoutingProfile.id]; blank = use the global profile;
+     * [RoutingProfile.NONE_ID] = explicitly no profile. Resolved by [RoutingProfilesState.resolve].
+     */
+    @SerialName("routing_profile_id")
+    val routingProfileId: String = "",
 ) {
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
@@ -46,7 +147,9 @@ data class LocationConfig(
             vp8Batch = sanitizeVp8Batch(vp8Batch),
             engine = engine,
             proxy = proxy,
-            core = core
+            core = core,
+            vkturn = vkturn,
+            routingProfileId = routingProfileId.trim(),
         )
     }
 
@@ -67,6 +170,18 @@ data class LocationConfig(
         EngineType.Standard -> proxy?.isComplete() == true
         // Chain needs both: a proxy and the olcRTC stealth tunnel to wrap it.
         EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
+        // VK-TURN needs the freeturn link, the per-client VK call link and the WireGuard outbound.
+        EngineType.VkTurn -> vkturn?.isComplete() == true && !proxy?.rawOutbound.isNullOrBlank()
+    }
+
+    /**
+     * True when this config has enough to persist in the location list. Matches
+     * [isComplete] for every engine except VK-TURN, where the per-client VK call
+     * link is filled in after import, so the location is kept (and shown) without it.
+     */
+    fun isStorable(): Boolean = when (engine) {
+        EngineType.VkTurn -> vkturn?.isStorable() == true && !proxy?.rawOutbound.isNullOrBlank()
+        else -> isComplete()
     }
 
     fun displayName(): String = name.ifBlank { id }
@@ -89,6 +204,9 @@ data class LocationConfig(
 
         const val DEFAULT_VP8_FPS = 60
         const val DEFAULT_VP8_BATCH = 64
+
+        /** Local port the freeturn client raises; must match the Endpoint baked into the WG config. */
+        const val DEFAULT_FREETURN_PORT = 9000
 
         val supportedBypassProviders = listOf(
             PROVIDER_JAZZ,
@@ -365,6 +483,10 @@ data class LocationEntry(
     val engine: EngineType? = null,
     val proxy: ProxyProfile? = null,
     val core: ProxyCore? = null,
+    val vkturn: VkTurnConfig? = null,
+    val advanced: AdvancedCoreConfig? = null,
+    @SerialName("routing_profile_id")
+    val routingProfileId: String? = null,
     @SerialName("auth_provider")
     val authProvider: String? = null,
     @SerialName("carrier")
@@ -429,7 +551,10 @@ data class LocationEntry(
                     ?: LocationConfig.DEFAULT_VP8_BATCH,
                 engine = engine ?: EngineType.Stealth,
                 proxy = proxy,
-                core = core ?: ProxyCore.Auto
+                core = core ?: ProxyCore.Auto,
+                vkturn = vkturn,
+                advanced = advanced,
+                routingProfileId = routingProfileId.orEmpty(),
             ).normalized()
         }
 
@@ -449,6 +574,9 @@ data class LocationEntry(
             engine = config.engine,
             proxy = config.proxy,
             core = config.core,
+            vkturn = config.vkturn,
+            advanced = config.advanced,
+            routingProfileId = config.routingProfileId.ifBlank { null },
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
             metadata = metadata
@@ -476,6 +604,9 @@ data class LocationEntry(
                 engine = config.engine,
                 proxy = config.proxy,
                 core = config.core,
+                vkturn = config.vkturn,
+                advanced = config.advanced,
+                routingProfileId = config.routingProfileId.ifBlank { null },
                 authProvider = config.bypassProvider,
                 transport = LocationTransportConfig.from(config),
                 metadata = metadata
@@ -502,7 +633,7 @@ data class LocationBundleV4(
     fun normalized(): LocationBundleV4 {
         val normalizedLocations = locations
             .map { it.normalized() }
-            .filter { it.storageId.isNotBlank() && it.location.isComplete() }
+            .filter { it.storageId.isNotBlank() && it.location.isStorable() }
             .distinctBy { it.storageId }
 
         val active = activeLocationId

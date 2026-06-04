@@ -23,14 +23,20 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalizationState
+import org.olcbox.app.data.model.RoutingProfile
+import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.data.importer.HappRoutingParser
+import org.olcbox.app.vpn.geo.GeoAssetManager
 import org.olcbox.app.vpn.data.KEY_ANDROID_APP_BEHAVIOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_LANGUAGE
 import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING
+import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING_PROFILES
 import org.olcbox.app.vpn.data.KEY_ANDROID_TRAFFIC
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
@@ -81,6 +87,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val hwid: StateFlow<String> = _hwid.asStateFlow()
     private val _routing = MutableStateFlow(RoutingRules())
     val routing: StateFlow<RoutingRules> = _routing.asStateFlow()
+    private val _routingProfiles = MutableStateFlow(RoutingProfilesState())
+    val routingProfiles: StateFlow<RoutingProfilesState> = _routingProfiles.asStateFlow()
+    /** Transient status of the geo-database download (null = idle). Surfaced in the routing UI. */
+    private val _geoUpdateStatus = MutableStateFlow<GeoUpdateStatus?>(null)
+    val geoUpdateStatus: StateFlow<GeoUpdateStatus?> = _geoUpdateStatus.asStateFlow()
     private val _trafficSettings = MutableStateFlow(TrafficSettings())
     val trafficSettings: StateFlow<TrafficSettings> = _trafficSettings.asStateFlow()
     private val _appBehavior = MutableStateFlow(AppBehaviorSettings())
@@ -89,8 +100,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val language: StateFlow<AppLanguage> = _language.asStateFlow()
 
     init {
-        LocalizationState.systemLanguage =
-            if (java.util.Locale.getDefault().language == "ru") AppLanguage.Russian else AppLanguage.English
+        LocalizationState.systemLanguage = when (java.util.Locale.getDefault().language) {
+            "ru" -> AppLanguage.Russian
+            "fa" -> AppLanguage.Persian
+            else -> AppLanguage.English
+        }
 
         scope.launch {
             ensureProxySettings()
@@ -142,6 +156,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 _routing.value = preferences[KEY_ANDROID_ROUTING]
                     ?.let { runCatching { Json.decodeFromString(RoutingRules.serializer(), it) }.getOrNull() }
                     ?: RoutingRules()
+                _routingProfiles.value = preferences[KEY_ANDROID_ROUTING_PROFILES]
+                    ?.let { runCatching { Json.decodeFromString(RoutingProfilesState.serializer(), it) }.getOrNull() }
+                    ?: seededRoutingProfilesState()
                 _trafficSettings.value = preferences[KEY_ANDROID_TRAFFIC]
                     ?.let { runCatching { Json.decodeFromString(TrafficSettings.serializer(), it) }.getOrNull() }
                     ?.normalized()
@@ -202,6 +219,97 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             startVpn()
         }
     }
+
+    // --- Happ-style routing profiles ---
+
+    /** Persists the whole routing-profile state (profiles, global selection, geo sources). */
+    fun setRoutingProfilesState(state: RoutingProfilesState) {
+        _routingProfiles.value = state
+        scope.launch {
+            appContext.vpnPrefDataStore.edit { preferences ->
+                preferences[KEY_ANDROID_ROUTING_PROFILES] =
+                    Json.encodeToString(RoutingProfilesState.serializer(), state)
+            }
+        }
+        if (status.value is VpnStatus.Connected || status.value is VpnStatus.Reconnecting) {
+            startVpn()
+        }
+    }
+
+    /** Inserts or replaces a profile (matched by id), assigning a fresh id when blank. Returns its id. */
+    fun saveRoutingProfile(profile: RoutingProfile): String {
+        val id = profile.id.ifBlank { "rp-" + java.util.UUID.randomUUID().toString().take(8) }
+        val withId = profile.copy(id = id)
+        val current = _routingProfiles.value
+        val others = current.profiles.filterNot { it.id == id }
+        setRoutingProfilesState(current.copy(profiles = others + withId))
+        return id
+    }
+
+    fun deleteRoutingProfile(id: String) {
+        val current = _routingProfiles.value
+        setRoutingProfilesState(
+            current.copy(
+                profiles = current.profiles.filterNot { it.id == id },
+                globalProfileId = if (current.globalProfileId == id) "" else current.globalProfileId,
+            )
+        )
+    }
+
+    /** Sets (or clears, with blank) the profile applied to every connection by default. */
+    fun setGlobalRoutingProfile(id: String) {
+        setRoutingProfilesState(_routingProfiles.value.copy(globalProfileId = id))
+    }
+
+    /**
+     * Imports a `happ://routing/add/...` link as a new profile. Returns true when [link] was a valid
+     * routing link (and a profile was saved); the new id is also returned by [importRoutingProfileId]
+     * for callers that want to select it.
+     */
+    override fun importRoutingProfileLink(link: String): Boolean =
+        importRoutingProfileId(link) != null
+
+    override fun routingProfileChoices(): List<RoutingProfile> = _routingProfiles.value.profiles
+
+    /** As [importRoutingProfileLink] but returns the new profile id (or null when not a routing profile). */
+    fun importRoutingProfileId(link: String): String? {
+        val parsed = HappRoutingParser.parseAny(link) ?: return null
+        return saveRoutingProfile(parsed.copy(id = ""))
+    }
+
+    /** Updates the geo-database source URLs (blank restores the defaults at build time). */
+    fun setGeoSources(geoipUrl: String, geositeUrl: String) {
+        setRoutingProfilesState(
+            _routingProfiles.value.copy(geoipUrl = geoipUrl.trim(), geositeUrl = geositeUrl.trim())
+        )
+    }
+
+    /** Downloads the geoip.dat/geosite.dat now (from the configured sources); status flows to [geoUpdateStatus]. */
+    fun updateGeoAssetsNow() {
+        if (_geoUpdateStatus.value is GeoUpdateStatus.Running) return
+        val state = _routingProfiles.value
+        _geoUpdateStatus.value = GeoUpdateStatus.Running
+        scope.launch {
+            val result = GeoAssetManager.download(appContext, state.geoipUrl, state.geositeUrl)
+            if (result.success) {
+                val now = System.currentTimeMillis()
+                setRoutingProfilesState(_routingProfiles.value.copy(geoLastUpdated = now))
+                _geoUpdateStatus.value = GeoUpdateStatus.Success(now, result.bytes)
+            } else {
+                _geoUpdateStatus.value = GeoUpdateStatus.Failed(result.error ?: "download failed")
+            }
+        }
+    }
+
+    fun clearGeoUpdateStatus() {
+        _geoUpdateStatus.value = null
+    }
+
+    /** First-run routing state: the built-in "Russia → direct" profile, applied globally for convenience. */
+    private fun seededRoutingProfilesState() = RoutingProfilesState(
+        profiles = listOf(RoutingProfile.russiaDirect()),
+        globalProfileId = RoutingProfile.DEFAULT_RU_DIRECT_ID,
+    )
 
     fun setTrafficSettings(settings: TrafficSettings) {
         val normalized = settings.normalized()
@@ -381,26 +489,127 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         context.startService(intent)
     }
 
-    override suspend fun ping(locationConfig: LocationConfig): Long? {
-        // VLESS/standard locations have no olcRTC room/key — pinging them via olcRTC is unstable.
-        // Use a plain TCP latency probe to the proxy server instead (like typical proxy clients).
-        if (locationConfig.engine == EngineType.Standard) {
-            return tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
+    override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
+
+    override suspend fun checkConnection(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
+
+    private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
+        val proxyType = locationConfig.proxy?.type
+        return when {
+            // Obfuscated transports whose real endpoint is blocked/hidden (VK-TURN, AmneziaWG):
+            // the only meaningful probe is end-to-end through the live tunnel.
+            locationConfig.engine == EngineType.VkTurn -> tunnelPing()
+            proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
+                // Connected → measure through the live tunnel; otherwise a standalone WG-handshake
+                // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).
+                if (OlcboxVpnState.activeSocks != null) tunnelPing()
+                else awgProbePing(locationConfig.proxy?.awgConfig.orEmpty())
+            // Plain proxies: TCP latency to the (reachable) proxy server.
+            locationConfig.engine == EngineType.Standard ->
+                tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
+            else -> OlcRtcConnectionChecker.ping(
+                locationConfig = locationConfig,
+                deviceId = deviceIdentityProvider.hwid()
+            )
         }
-        return OlcRtcConnectionChecker.ping(
-            locationConfig = locationConfig,
-            deviceId = deviceIdentityProvider.hwid()
-        )
     }
 
-    override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
-        if (locationConfig.engine == EngineType.Standard) {
-            return tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
+    /**
+     * Latency of the VK-TURN tunnel measured end-to-end: a SOCKS5 CONNECT through the local proxy
+     * to a reliable host (1.1.1.1:53) — the round trip traverses WireGuard over the VK relay. Only
+     * meaningful while connected; returns null otherwise (shown as "unknown", not offline).
+     */
+    /**
+     * End-to-end latency through the live tunnel: a SOCKS5 CONNECT to 1.1.1.1:443 via the running
+     * core's local SOCKS. Uses the per-session credentials the service publishes (randomized in TUN
+     * mode) — without them the handshake is rejected (0xFF) and shows a false "Offline". Returns null
+     * only when no core is up (cannot probe an obfuscated/blocked endpoint while disconnected).
+     */
+    /** Pre-connection AmneziaWG latency: a throwaway WG handshake via the awgproxy probe. */
+    private suspend fun awgProbePing(awgConfig: String): Long? = withContext(Dispatchers.IO) {
+        if (awgConfig.isBlank()) return@withContext null
+        val ms = runCatching { awg.Awg.probe(awgConfig) }.getOrDefault(-1L)
+        if (ms >= 0) ms else null
+    }
+
+    private suspend fun tunnelPing(): Long? = withContext(Dispatchers.IO) {
+        val sock = OlcboxVpnState.activeSocks ?: return@withContext null
+        val host = AndroidSocksProxySettings.connectHost(sock.host)
+
+        var best: Long? = null
+        var lastError: String? = null
+        repeat(TCP_PING_ATTEMPTS) {
+            val r = runCatching {
+                socks5ConnectRtt(host, sock.port, sock.username, sock.password,
+                    TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, TUNNEL_PING_TIMEOUT_MS)
+            }
+            val ms = r.getOrNull()
+            if (ms != null && (best == null || ms < best!!)) best = ms
+            if (ms == null) lastError = r.exceptionOrNull()?.message ?: "no reply"
         }
-        return OlcRtcConnectionChecker.check(
-            locationConfig = locationConfig,
-            deviceId = deviceIdentityProvider.hwid()
-        )
+        if (best == null) {
+            OlcboxVpnState.addLog("Tunnel ping failed via $host:${sock.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT: $lastError")
+        }
+        best
+    }
+
+    /** Hand-rolled SOCKS5 CONNECT to an IPv4 target through proxyHost:proxyPort; returns RTT ms. */
+    private fun socks5ConnectRtt(
+        proxyHost: String, proxyPort: Int, username: String, password: String,
+        targetHost: String, targetPort: Int, timeoutMs: Int
+    ): Long? {
+        java.net.Socket().use { socket ->
+            socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), timeoutMs)
+            socket.soTimeout = timeoutMs
+            val out = socket.getOutputStream()
+            val inp = socket.getInputStream()
+            val start = System.nanoTime()
+
+            val useAuth = username.isNotBlank()
+            out.write(if (useAuth) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
+            out.flush()
+            val sel = readExactly(inp, 2)
+            if (sel[0].toInt() and 0xFF != 0x05) return null
+            when (sel[1].toInt() and 0xFF) {
+                0x00 -> {}
+                0x02 -> {
+                    val u = username.encodeToByteArray(); val p = password.encodeToByteArray()
+                    val a = ByteArray(3 + u.size + p.size)
+                    a[0] = 0x01; a[1] = u.size.toByte(); u.copyInto(a, 2)
+                    a[2 + u.size] = p.size.toByte(); p.copyInto(a, 3 + u.size)
+                    out.write(a); out.flush()
+                    if (readExactly(inp, 2)[1].toInt() and 0xFF != 0x00) return null
+                }
+                else -> return null
+            }
+
+            val ip = targetHost.split('.').map { it.toInt() }
+            val req = byteArrayOf(
+                0x05, 0x01, 0x00, 0x01,
+                ip[0].toByte(), ip[1].toByte(), ip[2].toByte(), ip[3].toByte(),
+                ((targetPort shr 8) and 0xFF).toByte(), (targetPort and 0xFF).toByte()
+            )
+            out.write(req); out.flush()
+
+            val head = readExactly(inp, 4)
+            if (head[1].toInt() and 0xFF != 0x00) return null
+            val addrLen = when (head[3].toInt() and 0xFF) {
+                0x01 -> 4; 0x04 -> 16; 0x03 -> readExactly(inp, 1)[0].toInt() and 0xFF
+                else -> return null
+            }
+            readExactly(inp, addrLen + 2)
+            return (System.nanoTime() - start) / 1_000_000L
+        }
+    }
+
+    private fun readExactly(inp: java.io.InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n); var off = 0
+        while (off < n) {
+            val r = inp.read(buf, off, n - off)
+            if (r < 0) throw java.io.EOFException("short read")
+            off += r
+        }
+        return buf
     }
 
     /** TCP-connect latency to host:port in ms, best of a few attempts, or null if unreachable. */
@@ -533,6 +742,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
         const val TCP_PING_ATTEMPTS = 2
         const val TCP_PING_TIMEOUT_MS = 3_000
+        // End-to-end tunnel latency probe target. 1.1.1.1:443 (HTTPS) accepts TCP universally and
+        // fast; port 53 can be filtered on some paths.
+        const val TUNNEL_PROBE_HOST = "1.1.1.1"
+        const val TUNNEL_PROBE_PORT = 443
+        // The probe traverses VK relay + WireGuard, so allow more time than a direct TCP ping.
+        const val TUNNEL_PING_TIMEOUT_MS = 6_000
         val random = SecureRandom()
     }
 }

@@ -180,11 +180,11 @@ func TestSanitiseNick(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{"alice", "alice"},
+		{nameAlice, nameAlice},
 		{"Alice Smith", "Alice-Smith"},
 		{"Конрад Олег", "Konrad-Oleg"},
 		{"olcrtc-bot42", "olcrtc-bot42"},
-		{"  bob  ", "bob"},
+		{"  bob  ", nameBob},
 		{"$$$ %%%", ""},
 		{"verylongnicknamethatexceedslimit", "verylongnicknamet"[:16]},
 	}
@@ -225,17 +225,21 @@ func TestDeliverBridgeMessageMagicAndPeerLatch(t *testing.T) {
 	}
 	// Frame without magic is dropped.
 	js.deliverBridgeMessage(makeBridgeMessageFrom("peerA", map[string]any{rawFieldKey: bad}), true)
-	// Frame from a different sender after latch is dropped even with magic.
-	js.deliverBridgeMessage(makeBridgeMessageFrom("peerB", map[string]any{rawFieldKey: good}), true)
-	// Another frame from latched peer still flows.
+	// Frame from a different sender re-latches: any sender that passes
+	// the OLR magic check is by definition another olcrtc instance, and
+	// when a peer reconnects JVB assigns it a new endpoint id. We must
+	// adopt the new id so the peer's post-reconnect bytes flow.
 	beta := makeBridgeFrame(t, []byte("beta"))
-	js.deliverBridgeMessage(makeBridgeMessageFrom("peerA", map[string]any{rawFieldKey: beta}), true)
+	js.deliverBridgeMessage(makeBridgeMessageFrom("peerB", map[string]any{rawFieldKey: beta}), true)
 
 	if len(received) != 2 {
 		t.Fatalf("received frames = %d, want 2 (%q)", len(received), received)
 	}
 	if string(received[0]) != "alpha" || string(received[1]) != "beta" {
 		t.Fatalf("received = %q, want [alpha beta]", received)
+	}
+	if p := js.peerEndpoint.Load(); p == nil || *p != "peerB" {
+		t.Fatalf("peerEndpoint after re-latch = %v, want peerB", p)
 	}
 }
 
@@ -316,7 +320,16 @@ func TestReconnectEpochAnnounceWithZeroPeerEpochIsAccepted(t *testing.T) {
 	}
 }
 
-func TestDeliverBridgeMessagePeerEpochChangeRequestsReconnect(t *testing.T) {
+// TestDeliverBridgeMessagePeerEpochChangeAcceptsFrameNoReconnect codifies
+// the post-fix behaviour: when a peer's epoch flips (because the peer
+// reconnected), we update our latch and ACCEPT the new frame instead of
+// dropping it AND NEVER trigger our own reconnect. The earlier
+// "reconnect on peer epoch change" semantics created a tight ping-pong
+// loop: peer reconnects → we drop their first frame and reconnect →
+// we publish a fresh epoch → peer drops our frame and reconnects → ...
+// Both sides ended up in a cycle with no data flowing, which is exactly
+// what the paired chaos stress test caught.
+func TestDeliverBridgeMessagePeerEpochChangeAcceptsFrameNoReconnect(t *testing.T) {
 	sess, err := New(context.Background(), engine.Config{
 		URL:   testHost,
 		Extra: map[string]string{credentialKeyRoom: testRoom},
@@ -339,16 +352,24 @@ func TestDeliverBridgeMessagePeerEpochChangeRequestsReconnect(t *testing.T) {
 
 	first := makeBridgeFrameForEpoch(t, 0x1111, 0, []byte("first"))
 	js.deliverBridgeMessage(makeBridgeMessageFrom("peerA", map[string]any{rawFieldKey: first}), true)
-	changed := makeBridgeFrameForEpoch(t, 0x2222, 0x3333, nil)
+
+	// Peer reconnected, new epoch, and the very first post-reconnect
+	// frame carries the new payload.
+	changed := makeBridgeFrameForEpoch(t, 0x2222, 0x3333, []byte("after-peer-reconnect"))
 	js.deliverBridgeMessage(makeBridgeMessageFrom("peerA", map[string]any{rawFieldKey: changed}), true)
 
-	if len(received) != 1 || string(received[0]) != "first" {
-		t.Fatalf("received = %q, want only first payload", received)
+	if len(received) != 2 ||
+		string(received[0]) != "first" ||
+		string(received[1]) != "after-peer-reconnect" {
+		t.Fatalf("received = %q, want both payloads in order", received)
+	}
+	if got := js.peerEpoch.Load(); got != 0x2222 {
+		t.Fatalf("peerEpoch.Load() = 0x%X, want 0x2222 (latch must update)", got)
 	}
 	select {
 	case <-js.reconnectCh:
-	case <-time.After(time.Second):
-		t.Fatal("peer epoch change did not request reconnect")
+		t.Fatal("peer epoch change must NOT enqueue a self-reconnect (causes ping-pong loop)")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

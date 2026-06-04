@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -92,7 +93,7 @@ fun LocationRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .height(76.dp)
+            .heightIn(min = 76.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(16.dp))
@@ -114,19 +115,36 @@ fun LocationRow(
                 text = cleanName,
                 color = textColor,
                 fontSize = 16.sp,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Visible,
+                softWrap = true
             )
 
             Text(
                 text = locationSubtitle(location),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                maxLines = 2,
+                overflow = TextOverflow.Visible,
+                softWrap = true
             )
         }
         
+        // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),
+        // so show a neutral dash instead of a ms value or a false "Offline".
+        val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
+
         when {
+            isVkTurn -> {
+                Text(
+                    text = "—",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             isLoading -> {
                 ShimmeringPingSkeleton()
             }
@@ -142,7 +160,7 @@ fun LocationRow(
 
             isError -> {
                 Text(
-                    text = "Offline",
+                    text = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.error
@@ -184,6 +202,11 @@ private fun locationSubtitle(location: LocationItem): String {
         EngineType.Chain -> listOfNotNull(
             "Chain",
             protocolLabel(config.proxy?.type),
+            config.proxy?.server
+        )
+
+        EngineType.VkTurn -> listOfNotNull(
+            "VK-TURN",
             config.proxy?.server
         )
 

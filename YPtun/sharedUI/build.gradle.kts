@@ -150,6 +150,16 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         coresRepoDir.resolve("bind.go")
     )
     inputs.dir(coresRepoDir.resolve("xraybridge"))
+    // free-turn-proxy is a sibling replace module; track its bound sources so edits there
+    // (e.g. the freeturn wrapper / relay) re-trigger the gomobile bind.
+    inputs.dir(coresRepoDir.resolve("../free-turn-proxy/freeturn"))
+    inputs.dir(coresRepoDir.resolve("../free-turn-proxy/internal"))
+    // AmneziaWG SOCKS bridge (sibling module) + its local amneziawg-go fork.
+    inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
+    // olcrtc (sibling replace module) bound packages — track so edits (e.g. telemost cookies)
+    // re-trigger the bind.
+    inputs.dir(olcrtcRepoDir.resolve("mobile"))
+    inputs.dir(olcrtcRepoDir.resolve("internal"))
     inputs.property("tags", libboxBuildTags)
     outputs.file(coresAndroidAar)
 
@@ -169,6 +179,8 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         coresAndroidAarFile.absolutePath,
         "github.com/openlibrecommunity/olcrtc/mobile",
         "github.com/sagernet/sing-box/experimental/libbox",
+        "github.com/samosvalishe/free-turn-proxy/freeturn",
+        "github.com/olc/awgproxy/awg",
         "kazcores/xraybridge"
     )
 }

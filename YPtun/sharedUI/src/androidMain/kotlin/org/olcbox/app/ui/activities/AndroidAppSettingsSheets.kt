@@ -37,6 +37,7 @@ import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.ui.graphics.toArgb
 import org.olcbox.app.ui.theme.ThemeState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +64,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Refresh
@@ -110,6 +113,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
@@ -147,6 +152,14 @@ internal fun AppSettingsSheet(
     hwid: String,
     routing: RoutingRules,
     onRoutingChanged: (RoutingRules) -> Unit,
+    routingProfilesState: org.olcbox.app.data.model.RoutingProfilesState,
+    geoUpdateStatus: org.olcbox.app.vpn.GeoUpdateStatus?,
+    onRoutingProfileSaved: (org.olcbox.app.data.model.RoutingProfile) -> Unit,
+    onRoutingProfileDeleted: (String) -> Unit,
+    onGlobalRoutingProfileChanged: (String) -> Unit,
+    onRoutingProfileLinkImported: (String) -> Boolean,
+    onGeoSourcesChanged: (String, String) -> Unit,
+    onUpdateGeoNow: () -> Unit,
     trafficSettings: TrafficSettings,
     onTrafficChanged: (TrafficSettings) -> Unit,
     appBehavior: AppBehaviorSettings,
@@ -257,12 +270,21 @@ internal fun AppSettingsSheet(
                     onBackgroundColorSelected = onBackgroundColorSelected,
                     onConnectionSettingsClick = { route = AppSettingsRoute.ConnectionSettings },
                     onRoutingClick = { route = AppSettingsRoute.Routing },
+                    onRoutingProfilesClick = { route = AppSettingsRoute.RoutingProfiles },
                     onTrafficClick = { route = AppSettingsRoute.Traffic },
                     onApplicationClick = { route = AppSettingsRoute.Application },
                     onUrlSchemesClick = { route = AppSettingsRoute.UrlSchemes },
                     onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
-                    onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs }
+                    onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
+                    experimentalUnlocked = appBehavior.experimentalUnlocked,
+                    onExperimentalClick = { route = AppSettingsRoute.Experimental }
+                )
+
+                AppSettingsRoute.Experimental -> ExperimentalContent(
+                    settings = appBehavior,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onChanged = onAppBehaviorChanged
                 )
 
                 AppSettingsRoute.Routing -> RoutingContent(
@@ -270,6 +292,18 @@ internal fun AppSettingsSheet(
                     enabled = enabled,
                     onBack = { route = AppSettingsRoute.Hub },
                     onRoutingChanged = onRoutingChanged
+                )
+
+                AppSettingsRoute.RoutingProfiles -> RoutingProfilesContent(
+                    state = routingProfilesState,
+                    geoStatus = geoUpdateStatus,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onSaveProfile = onRoutingProfileSaved,
+                    onDeleteProfile = onRoutingProfileDeleted,
+                    onSetGlobal = onGlobalRoutingProfileChanged,
+                    onImportLink = onRoutingProfileLinkImported,
+                    onSetGeoSources = onGeoSourcesChanged,
+                    onUpdateGeo = onUpdateGeoNow,
                 )
 
                 AppSettingsRoute.Traffic -> TrafficSettingsContent(
@@ -384,13 +418,14 @@ private fun ThemeColorSection(
 ) {
     var showAccentPicker by remember { mutableStateOf(false) }
     var showBackgroundPicker by remember { mutableStateOf(false) }
+    val s = LocalStrings.current
 
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = "Theme color",
+            text = s.themeColor,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -412,7 +447,7 @@ private fun ThemeColorSection(
         }
 
         Text(
-            text = "Element color",
+            text = s.elementColor,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -434,7 +469,7 @@ private fun ThemeColorSection(
         }
 
         Text(
-            text = "Text color",
+            text = s.textColor,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -515,12 +550,13 @@ private fun ColorPickerDialog(
     val color = Color(r.toInt(), g.toInt(), b.toInt())
 
     fun syncHex() { hex = rgbToHex(r, g, b) }
+    val s = LocalStrings.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = { onConfirm(color) }) { Text("OK") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        title = { Text("Custom color (RGB)") },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(s.cancel) } },
+        title = { Text(s.customColorRgb) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(
@@ -600,12 +636,15 @@ private fun AppSettingsHubContent(
     onBackgroundColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onConnectionSettingsClick: () -> Unit,
     onRoutingClick: () -> Unit,
+    onRoutingProfilesClick: () -> Unit,
     onTrafficClick: () -> Unit,
     onApplicationClick: () -> Unit,
     onUrlSchemesClick: () -> Unit,
     onSubscriptionsSharingClick: () -> Unit,
     onUpdatesClick: () -> Unit,
-    onApplicationLogsClick: () -> Unit
+    onApplicationLogsClick: () -> Unit,
+    experimentalUnlocked: Boolean = false,
+    onExperimentalClick: () -> Unit = {}
 ) {
     val s = LocalStrings.current
     Column(
@@ -641,14 +680,15 @@ private fun AppSettingsHubContent(
             )
         }
 
-        // --- Маршрутизация + настройки трафика ---
+        // --- Маршрутизация (профили) + настройки трафика ---
+        // The legacy standalone "Routing & rules" screen has been folded into routing profiles.
         SettingsGroupCard {
             SettingsGroupRow(
-                title = s.routing,
-                subtitle = s.routingSubtitle,
+                title = s.routingProfiles,
+                subtitle = s.routingProfilesSubtitle,
                 icon = Icons.Outlined.AltRoute,
                 enabled = true,
-                onClick = onRoutingClick
+                onClick = onRoutingProfilesClick
             )
             SettingsGroupDivider()
             SettingsGroupRow(
@@ -709,6 +749,16 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = onApplicationLogsClick
             )
+            if (experimentalUnlocked) {
+                SettingsGroupDivider()
+                SettingsGroupRow(
+                    title = s.experimental,
+                    subtitle = s.experimentalSubtitle,
+                    icon = Icons.Outlined.Tune,
+                    enabled = true,
+                    onClick = onExperimentalClick
+                )
+            }
         }
 
         // --- ИНФОРМАЦИЯ ---
@@ -1286,7 +1336,7 @@ private fun ApplicationLogsSettingsContent(
         Row(verticalAlignment = Alignment.CenterVertically) {
             SettingsDetailHeader(
                 title = LocalStrings.current.applicationLogsTitle,
-                subtitle = if (logs.isEmpty()) "No entries" else "${logs.size} entries",
+                subtitle = if (logs.isEmpty()) LocalStrings.current.noLogEntries else LocalStrings.current.logEntriesCount(logs.size),
                 onBack = onBack,
                 modifier = Modifier.weight(1f)
             )
@@ -1295,13 +1345,13 @@ private fun ApplicationLogsSettingsContent(
                 enabled = logs.isNotEmpty(),
                 onClick = onSaveClick
             ) {
-                Text("Save")
+                Text(LocalStrings.current.save)
             }
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onShareClick
             ) {
-                Text("Share")
+                Text(LocalStrings.current.share)
             }
         }
 
@@ -1521,10 +1571,10 @@ private fun SubscriptionShareRow(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onShareClick) {
-                    Text("QR/share")
+                    Text(LocalStrings.current.qrShare)
                 }
                 TextButton(onClick = onRefreshClick) {
-                    Text("Refresh")
+                    Text(LocalStrings.current.refresh)
                 }
             }
         }
@@ -1581,7 +1631,7 @@ private fun SettingsGroupRow(
                     text = subtitle,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -2595,6 +2645,11 @@ private fun RoutingContent(
     var bypassRu by remember(routing) { mutableStateOf(routing.bypassRussia) }
     var directText by remember(routing) { mutableStateOf(RoutingRules.domainsToText(routing.directDomains)) }
     var blockText by remember(routing) { mutableStateOf(RoutingRules.domainsToText(routing.blockDomains)) }
+    var customRules by remember(routing) { mutableStateOf(routing.customRulesJson) }
+    var customRuleSets by remember(routing) { mutableStateOf(routing.customRuleSetsJson) }
+    var advancedExpanded by remember(routing) { mutableStateOf(routing.customRulesJson.isNotBlank() || routing.customRuleSetsJson.isNotBlank()) }
+    val rulesValid = RoutingRules.isValidRulesJson(customRules)
+    val ruleSetsValid = RoutingRules.isValidRulesJson(customRuleSets)
     val s = LocalStrings.current
 
     Column(
@@ -2670,6 +2725,54 @@ private fun RoutingContent(
             modifier = Modifier.fillMaxWidth()
         )
 
+        // Advanced: raw sing-box routing rules for power users.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable { advancedExpanded = !advancedExpanded }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                s.sbRoutingAdvanced,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                if (advancedExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = null
+            )
+        }
+        if (advancedExpanded) {
+            Text(
+                s.sbRoutingAdvancedDesc,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+            OutlinedTextField(
+                value = customRules,
+                onValueChange = { customRules = it },
+                label = { Text(s.sbRouteRulesLabel) },
+                placeholder = { Text("[{\"domain_suffix\":[\"example.com\"],\"outbound\":\"direct\"}]") },
+                isError = !rulesValid,
+                supportingText = if (!rulesValid) ({ Text(s.sbInvalidJsonArray) }) else null,
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = customRuleSets,
+                onValueChange = { customRuleSets = it },
+                label = { Text(s.sbRuleSetLabel) },
+                placeholder = { Text("[{\"type\":\"remote\",\"tag\":\"my-set\",\"format\":\"binary\",\"url\":\"https://…\",\"download_detour\":\"direct\"}]") },
+                isError = !ruleSetsValid,
+                supportingText = if (!ruleSetsValid) ({ Text(s.sbInvalidJsonArray) }) else null,
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
         Button(
             onClick = {
                 onRoutingChanged(
@@ -2678,12 +2781,14 @@ private fun RoutingContent(
                         blockAds = blockAds,
                         bypassRussia = bypassRu,
                         directDomains = RoutingRules.parseDomains(directText),
-                        blockDomains = RoutingRules.parseDomains(blockText)
+                        blockDomains = RoutingRules.parseDomains(blockText),
+                        customRulesJson = customRules.trim(),
+                        customRuleSetsJson = customRuleSets.trim()
                     )
                 )
                 onBack()
             },
-            enabled = enabled,
+            enabled = enabled && rulesValid && ruleSetsValid,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(s.saveAndApply)
@@ -2933,12 +3038,19 @@ private fun ApplicationBehaviorContent(
             checked = settings.confirmBeforeDelete
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
+        RoutingToggleRow(
+            title = s.notifSpeed,
+            subtitle = s.notifSpeedSubtitle,
+            checked = settings.showSpeedInNotification
+        ) { onChanged(settings.copy(showSpeedInNotification = it)) }
+
         SettingsSectionLabel(s.language)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val options = listOf(
                 AppLanguage.System to "Авто / Auto",
-                AppLanguage.Russian to "Русский",
-                AppLanguage.English to "English"
+                AppLanguage.Russian to "🇷🇺 Русский",
+                AppLanguage.English to "🇺🇸 English",
+                AppLanguage.Persian to "🇮🇷 فارسی"
             )
             options.forEach { (lang, title) ->
                 FilterChip(
@@ -2949,6 +3061,90 @@ private fun ApplicationBehaviorContent(
             }
         }
     }
+}
+
+/** Hidden Experimental section (unlocked by tapping the connection timer 5×). */
+@Composable
+private fun ExperimentalContent(
+    settings: AppBehaviorSettings,
+    onBack: () -> Unit,
+    onChanged: (AppBehaviorSettings) -> Unit
+) {
+    val s = LocalStrings.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = s.experimental,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        SettingsSectionLabel("Yandex Telemost")
+        Text(
+            text = s.telemostCookiesDescription,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        RoutingToggleRow(
+            title = s.useTelemostCookies,
+            subtitle = s.useTelemostCookiesSubtitle,
+            checked = settings.telemostCookiesEnabled
+        ) { onChanged(settings.copy(telemostCookiesEnabled = it)) }
+        OutlinedTextField(
+            value = settings.telemostCookies,
+            onValueChange = { onChanged(settings.copy(telemostCookies = it)) },
+            label = { Text(s.telemostCookieHeader) },
+            placeholder = { Text("Session_id=…; yandexuid=…") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth()
+        )
+        val context = LocalContext.current
+        val cookiePicker = rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            uri ?: return@rememberLauncherForActivityResult
+            val text = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            if (text != null) {
+                onChanged(settings.copy(telemostCookies = cookiesFromFile(text)))
+                android.widget.Toast.makeText(context, s.cookiesLoaded, android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                android.widget.Toast.makeText(context, s.cookiesReadFailed, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+        OutlinedButton(
+            onClick = { cookiePicker.launch(arrayOf("*/*")) },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(s.loadFromFile) }
+    }
+}
+
+/** Builds a Cookie header from a raw header string or a Netscape cookies.txt export. */
+private fun cookiesFromFile(text: String): String {
+    val trimmed = text.trim()
+    // Netscape cookies.txt: tab-separated lines with domain/flag/path/secure/expiry/name/value.
+    val pairs = trimmed.lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .mapNotNull { line ->
+            val parts = line.split('\t')
+            if (parts.size >= 7 && parts[5].isNotBlank()) "${parts[5]}=${parts[6]}" else null
+        }
+        .toList()
+    return if (pairs.isNotEmpty()) pairs.joinToString("; ") else trimmed
 }
 
 @Composable
@@ -3024,11 +3220,13 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object SplitTunneling : AppSettingsRoute(1)
     object SubscriptionsSharing : AppSettingsRoute(1)
     object Routing : AppSettingsRoute(1)
+    object RoutingProfiles : AppSettingsRoute(1)
     object Traffic : AppSettingsRoute(1)
     object Application : AppSettingsRoute(1)
     object UrlSchemes : AppSettingsRoute(1)
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)
+    object Experimental : AppSettingsRoute(1)
     data class AppList(val list: AndroidSplitTunnelList) : AppSettingsRoute(2)
 }
 

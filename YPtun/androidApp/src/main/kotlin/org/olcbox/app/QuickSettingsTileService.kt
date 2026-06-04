@@ -123,6 +123,8 @@ class QuickSettingsTileService : TileService() {
 
     private fun updateTile(status: VpnStatus) {
         val tile = qsTile ?: return
+        // Our cat-head silhouette instead of the default tile icon (system tints it).
+        tile.icon = android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_stat_yptun)
         when (status) {
             is VpnStatus.Connected -> {
                 tile.state = Tile.STATE_ACTIVE

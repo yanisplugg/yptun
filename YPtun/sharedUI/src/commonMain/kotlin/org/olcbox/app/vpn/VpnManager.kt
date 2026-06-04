@@ -2,6 +2,7 @@ package org.olcbox.app.vpn
 
 import kotlinx.coroutines.flow.StateFlow
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 
 sealed class VpnStatus {
@@ -23,4 +24,14 @@ interface VpnManager {
     suspend fun ping(locationConfig: LocationConfig): Long?
     suspend fun checkConnection(locationConfig: LocationConfig): Long?
     fun subscriptionFetchProxy(): SubscriptionFetchProxy? = null
+
+    /**
+     * Imports a `happ://routing/add/...` link as a routing profile. Returns true when [link] was a
+     * routing link (and was handled), so callers can short-circuit normal config import. Platforms
+     * without routing-profile support leave the default no-op.
+     */
+    fun importRoutingProfileLink(link: String): Boolean = false
+
+    /** Current routing profiles, for the per-location selector. Empty on platforms without support. */
+    fun routingProfileChoices(): List<RoutingProfile> = emptyList()
 }

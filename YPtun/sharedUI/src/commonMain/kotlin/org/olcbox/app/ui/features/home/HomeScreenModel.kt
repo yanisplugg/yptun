@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
+import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ui.features.locations.LocationItem
@@ -246,6 +247,10 @@ class HomeScreenViewModel(
         }
     }
 
+    /** Routing profiles for the per-location selector (empty on platforms without support). */
+    fun routingProfileChoices(): List<org.olcbox.app.data.model.RoutingProfile> =
+        vpnManager.routingProfileChoices()
+
     fun onImportFullConfig(
         rawText: String,
         onComplete: () -> Unit = {},
@@ -253,6 +258,30 @@ class HomeScreenViewModel(
     ) {
         if (rawText.isBlank()) {
             onError("No config text found")
+            return
+        }
+        // Bulk import: several subscription/share URLs pasted at once (one per line). We only treat
+        // it as a batch when EVERY non-empty line is an http(s) URL (≥2 of them) — that's the only
+        // unambiguous case. Multi-line sing-box/xray JSON, base64 blobs and vless:// lists are left
+        // to the single-import path below (which already handles a multi-link block itself).
+        run {
+            val lines = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val allHttp = lines.size >= 2 && lines.all {
+                it.startsWith("http://", true) || it.startsWith("https://", true)
+            }
+            if (allHttp) {
+                importManySubscriptions(lines, onComplete, onError)
+                return
+            }
+        }
+        // A happ://routing/add/... link OR raw Happ routing JSON is a routing profile, not a
+        // location — hand it off instead of trying to parse it as a config.
+        if (org.olcbox.app.data.importer.HappRoutingParser.looksLikeRoutingProfile(rawText)) {
+            if (vpnManager.importRoutingProfileLink(rawText.trim())) {
+                onComplete()
+            } else {
+                onError("Invalid routing profile")
+            }
             return
         }
         viewModelScope.launch {
@@ -268,6 +297,7 @@ class HomeScreenViewModel(
                     return@launch
                 }
                 loadCurrentConfigNow()
+                maybePromptForVkTurnLink()
                 onComplete()
             } catch (e: Exception) {
                 val message = e.message ?: "Import failed"
@@ -280,6 +310,83 @@ class HomeScreenViewModel(
                 onError(message)
             }
         }
+    }
+
+    /**
+     * Imports a batch of subscription/share URLs, one at a time, reusing the single-import path so
+     * dedup/merge behave exactly as for one paste. Succeeds if at least one URL imported; reports how
+     * many failed otherwise. Runs network I/O off the main thread.
+     */
+    private fun importManySubscriptions(
+        urls: List<String>,
+        onComplete: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            var added = 0
+            var failed = 0
+            withContext(Dispatchers.IO) {
+                for (url in urls) {
+                    val ok = runCatching {
+                        locationsRepository.importText(
+                            text = url,
+                            subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                        )
+                    }.getOrDefault(false)
+                    if (ok) added++ else failed++
+                }
+            }
+            if (added == 0) {
+                onError("No valid subscriptions found ($failed failed)")
+                return@launch
+            }
+            loadCurrentConfigNow()
+            maybePromptForVkTurnLink()
+            onComplete()
+            if (failed > 0) onError("Imported $added, $failed failed")
+        }
+    }
+
+    /**
+     * After importing a freeturn:// link, the VK-TURN location has everything but the per-client
+     * VK Calls link. Surface a prompt so the user can paste it right away (or defer with "Later").
+     */
+    private suspend fun maybePromptForVkTurnLink() {
+        val active = locationsRepository.getActiveLocation() ?: return
+        val config = active.location
+        val needsLink = config.engine == EngineType.VkTurn &&
+            config.vkturn?.vkLink.isNullOrBlank()
+        if (needsLink) {
+            _state.update {
+                it.copy(
+                    vkTurnLinkPrompt = VkTurnLinkPrompt(
+                        storageId = active.storageId,
+                        locationName = config.displayName()
+                    )
+                )
+            }
+        }
+    }
+
+    /** Saves the VK Calls link into the prompted VK-TURN location and dismisses the prompt. */
+    fun submitVkTurnLink(storageId: String, vkLink: String) {
+        viewModelScope.launch {
+            val location = locationsRepository.loadLocation(storageId)
+            val vkturn = location?.vkturn
+            if (location != null && vkturn != null) {
+                locationsRepository.saveLocation(
+                    storageId,
+                    location.copy(vkturn = vkturn.copy(vkLink = vkLink.trim()))
+                )
+                loadCurrentConfigNow()
+            }
+            _state.update { it.copy(vkTurnLinkPrompt = null) }
+        }
+    }
+
+    /** Dismisses the VK Calls link prompt; the user can fill it in later from location settings. */
+    fun dismissVkTurnLinkPrompt() {
+        _state.update { it.copy(vkTurnLinkPrompt = null) }
     }
 
     fun refreshSubscriptions(
@@ -348,7 +455,15 @@ data class HomeScreenState(
     val configData: LocationConfig,
     val shouldShowConfigInvalidReminder: Boolean,
     val canStartVpn: Boolean,
-    val startBlockedReason: String?
+    val startBlockedReason: String?,
+    /** Set after importing a VK-TURN link that still needs a per-client VK Calls link. */
+    val vkTurnLinkPrompt: VkTurnLinkPrompt? = null
+)
+
+/** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */
+data class VkTurnLinkPrompt(
+    val storageId: String,
+    val locationName: String
 )
 
 private const val SUBSCRIPTION_AUTO_REFRESH_POLL_MS = 60L * 60L * 1_000L

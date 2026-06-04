@@ -26,6 +26,21 @@ object OlcboxVpnState {
         _logs.update { (it + msg).takeLast(MAX_LOG_ENTRIES) }
     }
 
+    /**
+     * The live local SOCKS5 endpoint of the running core (host/port + the per-session credentials,
+     * which are randomized in TUN mode). Published by the service so the in-process latency probe
+     * can authenticate to it; null when no core is up. Same-process singleton.
+     */
+    @Volatile
+    var activeSocks: SocksEndpoint? = null
+
+    data class SocksEndpoint(
+        val host: String,
+        val port: Int,
+        val username: String,
+        val password: String,
+    )
+
     private const val MAX_LOG_ENTRIES = 1_000
     private const val TAG = "OlcboxVpnService"
 }

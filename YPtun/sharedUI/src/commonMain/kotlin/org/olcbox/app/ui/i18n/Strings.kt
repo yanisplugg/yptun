@@ -9,7 +9,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 enum class AppLanguage(val id: String) {
     System("system"),
     English("en"),
-    Russian("ru");
+    Russian("ru"),
+    Persian("fa");
 
     companion object {
         fun fromId(id: String?): AppLanguage = entries.firstOrNull { it.id == id } ?: System
@@ -31,6 +32,7 @@ val LocalStrings = staticCompositionLocalOf<Strings> { RuStrings }
 
 fun stringsFor(language: AppLanguage): Strings = when (language) {
     AppLanguage.English -> EnStrings
+    AppLanguage.Persian -> FaStrings
     else -> RuStrings
 }
 
@@ -51,6 +53,12 @@ interface Strings {
     val labelStart: String
     val addCustomLocation: String
     val addSubscription: String
+
+    // Subscription group menu
+    val groupPinToTop: String
+    val groupUnpinFromTop: String
+    val groupSortByPing: String
+    val groupDelete: String
 
     // Delete dialogs
     val delete: String
@@ -133,6 +141,52 @@ interface Strings {
     val presetRuAds: String
     val presetAllVpn: String
     val presetReset: String
+    val sbRoutingAdvanced: String
+    val sbRoutingAdvancedDesc: String
+    val sbRouteRulesLabel: String
+    val sbRuleSetLabel: String
+    val sbInvalidJsonArray: String
+
+    // Routing profiles (Happ-style)
+    val routingProfiles: String
+    val routingProfilesSubtitle: String
+    val routingProfileGlobal: String
+    val routingProfileNone: String
+    val routingProfileGlobalHint: String
+    val routingProfileAdd: String
+    val routingProfileImportLink: String
+    val routingProfilePasteHint: String
+    val routingProfileNewName: String
+    val routingProfileName: String
+    val routingProfileDelete: String
+    val routingProfileShare: String
+    val routingProfileGlobalProxy: String
+    val routingProfileGlobalProxyDesc: String
+    val routingProfileRouteOrder: String
+    val routingProfileDomainStrategy: String
+    val routingProxySites: String
+    val routingProxyIp: String
+    val routingDirectSites: String
+    val routingDirectIp: String
+    val routingBlockSites: String
+    val routingBlockIp: String
+    val routingSelectorsHint: String
+    val routingIpSelectorsHint: String
+    val routingGeoDatabases: String
+    val routingGeoDatabasesDesc: String
+    val routingGeoUpdate: String
+    val routingGeoUpdating: String
+    val routingGeoNever: String
+    val routingGeoipUrl: String
+    val routingGeositeUrl: String
+    val routingProfileSaved: String
+    val routingProfileImported: String
+    val routingProfileInvalidLink: String
+    val routingProfileEmpty: String
+    fun routingGeoUpdated(ts: String): String
+    fun routingProfileRuleCount(n: Int): String
+    val locationRoutingProfile: String
+    val locationRoutingGlobalDefault: String
 
     // URL schemes
     val urlSchemeAddConfig: String
@@ -218,6 +272,155 @@ interface Strings {
     val everyAppUsesYptun: String
     val chooseAppsUseYptun: String
     val chooseAppsBypass: String
+
+    // Theme color picker
+    val themeColor: String
+    val elementColor: String
+    val textColor: String
+    val customColorRgb: String
+
+    // Subscriptions sharing extra
+    val qrShare: String
+    val refresh: String
+
+    // Experimental section
+    val experimental: String
+    val experimentalSubtitle: String
+    val experimentalUnlocked: String
+    val notifSpeed: String
+    val notifSpeedSubtitle: String
+    val telemostCookiesDescription: String
+    val useTelemostCookies: String
+    val useTelemostCookiesSubtitle: String
+    val telemostCookieHeader: String
+    val cookiesLoaded: String
+    val cookiesReadFailed: String
+    val loadFromFile: String
+
+    // Notification / toasts
+    val notifConnected: String
+    fun notifConnectedMode(mode: String): String
+    val notifWaitingNetwork: String
+    val notifReconnecting: String
+    val notifWaitingTransport: String
+    val notifConnecting: String
+    val notifAddLocation: String
+    val notifAddProxy: String
+    val notifAddVkLink: String
+    val notifConnectionFailed: String
+    val notifTunnelFailed: String
+    val notifVpnTunnelError: String
+    val notifSplitTunnelError: String
+    val notifStop: String
+    val noFileSelected: String
+    val qrImported: String
+    fun cannotOpenFilePicker(msg: String): String
+    val configCopied: String
+    val copied: String
+
+    // VK call link dialog
+    val vkCallLink: String
+    fun vkCallLinkBody(name: String): String
+    val next: String
+    val later: String
+    val download: String
+    val updateAvailable: String
+    val sizeUnknown: String
+
+    // Logs detail
+    val noLogEntries: String
+    fun logEntriesCount(n: Int): String
+
+    // Location settings
+    val locationSettingsTitle: String
+    val proxyLinkOrConfig: String
+    val proxyLink: String
+    val fieldName: String
+    val locationNamePlaceholder: String
+    val engineSection: String
+    val proxySection: String
+    val proxySectionSubtitle: String
+    val freeturnTransportSection: String
+    val freeturnTransportSubtitle: String
+    val wireguardSubtitle: String
+    val proxyOverVkturn: String
+    val proxyOverVkturnSubtitle: String
+    val enableProxy: String
+    val vkCallLinksSection: String
+    val vkCallLinksSubtitle: String
+    fun vkCallLinkNumbered(n: Int): String
+    val additionalCalls: String
+    val coreSection: String
+    val coreSubtitle: String
+    val connectionType: String
+    val vp8Options: String
+    val vp8OptionsSubtitle: String
+
+    // Snackbars
+    fun subscriptionsUpdatedCount(n: Int): String
+    val subscriptionsUpdated: String
+    val subscriptionDeleted: String
+    val subscriptionsDeleted: String
+    val configsDeleted: String
+
+    // Home location picker
+    val customLocations: String
+    val addRelaySetup: String
+    val importHint: String
+    val importedFromClipboard: String
+
+    // Ping / connectivity
+    val pingOffline: String
+    val pingChecking: String
+    val pingVerify: String
+    val connectivityCheck: String
+
+    // QR scanner
+    val scanQrTitle: String
+    val readyToScan: String
+    val subscriptionOrLocationUri: String
+    val cameraPermissionDenied: String
+    val cameraUnavailable: String
+
+    // Updates status / share
+    val upToDate: String
+    fun latestAlreadyDownloaded(channel: String): String
+    fun channelUpdateAvailable(channel: String, version: String): String
+    fun checkingChannel(channel: String): String
+    val updateServiceUnavailable: String
+    val updateCheckFailed: String
+    val allowInstallUpdates: String
+    val locationQr: String
+    val subscriptionQr: String
+    val subscriptionUpdated: String
+    val subscriptionNotUpdated: String
+
+    // Connect blocked reasons
+    val addLocationFirst: String
+    val completeActiveLocationFirst: String
+    val addValidLocationFirst: String
+
+    // Custom-location fields & advanced toggles
+    val encryptionKey: String
+    val serverHost: String
+    val transportToRelay: String
+    val modeTunnelPayload: String
+    val obfuscationProfile: String
+    val obfuscationKey: String
+    val streamsParallel: String
+    val bondingMultipath: String
+    val privateKey: String
+    val peerPublicKey: String
+    val addressField: String
+    val listenPort: String
+    val allowedIps: String
+    val muxMultiplex: String
+    val muxProtocol: String
+    val maxStreamsField: String
+    val sniffDestination: String
+    val tlsFragmentXray: String
+    val coreAuto: String
+    fun advancedCoreSettings(core: String): String
 }
 
 object RuStrings : Strings {
@@ -230,8 +433,12 @@ object RuStrings : Strings {
     override val labelSetup = "НАСТРОИТЬ"
     override val labelStop = "СТОП"
     override val labelStart = "СТАРТ"
-    override val addCustomLocation = "Добавить свою локацию"
+    override val addCustomLocation = "Добавить локацию"
     override val addSubscription = "Добавить подписку"
+    override val groupPinToTop = "Закрепить наверху"
+    override val groupUnpinFromTop = "Открепить"
+    override val groupSortByPing = "Сортировать по пингу"
+    override val groupDelete = "Удалить подписку"
     override val delete = "Удалить"
     override val cancel = "Отмена"
     override val deleteSubscriptionTitle = "Удалить подписку?"
@@ -239,12 +446,12 @@ object RuStrings : Strings {
         "Будут удалены все конфигурации этой подписки ($count)."
     override val deleteAllSubscriptionsTitle = "Удалить все подписки?"
     override val deleteAllSubscriptionsMessage =
-        "Будут удалены все конфигурации из подписок. Кастомные локации останутся."
-    override val deleteAllConfigsTitle = "Удалить все конфиги?"
+        "Будут удалены все конфигурации из подписок. Собственные локации сохранятся."
+    override val deleteAllConfigsTitle = "Удалить все конфигурации?"
     override val deleteAllConfigsMessage =
         "Будут удалены все конфигурации и подписки. Это действие необратимо."
     override val menuDeleteAllSubscriptions = "Удалить все подписки"
-    override val menuDeleteAllConfigs = "Удалить все конфиги"
+    override val menuDeleteAllConfigs = "Удалить все конфигурации"
     override val settings = "Настройки"
     override val dynamicTheme = "Динамическая тема"
     override val dynamicThemeOn = "Системные цвета Android"
@@ -271,7 +478,7 @@ object RuStrings : Strings {
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
     override val confirmDeleteTitle = "Подтверждение удаления"
-    override val confirmDeleteSubtitle = "Спрашивать перед удалением подписок и конфигов"
+    override val confirmDeleteSubtitle = "Запрашивать подтверждение перед удалением подписок и конфигураций"
     override val language = "Язык"
     override val dns = "DNS"
     override val remoteDnsLabel = "Удалённый DNS (через прокси)"
@@ -297,7 +504,7 @@ object RuStrings : Strings {
     override val bypassRussia = "Обход России"
     override val bypassRussiaSubtitle = "RU-сайты и IP идут напрямую (geoip + geosite)"
     override val blockAds = "Блокировка рекламы"
-    override val blockAdsSubtitle = "Резать рекламные / трекерные домены"
+    override val blockAdsSubtitle = "Блокировать рекламные и трекинговые домены"
     override val directDomains = "Прямые домены"
     override val blockedDomains = "Заблокированные домены"
     override val domainsPlaceholder = "example.com, по одному на строку"
@@ -307,6 +514,52 @@ object RuStrings : Strings {
     override val presetRuAds = "Россия + без рекламы"
     override val presetAllVpn = "Всё через VPN"
     override val presetReset = "Сбросить"
+    override val sbRoutingAdvanced = "Маршрутизация sing-box (продвинутое)"
+    override val sbRoutingAdvancedDesc =
+        "Дословный JSON sing-box. Выполняется до переключателей выше. " +
+            "Пример правил: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]"
+    override val sbRouteRulesLabel = "route.rules (JSON-массив)"
+    override val sbRuleSetLabel = "rule_set (JSON-массив)"
+    override val sbInvalidJsonArray = "Некорректный JSON-массив"
+    override val routingProfiles = "Профили маршрутизации"
+    override val routingProfilesSubtitle = "Happ-совместимые правила — глобально или для отдельной локации"
+    override val routingProfileGlobal = "Глобальный профиль"
+    override val routingProfileNone = "Без профиля"
+    override val routingProfileGlobalHint = "Применяется ко всем подключениям, если у локации не задан свой профиль"
+    override val routingProfileAdd = "Создать профиль"
+    override val routingProfileImportLink = "Импорт по ссылке happ://"
+    override val routingProfilePasteHint = "happ://routing/add/…"
+    override val routingProfileNewName = "Новый профиль"
+    override val routingProfileName = "Название"
+    override val routingProfileDelete = "Удалить профиль"
+    override val routingProfileShare = "Поделиться ссылкой happ://"
+    override val routingProfileGlobalProxy = "Весь трафик через прокси"
+    override val routingProfileGlobalProxyDesc = "Иначе — напрямую, кроме списков «через прокси»"
+    override val routingProfileRouteOrder = "Порядок правил"
+    override val routingProfileDomainStrategy = "Стратегия доменов"
+    override val routingProxySites = "Через прокси: сайты"
+    override val routingProxyIp = "Через прокси: IP"
+    override val routingDirectSites = "Напрямую: сайты"
+    override val routingDirectIp = "Напрямую: IP"
+    override val routingBlockSites = "Блокировать: сайты"
+    override val routingBlockIp = "Блокировать: IP"
+    override val routingSelectorsHint = "geosite:ru, domain:vk.com — по одному на строку"
+    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — по одному на строку"
+    override val routingGeoDatabases = "Геобазы (geoip.dat / geosite.dat)"
+    override val routingGeoDatabasesDesc = "Нужны для селекторов geoip:/geosite: на ядре Xray. Загружаются из указанных ниже источников."
+    override val routingGeoUpdate = "Обновить геобазы"
+    override val routingGeoUpdating = "Загрузка…"
+    override val routingGeoNever = "Не загружены"
+    override val routingGeoipUrl = "URL geoip.dat"
+    override val routingGeositeUrl = "URL geosite.dat"
+    override val routingProfileSaved = "Профиль сохранён"
+    override val routingProfileImported = "Профиль маршрутизации импортирован"
+    override val routingProfileInvalidLink = "Неверная ссылка маршрутизации"
+    override val routingProfileEmpty = "Профилей пока нет"
+    override fun routingGeoUpdated(ts: String) = "Обновлено: $ts"
+    override fun routingProfileRuleCount(n: Int) = "правил: $n"
+    override val locationRoutingProfile = "Профиль маршрутизации"
+    override val locationRoutingGlobalDefault = "Глобальный (по умолчанию)"
     override val urlSchemeAddConfig = "ДОБАВИТЬ КОНФИГ"
     override val urlSchemeAddSubscription = "ДОБАВИТЬ ПОДПИСКУ"
     override val urlSchemeControl = "УПРАВЛЕНИЕ"
@@ -316,12 +569,12 @@ object RuStrings : Strings {
     override val scanQr = "Сканировать QR-код"
     override val scanQrSubtitle = "Подписка или olcrtc URI"
     override val pasteLink = "Вставить ссылку или URI"
-    override val pasteLinkSubtitle = "Подписка, olcrtc или sing-box конфиг"
+    override val pasteLinkSubtitle = "Подписка, olcrtc или конфигурация sing-box"
     override val importFile = "Импорт из файла"
-    override val importFileSubtitle = "Подписка, olcrtc или sing-box конфиг"
+    override val importFileSubtitle = "Подписка, olcrtc или конфигурация sing-box"
     override val updateSubscriptionsAction = "Обновить подписки"
     override val updateSubscriptionsSubtitle = "Обновить локации импортированных подписок"
-    override val createCustomLocation = "Создать свою локацию"
+    override val createCustomLocation = "Создать собственную локацию"
     override val createCustomLocationSubtitle = "Комната, ключ, провайдер и транспорт"
     override val connectionMode = "Режим подключения"
     override val socks5Proxy = "SOCKS5-прокси"
@@ -337,15 +590,15 @@ object RuStrings : Strings {
     override val updatesTitle = "Обновления"
     override fun currentVersion(v: String) = "Текущая версия $v"
     override val checkInterval = "Интервал проверки"
-    override val copyFullConfig = "Скопировать конфиг"
-    override val currentConfig = "Текущий конфиг"
+    override val copyFullConfig = "Скопировать конфигурацию"
+    override val currentConfig = "Текущая конфигурация"
     override val subscriptionsSection = "Подписки"
     override val noSubscriptions = "Нет подписок"
     override val noSubscriptionsSubtitle = "Импортированные HTTPS-подписки появятся здесь."
     override val listenAddress = "Адрес прослушивания"
     override val listenAddressRequired = "Укажите адрес"
     override val savingRestarts = "Сохранение перезапустит активное подключение"
-    override val unsavedChange = "Несохранённое изменение"
+    override val unsavedChange = "Есть несохранённые изменения"
     override val port = "Порт"
     override val portRequired = "Укажите порт"
     override val username = "Имя пользователя"
@@ -376,6 +629,136 @@ object RuStrings : Strings {
     override val everyAppUsesYptun = "Все приложения через YPtun"
     override val chooseAppsUseYptun = "Выберите приложения через YPtun"
     override val chooseAppsBypass = "Выберите приложения в обход YPtun"
+    override val themeColor = "Цвет темы"
+    override val elementColor = "Цвет элементов"
+    override val textColor = "Цвет текста"
+    override val customColorRgb = "Произвольный цвет (RGB)"
+    override val qrShare = "QR / поделиться"
+    override val refresh = "Обновить"
+    override val experimental = "Экспериментальные"
+    override val experimentalSubtitle = "Cookies Telemost и прочее"
+    override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
+    override val notifSpeed = "Скорость в уведомлении"
+    override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+    override val telemostCookiesDescription =
+        "Cookies авторизованного аккаунта Яндекса (заголовок Cookie, напр. " +
+            "«Session_id=…; yandexuid=…») — для приватных конференций. Запустить кастомное ядро " +
+            "отдельным бинарём на Android невозможно, поэтому эта функция встроена в штатное ядро."
+    override val useTelemostCookies = "Использовать cookies Telemost"
+    override val useTelemostCookiesSubtitle = "Подставлять cookies при подключении к Telemost"
+    override val telemostCookieHeader = "Заголовок Cookie для Telemost"
+    override val cookiesLoaded = "Cookies загружены"
+    override val cookiesReadFailed = "Не удалось прочитать файл"
+    override val loadFromFile = "Загрузить из файла (cookies.txt)"
+    override val notifConnected = "Подключено"
+    override fun notifConnectedMode(mode: String) = "$mode подключён"
+    override val notifWaitingNetwork = "Ожидание сети…"
+    override val notifReconnecting = "Переподключение…"
+    override val notifWaitingTransport = "Ожидание транспорта…"
+    override val notifConnecting = "Подключение…"
+    override val notifAddLocation = "Сначала добавьте локацию"
+    override val notifAddProxy = "Сначала добавьте прокси"
+    override val notifAddVkLink = "Сначала добавьте ссылку на звонок VK"
+    override val notifConnectionFailed = "Не удалось подключиться"
+    override val notifTunnelFailed = "Сбой туннеля"
+    override val notifVpnTunnelError = "Ошибка VPN-туннеля"
+    override val notifSplitTunnelError = "Ошибка раздельного туннелирования"
+    override val notifStop = "Стоп"
+    override val noFileSelected = "Файл не выбран"
+    override val qrImported = "QR-код импортирован"
+    override fun cannotOpenFilePicker(msg: String) = "Не удалось открыть выбор файла: $msg"
+    override val configCopied = "Конфигурация скопирована"
+    override val copied = "Скопировано"
+    override val vkCallLink = "Ссылка на звонок VK"
+    override fun vkCallLinkBody(name: String) =
+        "Вставьте ссылку-приглашение VK Звонков для «$name». Можно вставить несколько ссылок " +
+            "(по одной на строку), чтобы распределить туннель между звонками и повысить скорость."
+    override val next = "Далее"
+    override val later = "Позже"
+    override val download = "Скачать"
+    override val updateAvailable = "Доступно обновление"
+    override val sizeUnknown = "Размер неизвестен"
+    override val noLogEntries = "Нет записей"
+    override fun logEntriesCount(n: Int) = "Записей: $n"
+    override val locationSettingsTitle = "Настройки локации"
+    override val proxyLinkOrConfig = "Ссылка прокси или конфигурация"
+    override val proxyLink = "Ссылка прокси"
+    override val fieldName = "Название"
+    override val locationNamePlaceholder = "Название локации"
+    override val engineSection = "Движок"
+    override val proxySection = "Прокси"
+    override val proxySectionSubtitle =
+        "Вставьте ссылку vless/vmess/trojan/ss, конфигурацию AmneziaWG или JSON-исходящего sing-box"
+    override val freeturnTransportSection = "Транспорт Freeturn"
+    override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
+    override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
+    override val proxyOverVkturn = "Прокси поверх VK-TURN (необязательно)"
+    override val proxyOverVkturnSubtitle =
+        "Добавить прокси vless/vmess/trojan/ss поверх туннеля WireGuard"
+    override val enableProxy = "Включить прокси"
+    override val vkCallLinksSection = "Ссылки на звонки VK"
+    override val vkCallLinksSubtitle =
+        "Личная ссылка-приглашение VK Звонков (обязательно). Можно добавить до 5 — каждый " +
+            "дополнительный звонок прибавляет пропускную способность (туннель распределяется между ними)."
+    override fun vkCallLinkNumbered(n: Int) = "Ссылка на звонок VK $n (необязательно)"
+    override val additionalCalls = "Дополнительные звонки"
+    override val coreSection = "Ядро"
+    override val coreSubtitle = "«Авто» выбирает Xray для xhttp, иначе sing-box"
+    override val connectionType = "Тип подключения"
+    override val vp8Options = "Параметры VP8"
+    override val vp8OptionsSubtitle = "Тонкая настройка производительности потока"
+    override fun subscriptionsUpdatedCount(n: Int) = "Подписки обновлены: $n"
+    override val subscriptionsUpdated = "Подписки обновлены"
+    override val subscriptionDeleted = "Подписка удалена"
+    override val subscriptionsDeleted = "Подписки удалены"
+    override val configsDeleted = "Конфигурации удалены"
+    override val customLocations = "Свои локации"
+    override val addRelaySetup = "Настройка подключения"
+    override val importHint = "Сканируйте QR, вставьте URI или импортируйте файл"
+    override val importedFromClipboard = "Импортировано из буфера обмена"
+    override val pingOffline = "Не в сети"
+    override val pingChecking = "Проверка…"
+    override val pingVerify = "Нажмите для проверки доступности"
+    override val connectivityCheck = "Проверка соединения"
+    override val scanQrTitle = "Сканирование QR"
+    override val readyToScan = "Готово к сканированию"
+    override val subscriptionOrLocationUri = "Подписка или URI локации"
+    override val cameraPermissionDenied = "Доступ к камере запрещён"
+    override val cameraUnavailable = "Камера недоступна"
+    override val upToDate = "Установлена последняя версия"
+    override fun latestAlreadyDownloaded(channel: String) = "Последняя сборка $channel уже скачана"
+    override fun channelUpdateAvailable(channel: String, version: String) = "Доступно обновление $channel: $version"
+    override fun checkingChannel(channel: String) = "Проверка $channel…"
+    override val updateServiceUnavailable = "Служба обновлений недоступна"
+    override val updateCheckFailed = "Не удалось проверить обновления"
+    override val allowInstallUpdates = "Разрешите YPtun устанавливать обновления и нажмите «Скачать» снова"
+    override val locationQr = "QR локации"
+    override val subscriptionQr = "QR подписки"
+    override val subscriptionUpdated = "Подписка обновлена"
+    override val subscriptionNotUpdated = "Подписка не обновлена"
+    override val addLocationFirst = "Сначала добавьте локацию"
+    override val completeActiveLocationFirst = "Сначала завершите настройку активной локации"
+    override val addValidLocationFirst = "Сначала добавьте корректную локацию"
+    override val encryptionKey = "Ключ шифрования"
+    override val serverHost = "Хост сервера"
+    override val transportToRelay = "Транспорт (до TURN-ретранслятора)"
+    override val modeTunnelPayload = "Режим (нагрузка туннеля)"
+    override val obfuscationProfile = "Профиль обфускации"
+    override val obfuscationKey = "Ключ обфускации"
+    override val streamsParallel = "Потоки (параллельные ретрансляторы)"
+    override val bondingMultipath = "Агрегация каналов (multipath)"
+    override val privateKey = "Приватный ключ"
+    override val peerPublicKey = "Публичный ключ пира"
+    override val addressField = "Адрес"
+    override val listenPort = "Порт прослушивания"
+    override val allowedIps = "Разрешённые IP"
+    override val muxMultiplex = "Mux (мультиплексирование)"
+    override val muxProtocol = "Протокол Mux"
+    override val maxStreamsField = "Макс. потоков"
+    override val sniffDestination = "Определение назначения (sniff)"
+    override val tlsFragmentXray = "Фрагментация TLS (анти-DPI, Xray)"
+    override val coreAuto = "Авто"
+    override fun advancedCoreSettings(core: String) = "Дополнительные настройки $core"
 }
 
 object EnStrings : Strings {
@@ -390,6 +773,10 @@ object EnStrings : Strings {
     override val labelStart = "START"
     override val addCustomLocation = "Add custom location"
     override val addSubscription = "Add subscription"
+    override val groupPinToTop = "Pin to top"
+    override val groupUnpinFromTop = "Unpin"
+    override val groupSortByPing = "Sort by ping"
+    override val groupDelete = "Delete subscription"
     override val delete = "Delete"
     override val cancel = "Cancel"
     override val deleteSubscriptionTitle = "Delete subscription?"
@@ -465,6 +852,52 @@ object EnStrings : Strings {
     override val presetRuAds = "Russia + no ads"
     override val presetAllVpn = "All via VPN"
     override val presetReset = "Reset"
+    override val sbRoutingAdvanced = "Sing-box routing (advanced)"
+    override val sbRoutingAdvancedDesc =
+        "Verbatim sing-box JSON. These run before the toggles above. " +
+            "Rules example: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]"
+    override val sbRouteRulesLabel = "route.rules (JSON array)"
+    override val sbRuleSetLabel = "rule_set (JSON array)"
+    override val sbInvalidJsonArray = "Invalid JSON array"
+    override val routingProfiles = "Routing profiles"
+    override val routingProfilesSubtitle = "Happ-compatible rules — globally or per location"
+    override val routingProfileGlobal = "Global profile"
+    override val routingProfileNone = "No profile"
+    override val routingProfileGlobalHint = "Applied to every connection unless a location sets its own profile"
+    override val routingProfileAdd = "Create profile"
+    override val routingProfileImportLink = "Import happ:// link"
+    override val routingProfilePasteHint = "happ://routing/add/…"
+    override val routingProfileNewName = "New profile"
+    override val routingProfileName = "Name"
+    override val routingProfileDelete = "Delete profile"
+    override val routingProfileShare = "Share happ:// link"
+    override val routingProfileGlobalProxy = "All traffic via proxy"
+    override val routingProfileGlobalProxyDesc = "Otherwise direct, except the “via proxy” lists"
+    override val routingProfileRouteOrder = "Rule order"
+    override val routingProfileDomainStrategy = "Domain strategy"
+    override val routingProxySites = "Via proxy: sites"
+    override val routingProxyIp = "Via proxy: IPs"
+    override val routingDirectSites = "Direct: sites"
+    override val routingDirectIp = "Direct: IPs"
+    override val routingBlockSites = "Block: sites"
+    override val routingBlockIp = "Block: IPs"
+    override val routingSelectorsHint = "geosite:ru, domain:vk.com — one per line"
+    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — one per line"
+    override val routingGeoDatabases = "Geo databases (geoip.dat / geosite.dat)"
+    override val routingGeoDatabasesDesc = "Needed for geoip:/geosite: selectors on the Xray core. Downloaded from the sources below."
+    override val routingGeoUpdate = "Update geo databases"
+    override val routingGeoUpdating = "Downloading…"
+    override val routingGeoNever = "Not downloaded"
+    override val routingGeoipUrl = "geoip.dat URL"
+    override val routingGeositeUrl = "geosite.dat URL"
+    override val routingProfileSaved = "Profile saved"
+    override val routingProfileImported = "Routing profile imported"
+    override val routingProfileInvalidLink = "Invalid routing link"
+    override val routingProfileEmpty = "No profiles yet"
+    override fun routingGeoUpdated(ts: String) = "Updated: $ts"
+    override fun routingProfileRuleCount(n: Int) = "$n rules"
+    override val locationRoutingProfile = "Routing profile"
+    override val locationRoutingGlobalDefault = "Global (default)"
     override val urlSchemeAddConfig = "ADD CONFIG"
     override val urlSchemeAddSubscription = "ADD SUBSCRIPTION"
     override val urlSchemeControl = "CONTROL"
@@ -534,4 +967,472 @@ object EnStrings : Strings {
     override val everyAppUsesYptun = "Every app uses YPtun"
     override val chooseAppsUseYptun = "Choose apps that use YPtun"
     override val chooseAppsBypass = "Choose apps that bypass YPtun"
+    override val themeColor = "Theme color"
+    override val elementColor = "Element color"
+    override val textColor = "Text color"
+    override val customColorRgb = "Custom color (RGB)"
+    override val qrShare = "QR / share"
+    override val refresh = "Refresh"
+    override val experimental = "Experimental"
+    override val experimentalSubtitle = "Telemost cookies and more"
+    override val experimentalUnlocked = "Experimental settings unlocked"
+    override val notifSpeed = "Speed in notification"
+    override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+    override val telemostCookiesDescription =
+        "Cookies of a signed-in Yandex account (the Cookie header, e.g. " +
+            "\"Session_id=…; yandexuid=…\") — for private conferences. A custom core cannot be " +
+            "launched as a separate binary on Android, so this feature is built into the stock core."
+    override val useTelemostCookies = "Use Telemost cookies"
+    override val useTelemostCookiesSubtitle = "Attach cookies when connecting to Telemost"
+    override val telemostCookieHeader = "Telemost Cookie header"
+    override val cookiesLoaded = "Cookies loaded"
+    override val cookiesReadFailed = "Couldn't read the file"
+    override val loadFromFile = "Load from file (cookies.txt)"
+    override val notifConnected = "Connected"
+    override fun notifConnectedMode(mode: String) = "$mode Connected"
+    override val notifWaitingNetwork = "Waiting for network..."
+    override val notifReconnecting = "Reconnecting..."
+    override val notifWaitingTransport = "Waiting for transport..."
+    override val notifConnecting = "Connecting..."
+    override val notifAddLocation = "Add a location first"
+    override val notifAddProxy = "Add a proxy first"
+    override val notifAddVkLink = "Add a VK call link first"
+    override val notifConnectionFailed = "Connection failed"
+    override val notifTunnelFailed = "Tunnel failed"
+    override val notifVpnTunnelError = "VPN tunnel error"
+    override val notifSplitTunnelError = "Split tunneling error"
+    override val notifStop = "Stop"
+    override val noFileSelected = "No file selected"
+    override val qrImported = "QR imported"
+    override fun cannotOpenFilePicker(msg: String) = "Cannot open file picker: $msg"
+    override val configCopied = "Config copied"
+    override val copied = "Copied"
+    override val vkCallLink = "VK call link"
+    override fun vkCallLinkBody(name: String) =
+        "Paste your VK Calls join link for \"$name\". You can paste several links " +
+            "(one per line) to spread the tunnel across calls for more speed."
+    override val next = "Next"
+    override val later = "Later"
+    override val download = "Download"
+    override val updateAvailable = "Update available"
+    override val sizeUnknown = "Size unknown"
+    override val noLogEntries = "No entries"
+    override fun logEntriesCount(n: Int) = "$n entries"
+    override val locationSettingsTitle = "Location settings"
+    override val proxyLinkOrConfig = "Proxy link or config"
+    override val proxyLink = "Proxy link"
+    override val fieldName = "Name"
+    override val locationNamePlaceholder = "Location name"
+    override val engineSection = "Engine"
+    override val proxySection = "Proxy"
+    override val proxySectionSubtitle =
+        "Paste a vless/vmess/trojan/ss link, an AmneziaWG config, or a sing-box outbound JSON"
+    override val freeturnTransportSection = "Freeturn transport"
+    override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
+    override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
+    override val proxyOverVkturn = "Proxy over VK-TURN (optional)"
+    override val proxyOverVkturnSubtitle =
+        "Chain a vless/vmess/trojan/ss proxy on top of the WireGuard tunnel"
+    override val enableProxy = "Enable proxy"
+    override val vkCallLinksSection = "VK call link(s)"
+    override val vkCallLinksSubtitle =
+        "Personal VK Calls join link (required). Add up to 5 — each extra call " +
+            "adds bandwidth (the tunnel is spread across them)."
+    override fun vkCallLinkNumbered(n: Int) = "VK call link $n (optional)"
+    override val additionalCalls = "Additional calls"
+    override val coreSection = "Core"
+    override val coreSubtitle = "Auto picks Xray for xhttp, otherwise sing-box"
+    override val connectionType = "Connection type"
+    override val vp8Options = "VP8 options"
+    override val vp8OptionsSubtitle = "Fine-tune stream performance"
+    override fun subscriptionsUpdatedCount(n: Int) = "Subscriptions updated: $n"
+    override val subscriptionsUpdated = "Subscriptions updated"
+    override val subscriptionDeleted = "Subscription deleted"
+    override val subscriptionsDeleted = "Subscriptions deleted"
+    override val configsDeleted = "Configurations deleted"
+    override val customLocations = "Custom locations"
+    override val addRelaySetup = "Add relay setup"
+    override val importHint = "Scan QR, paste URI, or import file"
+    override val importedFromClipboard = "Imported from clipboard"
+    override val pingOffline = "Offline"
+    override val pingChecking = "Checking..."
+    override val pingVerify = "Click to verify reachability"
+    override val connectivityCheck = "Connectivity check"
+    override val scanQrTitle = "Scan QR"
+    override val readyToScan = "Ready to scan"
+    override val subscriptionOrLocationUri = "Subscription or location URI"
+    override val cameraPermissionDenied = "Camera permission denied"
+    override val cameraUnavailable = "Camera unavailable"
+    override val upToDate = "YPtun is up to date"
+    override fun latestAlreadyDownloaded(channel: String) = "Latest $channel is already downloaded"
+    override fun channelUpdateAvailable(channel: String, version: String) = "$channel update available: $version"
+    override fun checkingChannel(channel: String) = "Checking $channel..."
+    override val updateServiceUnavailable = "Update service unavailable"
+    override val updateCheckFailed = "Update check failed"
+    override val allowInstallUpdates = "Allow YPtun to install updates, then tap Download again"
+    override val locationQr = "Location QR"
+    override val subscriptionQr = "Subscription QR"
+    override val subscriptionUpdated = "Subscription updated"
+    override val subscriptionNotUpdated = "Subscription not updated"
+    override val addLocationFirst = "Add a location first"
+    override val completeActiveLocationFirst = "Complete active location first"
+    override val addValidLocationFirst = "Add a valid location first"
+    override val encryptionKey = "Encryption key"
+    override val serverHost = "Server host"
+    override val transportToRelay = "Transport (to TURN relay)"
+    override val modeTunnelPayload = "Mode (tunnel payload)"
+    override val obfuscationProfile = "Obfuscation profile"
+    override val obfuscationKey = "Obfuscation key"
+    override val streamsParallel = "Streams (parallel relays)"
+    override val bondingMultipath = "Bonding (multipath)"
+    override val privateKey = "Private key"
+    override val peerPublicKey = "Peer public key"
+    override val addressField = "Address"
+    override val listenPort = "Listen port"
+    override val allowedIps = "Allowed IPs"
+    override val muxMultiplex = "Mux (multiplex)"
+    override val muxProtocol = "Mux protocol"
+    override val maxStreamsField = "Max streams"
+    override val sniffDestination = "Sniff destination"
+    override val tlsFragmentXray = "TLS fragment (anti-DPI, Xray)"
+    override val coreAuto = "Auto"
+    override fun advancedCoreSettings(core: String) = "Advanced $core settings"
+}
+
+object FaStrings : Strings {
+    override val languageName = "فارسی"
+    override val navConnection = "اتصال"
+    override val navSettings = "تنظیمات"
+    override val connectionTime = "مدت اتصال"
+    override val refreshSubscriptions = "بازآوری اشتراک‌ها"
+    override val configurations = "پیکربندی‌ها"
+    override val labelSetup = "تنظیم"
+    override val labelStop = "توقف"
+    override val labelStart = "شروع"
+    override val addCustomLocation = "افزودن موقعیت سفارشی"
+    override val addSubscription = "افزودن اشتراک"
+    override val groupPinToTop = "سنجاق به بالا"
+    override val groupUnpinFromTop = "برداشتن سنجاق"
+    override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
+    override val groupDelete = "حذف اشتراک"
+    override val delete = "حذف"
+    override val cancel = "انصراف"
+    override val deleteSubscriptionTitle = "اشتراک حذف شود؟"
+    override fun deleteSubscriptionMessage(count: Int) =
+        "همهٔ پیکربندی‌های این اشتراک ($count) حذف خواهند شد."
+    override val deleteAllSubscriptionsTitle = "همهٔ اشتراک‌ها حذف شوند؟"
+    override val deleteAllSubscriptionsMessage =
+        "همهٔ پیکربندی‌های اشتراک‌ها حذف می‌شوند. موقعیت‌های سفارشی حفظ خواهند شد."
+    override val deleteAllConfigsTitle = "همهٔ پیکربندی‌ها حذف شوند؟"
+    override val deleteAllConfigsMessage =
+        "همهٔ پیکربندی‌ها و اشتراک‌ها حذف می‌شوند. این کار بازگشت‌ناپذیر است."
+    override val menuDeleteAllSubscriptions = "حذف همهٔ اشتراک‌ها"
+    override val menuDeleteAllConfigs = "حذف همهٔ پیکربندی‌ها"
+    override val settings = "تنظیمات"
+    override val dynamicTheme = "پوستهٔ پویا"
+    override val dynamicThemeOn = "استفاده از رنگ‌های سیستم اندروید"
+    override val dynamicThemeOff = "استفاده از رنگ‌های YPtun"
+    override val routing = "مسیریابی"
+    override val routingSubtitle = "دور زدن LAN/روسیه، مسدودسازی تبلیغات، دامنه‌ها"
+    override val trafficSettings = "تنظیمات ترافیک"
+    override val trafficSettingsSubtitle = "DNS، چندتکثیری، راهبرد دامنه"
+    override val connectionSettings = "تنظیمات اتصال"
+    override val connectionSettingsSubtitle = "حالت، پراکسی SOCKS5، مسیریابی هر برنامه"
+    override val subscriptionsSharing = "اشتراک‌ها و هم‌رسانی"
+    override val updates = "به‌روزرسانی‌ها"
+    override val applicationSettings = "تنظیمات برنامه"
+    override val applicationSettingsSubtitle = "اتصال خودکار، تأیید حذف"
+    override val urlSchemes = "طرح‌های URL"
+    override val urlSchemesSubtitle = "ورود و کنترل از طریق پیوند عمیق"
+    override val logs = "گزارش‌ها"
+    override val logsSubtitle = "عیب‌یابی و برون‌بری"
+    override val info = "اطلاعات"
+    override fun version(v: String) = "نسخه: $v"
+    override fun hwid(v: String) = "HWID: $v"
+    override val community = "انجمن"
+    override val howToConnect = "چگونه متصل شویم؟"
+    override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
+    override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
+    override val confirmDeleteTitle = "تأیید حذف"
+    override val confirmDeleteSubtitle = "پیش از حذف اشتراک‌ها و پیکربندی‌ها پرسیده شود"
+    override val language = "زبان"
+    override val dns = "DNS"
+    override val remoteDnsLabel = "DNS راه‌دور (از طریق پراکسی)"
+    override val directDnsLabel = "DNS مستقیم (راه‌انداز)"
+    override val domainStrategy = "راهبرد دامنه"
+    override val multiplexing = "چندتکثیری (Multiplexing)"
+    override val useMux = "استفاده از Mux"
+    override val useMuxSubtitle = "سریع‌تر، اما ممکن است پایداری اتصال را کاهش دهد"
+    override val muxMaxConnections = "حداکثر اتصال‌ها (۱ تا ۶۴)"
+    override val fragmentation = "تکه‌تکه‌سازی (Xray)"
+    override val useFragment = "فعال‌سازی تکه‌تکه‌سازی"
+    override val useFragmentSubtitle = "بسته‌های TLS را برای دور زدن DPI تکه‌تکه می‌کند. به هستهٔ Xray نیاز دارد."
+    override val fragmentPackets = "بسته‌ها (tlshello یا ۱-۳)"
+    override val fragmentLength = "طول (مثلاً ۵۰-۱۰۰)"
+    override val fragmentInterval = "بازه، میلی‌ثانیه (مثلاً ۱۰-۲۰)"
+    override val mtuLabel = "MTU (۱۲۸۰ تا ۹۰۰۰)"
+    override val blockRuDomains = "مسدودسازی دامنه‌های روسیه"
+    override val blockRuDomainsSubtitle = "فهرست داخلی دامنه‌های روسیه ← 0.0.0.0. به هستهٔ Xray نیاز دارد."
+    override val saveAndApply = "ذخیره و اعمال"
+    override val routingTitle = "مسیریابی و قواعد"
+    override val bypassLan = "دور زدن LAN"
+    override val bypassLanSubtitle = "نشانی‌های محلی/خصوصی مستقیم می‌روند"
+    override val bypassRussia = "دور زدن روسیه"
+    override val bypassRussiaSubtitle = "سایت‌ها و IPهای روسیه مستقیم می‌روند (geoip + geosite)"
+    override val blockAds = "مسدودسازی تبلیغات"
+    override val blockAdsSubtitle = "رد کردن دامنه‌های تبلیغاتی/ردیاب"
+    override val directDomains = "دامنه‌های مستقیم"
+    override val blockedDomains = "دامنه‌های مسدود"
+    override val domainsPlaceholder = "example.com، هر کدام در یک خط"
+    override val presets = "پیش‌تنظیم‌ها"
+    override val presetRuDirect = "روسیه مستقیم"
+    override val presetAdsBlock = "مسدودسازی تبلیغات"
+    override val presetRuAds = "روسیه + بدون تبلیغات"
+    override val presetAllVpn = "همه از طریق VPN"
+    override val presetReset = "بازنشانی"
+    override val sbRoutingAdvanced = "مسیریابی sing-box (پیشرفته)"
+    override val sbRoutingAdvancedDesc =
+        "JSON خام sing-box. پیش از کلیدهای بالا اجرا می‌شود. " +
+            "نمونهٔ قواعد: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]"
+    override val sbRouteRulesLabel = "route.rules (آرایهٔ JSON)"
+    override val sbRuleSetLabel = "rule_set (آرایهٔ JSON)"
+    override val sbInvalidJsonArray = "آرایهٔ JSON نامعتبر"
+    override val routingProfiles = "نمایه‌های مسیریابی"
+    override val routingProfilesSubtitle = "قواعد سازگار با Happ — سراسری یا برای هر موقعیت"
+    override val routingProfileGlobal = "نمایهٔ سراسری"
+    override val routingProfileNone = "بدون نمایه"
+    override val routingProfileGlobalHint = "برای همهٔ اتصال‌ها اعمال می‌شود مگر موقعیت نمایهٔ خود را داشته باشد"
+    override val routingProfileAdd = "ساخت نمایه"
+    override val routingProfileImportLink = "درون‌ریزی پیوند ‎happ://"
+    override val routingProfilePasteHint = "happ://routing/add/…"
+    override val routingProfileNewName = "نمایهٔ جدید"
+    override val routingProfileName = "نام"
+    override val routingProfileDelete = "حذف نمایه"
+    override val routingProfileShare = "اشتراک پیوند ‎happ://"
+    override val routingProfileGlobalProxy = "همهٔ ترافیک از پراکسی"
+    override val routingProfileGlobalProxyDesc = "در غیر این صورت مستقیم، به‌جز فهرست‌های «از پراکسی»"
+    override val routingProfileRouteOrder = "ترتیب قواعد"
+    override val routingProfileDomainStrategy = "راهبرد دامنه"
+    override val routingProxySites = "از پراکسی: سایت‌ها"
+    override val routingProxyIp = "از پراکسی: IP"
+    override val routingDirectSites = "مستقیم: سایت‌ها"
+    override val routingDirectIp = "مستقیم: IP"
+    override val routingBlockSites = "مسدود: سایت‌ها"
+    override val routingBlockIp = "مسدود: IP"
+    override val routingSelectorsHint = "geosite:ru, domain:vk.com — هر کدام در یک خط"
+    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — هر کدام در یک خط"
+    override val routingGeoDatabases = "پایگاه‌های جغرافیایی (geoip.dat / geosite.dat)"
+    override val routingGeoDatabasesDesc = "برای گزینشگرهای geoip:/geosite: روی هستهٔ Xray لازم است. از منابع زیر دانلود می‌شود."
+    override val routingGeoUpdate = "به‌روزرسانی پایگاه‌های جغرافیایی"
+    override val routingGeoUpdating = "در حال دانلود…"
+    override val routingGeoNever = "دانلود نشده"
+    override val routingGeoipUrl = "نشانی geoip.dat"
+    override val routingGeositeUrl = "نشانی geosite.dat"
+    override val routingProfileSaved = "نمایه ذخیره شد"
+    override val routingProfileImported = "نمایهٔ مسیریابی درون‌ریزی شد"
+    override val routingProfileInvalidLink = "پیوند مسیریابی نامعتبر"
+    override val routingProfileEmpty = "هنوز نمایه‌ای نیست"
+    override fun routingGeoUpdated(ts: String) = "به‌روزرسانی: $ts"
+    override fun routingProfileRuleCount(n: Int) = "$n قاعده"
+    override val locationRoutingProfile = "نمایهٔ مسیریابی"
+    override val locationRoutingGlobalDefault = "سراسری (پیش‌فرض)"
+    override val urlSchemeAddConfig = "افزودن پیکربندی"
+    override val urlSchemeAddSubscription = "افزودن اشتراک"
+    override val urlSchemeControl = "کنترل"
+    override val copy = "رونوشت"
+    override val addConnection = "افزودن اتصال"
+    override val addConnectionSubtitle = "اشتراک یا موقعیت سفارشی"
+    override val scanQr = "پویش کد QR"
+    override val scanQrSubtitle = "اشتراک یا نشانی olcrtc"
+    override val pasteLink = "چسباندن پیوند یا URI"
+    override val pasteLinkSubtitle = "اشتراک، olcrtc یا پیکربندی sing-box"
+    override val importFile = "ورود از پرونده"
+    override val importFileSubtitle = "اشتراک، olcrtc یا پیکربندی sing-box"
+    override val updateSubscriptionsAction = "به‌روزرسانی اشتراک‌ها"
+    override val updateSubscriptionsSubtitle = "بازآوری موقعیت‌های اشتراک‌های واردشده"
+    override val createCustomLocation = "ساخت موقعیت سفارشی"
+    override val createCustomLocationSubtitle = "اتاق، کلید، ارائه‌دهنده و حامل"
+    override val connectionMode = "حالت اتصال"
+    override val socks5Proxy = "پراکسی SOCKS5"
+    override val splitTunneling = "تونل‌سازی تفکیکی"
+    override val routingBehavior = "رفتار مسیریابی"
+    override val appsUsingYptun = "برنامه‌های استفاده‌کننده از YPtun"
+    override val bypassedApps = "برنامه‌های دور زده‌شده"
+    override val search = "جستجو"
+    override val appListSection = "فهرست برنامه‌ها"
+    override val endpointSection = "نقطهٔ پایانی"
+    override val credentialsSection = "اعتبارنامه‌ها"
+    override val applicationLogsTitle = "گزارش‌های برنامه"
+    override val updatesTitle = "به‌روزرسانی‌ها"
+    override fun currentVersion(v: String) = "نسخهٔ کنونی $v"
+    override val checkInterval = "بازهٔ بررسی"
+    override val copyFullConfig = "رونوشت پیکربندی کامل"
+    override val currentConfig = "پیکربندی کنونی"
+    override val subscriptionsSection = "اشتراک‌ها"
+    override val noSubscriptions = "اشتراکی نیست"
+    override val noSubscriptionsSubtitle = "اشتراک‌های HTTPS واردشده اینجا نمایش داده می‌شوند."
+    override val listenAddress = "نشانی شنود"
+    override val listenAddressRequired = "نشانی شنود الزامی است"
+    override val savingRestarts = "ذخیره‌سازی اتصال فعال را راه‌اندازی مجدد می‌کند"
+    override val unsavedChange = "تغییر ذخیره‌نشده"
+    override val port = "درگاه"
+    override val portRequired = "درگاه الزامی است"
+    override val username = "نام کاربری"
+    override val password = "گذرواژه"
+    override val generatedPassword = "گذرواژهٔ تولیدشده"
+    override val passwordRequired = "گذرواژه الزامی است"
+    override val usernameRequired = "نام کاربری الزامی است"
+    override val regeneratePassword = "تولید مجدد گذرواژه"
+    override val save = "ذخیره"
+    override val share = "هم‌رسانی"
+    override val searchApps = "جستجوی برنامه‌ها"
+    override val noApps = "برنامه‌ای یافت نشد"
+    override val noMatchingApps = "برنامهٔ همخوانی یافت نشد"
+    override val noAppsHint = "برنامه‌های قابل‌اجرا را نصب کنید تا قواعد مسیریابی را تنظیم کنید."
+    override val noMatchHint = "نام یا بستهٔ دیگری را امتحان کنید."
+    override val noAppListNeeded = "نیازی به فهرست برنامه‌ها نیست"
+    override val everyAppSameRoute = "همهٔ برنامه‌ها از یک مسیر TUN پیروی می‌کنند"
+    override val lastCheck = "آخرین بررسی"
+    override val notCheckedYet = "هنوز بررسی نشده"
+    override val checkNow = "همین حالا بررسی کن"
+    override val fullTunnel = "تونل کامل"
+    override val localSocksProxy = "پراکسی محلی SOCKS5"
+    override val systemVpnInterface = "رابط VPN سیستمی"
+    override val localSocksEndpoint = "نقطهٔ پایانی محلی SOCKS"
+    override val allApps = "همهٔ برنامه‌ها"
+    override val selectedAppsOnly = "فقط برنامه‌های انتخاب‌شده"
+    override val bypassSelected = "دور زدن انتخاب‌شده‌ها"
+    override val everyAppUsesYptun = "همهٔ برنامه‌ها از YPtun استفاده می‌کنند"
+    override val chooseAppsUseYptun = "برنامه‌هایی را که از YPtun استفاده می‌کنند انتخاب کنید"
+    override val chooseAppsBypass = "برنامه‌هایی را که YPtun را دور می‌زنند انتخاب کنید"
+    override val themeColor = "رنگ پوسته"
+    override val elementColor = "رنگ عناصر"
+    override val textColor = "رنگ متن"
+    override val customColorRgb = "رنگ سفارشی (RGB)"
+    override val qrShare = "QR / هم‌رسانی"
+    override val refresh = "بازآوری"
+    override val experimental = "آزمایشی"
+    override val experimentalSubtitle = "کوکی‌های Telemost و موارد دیگر"
+    override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
+    override val notifSpeed = "سرعت در اعلان"
+    override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
+    override val telemostCookiesDescription =
+        "کوکی‌های یک حساب واردشدهٔ یاندکس (سرایند Cookie، مثلاً " +
+            "«Session_id=…; yandexuid=…») — برای کنفرانس‌های خصوصی. در اندروید نمی‌توان هستهٔ " +
+            "سفارشی را به‌صورت یک باینری جداگانه اجرا کرد، بنابراین این قابلیت در هستهٔ استاندارد تعبیه شده است."
+    override val useTelemostCookies = "استفاده از کوکی‌های Telemost"
+    override val useTelemostCookiesSubtitle = "پیوست کوکی‌ها هنگام اتصال به Telemost"
+    override val telemostCookieHeader = "سرایند Cookie برای Telemost"
+    override val cookiesLoaded = "کوکی‌ها بارگذاری شد"
+    override val cookiesReadFailed = "خواندن پرونده ممکن نشد"
+    override val loadFromFile = "بارگذاری از پرونده (cookies.txt)"
+    override val notifConnected = "متصل شد"
+    override fun notifConnectedMode(mode: String) = "$mode متصل شد"
+    override val notifWaitingNetwork = "در انتظار شبکه…"
+    override val notifReconnecting = "در حال اتصال مجدد…"
+    override val notifWaitingTransport = "در انتظار حامل…"
+    override val notifConnecting = "در حال اتصال…"
+    override val notifAddLocation = "ابتدا یک موقعیت اضافه کنید"
+    override val notifAddProxy = "ابتدا یک پراکسی اضافه کنید"
+    override val notifAddVkLink = "ابتدا یک پیوند تماس VK اضافه کنید"
+    override val notifConnectionFailed = "اتصال ناموفق بود"
+    override val notifTunnelFailed = "تونل ناموفق بود"
+    override val notifVpnTunnelError = "خطای تونل VPN"
+    override val notifSplitTunnelError = "خطای تونل‌سازی تفکیکی"
+    override val notifStop = "توقف"
+    override val noFileSelected = "پرونده‌ای انتخاب نشد"
+    override val qrImported = "QR وارد شد"
+    override fun cannotOpenFilePicker(msg: String) = "بازکردن انتخابگر پرونده ممکن نشد: $msg"
+    override val configCopied = "پیکربندی رونوشت شد"
+    override val copied = "رونوشت شد"
+    override val vkCallLink = "پیوند تماس VK"
+    override fun vkCallLinkBody(name: String) =
+        "پیوند پیوستن VK Calls خود را برای «$name» بچسبانید. می‌توانید چند پیوند " +
+            "(هر کدام در یک خط) بچسبانید تا تونل میان تماس‌ها پخش شده و سرعت بیشتر شود."
+    override val next = "بعدی"
+    override val later = "بعداً"
+    override val download = "بارگیری"
+    override val updateAvailable = "به‌روزرسانی در دسترس است"
+    override val sizeUnknown = "اندازه نامشخص"
+    override val noLogEntries = "ورودی‌ای نیست"
+    override fun logEntriesCount(n: Int) = "$n ورودی"
+    override val locationSettingsTitle = "تنظیمات موقعیت"
+    override val proxyLinkOrConfig = "پیوند یا پیکربندی پراکسی"
+    override val proxyLink = "پیوند پراکسی"
+    override val fieldName = "نام"
+    override val locationNamePlaceholder = "نام موقعیت"
+    override val engineSection = "موتور"
+    override val proxySection = "پراکسی"
+    override val proxySectionSubtitle =
+        "یک پیوند vless/vmess/trojan/ss، پیکربندی AmneziaWG یا JSON خروجی sing-box را بچسبانید"
+    override val freeturnTransportSection = "حامل Freeturn"
+    override val freeturnTransportSubtitle = "نقطهٔ پایانی بازپخش VK TURN و مبهم‌سازی"
+    override val wireguardSubtitle = "تونل sing-box از طریق شنودگر محلی freeturn شماره‌گیری می‌کند"
+    override val proxyOverVkturn = "پراکسی روی VK-TURN (اختیاری)"
+    override val proxyOverVkturnSubtitle =
+        "زنجیر کردن یک پراکسی vless/vmess/trojan/ss روی تونل WireGuard"
+    override val enableProxy = "فعال‌سازی پراکسی"
+    override val vkCallLinksSection = "پیوند(های) تماس VK"
+    override val vkCallLinksSubtitle =
+        "پیوند شخصی پیوستن VK Calls (الزامی). تا ۵ مورد اضافه کنید — هر تماس اضافی " +
+            "پهنای باند را افزایش می‌دهد (تونل میان آن‌ها پخش می‌شود)."
+    override fun vkCallLinkNumbered(n: Int) = "پیوند تماس VK شمارهٔ $n (اختیاری)"
+    override val additionalCalls = "تماس‌های اضافی"
+    override val coreSection = "هسته"
+    override val coreSubtitle = "«خودکار» برای xhttp از Xray و در غیر این صورت از sing-box استفاده می‌کند"
+    override val connectionType = "نوع اتصال"
+    override val vp8Options = "گزینه‌های VP8"
+    override val vp8OptionsSubtitle = "تنظیم دقیق کارایی جریان"
+    override fun subscriptionsUpdatedCount(n: Int) = "اشتراک‌ها به‌روزرسانی شد: $n"
+    override val subscriptionsUpdated = "اشتراک‌ها به‌روزرسانی شد"
+    override val subscriptionDeleted = "اشتراک حذف شد"
+    override val subscriptionsDeleted = "اشتراک‌ها حذف شد"
+    override val configsDeleted = "پیکربندی‌ها حذف شد"
+    override val customLocations = "موقعیت‌های سفارشی"
+    override val addRelaySetup = "افزودن پیکربندی بازپخش"
+    override val importHint = "QR را بپویید، URI را بچسبانید یا پرونده وارد کنید"
+    override val importedFromClipboard = "از تخته‌گیره وارد شد"
+    override val pingOffline = "آفلاین"
+    override val pingChecking = "در حال بررسی…"
+    override val pingVerify = "برای بررسی دسترس‌پذیری کلیک کنید"
+    override val connectivityCheck = "بررسی اتصال"
+    override val scanQrTitle = "پویش QR"
+    override val readyToScan = "آمادهٔ پویش"
+    override val subscriptionOrLocationUri = "اشتراک یا URI موقعیت"
+    override val cameraPermissionDenied = "دسترسی به دوربین رد شد"
+    override val cameraUnavailable = "دوربین در دسترس نیست"
+    override val upToDate = "YPtun به‌روز است"
+    override fun latestAlreadyDownloaded(channel: String) = "آخرین نسخهٔ $channel قبلاً بارگیری شده است"
+    override fun channelUpdateAvailable(channel: String, version: String) = "به‌روزرسانی $channel در دسترس است: $version"
+    override fun checkingChannel(channel: String) = "در حال بررسی $channel…"
+    override val updateServiceUnavailable = "سرویس به‌روزرسانی در دسترس نیست"
+    override val updateCheckFailed = "بررسی به‌روزرسانی ناموفق بود"
+    override val allowInstallUpdates = "به YPtun اجازهٔ نصب به‌روزرسانی‌ها را بدهید، سپس دوباره «بارگیری» را بزنید"
+    override val locationQr = "QR موقعیت"
+    override val subscriptionQr = "QR اشتراک"
+    override val subscriptionUpdated = "اشتراک به‌روزرسانی شد"
+    override val subscriptionNotUpdated = "اشتراک به‌روزرسانی نشد"
+    override val addLocationFirst = "ابتدا یک موقعیت اضافه کنید"
+    override val completeActiveLocationFirst = "ابتدا موقعیت فعال را کامل کنید"
+    override val addValidLocationFirst = "ابتدا یک موقعیت معتبر اضافه کنید"
+    override val encryptionKey = "کلید رمزنگاری"
+    override val serverHost = "میزبان سرور"
+    override val transportToRelay = "حامل (تا بازپخش TURN)"
+    override val modeTunnelPayload = "حالت (بار تونل)"
+    override val obfuscationProfile = "نمایهٔ مبهم‌سازی"
+    override val obfuscationKey = "کلید مبهم‌سازی"
+    override val streamsParallel = "جریان‌ها (بازپخش‌های موازی)"
+    override val bondingMultipath = "تجمیع (چندمسیره)"
+    override val privateKey = "کلید خصوصی"
+    override val peerPublicKey = "کلید عمومی همتا"
+    override val addressField = "نشانی"
+    override val listenPort = "درگاه شنود"
+    override val allowedIps = "IPهای مجاز"
+    override val muxMultiplex = "Mux (چندتکثیری)"
+    override val muxProtocol = "پروتکل Mux"
+    override val maxStreamsField = "حداکثر جریان‌ها"
+    override val sniffDestination = "شناسایی مقصد (sniff)"
+    override val tlsFragmentXray = "تکه‌تکه‌سازی TLS (ضد DPI، Xray)"
+    override val coreAuto = "خودکار"
+    override fun advancedCoreSettings(core: String) = "تنظیمات پیشرفتهٔ $core"
 }

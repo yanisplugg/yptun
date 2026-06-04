@@ -76,7 +76,7 @@ cp docker-compose.server.yml .local/docker-compose.server.yml
 
 Создайте `.local/.env` и заполните значения в соответствии с выбранным типом подключения.
 
-Пример можно найти в `docs/examples/.env.telemost.server.example`.
+Пример можно найти в `docs/examples/server/.env.telemost.server.example`.
 
 ---
 

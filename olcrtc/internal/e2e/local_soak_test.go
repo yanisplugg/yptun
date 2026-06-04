@@ -77,6 +77,11 @@ var (
 		true,
 		"verify echoed bytes match the sent pattern (slower, but catches corruption)",
 	)
+	localSoakChaos = flag.Duration( //nolint:gochecknoglobals // package-level state intentional
+		"olcrtc.local-soak-chaos",
+		0,
+		"if >0, trigger carrier reconnect every this interval to simulate network disruption",
+	)
 )
 
 var (
@@ -125,9 +130,9 @@ func runLocalSoakOnce(t *testing.T, transportName string) {
 	// some transports), so don't fold it into the duration budget.
 	const setupBudget = 30 * time.Second
 
-	t.Logf("[soak] transport=%s duration=%s chunk=%d verify=%t progress=%s",
+	t.Logf("[soak] transport=%s duration=%s chunk=%d verify=%t progress=%s chaos=%s",
 		transportName, *localSoakDuration, *localSoakChunk,
-		*localSoakVerify, *localSoakProgress)
+		*localSoakVerify, *localSoakProgress, *localSoakChaos)
 
 	rt := startLocalSoakTunnel(t, transportName)
 	echoAddr := startEchoServer(t)
@@ -140,6 +145,10 @@ func runLocalSoakOnce(t *testing.T, transportName string) {
 
 	pumpCtx, cancelPump := context.WithTimeout(context.Background(), *localSoakDuration)
 	defer cancelPump()
+
+	if *localSoakChaos > 0 && rt.room != nil {
+		go runLocalSoakChaos(pumpCtx, t, rt.room, *localSoakChaos)
+	}
 
 	stats := runLocalSoakPump(pumpCtx, t, conn, *localSoakChunk, *localSoakVerify, *localSoakProgress)
 
@@ -448,5 +457,26 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%.2f KiB", float64(n)/float64(kib))
 	default:
 		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// runLocalSoakChaos periodically triggers carrier reconnect to simulate
+// network disruption (WiFi flap, NAT rebind, etc). This reproduces the
+// scenario from issue #72 where a carrier-driven reconnect leaves the
+// server and client in a desynchronized state.
+func runLocalSoakChaos(ctx context.Context, t *testing.T, room *memoryRoom, interval time.Duration) {
+	t.Helper()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var count int
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			count++
+			t.Logf("[chaos] triggering carrier reconnect #%d", count)
+			room.triggerReconnect()
+		}
 	}
 }

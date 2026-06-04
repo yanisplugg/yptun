@@ -21,6 +21,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.CurrentAppInfo
+import org.olcbox.app.data.importer.AmneziaWgParser
+import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
 import org.olcbox.app.data.identity.DeviceIdentityProvider
@@ -33,6 +35,7 @@ import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
+import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 
@@ -609,6 +612,19 @@ class LocationsRepositoryImpl(
             return ParsedImport(it, ImportMode.Additive)
         }
 
+        // VK-TURN share link (freeturn://): a WireGuard-over-VK location. Checked before the
+        // generic proxy parser since it has its own scheme and engine.
+        parseFreeturnText(text, subscriptionUrl)?.let {
+            return ParsedImport(it, ImportMode.Additive)
+        }
+
+        // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
+        // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
+        // and would not see the multi-line config).
+        parseAmneziaWgText(text, subscriptionUrl)?.let {
+            return ParsedImport(it, ImportMode.Additive)
+        }
+
         // Proxy share links / subscriptions (vless, vmess, trojan, ss, base64 blobs and
         // JSON panels with a "links" array) become sing-box (Standard) locations.
         parseProxyText(text, subscriptionUrl, subscriptionMetadata)?.let {
@@ -991,6 +1007,79 @@ class LocationsRepositoryImpl(
         return "$text ${units[unitIndex]}"
     }
 
+    /**
+     * Parses a single VK-TURN [FreeturnUriParser.SCHEME] link into a [EngineType.VkTurn] location.
+     * The decoded WireGuard config is stored as [ProxyProfile.rawOutbound]; the per-client VK call
+     * link is left empty for the user to fill in via the location settings before connecting.
+     */
+    private fun parseFreeturnText(
+        text: String,
+        subscriptionUrl: String? = null
+    ): LocationBundleV4? {
+        val line = text.trim().lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith(FreeturnUriParser.SCHEME, ignoreCase = true) }
+            ?: return null
+        val link = FreeturnUriParser.parse(line) ?: return null
+
+        val name = link.comment.ifBlank { "VK-TURN ${link.serverIp}" }
+        val location = LocationConfig(
+            name = name,
+            engine = EngineType.VkTurn,
+            proxy = ProxyProfile(
+                tag = name,
+                type = "wireguard",
+                server = link.serverIp,
+                serverPort = link.serverPort,
+                rawOutbound = link.wgOutboundJson,
+            ),
+            vkturn = VkTurnConfig(
+                uri = link.uri,
+                vkLink = "",
+                listenPort = link.listenPort,
+            ),
+        ).normalized()
+
+        val base = "${link.serverIp}_${link.serverPort}"
+            .lowercase()
+            .map { if (it.isLetterOrDigit()) it else '_' }
+            .joinToString("")
+        val storageId = uniqueStorageId("imported_vkturn_$base", mutableSetOf())
+        val entry = LocationEntry.from(
+            storageId = storageId,
+            location = location,
+            subscriptionUrl = subscriptionUrl,
+        )
+        return LocationBundleV4(
+            activeLocationId = entry.storageId,
+            locations = listOf(entry)
+        )
+    }
+
+    /** Parses a whole AmneziaWG wg-quick .conf into a [EngineType.Standard] location. */
+    private fun parseAmneziaWgText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
+        val trimmed = text.trim()
+        if (!AmneziaWgParser.looksLikeAmneziaWg(trimmed)) return null
+        val profile = AmneziaWgParser.parse(trimmed) ?: return null
+        val name = profile.tag.ifBlank { "AmneziaWG" }
+        val location = LocationConfig(
+            name = name,
+            engine = EngineType.Standard,
+            proxy = profile,
+        ).normalized()
+        val base = "${profile.server}_${profile.serverPort}"
+            .lowercase()
+            .map { if (it.isLetterOrDigit()) it else '_' }
+            .joinToString("")
+        val storageId = uniqueStorageId("imported_awg_$base", mutableSetOf())
+        val entry = LocationEntry.from(
+            storageId = storageId,
+            location = location,
+            subscriptionUrl = subscriptionUrl,
+        )
+        return LocationBundleV4(activeLocationId = entry.storageId, locations = listOf(entry))
+    }
+
     private fun parseProxyText(
         text: String,
         subscriptionUrl: String? = null,
@@ -1299,7 +1388,7 @@ class LocationsRepositoryImpl(
                     }
                 }
                 .normalized()
-                .takeIf { it.location.isComplete() }
+                .takeIf { it.location.isStorable() }
         }.getOrNull()
     }
 

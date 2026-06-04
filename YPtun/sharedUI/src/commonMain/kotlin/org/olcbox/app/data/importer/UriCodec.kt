@@ -37,7 +37,11 @@ internal object UriCodec {
     }
 
     /** Split "host:port" or "[ipv6]:port" into host and port. */
-    fun splitHostPort(value: String): Pair<String, Int>? {
+    fun splitHostPort(raw: String): Pair<String, Int>? {
+        // Drop a trailing path so "host:443/?type=tcp" → "host:443" (many panels emit the slash
+        // before the query; without this the port parses as "443/" and the whole link is dropped —
+        // e.g. a subscription where only the first server, the one without a slash, imported).
+        val value = raw.substringBefore('/')
         if (value.startsWith("[")) {
             val close = value.indexOf(']')
             if (close < 0) return null

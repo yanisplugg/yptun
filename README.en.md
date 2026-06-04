@@ -4,7 +4,7 @@
 
 ### Fast, censorship-resistant VPN for Android
 
-*VLESS · Reality · XHTTP over **Xray** & **sing-box** — and, above all, sheer versatility: even **olcRTC** support that makes your traffic look like a video call.*
+*VLESS · Reality · XHTTP over **Xray** & **sing-box**, obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls — and, above all, sheer versatility: even **olcRTC** support that makes your traffic look like a video call.*
 
 <br>
 
@@ -18,7 +18,7 @@
 
 <br>
 
-**🌍 English** · [**Русский**](README.md)
+[**Русский**](README.md) · **🌍 English** · [**فارسی**](README.fa.md)
 
 </div>
 
@@ -27,13 +27,26 @@
 ## ✨ Why YPtun?
 
 Most VPN clients give you one engine and one way to connect. **YPtun gives you a toolbox.**
-It bundles **two proxy cores** plus **olcRTC** support in one app, so when one method gets blocked, you switch and keep going.
+It bundles **several circumvention engines** in one app, so when one method gets blocked, you switch and keep going.
 
-> ⭐ **The standout is sheer versatility.** Xray and sing-box, every common protocol and transport, import almost anything — plus support for **olcRTC** ([openlibrecommunity/olcrtc](https://github.com/openlibrecommunity/olcrtc)), which routes traffic through real video-conferencing services (Jazz, Telemost, WB Stream, Jitsi) so it looks like an ordinary call to DPI. Block one path and there are several more right next to it.
+> ⭐ **The standout is sheer versatility.** Xray and sing-box with every common protocol and transport, obfuscated WireGuard via **AmneziaWG**, tunneling through real calls (**VK-TURN** and **olcRTC**), import almost anything, and Happ-compatible routing profiles. Block one path and there are several more right next to it.
 
-> Built for places where the internet fights back. 🌐
+> Built for places where the internet fights back — for 🇷🇺 Russia, 🇮🇷 Iran and any country where sites vanish without notice. 🌐
 
 > 🖥️ **Desktop coming soon** — native **Windows** and **Linux** builds are in the works.
+
+---
+
+## 🆕 What's new in 2.0
+
+| | |
+|---|---|
+| 🌀 **AmneziaWG engine** | Obfuscated WireGuard (AmneziaWG) — import `.conf`/QR, fine-tune obfuscation (Jc/Jmin/Jmax/S1/S2/H1–H4). Works as a standalone exit or as a link in a chain. |
+| 📞 **VK-TURN engine** | A tunnel over the TURN infrastructure of VK calls. Bonds several parallel "calls" for speed; pick the exit: WireGuard / AmneziaWG / proxy. |
+| 🧭 **Routing profiles** | Happ-compatible profiles (`happ://routing/add/…`): block/direct/proxy by `geoip:`/`geosite:`/domains/CIDR, a "route everything through proxy" switch, custom DNS and fakedns. Converted to both cores. |
+| 🗂️ **Better subscriptions** | Subscription groups can be **collapsed**, **pinned to the top**, and **sorted by ping** — state is remembered. Bulk-import a list of links in one paste. |
+| 🛡️ **Fewer leaks** | Unconditional QUIC blocking on transports that can't carry it, plus domain resolution for geoip rules — nothing slips past the tunnel anymore. |
+| 🔔 **Notification** | Colored logo and optional live up/down speed right in the shade. |
 
 ---
 
@@ -41,16 +54,16 @@ It bundles **two proxy cores** plus **olcRTC** support in one app, so when one m
 
 | | |
 |---|---|
-| 🔀 **Dual cores** | Runs on **Xray** *or* **sing-box** — auto-picked per protocol, or force one. |
-| 🧬 **Protocols** | VLESS · VMess · Trojan · Shadowsocks |
+| 🔀 **Multiple engines** | **Xray**, **sing-box**, **AmneziaWG** and **VK-TURN** — the core is auto-picked per protocol, or forced. |
+| 🧬 **Protocols** | VLESS · VMess · Trojan · Shadowsocks · WireGuard / AmneziaWG |
 | 🚇 **Transports** | TCP · WS · gRPC · HTTPUpgrade · **XHTTP** · TLS · **Reality** · uTLS fingerprints |
-| 🎭 **olcRTC support** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport (by openlibrecommunity) — traffic rides real video-call services, so to DPI it's an ordinary call, not a proxy. |
-| 📥 **Smart import** | vless/vmess/trojan/ss links, base64 blobs, panel JSON, **full raw Xray / sing-box configs**, and olcRTC URIs. |
-| 🧭 **DNS & routing** | Import a full Xray config (honored *verbatim*), or flip the built-in **"Block RU domains"** switch. |
-| 🧱 **DPI evasion** | TLS fragmentation + connection multiplexing. |
+| 🎭 **olcRTC support** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport (by openlibrecommunity) — traffic rides real video-call services (Jazz, Telemost, WB Stream, Jitsi), so to DPI it's an ordinary call, not a proxy. |
+| 📥 **Smart import** | vless/vmess/trojan/ss links, base64 blobs, panel JSON, **full raw Xray / sing-box configs**, AmneziaWG `.conf`/QR, olcRTC URIs, and Happ profiles. |
+| 🧭 **DNS & routing** | Routing profiles, import a full Xray config (honored *verbatim*), or flip the built-in **"Block RU domains"** switch. |
+| 🧱 **DPI evasion** | TLS fragmentation, multiplexing, AmneziaWG obfuscation, QUIC blocking. |
 | 🔒 **Leak-safe** | Captures **both IPv4 and IPv6** — nothing escapes the tunnel. |
 | 📱 **Split tunneling** | Pick exactly which apps go through the VPN. |
-| 🗂️ **Subscriptions** | Auto-refresh, traffic/usage display, multi-location lists. |
+| 🗂️ **Subscriptions** | Auto-refresh, traffic/usage display, groups with collapse/pin/sort-by-ping. |
 
 ---
 
@@ -67,29 +80,41 @@ Grab the latest signed APK from the **[Releases page](https://github.com/yanispl
 
 > 💡 Not sure? Download **arm64-v8a** or **universal**.
 
+Minimum is **Android 6.0** (API 23).
+
 ---
 
 ## 🧠 How it works
 
 ```
-┌─────────────┐   packets   ┌───────────────┐   SOCKS5   ┌────────────────────────┐
-│  Your apps  │ ──────────▶ │  Android TUN  │ ─────────▶ │  Engine (one process)  │
-└─────────────┘             │  (IPv4+IPv6)  │            │  ┌──────────────────┐  │
-                            └───────────────┘            │  │ Xray / sing-box  │  │
-                                                         │  │  + olcRTC stealth│  │
-                                                         │  └──────────────────┘  │
-                                                         └───────────┬────────────┘
-                                                                     ▼
-                                                              🌍 the open internet
+┌─────────────┐   packets   ┌───────────────┐   SOCKS5   ┌────────────────────────────┐
+│  Your apps  │ ──────────▶ │  Android TUN  │ ─────────▶ │     Engine (one process)   │
+└─────────────┘             │  (IPv4+IPv6)  │            │  ┌──────────────────────┐  │
+                            └───────────────┘            │  │  Xray / sing-box     │  │
+                                                         │  │  AmneziaWG / VK-TURN │  │
+                                                         │  │  + olcRTC stealth    │  │
+                                                         │  └──────────────────────┘  │
+                                                         └─────────────┬──────────────┘
+                                                                       ▼
+                                                                🌍 the open internet
 ```
 
-All native cores are compiled into **one** `gomobile` library (a single Go runtime), so Xray, sing-box and olcRTC coexist without conflicts.
+All native cores are compiled into **one** `gomobile` library (a single Go runtime), so Xray, sing-box, AmneziaWG, VK-TURN and olcRTC coexist in one process without conflicts. The app just spins up a `VpnService`, feeds packets into the TUN, and wraps them into the chosen engine via a local SOCKS5.
+
+---
+
+## 🧩 Engines in plain words
+
+- **Xray / sing-box** — classic proxy cores. VLESS+Reality, XHTTP, WS+TLS, etc. The core is auto-picked per transport.
+- **AmneziaWG** — WireGuard with obfuscation: the handshake and packets don't look like "plain" WireGuard, which is often fingerprinted and dropped.
+- **VK-TURN** — spins up a local WireGuard and routes it through the TURN servers of VK calls; several "calls" are bonded for throughput.
+- **olcRTC** — disguise as a video call: traffic rides genuine conferencing services, so to DPI it looks like a live call.
 
 ---
 
 ## 🛠️ Build from source
 
-Everything you need is vendored here (`cores`, `olcrtc`, `sing-box`). You'll need:
+Everything you need is vendored here (`cores`, `olcrtc`, `sing-box`, `awgproxy`, `free-turn-proxy`, `amneziawg-go`). You'll need:
 
 - **JDK 17** (the one bundled with Android Studio is fine)
 - **Android SDK** (set `sdk.dir` in `YPtun/local.properties`) + **NDK `28.2.13676358`**
@@ -100,10 +125,11 @@ Everything you need is vendored here (`cores`, `olcrtc`, `sing-box`). You'll nee
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=1.0.0 -Polcbox.versionCode=1
+  -Polcbox.version=2.0.0 -Polcbox.versionCode=2
 ```
 
 APKs land in `YPtun/androidApp/build/outputs/apk/release/`.
+Want a single-ABI build for your phone (faster)? Add `-Polcbox.android.abiFilters=arm64-v8a`.
 
 <details>
 <summary>🔑 Signing your own release builds (optional, for maintainers)</summary>
@@ -128,13 +154,33 @@ over previous versions.
 
 ---
 
+## 🧪 Development
+
+YPtun is **Kotlin Multiplatform**: all the logic (import, config building, engines, UI state)
+lives in `commonMain`, with platform glue in `androidMain`. That means the same code already
+runs on the JVM desktop target.
+
+- **UI** — Jetpack Compose, one design across platforms.
+- **Localization** — three languages (🇷🇺 Russian, 🇬🇧 English, 🇮🇷 فارسی) in a single strings file.
+- **Native cores** — Go, compiled into one gomobile AAR by the `buildCoresAndroidAar` task; core
+  inputs are tracked, so the AAR only rebuilds when Go code changes (Go's cache keeps it fast).
+- **Tests** — unit tests for the routing parsers/converters (`./gradlew :sharedUI:jvmTest`).
+- **Branches** — stable on `main`, active work on `Beta`; releases are tagged `vX.Y.Z`.
+
+Found a bug or want a feature? Open an issue or PR — see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
+---
+
 ## 🗂️ Project layout
 
 ```
-YPtun/      Kotlin Multiplatform app — Compose UI, Android VpnService, engine wiring
-cores/      Go glue: one gomobile AAR bundling sing-box (libbox) + olcRTC + Xray bridge
-olcrtc/     olcRTC — disguise transport       (third-party, vendored)
-sing-box/   sing-box / libbox, pinned v1.12.25 (vendored)
+YPtun/            Kotlin Multiplatform app — Compose UI, Android VpnService, engine wiring
+cores/            Go glue: one gomobile AAR bundling sing-box + olcRTC + Xray + AmneziaWG + VK-TURN
+olcrtc/           olcRTC — video-call disguise transport          (third-party, vendored)
+sing-box/         sing-box / libbox                               (vendored)
+awgproxy/         AmneziaWG wrapper → local SOCKS5                 (Go module)
+free-turn-proxy/  VK-TURN — tunnel over VK calls                  (Go module)
+amneziawg-go/     AmneziaWG implementation                        (vendored)
 ```
 
 ---
@@ -142,10 +188,21 @@ sing-box/   sing-box / libbox, pinned v1.12.25 (vendored)
 ## 🗺️ Roadmap
 
 - [x] Android release
+- [x] AmneziaWG and VK-TURN engines
+- [x] Routing profiles (Happ-compatible)
 - [ ] 🪟 **Windows** desktop build — *coming soon*
 - [ ] 🐧 **Linux** desktop build — *coming soon*
 
 > The shared engine already runs on the JVM (`desktopApp`), so desktop builds are next in line.
+
+---
+
+## 🤝 Contributing
+
+PRs and issues are welcome. Before you start, have a look at:
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — how to build, format and submit changes
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** — house rules
+- **[SECURITY.md](SECURITY.md)** — how to report a vulnerability
 
 ---
 
@@ -154,22 +211,22 @@ sing-box/   sing-box / libbox, pinned v1.12.25 (vendored)
 Standing on the shoulders of giants:
 [Xray-core](https://github.com/XTLS/Xray-core) ·
 [sing-box](https://github.com/SagerNet/sing-box) ·
-[olcRTC](https://github.com/openlibrecommunity/olcrtc).
+[olcRTC](https://github.com/openlibrecommunity/olcrtc) ·
+[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go).
 
 ## 📄 License
 
 [MIT](LICENSE) for the app. Vendored components keep their own licenses
-(`sing-box/LICENSE`, `olcrtc/LICENSE`).
+(`sing-box/LICENSE`, `olcrtc/LICENSE`, `amneziawg-go/LICENSE`).
 
 <div align="center">
 <br>
 
-<img src="docs/no-rkn.jpg" alt="No RKN" width="150">
+<img src="docs/no-rkn.jpg" alt="No censorship" width="150">
 
 <br><br>
 
 > *"A nation that is afraid to let its people judge the truth and falsehood in an open market is a nation that is afraid of its people."*
-> *«Нация, которая боится позволить своему народу судить о правде и лжи на открытом рынке, — это нация, которая боится своего народа.»*
 >
 > — **John F. Kennedy**
 

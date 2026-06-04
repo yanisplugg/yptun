@@ -35,7 +35,14 @@ fun OlcboxAppContent(
     canScanQr: Boolean = false,
     onAppSettingsClick: () -> Unit,
     onSplitTunnelingClick: () -> Unit = {},
-    confirmBeforeDelete: Boolean = true
+    confirmBeforeDelete: Boolean = true,
+    onUnlockExperimental: () -> Unit = {},
+    collapsedGroups: Set<String> = emptySet(),
+    pinnedGroups: List<String> = emptyList(),
+    pingSortedGroups: Set<String> = emptySet(),
+    onToggleGroupCollapsed: (String) -> Unit = {},
+    onToggleGroupPinned: (String) -> Unit = {},
+    onToggleGroupPingSort: (String) -> Unit = {}
 ) {
     val homeScrollState = rememberScrollState()
 
@@ -94,7 +101,14 @@ fun OlcboxAppContent(
                         locationViewModel.startEditing(null)
                         onNavigate(AppScreen.LocationSettings(null))
                     },
-                    confirmBeforeDelete = confirmBeforeDelete
+                    confirmBeforeDelete = confirmBeforeDelete,
+                    onUnlockExperimental = onUnlockExperimental,
+                    collapsedGroups = collapsedGroups,
+                    pinnedGroups = pinnedGroups,
+                    pingSortedGroups = pingSortedGroups,
+                    onToggleGroupCollapsed = onToggleGroupCollapsed,
+                    onToggleGroupPinned = onToggleGroupPinned,
+                    onToggleGroupPingSort = onToggleGroupPingSort
                 )
             }
 

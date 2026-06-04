@@ -50,6 +50,19 @@ const (
 	videoTrackName       = "videochannel"
 	maxReconnects        = 5
 	reconnectWindow      = 5 * time.Minute
+	// reconnectGrace is the window after a successful self-reconnect during
+	// which incoming peer-epoch changes do NOT trigger another reconnect.
+	// Without this, the peer's own recovery (which produces a fresh epoch)
+	// drives us into an infinite reconnect loop.
+	reconnectGrace = 20 * time.Second
+
+	// xmppKeepaliveInterval keeps the underlying XMPP transport alive while
+	// we wait for a peer. BOSH has no built-in stream management; without
+	// any application traffic Prosody closes the BOSH session after roughly
+	// 60 s and our subsequent WaitJingle observes "connection closed". A
+	// periodic XMPP ping IQ resets that idle timer end-to-end and works for
+	// the WebSocket transport too.
+	xmppKeepaliveInterval = 25 * time.Second
 )
 
 // bridgeMagic tags every EndpointMessage produced by this engine. JVB broadcasts
@@ -75,6 +88,9 @@ var (
 	ErrHostRequired = errors.New("jitsi host required")
 	// ErrRoomRequired is returned when no Jitsi room was supplied.
 	ErrRoomRequired = errors.New("jitsi room required")
+	// errNoPeer is returned by reconnectFull when the WaitJingle timeout
+	// fires because no peer has joined the room yet (not a real failure).
+	errNoPeer = errors.New("no peer in room")
 )
 
 // Session is the Jitsi engine handle.
@@ -91,8 +107,10 @@ type Session struct {
 
 	jSess atomic.Pointer[j.Session]
 
-	pcMu sync.Mutex
-	pc   *webrtc.PeerConnection
+	pcMu     sync.Mutex
+	pc       *webrtc.PeerConnection
+	pcCtx    context.Context    //nolint:containedctx // tied to PC lifetime, cancelled in teardownPC
+	pcCancel context.CancelFunc // cancels pcCtx; cancelled when the live PC is replaced
 
 	sendQueue     chan []byte
 	peerSendQueue chan bridgeOutbound
@@ -101,24 +119,30 @@ type Session struct {
 	reconnecting  atomic.Bool
 
 	reconnectCh          chan struct{}
-	reconnectMu          sync.Mutex // guards reconnectWindowStart and reconnectCount
+	reconnectMu          sync.Mutex // guards reconnectWindowStart, reconnectCount, lastReconnectAt
 	reconnectWindowStart time.Time
 	reconnectCount       int
-	localEpoch           atomic.Uint32
-	peerEpoch            atomic.Uint32
+	// lastReconnectAt records when the last successful self-reconnect completed.
+	// During the grace period after a reconnect, peer-epoch changes are tolerated
+	// without triggering yet another reconnect (the peer is also recovering and
+	// will publish a fresh epoch as part of its own recovery).
+	lastReconnectAt atomic.Int64
+	localEpoch      atomic.Uint32
+	peerEpoch       atomic.Uint32
 
 	// peerEndpoint latches the MUC nick of the first occupant whose
 	// EndpointMessage passed the bridgeMagic check. Once set, all bridge
 	// messages from other senders are dropped, isolating us from chatter by
 	// unrelated olcrtc processes that happen to share the same room.
-	peerEndpoint atomic.Pointer[string]
-	peerEpochMu  sync.Mutex
-	peerEpochs   map[string]uint32
-	done         chan struct{}
-	doneOnce     sync.Once
-	cancel       context.CancelFunc
-	runCtx       context.Context //nolint:containedctx // engine owns the supervisor lifetime
-	wg           sync.WaitGroup
+	peerEndpoint  atomic.Pointer[string]
+	peerEpochMu   sync.Mutex
+	peerEpochs    map[string]uint32
+	done          chan struct{}
+	doneOnce      sync.Once
+	cancel        context.CancelFunc
+	trickleCancel context.CancelFunc
+	runCtx        context.Context //nolint:containedctx // engine owns the supervisor lifetime
+	wg            sync.WaitGroup
 
 	videoTrackMu sync.RWMutex
 	videoTracks  []webrtc.TrackLocal
@@ -270,64 +294,104 @@ func (s *Session) Capabilities() engine.Capabilities {
 	return engine.Capabilities{ByteStream: true, VideoTrack: true}
 }
 
-// Connect joins the Jitsi conference, optionally opens the bridge channel,
-// and (if video tracks are pending or a remote handler is set) negotiates a
-// pion PeerConnection.
+// Connect joins the Jitsi MUC (non-blocking) and waits for the Jingle
+// session-initiate asynchronously. This avoids blocking on the timeout when
+// no second participant is present — Jicofo only sends session-initiate once
+// another peer joins the room.
 func (s *Session) Connect(ctx context.Context) error {
 	if s.closed.Load() {
 		return ErrSessionClosed
 	}
 
-	jSess, err := s.joinAndOpenBridge(ctx)
-	if err != nil {
-		return err
-	}
-	s.jSess.Store(jSess)
-
-	s.wg.Add(2)
-	go s.sendLoop()
-	go s.recvLoop()
-	return nil
-}
-
-func (s *Session) joinAndOpenBridge(ctx context.Context) (*j.Session, error) { //nolint:cyclop // sequential setup steps
-	logger.Infof("jitsi: joining %s/%s as %s …", s.host, s.room, s.name)
-	jSess, err := j.Join(ctx, j.Config{
+	logger.Infof("jitsi: joining MUC %s/%s as %s …", s.host, s.room, s.name)
+	jSess, err := j.JoinMUC(ctx, j.Config{
 		Host:  s.host,
 		Room:  s.room,
 		Nick:  s.name,
 		Debug: logger.IsVerbose(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("jitsi join: %w", err)
+		return fmt.Errorf("jitsi join muc: %w", err)
 	}
-	logger.Infof("jitsi: joined %s/%s; colibri-ws=%s", s.host, s.room, jSess.ColibriWS)
+	s.jSess.Store(jSess)
+	logger.Infof("jitsi: MUC joined %s/%s; waiting for peer …", s.host, s.room)
+
+	s.wg.Add(5)
+	go s.sendLoop()
+	go s.recvLoop()
+	go s.waitForJingle()
+	go s.bridgeKeepalive()
+	go s.xmppKeepalive()
+	return nil
+}
+
+// waitForJingle waits for Jicofo to send session-initiate (when a peer joins)
+// and then opens the bridge channel and negotiates the PeerConnection.
+//
+// Jicofo only emits session-initiate once min-participants is reached
+// (default 2). If we sit alone in the room long enough, the underlying
+// XMPP transport may also drop (BOSH session timeout, connection reset,
+// network blip, etc.). On any non-cancellation error we request a
+// reconnect so the supervisor can rejoin and resume waiting; without
+// this, a single failed wait permanently wedges the engine.
+func (s *Session) waitForJingle() {
+	defer s.wg.Done()
+
+	jSess := s.jSess.Load()
+	if jSess == nil {
+		return
+	}
+
+	stanza, err := jSess.Conn.WaitJingle(s.runCtx)
+	if err != nil {
+		if s.closed.Load() || s.runCtx.Err() != nil {
+			return
+		}
+		logger.Warnf("jitsi: wait jingle failed: %v", err)
+		s.requestReconnect("wait jingle failed: " + err.Error())
+		return
+	}
+	_ = stanza // parsed below via completeJingleSetup path
+
+	// Now do the full join (which will get the already-received jingle from LastJingleStanza).
+	if err := s.completeJingleSetup(s.runCtx, jSess); err != nil {
+		if !s.closed.Load() {
+			logger.Warnf("jitsi: jingle setup failed: %v", err)
+			s.requestReconnect("jingle setup failed")
+		}
+	}
+}
+
+// completeJingleSetup opens the bridge and negotiates the PeerConnection after
+// receiving session-initiate from Jicofo.
+func (s *Session) completeJingleSetup(ctx context.Context, jSess *j.Session) error {
+	logger.Infof("jitsi: session-initiate received; colibri-ws=%s", jSess.ColibriWS)
 
 	needBridge := s.onData != nil || s.onPeerData != nil
 	sctpBridge := needBridge && jSess.ColibriWS == ""
 
 	if needBridge && !sctpBridge {
 		if err := s.openBridgeWS(ctx, jSess); err != nil {
-			_ = jSess.Close()
-			return nil, err
+			return err
 		}
 	}
 
 	if s.shouldNegotiatePC() {
 		if err := s.negotiatePC(ctx, jSess, sctpBridge); err != nil {
-			_ = jSess.Close()
-			return nil, err
+			return err
 		}
 	}
 
 	if sctpBridge {
 		if err := s.openBridgeSCTP(ctx, jSess); err != nil {
-			_ = jSess.Close()
-			return nil, err
+			return err
 		}
 	}
 
-	return jSess, nil
+	// Restart recvLoop now that bridge is ready.
+	s.wg.Add(1)
+	go s.recvLoop()
+	return nil
 }
 
 func (s *Session) openBridgeWS(ctx context.Context, jSess *j.Session) error {
@@ -508,7 +572,9 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge 
 	// closes that race window - any source-add Jicofo emits is picked up
 	// the instant it lands on the wire.
 	s.wg.Add(1)
-	go s.trickleDrainLoop(pc, neg, jSess.LowLevel().Stanzas())
+	trickleCtx, trickleCancel := context.WithCancel(ctx)
+	s.trickleCancel = trickleCancel
+	go s.trickleDrainLoop(trickleCtx, pc, neg, jSess.LowLevel().Stanzas())
 
 	if sctpBridge {
 		if err := jSess.PrepareBridgeSCTP(pc); err != nil {
@@ -541,6 +607,14 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge 
 
 	s.pcMu.Lock()
 	s.pc = pc
+	// Build a context that lives exactly as long as this PC instance.
+	// teardownPC cancels pcCancel so any goroutines bound to pcCtx
+	// (currently rtcpKeepalive) exit before a fresh PC takes its place.
+	if s.pcCancel != nil {
+		s.pcCancel()
+	}
+	s.pcCtx, s.pcCancel = context.WithCancel(s.runCtx)
+	pcCtx := s.pcCtx
 	s.pcMu.Unlock()
 
 	// Start an RTCP keepalive. JVB tracks endpoint liveness via
@@ -551,7 +625,7 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge 
 	// after the default 1-minute inactivity timeout, which causes JVB to
 	// shut down the DTLS session and emit close_notify.
 	s.wg.Add(1)
-	go s.rtcpKeepalive(pc)
+	go s.rtcpKeepalive(pcCtx, pc) //nolint:contextcheck // pcCtx intentionally derives from s.runCtx to outlive this call
 
 	return nil
 }
@@ -569,23 +643,152 @@ type negotiator interface {
 // more than the configured inactivityTimeout (default 1 minute). Even an
 // empty RR keeps the timestamp fresh - JVB does not require the report to
 // reference any specific SSRC.
-func (s *Session) rtcpKeepalive(pc *webrtc.PeerConnection) {
+//
+// pcCtx is bound to the lifetime of pc: when teardownPC closes pc as part of
+// a reconnect, pcCtx is cancelled and this loop exits cleanly. Without that
+// binding, the loop would keep ticking after pc.Close(), accumulate write
+// errors against the dead PC, and fire a duplicate "rtcp keepalive dead"
+// reconnect that competes with the in-progress reconnect supervisor.
+func (s *Session) rtcpKeepalive(pcCtx context.Context, pc *webrtc.PeerConnection) {
 	defer s.wg.Done()
 	const interval = 5 * time.Second
+	const maxErrors = 3
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	pkts := []rtcp.Packet{&rtcp.ReceiverReport{}}
+	errCount := 0
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-pcCtx.Done():
+			return
+		case <-ticker.C:
+			if pcCtx.Err() != nil {
+				return
+			}
+			if err := pc.WriteRTCP(pkts); err != nil {
+				if s.closed.Load() || pcCtx.Err() != nil {
+					return
+				}
+				errCount++
+				logger.Debugf("jitsi: rtcp keepalive write (%d/%d): %v", errCount, maxErrors, err)
+				if errCount >= maxErrors {
+					logger.Warnf("jitsi: rtcp keepalive giving up after %d errors", maxErrors)
+					s.requestReconnect("rtcp keepalive dead")
+					return
+				}
+			} else {
+				errCount = 0
+			}
+		}
+	}
+}
+
+// bridgeKeepalive sends a lightweight bridge frame every 10 seconds so JVB
+// updates its endpoint lastActivity timestamp. Without this, JVB expires the
+// endpoint after its inactivity timeout (~30-60s) when the ICE/DTLS path is
+// routed through a TURN relay whose allocation silently dies.
+//
+// The frame is a normal olcrtc bridge frame with an empty payload: the
+// recipient's acceptEpochFrame returns 0 bytes, deliverBridgeMessage drops
+// it before invoking onData, and the wire is exactly len(magic)+8 bytes
+// (well under JVB's 16 KiB max-message-size). This works for both transports
+// JVB exposes:
+//
+//   - colibri-ws: BridgeSendRaw serialises through Bridge().SendRaw.
+//   - SCTP:       BridgeSendRaw writes onto the data channel directly.
+//
+// Previous implementation called jSess.Bridge().SendJSON (a colibri control
+// message) which is nil for SCTP-only deployments; that left SCTP bridges
+// without any keepalive at all, so JVB silently expired the endpoint.
+func (s *Session) bridgeKeepalive() {
+	defer s.wg.Done()
+	const interval = 10 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-s.done:
 			return
 		case <-ticker.C:
-			if err := pc.WriteRTCP(pkts); err != nil {
+			if !s.bridgeReady.Load() {
+				continue
+			}
+			jSess := s.jSess.Load()
+			if jSess == nil {
+				continue
+			}
+			frame, err := s.encodeBridgeFrame(nil, "")
+			if err != nil {
+				continue
+			}
+			if err := jSess.BridgeSendRaw("", frame); err != nil {
+				logger.Debugf("jitsi: bridge keepalive send: %v", err)
+			}
+		}
+	}
+}
+
+// xmppKeepalive periodically sends an XMPP ping IQ so that the underlying
+// transport (WebSocket or BOSH) keeps observing application traffic.
+//
+// Why we need it: Prosody's BOSH plugin defaults to bosh_max_inactivity=60s
+// (and Jitsi's docker images set it explicitly to 60s on visitor domains).
+// Once the inactivity timer expires Prosody returns <body type="terminate"/>
+// and our long-poll fails with "connection closed" — exactly the symptom
+// observed when nobody else joins the room within 60s. A 25s ping cadence
+// keeps the BOSH session pinned with comfortable margin.
+//
+// Why a ping rather than presence: pings round-trip through the IQ pipeline
+// already exercised by the j library, are cheap on the server side, and
+// can't be confused for a participant state change by Jicofo. Presence
+// updates would also work but their side-effects are harder to reason about.
+//
+// Lifecycle: the loop runs for the whole engine lifetime. If a send fails,
+// we surface a reconnect request but DO NOT exit — the supervisor swaps in
+// a fresh jSess and the next tick picks it up via s.jSess.Load(). Without
+// that property, keepalive would silently die on the first network blip
+// and BOSH would expire 60s into the next idle window.
+func (s *Session) xmppKeepalive() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(xmppKeepaliveInterval)
+	defer ticker.Stop()
+	var lastReconnectRequestErr string
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			jSess := s.jSess.Load()
+			if jSess == nil {
+				continue
+			}
+			conn := jSess.LowLevel()
+			if conn == nil {
+				continue
+			}
+			id := conn.NextID()
+			ping := fmt.Sprintf(
+				`<iq type="get" to="%s" id="%s" xmlns="jabber:client"><ping xmlns="urn:xmpp:ping"/></iq>`,
+				conn.Host(), id,
+			)
+			if err := conn.Send(ping); err != nil {
 				if s.closed.Load() {
 					return
 				}
-				logger.Debugf("jitsi: rtcp keepalive write: %v", err)
+				logger.Debugf("jitsi: xmpp keepalive send: %v", err)
+				// Avoid spamming the supervisor with identical
+				// requests during the reconnect; once a request
+				// is enqueued the channel is buffered to depth 1,
+				// but we still skip the call to keep logs quiet.
+				if reason := err.Error(); reason != lastReconnectRequestErr {
+					s.requestReconnect("xmpp keepalive: " + reason)
+					lastReconnectRequestErr = reason
+				}
+				continue
 			}
+			lastReconnectRequestErr = ""
 		}
 	}
 }
@@ -596,10 +799,14 @@ func (s *Session) rtcpKeepalive(pc *webrtc.PeerConnection) {
 // Incoming source-add stanzas (announcing other participants' SSRCs) are
 // merged into the remote SDP via neg.HandleSourceAdd so pion can route the
 // inbound RTP through OnTrack.
-func (s *Session) trickleDrainLoop(pc *webrtc.PeerConnection, neg negotiator, stanzas <-chan string) {
+func (s *Session) trickleDrainLoop(
+	ctx context.Context, pc *webrtc.PeerConnection, neg negotiator, stanzas <-chan string,
+) {
 	defer s.wg.Done()
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-s.done:
 			return
 		case raw, ok := <-stanzas:
@@ -985,33 +1192,100 @@ func (s *Session) acceptEpochFrame(payload []byte) ([]byte, bool) {
 			receiverEpoch, s.localEpoch.Load())
 		return nil, false
 	}
-	if prev := s.peerEpoch.Load(); prev == 0 {
+	// Update the peer-epoch latch and ALWAYS accept the frame.
+	//
+	// Earlier revisions reconnected ourselves whenever the peer's epoch
+	// flipped — the assumption was that a peer-side reconnect implied
+	// the bridge was wedged on our end too. In practice this caused the
+	// exact failure mode the chaos test catches: after the peer
+	// successfully recovered with a fresh epoch, our acceptEpochFrame
+	// dropped the very first post-recovery frame and (outside the grace
+	// window) issued a self-reconnect, dragging the just-recovered peer
+	// into another reconnect ping-pong cycle. The data never started
+	// flowing again and both sides looked permanently wedged.
+	//
+	// Epoch is a *deduplication* marker for stale frames during a
+	// reconnect, not a sign that *we* must reconnect. If our own bridge
+	// is dead, rtcpKeepalive / xmppKeepalive / "bridge closed" detection
+	// will surface it independently. If we *can* still receive frames,
+	// the bridge is alive by definition.
+	prev := s.peerEpoch.Load()
+	if prev == 0 {
 		s.peerEpoch.Store(senderEpoch)
 	} else if prev != senderEpoch {
-		if s.peerEpoch.CompareAndSwap(prev, senderEpoch) {
-			s.requestReconnect("jitsi peer epoch changed")
+		// Try to install the new epoch atomically; the loser of a
+		// race will simply retry on the next frame.
+		s.peerEpoch.CompareAndSwap(prev, senderEpoch)
+		if s.inReconnectGrace() {
+			logger.Debugf("jitsi: peer epoch changed during grace period (0x%08x -> 0x%08x)",
+				prev, senderEpoch)
+		} else {
+			logger.Debugf("jitsi: peer epoch changed (0x%08x -> 0x%08x) — accepting fresh peer state",
+				prev, senderEpoch)
 		}
-		return nil, false
 	}
 	return payload[off+epochHeaderLen:], true
 }
 
+// inReconnectGrace reports whether we are still within reconnectGrace of
+// the last successful self-reconnect. During this window peer-epoch
+// transitions are absorbed silently rather than triggering a fresh
+// reconnect.
+func (s *Session) inReconnectGrace() bool {
+	last := s.lastReconnectAt.Load()
+	if last == 0 {
+		return false
+	}
+	return time.Since(time.Unix(0, last)) < reconnectGrace
+}
+
 // peerLatchAccepts implements the peer-latch logic: the first sender whose
-// payload survived the magic check becomes our partner; everyone else is
-// ignored. Cleared on reconnect by the supervisor (peerEndpoint is reset
-// whenever the bridge is reopened).
-func (s *Session) peerLatchAccepts(from string) bool {
+// payload survived the bridgeMagic check becomes our partner; everyone
+// else is ignored.
+//
+// Re-latching on a fresh sender id: when the latched peer reconnects,
+// JVB assigns it a *new* endpoint id (new ICE/DTLS session). Without
+// re-latching, all post-reconnect frames carry the new id, fail the
+// equality check here, and get dropped — this is exactly the wedge the
+// paired chaos stress test caught (alice reconnects, bob's latch stays
+// on alice's old id, bob never receives a single byte from alice again).
+//
+// Replacement is safe at this point: bridgePayload already verified the
+// frame carries the OLR bridgeMagic prefix, so any sender that reaches
+// this layer is by definition another olcrtc instance using the same
+// magic. A non-olcrtc participant in the same MUC (a regular Jitsi web
+// client, an unrelated bot, etc.) gets filtered out before we ever
+// get here.
+func (s *Session) peerLatchAccepts(from string) bool { //nolint:unparam // filter contract; always-true is policy
 	if cur := s.peerEndpoint.Load(); cur != nil {
-		return *cur == from
+		if *cur == from {
+			return true
+		}
+		// Different sender than the latched one but the payload
+		// already passed the OLR magic check. Treat this as the
+		// peer reconnecting under a new JVB endpoint id and
+		// re-latch onto the new sender so subsequent frames flow.
+		// We only adopt the new id; the epoch latch resets the
+		// next time acceptEpochFrame sees the new sender's epoch.
+		if from == "" {
+			// Empty from is a JVB-broadcast frame (e.g. our own
+			// echo back). Don't re-latch on that.
+			return true
+		}
+		newFrom := from
+		if s.peerEndpoint.CompareAndSwap(cur, &newFrom) {
+			logger.Debugf("jitsi: peer latch re-bound %s -> %s (peer reconnected)", *cur, from)
+		}
+		return true
 	}
 	if from == "" {
 		return true
 	}
 	s.peerEndpoint.CompareAndSwap(nil, &from)
 	// Re-check after CAS: a concurrent latch may have picked a different
-	// peer first; if so, drop this frame.
-	cur := s.peerEndpoint.Load()
-	return cur == nil || *cur == from
+	// peer first; if so, allow the frame anyway — re-latch logic above
+	// will handle the next one.
+	return true
 }
 
 // decodeRaw extracts the bytes from an EndpointMessage produced by the j
@@ -1071,7 +1345,13 @@ func (s *Session) Close() error {
 	s.pcMu.Lock()
 	pc := s.pc
 	s.pc = nil
+	pcCancel := s.pcCancel
+	s.pcCancel = nil
+	s.pcCtx = nil
 	s.pcMu.Unlock()
+	if pcCancel != nil {
+		pcCancel()
+	}
 	if pc != nil {
 		_ = pc.Close()
 	}
@@ -1160,40 +1440,66 @@ func (s *Session) requestReconnect(reason string) {
 }
 
 func (s *Session) handleReconnectAttempt(ctx context.Context) bool {
-	now := time.Now()
-	s.reconnectMu.Lock()
-	if s.reconnectWindowStart.IsZero() || now.Sub(s.reconnectWindowStart) > reconnectWindow {
-		s.reconnectWindowStart = now
-		s.reconnectCount = 0
-	}
-	s.reconnectCount++
-	count := s.reconnectCount
-	s.reconnectMu.Unlock()
-
-	if count > maxReconnects {
-		s.signalEnded("jitsi reconnect limit reached")
-		return true
-	}
-
-	backoff := time.Duration(count) * 2 * time.Second
-	if backoff > 30*time.Second {
-		backoff = 30 * time.Second
-	}
-
+	// Counter semantics: we track *consecutive failures*, not the total
+	// number of reconnect attempts. A reconnect that ultimately succeeds
+	// resets the counter to zero. Without this, a long-running session
+	// that legitimately reconnects (peer leaves and rejoins, JVB restarts,
+	// network blips) eventually crosses maxReconnects on a perfectly
+	// recoverable failure and the supervisor permanently shuts the engine
+	// down. The cap is meant as a safety net against pathologically
+	// repeated failure, not as a budget on legitimate reconnect events.
 	for {
-		if err := s.reconnect(ctx); err != nil {
-			logger.Warnf("jitsi reconnect failed: %v", err)
-			select {
-			case <-ctx.Done():
-				return true
-			case <-s.done:
-				return true
-			case <-time.After(backoff):
-				continue
-			}
+		s.reconnectMu.Lock()
+		failures := s.reconnectCount
+		s.reconnectMu.Unlock()
+		if failures > maxReconnects {
+			s.signalEnded("jitsi reconnect limit reached")
+			return true
 		}
-		s.drainReconnectQueue()
-		return false
+
+		backoff := time.Duration(failures) * 2 * time.Second
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+
+		err := s.reconnect(ctx)
+		if err == nil {
+			s.reconnectMu.Lock()
+			s.reconnectCount = 0
+			s.reconnectWindowStart = time.Time{}
+			s.reconnectMu.Unlock()
+			s.drainReconnectQueue()
+			return false
+		}
+
+		// errNoPeer means we successfully rejoined the MUC but no peer
+		// is present yet. waitForJingle was restarted — don't burn
+		// reconnect budget, just return and wait for the next signal.
+		if errors.Is(err, errNoPeer) {
+			logger.Infof("jitsi: waiting for peer in room (not a failure)")
+			s.reconnectMu.Lock()
+			s.reconnectCount = 0
+			s.reconnectWindowStart = time.Time{}
+			s.reconnectMu.Unlock()
+			s.drainReconnectQueue()
+			return false
+		}
+
+		logger.Warnf("jitsi reconnect failed: %v", err)
+		s.reconnectMu.Lock()
+		s.reconnectCount++
+		if s.reconnectWindowStart.IsZero() {
+			s.reconnectWindowStart = time.Now()
+		}
+		s.reconnectMu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return true
+		case <-s.done:
+			return true
+		case <-time.After(backoff):
+		}
 	}
 }
 
@@ -1204,25 +1510,181 @@ func (s *Session) reconnect(ctx context.Context) error {
 	defer s.reconnecting.Store(false)
 
 	s.bridgeReady.Store(false)
+	s.teardownPC()
+
+	s.localEpoch.Store(randomEpoch())
+	s.peerEpoch.Store(0)
+	s.resetPeerEpochs()
+	s.drainSendQueue()
+
+	// Re-establish the XMPP/MUC session from scratch rather than reusing the
+	// lightweight jSess.Rejoin (leave+join) path. Rejoin skips the Jicofo
+	// focus-allocation IQ, and Jitsi gates the MUC on focus: once the server
+	// is left alone in the room, Jicofo idle-terminates the conference
+	// (session-terminate <expired/>) and tears down the room, after which a
+	// bare presence is rejected with <presence type='error'><not-allowed/>.
+	// The library's JoinMUC then matches a stale status-110 still buffered in
+	// its stanza channel and falsely reports success, so we wait forever for a
+	// session-initiate that never comes while actually being outside the room.
+	//
+	// j.JoinMUC re-runs dial -> focus allocation -> MUC join in the correct
+	// order (focus first, so Jicofo recreates the room), exactly like the
+	// initial Connect, but WITHOUT blocking on session-initiate — preserving
+	// the non-blocking reconnect contract. We wait for the fresh
+	// session-initiate separately via WaitJingleReinitiate once a peer rejoins.
 	if old := s.jSess.Swap(nil); old != nil {
 		_ = old.Close()
 	}
+
+	logger.Infof("jitsi: rejoin %s/%s (non-blocking) ...", s.host, s.room)
+	jSess, err := j.JoinMUC(ctx, j.Config{
+		Host:  s.host,
+		Room:  s.room,
+		Nick:  s.name,
+		Debug: logger.IsVerbose(),
+	})
+	if err != nil {
+		logger.Warnf("jitsi: rejoin failed: %v - full reconnect", err)
+		return s.reconnectFull(ctx)
+	}
+	s.jSess.Store(jSess)
+
+	// Wait for Jicofo to send session-initiate, but with a bounded
+	// timeout: if the recovery sits here forever the supervisor itself
+	// wedges and any subsequent reconnect requests pile up unhandled
+	// (handleReconnectAttempt is the single consumer of reconnectCh).
+	// Empirically Jicofo emits session-initiate within ~1 s once
+	// min-participants is reached; 30 s is a generous upper bound that
+	// still surfaces a stuck recovery before the chaos cycle below
+	// declares a wedge. On timeout we fall through to reconnectFull,
+	// which tears the j.Session down completely and rebuilds from the
+	// blocking Connect path that does include WaitJingle.
+	const reinitiateTimeout = 30 * time.Second
+	reinitCtx, reinitCancel := context.WithTimeout(ctx, reinitiateTimeout)
+	_, err = jSess.WaitJingleReinitiate(reinitCtx)
+	reinitCancel()
+	if err != nil {
+		logger.Warnf("jitsi: wait reinitiate failed: %v - full reconnect", err)
+		return s.reconnectFull(ctx)
+	}
+
+	if err := s.reinitiateBridge(ctx, jSess); err != nil {
+		return err
+	}
+
+	s.peerEndpoint.Store(nil)
+	s.peerVideoSSRC.Store(0)
+	s.bridgeReady.Store(true)
+
+	s.wg.Add(1)
+	go s.recvLoop()
+
+	if err := s.Send(nil); err != nil {
+		logger.Debugf("jitsi: epoch announce failed: %v", err)
+	}
+	if s.onReconnect != nil {
+		s.onReconnect(nil)
+	}
+	s.lastReconnectAt.Store(time.Now().UnixNano())
+	logger.Infof("jitsi: reconnected %s/%s (reinitiate); colibri-ws=%s", s.host, s.room, jSess.ColibriWS)
+	return nil
+}
+
+// teardownPC closes the current PeerConnection, cancels any goroutines
+// bound to its lifetime (rtcpKeepalive), and clears trickle state.
+//
+// Cancelling pcCtx before pc.Close() lets the rtcpKeepalive goroutine exit
+// via its <-pcCtx.Done() branch instead of getting tripped by a write
+// failure against a closing PC and racing the supervisor with a duplicate
+// "rtcp keepalive dead" reconnect request.
+func (s *Session) teardownPC() {
 	s.pcMu.Lock()
 	oldPC := s.pc
 	s.pc = nil
+	pcCancel := s.pcCancel
+	s.pcCancel = nil
+	s.pcCtx = nil
 	s.pcMu.Unlock()
+	if pcCancel != nil {
+		pcCancel()
+	}
+	if s.trickleCancel != nil {
+		s.trickleCancel()
+		s.trickleCancel = nil
+	}
 	if oldPC != nil {
 		_ = oldPC.Close()
+	}
+}
+
+// reinitiateBridge negotiates a new PeerConnection and opens the bridge channel.
+func (s *Session) reinitiateBridge(ctx context.Context, jSess *j.Session) error {
+	sctpBridge := jSess.ColibriWS == ""
+	if err := s.negotiatePC(ctx, jSess, sctpBridge); err != nil {
+		logger.Warnf("jitsi: negotiate after reinitiate failed: %v - full reconnect", err)
+		return s.reconnectFull(ctx)
+	}
+	if sctpBridge {
+		if err := s.openBridgeSCTP(ctx, jSess); err != nil {
+			logger.Warnf("jitsi: bridge after reinitiate failed: %v - full reconnect", err)
+			return s.reconnectFull(ctx)
+		}
+	} else {
+		if err := s.openBridgeWS(ctx, jSess); err != nil {
+			logger.Warnf("jitsi: bridge after reinitiate failed: %v - full reconnect", err)
+			return s.reconnectFull(ctx)
+		}
+	}
+	return nil
+}
+
+// reconnectFull tears down everything and does a full rejoin.
+//
+// If no peer is present in the room, WaitJingle will time out. In that
+// case we park the new MUC session, restart waitForJingle + xmppKeepalive,
+// and return errNoPeer so the caller does not count it as a failure.
+func (s *Session) reconnectFull(ctx context.Context) error {
+	if old := s.jSess.Swap(nil); old != nil {
+		_ = old.Close()
 	}
 	s.localEpoch.Store(randomEpoch())
 	s.peerEpoch.Store(0)
 	s.resetPeerEpochs()
 	s.drainSendQueue()
 
-	logger.Infof("jitsi: reconnecting %s/%s as %s ...", s.host, s.room, s.name)
-	jSess, err := s.joinAndOpenBridge(ctx)
+	const fullReconnectTimeout = 60 * time.Second
+
+	logger.Infof("jitsi: full reconnect %s/%s as %s ...", s.host, s.room, s.name)
+
+	// First: join the MUC (non-blocking, does not wait for session-initiate).
+	// If this fails, it's a real connectivity problem.
+	jSess, err := j.JoinMUC(ctx, j.Config{
+		Host:  s.host,
+		Room:  s.room,
+		Nick:  s.name,
+		Debug: logger.IsVerbose(),
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("jitsi join: %w", err)
+	}
+
+	// Second: wait for Jicofo session-initiate (requires a peer in the room).
+	// If this times out, it means no peer has joined — not a real failure.
+	bctx, bcancel := context.WithTimeout(ctx, fullReconnectTimeout)
+	_, err = jSess.Conn.WaitJingle(bctx)
+	bcancel()
+	if err != nil {
+		// Park the session so waitForJingle can pick up later.
+		s.jSess.Store(jSess)
+		s.wg.Add(2)
+		go s.waitForJingle()
+		go s.xmppKeepalive()
+		return errNoPeer
+	}
+
+	if err := s.completeJingleSetup(ctx, jSess); err != nil {
+		_ = jSess.Close()
+		return fmt.Errorf("jitsi setup after full reconnect: %w", err)
 	}
 	s.jSess.Store(jSess)
 	s.peerEndpoint.Store(nil)
@@ -1235,11 +1697,11 @@ func (s *Session) reconnect(ctx context.Context) error {
 	if err := s.Send(nil); err != nil {
 		logger.Debugf("jitsi: epoch announce failed: %v", err)
 	}
-
 	if s.onReconnect != nil {
 		s.onReconnect(nil)
 	}
-	logger.Infof("jitsi: reconnected %s/%s; colibri-ws=%s", s.host, s.room, jSess.ColibriWS)
+	s.lastReconnectAt.Store(time.Now().UnixNano())
+	logger.Infof("jitsi: reconnected %s/%s (full); colibri-ws=%s", s.host, s.room, jSess.ColibriWS)
 	return nil
 }
 

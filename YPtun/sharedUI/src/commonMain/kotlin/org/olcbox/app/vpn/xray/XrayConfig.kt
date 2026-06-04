@@ -29,6 +29,7 @@ object XrayConfig {
 
     private const val PROXY_TAG = "proxy"
     private const val OLCRTC_TAG = "olcrtc-out"
+    private const val WG_BASE_TAG = "wireguard-base"
 
     private val json = Json { prettyPrint = true }
 
@@ -43,14 +44,27 @@ object XrayConfig {
         olcrtcChainPass: String = "",
         logLevel: String = "warning",
         traffic: TrafficSettings = TrafficSettings(),
+        // VK-TURN chain: when set, [profile] dials its server THROUGH this WireGuard outbound (the
+        // WG-over-VK base). Mirrors SingBoxConfig.wireguardBase. The ProxyProfile carries the
+        // sing-box-format WG outbound in [ProxyProfile.rawOutbound]; we convert it to Xray schema.
+        wireguardBase: ProxyProfile? = null,
+        // When set, the `routing` block is generated from this profile (direct/block/proxy buckets
+        // with geosite:/geoip:/domain: selectors) and its dns.hosts are merged. The referenced
+        // geoip.dat/geosite.dat must be present in XRAY_LOCATION_ASSET.
+        routingProfile: org.olcbox.app.data.model.RoutingProfile? = null,
+        // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
+        // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
+        blockQuic: Boolean = true,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
 
             putJsonObject("dns") {
-                if (traffic.blockRuDomains) {
+                val profileHosts = routingProfile?.dnsHosts ?: emptyMap()
+                if (traffic.blockRuDomains || profileHosts.isNotEmpty()) {
                     putJsonObject("hosts") {
-                        RuBlocklist.hostRegexps.forEach { put(it, "0.0.0.0") }
+                        if (traffic.blockRuDomains) RuBlocklist.hostRegexps.forEach { put(it, "0.0.0.0") }
+                        profileHosts.forEach { (k, v) -> put(k, v) }
                     }
                 }
                 putJsonArray("servers") {
@@ -87,17 +101,26 @@ object XrayConfig {
                 }
             }
 
+            val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
             putJsonArray("outbounds") {
-                add(buildProxyOutbound(profile, chained = olcrtcChainPort != null, traffic = traffic))
+                add(
+                    buildProxyOutbound(
+                        profile,
+                        chained = olcrtcChainPort != null,
+                        traffic = traffic,
+                        detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null,
+                    )
+                )
+                if (wgBaseOutbound != null) add(wgBaseOutbound)
                 addJsonObject {
                     put("tag", "direct")
                     put("protocol", "freedom")
                 }
-                if (traffic.blockRuDomains) {
-                    addJsonObject {
-                        put("tag", "block")
-                        put("protocol", "blackhole")
-                    }
+                // Always present: needed by the RU blocklist, profile block buckets AND the QUIC
+                // blackhole rule below.
+                addJsonObject {
+                    put("tag", "block")
+                    put("protocol", "blackhole")
                 }
                 // TLS fragmentation outbound (DPI evasion); proxy dials through it via dialerProxy.
                 if (traffic.fragmentEnabled && olcrtcChainPort == null) {
@@ -137,16 +160,36 @@ object XrayConfig {
                 }
             }
 
+            // QUIC (HTTP/3) over a TCP-only transport (xhttp/reality/ws) can't pass → ERR_QUIC_PROTOCOL
+            // on Telemost/Wildberries/Google. Blackhole UDP/443 so clients fall back to TCP/HTTP2.
+            val quicBlockRule = buildJsonObject {
+                put("type", "field")
+                put("network", "udp")
+                put("port", 443)
+                put("outboundTag", "block")
+            }
+            // Blocked RU hosts resolve to 0.0.0.0 (dns.hosts above); blackhole anything aimed there.
+            val blockZeroRule = buildJsonObject {
+                put("type", "field")
+                putJsonArray("ip") { add("0.0.0.0") }
+                put("outboundTag", "block")
+            }
             putJsonObject("routing") {
-                put("domainStrategy", "AsIs")
-                putJsonArray("rules") {
-                    if (traffic.blockRuDomains) {
-                        // Blocked hosts resolve to 0.0.0.0 (above); blackhole anything aimed there.
-                        addJsonObject {
-                            put("type", "field")
-                            putJsonArray("ip") { add("0.0.0.0") }
-                            put("outboundTag", "block")
-                        }
+                if (routingProfile != null) {
+                    // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
+                    // blocklist (item 5): the toggles run alongside the profile, not instead of it.
+                    val base = XrayRouting.routingObject(routingProfile)
+                    put("domainStrategy", base["domainStrategy"] ?: JsonPrimitive("AsIs"))
+                    putJsonArray("rules") {
+                        if (blockQuic) add(quicBlockRule)
+                        if (traffic.blockRuDomains) add(blockZeroRule)
+                        (base["rules"] as? JsonArray)?.forEach { add(it) }
+                    }
+                } else {
+                    put("domainStrategy", "AsIs")
+                    putJsonArray("rules") {
+                        if (blockQuic) add(quicBlockRule)
+                        if (traffic.blockRuDomains) add(blockZeroRule)
                     }
                 }
             }
@@ -223,11 +266,55 @@ object XrayConfig {
         return json.encodeToString(newRoot)
     }
 
+    /**
+     * Converts the sing-box WireGuard outbound stored in [profile].rawOutbound into an Xray
+     * `wireguard` outbound (tag [WG_BASE_TAG]) so a chained proxy can dial through the VK tunnel.
+     */
+    private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {
+        val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
+        val o = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        val secret = o["private_key"]?.jsonPrimitive?.contentOrNull ?: return null
+        val peerPub = o["peer_public_key"]?.jsonPrimitive?.contentOrNull ?: return null
+        val server = o["server"]?.jsonPrimitive?.contentOrNull ?: "127.0.0.1"
+        val port = o["server_port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: return null
+        val addresses = (o["local_address"] as? JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+        val mtu = o["mtu"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+        val keepalive = o["persistent_keepalive_interval"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            ?: o["persistent_keepalive"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            ?: 25
+        return buildJsonObject {
+            put("tag", WG_BASE_TAG)
+            put("protocol", "wireguard")
+            putJsonObject("settings") {
+                put("secretKey", secret)
+                putJsonArray("address") { addresses.forEach { add(it) } }
+                // The WG-over-VK tunnel is IPv4-only; resolve the chained proxy's server to IPv4 so it
+                // doesn't dial an AAAA address with no route through the tunnel (→ connection reset).
+                put("domainStrategy", "ForceIPv4")
+                putJsonArray("peers") {
+                    addJsonObject {
+                        put("publicKey", peerPub)
+                        put("endpoint", "$server:$port")
+                        putJsonArray("allowedIPs") { add("0.0.0.0/0"); add("::/0") }
+                        // Keep the tunnel alive through the TURN relay / NAT (matches wg-quick clients).
+                        put("keepAlive", keepalive)
+                    }
+                }
+                if (mtu != null) put("mtu", mtu)
+            }
+        }
+    }
+
     private fun buildProxyOutbound(
         profile: ProxyProfile,
         chained: Boolean,
-        traffic: TrafficSettings = TrafficSettings()
+        traffic: TrafficSettings = TrafficSettings(),
+        // When set, the proxy dials through this outbound tag (e.g. the VK-TURN WireGuard base);
+        // takes precedence over the olcRTC chain detour.
+        detourTagOverride: String? = null,
     ) = buildJsonObject {
+        val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", PROXY_TAG)
         put("protocol", profile.type)
 
@@ -277,10 +364,10 @@ object XrayConfig {
             }
         }
 
-        put("streamSettings", buildStreamSettings(profile, fragmentDialer = traffic.fragmentEnabled && !chained))
+        put("streamSettings", buildStreamSettings(profile, fragmentDialer = traffic.fragmentEnabled && detourTag == null))
 
-        if (chained) {
-            putJsonObject("proxySettings") { put("tag", OLCRTC_TAG) }
+        if (detourTag != null) {
+            putJsonObject("proxySettings") { put("tag", detourTag) }
         }
 
         if (traffic.muxEnabled) {
