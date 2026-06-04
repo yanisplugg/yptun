@@ -25,6 +25,8 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Sort
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.rounded.Add
@@ -39,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,6 +63,7 @@ fun LocationSelectorScreen(
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
+    hasLoaded: Boolean = true,
     locations: List<LocationItem>,
     selectedLocationId: String?,
     pingsState: PingsState,
@@ -69,6 +73,7 @@ fun LocationSelectorScreen(
     collapsedGroups: Set<String> = emptySet(),
     pinnedGroups: List<String> = emptyList(),
     pingSortedGroups: Set<String> = emptySet(),
+    pingSortDescendingGroups: Set<String> = emptySet(),
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {}
@@ -88,10 +93,14 @@ fun LocationSelectorScreen(
         val customLocations = locations.filter { it.subscriptionUrl.isNullOrBlank() }
 
         if (locations.isEmpty()) {
-            RelaySetupCard(
-                onAddSubscriptionClick = onAddSubscriptionClick,
-                onAddLocationClick = onAddLocationClick
-            )
+            // Don't flash the "add your first config" card during the initial async load — only show
+            // it once we know the store is actually empty.
+            if (hasLoaded) {
+                RelaySetupCard(
+                    onAddSubscriptionClick = onAddSubscriptionClick,
+                    onAddLocationClick = onAddLocationClick
+                )
+            }
             return@Column
         }
 
@@ -110,6 +119,7 @@ fun LocationSelectorScreen(
                 val isCollapsed = groupKey in collapsedGroups
                 val isPinned = groupKey in pinnedGroups
                 val isPingSorted = groupKey in pingSortedGroups
+                val isPingDescending = groupKey in pingSortDescendingGroups
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
@@ -141,6 +151,7 @@ fun LocationSelectorScreen(
                                 )
                                 SubscriptionGroupHeader(
                                     locations = group,
+                                    isPinned = isPinned,
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -158,6 +169,7 @@ fun LocationSelectorScreen(
                             SubscriptionGroupMenu(
                                 isPinned = isPinned,
                                 isPingSorted = isPingSorted,
+                                isPingDescending = isPingDescending,
                                 onTogglePin = { onToggleGroupPinned(groupKey) },
                                 onTogglePingSort = { onToggleGroupPingSort(groupKey) },
                                 onDelete = { onDeleteSubscription(groupIds) }
@@ -170,7 +182,7 @@ fun LocationSelectorScreen(
                             TrafficProgressBar(location = group.firstOrNull())
 
                             val orderedGroup = if (isPingSorted) {
-                                group.sortedWith(pingComparator(pingsState))
+                                group.sortedWith(pingComparator(pingsState, isPingDescending))
                             } else {
                                 group
                             }
@@ -179,13 +191,15 @@ fun LocationSelectorScreen(
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 orderedGroup.forEach { location ->
-                                    LocationSelectorRow(
-                                        location = location,
-                                        selectedLocationId = selectedLocationId,
-                                        pingsState = pingsState,
-                                        onLocationSelected = onLocationSelected,
-                                        onLocationSettingsClick = onLocationSettingsClick
-                                    )
+                                    key(location.storageId) {
+                                        LocationSelectorRow(
+                                            location = location,
+                                            selectedLocationId = selectedLocationId,
+                                            pingsState = pingsState,
+                                            onLocationSelected = onLocationSelected,
+                                            onLocationSettingsClick = onLocationSettingsClick
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -223,13 +237,15 @@ fun LocationSelectorScreen(
 
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         customLocations.forEach { location ->
-                            LocationSelectorRow(
-                                location = location,
-                                selectedLocationId = selectedLocationId,
-                                pingsState = pingsState,
-                                onLocationSelected = onLocationSelected,
-                                onLocationSettingsClick = onLocationSettingsClick
-                            )
+                            key(location.storageId) {
+                                LocationSelectorRow(
+                                    location = location,
+                                    selectedLocationId = selectedLocationId,
+                                    pingsState = pingsState,
+                                    onLocationSelected = onLocationSelected,
+                                    onLocationSettingsClick = onLocationSettingsClick
+                                )
+                            }
                         }
                     }
                 }
@@ -466,6 +482,7 @@ private fun parseTrafficBytes(raw: String?): Long? {
 private fun SubscriptionGroupMenu(
     isPinned: Boolean,
     isPingSorted: Boolean,
+    isPingDescending: Boolean,
     onTogglePin: () -> Unit,
     onTogglePingSort: () -> Unit,
     onDelete: () -> Unit
@@ -507,7 +524,7 @@ private fun SubscriptionGroupMenu(
                 trailingIcon = if (isPingSorted) {
                     {
                         Icon(
-                            imageVector = Icons.Filled.Check,
+                            imageVector = if (isPingDescending) Icons.Filled.ArrowDownward else Icons.Filled.ArrowUpward,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary
                         )
@@ -555,6 +572,7 @@ private fun LocationGroupHeader(
 @Composable
 private fun SubscriptionGroupHeader(
     locations: List<LocationItem>,
+    isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val first = locations.firstOrNull()
@@ -562,12 +580,24 @@ private fun SubscriptionGroupHeader(
     val details = first?.subscriptionDetails()
 
     Column(modifier = modifier.padding(start = 4.dp, top = 2.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            fontWeight = FontWeight.SemiBold
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (isPinned) {
+                Icon(
+                    imageVector = Icons.Filled.PushPin,
+                    contentDescription = "Pinned",
+                    modifier = Modifier
+                        .size(20.dp)
+                        .padding(end = 4.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
 
         if (!details.isNullOrBlank()) {
             Text(
@@ -592,18 +622,23 @@ private fun LocationSelectorRow(
     val isLoading = pingsState.isChecking(location.storageId)
     val isOffline = pingsState.isOffline(location.storageId)
 
+    // Stable per-row callbacks: without remember(), each ping tick allocates fresh lambdas, which
+    // forces every LocationRow to recompose (300+ rows → scroll jank when a ping pass starts).
+    val onClick = remember(location.storageId, onLocationSelected) {
+        { onLocationSelected(location.storageId) }
+    }
+    val onSettings = remember(location.storageId, onLocationSettingsClick) {
+        { onLocationSettingsClick(location.storageId) }
+    }
+
     LocationRow(
         location = location,
         isSelected = selectedLocationId == location.storageId,
         isLoading = isLoading,
         isError = isOffline,
         pingMs = pingMs,
-        onSettingsClick = {
-            onLocationSettingsClick(location.storageId)
-        },
-        onClick = {
-            onLocationSelected(location.storageId)
-        }
+        onSettingsClick = onSettings,
+        onClick = onClick
     )
 }
 
@@ -611,9 +646,18 @@ private fun LocationSelectorRow(
  * Orders locations fastest-first: known pings ascending, then not-yet-measured,
  * then offline (null ping) at the very bottom.
  */
-private fun pingComparator(pingsState: PingsState): Comparator<LocationItem> {
+private fun pingComparator(pingsState: PingsState, descending: Boolean = false): Comparator<LocationItem> {
     return Comparator { a, b ->
-        rankFor(pingsState, a).compareTo(rankFor(pingsState, b))
+        val ra = rankFor(pingsState, a)
+        val rb = rankFor(pingsState, b)
+        // Offline / not-yet-measured always sink to the bottom regardless of direction.
+        val aSpecial = ra >= Long.MAX_VALUE - 1
+        val bSpecial = rb >= Long.MAX_VALUE - 1
+        when {
+            aSpecial || bSpecial -> ra.compareTo(rb)
+            descending -> rb.compareTo(ra)
+            else -> ra.compareTo(rb)
+        }
     }
 }
 

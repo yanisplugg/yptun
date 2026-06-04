@@ -8,10 +8,10 @@ auth:
 
 # Для jitsi: полный URL комнаты (https://host/room или host/room).
 # Должен совпадать с сервером.
-# Доступные серверы: meet1.arbitr.ru или meet.cryptopro.ru
+# Доступные серверы: meet.small-dm.ru, meet1.arbitr.ru или meet.handyweb.org
 # Проверьте в браузере, какой работает в вашей сети.
 room:
-  id: "https://meet1.arbitr.ru/REPLACE_WITH_ROOM_NAME"
+  id: "https://meet.small-dm.ru/REPLACE_WITH_ROOM_NAME"
 
 crypto:
   # Можно использовать key_file: "./olcrtc.key", чтобы не хранить секрет прямо здесь.

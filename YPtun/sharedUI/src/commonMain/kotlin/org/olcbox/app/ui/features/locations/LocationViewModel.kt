@@ -72,6 +72,13 @@ class LocationViewModel(
     var selectedLocationId by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * False until the first [loadLocations] completes. Lets the UI avoid flashing the empty
+     * "add your first config" card during the initial async load (locations start as an empty list).
+     */
+    var hasLoadedLocations by mutableStateOf(false)
+        private set
+
     var pingsState by mutableStateOf<PingsState>(PingsState.Idle)
         private set
 
@@ -179,6 +186,7 @@ class LocationViewModel(
 
             locations.clear()
             locations.addAll(nextLocations)
+            hasLoadedLocations = true
 
             val nextSelectedId = if (
                 nextLocations.isNotEmpty() &&

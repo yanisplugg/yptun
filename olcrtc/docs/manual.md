@@ -158,7 +158,7 @@ openssl rand -hex 32
 
 ### jitsi + datachannel (рекомендуется)
 
-Самый простой способ: используй любой self-hosted или публичный Jitsi Meet инстанс. Регистрация не нужна, имя комнаты выдумывается на лету. Доступные публичные серверы: `meet1.arbitr.ru` и `meet.cryptopro.ru` - **обязательно проверь в браузере, какой из них работает в твоей сети**, и используй тот, который открывается. Также подойдёт любой другой (`meet.jit.si`, свой self-hosted и т.п.).
+Самый простой способ: используй любой self-hosted или публичный Jitsi Meet инстанс. Регистрация не нужна, имя комнаты выдумывается на лету. Доступные публичные серверы: `meet.small-dm.ru`, `meet1.arbitr.ru` и `meet.handyweb.org` - **обязательно проверь в браузере, какой из них работает в твоей сети**, и используй тот, который открывается. Также подойдёт любой другой (`meet.jit.si`, свой self-hosted и т.п.).
 
 Создай YAML конфиг:
 
@@ -168,8 +168,8 @@ mode: srv
 auth:
   provider: jitsi
 room:
-  # Используйте meet1.arbitr.ru или meet.cryptopro.ru - тот, что работает в вашей сети
-  id: "https://meet1.arbitr.ru/myroom"
+  # Используйте meet.small-dm.ru, meet1.arbitr.ru или meet.handyweb.org - тот, что работает в вашей сети
+  id: "https://meet.small-dm.ru/myroom"
 crypto:
   key: "d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799"
 net:
@@ -243,8 +243,8 @@ mode: cnc
 auth:
   provider: jitsi
 room:
-  # Используйте meet1.arbitr.ru или meet.cryptopro.ru - тот, что работает в вашей сети
-  id: "https://meet1.arbitr.ru/myroom"
+  # Используйте meet.small-dm.ru, meet1.arbitr.ru или meet.handyweb.org - тот, что работает в вашей сети
+  id: "https://meet.small-dm.ru/myroom"
 crypto:
   key: "<hex-key-такой-же-как-на-сервере>"
 net:

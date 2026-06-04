@@ -99,6 +99,10 @@ val libboxAndroidAarFile = libboxAndroidAar.get().asFile
 // unaffected.
 val libboxBuildTags = "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api"
 
+// sing-box version embedded into libbox via ldflags (-X constant.Version); otherwise libbox.Version()
+// reports "unknown". Keep in sync with the pinned sing-box checkout (v1.12.25, see comment above).
+val singboxVersion = "1.12.25"
+
 libboxAndroidAarFile.parentFile.mkdirs()
 
 val buildLibboxAndroidAar by tasks.registering(Exec::class) {
@@ -120,7 +124,7 @@ val buildLibboxAndroidAar by tasks.registering(Exec::class) {
         libboxBuildTags,
         "-trimpath",
         "-ldflags",
-        "-s -w -checklinkname=0",
+        "-X github.com/sagernet/sing-box/constant.Version=$singboxVersion -s -w -checklinkname=0",
         "-o",
         libboxAndroidAarFile.absolutePath,
         "./experimental/libbox"
@@ -161,6 +165,7 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
     inputs.dir(olcrtcRepoDir.resolve("internal"))
     inputs.property("tags", libboxBuildTags)
+    inputs.property("singboxVersion", singboxVersion)
     outputs.file(coresAndroidAar)
 
     workingDir = coresRepoDir
@@ -174,7 +179,7 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         libboxBuildTags,
         "-trimpath",
         "-ldflags",
-        "-s -w -checklinkname=0",
+        "-X github.com/sagernet/sing-box/constant.Version=$singboxVersion -s -w -checklinkname=0",
         "-o",
         coresAndroidAarFile.absolutePath,
         "github.com/openlibrecommunity/olcrtc/mobile",

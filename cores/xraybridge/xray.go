@@ -6,11 +6,16 @@ package xraybridge
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"net"
+	"net/http"
 	"os"
 	"sync"
 	"syscall"
+	"time"
 
+	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all" // register all protocols/transports (vless, xhttp, reality, ...)
@@ -50,6 +55,65 @@ func SetAssetPath(dir string) {
 		return
 	}
 	_ = os.Setenv("xray.location.asset", dir)
+}
+
+// Version returns the embedded xray-core version (e.g. "25.3.27"), for display in the app.
+func Version() string {
+	return core.Version()
+}
+
+// MeasureDelay spins up a THROWAWAY xray instance from [configJSON], fetches [url] (with HTTP
+// [method], "GET"/"HEAD") THROUGH that instance's proxy outbound, and returns the round-trip in
+// milliseconds — or -1 on any failure. This is the per-server "real delay" probe (à la v2rayNG /
+// Happ): it needs no system VPN/TUN and is independent of the main running instance, so the server
+// list can be pinged through the proxy while disconnected.
+func MeasureDelay(configJSON, url, method string, timeoutMs int) int64 {
+	config, err := serial.LoadJSONConfig(bytes.NewReader([]byte(configJSON)))
+	if err != nil {
+		return -1
+	}
+	inst, err := core.New(config)
+	if err != nil {
+		return -1
+	}
+	if err := inst.Start(); err != nil {
+		return -1
+	}
+	defer inst.Close()
+
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			// Dial every connection THROUGH the test instance (its default/proxy outbound).
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				dest, derr := xnet.ParseDestination(network + ":" + addr)
+				if derr != nil {
+					return nil, derr
+				}
+				return core.Dial(ctx, inst, dest)
+			},
+		},
+	}
+	if method == "" {
+		method = "HEAD"
+	}
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		return -1
+	}
+	req.Header.Set("User-Agent", "olcbox-ping")
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return -1
+	}
+	_ = resp.Body.Close()
+	return time.Since(start).Milliseconds()
 }
 
 // Start launches Xray with the given JSON config. Returns an error if already running or invalid.

@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.RoutingRules
@@ -273,6 +274,7 @@ internal fun AppSettingsSheet(
                     onRoutingProfilesClick = { route = AppSettingsRoute.RoutingProfiles },
                     onTrafficClick = { route = AppSettingsRoute.Traffic },
                     onApplicationClick = { route = AppSettingsRoute.Application },
+                    onPingClick = { route = AppSettingsRoute.Ping },
                     onUrlSchemesClick = { route = AppSettingsRoute.UrlSchemes },
                     onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
@@ -319,6 +321,12 @@ internal fun AppSettingsSheet(
                     onBack = { route = AppSettingsRoute.Hub },
                     onChanged = onAppBehaviorChanged,
                     onLanguageChanged = onLanguageChanged
+                )
+
+                AppSettingsRoute.Ping -> PingSettingsContent(
+                    settings = appBehavior,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onChanged = onAppBehaviorChanged
                 )
 
                 AppSettingsRoute.UrlSchemes -> UrlSchemesContent(
@@ -639,6 +647,7 @@ private fun AppSettingsHubContent(
     onRoutingProfilesClick: () -> Unit,
     onTrafficClick: () -> Unit,
     onApplicationClick: () -> Unit,
+    onPingClick: () -> Unit,
     onUrlSchemesClick: () -> Unit,
     onSubscriptionsSharingClick: () -> Unit,
     onUpdatesClick: () -> Unit,
@@ -735,6 +744,14 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
+                title = s.pingSettings,
+                subtitle = s.pingSettingsSubtitle,
+                icon = Icons.Outlined.Bolt,
+                enabled = true,
+                onClick = onPingClick
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
                 title = s.urlSchemes,
                 subtitle = s.urlSchemesSubtitle,
                 icon = Icons.Outlined.Share,
@@ -768,6 +785,22 @@ private fun AppSettingsHubContent(
             SettingsGroupRow(
                 title = s.version(CurrentAppInfo.value.version),
                 icon = Icons.Outlined.Settings,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            val xrayVer = remember { runCatching { xraybridge.Xraybridge.version() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val singboxVer = remember { runCatching { libbox.Libbox.version() }.getOrNull()?.ifBlank { null } ?: "—" }
+            SettingsGroupRow(
+                title = s.xrayVersion(xrayVer),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.singboxVersion(singboxVer),
+                icon = Icons.Outlined.Tune,
                 enabled = true,
                 showChevron = false
             )
@@ -2889,7 +2922,7 @@ private fun TrafficSettingsContent(
                 FilterChip(
                     selected = strategy == option,
                     onClick = { strategy = option },
-                    label = { Text(option) }
+                    label = { Text(s.domainStrategyName(option)) }
                 )
             }
         }
@@ -3063,6 +3096,67 @@ private fun ApplicationBehaviorContent(
     }
 }
 
+/** Dedicated «Пинг» screen: how locations/inbounds are probed + the proxy-probe target URL. */
+@Composable
+private fun PingSettingsContent(
+    settings: AppBehaviorSettings,
+    onBack: () -> Unit,
+    onChanged: (AppBehaviorSettings) -> Unit
+) {
+    val s = LocalStrings.current
+    val isProxyMode = settings.pingMode == AppBehaviorSettings.PING_PROXY_GET ||
+        settings.pingMode == AppBehaviorSettings.PING_PROXY_HEAD
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = s.pingSettings,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        SettingsSectionLabel(s.pingMethod)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val pingOptions = listOf(
+                AppBehaviorSettings.PING_AUTO to s.pingModeAuto,
+                AppBehaviorSettings.PING_TCP to s.pingModeTcp,
+                AppBehaviorSettings.PING_ICMP to s.pingModeIcmp,
+                AppBehaviorSettings.PING_PROXY_GET to s.pingModeProxyGet,
+                AppBehaviorSettings.PING_PROXY_HEAD to s.pingModeProxyHead,
+            )
+            pingOptions.forEach { (mode, title) ->
+                FilterChip(
+                    selected = settings.pingMode == mode,
+                    onClick = { onChanged(settings.copy(pingMode = mode)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+        // The target URL is meaningful ONLY for the proxy GET/HEAD probes; TCP/ICMP probe the
+        // location's own server, so the field is disabled for those modes.
+        OutlinedTextField(
+            value = settings.pingUrl,
+            onValueChange = { onChanged(settings.copy(pingUrl = it)) },
+            label = { Text(s.pingTarget) },
+            placeholder = { Text(s.pingTargetHint) },
+            singleLine = true,
+            enabled = isProxyMode,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
 /** Hidden Experimental section (unlocked by tapping the connection timer 5×). */
 @Composable
 private fun ExperimentalContent(
@@ -3129,6 +3223,36 @@ private fun ExperimentalContent(
             onClick = { cookiePicker.launch(arrayOf("*/*")) },
             modifier = Modifier.fillMaxWidth()
         ) { Text(s.loadFromFile) }
+
+        SettingsSectionLabel("Root")
+        val rootScope = rememberCoroutineScope()
+        RoutingToggleRow(
+            title = s.hideTunTitle,
+            subtitle = s.hideTunSubtitle,
+            checked = settings.hideTunInterface
+        ) { enabled ->
+            onChanged(settings.copy(hideTunInterface = enabled))
+            // Trigger the superuser prompt right away so the user grants root before connecting.
+            if (enabled) {
+                rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val ok = runCatching {
+                        val p = ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start()
+                        p.inputStream.bufferedReader().use { it.readText() }
+                        p.waitFor() == 0
+                    }.getOrDefault(false)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context, if (ok) s.rootGranted else s.rootDenied, android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+        Text(
+            text = s.hideTunDisclaimer,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
     }
 }
 
@@ -3223,6 +3347,7 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object RoutingProfiles : AppSettingsRoute(1)
     object Traffic : AppSettingsRoute(1)
     object Application : AppSettingsRoute(1)
+    object Ping : AppSettingsRoute(1)
     object UrlSchemes : AppSettingsRoute(1)
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)

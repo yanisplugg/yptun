@@ -86,9 +86,10 @@ olcrtc /etc/olcrtc/client.yaml
 
 ### Сервер
 
-> **Jitsi-провайдер:** используйте тот сервер, который доступен в вашей сети. Проверьте оба в браузере и выберите рабочий:
+> **Jitsi-провайдер:** используйте тот сервер, который доступен в вашей сети. Проверьте в браузере и выберите рабочий:
+> - `https://meet.small-dm.ru/`
 > - `https://meet1.arbitr.ru/` 
-> - `https://meet.cryptopro.ru/`
+> - `https://meet.handyweb.org/`
 
 ```yaml
 mode: srv
@@ -96,8 +97,8 @@ auth:
   provider: jitsi
 room:
   # Используйте тот Jitsi-сервер, который работает в вашей сети:
-  # https://meet1.arbitr.ru/ROOM  или  https://meet.cryptopro.ru/ROOM
-  id: "https://meet1.arbitr.ru/REPLACE_ME_WITH_ROOM_ID"
+  # https://meet.small-dm.ru/ROOM  или  https://meet1.arbitr.ru/ROOM  или  https://meet.handyweb.org/ROOM
+  id: "https://meet.small-dm.ru/REPLACE_ME_WITH_ROOM_ID"
 crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS"
 net:
@@ -114,8 +115,8 @@ auth:
   provider: jitsi
 room:
   # Используйте тот Jitsi-сервер, который работает в вашей сети:
-  # https://meet1.arbitr.ru/ROOM  или  https://meet.cryptopro.ru/ROOM
-  id: "https://meet1.arbitr.ru/REPLACE_ME_WITH_ROOM_ID"
+  # https://meet.small-dm.ru/ROOM  или  https://meet1.arbitr.ru/ROOM  или  https://meet.handyweb.org/ROOM
+  id: "https://meet.small-dm.ru/REPLACE_ME_WITH_ROOM_ID"
 crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS"
 net:

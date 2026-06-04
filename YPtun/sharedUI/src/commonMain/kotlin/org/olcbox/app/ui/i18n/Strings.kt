@@ -93,6 +93,10 @@ interface Strings {
     val logsSubtitle: String
     val info: String
     fun version(v: String): String
+    fun xrayVersion(v: String): String
+    fun singboxVersion(v: String): String
+    /** Localized label for a TrafficSettings domain strategy (prefer_ipv4/prefer_ipv6/ipv4_only/ipv6_only). */
+    fun domainStrategyName(v: String): String
     fun hwid(v: String): String
     val community: String
     val howToConnect: String
@@ -292,6 +296,11 @@ interface Strings {
     val telemostCookiesDescription: String
     val useTelemostCookies: String
     val useTelemostCookiesSubtitle: String
+    val hideTunTitle: String
+    val hideTunSubtitle: String
+    val hideTunDisclaimer: String
+    val rootGranted: String
+    val rootDenied: String
     val telemostCookieHeader: String
     val cookiesLoaded: String
     val cookiesReadFailed: String
@@ -374,6 +383,18 @@ interface Strings {
     val pingChecking: String
     val pingVerify: String
     val connectivityCheck: String
+
+    // Ping settings (how inbounds are probed)
+    val pingSettings: String
+    val pingSettingsSubtitle: String
+    val pingMethod: String
+    val pingTarget: String
+    val pingTargetHint: String
+    val pingModeAuto: String
+    val pingModeTcp: String
+    val pingModeIcmp: String
+    val pingModeProxyGet: String
+    val pingModeProxyHead: String
 
     // QR scanner
     val scanQrTitle: String
@@ -472,6 +493,15 @@ object RuStrings : Strings {
     override val logsSubtitle = "Диагностика и экспорт"
     override val info = "ИНФОРМАЦИЯ"
     override fun version(v: String) = "Версия: $v"
+    override fun xrayVersion(v: String) = "Xray: $v"
+    override fun singboxVersion(v: String) = "sing-box: $v"
+    override fun domainStrategyName(v: String) = when (v) {
+        "prefer_ipv4" -> "Предпочитать IPv4"
+        "prefer_ipv6" -> "Предпочитать IPv6"
+        "ipv4_only" -> "Только IPv4"
+        "ipv6_only" -> "Только IPv6"
+        else -> v
+    }
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Сообщество"
     override val howToConnect = "Как подключиться?"
@@ -646,6 +676,11 @@ object RuStrings : Strings {
             "отдельным бинарём на Android невозможно, поэтому эта функция встроена в штатное ядро."
     override val useTelemostCookies = "Использовать cookies Telemost"
     override val useTelemostCookiesSubtitle = "Подставлять cookies при подключении к Telemost"
+    override val hideTunTitle = "Скрывать интерфейс tun0 (root)"
+    override val hideTunSubtitle = "Переименовывает tun0 после подключения, чтобы приложения не определяли VPN. Требуется root."
+    override val hideTunDisclaimer = "Внимание: функция использует root-доступ (su). Автор ПО не несёт ответственности за любые повреждения, потерю данных или причинение вреда устройству вследствие использования root."
+    override val rootGranted = "Root-доступ получен"
+    override val rootDenied = "Root-доступ не предоставлен"
     override val telemostCookieHeader = "Заголовок Cookie для Telemost"
     override val cookiesLoaded = "Cookies загружены"
     override val cookiesReadFailed = "Не удалось прочитать файл"
@@ -720,6 +755,16 @@ object RuStrings : Strings {
     override val pingChecking = "Проверка…"
     override val pingVerify = "Нажмите для проверки доступности"
     override val connectivityCheck = "Проверка соединения"
+    override val pingSettings = "Пинг"
+    override val pingSettingsSubtitle = "Способ проверки инбаундов"
+    override val pingMethod = "Способ пинга"
+    override val pingTarget = "Сайт для пинга"
+    override val pingTargetHint = "Например: https://www.google.com"
+    override val pingModeAuto = "Авто"
+    override val pingModeTcp = "TCP"
+    override val pingModeIcmp = "ICMP"
+    override val pingModeProxyGet = "Через прокси GET"
+    override val pingModeProxyHead = "Через прокси HEAD"
     override val scanQrTitle = "Сканирование QR"
     override val readyToScan = "Готово к сканированию"
     override val subscriptionOrLocationUri = "Подписка или URI локации"
@@ -810,6 +855,15 @@ object EnStrings : Strings {
     override val logsSubtitle = "Diagnostics and export"
     override val info = "INFORMATION"
     override fun version(v: String) = "Version: $v"
+    override fun xrayVersion(v: String) = "Xray: $v"
+    override fun singboxVersion(v: String) = "sing-box: $v"
+    override fun domainStrategyName(v: String) = when (v) {
+        "prefer_ipv4" -> "Prefer IPv4"
+        "prefer_ipv6" -> "Prefer IPv6"
+        "ipv4_only" -> "IPv4 only"
+        "ipv6_only" -> "IPv6 only"
+        else -> v
+    }
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Community"
     override val howToConnect = "How to connect?"
@@ -984,6 +1038,11 @@ object EnStrings : Strings {
             "launched as a separate binary on Android, so this feature is built into the stock core."
     override val useTelemostCookies = "Use Telemost cookies"
     override val useTelemostCookiesSubtitle = "Attach cookies when connecting to Telemost"
+    override val hideTunTitle = "Hide tun0 interface (root)"
+    override val hideTunSubtitle = "Renames tun0 after connecting so apps can't detect the VPN. Requires root."
+    override val hideTunDisclaimer = "Warning: this uses root access (su). The software author is NOT liable for any damage, data loss, or harm to your device resulting from root usage."
+    override val rootGranted = "Root access granted"
+    override val rootDenied = "Root access denied"
     override val telemostCookieHeader = "Telemost Cookie header"
     override val cookiesLoaded = "Cookies loaded"
     override val cookiesReadFailed = "Couldn't read the file"
@@ -1058,6 +1117,16 @@ object EnStrings : Strings {
     override val pingChecking = "Checking..."
     override val pingVerify = "Click to verify reachability"
     override val connectivityCheck = "Connectivity check"
+    override val pingSettings = "Ping"
+    override val pingSettingsSubtitle = "How inbounds are probed"
+    override val pingMethod = "Ping method"
+    override val pingTarget = "Ping target site"
+    override val pingTargetHint = "e.g. https://www.google.com"
+    override val pingModeAuto = "Auto"
+    override val pingModeTcp = "TCP"
+    override val pingModeIcmp = "ICMP"
+    override val pingModeProxyGet = "Via proxy GET"
+    override val pingModeProxyHead = "Via proxy HEAD"
     override val scanQrTitle = "Scan QR"
     override val readyToScan = "Ready to scan"
     override val subscriptionOrLocationUri = "Subscription or location URI"
@@ -1147,7 +1216,16 @@ object FaStrings : Strings {
     override val logs = "گزارش‌ها"
     override val logsSubtitle = "عیب‌یابی و برون‌بری"
     override val info = "اطلاعات"
+    override fun domainStrategyName(v: String) = when (v) {
+        "prefer_ipv4" -> "ترجیح IPv4"
+        "prefer_ipv6" -> "ترجیح IPv6"
+        "ipv4_only" -> "فقط IPv4"
+        "ipv6_only" -> "فقط IPv6"
+        else -> v
+    }
     override fun version(v: String) = "نسخه: $v"
+    override fun xrayVersion(v: String) = "Xray: $v"
+    override fun singboxVersion(v: String) = "sing-box: $v"
     override fun hwid(v: String) = "HWID: $v"
     override val community = "انجمن"
     override val howToConnect = "چگونه متصل شویم؟"
@@ -1311,6 +1389,11 @@ object FaStrings : Strings {
     override val customColorRgb = "رنگ سفارشی (RGB)"
     override val qrShare = "QR / هم‌رسانی"
     override val refresh = "بازآوری"
+    override val hideTunTitle = "پنهان‌کردن رابط tun0 (روت)"
+    override val hideTunSubtitle = "پس از اتصال tun0 را تغییر نام می‌دهد تا برنامه‌ها VPN را تشخیص ندهند. نیازمند روت."
+    override val hideTunDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) استفاده می‌کند. سازندهٔ نرم‌افزار مسئولیتی در قبال آسیب، از دست رفتن داده یا خرابی دستگاه ناشی از استفاده از روت ندارد."
+    override val rootGranted = "دسترسی روت اعطا شد"
+    override val rootDenied = "دسترسی روت رد شد"
     override val experimental = "آزمایشی"
     override val experimentalSubtitle = "کوکی‌های Telemost و موارد دیگر"
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
@@ -1396,6 +1479,16 @@ object FaStrings : Strings {
     override val pingChecking = "در حال بررسی…"
     override val pingVerify = "برای بررسی دسترس‌پذیری کلیک کنید"
     override val connectivityCheck = "بررسی اتصال"
+    override val pingSettings = "پینگ"
+    override val pingSettingsSubtitle = "نحوه بررسی ورودی‌ها"
+    override val pingMethod = "روش پینگ"
+    override val pingTarget = "سایت هدف پینگ"
+    override val pingTargetHint = "مثال: https://www.google.com"
+    override val pingModeAuto = "خودکار"
+    override val pingModeTcp = "TCP"
+    override val pingModeIcmp = "ICMP"
+    override val pingModeProxyGet = "از طریق پروکسی GET"
+    override val pingModeProxyHead = "از طریق پروکسی HEAD"
     override val scanQrTitle = "پویش QR"
     override val readyToScan = "آمادهٔ پویش"
     override val subscriptionOrLocationUri = "اشتراک یا URI موقعیت"

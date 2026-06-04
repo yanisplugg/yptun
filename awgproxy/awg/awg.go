@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -149,6 +150,61 @@ func Probe(iniConfig string) int64 {
 		return -1
 	}
 	_ = c.Close()
+	return time.Since(start).Milliseconds()
+}
+
+// MeasureDelay brings up a THROWAWAY AmneziaWG tunnel from [iniConfig], fetches [url] (HTTP
+// [method] "GET"/"HEAD") THROUGH it, and returns the round-trip in milliseconds (-1 on failure).
+// Mirrors xraybridge.MeasureDelay for the AWG outbound: needs no system VPN/TUN and is independent
+// of any running session, so AmneziaWG servers can be URL-tested from the list while disconnected.
+func MeasureDelay(iniConfig, url, method string, timeoutMs int) int64 {
+	cfg, err := parseConfig(iniConfig)
+	if err != nil {
+		return -1
+	}
+	uapi, err := cfg.uapi()
+	if err != nil {
+		return -1
+	}
+	tunDev, tnet, err := netstack.CreateNetTUN(cfg.addresses, cfg.dns, cfg.mtu)
+	if err != nil {
+		return -1
+	}
+	d := device.NewDevice(tunDev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "[awg-urltest] "))
+	defer d.Close()
+	if err := d.IpcSet(uapi); err != nil {
+		return -1
+	}
+	if err := d.Up(); err != nil {
+		return -1
+	}
+
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			// Every connection (incl. DNS) rides the AmneziaWG netstack tunnel.
+			DialContext: tnet.DialContext,
+		},
+	}
+	if method == "" {
+		method = "HEAD"
+	}
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		return -1
+	}
+	req.Header.Set("User-Agent", "olcbox-ping")
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return -1
+	}
+	_ = resp.Body.Close()
 	return time.Since(start).Milliseconds()
 }
 

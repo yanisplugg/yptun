@@ -42,7 +42,7 @@ object XrayConfig {
         olcrtcChainPort: Int? = null,
         olcrtcChainUser: String = "",
         olcrtcChainPass: String = "",
-        logLevel: String = "warning",
+        logLevel: String = "debug",
         traffic: TrafficSettings = TrafficSettings(),
         // VK-TURN chain: when set, [profile] dials its server THROUGH this WireGuard outbound (the
         // WG-over-VK base). Mirrors SingBoxConfig.wireguardBase. The ProxyProfile carries the
@@ -174,6 +174,17 @@ object XrayConfig {
                 putJsonArray("ip") { add("0.0.0.0") }
                 put("outboundTag", "block")
             }
+            // Domain-strategy enforcement: blackhole the opposite IP family so ipv4_only / ipv6_only
+            // forces ALL traffic onto the chosen family (even DoH apps that resolve the other one).
+            val familyBlockRule = when (traffic.domainStrategy) {
+                "ipv4_only" -> buildJsonObject {
+                    put("type", "field"); putJsonArray("ip") { add("::/0") }; put("outboundTag", "block")
+                }
+                "ipv6_only" -> buildJsonObject {
+                    put("type", "field"); putJsonArray("ip") { add("0.0.0.0/0") }; put("outboundTag", "block")
+                }
+                else -> null
+            }
             putJsonObject("routing") {
                 if (routingProfile != null) {
                     // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
@@ -182,6 +193,7 @@ object XrayConfig {
                     put("domainStrategy", base["domainStrategy"] ?: JsonPrimitive("AsIs"))
                     putJsonArray("rules") {
                         if (blockQuic) add(quicBlockRule)
+                        familyBlockRule?.let { add(it) }
                         if (traffic.blockRuDomains) add(blockZeroRule)
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
@@ -189,6 +201,7 @@ object XrayConfig {
                     put("domainStrategy", "AsIs")
                     putJsonArray("rules") {
                         if (blockQuic) add(quicBlockRule)
+                        familyBlockRule?.let { add(it) }
                         if (traffic.blockRuDomains) add(blockZeroRule)
                     }
                 }

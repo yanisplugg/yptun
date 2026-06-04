@@ -80,6 +80,7 @@ fun HomeScreen(
     collapsedGroups: Set<String> = emptySet(),
     pinnedGroups: List<String> = emptyList(),
     pingSortedGroups: Set<String> = emptySet(),
+    pingSortDescendingGroups: Set<String> = emptySet(),
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {}
@@ -229,6 +230,7 @@ fun HomeScreen(
                 onAddSubscriptionClick = {
                     isAddSheetOpen = true
                 },
+                hasLoaded = locationViewModel.hasLoadedLocations,
                 locations = locations,
                 selectedLocationId = locationViewModel.selectedLocationId,
                 pingsState = pingsState,
@@ -250,6 +252,7 @@ fun HomeScreen(
                 collapsedGroups = collapsedGroups,
                 pinnedGroups = pinnedGroups,
                 pingSortedGroups = pingSortedGroups,
+                pingSortDescendingGroups = pingSortDescendingGroups,
                 onToggleGroupCollapsed = onToggleGroupCollapsed,
                 onToggleGroupPinned = onToggleGroupPinned,
                 onToggleGroupPingSort = onToggleGroupPingSort

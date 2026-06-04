@@ -49,7 +49,7 @@ object SingBoxConfig {
         olcrtcChainPort: Int? = null,
         olcrtcChainUser: String = "",
         olcrtcChainPass: String = "",
-        logLevel: String = "warn",
+        logLevel: String = "debug",
         // On Android we bind the whole process to the upstream network (like olcRTC), so
         // sing-box must not try to detect/bind an interface itself. Desktop can enable it.
         autoDetectInterface: Boolean = false,
@@ -177,6 +177,20 @@ object SingBoxConfig {
                         addJsonObject {
                             put("network", "udp")
                             putJsonArray("port") { add(443) }
+                            put("action", "reject")
+                        }
+                    }
+                    // Domain-strategy enforcement: reject the opposite IP family so ipv4_only /
+                    // ipv6_only truly forces ALL traffic (incl. apps/browsers using their own DoH
+                    // DNS that returns the other family) onto the chosen one — Happy-Eyeballs then
+                    // falls back to the allowed family. prefer_* keeps both.
+                    when (dnsStrategyOverride ?: traffic.domainStrategy) {
+                        "ipv4_only" -> addJsonObject {
+                            putJsonArray("ip_cidr") { add("::/0") }
+                            put("action", "reject")
+                        }
+                        "ipv6_only" -> addJsonObject {
+                            putJsonArray("ip_cidr") { add("0.0.0.0/0") }
                             put("action", "reject")
                         }
                     }

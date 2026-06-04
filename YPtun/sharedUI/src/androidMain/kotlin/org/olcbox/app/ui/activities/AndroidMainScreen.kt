@@ -431,6 +431,7 @@ fun AndroidMainScreen(
         collapsedGroups = appBehavior.collapsedSubscriptionGroups,
         pinnedGroups = appBehavior.pinnedSubscriptionGroups,
         pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,
+        pingSortDescendingGroups = appBehavior.pingSortDescendingSubscriptionGroups,
         onToggleGroupCollapsed = { key ->
             val current = appBehavior.collapsedSubscriptionGroups
             val updated = if (key in current) current - key else current + key
@@ -442,9 +443,21 @@ fun AndroidMainScreen(
             vpnManager.setAppBehavior(appBehavior.copy(pinnedSubscriptionGroups = updated))
         },
         onToggleGroupPingSort = { key ->
-            val current = appBehavior.pingSortedSubscriptionGroups
-            val updated = if (key in current) current - key else current + key
-            vpnManager.setAppBehavior(appBehavior.copy(pingSortedSubscriptionGroups = updated))
+            // Cycle: off → ascending → descending → off.
+            val sorted = appBehavior.pingSortedSubscriptionGroups
+            val desc = appBehavior.pingSortDescendingSubscriptionGroups
+            val updated = when {
+                key !in sorted -> appBehavior.copy(
+                    pingSortedSubscriptionGroups = sorted + key,
+                    pingSortDescendingSubscriptionGroups = desc - key,
+                )
+                key !in desc -> appBehavior.copy(pingSortDescendingSubscriptionGroups = desc + key)
+                else -> appBehavior.copy(
+                    pingSortedSubscriptionGroups = sorted - key,
+                    pingSortDescendingSubscriptionGroups = desc - key,
+                )
+            }
+            vpnManager.setAppBehavior(updated)
         },
         onAppSettingsClick = {
             appSettingsInitialRoute = AppSettingsInitialRoute.Hub
