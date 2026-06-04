@@ -1,39 +1,39 @@
 ---
-name: 🐛 Bug report
-about: Something doesn't work as expected
+name: 🐛 Сообщить о баге
+about: Что-то работает не так, как ожидалось
 title: "[Bug] "
 labels: bug
 assignees: ''
 ---
 
-## Describe the bug
+## Описание
 
-A clear and concise description of what's wrong.
+Чётко и кратко опиши, что не так.
 
-## Steps to reproduce
+## Шаги воспроизведения
 
-1. Go to '...'
-2. Tap on '...'
-3. See error
+1. Открыть «...»
+2. Нажать на «...»
+3. Видим ошибку
 
-## Expected behavior
+## Ожидаемое поведение
 
-What you expected to happen.
+Что должно было произойти.
 
-## Environment
+## Окружение
 
-- App version: <!-- e.g. v2.0.0 (arm64-v8a) -->
-- Device: <!-- e.g. Pixel 6 -->
-- Android version: <!-- e.g. 14 -->
-- Engine / protocol: <!-- e.g. Xray VLESS+Reality, VK-TURN, AmneziaWG, olcRTC -->
+- Версия приложения: <!-- например v2.0.0 (arm64-v8a) -->
+- Устройство: <!-- например Pixel 6 -->
+- Версия Android: <!-- например 14 -->
+- Движок / протокол: <!-- например Xray VLESS+Reality, VK-TURN, AmneziaWG, olcRTC -->
 
-## Logs
+## Логи
 
 <!--
-If a connection fails, paste anonymized logs from the in-app log viewer
-(History icon). REMOVE server addresses, UUIDs, and any secrets first.
+Если не подключается — вставь обезличенные логи из встроенного просмотрщика
+(иконка истории). СНАЧАЛА убери адреса серверов, UUID и любые секреты.
 -->
 
-## Screenshots
+## Скриншоты
 
-If applicable, add screenshots to help explain the problem.
+Если уместно — добавь скриншоты.

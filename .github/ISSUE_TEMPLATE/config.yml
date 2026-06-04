@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 🔒 Security vulnerability
+  - name: 🔒 Уязвимость безопасности
     url: https://github.com/yanisplugg/olcvpn-client/security/advisories/new
-    about: Please report security issues privately, not as a public issue.
-  - name: 💬 Questions & discussion
+    about: Пожалуйста, сообщай об уязвимостях приватно, а не публичным issue.
+  - name: 💬 Вопросы и обсуждения
     url: https://github.com/yanisplugg/olcvpn-client/discussions
-    about: Ask questions and share setups with the community.
+    about: Задавай вопросы и делись настройками с сообществом.

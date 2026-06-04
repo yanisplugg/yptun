@@ -1,38 +1,38 @@
-# Security Policy
+# Политика безопасности
 
-## Supported versions
+## Поддерживаемые версии
 
-Only the **latest release** receives security fixes. Always update to the newest
-APK from the [Releases page](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-before reporting an issue.
+Исправления безопасности выходят только для **последнего релиза**. Прежде чем
+сообщать о проблеме, обнови приложение до свежего APK со
+[страницы релизов](https://github.com/yanisplugg/olcvpn-client/releases/latest).
 
-| Version | Supported |
-|---------|-----------|
-| latest release | ✅ |
-| older releases | ❌ |
+| Версия | Поддержка |
+|--------|-----------|
+| последний релиз | ✅ |
+| старые релизы | ❌ |
 
-## Reporting a vulnerability
+## Как сообщить об уязвимости
 
-**Please do not open a public issue for security vulnerabilities.**
+**Пожалуйста, не открывай публичный issue по уязвимостям.**
 
-Report privately through GitHub's
+Сообщи приватно через
 [**Security Advisories**](https://github.com/yanisplugg/olcvpn-client/security/advisories/new)
-("Report a vulnerability"). Include:
+на GitHub («Report a vulnerability»). Укажи:
 
-- a description of the issue and its impact,
-- steps to reproduce or a proof of concept,
-- the app version and your device / Android version.
+- описание проблемы и её влияние,
+- шаги воспроизведения или proof of concept,
+- версию приложения и устройство / версию Android.
 
-We aim to acknowledge reports within a few days and will keep you updated on the fix.
-Please give us reasonable time to release a patch before any public disclosure.
+Мы постараемся ответить за несколько дней и будем держать в курсе по исправлению.
+Дай разумное время на выпуск патча до публичного раскрытия.
 
-## Scope
+## Что особенно важно
 
-This is a circumvention tool. Especially valuable reports include:
+Это инструмент обхода блокировок. Особенно ценны сообщения про:
 
-- traffic, DNS, or IP leaks outside the tunnel (IPv4 **or** IPv6),
-- fingerprints that let an observer reliably distinguish YPtun traffic,
-- crashes or memory issues reachable from untrusted subscription/config input,
-- mishandling of user secrets (configs, keys, cookies) on the device.
+- утечки трафика, DNS или IP мимо туннеля (IPv4 **или** IPv6),
+- отпечатки, по которым наблюдатель может надёжно отличить трафик YPtun,
+- падения или проблемы с памятью из-за недоверенного ввода (подписки/конфиги),
+- небезопасное обращение с секретами пользователя (конфиги, ключи, cookie) на устройстве.
 
-Thank you for helping keep users safe. 🛡️
+Спасибо, что помогаешь защитить пользователей. 🛡️
