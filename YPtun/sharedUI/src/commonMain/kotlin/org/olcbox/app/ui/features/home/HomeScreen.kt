@@ -76,7 +76,13 @@ fun HomeScreen(
     onOpenLocationSettings: (String?) -> Unit,
     onAddLocation: () -> Unit,
     confirmBeforeDelete: Boolean = true,
-    onUnlockExperimental: () -> Unit = {}
+    onUnlockExperimental: () -> Unit = {},
+    collapsedGroups: Set<String> = emptySet(),
+    pinnedGroups: List<String> = emptyList(),
+    pingSortedGroups: Set<String> = emptySet(),
+    onToggleGroupCollapsed: (String) -> Unit = {},
+    onToggleGroupPinned: (String) -> Unit = {},
+    onToggleGroupPingSort: (String) -> Unit = {}
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
@@ -240,7 +246,13 @@ fun HomeScreen(
                 },
                 onDeleteSubscription = { ids ->
                     requestDelete(PendingDelete.Subscription(ids))
-                }
+                },
+                collapsedGroups = collapsedGroups,
+                pinnedGroups = pinnedGroups,
+                pingSortedGroups = pingSortedGroups,
+                onToggleGroupCollapsed = onToggleGroupCollapsed,
+                onToggleGroupPinned = onToggleGroupPinned,
+                onToggleGroupPingSort = onToggleGroupPingSort
             )
 
             Spacer(modifier = Modifier.height(24.dp))

@@ -54,6 +54,12 @@ interface Strings {
     val addCustomLocation: String
     val addSubscription: String
 
+    // Subscription group menu
+    val groupPinToTop: String
+    val groupUnpinFromTop: String
+    val groupSortByPing: String
+    val groupDelete: String
+
     // Delete dialogs
     val delete: String
     val cancel: String
@@ -429,6 +435,10 @@ object RuStrings : Strings {
     override val labelStart = "СТАРТ"
     override val addCustomLocation = "Добавить локацию"
     override val addSubscription = "Добавить подписку"
+    override val groupPinToTop = "Закрепить наверху"
+    override val groupUnpinFromTop = "Открепить"
+    override val groupSortByPing = "Сортировать по пингу"
+    override val groupDelete = "Удалить подписку"
     override val delete = "Удалить"
     override val cancel = "Отмена"
     override val deleteSubscriptionTitle = "Удалить подписку?"
@@ -763,6 +773,10 @@ object EnStrings : Strings {
     override val labelStart = "START"
     override val addCustomLocation = "Add custom location"
     override val addSubscription = "Add subscription"
+    override val groupPinToTop = "Pin to top"
+    override val groupUnpinFromTop = "Unpin"
+    override val groupSortByPing = "Sort by ping"
+    override val groupDelete = "Delete subscription"
     override val delete = "Delete"
     override val cancel = "Cancel"
     override val deleteSubscriptionTitle = "Delete subscription?"
@@ -1097,6 +1111,10 @@ object FaStrings : Strings {
     override val labelStart = "شروع"
     override val addCustomLocation = "افزودن موقعیت سفارشی"
     override val addSubscription = "افزودن اشتراک"
+    override val groupPinToTop = "سنجاق به بالا"
+    override val groupUnpinFromTop = "برداشتن سنجاق"
+    override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
+    override val groupDelete = "حذف اشتراک"
     override val delete = "حذف"
     override val cancel = "انصراف"
     override val deleteSubscriptionTitle = "اشتراک حذف شود؟"

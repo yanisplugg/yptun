@@ -36,7 +36,13 @@ fun OlcboxAppContent(
     onAppSettingsClick: () -> Unit,
     onSplitTunnelingClick: () -> Unit = {},
     confirmBeforeDelete: Boolean = true,
-    onUnlockExperimental: () -> Unit = {}
+    onUnlockExperimental: () -> Unit = {},
+    collapsedGroups: Set<String> = emptySet(),
+    pinnedGroups: List<String> = emptyList(),
+    pingSortedGroups: Set<String> = emptySet(),
+    onToggleGroupCollapsed: (String) -> Unit = {},
+    onToggleGroupPinned: (String) -> Unit = {},
+    onToggleGroupPingSort: (String) -> Unit = {}
 ) {
     val homeScrollState = rememberScrollState()
 
@@ -96,7 +102,13 @@ fun OlcboxAppContent(
                         onNavigate(AppScreen.LocationSettings(null))
                     },
                     confirmBeforeDelete = confirmBeforeDelete,
-                    onUnlockExperimental = onUnlockExperimental
+                    onUnlockExperimental = onUnlockExperimental,
+                    collapsedGroups = collapsedGroups,
+                    pinnedGroups = pinnedGroups,
+                    pingSortedGroups = pingSortedGroups,
+                    onToggleGroupCollapsed = onToggleGroupCollapsed,
+                    onToggleGroupPinned = onToggleGroupPinned,
+                    onToggleGroupPingSort = onToggleGroupPingSort
                 )
             }
 

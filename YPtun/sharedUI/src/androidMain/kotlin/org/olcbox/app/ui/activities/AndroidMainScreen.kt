@@ -428,6 +428,24 @@ fun AndroidMainScreen(
         showSplitTunnelingButton = false,
         canScanQr = true,
         confirmBeforeDelete = appBehavior.confirmBeforeDelete,
+        collapsedGroups = appBehavior.collapsedSubscriptionGroups,
+        pinnedGroups = appBehavior.pinnedSubscriptionGroups,
+        pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,
+        onToggleGroupCollapsed = { key ->
+            val current = appBehavior.collapsedSubscriptionGroups
+            val updated = if (key in current) current - key else current + key
+            vpnManager.setAppBehavior(appBehavior.copy(collapsedSubscriptionGroups = updated))
+        },
+        onToggleGroupPinned = { key ->
+            val current = appBehavior.pinnedSubscriptionGroups
+            val updated = if (key in current) current - key else current + key
+            vpnManager.setAppBehavior(appBehavior.copy(pinnedSubscriptionGroups = updated))
+        },
+        onToggleGroupPingSort = { key ->
+            val current = appBehavior.pingSortedSubscriptionGroups
+            val updated = if (key in current) current - key else current + key
+            vpnManager.setAppBehavior(appBehavior.copy(pingSortedSubscriptionGroups = updated))
+        },
         onAppSettingsClick = {
             appSettingsInitialRoute = AppSettingsInitialRoute.Hub
             vpnManager.refreshInstalledApps()

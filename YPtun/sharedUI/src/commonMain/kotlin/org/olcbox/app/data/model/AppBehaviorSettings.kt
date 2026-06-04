@@ -17,4 +17,10 @@ data class AppBehaviorSettings(
     val telemostCookies: String = "",
     /** Whether the stored Telemost cookies are applied on connect. */
     val telemostCookiesEnabled: Boolean = false,
+    /** Subscription group keys whose server list is collapsed (chevron). */
+    val collapsedSubscriptionGroups: Set<String> = emptySet(),
+    /** Subscription group keys pinned to the top, in pin order. */
+    val pinnedSubscriptionGroups: List<String> = emptyList(),
+    /** Subscription group keys whose servers are sorted by ping. */
+    val pingSortedSubscriptionGroups: Set<String> = emptySet(),
 )
