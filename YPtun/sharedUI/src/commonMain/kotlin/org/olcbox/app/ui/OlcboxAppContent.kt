@@ -36,6 +36,8 @@ fun OlcboxAppContent(
     onAppSettingsClick: () -> Unit,
     onSplitTunnelingClick: () -> Unit = {},
     confirmBeforeDelete: Boolean = true,
+    updateAvailable: Boolean = false,
+    onUpdateClick: () -> Unit = {},
     onUnlockExperimental: () -> Unit = {},
     collapsedGroups: Set<String> = emptySet(),
     pinnedGroups: List<String> = emptyList(),
@@ -108,6 +110,8 @@ fun OlcboxAppContent(
                         onNavigate(AppScreen.LocationSettings(null))
                     },
                     confirmBeforeDelete = confirmBeforeDelete,
+                    updateAvailable = updateAvailable,
+                    onUpdateClick = onUpdateClick,
                     onUnlockExperimental = onUnlockExperimental,
                     collapsedGroups = collapsedGroups,
                     pinnedGroups = pinnedGroups,

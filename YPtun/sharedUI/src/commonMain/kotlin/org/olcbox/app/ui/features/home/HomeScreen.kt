@@ -81,6 +81,10 @@ fun HomeScreen(
     onOpenLocationSettings: (String?) -> Unit,
     onAddLocation: () -> Unit,
     confirmBeforeDelete: Boolean = true,
+    /** A newer app release is available on GitHub → show the "update app" banner above the nav bar. */
+    updateAvailable: Boolean = false,
+    /** Tapping the update banner's button — opens the update offer (auto/manual). */
+    onUpdateClick: () -> Unit = {},
     onUnlockExperimental: () -> Unit = {},
     collapsedGroups: Set<String> = emptySet(),
     pinnedGroups: List<String> = emptyList(),
@@ -196,20 +200,25 @@ fun HomeScreen(
             )
         },
         bottomBar = {
-            if (showAppSettingsButton) {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
-                    NavigationBarItem(
-                        selected = true,
-                        onClick = {},
-                        icon = { Icon(Icons.Rounded.Bolt, contentDescription = null) },
-                        label = { Text(s.navConnection) }
-                    )
-                    NavigationBarItem(
-                        selected = false,
-                        onClick = onAppSettingsClick,
-                        icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
-                        label = { Text(s.navSettings) }
-                    )
+            Column {
+                if (updateAvailable) {
+                    UpdateAvailableBanner(onClick = onUpdateClick)
+                }
+                if (showAppSettingsButton) {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+                        NavigationBarItem(
+                            selected = true,
+                            onClick = {},
+                            icon = { Icon(Icons.Rounded.Bolt, contentDescription = null) },
+                            label = { Text(s.navConnection) }
+                        )
+                        NavigationBarItem(
+                            selected = false,
+                            onClick = onAppSettingsClick,
+                            icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
+                            label = { Text(s.navSettings) }
+                        )
+                    }
                 }
             }
         }
@@ -452,6 +461,37 @@ private sealed interface PendingDelete {
     data class Subscription(val ids: List<String>) : PendingDelete
     data object AllSubscriptions : PendingDelete
     data object AllConfigs : PendingDelete
+}
+
+@Composable
+private fun UpdateAvailableBanner(onClick: () -> Unit) {
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = s.updateBannerTitle,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            TextButton(onClick = onClick) {
+                Text(
+                    text = s.updateBannerAction,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
 }
 
 @OptIn(kotlin.time.ExperimentalTime::class)

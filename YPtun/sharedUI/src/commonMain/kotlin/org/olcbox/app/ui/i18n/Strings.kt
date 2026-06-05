@@ -462,6 +462,11 @@ interface Strings {
     fun subscriptionExpiry(dateTime: String): String
     /** Auto-refresh interval taken from the subscription, e.g. "Обновление каждые 6 ч". */
     fun subscriptionEvery(hours: Int): String
+    /** Banner above the nav bar when a newer GitHub release exists. */
+    val updateBannerTitle: String
+    val updateBannerAction: String
+    /** Offer-sheet button: download the APK by hand from the GitHub release page. */
+    val updateManual: String
 
     // Connect blocked reasons
     val addLocationFirst: String
@@ -871,6 +876,9 @@ object RuStrings : Strings {
     override val subscriptionNotUpdated = "Подписка не обновлена"
     override fun subscriptionExpiry(dateTime: String) = "до $dateTime"
     override fun subscriptionEvery(hours: Int) = "Обновление каждые $hours ч"
+    override val updateBannerTitle = "Обновите приложение"
+    override val updateBannerAction = "Обновить"
+    override val updateManual = "Скачать с GitHub"
     override val addLocationFirst = "Сначала добавьте локацию"
     override val completeActiveLocationFirst = "Сначала завершите настройку активной локации"
     override val addValidLocationFirst = "Сначала добавьте корректную локацию"
@@ -1276,6 +1284,9 @@ object EnStrings : Strings {
     override val subscriptionNotUpdated = "Subscription not updated"
     override fun subscriptionExpiry(dateTime: String) = "until $dateTime"
     override fun subscriptionEvery(hours: Int) = "Updates every ${hours}h"
+    override val updateBannerTitle = "Update available"
+    override val updateBannerAction = "Update"
+    override val updateManual = "Download from GitHub"
     override val addLocationFirst = "Add a location first"
     override val completeActiveLocationFirst = "Complete active location first"
     override val addValidLocationFirst = "Add a valid location first"
@@ -1681,6 +1692,9 @@ object FaStrings : Strings {
     override val subscriptionNotUpdated = "اشتراک به‌روزرسانی نشد"
     override fun subscriptionExpiry(dateTime: String) = "تا $dateTime"
     override fun subscriptionEvery(hours: Int) = "به‌روزرسانی هر $hours ساعت"
+    override val updateBannerTitle = "به‌روزرسانی موجود است"
+    override val updateBannerAction = "به‌روزرسانی"
+    override val updateManual = "دانلود از گیت‌هاب"
     override val addLocationFirst = "ابتدا یک موقعیت اضافه کنید"
     override val completeActiveLocationFirst = "ابتدا موقعیت فعال را کامل کنید"
     override val addValidLocationFirst = "ابتدا یک موقعیت معتبر اضافه کنید"

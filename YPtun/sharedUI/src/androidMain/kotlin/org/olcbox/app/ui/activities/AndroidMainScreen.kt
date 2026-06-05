@@ -119,6 +119,9 @@ fun AndroidMainScreen(
     var updateStatusText by remember { mutableStateOf<String?>(null) }
     var updateDownloadProgress by remember { mutableStateOf<Float?>(null) }
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    // Drives the persistent "update app" banner above the nav bar (independent of the offer sheet,
+    // which the user can dismiss while a newer release still exists).
+    var updateAvailable by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var relaunchAfterInstall by remember { mutableStateOf(false) }
     val subscriptionShareItems = locationViewModel.locations.toList()
         .mapNotNull { item ->
@@ -175,12 +178,14 @@ fun AndroidMainScreen(
         updateSettingsStore.save(normalized)
     }
 
-    fun showUpdateResult(info: AppUpdateInfo) {
+    fun showUpdateResult(info: AppUpdateInfo, manual: Boolean) {
         if (info.isDownloaded(updateSettings)) {
             updateOffer = null
             updateStatusText = s.latestAlreadyDownloaded(info.channel.name.lowercase())
         } else if (info.isUpdateAvailable) {
-            updateOffer = info
+            // Auto checks only raise the banner; the full offer sheet pops on a manual check (or when
+            // the user taps the banner). Avoids a sheet ambushing the user on every launch.
+            if (manual) updateOffer = info
             updateStatusText = s.channelUpdateAvailable(info.channel.name, info.version)
         } else {
             updateOffer = null
@@ -209,8 +214,11 @@ fun AndroidMainScreen(
             saveUpdateSettings(checkedSettings)
             result.fold(
                 onSuccess = { info ->
+                    // The banner reflects whether a newer, not-yet-downloaded release exists — shown
+                    // regardless of the postpone/"should offer" logic that only gates the sheet.
+                    updateAvailable = info.takeIf { it.isUpdateAvailable && !it.isDownloaded(checkedSettings) }
                     if (manual || info.shouldShowOffer(previousSettings, checkedAt)) {
-                        showUpdateResult(info)
+                        showUpdateResult(info, manual)
                     } else {
                         updateOffer = null
                         updateStatusText = null
@@ -251,6 +259,7 @@ fun AndroidMainScreen(
                 )
             )
             updateOffer = null
+            updateAvailable = null
             updateDownloadProgress = null
             relaunchAfterInstall = true
             updateInstallLauncher.launch(updateInstaller.installIntent(file))
@@ -431,6 +440,8 @@ fun AndroidMainScreen(
         showSplitTunnelingButton = false,
         canScanQr = true,
         confirmBeforeDelete = appBehavior.confirmBeforeDelete,
+        updateAvailable = updateAvailable != null,
+        onUpdateClick = { updateAvailable?.let { updateOffer = it } },
         collapsedGroups = appBehavior.collapsedSubscriptionGroups,
         pinnedGroups = appBehavior.pinnedSubscriptionGroups,
         pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,
@@ -526,7 +537,16 @@ fun AndroidMainScreen(
             info = info,
             downloadProgress = updateDownloadProgress,
             onLater = { postponeUpdate(info) },
-            onDownload = { downloadUpdate(info) }
+            onDownload = { downloadUpdate(info) },
+            onManual = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(info.htmlUrl))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
+                updateOffer = null
+            }
         )
     }
 
