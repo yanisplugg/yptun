@@ -699,7 +699,7 @@ private fun SubscriptionGroupHeader(
                 text = details,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
@@ -857,10 +857,14 @@ private fun LocationItem.subscriptionTitle(): String {
 
 private fun LocationItem.subscriptionDetails(): String? {
     val subscription = metadata?.subscription ?: return null
+    val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+    // Auto-refresh interval taken from the subscription (profile-update-interval header).
+    val interval = subscription.updateIntervalHours?.let { s.subscriptionEvery(it) }
 
     return listOfNotNull(
         quotaText(subscription.used, subscription.available),
-        subscription.refresh?.takeIf { it.isNotBlank() }?.let { "Refresh $it" }
+        subscription.refresh?.takeIf { it.isNotBlank() }?.let { "Refresh $it" },
+        interval
     ).joinToString(" · ").takeIf { it.isNotBlank() }
 }
 
@@ -884,9 +888,9 @@ private fun LocationItem.subscriptionStatusLine(): String? {
 
 private fun quotaText(used: String?, available: String?): String? {
     return when {
-        !used.isNullOrBlank() && !available.isNullOrBlank() -> "$used used · $available available"
-        !used.isNullOrBlank() -> "$used used"
-        !available.isNullOrBlank() -> "$available available"
+        !used.isNullOrBlank() && !available.isNullOrBlank() -> "$used / $available"
+        !used.isNullOrBlank() -> used
+        !available.isNullOrBlank() -> available
         else -> null
     }
 }

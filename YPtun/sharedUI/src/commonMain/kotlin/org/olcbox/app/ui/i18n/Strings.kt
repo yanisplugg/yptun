@@ -462,6 +462,8 @@ interface Strings {
     fun subscriptionExpiry(date: String, daysLeft: Long): String
     /** "Last updated …" line built from how long ago the last successful refresh was. */
     fun subscriptionUpdatedAgo(elapsedMs: Long): String
+    /** Auto-refresh interval taken from the subscription, e.g. "каждые 6 ч" / "every 6h". */
+    fun subscriptionEvery(hours: Int): String
 
     // Connect blocked reasons
     val addLocationFirst: String
@@ -883,6 +885,7 @@ object RuStrings : Strings {
             else -> "обновлено ${mins / (24 * 60)} дн назад"
         }
     }
+    override fun subscriptionEvery(hours: Int) = "каждые $hours ч"
     override val addLocationFirst = "Сначала добавьте локацию"
     override val completeActiveLocationFirst = "Сначала завершите настройку активной локации"
     override val addValidLocationFirst = "Сначала добавьте корректную локацию"
@@ -1300,6 +1303,7 @@ object EnStrings : Strings {
             else -> "updated ${mins / (24 * 60)}d ago"
         }
     }
+    override fun subscriptionEvery(hours: Int) = "every ${hours}h"
     override val addLocationFirst = "Add a location first"
     override val completeActiveLocationFirst = "Complete active location first"
     override val addValidLocationFirst = "Add a valid location first"
@@ -1717,6 +1721,7 @@ object FaStrings : Strings {
             else -> "${mins / (24 * 60)} روز پیش به‌روز شد"
         }
     }
+    override fun subscriptionEvery(hours: Int) = "هر $hours ساعت"
     override val addLocationFirst = "ابتدا یک موقعیت اضافه کنید"
     override val completeActiveLocationFirst = "ابتدا موقعیت فعال را کامل کنید"
     override val addValidLocationFirst = "ابتدا یک موقعیت معتبر اضافه کنید"

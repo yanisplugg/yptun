@@ -516,7 +516,9 @@ class LocationsRepositoryImpl(
                 // the response headers carry the profile title (name) and may also carry traffic/expiry.
                 primary = subscriptionMetadataFromBody(source.content),
                 secondary = subscriptionMetadataFromHeaders(source.profileTitle, source.userInfo)
-            )
+            // Persist the auto-refresh interval (profile-update-interval header) onto the metadata at
+            // import time too, so it's shown and used even before the first scheduled refresh.
+            ).withSubscriptionInterval(initialSubscriptionInterval)
         )
     }
 
