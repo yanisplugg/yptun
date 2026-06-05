@@ -8,7 +8,7 @@ import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.ui.features.home.HomeScreen
@@ -41,11 +41,16 @@ fun OlcboxAppContent(
     pinnedGroups: List<String> = emptyList(),
     pingSortedGroups: Set<String> = emptySet(),
     pingSortDescendingGroups: Set<String> = emptySet(),
+    pinnedCustomLocations: List<String> = emptyList(),
+    customLocationsPingSorted: Boolean = false,
+    customLocationsPingSortDescending: Boolean = false,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
-    onToggleGroupPingSort: (String) -> Unit = {}
+    onToggleGroupPingSort: (String) -> Unit = {},
+    onToggleCustomLocationPinned: (String) -> Unit = {},
+    onToggleCustomLocationsPingSort: () -> Unit = {}
 ) {
-    val homeScrollState = rememberScrollState()
+    val homeScrollState = rememberLazyListState()
 
     AnimatedContent(
         targetState = currentScreen,
@@ -108,9 +113,14 @@ fun OlcboxAppContent(
                     pinnedGroups = pinnedGroups,
                     pingSortedGroups = pingSortedGroups,
                     pingSortDescendingGroups = pingSortDescendingGroups,
+                    pinnedCustomLocations = pinnedCustomLocations,
+                    customLocationsPingSorted = customLocationsPingSorted,
+                    customLocationsPingSortDescending = customLocationsPingSortDescending,
                     onToggleGroupCollapsed = onToggleGroupCollapsed,
                     onToggleGroupPinned = onToggleGroupPinned,
-                    onToggleGroupPingSort = onToggleGroupPingSort
+                    onToggleGroupPingSort = onToggleGroupPingSort,
+                    onToggleCustomLocationPinned = onToggleCustomLocationPinned,
+                    onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort
                 )
             }
 

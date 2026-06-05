@@ -26,6 +26,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +62,9 @@ fun LocationRow(
     isError: Boolean = false,
     settingsEnabled: Boolean = true,
     onSettingsClick: () -> Unit = {},
+    isPinned: Boolean = false,
+    // When non-null, a pin toggle is shown (used for "own" custom locations).
+    onTogglePinned: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val bgColor by animateColorAsState(
@@ -169,6 +174,19 @@ fun LocationRow(
         }
 
         Spacer(modifier = Modifier.width(12.dp))
+
+        if (onTogglePinned != null) {
+            IconButton(
+                onClick = onTogglePinned,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                    contentDescription = "Pin",
+                    tint = if (isPinned) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
         if (settingsEnabled) {
             IconButton(

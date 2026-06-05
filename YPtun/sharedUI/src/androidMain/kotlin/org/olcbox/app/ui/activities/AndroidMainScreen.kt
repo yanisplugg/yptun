@@ -432,6 +432,30 @@ fun AndroidMainScreen(
         pinnedGroups = appBehavior.pinnedSubscriptionGroups,
         pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,
         pingSortDescendingGroups = appBehavior.pingSortDescendingSubscriptionGroups,
+        pinnedCustomLocations = appBehavior.pinnedCustomLocations,
+        customLocationsPingSorted = appBehavior.customLocationsPingSorted,
+        customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
+        onToggleCustomLocationPinned = { id ->
+            val current = appBehavior.pinnedCustomLocations
+            val updated = if (id in current) current - id else current + id
+            vpnManager.setAppBehavior(appBehavior.copy(pinnedCustomLocations = updated))
+        },
+        onToggleCustomLocationsPingSort = {
+            // Cycle: off → ascending → descending → off.
+            val updated = when {
+                !appBehavior.customLocationsPingSorted -> appBehavior.copy(
+                    customLocationsPingSorted = true,
+                    customLocationsPingSortDescending = false,
+                )
+                !appBehavior.customLocationsPingSortDescending ->
+                    appBehavior.copy(customLocationsPingSortDescending = true)
+                else -> appBehavior.copy(
+                    customLocationsPingSorted = false,
+                    customLocationsPingSortDescending = false,
+                )
+            }
+            vpnManager.setAppBehavior(updated)
+        },
         onToggleGroupCollapsed = { key ->
             val current = appBehavior.collapsedSubscriptionGroups
             val updated = if (key in current) current - key else current + key

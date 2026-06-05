@@ -394,6 +394,20 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun deleteLocations(storageIds: Collection<String>) {
+        if (storageIds.isEmpty()) return
+        val ids = storageIds.toHashSet()
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            saveBundleUnlocked(
+                bundle.copy(
+                    activeLocationId = bundle.activeLocationId?.takeUnless { it in ids },
+                    locations = bundle.locations.filterNot { it.storageId in ids }
+                )
+            )
+        }
+    }
+
     override suspend fun getAllLocations(): List<LocationEntry> {
         return mutationMutex.withLock {
             getBundleUnlocked().locations

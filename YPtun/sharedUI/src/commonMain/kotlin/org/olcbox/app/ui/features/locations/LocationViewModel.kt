@@ -8,8 +8,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -33,6 +36,12 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 
+/**
+ * @Immutable: instances are never mutated in place (a new one is built on every change), so Compose
+ * can treat it as a stable parameter and skip recomposing an unchanged [LocationRow] — important so a
+ * ping update only recomposes the rows whose ping actually changed, not the whole list.
+ */
+@androidx.compose.runtime.Immutable
 data class LocationItem(
     val storageId: String,
     val fullName: String,
@@ -84,6 +93,13 @@ class LocationViewModel(
 
     private val activePingJobs = mutableMapOf<String, Job>()
     private val pingSemaphore = Semaphore(LOCATION_PING_PARALLELISM)
+    // Source-of-truth ping map during a refresh pass. Each completion updates this in place (O(1))
+    // instead of copying the whole map; the UI state is then refreshed on a throttled cadence (see
+    // [schedulePingEmit]) so 300+ completions no longer trigger 300 full-list recompositions + 300
+    // whole-map copies (the O(n²) "ping lag with many inbounds" bug). All mutations happen on the
+    // main dispatcher (viewModelScope), so no locking is needed.
+    private val livePings = mutableMapOf<String, Int?>()
+    private var pingEmitJob: Job? = null
     private var loadLocationsJob: Job? = null
     private var loadLocationsRequest = 0
     private val providerDrafts = mutableMapOf<String, ProviderDraft>()
@@ -167,19 +183,22 @@ class LocationViewModel(
         val requestId = ++loadLocationsRequest
         loadLocationsJob?.cancel()
         loadLocationsJob = viewModelScope.launch {
-            val bundle = locationsRepository.getBundle()
-            val savedConfigs = bundle.locations
-            val currentSelectedId = bundle.activeLocationId
-
-            val nextLocations = savedConfigs.map { entry ->
-                val normalized = entry.location
-                LocationItem(
-                    storageId = entry.storageId,
-                    fullName = normalized.displayName(),
-                    config = normalized,
-                    subscriptionUrl = entry.subscriptionUrl,
-                    metadata = entry.metadata
-                )
+            // Fetch + parse + map OFF the main thread: with 300+ saved configs the bundle decode and
+            // per-entry displayName() parsing froze the UI for seconds on app open (the "configs load
+            // slowly" bug). Only the snapshotStateList mutation below must run on the main thread.
+            val (nextLocations, currentSelectedId) = withContext(Dispatchers.IO) {
+                val bundle = locationsRepository.getBundle()
+                val mapped = bundle.locations.map { entry ->
+                    val normalized = entry.location
+                    LocationItem(
+                        storageId = entry.storageId,
+                        fullName = normalized.displayName(),
+                        config = normalized,
+                        subscriptionUrl = entry.subscriptionUrl,
+                        metadata = entry.metadata
+                    )
+                }
+                mapped to bundle.activeLocationId
             }
 
             if (requestId != loadLocationsRequest) return@launch
@@ -228,6 +247,9 @@ class LocationViewModel(
         onError: (String) -> Unit = {}
     ) {
         val previousPings = currentPingsSnapshot()
+        // Seed the live map with prior results so a targeted refresh doesn't drop other groups' pings.
+        livePings.clear()
+        livePings.putAll(previousPings)
         val locationsSnapshot = locations.toList()
 
         val pingableLocations = locationsSnapshot
@@ -271,8 +293,7 @@ class LocationViewModel(
                         null
                     }
 
-                    val updatedPings = currentPingsSnapshot().toMutableMap()
-                    updatedPings[location.storageId] = ping
+                    livePings[location.storageId] = ping
 
                     activePingJobs.remove(location.storageId)
 
@@ -282,10 +303,12 @@ class LocationViewModel(
 
                     completedForThisRequest++
 
-                    emitPingState(updatedPings.toMap())
-
                     if (completedForThisRequest == totalForThisRequest) {
+                        // Final result of this pass: emit immediately (and cancel any pending throttle).
+                        flushPingState()
                         onComplete(onlineForThisRequest, totalForThisRequest)
+                    } else {
+                        schedulePingEmit()
                     }
                 } catch (e: CancellationException) {
                     activePingJobs.remove(location.storageId)
@@ -330,7 +353,7 @@ class LocationViewModel(
     }
 
     private fun emitPingState(
-        pings: Map<String, Int?> = currentPingsSnapshot()
+        pings: Map<String, Int?> = livePings.toMap()
     ) {
         val pendingIds = activePingJobs.keys.toSet()
 
@@ -345,6 +368,26 @@ class LocationViewModel(
                 total = pendingIds.size
             )
         }
+    }
+
+    /**
+     * Coalesces frequent ping updates into at most one UI emission per [PING_EMIT_THROTTLE_MS]. While
+     * a throttle window is open, additional completions just mutate [livePings]; one emission then
+     * publishes the accumulated batch — turning an O(n²) recomposition storm into a steady trickle.
+     */
+    private fun schedulePingEmit() {
+        if (pingEmitJob?.isActive == true) return
+        pingEmitJob = viewModelScope.launch {
+            delay(PING_EMIT_THROTTLE_MS)
+            emitPingState()
+        }
+    }
+
+    /** Emits the current [livePings] immediately, cancelling any pending throttled emission. */
+    private fun flushPingState() {
+        pingEmitJob?.cancel()
+        pingEmitJob = null
+        emitPingState()
     }
 
     private suspend fun checkLocationPing(
@@ -647,10 +690,10 @@ class LocationViewModel(
         }
     }
 
-    /** Deletes several locations at once (e.g. all configs of one subscription). */
+    /** Deletes several locations at once (e.g. all configs of one subscription) in a single rewrite. */
     fun deleteLocations(ids: List<String>, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
-            ids.forEach { locationsRepository.deleteLocation(it) }
+            locationsRepository.deleteLocations(ids)
             loadLocations(onComplete)
         }
     }
@@ -672,6 +715,7 @@ class LocationViewModel(
         const val LOCATION_PING_TIMEOUT_MS = 12_000L
         const val LOCATION_PING_RETRY_DELAY_MS = 0L
         const val LOCATION_PING_PARALLELISM = 4
+        const val PING_EMIT_THROTTLE_MS = 150L
     }
 
     private data class ProviderDraft(

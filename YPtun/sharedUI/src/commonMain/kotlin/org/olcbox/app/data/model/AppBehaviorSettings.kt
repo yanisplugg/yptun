@@ -30,6 +30,12 @@ data class AppBehaviorSettings(
     val pingSortedSubscriptionGroups: Set<String> = emptySet(),
     /** Subset of [pingSortedSubscriptionGroups] sorted in DESCENDING ping order (slowest first). */
     val pingSortDescendingSubscriptionGroups: Set<String> = emptySet(),
+    /** Storage ids of "own" (custom, non-subscription) locations pinned to the top, in pin order. */
+    val pinnedCustomLocations: List<String> = emptyList(),
+    /** Whether the "own locations" section is sorted by ping (ascending unless [customLocationsPingSortDescending]). */
+    val customLocationsPingSorted: Boolean = false,
+    /** Whether the "own locations" ping sort is DESCENDING (slowest first). */
+    val customLocationsPingSortDescending: Boolean = false,
     /**
      * How inbounds/locations are probed by the «Пинг» button. One of [PING_MODES].
      * [PING_AUTO] keeps the per-engine default behaviour (olcRTC handshake / tunnel / TCP).

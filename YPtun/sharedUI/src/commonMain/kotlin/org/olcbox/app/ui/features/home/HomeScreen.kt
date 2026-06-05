@@ -1,6 +1,5 @@
 package org.olcbox.app.ui.features.home
 
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -12,8 +11,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
@@ -51,7 +51,7 @@ import org.olcbox.app.ui.components.StartButton
 import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
 import org.olcbox.app.ui.features.home.components.HomeScreenAppBar
-import org.olcbox.app.ui.features.home.components.LocationSelectorScreen
+import org.olcbox.app.ui.features.home.components.locationSelectorContent
 import org.olcbox.app.ui.features.home.components.LogsSheet
 import org.olcbox.app.ui.features.home.components.RelayStatus
 import org.olcbox.app.ui.features.locations.LocationViewModel
@@ -61,7 +61,7 @@ import org.olcbox.app.ui.features.locations.LocationViewModel
 fun HomeScreen(
     viewModel: HomeScreenViewModel,
     locationViewModel: LocationViewModel,
-    scrollState: ScrollState,
+    scrollState: LazyListState,
     onToggleClick: () -> Unit = { viewModel.ToggleVpn() },
     onImportFileRequested: () -> Unit = {},
     onImportFromClipboardRequested: (onImported: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _ -> },
@@ -81,9 +81,14 @@ fun HomeScreen(
     pinnedGroups: List<String> = emptyList(),
     pingSortedGroups: Set<String> = emptySet(),
     pingSortDescendingGroups: Set<String> = emptySet(),
+    pinnedCustomLocations: List<String> = emptyList(),
+    customLocationsPingSorted: Boolean = false,
+    customLocationsPingSortDescending: Boolean = false,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
-    onToggleGroupPingSort: (String) -> Unit = {}
+    onToggleGroupPingSort: (String) -> Unit = {},
+    onToggleCustomLocationPinned: (String) -> Unit = {},
+    onToggleCustomLocationsPingSort: () -> Unit = {}
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
@@ -189,41 +194,43 @@ fun HomeScreen(
             }
         }
     ) { innerPadding ->
-        Column(
+        LazyColumn(
+            state = scrollState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            ConnectionTimer(isConnected = state.isVpnConnected, onSecretTap = onUnlockExperimental)
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            StartButton(
-                isActive = state.isVpnConnected,
-                isLoading = state.isVpnLoading,
-                requiresSetup = requiresSetup,
-                label = primaryActionLabel,
-                enabled = true,
-                onClick = {
-                    if (requiresSetup) {
-                        isAddSheetOpen = true
-                    } else {
-                        onToggleClick()
-                    }
-                }
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            if (hasSubscriptions) {
-                SubscriptionsRefreshRow(text = s.refreshSubscriptions, onClick = { refreshSubscriptions() })
-                Spacer(modifier = Modifier.height(8.dp))
+            item(key = "connection-timer") {
+                ConnectionTimer(isConnected = state.isVpnConnected, onSecretTap = onUnlockExperimental)
             }
 
-            LocationSelectorScreen(
+            item(key = "start-button") {
+                StartButton(
+                    isActive = state.isVpnConnected,
+                    isLoading = state.isVpnLoading,
+                    requiresSetup = requiresSetup,
+                    label = primaryActionLabel,
+                    enabled = true,
+                    onClick = {
+                        if (requiresSetup) {
+                            isAddSheetOpen = true
+                        } else {
+                            onToggleClick()
+                        }
+                    }
+                )
+            }
+
+            if (hasSubscriptions) {
+                item(key = "subscriptions-refresh") {
+                    SubscriptionsRefreshRow(text = s.refreshSubscriptions, onClick = { refreshSubscriptions() })
+                }
+            }
+
+            locationSelectorContent(
                 onRefreshClick = { targetIds ->
                     refreshHttpPings(targetIds)
                 },
@@ -253,12 +260,19 @@ fun HomeScreen(
                 pinnedGroups = pinnedGroups,
                 pingSortedGroups = pingSortedGroups,
                 pingSortDescendingGroups = pingSortDescendingGroups,
+                pinnedCustomLocations = pinnedCustomLocations,
+                customLocationsPingSorted = customLocationsPingSorted,
+                customLocationsPingSortDescending = customLocationsPingSortDescending,
                 onToggleGroupCollapsed = onToggleGroupCollapsed,
                 onToggleGroupPinned = onToggleGroupPinned,
-                onToggleGroupPingSort = onToggleGroupPingSort
+                onToggleGroupPingSort = onToggleGroupPingSort,
+                onToggleCustomLocationPinned = onToggleCustomLocationPinned,
+                onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            item(key = "bottom-spacer") {
+                Spacer(modifier = Modifier.height(12.dp))
+            }
         }
 
         if (isLogsSheetOpen) {

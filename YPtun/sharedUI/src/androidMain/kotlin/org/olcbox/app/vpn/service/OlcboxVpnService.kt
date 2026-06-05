@@ -862,13 +862,16 @@ class OlcboxVpnService : VpnService() {
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
             // the whole profile (incl. domain:ru) and Russian sites would wrongly egress via the VPN.
-            // Any active routing profile forces the Xray core: xray-core has rock-solid native
-            // `domain:`/`geoip:`/`geosite:` matching (it's exactly what Happ / v2rayNG use), so
-            // `domain:ru → direct` works reliably. sing-box's domain_suffix path proved flaky here,
-            // letting RU traffic wrongly egress via the proxy. Falls back to sing-box only when the
-            // proxy type isn't xray-serviceable (checked below).
-            val profileWantsXray = routingProfile != null &&
-                (routingProfile.dnsHosts.isNotEmpty() || routingProfile.ruleCount() > 0)
+            // Routing-rule matching (domain:/geoip:/geosite: → direct/block/proxy) runs on sing-box
+            // too: the AmneziaWG path proves it (AWG forces sing-box yet `domain:ru → direct` egresses
+            // via the real IP correctly). Earlier we force-switched EVERY routing profile to Xray, but
+            // that left standard (vless/…) locations broken whenever Xray couldn't start (e.g. a
+            // geoip.dat download blocked on a whitelist network), so `domain:ru` wrongly egressed via
+            // the VPN — exactly the "routing only works for AmneziaWG" bug. Now only a profile that
+            // needs the RU regexp DNS-hosts (`dnsHosts`, genuinely Xray-only) forces Xray; plain
+            // routing rules stay on whichever core the location resolves to (sing-box by default),
+            // matching the working AWG behaviour.
+            val profileWantsXray = routingProfile != null && routingProfile.dnsHosts.isNotEmpty()
             // A user-supplied full Xray JSON (dns / routing / balancers / custom fields) can ONLY run
             // verbatim on xray-core. Force Xray so the whole template is honored instead of falling to
             // sing-box, which would rebuild from the parsed profile and drop everything but the outbound.
@@ -1371,22 +1374,34 @@ class OlcboxVpnService : VpnService() {
     }
 
     /**
-     * EXPERIMENTAL (root): when [AppBehaviorSettings.hideTunInterface] is on, rename the tun0/tun1
-     * netdev so apps that detect a VPN by enumerating interface names (e.g. "tun0") no longer see
-     * it. Routes are keyed by interface index, not name, so renaming doesn't drop connectivity.
-     * Best-effort — silently no-ops without root. The user is warned (disclaimer in the UI) that the
-     * author isn't liable for any root-induced damage.
+     * EXPERIMENTAL (root): when [AppBehaviorSettings.hideTunInterface] is on, rename every VPN-looking
+     * netdev (`tun*` from VpnService, `awg*`/`wg*` from AmneziaWG/WireGuard) to an innocuous
+     * `rmnet9x` name so apps that detect a VPN by enumerating interface names no longer see it. Routes
+     * are keyed by interface index, not name, so renaming doesn't drop connectivity.
+     *
+     * Enumerates `/sys/class/net` at run time instead of hardcoding `tun0`/`tun1`: the real index
+     * varies (another VPN may already hold `tun0`) and AmneziaWG's interface isn't a `tun*`. An
+     * interface that doesn't exist (e.g. AmneziaWG runs in userspace netstack with no kernel netdev)
+     * is simply skipped. Best-effort — silently no-ops without root. The user is warned (disclaimer in
+     * the UI) that the author isn't liable for any root-induced damage.
      */
     private suspend fun maybeHideTunInterface() {
         if (!loadAppBehavior().hideTunInterface) return
         withContext(Dispatchers.IO) {
-            val cmd = "ip link set tun0 name rmnet9 2>/dev/null; " +
-                "ip link set tun1 name rmnet8 2>/dev/null; true"
+            // mksh/toybox (Android's `sh`) supports $(), case, and $(()) arithmetic. Rename each
+            // tun*/awg*/wg* netdev to rmnet9<n> (a modem-looking name with no "tun"/"wg" substring).
+            val cmd = buildString {
+                append("n=90; ")
+                append("for p in /sys/class/net/*; do d=\${p##*/}; case \"\$d\" in ")
+                append("tun*|awg*|wg*) ip link set \"\$d\" name rmnet9\$n 2>/dev/null && ")
+                append("echo \"hid \$d -> rmnet9\$n\"; n=\$((n+1));; ")
+                append("esac; done; true")
+            }
             runCatching {
                 val p = ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start()
                 val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
                 val code = p.waitFor()
-                addLog("Hide tun (root): exit=$code${if (out.isNotBlank()) " — $out" else ""}")
+                addLog("Hide tun (root): exit=$code${if (out.isNotBlank()) " — $out" else " — no tun/awg/wg netdev found"}")
             }.onFailure {
                 addLog("Hide tun (root) failed (no su / denied): ${it.message}")
             }

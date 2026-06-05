@@ -170,6 +170,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 _language.value = lang
                 LocalizationState.language = lang
                 ThemeState.background = preferences[KEY_ANDROID_BG_COLOR]?.let { Color(it.toInt()) }
+                ThemeState.dynamicEnabled = preferences[KEY_ANDROID_DYNAMIC_THEME] == true
             }
         }
     }
@@ -361,6 +362,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     fun setDynamicThemeEnabled(enabled: Boolean) {
         _dynamicThemeEnabled.value = enabled
+        ThemeState.dynamicEnabled = enabled
         scope.launch {
             appContext.vpnPrefDataStore.edit { preferences ->
                 preferences[KEY_ANDROID_DYNAMIC_THEME] = enabled
