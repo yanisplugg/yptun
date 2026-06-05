@@ -266,11 +266,20 @@ class HomeScreenViewModel(
         // to the single-import path below (which already handles a multi-link block itself).
         run {
             val lines = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
-            val allHttp = lines.size >= 2 && lines.all {
+            val httpUrls = lines.filter {
                 it.startsWith("http://", true) || it.startsWith("https://", true)
             }
-            if (allHttp) {
-                importManySubscriptions(lines, onComplete, onError)
+            // Everything else that looks like a protocol share link (vless://, vmess://, ss://,
+            // trojan://, freeturn://, …) — grouped into ONE blob so a 1000-line paste is parsed in a
+            // single pass (parseProxyText splits it). Mixed pastes (subscription URLs + links) work.
+            val protoLines = lines.filter { it !in httpUrls && it.contains("://") }
+            val isBatch = httpUrls.size >= 2 || (httpUrls.isNotEmpty() && protoLines.isNotEmpty())
+            if (isBatch) {
+                val items = buildList {
+                    addAll(httpUrls)
+                    if (protoLines.isNotEmpty()) add(protoLines.joinToString("\n"))
+                }
+                importManySubscriptions(items, onComplete, onError)
                 return
             }
         }

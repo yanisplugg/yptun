@@ -27,6 +27,14 @@ object OlcboxVpnState {
     }
 
     /**
+     * Appends a line to the journal WITHOUT echoing it back to logcat. Used by the logcat tailer
+     * ([OlcboxVpnService] full-logs capture) so reading our own process log doesn't feed itself.
+     */
+    fun appendRaw(line: String) {
+        _logs.update { (it + line).takeLast(MAX_LOG_ENTRIES) }
+    }
+
+    /**
      * The live local SOCKS5 endpoint of the running core (host/port + the per-session credentials,
      * which are randomized in TUN mode). Published by the service so the in-process latency probe
      * can authenticate to it; null when no core is up. Same-process singleton.
@@ -41,6 +49,6 @@ object OlcboxVpnState {
         val password: String,
     )
 
-    private const val MAX_LOG_ENTRIES = 1_000
+    private const val MAX_LOG_ENTRIES = 5_000
     private const val TAG = "OlcboxVpnService"
 }

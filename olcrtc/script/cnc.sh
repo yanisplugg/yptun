@@ -131,16 +131,20 @@ echo ""
 if [ "$AUTH" = "jitsi" ]; then
     echo ""
     echo "Выберите Jitsi-сервер (проверьте в браузере, какой работает в вашей сети):"
-    echo "  1) https://meet1.arbitr.ru/"
-    echo "  2) https://meet.cryptopro.ru/"
-    echo "  3) Другой (ввести вручную)"
-    read -p "Введите номер [1-3, по умолчанию: 1]: " JITSI_SERVER_CHOICE
+    echo "  1) https://meet.small-dm.ru/"
+    echo "  2) https://meet1.arbitr.ru/"
+    echo "  3) https://meet.handyweb.org/"
+    echo "  4) Другой (ввести вручную)"
+    read -p "Введите номер [1-4, по умолчанию: 1]: " JITSI_SERVER_CHOICE
 
     case "$JITSI_SERVER_CHOICE" in
         2)
-            JITSI_BASE_URL="https://meet.cryptopro.ru"
+            JITSI_BASE_URL="https://meet1.arbitr.ru"
             ;;
         3)
+            JITSI_BASE_URL="https://meet.handyweb.org"
+            ;;
+        4)
             read -p "Введите URL Jitsi-сервера: " JITSI_BASE_INPUT
             JITSI_BASE_URL="${JITSI_BASE_INPUT%/}"
             if [ -z "$JITSI_BASE_URL" ]; then
@@ -149,7 +153,7 @@ if [ "$AUTH" = "jitsi" ]; then
             fi
             ;;
         *)
-            JITSI_BASE_URL="https://meet1.arbitr.ru"
+            JITSI_BASE_URL="https://meet.small-dm.ru"
             ;;
     esac
 

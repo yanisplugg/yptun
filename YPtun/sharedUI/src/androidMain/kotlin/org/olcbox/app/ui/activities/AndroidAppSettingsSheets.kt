@@ -26,9 +26,11 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.RoutingRules
+import org.olcbox.app.data.model.SingBoxRule
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalStrings
@@ -61,6 +63,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ContentPaste
@@ -85,6 +89,8 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -101,6 +107,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -273,6 +280,7 @@ internal fun AppSettingsSheet(
                     onRoutingProfilesClick = { route = AppSettingsRoute.RoutingProfiles },
                     onTrafficClick = { route = AppSettingsRoute.Traffic },
                     onApplicationClick = { route = AppSettingsRoute.Application },
+                    onPingClick = { route = AppSettingsRoute.Ping },
                     onUrlSchemesClick = { route = AppSettingsRoute.UrlSchemes },
                     onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
@@ -287,17 +295,14 @@ internal fun AppSettingsSheet(
                     onChanged = onAppBehaviorChanged
                 )
 
-                AppSettingsRoute.Routing -> RoutingContent(
+                AppSettingsRoute.Routing,
+                AppSettingsRoute.RoutingProfiles -> RoutingContent(
                     routing = routing,
                     enabled = enabled,
                     onBack = { route = AppSettingsRoute.Hub },
-                    onRoutingChanged = onRoutingChanged
-                )
-
-                AppSettingsRoute.RoutingProfiles -> RoutingProfilesContent(
-                    state = routingProfilesState,
+                    onRoutingChanged = onRoutingChanged,
+                    routingProfilesState = routingProfilesState,
                     geoStatus = geoUpdateStatus,
-                    onBack = { route = AppSettingsRoute.Hub },
                     onSaveProfile = onRoutingProfileSaved,
                     onDeleteProfile = onRoutingProfileDeleted,
                     onSetGlobal = onGlobalRoutingProfileChanged,
@@ -319,6 +324,12 @@ internal fun AppSettingsSheet(
                     onBack = { route = AppSettingsRoute.Hub },
                     onChanged = onAppBehaviorChanged,
                     onLanguageChanged = onLanguageChanged
+                )
+
+                AppSettingsRoute.Ping -> PingSettingsContent(
+                    settings = appBehavior,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onChanged = onAppBehaviorChanged
                 )
 
                 AppSettingsRoute.UrlSchemes -> UrlSchemesContent(
@@ -639,6 +650,7 @@ private fun AppSettingsHubContent(
     onRoutingProfilesClick: () -> Unit,
     onTrafficClick: () -> Unit,
     onApplicationClick: () -> Unit,
+    onPingClick: () -> Unit,
     onUrlSchemesClick: () -> Unit,
     onSubscriptionsSharingClick: () -> Unit,
     onUpdatesClick: () -> Unit,
@@ -684,7 +696,7 @@ private fun AppSettingsHubContent(
         // The legacy standalone "Routing & rules" screen has been folded into routing profiles.
         SettingsGroupCard {
             SettingsGroupRow(
-                title = s.routingProfiles,
+                title = s.routingTitle,
                 subtitle = s.routingProfilesSubtitle,
                 icon = Icons.Outlined.AltRoute,
                 enabled = true,
@@ -735,6 +747,14 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
+                title = s.pingSettings,
+                subtitle = s.pingSettingsSubtitle,
+                icon = Icons.Outlined.Bolt,
+                enabled = true,
+                onClick = onPingClick
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
                 title = s.urlSchemes,
                 subtitle = s.urlSchemesSubtitle,
                 icon = Icons.Outlined.Share,
@@ -768,6 +788,22 @@ private fun AppSettingsHubContent(
             SettingsGroupRow(
                 title = s.version(CurrentAppInfo.value.version),
                 icon = Icons.Outlined.Settings,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            val xrayVer = remember { runCatching { xraybridge.Xraybridge.version() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val singboxVer = remember { runCatching { libbox.Libbox.version() }.getOrNull()?.ifBlank { null } ?: "—" }
+            SettingsGroupRow(
+                title = s.xrayVersion(xrayVer),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.singboxVersion(singboxVer),
+                icon = Icons.Outlined.Tune,
                 enabled = true,
                 showChevron = false
             )
@@ -2638,7 +2674,16 @@ private fun RoutingContent(
     routing: RoutingRules,
     enabled: Boolean,
     onBack: () -> Unit,
-    onRoutingChanged: (RoutingRules) -> Unit
+    onRoutingChanged: (RoutingRules) -> Unit,
+    // Happ routing profiles — shown as the third tab.
+    routingProfilesState: org.olcbox.app.data.model.RoutingProfilesState,
+    geoStatus: org.olcbox.app.vpn.GeoUpdateStatus?,
+    onSaveProfile: (org.olcbox.app.data.model.RoutingProfile) -> Unit,
+    onDeleteProfile: (String) -> Unit,
+    onSetGlobal: (String) -> Unit,
+    onImportLink: (String) -> Boolean,
+    onSetGeoSources: (String, String) -> Unit,
+    onUpdateGeo: () -> Unit,
 ) {
     var bypassLan by remember(routing) { mutableStateOf(routing.bypassLan) }
     var blockAds by remember(routing) { mutableStateOf(routing.blockAds) }
@@ -2648,19 +2693,36 @@ private fun RoutingContent(
     var customRules by remember(routing) { mutableStateOf(routing.customRulesJson) }
     var customRuleSets by remember(routing) { mutableStateOf(routing.customRuleSetsJson) }
     var advancedExpanded by remember(routing) { mutableStateOf(routing.customRulesJson.isNotBlank() || routing.customRuleSetsJson.isNotBlank()) }
+    // v2rayNG-style ordered rules (sing-box). Edited as drafts (raw text) so the cursor stays put;
+    // converted back to [SingBoxRule] on save. Kept ALONGSIDE the Happ routing profiles.
+    val ruleDrafts = remember(routing) { mutableStateListOf<SbRuleDraft>().apply { addAll(routing.rules.map { it.toDraft() }) } }
     val rulesValid = RoutingRules.isValidRulesJson(customRules)
     val ruleSetsValid = RoutingRules.isValidRulesJson(customRuleSets)
+    var selectedTab by remember { mutableStateOf(0) }
     val s = LocalStrings.current
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    // Persists the RoutingRules from the Simple + Rules tabs (the Happ tab saves its own profiles).
+    fun saveRouting() {
+        onRoutingChanged(
+            RoutingRules(
+                bypassLan = bypassLan,
+                blockAds = blockAds,
+                bypassRussia = bypassRu,
+                directDomains = RoutingRules.parseDomains(directText),
+                blockDomains = RoutingRules.parseDomains(blockText),
+                customRulesJson = customRules.trim(),
+                customRuleSetsJson = customRuleSets.trim(),
+                rules = ruleDrafts.map { it.toRule() }.filter { it.hasMatcher() }
+            )
+        )
+        onBack()
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+        ) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
             }
@@ -2672,126 +2734,315 @@ private fun RoutingContent(
             )
         }
 
-        SettingsSectionLabel(s.presets)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = false,
-                onClick = { bypassLan = true; bypassRu = true; blockAds = false },
-                label = { Text(s.presetRuDirect) }
-            )
-            FilterChip(
-                selected = false,
-                onClick = { bypassLan = true; blockAds = true; bypassRu = false },
-                label = { Text(s.presetAdsBlock) }
-            )
-            FilterChip(
-                selected = false,
-                onClick = { bypassLan = true; bypassRu = true; blockAds = true },
-                label = { Text(s.presetRuAds) }
-            )
-            FilterChip(
-                selected = false,
-                onClick = { bypassLan = true; bypassRu = false; blockAds = false },
-                label = { Text(s.presetAllVpn) }
-            )
-            FilterChip(
-                selected = false,
-                onClick = {
-                    bypassLan = true; bypassRu = false; blockAds = false
-                    directText = ""; blockText = ""
-                },
-                label = { Text(s.presetReset) }
-            )
+        TabRow(selectedTabIndex = selectedTab) {
+            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text(s.routingTabSimple) })
+            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text(s.routingTabRules) })
+            Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text(s.routingTabHapp) })
         }
 
-        RoutingToggleRow(s.bypassLan, s.bypassLanSubtitle, bypassLan) { bypassLan = it }
-        RoutingToggleRow(s.bypassRussia, s.bypassRussiaSubtitle, bypassRu) { bypassRu = it }
-        RoutingToggleRow(s.blockAds, s.blockAdsSubtitle, blockAds) { blockAds = it }
-
-        OutlinedTextField(
-            value = directText,
-            onValueChange = { directText = it },
-            label = { Text(s.directDomains) },
-            placeholder = { Text(s.domainsPlaceholder) },
-            minLines = 2,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = blockText,
-            onValueChange = { blockText = it },
-            label = { Text(s.blockedDomains) },
-            placeholder = { Text(s.domainsPlaceholder) },
-            minLines = 2,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        // Advanced: raw sing-box routing rules for power users.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { advancedExpanded = !advancedExpanded }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                s.sbRoutingAdvanced,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f)
-            )
-            Icon(
-                if (advancedExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                contentDescription = null
-            )
-        }
-        if (advancedExpanded) {
-            Text(
-                s.sbRoutingAdvancedDesc,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
-            )
-            OutlinedTextField(
-                value = customRules,
-                onValueChange = { customRules = it },
-                label = { Text(s.sbRouteRulesLabel) },
-                placeholder = { Text("[{\"domain_suffix\":[\"example.com\"],\"outbound\":\"direct\"}]") },
-                isError = !rulesValid,
-                supportingText = if (!rulesValid) ({ Text(s.sbInvalidJsonArray) }) else null,
-                minLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = customRuleSets,
-                onValueChange = { customRuleSets = it },
-                label = { Text(s.sbRuleSetLabel) },
-                placeholder = { Text("[{\"type\":\"remote\",\"tag\":\"my-set\",\"format\":\"binary\",\"url\":\"https://…\",\"download_detour\":\"direct\"}]") },
-                isError = !ruleSetsValid,
-                supportingText = if (!ruleSetsValid) ({ Text(s.sbInvalidJsonArray) }) else null,
-                minLines = 2,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        Button(
-            onClick = {
-                onRoutingChanged(
-                    RoutingRules(
-                        bypassLan = bypassLan,
-                        blockAds = blockAds,
-                        bypassRussia = bypassRu,
-                        directDomains = RoutingRules.parseDomains(directText),
-                        blockDomains = RoutingRules.parseDomains(blockText),
-                        customRulesJson = customRules.trim(),
-                        customRuleSetsJson = customRuleSets.trim()
+        when (selectedTab) {
+            0 -> Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp)
+                    .padding(top = 12.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SettingsSectionLabel(s.presets)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = false,
+                        onClick = { bypassLan = true; bypassRu = true; blockAds = false },
+                        label = { Text(s.presetRuDirect) }
                     )
+                    FilterChip(
+                        selected = false,
+                        onClick = { bypassLan = true; blockAds = true; bypassRu = false },
+                        label = { Text(s.presetAdsBlock) }
+                    )
+                    FilterChip(
+                        selected = false,
+                        onClick = { bypassLan = true; bypassRu = true; blockAds = true },
+                        label = { Text(s.presetRuAds) }
+                    )
+                    FilterChip(
+                        selected = false,
+                        onClick = { bypassLan = true; bypassRu = false; blockAds = false },
+                        label = { Text(s.presetAllVpn) }
+                    )
+                    FilterChip(
+                        selected = false,
+                        onClick = {
+                            bypassLan = true; bypassRu = false; blockAds = false
+                            directText = ""; blockText = ""
+                        },
+                        label = { Text(s.presetReset) }
+                    )
+                }
+
+                RoutingToggleRow(s.bypassLan, s.bypassLanSubtitle, bypassLan) { bypassLan = it }
+                RoutingToggleRow(s.bypassRussia, s.bypassRussiaSubtitle, bypassRu) { bypassRu = it }
+                RoutingToggleRow(s.blockAds, s.blockAdsSubtitle, blockAds) { blockAds = it }
+
+                OutlinedTextField(
+                    value = directText,
+                    onValueChange = { directText = it },
+                    label = { Text(s.directDomains) },
+                    placeholder = { Text(s.domainsPlaceholder) },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
                 )
-                onBack()
-            },
-            enabled = enabled && rulesValid && ruleSetsValid,
-            modifier = Modifier.fillMaxWidth()
+                OutlinedTextField(
+                    value = blockText,
+                    onValueChange = { blockText = it },
+                    label = { Text(s.blockedDomains) },
+                    placeholder = { Text(s.domainsPlaceholder) },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Advanced: raw sing-box routing rules for power users.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { advancedExpanded = !advancedExpanded }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        s.sbRoutingAdvanced,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        if (advancedExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                        contentDescription = null
+                    )
+                }
+                if (advancedExpanded) {
+                    Text(
+                        s.sbRoutingAdvancedDesc,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = customRules,
+                        onValueChange = { customRules = it },
+                        label = { Text(s.sbRouteRulesLabel) },
+                        placeholder = { Text("[{\"domain_suffix\":[\"example.com\"],\"outbound\":\"direct\"}]") },
+                        isError = !rulesValid,
+                        supportingText = if (!rulesValid) ({ Text(s.sbInvalidJsonArray) }) else null,
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = customRuleSets,
+                        onValueChange = { customRuleSets = it },
+                        label = { Text(s.sbRuleSetLabel) },
+                        placeholder = { Text("[{\"type\":\"remote\",\"tag\":\"my-set\",\"format\":\"binary\",\"url\":\"https://…\",\"download_detour\":\"direct\"}]") },
+                        isError = !ruleSetsValid,
+                        supportingText = if (!ruleSetsValid) ({ Text(s.sbInvalidJsonArray) }) else null,
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Button(
+                    onClick = { saveRouting() },
+                    enabled = enabled && rulesValid && ruleSetsValid,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(s.saveAndApply)
+                }
+            }
+
+            1 -> Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp)
+                    .padding(top = 12.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // v2rayNG-style ordered rules (sing-box). Each rule is matched top-to-bottom; the
+                // first match decides the outbound (proxy / direct / block). Runs on the sing-box
+                // core alongside the toggle presets and any Happ routing profile.
+                Text(
+                    s.routingRulesDesc,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (ruleDrafts.isEmpty()) {
+                    Text(
+                        s.routingRulesEmpty,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                ruleDrafts.forEachIndexed { index, draft ->
+                    SingBoxRuleCard(
+                        draft = draft,
+                        onChange = { ruleDrafts[index] = it },
+                        onDelete = { ruleDrafts.removeAt(index) }
+                    )
+                }
+                OutlinedButton(
+                    onClick = { ruleDrafts.add(SbRuleDraft()) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(s.routingRuleAdd)
+                }
+                Button(
+                    onClick = { saveRouting() },
+                    enabled = enabled && rulesValid && ruleSetsValid,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(s.saveAndApply)
+                }
+            }
+
+            else -> RoutingProfilesContent(
+                state = routingProfilesState,
+                geoStatus = geoStatus,
+                onBack = onBack,
+                onSaveProfile = onSaveProfile,
+                onDeleteProfile = onDeleteProfile,
+                onSetGlobal = onSetGlobal,
+                onImportLink = onImportLink,
+                onSetGeoSources = onSetGeoSources,
+                onUpdateGeo = onUpdateGeo,
+                embedded = true,
+            )
+        }
+    }
+}
+
+/** Editable (raw-text) form of a [SingBoxRule] so text fields keep their cursor while typing. */
+private data class SbRuleDraft(
+    val outbound: String = SingBoxRule.OUT_PROXY,
+    val domains: String = "",
+    val ip: String = "",
+    val port: String = "",
+    val network: String = "",
+    val protocol: String = "",
+    val enabled: Boolean = true,
+) {
+    fun toRule(): SingBoxRule = SingBoxRule(
+        outbound = outbound,
+        domains = splitList(domains),
+        ip = splitList(ip),
+        port = port.trim(),
+        network = network.trim(),
+        protocol = splitList(protocol),
+        enabled = enabled,
+    )
+
+    private fun splitList(text: String): List<String> =
+        text.split('\n', ',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
+}
+
+private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
+    outbound = outbound,
+    domains = domains.joinToString("\n"),
+    ip = ip.joinToString("\n"),
+    port = port,
+    network = network,
+    protocol = protocol.joinToString(", "),
+    enabled = enabled,
+)
+
+@Composable
+private fun SingBoxRuleCard(
+    draft: SbRuleDraft,
+    onChange: (SbRuleDraft) -> Unit,
+    onDelete: () -> Unit
+) {
+    val s = LocalStrings.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(s.saveAndApply)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    s.routingRuleOutbound,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(checked = draft.enabled, onCheckedChange = { onChange(draft.copy(enabled = it)) })
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Outlined.Delete, contentDescription = s.routingRuleDelete,
+                        tint = MaterialTheme.colorScheme.error)
+                }
+            }
+            // Outbound action: proxy / direct / block.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    SingBoxRule.OUT_PROXY to s.routingOutProxy,
+                    SingBoxRule.OUT_DIRECT to s.routingOutDirect,
+                    SingBoxRule.OUT_BLOCK to s.routingOutBlock,
+                ).forEach { (value, label) ->
+                    FilterChip(
+                        selected = draft.outbound == value,
+                        onClick = { onChange(draft.copy(outbound = value)) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = draft.domains,
+                onValueChange = { onChange(draft.copy(domains = it)) },
+                label = { Text(s.routingRuleDomains) },
+                placeholder = { Text("geosite:ru, domain:vk.com") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.ip,
+                onValueChange = { onChange(draft.copy(ip = it)) },
+                label = { Text(s.routingRuleIps) },
+                placeholder = { Text("geoip:ru, 10.0.0.0/8") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = draft.port,
+                    onValueChange = { onChange(draft.copy(port = it)) },
+                    label = { Text(s.routingRulePort) },
+                    placeholder = { Text("443, 8000:9000") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = draft.protocol,
+                    onValueChange = { onChange(draft.copy(protocol = it)) },
+                    label = { Text(s.routingRuleProtocol) },
+                    placeholder = { Text("tls, quic") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            // Network: any / tcp / udp.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("" to s.routingRuleNetworkAny, "tcp" to "TCP", "udp" to "UDP").forEach { (value, label) ->
+                    FilterChip(
+                        selected = draft.network == value,
+                        onClick = { onChange(draft.copy(network = value)) },
+                        label = { Text(label) }
+                    )
+                }
+            }
         }
     }
 }
@@ -2889,7 +3140,7 @@ private fun TrafficSettingsContent(
                 FilterChip(
                     selected = strategy == option,
                     onClick = { strategy = option },
-                    label = { Text(option) }
+                    label = { Text(s.domainStrategyName(option)) }
                 )
             }
         }
@@ -3063,6 +3314,82 @@ private fun ApplicationBehaviorContent(
     }
 }
 
+/** Dedicated «Пинг» screen: how locations/inbounds are probed + the proxy-probe target URL. */
+@Composable
+private fun PingSettingsContent(
+    settings: AppBehaviorSettings,
+    onBack: () -> Unit,
+    onChanged: (AppBehaviorSettings) -> Unit
+) {
+    val s = LocalStrings.current
+    val isProxyMode = settings.pingMode == AppBehaviorSettings.PING_PROXY_GET ||
+        settings.pingMode == AppBehaviorSettings.PING_PROXY_HEAD
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = s.pingSettings,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        SettingsSectionLabel(s.pingMethod)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val pingOptions = listOf(
+                AppBehaviorSettings.PING_AUTO to s.pingModeAuto,
+                AppBehaviorSettings.PING_TCP to s.pingModeTcp,
+                AppBehaviorSettings.PING_ICMP to s.pingModeIcmp,
+                AppBehaviorSettings.PING_PROXY_GET to s.pingModeProxyGet,
+                AppBehaviorSettings.PING_PROXY_HEAD to s.pingModeProxyHead,
+            )
+            pingOptions.forEach { (mode, title) ->
+                FilterChip(
+                    selected = settings.pingMode == mode,
+                    onClick = { onChanged(settings.copy(pingMode = mode)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+        // The target URL is meaningful ONLY for the proxy GET/HEAD probes; TCP/ICMP probe the
+        // location's own server, so the field is disabled for those modes.
+        OutlinedTextField(
+            value = settings.pingUrl,
+            onValueChange = { onChanged(settings.copy(pingUrl = it)) },
+            label = { Text(s.pingTarget) },
+            placeholder = { Text(s.pingTargetHint) },
+            singleLine = true,
+            enabled = isProxyMode,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        SettingsSectionLabel(s.pingResultLabel)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val resultOptions = listOf(
+                AppBehaviorSettings.PING_RESULT_TIME to s.pingResultTime,
+                AppBehaviorSettings.PING_RESULT_ICON to s.pingResultIcon,
+            )
+            resultOptions.forEach { (mode, title) ->
+                FilterChip(
+                    selected = settings.pingResultDisplay == mode,
+                    onClick = { onChanged(settings.copy(pingResultDisplay = mode)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+    }
+}
+
 /** Hidden Experimental section (unlocked by tapping the connection timer 5×). */
 @Composable
 private fun ExperimentalContent(
@@ -3129,6 +3456,36 @@ private fun ExperimentalContent(
             onClick = { cookiePicker.launch(arrayOf("*/*")) },
             modifier = Modifier.fillMaxWidth()
         ) { Text(s.loadFromFile) }
+
+        SettingsSectionLabel("Root")
+        val rootScope = rememberCoroutineScope()
+        RoutingToggleRow(
+            title = s.hideTunTitle,
+            subtitle = s.hideTunSubtitle,
+            checked = settings.hideTunInterface
+        ) { enabled ->
+            onChanged(settings.copy(hideTunInterface = enabled))
+            // Trigger the superuser prompt right away so the user grants root before connecting.
+            if (enabled) {
+                rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val ok = runCatching {
+                        val p = ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start()
+                        p.inputStream.bufferedReader().use { it.readText() }
+                        p.waitFor() == 0
+                    }.getOrDefault(false)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context, if (ok) s.rootGranted else s.rootDenied, android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+        Text(
+            text = s.hideTunDisclaimer,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
     }
 }
 
@@ -3223,6 +3580,7 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object RoutingProfiles : AppSettingsRoute(1)
     object Traffic : AppSettingsRoute(1)
     object Application : AppSettingsRoute(1)
+    object Ping : AppSettingsRoute(1)
     object UrlSchemes : AppSettingsRoute(1)
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)

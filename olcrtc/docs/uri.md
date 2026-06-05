@@ -219,16 +219,16 @@ data: data
 ### jitsi + datachannel
 
 ```text
-olcrtc://jitsi?datachannel@https://meet1.arbitr.ru/myroom#d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799$RU / olc free sub
+olcrtc://jitsi?datachannel@https://meet.small-dm.ru/myroom#d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799$RU / olc free sub
 ```
 
-Или с `meet.cryptopro.ru`:
+Или с `meet.handyweb.org`:
 
 ```text
-olcrtc://jitsi?datachannel@https://meet.cryptopro.ru/myroom#d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799$RU / olc free sub
+olcrtc://jitsi?datachannel@https://meet.handyweb.org/myroom#d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799$RU / olc free sub
 ```
 
-`<RoomID>` для jitsi - полный URL комнаты в формате `https://host/room` (или `host/room`). Поддерживается любой self-hosted Jitsi Meet инстанс без аутентификации; для публичных серверов (`meet1.arbitr.ru`, `meet.cryptopro.ru`, `meet.jit.si`) тот же формат. **Обязательно проверьте, какой сервер доступен в вашей сети.**
+`<RoomID>` для jitsi - полный URL комнаты в формате `https://host/room` (или `host/room`). Поддерживается любой self-hosted Jitsi Meet инстанс без аутентификации; для публичных серверов (`meet.small-dm.ru`, `meet1.arbitr.ru`, `meet.handyweb.org`, `meet.jit.si`) тот же формат. **Обязательно проверьте, какой сервер доступен в вашей сети.**
 
 ### Эквивалент YAML
 
@@ -237,8 +237,8 @@ mode: cnc
 auth:
   provider: jitsi
 room:
-  # Используйте meet1.arbitr.ru или meet.cryptopro.ru - тот, что работает в вашей сети
-  id: "https://meet1.arbitr.ru/myroom"
+  # Используйте meet.small-dm.ru, meet1.arbitr.ru или meet.handyweb.org - тот, что работает в вашей сети
+  id: "https://meet.small-dm.ru/myroom"
 crypto:
   key: "d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799"
 net:

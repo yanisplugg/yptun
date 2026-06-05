@@ -49,7 +49,7 @@ object SingBoxConfig {
         olcrtcChainPort: Int? = null,
         olcrtcChainUser: String = "",
         olcrtcChainPass: String = "",
-        logLevel: String = "warn",
+        logLevel: String = "debug",
         // On Android we bind the whole process to the upstream network (like olcRTC), so
         // sing-box must not try to detect/bind an interface itself. Desktop can enable it.
         autoDetectInterface: Boolean = false,
@@ -161,8 +161,12 @@ object SingBoxConfig {
                 put("auto_detect_interface", autoDetectInterface)
 
                 putJsonArray("rules") {
-                    // Sniff destination domain so domain rules match (can be disabled in advanced).
-                    if (advanced?.sniff != false) {
+                    // Expert per-core overrides (sing-box): explicit sniff/resolve/strategy control.
+                    val sbExpert = routingProfile?.expertEnabled == true
+                    val sbExpertStrategy = routingProfile
+                        ?.takeIf { it.expertEnabled }?.singboxDomainStrategy?.takeIf { it.isNotBlank() }
+                    // Sniff destination domain so domain rules match (advanced or expert can disable it).
+                    if (advanced?.sniff != false && (!sbExpert || routingProfile!!.singboxSniff)) {
                         addJsonObject { put("action", "sniff") }
                     }
                     // Block QUIC (HTTP/3) so clients fall back to TCP/HTTP2 through the proxy. A
@@ -180,6 +184,7 @@ object SingBoxConfig {
                             put("action", "reject")
                         }
                     }
+                    val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
                     // Routing profile and the advanced toggles are COMBINED (not either/or): the
                     // profile's buckets run alongside the user's verbatim rules and the
                     // bypassRussia/blockAds/block-direct toggles.
@@ -193,16 +198,43 @@ object SingBoxConfig {
                     // sing-box 1.11+: ip_cidr/geoip rules only match a connection that already carries
                     // an IP. A sniffed domain connection has none, so `geoip:ru → direct` (profile or
                     // the bypassRussia toggle) is silently skipped and RU sites wrongly use the proxy
-                    // IP. Resolve the sniffed domain to an IP first so IP rules can match. The
-                    // ipv4-only strategy doubles as the IPv6 lever: no AAAA → nothing routes over IPv6.
-                    if (routingProfile?.usesIpRules() == true || routing.bypassRussia) {
+                    // IP. Resolve the sniffed domain to an IP first so IP rules can match. ALSO resolve
+                    // unconditionally for ipv4_only/ipv6_only: otherwise a plain proxy never resolves
+                    // locally and the REMOTE side picks the family (AAAA) → IPv6 leaks past the chosen
+                    // strategy (2ip.io shows IPv6). Resolving here with the strategy forces the family.
+                    // Expert mode can also force resolve (e.g. for geoip rules) and override the strategy.
+                    val expertStrategy = sbExpertStrategy ?: effectiveStrategy
+                    val forceFamily = expertStrategy == "ipv4_only" || expertStrategy == "ipv6_only"
+                    // v2rayNG-style manual rules that use IP/geoip selectors also need the sniffed
+                    // domain resolved first, or `geoip:ru → direct` silently skips domain connections.
+                    val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
+                    if (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
+                        manualRulesUseIp || (sbExpert && routingProfile!!.singboxResolve)
+                    ) {
                         addJsonObject {
                             put("action", "resolve")
-                            put("strategy", dnsStrategyOverride ?: traffic.domainStrategy)
+                            put("strategy", expertStrategy)
+                        }
+                    }
+                    // Domain-strategy enforcement: AFTER resolve, reject the opposite IP family so
+                    // ipv4_only / ipv6_only truly forces ALL traffic (incl. apps/browsers using their
+                    // own DoH DNS that returns the other family, and raw IP-literal connections) onto
+                    // the chosen one. Placed after `resolve` so freshly-resolved domains are caught
+                    // too. prefer_* keeps both families.
+                    when (expertStrategy) {
+                        "ipv4_only" -> addJsonObject {
+                            putJsonArray("ip_cidr") { add("::/0") }
+                            put("action", "reject")
+                        }
+                        "ipv6_only" -> addJsonObject {
+                            putJsonArray("ip_cidr") { add("0.0.0.0/0") }
+                            put("action", "reject")
                         }
                     }
                     // Advanced verbatim user rules (highest precedence).
                     parseJsonArray(routing.customRulesJson).forEach { add(it) }
+                    // Structured v2rayNG-style rules (in user-defined order, after verbatim JSON).
+                    SingBoxRouting.manualRules(routing.rules).forEach { add(it) }
                     // Blocking toggles first so ads/blocked domains die even if a profile bucket would proxy them.
                     if (routing.blockDomains.isNotEmpty()) {
                         addJsonObject {
@@ -244,6 +276,9 @@ object SingBoxConfig {
                             .forEach { (it as? JsonObject)?.let(::add) }
                     }
                     parseJsonArray(routing.customRuleSetsJson).forEach { (it as? JsonObject)?.let(::add) }
+                    // Geo rule-sets referenced by the structured v2rayNG rules.
+                    SingBoxRouting.manualRuleSets(routing.rules, singboxGeositeBase, singboxGeoipBase)
+                        .forEach { (it as? JsonObject)?.let(::add) }
                     if (routing.blockAds) {
                         add(buildJsonObject {
                             put("type", "remote")

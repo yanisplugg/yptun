@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  YPtun status-bar / Quick-Settings tile icon: a white cat-head silhouette with eye cut-outs.
+  Android forces a single-colour (alpha-only) render here, so a solid white silhouette with
+  transparent holes is the only thing that reads correctly. The eyes are punched out via
+  android:fillType="evenOdd" so they stay transparent after tint. The cat is scaled to fill
+  most of the 24dp canvas so it reads clearly in the dense status bar.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M2.25,1.0 L9.0,6.25 C9.94,6.0 10.94,5.88 12,5.88 C13.06,5.88 14.06,6.0 15.0,6.25 L21.75,1.0 L20.13,9.375 C21.31,10.75 22.0,12.44 22.0,14.25 C22.0,19.125 17.53,23.0 12,23.0 C6.48,23.0 2.0,19.125 2.0,14.25 C2.0,12.44 2.69,10.75 3.88,9.375 Z M8.5,12.25 a1.3125,1.3125 0 1,0 0.01,0 Z M15.5,12.25 a1.3125,1.3125 0 1,0 0.01,0 Z" />
+</vector>

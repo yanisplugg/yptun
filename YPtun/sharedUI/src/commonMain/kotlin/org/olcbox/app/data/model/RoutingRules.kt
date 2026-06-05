@@ -31,6 +31,11 @@ data class RoutingRules(
      * so [customRulesJson] can reference custom `rule_set` tags. Blank = unused.
      */
     val customRuleSetsJson: String = "",
+    /**
+     * Structured v2rayNG-style rules (sing-box only). Each entry becomes a single `route.rules`
+     * object; geo selectors add the matching remote `.srs` rule-sets. Empty = unused.
+     */
+    val rules: List<SingBoxRule> = emptyList(),
 ) {
     companion object {
         /** Split a free-text field (newline/comma/space separated) into clean domain suffixes. */

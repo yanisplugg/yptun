@@ -377,6 +377,9 @@ fun AndroidMainScreen(
         navigateHomeFromLocationSettings()
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(
+        org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay
+    ) {
     OlcboxAppContent(
         homeViewModel = viewModel,
         locationViewModel = locationViewModel,
@@ -431,6 +434,31 @@ fun AndroidMainScreen(
         collapsedGroups = appBehavior.collapsedSubscriptionGroups,
         pinnedGroups = appBehavior.pinnedSubscriptionGroups,
         pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,
+        pingSortDescendingGroups = appBehavior.pingSortDescendingSubscriptionGroups,
+        pinnedCustomLocations = appBehavior.pinnedCustomLocations,
+        customLocationsPingSorted = appBehavior.customLocationsPingSorted,
+        customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
+        onToggleCustomLocationPinned = { id ->
+            val current = appBehavior.pinnedCustomLocations
+            val updated = if (id in current) current - id else current + id
+            vpnManager.setAppBehavior(appBehavior.copy(pinnedCustomLocations = updated))
+        },
+        onToggleCustomLocationsPingSort = {
+            // Cycle: off → ascending → descending → off.
+            val updated = when {
+                !appBehavior.customLocationsPingSorted -> appBehavior.copy(
+                    customLocationsPingSorted = true,
+                    customLocationsPingSortDescending = false,
+                )
+                !appBehavior.customLocationsPingSortDescending ->
+                    appBehavior.copy(customLocationsPingSortDescending = true)
+                else -> appBehavior.copy(
+                    customLocationsPingSorted = false,
+                    customLocationsPingSortDescending = false,
+                )
+            }
+            vpnManager.setAppBehavior(updated)
+        },
         onToggleGroupCollapsed = { key ->
             val current = appBehavior.collapsedSubscriptionGroups
             val updated = if (key in current) current - key else current + key
@@ -442,9 +470,21 @@ fun AndroidMainScreen(
             vpnManager.setAppBehavior(appBehavior.copy(pinnedSubscriptionGroups = updated))
         },
         onToggleGroupPingSort = { key ->
-            val current = appBehavior.pingSortedSubscriptionGroups
-            val updated = if (key in current) current - key else current + key
-            vpnManager.setAppBehavior(appBehavior.copy(pingSortedSubscriptionGroups = updated))
+            // Cycle: off → ascending → descending → off.
+            val sorted = appBehavior.pingSortedSubscriptionGroups
+            val desc = appBehavior.pingSortDescendingSubscriptionGroups
+            val updated = when {
+                key !in sorted -> appBehavior.copy(
+                    pingSortedSubscriptionGroups = sorted + key,
+                    pingSortDescendingSubscriptionGroups = desc - key,
+                )
+                key !in desc -> appBehavior.copy(pingSortDescendingSubscriptionGroups = desc + key)
+                else -> appBehavior.copy(
+                    pingSortedSubscriptionGroups = sorted - key,
+                    pingSortDescendingSubscriptionGroups = desc - key,
+                )
+            }
+            vpnManager.setAppBehavior(updated)
         },
         onAppSettingsClick = {
             appSettingsInitialRoute = AppSettingsInitialRoute.Hub
@@ -463,6 +503,7 @@ fun AndroidMainScreen(
             }
         }
     )
+    }
 
     shareSheetPayload?.let { (title, payload) ->
         AndroidConfigShareSheet(

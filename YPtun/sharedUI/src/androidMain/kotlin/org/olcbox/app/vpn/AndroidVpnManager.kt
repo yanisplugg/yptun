@@ -170,6 +170,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 _language.value = lang
                 LocalizationState.language = lang
                 ThemeState.background = preferences[KEY_ANDROID_BG_COLOR]?.let { Color(it.toInt()) }
+                ThemeState.dynamicEnabled = preferences[KEY_ANDROID_DYNAMIC_THEME] == true
             }
         }
     }
@@ -266,8 +267,18 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      * routing link (and a profile was saved); the new id is also returned by [importRoutingProfileId]
      * for callers that want to select it.
      */
-    override fun importRoutingProfileLink(link: String): Boolean =
-        importRoutingProfileId(link) != null
+    override fun importRoutingProfileLink(link: String): Boolean {
+        // A `yptun://routing/...` link carries the ENTIRE routing setup (all profiles + global choice +
+        // geo sources) — importing it restores the whole thing at once.
+        RoutingProfilesState.fromRoutingLink(link)?.let { imported ->
+            val withIds = imported.profiles.map {
+                if (it.id.isBlank()) it.copy(id = "rp-" + java.util.UUID.randomUUID().toString().take(8)) else it
+            }
+            setRoutingProfilesState(imported.copy(profiles = withIds))
+            return true
+        }
+        return importRoutingProfileId(link) != null
+    }
 
     override fun routingProfileChoices(): List<RoutingProfile> = _routingProfiles.value.profiles
 
@@ -361,6 +372,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     fun setDynamicThemeEnabled(enabled: Boolean) {
         _dynamicThemeEnabled.value = enabled
+        ThemeState.dynamicEnabled = enabled
         scope.launch {
             appContext.vpnPrefDataStore.edit { preferences ->
                 preferences[KEY_ANDROID_DYNAMIC_THEME] = enabled
@@ -494,6 +506,23 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
     private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
+        // User-selected ping method (Settings → «Пинг») overrides the per-engine default probe.
+        // TCP/ICMP probe the location's own server; the URL is used ONLY by the proxy GET/HEAD probes.
+        val behavior = _appBehavior.value
+        val server = locationConfig.proxy?.server
+        val serverPort = locationConfig.proxy?.serverPort
+        // olcRTC/Stealth (and other provider engines) carry no vless/proxy profile, so the proxy
+        // GET/HEAD probe can't build a throwaway outbound for them. When proxy mode is selected (it's
+        // now the default) but this location has no proxy, fall through to the engine-default probe
+        // instead of reporting a false "Offline".
+        val hasProxy = locationConfig.proxy != null
+        when (behavior.pingMode) {
+            AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
+            AppBehaviorSettings.PING_ICMP -> if (hasProxy) return icmpPing(server)
+            AppBehaviorSettings.PING_PROXY_GET -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "GET")
+            AppBehaviorSettings.PING_PROXY_HEAD -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "HEAD")
+            else -> { /* PING_AUTO → fall through to the engine-specific default below */ }
+        }
         val proxyType = locationConfig.proxy?.type
         return when {
             // Obfuscated transports whose real endpoint is blocked/hidden (VK-TURN, AmneziaWG):
@@ -628,6 +657,86 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         }
         best
     }
+
+    // --- User-selectable ping methods (Settings → «Пинг») ---
+
+    /** ICMP/echo reachability latency to [host] (Android uses ICMP or a TCP echo internally). */
+    private suspend fun icmpPing(host: String?): Long? = withContext(Dispatchers.IO) {
+        if (host.isNullOrBlank()) return@withContext null
+        var best: Long? = null
+        repeat(TCP_PING_ATTEMPTS) {
+            val ms = runCatching {
+                val addr = java.net.InetAddress.getByName(host)
+                val start = System.nanoTime()
+                if (addr.isReachable(TCP_PING_TIMEOUT_MS)) (System.nanoTime() - start) / 1_000_000L else null
+            }.getOrNull()
+            if (ms != null && (best == null || ms < best!!)) best = ms
+        }
+        best
+    }
+
+    /**
+     * Per-server proxy URL test (à la v2rayNG / Happ): builds a throwaway Xray config for
+     * [location]'s proxy and fetches [url] THROUGH it inside xray-core, returning the round-trip in
+     * ms. Independent of the system VPN, so it works while DISCONNECTED — that's how the whole
+     * server list can be probed "via proxy". Returns null when the proxy type isn't xray-serviceable
+     * (e.g. AmneziaWG / raw WireGuard) or the request fails.
+     */
+    private suspend fun proxyUrlTest(location: LocationConfig, url: String, method: String): Long? =
+        withContext(Dispatchers.IO) {
+            val profile = location.proxy
+            if (profile == null) {
+                OlcboxVpnState.addLog("Proxy $method ping: location has no proxy")
+                return@withContext null
+            }
+            // AmneziaWG isn't xray-serviceable — raise a throwaway AWG tunnel and fetch through it.
+            if (profile.type == ProxyProfile.TYPE_AMNEZIAWG) {
+                val awgConfig = profile.awgConfig.orEmpty()
+                if (awgConfig.isBlank()) {
+                    OlcboxVpnState.addLog("Proxy $method ping: AmneziaWG config missing")
+                    return@withContext null
+                }
+                val ms = runCatching {
+                    awg.Awg.measureDelay(awgConfig, url, method, TUNNEL_PING_TIMEOUT_MS.toLong())
+                }.getOrElse {
+                    OlcboxVpnState.addLog("Proxy $method ping (AmneziaWG) error: ${it.message}")
+                    -1L
+                }
+                return@withContext if (ms >= 0) ms else {
+                    OlcboxVpnState.addLog("Proxy $method ping: no response via AmneziaWG for $url")
+                    null
+                }
+            }
+            if (profile.server.isBlank()) {
+                OlcboxVpnState.addLog("Proxy $method ping: location has no proxy server")
+                return@withContext null
+            }
+            val listenPort = (20_000..60_000).random()
+            val configJson = runCatching {
+                org.olcbox.app.vpn.xray.XrayConfig.build(
+                    profile = profile,
+                    listenPort = listenPort,
+                    listenHost = "127.0.0.1",
+                    logLevel = "none",
+                    blockQuic = false,
+                )
+            }.getOrElse {
+                OlcboxVpnState.addLog("Proxy $method ping: failed to build test config: ${it.message}")
+                return@withContext null
+            }
+            val ms = runCatching {
+                xraybridge.Xraybridge.measureDelay(configJson, url, method, TUNNEL_PING_TIMEOUT_MS.toLong())
+            }.getOrElse {
+                OlcboxVpnState.addLog("Proxy $method ping error for ${profile.server}: ${it.message}")
+                -1L
+            }
+            if (ms >= 0) {
+                ms
+            } else {
+                OlcboxVpnState.addLog("Proxy $method ping: no response via ${profile.server} for $url")
+                null
+            }
+        }
 
     override fun subscriptionFetchProxy(): SubscriptionFetchProxy? {
         val currentStatus = status.value

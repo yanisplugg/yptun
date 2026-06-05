@@ -38,6 +38,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import awg.Awg
 import awg.LogWriter as AwgLogWriter
+import awg.Protector as AwgProtector
+import xraybridge.Xraybridge
+import xraybridge.Protector as XrayProtector
 import freeturn.Freeturn
 import freeturn.LogWriter as FreeturnLogWriter
 import mobile.LogWriter
@@ -105,6 +108,7 @@ class OlcboxVpnService : VpnService() {
 
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Default + job)
+    private val logcatStarted = java.util.concurrent.atomic.AtomicBoolean(false)
     private val tunnelMutex = Mutex()
     private val repository: LocationsRepository by lazy {
         LocationsRepositoryImpl(LocationsDataSourceImpl(applicationContext))
@@ -292,6 +296,43 @@ class OlcboxVpnService : VpnService() {
 
         installMobileCallbacks()
         observeSpeedNotificationSetting()
+        startLogcatCapture()
+    }
+
+    /**
+     * Full-logs capture: tails this process's logcat into the in-app journal, so EVERYTHING the
+     * native cores emit (xray-core, sing-box/libbox, olcRTC, freeturn, WireGuard…) shows up in the
+     * "Журнал" — not just the lines we explicitly addLog(). Reads only our own PID (no special
+     * permission needed) and skips our own OlcboxVpnService tag to avoid echoing addLog() twice.
+     */
+    private fun startLogcatCapture() {
+        if (logcatStarted.getAndSet(true)) return
+        scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    val pid = android.os.Process.myPid()
+                    // -T 1: start from the next line (skip backlog). Capture all levels (verbose).
+                    val proc = ProcessBuilder(
+                        "logcat", "-v", "time", "-T", "1", "--pid=$pid", "*:V"
+                    ).redirectErrorStream(true).start()
+                    proc.inputStream.bufferedReader().use { reader ->
+                        while (isActive) {
+                            val line = reader.readLine() ?: break
+                            // Skip our own service tag — those lines are already added via addLog().
+                            if (!line.contains("OlcboxVpnService")) {
+                                OlcboxVpnState.appendRaw(line)
+                            }
+                        }
+                    }
+                    proc.destroy()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    OlcboxVpnState.addLog("logcat capture restarting: ${e.message}")
+                    delay(2_000)
+                }
+            }
+        }
     }
 
     /**
@@ -369,6 +410,26 @@ class OlcboxVpnService : VpnService() {
                 return this@OlcboxVpnService.protect(fd.toInt())
             }
         })
+        // Register the xray/awg socket protectors process-wide (not just when those engines start),
+        // so the per-server ping probes (xraybridge/awg MeasureDelay) always leave via the underlying
+        // network and bypass the active TUN — otherwise, while connected through ANY engine, the probe
+        // would ride the tunnel and report a bogus tunnel-inflated latency. See item: ping via main iface.
+        runCatching {
+            Xraybridge.setProtector(object : XrayProtector {
+                override fun protect(fd: Long): Boolean {
+                    if (connectionMode == AndroidConnectionMode.Proxy) return true
+                    return this@OlcboxVpnService.protect(fd.toInt())
+                }
+            })
+        }.onFailure { Log.w(TAG, "xray setProtector failed", it) }
+        runCatching {
+            Awg.setProtector(object : AwgProtector {
+                override fun protect(fd: Long): Boolean {
+                    if (connectionMode == AndroidConnectionMode.Proxy) return true
+                    return this@OlcboxVpnService.protect(fd.toInt())
+                }
+            })
+        }.onFailure { Log.w(TAG, "awg setProtector failed", it) }
         Mobile.setProviders()
         Mobile.setLogWriter(object : LogWriter {
             override fun writeLog(msg: String) {
@@ -637,6 +698,7 @@ class OlcboxVpnService : VpnService() {
         resetRecoveryState()
         updateNotification(connectedNotificationText())
         addLog("VPN tunnel established")
+        maybeHideTunInterface()
         startWatchdog()
     }
 
@@ -803,12 +865,35 @@ class OlcboxVpnService : VpnService() {
             // Happ-style routing profile (per-location override → global default), if any.
             val profilesState = loadRoutingProfilesState()
             val routingProfile = profilesState.resolve(config.routingProfileId)
+            // Diagnostic: surfaces which profile (if any) is actually applied, so a "routing ignored"
+            // report can be traced to "no profile resolved" vs "profile applied but ineffective".
+            if (routingProfile == null) {
+                addLog(
+                    "Routing: NO profile applied (location id='${config.routingProfileId}', " +
+                        "global='${profilesState.globalProfileId}', ${profilesState.profiles.size} saved) — all traffic via proxy"
+                )
+            } else {
+                addLog(
+                    "Routing: applying '${routingProfile.displayName()}' " +
+                        "(direct sites=${routingProfile.directSites}, direct ip=${routingProfile.directIp}, " +
+                        "globalProxy=${routingProfile.globalProxy})"
+                )
+            }
 
             activeProxyCore = if (isAwg) ProxyCore.SingBox else config.resolvedCore()
             // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
             // the whole profile (incl. domain:ru) and Russian sites would wrongly egress via the VPN.
+            // Routing-rule matching (domain:/geoip:/geosite: → direct/block/proxy) runs on sing-box
+            // too: the AmneziaWG path proves it (AWG forces sing-box yet `domain:ru → direct` egresses
+            // via the real IP correctly). Earlier we force-switched EVERY routing profile to Xray, but
+            // that left standard (vless/…) locations broken whenever Xray couldn't start (e.g. a
+            // geoip.dat download blocked on a whitelist network), so `domain:ru` wrongly egressed via
+            // the VPN — exactly the "routing only works for AmneziaWG" bug. Now only a profile that
+            // needs the RU regexp DNS-hosts (`dnsHosts`, genuinely Xray-only) forces Xray; plain
+            // routing rules stay on whichever core the location resolves to (sing-box by default),
+            // matching the working AWG behaviour.
             val profileWantsXray = routingProfile != null && routingProfile.dnsHosts.isNotEmpty()
             // A user-supplied full Xray JSON (dns / routing / balancers / custom fields) can ONLY run
             // verbatim on xray-core. Force Xray so the whole template is honored instead of falling to
@@ -824,22 +909,43 @@ class OlcboxVpnService : VpnService() {
             ) {
                 activeProxyCore = ProxyCore.Xray
                 addLog(
-                    if (profileWantsXray) "Switching to Xray core for routing-profile DNS hosts"
+                    if (profileWantsXray) "Switching to Xray core for routing profile (native domain:/geoip: matching)"
                     else "Switching to Xray core for RU-domain blocklist"
                 )
+            }
+            // If Xray would run but the profile's geo .dat files can't be fetched (e.g. the current
+            // network is blocked and NEEDS the VPN to reach GitHub), xray silently drops geosite:/geoip:
+            // rules → `geosite:ru → direct` never fires and RU sites wrongly egress via the proxy. sing-box
+            // downloads its own .srs rule-sets through the tunnel, so it keeps working — which is exactly
+            // why routing "only works on sing-box/AmneziaWG, not xray". Fall back to sing-box when the
+            // transport allows it (plain vless/ws/reality; not xhttp or a raw Xray template).
+            if (activeProxyCore == ProxyCore.Xray &&
+                routingProfile?.needsGeoFiles() == true &&
+                effectiveProfile.rawXrayConfig.isNullOrBlank() &&
+                effectiveProfile.network != ProxyProfile.NETWORK_XHTTP &&
+                effectiveProfile.rawOutbound.isNullOrBlank() &&
+                ensureGeoAssetPath(routingProfile).isEmpty()
+            ) {
+                activeProxyCore = ProxyCore.SingBox
+                addLog("Geo databases unavailable for Xray → using sing-box for routing (it downloads its own rule-sets)")
             }
             if (activeProxyCore == ProxyCore.Xray) {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""
                 val json = if (!rawXray.isNullOrBlank()) {
-                    // User-supplied full Xray config: run verbatim (honors custom dns/routing/hosts).
-                    addLog("Starting Xray with custom config (verbatim)")
+                    // User-supplied full Xray config: run mostly verbatim, but MERGE the routing profile
+                    // (e.g. domain:ru → direct) so it applies to cascade/custom configs too — previously
+                    // the profile was ignored here, which is why domain:ru worked on AWG but not vless.
+                    if (routingProfile != null) assetPath = ensureGeoAssetPath(routingProfile)
+                    addLog("Starting Xray with custom config" +
+                        if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else " (verbatim)")
                     XrayConfig.prepareRaw(
                         rawConfigJson = rawXray,
                         listenPort = socksListenPort,
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
+                        routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     )
                 } else {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
@@ -1044,7 +1150,7 @@ class OlcboxVpnService : VpnService() {
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
-                        logLevel = "info",
+                        logLevel = "debug",
                         traffic = ipv4Traffic,
                         routingProfile = xrayProfile,
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
@@ -1058,7 +1164,7 @@ class OlcboxVpnService : VpnService() {
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
-                        logLevel = "info",
+                        logLevel = "debug",
                         traffic = ipv4Traffic,
                         routingProfile = xrayProfile,
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
@@ -1096,7 +1202,7 @@ class OlcboxVpnService : VpnService() {
                         routingProfile = routingProfile,
                         singboxGeositeBase = profilesState.singboxGeositeBase,
                         singboxGeoipBase = profilesState.singboxGeoipBase,
-                        logLevel = "info",
+                        logLevel = "debug",
                         dnsStrategyOverride = "ipv4_only",
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                     )
@@ -1116,7 +1222,7 @@ class OlcboxVpnService : VpnService() {
                         routingProfile = routingProfile,
                         singboxGeositeBase = profilesState.singboxGeositeBase,
                         singboxGeoipBase = profilesState.singboxGeoipBase,
-                        logLevel = "info",
+                        logLevel = "debug",
                         // The exit is reached through the IPv4 freeturn TCP listener; force A-only
                         // resolution so dual-stack sites don't attempt IPv6 (no v6 path) and the
                         // TUN's captured ::/0 stays a harmless blackhole instead of a dead route.
@@ -1144,7 +1250,7 @@ class OlcboxVpnService : VpnService() {
                             routingProfile = routingProfile,
                             singboxGeositeBase = profilesState.singboxGeositeBase,
                             singboxGeoipBase = profilesState.singboxGeoipBase,
-                            logLevel = "info",
+                            logLevel = "debug",
                             dnsStrategyOverride = "ipv4_only",
                             blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                         )
@@ -1163,7 +1269,7 @@ class OlcboxVpnService : VpnService() {
                             singboxGeoipBase = profilesState.singboxGeoipBase,
                             // info level surfaces the WireGuard handshake so a dead server→client
                             // relay path (handshake never completes) is visible.
-                            logLevel = "info",
+                            logLevel = "debug",
                             // WG tunnel is IPv4-only; force A-only resolution so dual-stack sites
                             // don't attempt IPv6 (no route through the tunnel → "no route to host").
                             dnsStrategyOverride = "ipv4_only",
@@ -1308,6 +1414,58 @@ class OlcboxVpnService : VpnService() {
             setStatus(VpnStatus.Error(e.message ?: "tun2socks failed"))
             updateNotification(ns.notifTunnelFailed)
             false
+        }
+    }
+
+    /**
+     * EXPERIMENTAL (root): when [AppBehaviorSettings.hideTunInterface] is on, rename every VPN-looking
+     * netdev (`tun*` from VpnService, `awg*`/`wg*` from AmneziaWG/WireGuard) to an innocuous
+     * `rmnet9x` name so apps that detect a VPN by enumerating interface names no longer see it. Routes
+     * are keyed by interface index, not name, so renaming doesn't drop connectivity.
+     *
+     * Enumerates `/sys/class/net` at run time instead of hardcoding `tun0`/`tun1`: the real index
+     * varies (another VPN may already hold `tun0`) and AmneziaWG's interface isn't a `tun*`. An
+     * interface that doesn't exist (e.g. AmneziaWG runs in userspace netstack with no kernel netdev)
+     * is simply skipped. Best-effort — silently no-ops without root. The user is warned (disclaimer in
+     * the UI) that the author isn't liable for any root-induced damage.
+     */
+    private suspend fun maybeHideTunInterface() {
+        if (!loadAppBehavior().hideTunInterface) return
+        withContext(Dispatchers.IO) {
+            // Rename tun*/awg*/wg* to a REALISTIC cellular-style name (rmnet_data0, rmnet_data1…) so
+            // apps that bypass the VPN (split-tunnel) and enumerate interfaces see a normal radio iface
+            // instead of an obvious "tun0". We FIRST try to rename without touching link state — on
+            // kernels that allow it the active tunnel is never interrupted (no connectivity drop). Only
+            // if that fails do we fall back to the down→rename→up cycle. Routes are keyed by ifindex,
+            // not name, so the rename itself doesn't break routing.
+            // IMPORTANT: rename ONLY in place (no down/up). Bringing the active VPN tun DOWN makes
+            // Android tear down the DNS binding for the VPN network → Chrome shows "DNS probe started"
+            // and the whole connection dies. An in-place rename keeps the link UP, so routes (by ifindex)
+            // and DNS survive. On kernels that refuse to rename an UP interface we simply SKIP it
+            // (best-effort, "по возможности") rather than forcibly down/up and break connectivity.
+            val script = buildString {
+                append("export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH; ")
+                append("IP=\$(command -v ip || echo /system/bin/ip); ")
+                append("n=0; ")
+                append("for ifc in \$(ls /sys/class/net 2>/dev/null); do ")
+                append("case \"\$ifc\" in tun*|awg*|wg*) ")
+                append("new=rmnet_data\$n; n=\$((n+1)); ")
+                append("if \$IP link set \"\$ifc\" name \"\$new\" 2>/dev/null; then ")
+                append("echo \"\$ifc -> \$new (live)\"; ")
+                append("else ")
+                append("echo \"\$ifc: in-place rename not permitted, skipped (kept up to preserve DNS)\"; ")
+                append("fi;; ")
+                append("esac; done; ")
+                append("echo \"after: \$(ls /sys/class/net 2>/dev/null | tr '\\n' ' ')\"")
+            }
+            runCatching {
+                val p = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
+                val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
+                val code = p.waitFor()
+                addLog("Hide tun (root): exit=$code${if (out.isNotBlank()) " — $out" else " — no tun/awg/wg netdev found"}")
+            }.onFailure {
+                addLog("Hide tun (root) failed (no su / denied): ${it.message}")
+            }
         }
     }
 

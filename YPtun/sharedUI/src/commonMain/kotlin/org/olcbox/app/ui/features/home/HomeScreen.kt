@@ -1,6 +1,5 @@
 package org.olcbox.app.ui.features.home
 
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -12,11 +11,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
@@ -33,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,7 +56,7 @@ import org.olcbox.app.ui.components.StartButton
 import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
 import org.olcbox.app.ui.features.home.components.HomeScreenAppBar
-import org.olcbox.app.ui.features.home.components.LocationSelectorScreen
+import org.olcbox.app.ui.features.home.components.locationSelectorContent
 import org.olcbox.app.ui.features.home.components.LogsSheet
 import org.olcbox.app.ui.features.home.components.RelayStatus
 import org.olcbox.app.ui.features.locations.LocationViewModel
@@ -61,7 +66,7 @@ import org.olcbox.app.ui.features.locations.LocationViewModel
 fun HomeScreen(
     viewModel: HomeScreenViewModel,
     locationViewModel: LocationViewModel,
-    scrollState: ScrollState,
+    scrollState: LazyListState,
     onToggleClick: () -> Unit = { viewModel.ToggleVpn() },
     onImportFileRequested: () -> Unit = {},
     onImportFromClipboardRequested: (onImported: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _ -> },
@@ -80,20 +85,41 @@ fun HomeScreen(
     collapsedGroups: Set<String> = emptySet(),
     pinnedGroups: List<String> = emptyList(),
     pingSortedGroups: Set<String> = emptySet(),
+    pingSortDescendingGroups: Set<String> = emptySet(),
+    pinnedCustomLocations: List<String> = emptyList(),
+    customLocationsPingSorted: Boolean = false,
+    customLocationsPingSortDescending: Boolean = false,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
-    onToggleGroupPingSort: (String) -> Unit = {}
+    onToggleGroupPingSort: (String) -> Unit = {},
+    onToggleCustomLocationPinned: (String) -> Unit = {},
+    onToggleCustomLocationsPingSort: () -> Unit = {}
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<PendingDelete?>(null) }
     val s = LocalStrings.current
 
+    // Bulk-selection: long-press a row to enter multi-select, tick several, then delete them at once.
+    val selectedIds = remember { mutableStateListOf<String>() }
+    var selectionMode by remember { mutableStateOf(false) }
+    fun exitSelection() { selectionMode = false; selectedIds.clear() }
+    fun toggleSelected(id: String) {
+        if (id in selectedIds) selectedIds.remove(id) else selectedIds.add(id)
+        if (selectedIds.isEmpty()) selectionMode = false
+    }
+    fun startSelection(id: String) {
+        selectionMode = true
+        if (id !in selectedIds) selectedIds.add(id)
+    }
+
     val state by viewModel.state.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val pingsState = locationViewModel.pingsState
     val locations = locationViewModel.locations.toList()
+    // Drop selected ids that no longer exist (e.g. after a delete) so the count stays accurate.
+    selectedIds.retainAll(locations.map { it.storageId }.toSet())
     val hasSubscriptions = locations.any { !it.subscriptionUrl.isNullOrBlank() }
 
     val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading
@@ -188,47 +214,90 @@ fun HomeScreen(
             }
         }
     ) { innerPadding ->
-        Column(
+        LazyColumn(
+            state = scrollState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            ConnectionTimer(isConnected = state.isVpnConnected, onSecretTap = onUnlockExperimental)
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            StartButton(
-                isActive = state.isVpnConnected,
-                isLoading = state.isVpnLoading,
-                requiresSetup = requiresSetup,
-                label = primaryActionLabel,
-                enabled = true,
-                onClick = {
-                    if (requiresSetup) {
-                        isAddSheetOpen = true
-                    } else {
-                        onToggleClick()
-                    }
-                }
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            if (hasSubscriptions) {
-                SubscriptionsRefreshRow(text = s.refreshSubscriptions, onClick = { refreshSubscriptions() })
-                Spacer(modifier = Modifier.height(8.dp))
+            item(key = "connection-timer") {
+                ConnectionTimer(isConnected = state.isVpnConnected, onSecretTap = onUnlockExperimental)
             }
 
-            LocationSelectorScreen(
+            item(key = "start-button") {
+                StartButton(
+                    isActive = state.isVpnConnected,
+                    isLoading = state.isVpnLoading,
+                    requiresSetup = requiresSetup,
+                    label = primaryActionLabel,
+                    enabled = true,
+                    onClick = {
+                        if (requiresSetup) {
+                            isAddSheetOpen = true
+                        } else {
+                            onToggleClick()
+                        }
+                    }
+                )
+            }
+
+            if (hasSubscriptions) {
+                item(key = "subscriptions-refresh") {
+                    SubscriptionsRefreshRow(text = s.refreshSubscriptions, onClick = { refreshSubscriptions() })
+                }
+            }
+
+            if (selectionMode) {
+                item(key = "selection-bar") {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { exitSelection() }) {
+                                Icon(Icons.Outlined.Close, contentDescription = s.cancel)
+                            }
+                            Text(
+                                text = s.selectedCount(selectedIds.size),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f).padding(start = 4.dp)
+                            )
+                            IconButton(
+                                onClick = {
+                                    val ids = selectedIds.toList()
+                                    if (ids.isNotEmpty()) requestDelete(PendingDelete.Subscription(ids))
+                                    exitSelection()
+                                },
+                                enabled = selectedIds.isNotEmpty()
+                            ) {
+                                Icon(Icons.Outlined.Delete, contentDescription = s.delete, tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+
+            locationSelectorContent(
+                selectionMode = selectionMode,
+                selectedIds = selectedIds,
+                onToggleSelect = { toggleSelected(it) },
+                onStartSelection = { startSelection(it) },
                 onRefreshClick = { targetIds ->
                     refreshHttpPings(targetIds)
                 },
                 onAddSubscriptionClick = {
                     isAddSheetOpen = true
                 },
+                hasLoaded = locationViewModel.hasLoadedLocations,
                 locations = locations,
                 selectedLocationId = locationViewModel.selectedLocationId,
                 pingsState = pingsState,
@@ -250,12 +319,20 @@ fun HomeScreen(
                 collapsedGroups = collapsedGroups,
                 pinnedGroups = pinnedGroups,
                 pingSortedGroups = pingSortedGroups,
+                pingSortDescendingGroups = pingSortDescendingGroups,
+                pinnedCustomLocations = pinnedCustomLocations,
+                customLocationsPingSorted = customLocationsPingSorted,
+                customLocationsPingSortDescending = customLocationsPingSortDescending,
                 onToggleGroupCollapsed = onToggleGroupCollapsed,
                 onToggleGroupPinned = onToggleGroupPinned,
-                onToggleGroupPingSort = onToggleGroupPingSort
+                onToggleGroupPingSort = onToggleGroupPingSort,
+                onToggleCustomLocationPinned = onToggleCustomLocationPinned,
+                onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            item(key = "bottom-spacer") {
+                Spacer(modifier = Modifier.height(12.dp))
+            }
         }
 
         if (isLogsSheetOpen) {

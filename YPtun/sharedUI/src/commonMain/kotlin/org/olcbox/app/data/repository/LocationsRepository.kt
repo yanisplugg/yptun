@@ -21,6 +21,12 @@ interface LocationsRepository {
     suspend fun saveLocation(storageId: String, location: LocationConfig)
     suspend fun loadLocation(storageId: String): LocationConfig?
     suspend fun deleteLocation(storageId: String)
+
+    /**
+     * Deletes many locations in a single bundle rewrite (one load + one save), instead of N
+     * sequential rewrites. Essential for long subscriptions where per-item deletion is O(N²).
+     */
+    suspend fun deleteLocations(storageIds: Collection<String>)
     suspend fun getAllLocations(): List<LocationEntry>
     suspend fun getActiveLocationId(): String?
     suspend fun setActiveLocationId(storageId: String?)

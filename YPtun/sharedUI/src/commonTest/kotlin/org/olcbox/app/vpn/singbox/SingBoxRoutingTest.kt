@@ -4,7 +4,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.int
 import org.olcbox.app.data.model.RoutingProfile
+import org.olcbox.app.data.model.SingBoxRule
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -103,5 +105,61 @@ class SingBoxRoutingTest {
     @Test
     fun emptyProfileProducesNoRules() {
         assertTrue(SingBoxRouting.rules(RoutingProfile()).isEmpty())
+    }
+
+    // --- v2rayNG-style manual rules ---
+
+    @Test
+    fun manualRuleCombinesAllFieldsIntoOneObject() {
+        val rule = SingBoxRule(
+            outbound = SingBoxRule.OUT_DIRECT,
+            domains = listOf("geosite:ru", "domain:vk.com", "full:exact.example"),
+            ip = listOf("geoip:ru", "10.0.0.0/8"),
+            port = "443, 8000:9000",
+            network = "tcp",
+            protocol = listOf("tls", "quic"),
+        )
+        val out = SingBoxRouting.manualRules(listOf(rule)).map { it.jsonObject }
+        assertEquals(1, out.size) // ONE route rule per SingBoxRule (AND across fields)
+        val r = out.first()
+        assertEquals("direct", r["outbound"]!!.jsonPrimitive.content)
+        val ruleSets = r["rule_set"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue(ruleSets.contains("geosite-ru"))
+        assertTrue(ruleSets.contains("geoip-ru"))
+        assertTrue(r["domain_suffix"]!!.jsonArray.map { it.jsonPrimitive.content }.contains(".vk.com"))
+        assertTrue(r["domain"]!!.jsonArray.map { it.jsonPrimitive.content }.contains("exact.example"))
+        assertTrue(r["ip_cidr"]!!.jsonArray.map { it.jsonPrimitive.content }.contains("10.0.0.0/8"))
+        assertTrue(r["port"]!!.jsonArray.map { it.jsonPrimitive.int }.contains(443))
+        assertEquals("8000:9000", r["port_range"]!!.jsonArray[0].jsonPrimitive.content)
+        assertEquals("tcp", r["network"]!!.jsonPrimitive.content)
+        assertTrue(r["protocol"]!!.jsonArray.map { it.jsonPrimitive.content }.contains("quic"))
+    }
+
+    @Test
+    fun manualBlockRuleUsesRejectAction() {
+        val r = SingBoxRouting.manualRules(
+            listOf(SingBoxRule(outbound = SingBoxRule.OUT_BLOCK, domains = listOf("domain:ads.example")))
+        ).first().jsonObject
+        assertEquals("reject", r["action"]!!.jsonPrimitive.content)
+        assertTrue(!r.containsKey("outbound"))
+    }
+
+    @Test
+    fun disabledOrEmptyManualRulesAreSkipped() {
+        val rules = listOf(
+            SingBoxRule(outbound = SingBoxRule.OUT_PROXY, domains = listOf("domain:a.com"), enabled = false),
+            SingBoxRule(), // no matcher
+        )
+        assertTrue(SingBoxRouting.manualRules(rules).isEmpty())
+        assertTrue(SingBoxRouting.manualRuleSets(rules).isEmpty())
+    }
+
+    @Test
+    fun manualRuleSetsEmittedForGeoSelectors() {
+        val rules = listOf(SingBoxRule(domains = listOf("geosite:cn"), ip = listOf("geoip:cn")))
+        val sets = SingBoxRouting.manualRuleSets(rules).map { it.jsonObject }
+        assertEquals(2, sets.size)
+        assertTrue(sets.any { it["tag"]!!.jsonPrimitive.content == "geosite-cn" })
+        assertTrue(sets.any { it["tag"]!!.jsonPrimitive.content == "geoip-cn" })
     }
 }

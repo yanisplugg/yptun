@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -44,6 +45,54 @@ var (
 	logSink  io.Writer = io.Discard
 	debug    atomic.Bool
 )
+
+// Protector protects a socket fd from the VPN (implemented in Kotlin via VpnService.protect). It
+// mirrors xraybridge.Protector so the AmneziaWG probe/measure sockets bypass the active system TUN
+// — otherwise, while connected, the throwaway WG handshake would ride the tunnel and report a
+// bogus (tunnel-inflated) latency instead of the real path to the endpoint.
+type Protector interface {
+	Protect(fd int) bool
+}
+
+//nolint:gochecknoglobals // process-wide, mirrors the other bound packages.
+var (
+	protectorMu sync.Mutex
+	protector   Protector
+)
+
+// SetProtector installs the socket protector used by Probe/MeasureDelay (and Start). Passing nil
+// clears it. Must be set before those calls for protection to take effect.
+func SetProtector(p Protector) {
+	protectorMu.Lock()
+	protector = p
+	protectorMu.Unlock()
+}
+
+// protectBind protects the UDP socket(s) the WireGuard bind has just opened (after device Up), so
+// outbound WG packets leave via the underlying network rather than the system VPN tun. No-op when
+// no protector is set or the bind doesn't expose its fd (non-Android builds).
+func protectBind(bind conn.Bind) {
+	protectorMu.Lock()
+	p := protector
+	protectorMu.Unlock()
+	if p == nil {
+		return
+	}
+	type fdPeeker interface {
+		PeekLookAtSocketFd4() (int, error)
+		PeekLookAtSocketFd6() (int, error)
+	}
+	b, ok := bind.(fdPeeker)
+	if !ok {
+		return
+	}
+	if fd, err := b.PeekLookAtSocketFd4(); err == nil && fd >= 0 {
+		p.Protect(fd)
+	}
+	if fd, err := b.PeekLookAtSocketFd6(); err == nil && fd >= 0 {
+		p.Protect(fd)
+	}
+}
 
 // SetLogWriter routes logs to w (nil → discard).
 func SetLogWriter(w LogWriter) {
@@ -92,7 +141,8 @@ func Start(iniConfig, listenAddr string) error {
 	logger.Verbosef = func(format string, args ...any) { log.New(logSink, "", 0).Printf(format, args...) }
 	logger.Errorf = func(format string, args ...any) { log.New(logSink, "", 0).Printf(format, args...) }
 
-	d := device.NewDevice(tunDev, conn.NewDefaultBind(), logger)
+	bind := conn.NewDefaultBind()
+	d := device.NewDevice(tunDev, bind, logger)
 	if err := d.IpcSet(uapi); err != nil {
 		d.Close()
 		return fmt.Errorf("awg ipc: %w", err)
@@ -101,6 +151,7 @@ func Start(iniConfig, listenAddr string) error {
 		d.Close()
 		return fmt.Errorf("awg up: %w", err)
 	}
+	protectBind(bind)
 
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -133,7 +184,8 @@ func Probe(iniConfig string) int64 {
 	if err != nil {
 		return -1
 	}
-	d := device.NewDevice(tunDev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "[awg-probe] "))
+	bind := conn.NewDefaultBind()
+	d := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "[awg-probe] "))
 	defer d.Close()
 	if err := d.IpcSet(uapi); err != nil {
 		return -1
@@ -141,6 +193,7 @@ func Probe(iniConfig string) int64 {
 	if err := d.Up(); err != nil {
 		return -1
 	}
+	protectBind(bind)
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -149,6 +202,63 @@ func Probe(iniConfig string) int64 {
 		return -1
 	}
 	_ = c.Close()
+	return time.Since(start).Milliseconds()
+}
+
+// MeasureDelay brings up a THROWAWAY AmneziaWG tunnel from [iniConfig], fetches [url] (HTTP
+// [method] "GET"/"HEAD") THROUGH it, and returns the round-trip in milliseconds (-1 on failure).
+// Mirrors xraybridge.MeasureDelay for the AWG outbound: needs no system VPN/TUN and is independent
+// of any running session, so AmneziaWG servers can be URL-tested from the list while disconnected.
+func MeasureDelay(iniConfig, url, method string, timeoutMs int) int64 {
+	cfg, err := parseConfig(iniConfig)
+	if err != nil {
+		return -1
+	}
+	uapi, err := cfg.uapi()
+	if err != nil {
+		return -1
+	}
+	tunDev, tnet, err := netstack.CreateNetTUN(cfg.addresses, cfg.dns, cfg.mtu)
+	if err != nil {
+		return -1
+	}
+	bind := conn.NewDefaultBind()
+	d := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "[awg-urltest] "))
+	defer d.Close()
+	if err := d.IpcSet(uapi); err != nil {
+		return -1
+	}
+	if err := d.Up(); err != nil {
+		return -1
+	}
+	protectBind(bind)
+
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			// Every connection (incl. DNS) rides the AmneziaWG netstack tunnel.
+			DialContext: tnet.DialContext,
+		},
+	}
+	if method == "" {
+		method = "HEAD"
+	}
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		return -1
+	}
+	req.Header.Set("User-Agent", "olcbox-ping")
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return -1
+	}
+	_ = resp.Body.Close()
 	return time.Since(start).Milliseconds()
 }
 

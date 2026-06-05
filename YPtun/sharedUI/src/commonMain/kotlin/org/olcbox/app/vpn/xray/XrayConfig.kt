@@ -42,7 +42,7 @@ object XrayConfig {
         olcrtcChainPort: Int? = null,
         olcrtcChainUser: String = "",
         olcrtcChainPass: String = "",
-        logLevel: String = "warning",
+        logLevel: String = "debug",
         traffic: TrafficSettings = TrafficSettings(),
         // VK-TURN chain: when set, [profile] dials its server THROUGH this WireGuard outbound (the
         // WG-over-VK base). Mirrors SingBoxConfig.wireguardBase. The ProxyProfile carries the
@@ -95,8 +95,13 @@ object XrayConfig {
                         }
                     }
                     putJsonObject("sniffing") {
-                        put("enabled", true)
+                        // Expert mode can disable sniffing or switch it to route-only (sniff for routing
+                        // but keep dialing the original destination). Sniffing ON is required for
+                        // `domain:` rules to match by SNI/Host — the usual reason domain:ru "does nothing".
+                        val expert = routingProfile?.expertEnabled == true
+                        put("enabled", if (expert) routingProfile!!.xraySniffing else true)
                         putJsonArray("destOverride") { add("http"); add("tls"); add("quic") }
+                        if (expert && routingProfile!!.xrayRouteOnly) put("routeOnly", true)
                     }
                 }
             }
@@ -174,21 +179,40 @@ object XrayConfig {
                 putJsonArray("ip") { add("0.0.0.0") }
                 put("outboundTag", "block")
             }
+            // Domain-strategy enforcement: blackhole the opposite IP family so ipv4_only / ipv6_only
+            // forces ALL traffic onto the chosen family (even DoH apps that resolve the other one).
+            val familyBlockRule = when (traffic.domainStrategy) {
+                "ipv4_only" -> buildJsonObject {
+                    put("type", "field"); putJsonArray("ip") { add("::/0") }; put("outboundTag", "block")
+                }
+                "ipv6_only" -> buildJsonObject {
+                    put("type", "field"); putJsonArray("ip") { add("0.0.0.0/0") }; put("outboundTag", "block")
+                }
+                else -> null
+            }
+            // When forcing a family (ipv4_only/ipv6_only) we must resolve domains for routing so the
+            // opposite-family blackhole below actually matches domain destinations (with AsIs it only
+            // catches raw IP literals, and the remote proxy is then free to pick AAAA → IPv6 leak on
+            // 2ip.io). IPIfNonMatch + queryStrategy=UseIPv4 makes Xray resolve to the chosen family.
+            val forceFamily = familyBlockRule != null
             putJsonObject("routing") {
                 if (routingProfile != null) {
                     // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
                     // blocklist (item 5): the toggles run alongside the profile, not instead of it.
                     val base = XrayRouting.routingObject(routingProfile)
-                    put("domainStrategy", base["domainStrategy"] ?: JsonPrimitive("AsIs"))
+                    val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
+                    put("domainStrategy", if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy)
                     putJsonArray("rules") {
                         if (blockQuic) add(quicBlockRule)
+                        familyBlockRule?.let { add(it) }
                         if (traffic.blockRuDomains) add(blockZeroRule)
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
-                    put("domainStrategy", "AsIs")
+                    put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
                         if (blockQuic) add(quicBlockRule)
+                        familyBlockRule?.let { add(it) }
                         if (traffic.blockRuDomains) add(blockZeroRule)
                     }
                 }
@@ -210,6 +234,10 @@ object XrayConfig {
         listenHost: String = "127.0.0.1",
         socksUsername: String = "",
         socksPassword: String = "",
+        // When set, the profile's routing buckets (e.g. domain:ru → direct) are MERGED into the user's
+        // verbatim config. Without this the routing profile was silently ignored for full custom Xray
+        // configs (common with server-side cascade setups), so domain:ru never went direct on vless.
+        routingProfile: org.olcbox.app.data.model.RoutingProfile? = null,
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
@@ -254,13 +282,48 @@ object XrayConfig {
             }
         }
 
+        // Merge profile routing (direct/block buckets) into the user's config, if requested.
+        val userOutbounds = (root["outbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
+        val userOutboundTags = userOutbounds.mapNotNull { it["tag"]?.jsonPrimitive?.contentOrNull }.toSet()
+        val userRouting = root["routing"] as? JsonObject
+        val mergedRouting: JsonObject? = routingProfile?.let { rp ->
+            buildJsonObject {
+                // Keep the user's domainStrategy if they set one; else the profile's.
+                val ds = userRouting?.get("domainStrategy")?.jsonPrimitive?.contentOrNull
+                    ?: XrayRouting.domainStrategy(rp)
+                put("domainStrategy", ds)
+                putJsonArray("rules") {
+                    // Profile buckets FIRST so domain:ru → direct wins over the user's catch-all proxy.
+                    XrayRouting.bucketRules(rp).forEach { add(it) }
+                    // Then the user's own rules (their proxy default / custom splits).
+                    (userRouting?.get("rules") as? JsonArray)?.forEach { add(it) }
+                    // Selective-proxy fall-through (only when not a global-proxy profile).
+                    XrayRouting.catchAllDirectRule(rp)?.let { add(it) }
+                }
+            }
+        }
+
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
-                if (key != "inbounds") put(key, value)
+                if (key != "inbounds" && key != "outbounds" && key != "routing") put(key, value)
             }
             putJsonArray("inbounds") {
                 add(socksInbound)
                 nonSocks.forEach { add(it) }
+            }
+            putJsonArray("outbounds") {
+                userOutbounds.forEach { add(it) }
+                // The profile rules reference direct/block tags — make sure they exist.
+                if (mergedRouting != null && "direct" !in userOutboundTags) {
+                    addJsonObject { put("tag", "direct"); put("protocol", "freedom") }
+                }
+                if (mergedRouting != null && "block" !in userOutboundTags) {
+                    addJsonObject { put("tag", "block"); put("protocol", "blackhole") }
+                }
+            }
+            when {
+                mergedRouting != null -> put("routing", mergedRouting)
+                userRouting != null -> put("routing", userRouting)
             }
         }
         return json.encodeToString(newRoot)
