@@ -167,10 +167,38 @@ class LocationsRepositoryImpl(
             subscriptionProxy = subscriptionProxy
         ) ?: return false
 
+        // The data was just fetched, so stamp "now" as the last-refresh time on every imported
+        // subscription entry — otherwise a freshly added subscription shows no "обновлена …" date
+        // until its first scheduled/manual refresh.
+        val now = nowEpochMs()
+        val importedInterval = resolved.source.updateIntervalHours
+        val imported = resolved.parsed.bundle.normalized().let { bundle ->
+            bundle.copy(
+                locations = bundle.locations.map { entry ->
+                    val isSubscription = entry.metadata?.subscription != null ||
+                        !entry.subscriptionUrl.isNullOrBlank()
+                    if (!isSubscription) {
+                        entry
+                    } else {
+                        val interval = entry.metadata?.subscription?.updateIntervalHours
+                            ?: importedInterval
+                            ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS
+                        entry.copy(
+                            metadata = entry.metadata.withSubscriptionRefreshState(
+                                updateIntervalHours = interval,
+                                lastRefreshAtEpochMs = now,
+                                lastAttemptAtEpochMs = now
+                            )
+                        ).normalized()
+                    }
+                }
+            )
+        }
+
         mutationMutex.withLock {
             val merged = mergeImportedBundle(
                 current = getBundleUnlocked(),
-                imported = resolved.parsed.bundle.normalized(),
+                imported = imported,
                 replaceMatchingStorageIds = resolved.parsed.mode == ImportMode.Restore
             )
             saveBundleUnlocked(merged)

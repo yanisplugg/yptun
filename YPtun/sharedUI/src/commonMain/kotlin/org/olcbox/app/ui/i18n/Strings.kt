@@ -127,6 +127,8 @@ interface Strings {
     val mtuLabel: String
     val blockRuDomains: String
     val blockRuDomainsSubtitle: String
+    val fakeDnsTitle: String
+    val fakeDnsSubtitle: String
     val saveAndApply: String
 
     // Routing
@@ -462,6 +464,12 @@ interface Strings {
     fun subscriptionExpiry(dateTime: String, daysLeft: Long): String
     /** Auto-refresh interval taken from the subscription, e.g. "Обновление каждые 6 ч". */
     fun subscriptionEvery(hours: Int): String
+    /** Second header line showing the last successful refresh, e.g. "обновлена 05.06.2026 14:30:00". */
+    fun subscriptionUpdatedAt(dateTime: String): String
+    /** Accessibility label for the red "expiring soon" warning badge. */
+    val subscriptionExpiringSoon: String
+    /** Full expiry detail shown when tapping the warning badge, e.g. "до 06.06.2026 14:30:00 · через 1 дн.". */
+    fun subscriptionExpiryFull(dateTime: String, daysLeft: Long): String
     /** Banner above the nav bar when a newer GitHub release exists. */
     val updateBannerTitle: String
     val updateBannerAction: String
@@ -580,6 +588,8 @@ object RuStrings : Strings {
     override val mtuLabel = "MTU (1280–9000)"
     override val blockRuDomains = "Блокировать РФ-домены"
     override val blockRuDomainsSubtitle = "Встроенный список доменов РФ → 0.0.0.0. Работает на ядре Xray."
+    override val fakeDnsTitle = "FakeDNS"
+    override val fakeDnsSubtitle = "Подменяет ответы DNS фейковыми IP — приложения не видят реальные адреса, домен резолвится за прокси. Конфиг подписки со своим fakedns используется как есть."
     override val saveAndApply = "Сохранить и применить"
     override val routingTitle = "Маршрутизация и правила"
     override val bypassLan = "Обход LAN"
@@ -875,8 +885,15 @@ object RuStrings : Strings {
     override val subscriptionUpdated = "Подписка обновлена"
     override val subscriptionNotUpdated = "Подписка не обновлена"
     override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
-        if (daysLeft < 0) "истекла $dateTime" else "до $dateTime · осталось $daysLeft дн."
+        if (daysLeft < 0) "истекла $dateTime" else "до $dateTime"
     override fun subscriptionEvery(hours: Int) = "Обновление каждые $hours ч"
+    override fun subscriptionUpdatedAt(dateTime: String) = "Обновлена $dateTime"
+    override val subscriptionExpiringSoon = "Подписка скоро закончится"
+    override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "истекла $dateTime"
+        daysLeft == 0L -> "до $dateTime · сегодня"
+        else -> "до $dateTime · через $daysLeft дн."
+    }
     override val updateBannerTitle = "Обновите приложение"
     override val updateBannerAction = "Обновить"
     override val updateManual = "Скачать с GitHub"
@@ -989,6 +1006,8 @@ object EnStrings : Strings {
     override val mtuLabel = "MTU (1280–9000)"
     override val blockRuDomains = "Block RU domains"
     override val blockRuDomainsSubtitle = "Bundled list of Russian domains → 0.0.0.0. Requires the Xray core."
+    override val fakeDnsTitle = "FakeDNS"
+    override val fakeDnsSubtitle = "Answers DNS with synthetic IPs — apps never see the real address; the domain is resolved behind the proxy. A subscription config with its own fakedns is used as-is."
     override val saveAndApply = "Save & apply"
     override val routingTitle = "Routing & rules"
     override val bypassLan = "Bypass LAN"
@@ -1284,8 +1303,15 @@ object EnStrings : Strings {
     override val subscriptionUpdated = "Subscription updated"
     override val subscriptionNotUpdated = "Subscription not updated"
     override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
-        if (daysLeft < 0) "expired $dateTime" else "until $dateTime · $daysLeft days left"
+        if (daysLeft < 0) "expired $dateTime" else "until $dateTime"
     override fun subscriptionEvery(hours: Int) = "Updates every ${hours}h"
+    override fun subscriptionUpdatedAt(dateTime: String) = "updated $dateTime"
+    override val subscriptionExpiringSoon = "Subscription expiring soon"
+    override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "expired $dateTime"
+        daysLeft == 0L -> "until $dateTime · today"
+        else -> "until $dateTime · in $daysLeft days"
+    }
     override val updateBannerTitle = "Update available"
     override val updateBannerAction = "Update"
     override val updateManual = "Download from GitHub"
@@ -1398,6 +1424,8 @@ object FaStrings : Strings {
     override val mtuLabel = "MTU (۱۲۸۰ تا ۹۰۰۰)"
     override val blockRuDomains = "مسدودسازی دامنه‌های روسیه"
     override val blockRuDomainsSubtitle = "فهرست داخلی دامنه‌های روسیه ← 0.0.0.0. به هستهٔ Xray نیاز دارد."
+    override val fakeDnsTitle = "FakeDNS"
+    override val fakeDnsSubtitle = "پاسخ‌های DNS را با IPهای ساختگی جایگزین می‌کند — برنامه‌ها نشانی واقعی را نمی‌بینند و دامنه پشت پراکسی حل می‌شود. پیکربندی اشتراک با fakedns خودش بدون تغییر استفاده می‌شود."
     override val saveAndApply = "ذخیره و اعمال"
     override val routingTitle = "مسیریابی و قواعد"
     override val bypassLan = "دور زدن LAN"
@@ -1693,8 +1721,15 @@ object FaStrings : Strings {
     override val subscriptionUpdated = "اشتراک به‌روزرسانی شد"
     override val subscriptionNotUpdated = "اشتراک به‌روزرسانی نشد"
     override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
-        if (daysLeft < 0) "منقضی‌شده $dateTime" else "تا $dateTime · $daysLeft روز باقی‌مانده"
+        if (daysLeft < 0) "منقضی‌شده $dateTime" else "تا $dateTime"
     override fun subscriptionEvery(hours: Int) = "به‌روزرسانی هر $hours ساعت"
+    override fun subscriptionUpdatedAt(dateTime: String) = "به‌روزرسانی‌شده $dateTime"
+    override val subscriptionExpiringSoon = "اشتراک به‌زودی منقضی می‌شود"
+    override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "منقضی‌شده $dateTime"
+        daysLeft == 0L -> "تا $dateTime · امروز"
+        else -> "تا $dateTime · $daysLeft روز دیگر"
+    }
     override val updateBannerTitle = "به‌روزرسانی موجود است"
     override val updateBannerAction = "به‌روزرسانی"
     override val updateManual = "دانلود از گیت‌هاب"

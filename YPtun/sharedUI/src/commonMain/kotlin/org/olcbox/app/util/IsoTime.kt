@@ -1,5 +1,7 @@
 package org.olcbox.app.util
 
+import kotlinx.datetime.offsetIn
+
 /**
  * Tiny dependency-free date helper for subscription metadata: parses the ISO-8601 `expiresAt` the
  * panel returns and formats an epoch-ms back into a `DD.MM.YYYY` calendar date. Uses Howard Hinnant's
@@ -100,6 +102,20 @@ object IsoTime {
         val mm = ((secOfDay % 3_600L) / 60L).toInt()
         val ss = (secOfDay % 60L).toInt()
         return "${pad2(day)}.${pad2(month)}.$year ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}"
+    }
+
+    /**
+     * Same `DD.MM.YYYY HH:MM:SS` but in the device's local time zone, so subscription dates match what
+     * the rest of the app shows (the panel sends an absolute instant; rendering it in UTC was 3 h off
+     * for MSK users). Reuses the civil math by shifting the instant by the current UTC offset.
+     */
+    @OptIn(kotlin.time.ExperimentalTime::class)
+    fun formatLocalDateTime(epochMs: Long): String {
+        val instant = kotlin.time.Instant.fromEpochMilliseconds(epochMs)
+        val offsetSeconds = instant
+            .offsetIn(kotlinx.datetime.TimeZone.currentSystemDefault())
+            .totalSeconds
+        return formatDateTime(epochMs + offsetSeconds * 1_000L)
     }
 
     private fun pad2(value: Int): String = if (value in 0..9) "0$value" else value.toString()

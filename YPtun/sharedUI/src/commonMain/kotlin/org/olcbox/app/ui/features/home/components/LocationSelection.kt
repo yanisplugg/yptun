@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MoreVert
@@ -671,7 +672,7 @@ private fun SubscriptionGroupHeader(
 ) {
     val first = locations.firstOrNull()
     val title = first?.subscriptionTitle().orEmpty().ifBlank { org.olcbox.app.ui.i18n.LocalStrings.current.subscriptionsSection }
-    val details = first?.subscriptionDetails()
+    val info = first?.subscriptionInfo()
 
     Column(modifier = modifier.padding(start = 4.dp, top = 2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -691,15 +692,74 @@ private fun SubscriptionGroupHeader(
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold
             )
+            // Red "!" badge when the subscription expires within 2 days; tap reveals the exact date.
+            if (info?.expiryUrgent == true && info.expiryDateTime != null) {
+                Spacer(modifier = Modifier.width(6.dp))
+                ExpiryWarningBadge(
+                    dateTime = info.expiryDateTime,
+                    daysLeft = info.daysLeft ?: 0L
+                )
+            }
         }
 
-        if (!details.isNullOrBlank()) {
+        if (info != null) {
+            // Stacked, small font so nothing gets squeezed: last-refresh time on top, auto-refresh
+            // interval beneath it.
+            info.updatedAt?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 1.dp)
+                )
+            }
+            info.interval?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Small red circled-"!" badge for a subscription that expires within 2 days. Tapping it opens a tiny
+ * popup spelling out the exact end date and how many days are left.
+ */
+@Composable
+private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    var showDetail by remember { mutableStateOf(false) }
+
+    Box {
+        Icon(
+            imageVector = Icons.Filled.Error,
+            contentDescription = s.subscriptionExpiringSoon,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier
+                .size(20.dp)
+                .clip(CircleShape)
+                .clickable { showDetail = true }
+        )
+        DropdownMenu(
+            expanded = showDetail,
+            onDismissRequest = { showDetail = false }
+        ) {
             Text(
-                text = details,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                text = s.subscriptionExpiryFull(dateTime, daysLeft),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
             )
         }
     }
@@ -843,33 +903,48 @@ private fun LocationItem.subscriptionTitle(): String {
     ).joinToString(" ")
 }
 
+/**
+ * Subscription header content. The second header row shows the last-refresh time on the left and the
+ * auto-refresh interval on the right. The expiry no longer takes a line of its own — when ≤2 days
+ * remain it surfaces as a red warning badge by the title ([expiryUrgent]); tapping it reveals the
+ * full [expiryDateTime] / [daysLeft] detail.
+ */
+private data class SubscriptionInfo(
+    val expiryDateTime: String?,
+    val daysLeft: Long?,
+    val expiryUrgent: Boolean,
+    val interval: String?,
+    val updatedAt: String?
+)
+
 @OptIn(kotlin.time.ExperimentalTime::class)
-private fun LocationItem.subscriptionDetails(): String? {
+private fun LocationItem.subscriptionInfo(): SubscriptionInfo? {
     val subscription = metadata?.subscription ?: return null
     val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
     val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
-    // End date (with time) + days-left + the auto-refresh interval (profile-update-interval header).
-    val expiry = subscription.expiresAtEpochMs?.let {
-        val daysLeft = (it - now).floorDiv(DAY_MILLIS)
-        s.subscriptionExpiry(org.olcbox.app.util.IsoTime.formatDateTime(it), daysLeft)
+    // End date (with time) + days-left; flag as urgent (red badge) when ≤2 days remain (incl. expired).
+    var daysLeft: Long? = null
+    val expiryDateTime = subscription.expiresAtEpochMs?.let {
+        daysLeft = (it - now).floorDiv(DAY_MILLIS)
+        org.olcbox.app.util.IsoTime.formatLocalDateTime(it)
     }
+    val expiryUrgent = daysLeft?.let { it <= 2 } ?: false
     val interval = subscription.updateIntervalHours?.let { s.subscriptionEvery(it) }
-
-    return listOfNotNull(
-        quotaText(subscription.used, subscription.available),
-        expiry,
-        subscription.refresh?.takeIf { it.isNotBlank() }?.let { "Refresh $it" },
-        interval
-    ).joinToString(" · ").takeIf { it.isNotBlank() }
-}
-
-private fun quotaText(used: String?, available: String?): String? {
-    return when {
-        !used.isNullOrBlank() && !available.isNullOrBlank() -> "$used / $available"
-        !used.isNullOrBlank() -> used
-        !available.isNullOrBlank() -> available
-        else -> null
+    // Last successful refresh, shown on the left of the second header row.
+    val updatedAt = subscription.lastRefreshAtEpochMs?.let {
+        s.subscriptionUpdatedAt(org.olcbox.app.util.IsoTime.formatLocalDateTime(it))
     }
+
+    val info = SubscriptionInfo(
+        expiryDateTime = expiryDateTime,
+        daysLeft = daysLeft,
+        expiryUrgent = expiryUrgent,
+        interval = interval,
+        updatedAt = updatedAt
+    )
+    val empty = expiryDateTime == null &&
+        info.interval.isNullOrBlank() && info.updatedAt.isNullOrBlank()
+    return if (empty) null else info
 }
 
 private fun plural(value: Long, unit: String): String {

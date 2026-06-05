@@ -270,6 +270,7 @@ kotlin {
             implementation(libs.androidx.lifecycle.viewmodel)
             implementation(libs.androidx.lifecycle.runtime)
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlinx.datetime)
             implementation(libs.multiplatformSettings)
             implementation(libs.kstore)
             implementation(libs.materialKolor)

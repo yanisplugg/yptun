@@ -31,6 +31,11 @@ object XrayConfig {
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
 
+    // FakeDNS synthetic-IP pool (matches the v2rayNG/Happ default).
+    private const val FAKEDNS_SERVER = "fakedns"
+    private const val FAKEDNS_POOL = "198.18.0.0/15"
+    private const val FAKEDNS_POOL_SIZE = 65535
+
     private val json = Json { prettyPrint = true }
 
     /**
@@ -46,6 +51,39 @@ object XrayConfig {
         "ipv4_only" -> "UseIPv4"
         "ipv6_only" -> "UseIPv6"
         else -> "UseIP"
+    }
+
+    // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
+
+    /** Routing rules that hijack DNS (UDP/53, TCP/853 DoT) to the `dns-out` outbound. */
+    private fun dnsHijackRules(): List<JsonObject> = listOf(
+        buildJsonObject { put("type", "field"); put("network", "udp"); put("port", 53); put("outboundTag", "dns-out") },
+        buildJsonObject { put("type", "field"); put("network", "tcp"); put("port", 853); put("outboundTag", "dns-out") },
+    )
+
+    /** The `dns` protocol outbound that answers hijacked queries (tag `dns-out`). */
+    private fun dnsOutOutbound(): JsonObject = buildJsonObject {
+        put("tag", "dns-out")
+        put("protocol", "dns")
+        putJsonObject("settings") { put("nonIPQuery", "skip") }
+    }
+
+    /** A single synthetic-IP pool entry for the top-level `fakedns` array. */
+    private fun fakeDnsPool(): JsonObject = buildJsonObject {
+        put("ipPool", FAKEDNS_POOL)
+        put("poolSize", FAKEDNS_POOL_SIZE)
+    }
+
+    /** Returns [sniffing] with `fakedns` ensured in destOverride (building a default block if null). */
+    private fun sniffingWithFakeDns(sniffing: JsonObject?): JsonObject = buildJsonObject {
+        val existing = (sniffing?.get("destOverride") as? JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: listOf("http", "tls", "quic")
+        sniffing?.forEach { (k, v) -> if (k != "destOverride" && k != "enabled") put(k, v) }
+        put("enabled", true)
+        putJsonArray("destOverride") {
+            existing.forEach { add(it) }
+            if ("fakedns" !in existing) add("fakedns")
+        }
     }
 
     fun build(
@@ -83,10 +121,18 @@ object XrayConfig {
                     }
                 }
                 putJsonArray("servers") {
+                    // FakeDNS first so sniffed domains get a synthetic IP before the real resolvers.
+                    if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
                     add(traffic.remoteDns)
                     add(traffic.directDns)
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())
+            }
+
+            // Synthetic-IP pool for FakeDNS (apps see 198.18.x.x; the domain is recovered via the
+            // socks inbound's `fakedns` sniffing and resolved behind the proxy).
+            if (traffic.fakeDnsEnabled) {
+                putJsonArray("fakedns") { add(fakeDnsPool()) }
             }
 
             putJsonArray("inbounds") {
@@ -115,7 +161,11 @@ object XrayConfig {
                         // `domain:` rules to match by SNI/Host — the usual reason domain:ru "does nothing".
                         val expert = routingProfile?.expertEnabled == true
                         put("enabled", if (expert) routingProfile!!.xraySniffing else true)
-                        putJsonArray("destOverride") { add("http"); add("tls"); add("quic") }
+                        putJsonArray("destOverride") {
+                            add("http"); add("tls"); add("quic")
+                            // Recover the real domain from a FakeDNS synthetic-IP connection.
+                            if (traffic.fakeDnsEnabled) add("fakedns")
+                        }
                         if (expert && routingProfile!!.xrayRouteOnly) put("routeOnly", true)
                     }
                 }
@@ -146,6 +196,9 @@ object XrayConfig {
                     put("tag", "block")
                     put("protocol", "blackhole")
                 }
+                // FakeDNS: DNS queries (port 53/853) are hijacked to this dns outbound so the core
+                // answers them from the fake pool / upstream instead of leaking them out.
+                if (traffic.fakeDnsEnabled) add(dnsOutOutbound())
                 // TLS fragmentation outbound (DPI evasion); proxy dials through it via dialerProxy.
                 if (traffic.fragmentEnabled && olcrtcChainPort == null) {
                     addJsonObject {
@@ -192,6 +245,8 @@ object XrayConfig {
                 put("port", 443)
                 put("outboundTag", "block")
             }
+            // FakeDNS: route DNS queries to the dns outbound so they're answered from the fake pool.
+            val dnsOutRules = if (traffic.fakeDnsEnabled) dnsHijackRules() else emptyList()
             // Blocked RU hosts resolve to 0.0.0.0 (dns.hosts above); blackhole anything aimed there.
             val blockZeroRule = buildJsonObject {
                 put("type", "field")
@@ -222,6 +277,8 @@ object XrayConfig {
                     val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
                     put("domainStrategy", if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy)
                     putJsonArray("rules") {
+                        // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
+                        dnsOutRules.forEach { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (traffic.blockRuDomains) add(blockZeroRule)
@@ -230,6 +287,7 @@ object XrayConfig {
                 } else {
                     put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
+                        dnsOutRules.forEach { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (traffic.blockRuDomains) add(blockZeroRule)
@@ -257,9 +315,16 @@ object XrayConfig {
         // verbatim config. Without this the routing profile was silently ignored for full custom Xray
         // configs (common with server-side cascade setups), so domain:ru never went direct on vless.
         routingProfile: org.olcbox.app.data.model.RoutingProfile? = null,
+        // Global FakeDNS toggle. When on AND the raw config doesn't already define `fakedns`, we inject
+        // the fakedns plumbing (pool + dns server + sniffing + dns-out). A config that ALREADY carries
+        // its own `fakedns` (e.g. a Remnawave/Happ subscription) is honored verbatim — never overwritten.
+        fakeDnsEnabled: Boolean = false,
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
+
+        // Only inject when the user's config doesn't already opt into FakeDNS (honor wins).
+        val injectFake = fakeDnsEnabled && root["fakedns"] == null
 
         // Reuse the user's existing socks inbound (to keep its sniffing/fakedns) when present.
         val existingInbounds = (root["inbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
@@ -290,11 +355,12 @@ object XrayConfig {
                 }
             }
             // Preserve the user's sniffing block (carries fakedns/destOverride needed for hosts blocking).
-            val sniffing = templateSocks?.get("sniffing")
-            if (sniffing != null) {
-                put("sniffing", sniffing)
-            } else {
-                putJsonObject("sniffing") {
+            val sniffing = templateSocks?.get("sniffing") as? JsonObject
+            when {
+                // Injecting FakeDNS: ensure the sniffer recovers the domain from a synthetic IP.
+                injectFake -> put("sniffing", sniffingWithFakeDns(sniffing))
+                sniffing != null -> put("sniffing", sniffing)
+                else -> putJsonObject("sniffing") {
                     put("enabled", true)
                     putJsonArray("destOverride") { add("http"); add("tls"); add("quic") }
                 }
@@ -322,10 +388,45 @@ object XrayConfig {
             }
         }
 
+        // FakeDNS injection (only when the raw config doesn't already define it): augment `dns` with a
+        // `fakedns` server, add the synthetic-IP pool, and hijack DNS ports to a `dns-out` outbound.
+        val rawDns = root["dns"] as? JsonObject
+        val augmentedDns = if (injectFake) buildJsonObject {
+            rawDns?.forEach { (k, v) -> if (k != "servers") put(k, v) }
+            putJsonArray("servers") {
+                add("fakedns")
+                val servers = rawDns?.get("servers") as? JsonArray
+                if (servers != null) servers.forEach { add(it) } else add("1.1.1.1")
+            }
+            if (rawDns?.get("queryStrategy") == null) put("queryStrategy", "UseIP")
+        } else null
+
+        // Build the final routing object, prepending the DNS-hijack rules when injecting FakeDNS.
+        val baseRouting = mergedRouting ?: userRouting
+        val finalRouting: JsonObject? = when {
+            injectFake -> buildJsonObject {
+                baseRouting?.forEach { (k, v) -> if (k != "rules") put(k, v) }
+                if (baseRouting?.get("domainStrategy") == null) put("domainStrategy", "AsIs")
+                putJsonArray("rules") {
+                    dnsHijackRules().forEach { add(it) }
+                    (baseRouting?.get("rules") as? JsonArray)?.forEach { add(it) }
+                }
+            }
+            mergedRouting != null -> mergedRouting
+            userRouting != null -> userRouting
+            else -> null
+        }
+
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
-                if (key != "inbounds" && key != "outbounds" && key != "routing") put(key, value)
+                if (key != "inbounds" && key != "outbounds" && key != "routing" &&
+                    !(injectFake && (key == "dns" || key == "fakedns"))
+                ) {
+                    put(key, value)
+                }
             }
+            if (augmentedDns != null) put("dns", augmentedDns)
+            if (injectFake) putJsonArray("fakedns") { add(fakeDnsPool()) }
             putJsonArray("inbounds") {
                 add(socksInbound)
                 nonSocks.forEach { add(it) }
@@ -344,11 +445,10 @@ object XrayConfig {
                 if (mergedRouting != null && "block" !in userOutboundTags) {
                     addJsonObject { put("tag", "block"); put("protocol", "blackhole") }
                 }
+                // FakeDNS dns outbound for the hijacked queries.
+                if (injectFake && "dns-out" !in userOutboundTags) add(dnsOutOutbound())
             }
-            when {
-                mergedRouting != null -> put("routing", mergedRouting)
-                userRouting != null -> put("routing", userRouting)
-            }
+            if (finalRouting != null) put("routing", finalRouting)
         }
         return json.encodeToString(newRoot)
     }
