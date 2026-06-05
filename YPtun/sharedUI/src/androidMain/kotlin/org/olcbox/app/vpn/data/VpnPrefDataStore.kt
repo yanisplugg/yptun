@@ -27,6 +27,13 @@ val KEY_ANDROID_ROUTING = stringPreferencesKey("android_routing_json")
 val KEY_ANDROID_ROUTING_PROFILES = stringPreferencesKey("android_routing_profiles_json")
 val KEY_ANDROID_TRAFFIC = stringPreferencesKey("android_traffic_json")
 val KEY_ANDROID_APP_BEHAVIOR = stringPreferencesKey("android_app_behavior_json")
+/**
+ * Wall-clock epoch-ms when the live VPN session became connected. Persisted (not just in-memory)
+ * so the on-screen connection timer survives the process being killed when the app is swiped out
+ * of recents while the foreground VPN service keeps running / is auto-restarted (START_REDELIVER_INTENT).
+ * Cleared only on an explicit user connect/stop, never on the auto-restart path.
+ */
+val KEY_ANDROID_CONNECTED_SINCE = longPreferencesKey("android_connected_since_ms")
 val KEY_ANDROID_LANGUAGE = stringPreferencesKey("android_language")
 val KEY_ANDROID_ACCENT_COLOR = longPreferencesKey("android_accent_color")
 val KEY_ANDROID_TEXT_COLOR = longPreferencesKey("android_text_color")

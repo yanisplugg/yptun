@@ -18,6 +18,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -33,7 +34,8 @@ fun ApplicationUpdateOfferSheet(
     info: AppUpdateInfo,
     downloadProgress: Float?,
     onLater: () -> Unit,
-    onDownload: () -> Unit
+    onDownload: () -> Unit,
+    onManual: () -> Unit = {}
 ) {
     val s = LocalStrings.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -94,20 +96,30 @@ fun ApplicationUpdateOfferSheet(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(
-                    onClick = onLater,
-                    modifier = Modifier.weight(1f),
-                    enabled = downloadProgress == null
-                ) {
-                    Text(s.later)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(
+                        onClick = onLater,
+                        modifier = Modifier.weight(1f),
+                        enabled = downloadProgress == null
+                    ) {
+                        Text(s.later)
+                    }
+                    Button(
+                        onClick = onDownload,
+                        modifier = Modifier.weight(1f),
+                        enabled = downloadProgress == null
+                    ) {
+                        Text(s.download)
+                    }
                 }
-                Button(
-                    onClick = onDownload,
-                    modifier = Modifier.weight(1f),
+                // Manual fallback: open the GitHub release page to download by hand.
+                TextButton(
+                    onClick = onManual,
+                    modifier = Modifier.fillMaxWidth(),
                     enabled = downloadProgress == null
                 ) {
-                    Text(s.download)
+                    Text(s.updateManual)
                 }
             }
         }

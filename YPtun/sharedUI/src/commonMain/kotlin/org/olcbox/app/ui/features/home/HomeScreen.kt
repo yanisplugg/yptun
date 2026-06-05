@@ -81,6 +81,10 @@ fun HomeScreen(
     onOpenLocationSettings: (String?) -> Unit,
     onAddLocation: () -> Unit,
     confirmBeforeDelete: Boolean = true,
+    /** A newer app release is available on GitHub → show the "update app" banner above the nav bar. */
+    updateAvailable: Boolean = false,
+    /** Tapping the update banner's button — opens the update offer (auto/manual). */
+    onUpdateClick: () -> Unit = {},
     onUnlockExperimental: () -> Unit = {},
     collapsedGroups: Set<String> = emptySet(),
     pinnedGroups: List<String> = emptyList(),
@@ -196,20 +200,25 @@ fun HomeScreen(
             )
         },
         bottomBar = {
-            if (showAppSettingsButton) {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
-                    NavigationBarItem(
-                        selected = true,
-                        onClick = {},
-                        icon = { Icon(Icons.Rounded.Bolt, contentDescription = null) },
-                        label = { Text(s.navConnection) }
-                    )
-                    NavigationBarItem(
-                        selected = false,
-                        onClick = onAppSettingsClick,
-                        icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
-                        label = { Text(s.navSettings) }
-                    )
+            Column {
+                if (updateAvailable) {
+                    UpdateAvailableBanner(onClick = onUpdateClick)
+                }
+                if (showAppSettingsButton) {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+                        NavigationBarItem(
+                            selected = true,
+                            onClick = {},
+                            icon = { Icon(Icons.Rounded.Bolt, contentDescription = null) },
+                            label = { Text(s.navConnection) }
+                        )
+                        NavigationBarItem(
+                            selected = false,
+                            onClick = onAppSettingsClick,
+                            icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
+                            label = { Text(s.navSettings) }
+                        )
+                    }
                 }
             }
         }
@@ -224,7 +233,11 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item(key = "connection-timer") {
-                ConnectionTimer(isConnected = state.isVpnConnected, onSecretTap = onUnlockExperimental)
+                ConnectionTimer(
+                    isConnected = state.isVpnConnected,
+                    connectedSinceEpochMs = state.connectedSinceEpochMs,
+                    onSecretTap = onUnlockExperimental,
+                )
             }
 
             item(key = "start-button") {
@@ -451,13 +464,51 @@ private sealed interface PendingDelete {
 }
 
 @Composable
-private fun ConnectionTimer(isConnected: Boolean, onSecretTap: () -> Unit = {}) {
+private fun UpdateAvailableBanner(onClick: () -> Unit) {
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = s.updateBannerTitle,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            TextButton(onClick = onClick) {
+                Text(
+                    text = s.updateBannerAction,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@OptIn(kotlin.time.ExperimentalTime::class)
+@Composable
+private fun ConnectionTimer(
+    isConnected: Boolean,
+    connectedSinceEpochMs: Long = 0L,
+    onSecretTap: () -> Unit = {},
+) {
     var elapsed by remember { mutableStateOf(0L) }
-    LaunchedEffect(isConnected) {
-        if (isConnected) {
-            val mark = TimeSource.Monotonic.markNow()
+    // Derive the elapsed time from the REAL connection start (persisted in the VPN service, not a
+    // UI-local clock), so closing and reopening the app no longer resets the timer to 0.
+    LaunchedEffect(isConnected, connectedSinceEpochMs) {
+        if (isConnected && connectedSinceEpochMs > 0L) {
             while (true) {
-                elapsed = mark.elapsedNow().inWholeSeconds
+                val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+                elapsed = ((now - connectedSinceEpochMs) / 1000L).coerceAtLeast(0L)
                 delay(1000)
             }
         } else {

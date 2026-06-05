@@ -16,9 +16,40 @@ object OlcboxVpnState {
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
 
+    /**
+     * Wall-clock epoch-ms when the current session became connected (0 = not connected). Process-global
+     * so the connection timer keeps counting from the real start even after the Activity is closed and
+     * reopened while the foreground VPN service keeps running — it's NOT reset by a brief Reconnecting.
+     */
+    private val _connectedSinceMs = MutableStateFlow(0L)
+    val connectedSinceMs = _connectedSinceMs.asStateFlow()
+
     fun setStatus(status: VpnStatus) {
         _status.value = status
         _isConnected.value = status is VpnStatus.Connected
+        when (status) {
+            // Stamp lazily on the first Connected of a session; a value restored via
+            // setConnectedSince already wins (it's > 0) so this never overwrites it.
+            is VpnStatus.Connected -> if (_connectedSinceMs.value == 0L) _connectedSinceMs.value = System.currentTimeMillis()
+            // ONLY an explicit stop clears the running clock. Connecting / Reconnecting / Error are all
+            // TRANSIENT (recovery, network change, a settings re-apply, a probe-induced blip during a
+            // ping pass) — keep counting so the on-screen timer never resets mid-session. A genuine
+            // fresh connect always passes through Disconnected/Stopping first (or the service clears the
+            // persisted value), so the next Connected re-stamps from 0.
+            is VpnStatus.Disconnected, is VpnStatus.Stopping -> _connectedSinceMs.value = 0L
+            else -> { /* Connecting / Reconnecting / Error: keep the running clock */ }
+        }
+    }
+
+    /**
+     * Seeds the connection clock with a specific epoch-ms — used by the service to RESTORE the
+     * persisted start time after the process was killed and auto-restarted (app swiped from recents),
+     * so the on-screen timer keeps counting from the real start instead of resetting. A value of 0
+     * is ignored here (a reset goes through [setStatus]); a positive value wins over the lazy
+     * "set now on Connected" so the restored time is preserved even across the Connecting transition.
+     */
+    fun setConnectedSince(epochMs: Long) {
+        if (epochMs > 0L) _connectedSinceMs.value = epochMs
     }
 
     fun addLog(msg: String) {

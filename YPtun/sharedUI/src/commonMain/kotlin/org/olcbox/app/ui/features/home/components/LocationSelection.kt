@@ -698,7 +698,8 @@ private fun SubscriptionGroupHeader(
                 text = details,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -842,20 +843,31 @@ private fun LocationItem.subscriptionTitle(): String {
     ).joinToString(" ")
 }
 
+@OptIn(kotlin.time.ExperimentalTime::class)
 private fun LocationItem.subscriptionDetails(): String? {
     val subscription = metadata?.subscription ?: return null
+    val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+    val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+    // End date (with time) + days-left + the auto-refresh interval (profile-update-interval header).
+    val expiry = subscription.expiresAtEpochMs?.let {
+        val daysLeft = (it - now).floorDiv(DAY_MILLIS)
+        s.subscriptionExpiry(org.olcbox.app.util.IsoTime.formatDateTime(it), daysLeft)
+    }
+    val interval = subscription.updateIntervalHours?.let { s.subscriptionEvery(it) }
 
     return listOfNotNull(
         quotaText(subscription.used, subscription.available),
-        subscription.refresh?.takeIf { it.isNotBlank() }?.let { "Refresh $it" }
+        expiry,
+        subscription.refresh?.takeIf { it.isNotBlank() }?.let { "Refresh $it" },
+        interval
     ).joinToString(" · ").takeIf { it.isNotBlank() }
 }
 
 private fun quotaText(used: String?, available: String?): String? {
     return when {
-        !used.isNullOrBlank() && !available.isNullOrBlank() -> "$used used · $available available"
-        !used.isNullOrBlank() -> "$used used"
-        !available.isNullOrBlank() -> "$available available"
+        !used.isNullOrBlank() && !available.isNullOrBlank() -> "$used / $available"
+        !used.isNullOrBlank() -> used
+        !available.isNullOrBlank() -> available
         else -> null
     }
 }

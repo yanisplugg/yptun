@@ -7,6 +7,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.datasource.createProxyHttpClient
@@ -110,11 +111,22 @@ class AppUpdateService(
     }
 
     private suspend fun fetchRelease(client: HttpClient, channel: ReleaseChannel): GithubRelease {
-        val endpoint = when (channel) {
-            ReleaseChannel.Stable -> "https://api.github.com/repos/${mirror.ownerRepo}/releases/latest"
-            ReleaseChannel.Nightly -> "https://api.github.com/repos/${mirror.ownerRepo}/releases/tags/nightly"
+        val base = "https://api.github.com/repos/${mirror.ownerRepo}"
+        return when (channel) {
+            // Use the releases LIST (newest first), NOT /releases/latest — the latter returns 404 when
+            // every published release is flagged "pre-release". Pick the newest non-draft entry.
+            ReleaseChannel.Stable -> {
+                val body = getBody(client, "$base/releases?per_page=20")
+                val releases = json.decodeFromString(ListSerializer(GithubRelease.serializer()), body)
+                releases.firstOrNull { !it.draft }
+                    ?: error("No releases published for ${mirror.ownerRepo}")
+            }
+            ReleaseChannel.Nightly ->
+                json.decodeFromString(GithubRelease.serializer(), getBody(client, "$base/releases/tags/nightly"))
         }
+    }
 
+    private suspend fun getBody(client: HttpClient, endpoint: String): String {
         val hwid = deviceIdentityProvider.hwid()
         val response = client.get(endpoint) {
             headers {
@@ -123,12 +135,10 @@ class AppUpdateService(
                 append("x-hwid", hwid)
             }
         }
-
         if (response.status.value !in 200..299) {
             error("GitHub release request failed with HTTP ${response.status.value}")
         }
-
-        return json.decodeFromString(GithubRelease.serializer(), response.bodyAsText())
+        return response.bodyAsText()
     }
 
     companion object {
@@ -291,6 +301,8 @@ data class GithubRelease(
     val htmlUrl: String,
     @SerialName("published_at")
     val publishedAt: String? = null,
+    val draft: Boolean = false,
+    val prerelease: Boolean = false,
     val assets: List<GithubReleaseAsset> = emptyList()
 )
 

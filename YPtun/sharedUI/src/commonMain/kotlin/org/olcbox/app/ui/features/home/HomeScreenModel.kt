@@ -67,6 +67,12 @@ class HomeScreenViewModel(
                 }
             }
         }
+
+        viewModelScope.launch {
+            vpnManager.connectedSinceEpochMs.collect { since ->
+                _state.update { it.copy(connectedSinceEpochMs = since) }
+            }
+        }
     }
 
     fun loadCurrentConfig(onComplete: () -> Unit = {}) {
@@ -465,6 +471,8 @@ data class HomeScreenState(
     val shouldShowConfigInvalidReminder: Boolean,
     val canStartVpn: Boolean,
     val startBlockedReason: String?,
+    /** Wall-clock epoch-ms when the connection started (0 = not connected); drives the on-screen timer. */
+    val connectedSinceEpochMs: Long = 0L,
     /** Set after importing a VK-TURN link that still needs a per-client VK Calls link. */
     val vkTurnLinkPrompt: VkTurnLinkPrompt? = null
 )

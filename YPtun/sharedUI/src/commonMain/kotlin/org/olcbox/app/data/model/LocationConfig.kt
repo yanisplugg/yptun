@@ -395,7 +395,23 @@ data class SubscriptionMetadata(
     @SerialName("update_interval_hours")
     val updateIntervalHours: Int? = null,
     @SerialName("last_refresh_at_epoch_ms")
-    val lastRefreshAtEpochMs: Long? = null
+    val lastRefreshAtEpochMs: Long? = null,
+    /**
+     * Subscription expiry as wall-clock epoch-ms, parsed from the panel response (`user.expiresAt`
+     * ISO date in the body, or the `expire=<unix>` field of the `subscription-userinfo` header).
+     * Drives the "end date" / days-left shown on the subscription group. Null when the panel doesn't
+     * report one (or it's unlimited).
+     */
+    @SerialName("expires_at_epoch_ms")
+    val expiresAtEpochMs: Long? = null,
+    /**
+     * Wall-clock epoch-ms of the last refresh ATTEMPT (success or failure), distinct from
+     * [lastRefreshAtEpochMs] (last SUCCESS, shown as "last updated"). The due-check schedules the next
+     * attempt off this, so a failed fetch is retried only after the update interval elapses again —
+     * "retry after the hours indicated" — instead of hammering a down panel every poll.
+     */
+    @SerialName("last_attempt_at_epoch_ms")
+    val lastAttemptAtEpochMs: Long? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -407,7 +423,9 @@ data class SubscriptionMetadata(
             used = used.cleanMetadataValue(),
             available = available.cleanMetadataValue(),
             updateIntervalHours = updateIntervalHours?.coerceIn(MIN_UPDATE_INTERVAL_HOURS, MAX_UPDATE_INTERVAL_HOURS),
-            lastRefreshAtEpochMs = lastRefreshAtEpochMs?.takeIf { it > 0 }
+            lastRefreshAtEpochMs = lastRefreshAtEpochMs?.takeIf { it > 0 },
+            expiresAtEpochMs = expiresAtEpochMs?.takeIf { it > 0 },
+            lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 }
         )
     }
 
@@ -420,7 +438,9 @@ data class SubscriptionMetadata(
                 used.isNullOrBlank() &&
                 available.isNullOrBlank() &&
                 updateIntervalHours == null &&
-                lastRefreshAtEpochMs == null
+                lastRefreshAtEpochMs == null &&
+                expiresAtEpochMs == null &&
+                lastAttemptAtEpochMs == null
     }
 
     companion object {
