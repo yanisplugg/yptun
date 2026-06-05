@@ -458,6 +458,10 @@ interface Strings {
     val subscriptionQr: String
     val subscriptionUpdated: String
     val subscriptionNotUpdated: String
+    /** Subscription end-date line, e.g. "до 03.05.2099 · осталось 26630 дн." or "истекла 03.05.2099". */
+    fun subscriptionExpiry(date: String, daysLeft: Long): String
+    /** "Last updated …" line built from how long ago the last successful refresh was. */
+    fun subscriptionUpdatedAgo(elapsedMs: Long): String
 
     // Connect blocked reasons
     val addLocationFirst: String
@@ -865,6 +869,20 @@ object RuStrings : Strings {
     override val subscriptionQr = "QR подписки"
     override val subscriptionUpdated = "Подписка обновлена"
     override val subscriptionNotUpdated = "Подписка не обновлена"
+    override fun subscriptionExpiry(date: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "истекла $date"
+        daysLeft == 0L -> "истекает сегодня"
+        else -> "до $date · осталось $daysLeft дн."
+    }
+    override fun subscriptionUpdatedAgo(elapsedMs: Long): String {
+        val mins = elapsedMs / 60_000L
+        return when {
+            mins < 1 -> "обновлено только что"
+            mins < 60 -> "обновлено $mins мин назад"
+            mins < 24 * 60 -> "обновлено ${mins / 60} ч назад"
+            else -> "обновлено ${mins / (24 * 60)} дн назад"
+        }
+    }
     override val addLocationFirst = "Сначала добавьте локацию"
     override val completeActiveLocationFirst = "Сначала завершите настройку активной локации"
     override val addValidLocationFirst = "Сначала добавьте корректную локацию"
@@ -1268,6 +1286,20 @@ object EnStrings : Strings {
     override val subscriptionQr = "Subscription QR"
     override val subscriptionUpdated = "Subscription updated"
     override val subscriptionNotUpdated = "Subscription not updated"
+    override fun subscriptionExpiry(date: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "expired $date"
+        daysLeft == 0L -> "expires today"
+        else -> "until $date · $daysLeft days left"
+    }
+    override fun subscriptionUpdatedAgo(elapsedMs: Long): String {
+        val mins = elapsedMs / 60_000L
+        return when {
+            mins < 1 -> "updated just now"
+            mins < 60 -> "updated ${mins}m ago"
+            mins < 24 * 60 -> "updated ${mins / 60}h ago"
+            else -> "updated ${mins / (24 * 60)}d ago"
+        }
+    }
     override val addLocationFirst = "Add a location first"
     override val completeActiveLocationFirst = "Complete active location first"
     override val addValidLocationFirst = "Add a valid location first"
@@ -1671,6 +1703,20 @@ object FaStrings : Strings {
     override val subscriptionQr = "QR اشتراک"
     override val subscriptionUpdated = "اشتراک به‌روزرسانی شد"
     override val subscriptionNotUpdated = "اشتراک به‌روزرسانی نشد"
+    override fun subscriptionExpiry(date: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "منقضی‌شده $date"
+        daysLeft == 0L -> "امروز منقضی می‌شود"
+        else -> "تا $date · $daysLeft روز باقی‌مانده"
+    }
+    override fun subscriptionUpdatedAgo(elapsedMs: Long): String {
+        val mins = elapsedMs / 60_000L
+        return when {
+            mins < 1 -> "هم‌اکنون به‌روز شد"
+            mins < 60 -> "$mins دقیقه پیش به‌روز شد"
+            mins < 24 * 60 -> "${mins / 60} ساعت پیش به‌روز شد"
+            else -> "${mins / (24 * 60)} روز پیش به‌روز شد"
+        }
+    }
     override val addLocationFirst = "ابتدا یک موقعیت اضافه کنید"
     override val completeActiveLocationFirst = "ابتدا موقعیت فعال را کامل کنید"
     override val addValidLocationFirst = "ابتدا یک موقعیت معتبر اضافه کنید"

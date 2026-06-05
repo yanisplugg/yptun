@@ -38,6 +38,7 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
+import org.olcbox.app.util.IsoTime
 
 interface LocationsDataSource {
     suspend fun loadLocationBundle(): LocationBundleV4?
@@ -221,33 +222,45 @@ class LocationsRepositoryImpl(
         val activeBefore = bundle.activeLocationId
         var activeAfter = activeBefore
         var successfulRefreshes = 0
+        // True when a failed URL had its lastAttempt time bumped: persist that even with 0 successes so
+        // the due-check defers the next retry by the interval (instead of retrying every poll).
+        var attemptStateChanged = false
 
-        fun preservePreviousEntries(entries: List<LocationEntry>) {
+        fun preservePreviousEntries(entries: List<LocationEntry>, attemptTimestamp: Long? = null) {
             entries.forEach { entry ->
                 if (usedStorageIds.add(entry.storageId)) {
-                    refreshedLocations += entry
+                    refreshedLocations += if (attemptTimestamp == null) {
+                        entry
+                    } else {
+                        entry.copy(
+                            metadata = entry.metadata.withSubscriptionAttemptState(attemptTimestamp)
+                        ).normalized()
+                    }
                 }
             }
         }
 
         groupedByUrl.forEach { (url, previousEntries) ->
+            val attemptTimestamp = nowEpochMs()
             val previousInterval = previousEntries.subscriptionUpdateIntervalHours()
             val resolved = resolveParsedImport(
                 text = url,
                 fallbackSubscriptionInterval = previousInterval,
                 subscriptionProxy = subscriptionProxy
             ) ?: run {
-                preservePreviousEntries(previousEntries)
+                // Fetch/parse failed — keep the old links, just stamp the attempt so we retry later.
+                preservePreviousEntries(previousEntries, attemptTimestamp)
+                attemptStateChanged = true
                 return@forEach
             }
             val source = resolved.source
             val updateInterval = source.updateIntervalHours
                 ?: previousInterval
                 ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS
-            val refreshTimestamp = nowEpochMs()
             val refreshed = resolved.parsed.bundle.locations
             if (refreshed.isEmpty()) {
-                preservePreviousEntries(previousEntries)
+                preservePreviousEntries(previousEntries, attemptTimestamp)
+                attemptStateChanged = true
                 return@forEach
             }
 
@@ -271,7 +284,8 @@ class LocationsRepositoryImpl(
                     subscriptionUrl = url,
                     metadata = entry.metadata.withSubscriptionRefreshState(
                         updateIntervalHours = updateInterval,
-                        lastRefreshAtEpochMs = refreshTimestamp
+                        lastRefreshAtEpochMs = attemptTimestamp,
+                        lastAttemptAtEpochMs = attemptTimestamp
                     )
                 ).normalized()
             }
@@ -286,7 +300,7 @@ class LocationsRepositoryImpl(
             successfulRefreshes += 1
         }
 
-        if (successfulRefreshes == 0) return 0
+        if (successfulRefreshes == 0 && !attemptStateChanged) return 0
 
         saveBundleUnlocked(
             bundle.copy(
@@ -307,9 +321,15 @@ class LocationsRepositoryImpl(
                     val metadata = entry.metadata?.subscription
                     val interval = metadata?.updateIntervalHours
                         ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS
-                    val lastRefreshAt = metadata?.lastRefreshAtEpochMs ?: 0L
+                    // Schedule off the last ATTEMPT (success OR failure), so a failed fetch is retried
+                    // only after the interval elapses again — "retry after the hours indicated" —
+                    // instead of being re-tried on every hourly poll while a panel is unreachable.
+                    val lastTouchAt = maxOf(
+                        metadata?.lastRefreshAtEpochMs ?: 0L,
+                        metadata?.lastAttemptAtEpochMs ?: 0L
+                    )
                     val intervalMs = interval.toLong() * 60L * 60L * 1_000L
-                    url.takeIf { lastRefreshAt <= 0L || now - lastRefreshAt >= intervalMs }
+                    url.takeIf { lastTouchAt <= 0L || now - lastTouchAt >= intervalMs }
                 }
                 .toSet()
 
@@ -491,7 +511,12 @@ class LocationsRepositoryImpl(
             source.content.normalizedImportText(),
             source.subscriptionUrl,
             initialSubscriptionInterval,
-            subscriptionMetadataFromHeaders(source.profileTitle, source.userInfo)
+            mergeSubscriptionMetadata(
+                // The panel JSON body (Remnawave `user{}`) carries the expiry + human traffic counters;
+                // the response headers carry the profile title (name) and may also carry traffic/expiry.
+                primary = subscriptionMetadataFromBody(source.content),
+                secondary = subscriptionMetadataFromHeaders(source.profileTitle, source.userInfo)
+            )
         )
     }
 
@@ -973,6 +998,7 @@ class LocationsRepositoryImpl(
 
         var used: String? = null
         var available: String? = null
+        var expiresAtEpochMs: Long? = null
         if (!userInfo.isNullOrBlank()) {
             val fields = userInfo.split(';')
                 .mapNotNull { part ->
@@ -987,10 +1013,69 @@ class LocationsRepositoryImpl(
                 used = formatTrafficBytes(upload + download)
                 available = if (total == null || total <= 0L) "∞" else formatTrafficBytes(total)
             }
+            // `expire=<unix seconds>` (0 / absent = no expiry) — the standard subscription-userinfo field.
+            expiresAtEpochMs = fields["expire"]?.toLongOrNull()?.takeIf { it > 0L }?.let { it * 1_000L }
         }
 
-        if (name == null && used == null && available == null) return null
-        return SubscriptionMetadata(name = name, used = used, available = available).normalized()
+        if (name == null && used == null && available == null && expiresAtEpochMs == null) return null
+        return SubscriptionMetadata(
+            name = name,
+            used = used,
+            available = available,
+            expiresAtEpochMs = expiresAtEpochMs
+        ).normalized()
+    }
+
+    /**
+     * Builds subscription metadata from a Remnawave-style JSON subscription BODY, e.g.
+     * `{ "user": { "expiresAt": "2099-05-03T20:59:00.000Z", "trafficUsed": "113.14 GiB",
+     * "trafficLimit": "0", ... }, "links": [...] }`. Pulls the expiry date and the human traffic
+     * counters that the response headers don't carry. Returns null for non-JSON bodies (base64 / plain
+     * link lists) or when no usable field is present.
+     */
+    private fun subscriptionMetadataFromBody(content: String): SubscriptionMetadata? {
+        val trimmed = content.trim()
+        if (!trimmed.startsWith("{")) return null
+        val root = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: return null
+        val user = root["user"]?.jsonObjectOrNull() ?: return null
+
+        val expiresAtEpochMs = IsoTime.parseIsoToEpochMs(user.string("expiresAt"))
+        val used = user.string("trafficUsed")?.trim()?.takeIf { it.isNotBlank() && it != "0" }
+        val limit = user.string("trafficLimit")?.trim()
+        // trafficLimit "0" / blank = unlimited (NO_RESET plans report a 0 limit).
+        val available = when {
+            limit.isNullOrBlank() || limit == "0" || limit == "0 B" -> if (used != null) "∞" else null
+            else -> limit
+        }
+
+        if (expiresAtEpochMs == null && used == null && available == null) return null
+        return SubscriptionMetadata(
+            used = used,
+            available = available,
+            expiresAtEpochMs = expiresAtEpochMs
+        ).normalized().takeUnless { it.isEmpty() }
+    }
+
+    /** Field-wise merge: [primary] wins, [secondary] fills the gaps; the name prefers the header title. */
+    private fun mergeSubscriptionMetadata(
+        primary: SubscriptionMetadata?,
+        secondary: SubscriptionMetadata?
+    ): SubscriptionMetadata? {
+        if (primary == null) return secondary
+        if (secondary == null) return primary
+        return SubscriptionMetadata(
+            name = secondary.name ?: primary.name,
+            update = primary.update ?: secondary.update,
+            refresh = primary.refresh ?: secondary.refresh,
+            color = primary.color ?: secondary.color,
+            icon = primary.icon ?: secondary.icon,
+            used = primary.used ?: secondary.used,
+            available = primary.available ?: secondary.available,
+            updateIntervalHours = primary.updateIntervalHours ?: secondary.updateIntervalHours,
+            lastRefreshAtEpochMs = primary.lastRefreshAtEpochMs ?: secondary.lastRefreshAtEpochMs,
+            expiresAtEpochMs = primary.expiresAtEpochMs ?: secondary.expiresAtEpochMs,
+            lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs
+        ).normalized().takeUnless { it.isEmpty() }
     }
 
     /** Decodes a `profile-title` header, which Remnawave sends as `base64:<payload>`. */
@@ -1484,20 +1569,31 @@ class LocationsRepositoryImpl(
         if (hours == null) return this
         return withSubscriptionRefreshState(
             updateIntervalHours = hours,
-            lastRefreshAtEpochMs = this?.subscription?.lastRefreshAtEpochMs
+            lastRefreshAtEpochMs = this?.subscription?.lastRefreshAtEpochMs,
+            lastAttemptAtEpochMs = this?.subscription?.lastAttemptAtEpochMs
         )
     }
 
     private fun LocationMetadata?.withSubscriptionRefreshState(
         updateIntervalHours: Int,
-        lastRefreshAtEpochMs: Long?
+        lastRefreshAtEpochMs: Long?,
+        lastAttemptAtEpochMs: Long? = lastRefreshAtEpochMs
     ): LocationMetadata {
         val subscription = this?.subscription ?: SubscriptionMetadata()
         return (this ?: LocationMetadata()).copy(
             subscription = subscription.copy(
                 updateIntervalHours = updateIntervalHours,
-                lastRefreshAtEpochMs = lastRefreshAtEpochMs
+                lastRefreshAtEpochMs = lastRefreshAtEpochMs,
+                lastAttemptAtEpochMs = lastAttemptAtEpochMs
             )
+        ).normalized()
+    }
+
+    /** Records only a refresh ATTEMPT time (failure path), keeping the existing links/metadata intact. */
+    private fun LocationMetadata?.withSubscriptionAttemptState(lastAttemptAtEpochMs: Long): LocationMetadata {
+        val subscription = this?.subscription ?: SubscriptionMetadata()
+        return (this ?: LocationMetadata()).copy(
+            subscription = subscription.copy(lastAttemptAtEpochMs = lastAttemptAtEpochMs)
         ).normalized()
     }
 

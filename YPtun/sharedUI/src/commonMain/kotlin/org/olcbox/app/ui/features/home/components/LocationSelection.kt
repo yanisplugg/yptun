@@ -698,7 +698,8 @@ private fun SubscriptionGroupHeader(
                 text = details,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -842,12 +843,27 @@ private fun LocationItem.subscriptionTitle(): String {
     ).joinToString(" ")
 }
 
+@OptIn(kotlin.time.ExperimentalTime::class)
 private fun LocationItem.subscriptionDetails(): String? {
     val subscription = metadata?.subscription ?: return null
+    val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+    val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+
+    // Subscription end date (+ days-left) parsed from the panel JSON / headers.
+    val expiry = subscription.expiresAtEpochMs?.let { expiresAt ->
+        val daysLeft = (expiresAt - now).floorDiv(DAY_MILLIS)
+        s.subscriptionExpiry(org.olcbox.app.util.IsoTime.formatDate(expiresAt), daysLeft)
+    }
+    // When the links were last successfully refreshed.
+    val lastUpdated = subscription.lastRefreshAtEpochMs
+        ?.takeIf { it > 0L }
+        ?.let { s.subscriptionUpdatedAgo((now - it).coerceAtLeast(0L)) }
 
     return listOfNotNull(
         quotaText(subscription.used, subscription.available),
-        subscription.refresh?.takeIf { it.isNotBlank() }?.let { "Refresh $it" }
+        expiry,
+        subscription.refresh?.takeIf { it.isNotBlank() }?.let { "Refresh $it" },
+        lastUpdated
     ).joinToString(" · ").takeIf { it.isNotBlank() }
 }
 
