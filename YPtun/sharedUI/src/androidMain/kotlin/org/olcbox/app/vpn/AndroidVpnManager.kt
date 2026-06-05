@@ -267,8 +267,18 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      * routing link (and a profile was saved); the new id is also returned by [importRoutingProfileId]
      * for callers that want to select it.
      */
-    override fun importRoutingProfileLink(link: String): Boolean =
-        importRoutingProfileId(link) != null
+    override fun importRoutingProfileLink(link: String): Boolean {
+        // A `yptun://routing/...` link carries the ENTIRE routing setup (all profiles + global choice +
+        // geo sources) — importing it restores the whole thing at once.
+        RoutingProfilesState.fromRoutingLink(link)?.let { imported ->
+            val withIds = imported.profiles.map {
+                if (it.id.isBlank()) it.copy(id = "rp-" + java.util.UUID.randomUUID().toString().take(8)) else it
+            }
+            setRoutingProfilesState(imported.copy(profiles = withIds))
+            return true
+        }
+        return importRoutingProfileId(link) != null
+    }
 
     override fun routingProfileChoices(): List<RoutingProfile> = _routingProfiles.value.profiles
 

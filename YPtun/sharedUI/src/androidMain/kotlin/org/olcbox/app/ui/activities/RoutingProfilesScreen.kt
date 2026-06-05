@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -71,10 +72,59 @@ internal fun RoutingProfilesContent(
     embedded: Boolean = false,
 ) {
     val s = LocalStrings.current
+    val clipboard = LocalClipboardManager.current
     // null = list view; non-null = editing that profile (blank id → a brand-new one).
     var editing by remember { mutableStateOf<RoutingProfile?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var importError by remember { mutableStateOf<String?>(null) }
+    var showShareDialog by remember { mutableStateOf(false) }
+    var shareImportText by remember { mutableStateOf("") }
+
+    if (showShareDialog) {
+        AlertDialog(
+            onDismissRequest = { showShareDialog = false; shareImportText = "" },
+            title = { Text(s.routingShareAllTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(s.routingShareAllDesc, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(
+                        onClick = { clipboard.setText(AnnotatedString(state.toRoutingLink())) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(s.routingExportCopy)
+                    }
+                    OutlinedTextField(
+                        value = shareImportText,
+                        onValueChange = { shareImportText = it; importError = null },
+                        label = { Text(s.routingImportPaste) },
+                        placeholder = { Text(RoutingProfilesState.ROUTING_LINK_PREFIX + "…") },
+                        singleLine = false,
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    importError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = shareImportText.isNotBlank(),
+                    onClick = {
+                        if (onImportLink(shareImportText.trim())) {
+                            showShareDialog = false; shareImportText = ""; importError = null
+                        } else {
+                            importError = s.routingImportInvalid
+                        }
+                    }
+                ) { Text(s.routingImportApply) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showShareDialog = false; shareImportText = "" }) { Text(s.cancel) }
+            }
+        )
+    }
 
     BackHandler(enabled = editing != null) { editing = null }
 
@@ -110,6 +160,13 @@ internal fun RoutingProfilesContent(
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
+        }
+
+        // One-tap export/import of the WHOLE routing setup as a yptun://routing link.
+        OutlinedButton(onClick = { showShareDialog = true }, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Outlined.Share, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(s.routingShareAllButton)
         }
 
         // --- Global profile selector ---

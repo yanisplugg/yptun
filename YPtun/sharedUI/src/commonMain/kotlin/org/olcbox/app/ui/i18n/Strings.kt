@@ -156,6 +156,13 @@ interface Strings {
     val routingTabSimple: String
     val routingTabRules: String
     val routingTabHapp: String
+    val routingShareAllButton: String
+    val routingShareAllTitle: String
+    val routingShareAllDesc: String
+    val routingExportCopy: String
+    val routingImportPaste: String
+    val routingImportApply: String
+    val routingImportInvalid: String
     val routingRulesTitle: String
     val routingRulesDesc: String
     val routingRulesEmpty: String
@@ -588,7 +595,14 @@ object RuStrings : Strings {
     override val sbRouteRulesLabel = "route.rules (JSON-массив)"
     override val routingTabSimple = "Простой"
     override val routingTabRules = "Правила"
-    override val routingTabHapp = "Happ"
+    override val routingTabHapp = "Профили"
+    override val routingShareAllButton = "Импорт / экспорт всех настроек"
+    override val routingShareAllTitle = "Настройки маршрутизации"
+    override val routingShareAllDesc = "Скопируйте все профили одной ссылкой yptun://routing или вставьте её, чтобы импортировать."
+    override val routingExportCopy = "Скопировать ссылку"
+    override val routingImportPaste = "Вставьте yptun://routing"
+    override val routingImportApply = "Импортировать"
+    override val routingImportInvalid = "Неверная ссылка"
     override val routingRulesTitle = "Правила маршрутизации"
     override val routingRulesDesc = "Свой список правил в стиле v2rayNG. Работает на движке sing-box; правила применяются по порядку сверху вниз."
     override val routingRulesEmpty = "Правил пока нет. Добавьте первое."
@@ -986,7 +1000,14 @@ object EnStrings : Strings {
     override val sbInvalidJsonArray = "Invalid JSON array"
     override val routingTabSimple = "Simple"
     override val routingTabRules = "Rules"
-    override val routingTabHapp = "Happ"
+    override val routingTabHapp = "Profiles"
+    override val routingShareAllButton = "Import / export all settings"
+    override val routingShareAllTitle = "Routing settings"
+    override val routingShareAllDesc = "Copy every profile as one yptun://routing link, or paste one to import."
+    override val routingExportCopy = "Copy link"
+    override val routingImportPaste = "Paste yptun://routing"
+    override val routingImportApply = "Import"
+    override val routingImportInvalid = "Invalid link"
     override val routingRulesTitle = "Routing rules"
     override val routingRulesDesc = "A custom v2rayNG-style rule list. Runs on the sing-box core; rules apply top to bottom."
     override val routingRulesEmpty = "No rules yet. Add the first one."
@@ -1382,7 +1403,14 @@ object FaStrings : Strings {
     override val sbInvalidJsonArray = "آرایهٔ JSON نامعتبر"
     override val routingTabSimple = "ساده"
     override val routingTabRules = "قوانین"
-    override val routingTabHapp = "Happ"
+    override val routingTabHapp = "پروفایل‌ها"
+    override val routingShareAllButton = "ورود / خروج همهٔ تنظیمات"
+    override val routingShareAllTitle = "تنظیمات مسیریابی"
+    override val routingShareAllDesc = "همهٔ پروفایل‌ها را با یک پیوند yptun://routing کپی کنید یا برای ورود، پیوند را بچسبانید."
+    override val routingExportCopy = "کپی پیوند"
+    override val routingImportPaste = "پیوند yptun://routing را بچسبانید"
+    override val routingImportApply = "ورود"
+    override val routingImportInvalid = "پیوند نامعتبر"
     override val routingRulesTitle = "قوانین مسیریابی"
     override val routingRulesDesc = "فهرست قوانین سفارشی به سبک v2rayNG. روی هستهٔ sing-box کار می‌کند؛ قوانین از بالا به پایین اعمال می‌شوند."
     override val routingRulesEmpty = "هنوز قانونی نیست. اولین را اضافه کنید."

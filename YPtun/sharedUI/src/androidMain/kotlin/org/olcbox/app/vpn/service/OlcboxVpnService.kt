@@ -913,6 +913,22 @@ class OlcboxVpnService : VpnService() {
                     else "Switching to Xray core for RU-domain blocklist"
                 )
             }
+            // If Xray would run but the profile's geo .dat files can't be fetched (e.g. the current
+            // network is blocked and NEEDS the VPN to reach GitHub), xray silently drops geosite:/geoip:
+            // rules → `geosite:ru → direct` never fires and RU sites wrongly egress via the proxy. sing-box
+            // downloads its own .srs rule-sets through the tunnel, so it keeps working — which is exactly
+            // why routing "only works on sing-box/AmneziaWG, not xray". Fall back to sing-box when the
+            // transport allows it (plain vless/ws/reality; not xhttp or a raw Xray template).
+            if (activeProxyCore == ProxyCore.Xray &&
+                routingProfile?.needsGeoFiles() == true &&
+                effectiveProfile.rawXrayConfig.isNullOrBlank() &&
+                effectiveProfile.network != ProxyProfile.NETWORK_XHTTP &&
+                effectiveProfile.rawOutbound.isNullOrBlank() &&
+                ensureGeoAssetPath(routingProfile).isEmpty()
+            ) {
+                activeProxyCore = ProxyCore.SingBox
+                addLog("Geo databases unavailable for Xray → using sing-box for routing (it downloads its own rule-sets)")
+            }
             if (activeProxyCore == ProxyCore.Xray) {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""
@@ -1422,6 +1438,11 @@ class OlcboxVpnService : VpnService() {
             // kernels that allow it the active tunnel is never interrupted (no connectivity drop). Only
             // if that fails do we fall back to the down→rename→up cycle. Routes are keyed by ifindex,
             // not name, so the rename itself doesn't break routing.
+            // IMPORTANT: rename ONLY in place (no down/up). Bringing the active VPN tun DOWN makes
+            // Android tear down the DNS binding for the VPN network → Chrome shows "DNS probe started"
+            // and the whole connection dies. An in-place rename keeps the link UP, so routes (by ifindex)
+            // and DNS survive. On kernels that refuse to rename an UP interface we simply SKIP it
+            // (best-effort, "по возможности") rather than forcibly down/up and break connectivity.
             val script = buildString {
                 append("export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH; ")
                 append("IP=\$(command -v ip || echo /system/bin/ip); ")
@@ -1429,15 +1450,10 @@ class OlcboxVpnService : VpnService() {
                 append("for ifc in \$(ls /sys/class/net 2>/dev/null); do ")
                 append("case \"\$ifc\" in tun*|awg*|wg*) ")
                 append("new=rmnet_data\$n; n=\$((n+1)); ")
-                // Try in-place rename first (no down) — keeps the tunnel alive when the kernel permits.
                 append("if \$IP link set \"\$ifc\" name \"\$new\" 2>/dev/null; then ")
                 append("echo \"\$ifc -> \$new (live)\"; ")
                 append("else ")
-                // Fallback: bring down, rename, bring straight back up.
-                append("\$IP link set \"\$ifc\" down 2>/dev/null; ")
-                append("\$IP link set \"\$ifc\" name \"\$new\" 2>/dev/null; ")
-                append("\$IP link set \"\$new\" up 2>/dev/null; ")
-                append("echo \"\$ifc -> \$new (down/up)\"; ")
+                append("echo \"\$ifc: in-place rename not permitted, skipped (kept up to preserve DNS)\"; ")
                 append("fi;; ")
                 append("esac; done; ")
                 append("echo \"after: \$(ls /sys/class/net 2>/dev/null | tr '\\n' ' ')\"")

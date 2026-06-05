@@ -711,9 +711,12 @@ class LocationViewModel(
     }
 
     private companion object {
-        const val LOCATION_PING_ATTEMPTS = 1
+        // Retry a few times: the proxy-HEAD probe spins a throwaway xray that binds a random local
+        // port, so under a big batch (300+ "own" locations pinged at once) a transient port collision
+        // or resource hiccup would otherwise show a false "unavailable". Each attempt re-rolls the port.
+        const val LOCATION_PING_ATTEMPTS = 3
         const val LOCATION_PING_TIMEOUT_MS = 12_000L
-        const val LOCATION_PING_RETRY_DELAY_MS = 0L
+        const val LOCATION_PING_RETRY_DELAY_MS = 150L
         const val LOCATION_PING_PARALLELISM = 4
         const val PING_EMIT_THROTTLE_MS = 150L
     }
