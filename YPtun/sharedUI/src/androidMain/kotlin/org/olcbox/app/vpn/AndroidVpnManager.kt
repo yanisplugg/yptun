@@ -219,7 +219,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         }
         // Re-apply immediately if currently connected.
         if (status.value is VpnStatus.Connected || status.value is VpnStatus.Reconnecting) {
-            startVpn()
+            reapplyRunningConfig()
         }
     }
 
@@ -235,7 +235,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             }
         }
         if (status.value is VpnStatus.Connected || status.value is VpnStatus.Reconnecting) {
-            startVpn()
+            reapplyRunningConfig()
         }
     }
 
@@ -333,7 +333,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             }
         }
         if (status.value is VpnStatus.Connected || status.value is VpnStatus.Reconnecting) {
-            startVpn()
+            reapplyRunningConfig()
         }
     }
 
@@ -476,6 +476,21 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         scope.launch {
             runCatching { appContext.vpnPrefDataStore.edit { it.remove(KEY_ANDROID_CONNECTED_SINCE) } }
         }
+        sendStartVpnIntent()
+    }
+
+    /**
+     * Re-applies the running config to the live tunnel (routing / traffic / profile change) WITHOUT
+     * touching the connection timer: it reuses the same ACTION_START_VPN path the service treats as a
+     * restart, but — unlike [startVpn] — it does NOT clear the persisted start time, so the on-screen
+     * timer keeps counting from the original connect instead of resetting every time a setting changes
+     * mid-session.
+     */
+    private fun reapplyRunningConfig() {
+        sendStartVpnIntent()
+    }
+
+    private fun sendStartVpnIntent() {
         val intent = Intent().apply {
             setClassName(context.packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
             action = OlcboxVpnActions.ACTION_START_VPN
