@@ -79,14 +79,17 @@ class LocationsRepositoryImpl(
         val updateIntervalHours: Int? = null,
         val requestMode: SubscriptionRequestMode = SubscriptionRequestMode.Identity,
         val profileTitle: String? = null,
-        val userInfo: String? = null
+        val userInfo: String? = null,
+        /** Best-effort JSON from the Remnawave `<url>/info` endpoint (carries user.expiresAt etc.). */
+        val infoJson: String? = null
     )
 
     private data class DownloadedSubscription(
         val content: String,
         val updateIntervalHours: Int?,
         val profileTitle: String? = null,
-        val userInfo: String? = null
+        val userInfo: String? = null,
+        val infoJson: String? = null
     )
 
     private data class ParsedImport(
@@ -514,7 +517,7 @@ class LocationsRepositoryImpl(
             mergeSubscriptionMetadata(
                 // The panel JSON body (Remnawave `user{}`) carries the expiry + human traffic counters;
                 // the response headers carry the profile title (name) and may also carry traffic/expiry.
-                primary = subscriptionMetadataFromBody(source.content),
+                primary = subscriptionMetadataFromBody(source.infoJson ?: source.content),
                 secondary = subscriptionMetadataFromHeaders(source.profileTitle, source.userInfo)
             // Persist the auto-refresh interval (profile-update-interval header) onto the metadata at
             // import time too, so it's shown and used even before the first scheduled refresh.
@@ -548,7 +551,8 @@ class LocationsRepositoryImpl(
                     updateIntervalHours = downloaded.updateIntervalHours,
                     requestMode = requestMode,
                     profileTitle = downloaded.profileTitle,
-                    userInfo = downloaded.userInfo
+                    userInfo = downloaded.userInfo,
+                    infoJson = downloaded.infoJson
                 )
             }
     }
@@ -608,11 +612,28 @@ class LocationsRepositoryImpl(
                 }.getOrNull()?.takeIf { it.isNotBlank() }
                     ?: return@withProxyAuthentication null
 
+                // Best-effort: Remnawave exposes the rich JSON (user.expiresAt + traffic) at <url>/info;
+                // the plain subscription endpoint returns only base64 links and expire=0. Failures are
+                // ignored (non-Remnawave panels simply 404 here).
+                val infoJson = runCatching {
+                    val infoResponse = client.get(url.trim().trimEnd('/') + "/info") {
+                        headers {
+                            append(HttpHeaders.Accept, "application/json")
+                            append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
+                            if (requestMode == SubscriptionRequestMode.Identity) {
+                                append("x-hwid", hwid.orEmpty())
+                            }
+                        }
+                    }
+                    if (infoResponse.status.value in 200..299) infoResponse.bodyAsText() else null
+                }.getOrNull()?.takeIf { it.isNotBlank() }
+
                 DownloadedSubscription(
                     content = content,
                     updateIntervalHours = response.profileUpdateIntervalHours(),
                     profileTitle = response.headers["profile-title"]?.let { decodeProfileTitle(it) },
-                    userInfo = response.headers["subscription-userinfo"]?.trim()
+                    userInfo = response.headers["subscription-userinfo"]?.trim(),
+                    infoJson = infoJson
                 )
             }
         } finally {
@@ -1042,7 +1063,10 @@ class LocationsRepositoryImpl(
         val trimmed = content.trim()
         if (!trimmed.startsWith("{")) return null
         val root = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: return null
-        val user = root["user"]?.jsonObjectOrNull() ?: return null
+        // The `/info` endpoint wraps it as {response:{user:{…}}}; the bare body uses {user:{…}}.
+        val user = root["response"]?.jsonObjectOrNull()?.get("user")?.jsonObjectOrNull()
+            ?: root["user"]?.jsonObjectOrNull()
+            ?: return null
 
         val expiresAtEpochMs = IsoTime.parseIsoToEpochMs(user.string("expiresAt"))
         val used = user.string("trafficUsed")?.trim()?.takeIf { it.isNotBlank() && it != "0" }
