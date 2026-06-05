@@ -3154,6 +3154,21 @@ private fun PingSettingsContent(
             enabled = isProxyMode,
             modifier = Modifier.fillMaxWidth()
         )
+
+        SettingsSectionLabel(s.pingResultLabel)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val resultOptions = listOf(
+                AppBehaviorSettings.PING_RESULT_TIME to s.pingResultTime,
+                AppBehaviorSettings.PING_RESULT_ICON to s.pingResultIcon,
+            )
+            resultOptions.forEach { (mode, title) ->
+                FilterChip(
+                    selected = settings.pingResultDisplay == mode,
+                    onClick = { onChanged(settings.copy(pingResultDisplay = mode)) },
+                    label = { Text(title) }
+                )
+            }
+        }
     }
 }
 

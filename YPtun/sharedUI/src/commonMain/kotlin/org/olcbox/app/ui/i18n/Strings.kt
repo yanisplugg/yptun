@@ -63,6 +63,7 @@ interface Strings {
     // Delete dialogs
     val delete: String
     val cancel: String
+    fun selectedCount(count: Int): String
     val deleteSubscriptionTitle: String
     fun deleteSubscriptionMessage(count: Int): String
     val deleteAllSubscriptionsTitle: String
@@ -168,6 +169,15 @@ interface Strings {
     val routingProfileGlobalProxyDesc: String
     val routingProfileRouteOrder: String
     val routingProfileDomainStrategy: String
+    val routingExpert: String
+    val routingExpertDesc: String
+    val routingExpertInherit: String
+    val routingExpertSniffing: String
+    val routingExpertSniffingDesc: String
+    val routingExpertRouteOnly: String
+    val routingExpertRouteOnlyDesc: String
+    val routingExpertResolve: String
+    val routingExpertResolveDesc: String
     val routingProxySites: String
     val routingProxyIp: String
     val routingDirectSites: String
@@ -380,6 +390,7 @@ interface Strings {
 
     // Ping / connectivity
     val pingOffline: String
+    val pingOnline: String
     val pingChecking: String
     val pingVerify: String
     val connectivityCheck: String
@@ -395,6 +406,9 @@ interface Strings {
     val pingModeIcmp: String
     val pingModeProxyGet: String
     val pingModeProxyHead: String
+    val pingResultLabel: String
+    val pingResultTime: String
+    val pingResultIcon: String
 
     // QR scanner
     val scanQrTitle: String
@@ -462,6 +476,7 @@ object RuStrings : Strings {
     override val groupDelete = "Удалить подписку"
     override val delete = "Удалить"
     override val cancel = "Отмена"
+    override fun selectedCount(count: Int) = "Выбрано: $count"
     override val deleteSubscriptionTitle = "Удалить подписку?"
     override fun deleteSubscriptionMessage(count: Int) =
         "Будут удалены все конфигурации этой подписки ($count)."
@@ -567,6 +582,15 @@ object RuStrings : Strings {
     override val routingProfileGlobalProxyDesc = "Иначе — напрямую, кроме списков «через прокси»"
     override val routingProfileRouteOrder = "Порядок правил"
     override val routingProfileDomainStrategy = "Стратегия доменов"
+    override val routingExpert = "Экспертные настройки"
+    override val routingExpertDesc = "Тонкая настройка маршрутизации отдельно для Xray и sing-box"
+    override val routingExpertInherit = "По умолчанию"
+    override val routingExpertSniffing = "Анализ домена (sniffing)"
+    override val routingExpertSniffingDesc = "Нужен, чтобы правила domain:/geosite: срабатывали по SNI/Host. Без него .ru-правила не действуют."
+    override val routingExpertRouteOnly = "Только для маршрутизации (routeOnly)"
+    override val routingExpertRouteOnlyDesc = "Определять домен только для правил, но соединяться по исходному адресу."
+    override val routingExpertResolve = "Резолвить домен (resolve)"
+    override val routingExpertResolveDesc = "Преобразовывать домен в IP, чтобы срабатывали geoip:/ip-правила."
     override val routingProxySites = "Через прокси: сайты"
     override val routingProxyIp = "Через прокси: IP"
     override val routingDirectSites = "Напрямую: сайты"
@@ -752,6 +776,7 @@ object RuStrings : Strings {
     override val importHint = "Сканируйте QR, вставьте URI или импортируйте файл"
     override val importedFromClipboard = "Импортировано из буфера обмена"
     override val pingOffline = "Не в сети"
+    override val pingOnline = "В сети"
     override val pingChecking = "Проверка…"
     override val pingVerify = "Нажмите для проверки доступности"
     override val connectivityCheck = "Проверка соединения"
@@ -765,6 +790,9 @@ object RuStrings : Strings {
     override val pingModeIcmp = "ICMP"
     override val pingModeProxyGet = "Через прокси GET"
     override val pingModeProxyHead = "Через прокси HEAD"
+    override val pingResultLabel = "Результат пинга"
+    override val pingResultTime = "Время"
+    override val pingResultIcon = "Значок"
     override val scanQrTitle = "Сканирование QR"
     override val readyToScan = "Готово к сканированию"
     override val subscriptionOrLocationUri = "Подписка или URI локации"
@@ -824,6 +852,7 @@ object EnStrings : Strings {
     override val groupDelete = "Delete subscription"
     override val delete = "Delete"
     override val cancel = "Cancel"
+    override fun selectedCount(count: Int) = "Selected: $count"
     override val deleteSubscriptionTitle = "Delete subscription?"
     override fun deleteSubscriptionMessage(count: Int) =
         "All configurations of this subscription ($count) will be removed."
@@ -929,6 +958,15 @@ object EnStrings : Strings {
     override val routingProfileGlobalProxyDesc = "Otherwise direct, except the “via proxy” lists"
     override val routingProfileRouteOrder = "Rule order"
     override val routingProfileDomainStrategy = "Domain strategy"
+    override val routingExpert = "Expert settings"
+    override val routingExpertDesc = "Fine-tune routing separately for Xray and sing-box"
+    override val routingExpertInherit = "Default"
+    override val routingExpertSniffing = "Domain sniffing"
+    override val routingExpertSniffingDesc = "Required for domain:/geosite: rules to match by SNI/Host. Without it .ru rules do nothing."
+    override val routingExpertRouteOnly = "Route only (routeOnly)"
+    override val routingExpertRouteOnlyDesc = "Detect the domain for routing only, but still dial the original address."
+    override val routingExpertResolve = "Resolve domain (resolve)"
+    override val routingExpertResolveDesc = "Resolve the domain to an IP so geoip:/ip rules can match."
     override val routingProxySites = "Via proxy: sites"
     override val routingProxyIp = "Via proxy: IPs"
     override val routingDirectSites = "Direct: sites"
@@ -1114,6 +1152,7 @@ object EnStrings : Strings {
     override val importHint = "Scan QR, paste URI, or import file"
     override val importedFromClipboard = "Imported from clipboard"
     override val pingOffline = "Offline"
+    override val pingOnline = "Online"
     override val pingChecking = "Checking..."
     override val pingVerify = "Click to verify reachability"
     override val connectivityCheck = "Connectivity check"
@@ -1127,6 +1166,9 @@ object EnStrings : Strings {
     override val pingModeIcmp = "ICMP"
     override val pingModeProxyGet = "Via proxy GET"
     override val pingModeProxyHead = "Via proxy HEAD"
+    override val pingResultLabel = "Ping result"
+    override val pingResultTime = "Time"
+    override val pingResultIcon = "Icon"
     override val scanQrTitle = "Scan QR"
     override val readyToScan = "Ready to scan"
     override val subscriptionOrLocationUri = "Subscription or location URI"
@@ -1186,6 +1228,7 @@ object FaStrings : Strings {
     override val groupDelete = "حذف اشتراک"
     override val delete = "حذف"
     override val cancel = "انصراف"
+    override fun selectedCount(count: Int) = "انتخاب‌شده: $count"
     override val deleteSubscriptionTitle = "اشتراک حذف شود؟"
     override fun deleteSubscriptionMessage(count: Int) =
         "همهٔ پیکربندی‌های این اشتراک ($count) حذف خواهند شد."
@@ -1291,6 +1334,15 @@ object FaStrings : Strings {
     override val routingProfileGlobalProxyDesc = "در غیر این صورت مستقیم، به‌جز فهرست‌های «از پراکسی»"
     override val routingProfileRouteOrder = "ترتیب قواعد"
     override val routingProfileDomainStrategy = "راهبرد دامنه"
+    override val routingExpert = "تنظیمات پیشرفته"
+    override val routingExpertDesc = "تنظیم دقیق مسیریابی جداگانه برای Xray و sing-box"
+    override val routingExpertInherit = "پیش‌فرض"
+    override val routingExpertSniffing = "تشخیص دامنه (sniffing)"
+    override val routingExpertSniffingDesc = "برای تطبیق قواعد domain:/geosite: با SNI/Host لازم است."
+    override val routingExpertRouteOnly = "فقط مسیریابی (routeOnly)"
+    override val routingExpertRouteOnlyDesc = "دامنه فقط برای مسیریابی تشخیص داده شود، اتصال به نشانی اصلی."
+    override val routingExpertResolve = "تبدیل دامنه (resolve)"
+    override val routingExpertResolveDesc = "دامنه به IP تبدیل شود تا قواعد geoip:/ip اعمال شوند."
     override val routingProxySites = "از پراکسی: سایت‌ها"
     override val routingProxyIp = "از پراکسی: IP"
     override val routingDirectSites = "مستقیم: سایت‌ها"
@@ -1476,6 +1528,7 @@ object FaStrings : Strings {
     override val importHint = "QR را بپویید، URI را بچسبانید یا پرونده وارد کنید"
     override val importedFromClipboard = "از تخته‌گیره وارد شد"
     override val pingOffline = "آفلاین"
+    override val pingOnline = "آنلاین"
     override val pingChecking = "در حال بررسی…"
     override val pingVerify = "برای بررسی دسترس‌پذیری کلیک کنید"
     override val connectivityCheck = "بررسی اتصال"
@@ -1489,6 +1542,9 @@ object FaStrings : Strings {
     override val pingModeIcmp = "ICMP"
     override val pingModeProxyGet = "از طریق پروکسی GET"
     override val pingModeProxyHead = "از طریق پروکسی HEAD"
+    override val pingResultLabel = "نتیجهٔ پینگ"
+    override val pingResultTime = "زمان"
+    override val pingResultIcon = "نشان"
     override val scanQrTitle = "پویش QR"
     override val readyToScan = "آمادهٔ پویش"
     override val subscriptionOrLocationUri = "اشتراک یا URI موقعیت"

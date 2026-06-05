@@ -377,6 +377,9 @@ fun AndroidMainScreen(
         navigateHomeFromLocationSettings()
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(
+        org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay
+    ) {
     OlcboxAppContent(
         homeViewModel = viewModel,
         locationViewModel = locationViewModel,
@@ -476,6 +479,7 @@ fun AndroidMainScreen(
             }
         }
     )
+    }
 
     shareSheetPayload?.let { (title, payload) ->
         AndroidConfigShareSheet(

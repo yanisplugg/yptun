@@ -26,7 +26,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,11 +49,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.util.parseEmojiAndName
+
+/**
+ * How a ping result is rendered in the location list — one of [AppBehaviorSettings.PING_RESULT_MODES].
+ * Provided once near the app root (Android: from the persisted app-behavior settings). Defaults to
+ * the classic ms display so iOS/desktop keep their existing look until they wire it up too.
+ */
+val LocalPingResultDisplay = staticCompositionLocalOf { AppBehaviorSettings.PING_RESULT_TIME }
+
+/** Fixed "success green" for the ping tick — theme-independent so it's always clearly green. */
+private val PingOkGreen = Color(0xFF22C55E)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -59,7 +75,13 @@ fun LocationRow(
     pingMs: Int?,
     isError: Boolean = false,
     settingsEnabled: Boolean = true,
+    selectionMode: Boolean = false,
+    isChecked: Boolean = false,
+    showPin: Boolean = false,
+    isPinned: Boolean = false,
+    onTogglePin: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val bgColor by animateColorAsState(
@@ -100,7 +122,10 @@ fun LocationRow(
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = {
-                    if (settingsEnabled) onSettingsClick()
+                    when {
+                        onLongClick != null -> onLongClick()
+                        settingsEnabled -> onSettingsClick()
+                    }
                 }
             )
             .padding(horizontal = 20.dp, vertical = 8.dp)
@@ -134,6 +159,8 @@ fun LocationRow(
         // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),
         // so show a neutral dash instead of a ms value or a false "Offline".
         val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
+        // "Значок" mode shows a check/cross instead of the raw latency (per user setting).
+        val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
 
         when {
             isVkTurn -> {
@@ -150,42 +177,84 @@ fun LocationRow(
             }
 
             pingMs != null -> {
-                Text(
-                    text = "$pingMs ms",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (iconResult) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOnline,
+                        // Fixed green so the "online" tick reads the same in light/dark/dynamic themes.
+                        tint = PingOkGreen,
+                        modifier = Modifier.size(20.dp)
+                    )
+                } else {
+                    Text(
+                        text = "$pingMs ms",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             isError -> {
-                Text(
-                    text = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.error
-                )
+                if (iconResult) {
+                    Icon(
+                        imageVector = Icons.Rounded.Cancel,
+                        contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp)
+                    )
+                } else {
+                    Text(
+                        text = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
 
         Spacer(modifier = Modifier.width(12.dp))
 
-        if (settingsEnabled) {
-            IconButton(
-                onClick = onSettingsClick,
-                modifier = Modifier.size(40.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.MoreVert,
-                    contentDescription = "Settings",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+        if (selectionMode) {
+            // In multi-select mode the trailing controls collapse to a single checkbox.
+            Checkbox(
+                checked = isChecked,
+                onCheckedChange = { onClick() }
+            )
+        } else {
+            // Per-inbound pin toggle (custom locations): pinned rows float to the top of the section.
+            if (showPin) {
+                IconButton(
+                    onClick = onTogglePin,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                        contentDescription = "Pin",
+                        tint = if (isPinned) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
+
+            if (settingsEnabled) {
+                IconButton(
+                    onClick = onSettingsClick,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            LocationSelectionIndicator(isSelected = isSelected)
         }
-
-        Spacer(modifier = Modifier.width(8.dp))
-
-        LocationSelectionIndicator(isSelected = isSelected)
     }
 }
 

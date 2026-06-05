@@ -38,6 +38,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import awg.Awg
 import awg.LogWriter as AwgLogWriter
+import awg.Protector as AwgProtector
+import xraybridge.Xraybridge
+import xraybridge.Protector as XrayProtector
 import freeturn.Freeturn
 import freeturn.LogWriter as FreeturnLogWriter
 import mobile.LogWriter
@@ -407,6 +410,26 @@ class OlcboxVpnService : VpnService() {
                 return this@OlcboxVpnService.protect(fd.toInt())
             }
         })
+        // Register the xray/awg socket protectors process-wide (not just when those engines start),
+        // so the per-server ping probes (xraybridge/awg MeasureDelay) always leave via the underlying
+        // network and bypass the active TUN — otherwise, while connected through ANY engine, the probe
+        // would ride the tunnel and report a bogus tunnel-inflated latency. See item: ping via main iface.
+        runCatching {
+            Xraybridge.setProtector(object : XrayProtector {
+                override fun protect(fd: Long): Boolean {
+                    if (connectionMode == AndroidConnectionMode.Proxy) return true
+                    return this@OlcboxVpnService.protect(fd.toInt())
+                }
+            })
+        }.onFailure { Log.w(TAG, "xray setProtector failed", it) }
+        runCatching {
+            Awg.setProtector(object : AwgProtector {
+                override fun protect(fd: Long): Boolean {
+                    if (connectionMode == AndroidConnectionMode.Proxy) return true
+                    return this@OlcboxVpnService.protect(fd.toInt())
+                }
+            })
+        }.onFailure { Log.w(TAG, "awg setProtector failed", it) }
         Mobile.setProviders()
         Mobile.setLogWriter(object : LogWriter {
             override fun writeLog(msg: String) {
@@ -891,14 +914,19 @@ class OlcboxVpnService : VpnService() {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""
                 val json = if (!rawXray.isNullOrBlank()) {
-                    // User-supplied full Xray config: run verbatim (honors custom dns/routing/hosts).
-                    addLog("Starting Xray with custom config (verbatim)")
+                    // User-supplied full Xray config: run mostly verbatim, but MERGE the routing profile
+                    // (e.g. domain:ru → direct) so it applies to cascade/custom configs too — previously
+                    // the profile was ignored here, which is why domain:ru worked on AWG but not vless.
+                    if (routingProfile != null) assetPath = ensureGeoAssetPath(routingProfile)
+                    addLog("Starting Xray with custom config" +
+                        if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else " (verbatim)")
                     XrayConfig.prepareRaw(
                         rawConfigJson = rawXray,
                         listenPort = socksListenPort,
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
+                        routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     )
                 } else {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
@@ -1380,10 +1408,40 @@ class OlcboxVpnService : VpnService() {
     private suspend fun maybeHideTunInterface() {
         if (!loadAppBehavior().hideTunInterface) return
         withContext(Dispatchers.IO) {
-            val cmd = "ip link set tun0 name rmnet9 2>/dev/null; " +
-                "ip link set tun1 name rmnet8 2>/dev/null; true"
+            // The old one-liner failed for three reasons: (1) it hardcoded only tun0/tun1 and never
+            // touched awg0 or differently-numbered tun devices; (2) `ip link set <name>` renames an
+            // UP interface with EBUSY — the device must be brought DOWN first, then renamed, then UP;
+            // (3) `su`'s shell may not have `ip` on PATH. This script discovers every tun*/awg*/wg*
+            // netdev under /sys/class/net and down→rename→up each one (routes are keyed by ifindex,
+            // not name, so connectivity survives the rename). Best-effort; logs the full su output.
+            // Rename tun*/awg*/wg* to a REALISTIC cellular-style name (rmnet_data0, rmnet_data1…) so
+            // apps that bypass the VPN (split-tunnel) and enumerate interfaces see a normal radio iface
+            // instead of an obvious "tun0". We FIRST try to rename without touching link state — on
+            // kernels that allow it the active tunnel is never interrupted (no connectivity drop). Only
+            // if that fails do we fall back to the down→rename→up cycle. Routes are keyed by ifindex,
+            // not name, so the rename itself doesn't break routing.
+            val script = buildString {
+                append("export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH; ")
+                append("IP=\$(command -v ip || echo /system/bin/ip); ")
+                append("n=0; ")
+                append("for ifc in \$(ls /sys/class/net 2>/dev/null); do ")
+                append("case \"\$ifc\" in tun*|awg*|wg*) ")
+                append("new=rmnet_data\$n; n=\$((n+1)); ")
+                // Try in-place rename first (no down) — keeps the tunnel alive when the kernel permits.
+                append("if \$IP link set \"\$ifc\" name \"\$new\" 2>/dev/null; then ")
+                append("echo \"\$ifc -> \$new (live)\"; ")
+                append("else ")
+                // Fallback: bring down, rename, bring straight back up.
+                append("\$IP link set \"\$ifc\" down 2>/dev/null; ")
+                append("\$IP link set \"\$ifc\" name \"\$new\" 2>/dev/null; ")
+                append("\$IP link set \"\$new\" up 2>/dev/null; ")
+                append("echo \"\$ifc -> \$new (down/up)\"; ")
+                append("fi;; ")
+                append("esac; done; ")
+                append("echo \"after: \$(ls /sys/class/net 2>/dev/null | tr '\\n' ' ')\"")
+            }
             runCatching {
-                val p = ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start()
+                val p = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
                 val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
                 val code = p.waitFor()
                 addLog("Hide tun (root): exit=$code${if (out.isNotBlank()) " — $out" else ""}")

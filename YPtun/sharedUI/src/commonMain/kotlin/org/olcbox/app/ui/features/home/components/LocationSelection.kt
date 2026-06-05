@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
@@ -42,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,6 +59,9 @@ import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
 import org.olcbox.app.ui.features.locations.components.RefreshButton
+
+/** Reserved pin key for the non-subscription "Свои локации" group (it has no subscription URL). */
+const val CUSTOM_GROUP_KEY = "__custom_locations__"
 
 @Composable
 fun LocationSelectorScreen(
@@ -92,6 +98,25 @@ fun LocationSelectorScreen(
             }
         val customLocations = locations.filter { it.subscriptionUrl.isNullOrBlank() }
 
+        // --- Bulk-selection (long-press to multi-select subscriptions & inbounds, then delete) ---
+        val selectedIds = remember { mutableStateListOf<String>() }
+        var selectionMode by remember { mutableStateOf(false) }
+        fun exitSelection() {
+            selectionMode = false
+            selectedIds.clear()
+        }
+        fun toggleSelected(id: String) {
+            if (id in selectedIds) selectedIds.remove(id) else selectedIds.add(id)
+            if (selectedIds.isEmpty()) selectionMode = false
+        }
+        fun startSelection(id: String) {
+            selectionMode = true
+            if (id !in selectedIds) selectedIds.add(id)
+        }
+        // Drop stale ids if the underlying list changed (e.g. after a delete).
+        val knownIds = locations.map { it.storageId }.toSet()
+        selectedIds.retainAll(knownIds)
+
         if (locations.isEmpty()) {
             // Don't flash the "add your first config" card during the initial async load — only show
             // it once we know the store is actually empty.
@@ -105,6 +130,52 @@ fun LocationSelectorScreen(
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (selectionMode) {
+                // Selection action bar: shows the count, a delete-all-selected button and a close.
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { exitSelection() }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.cancel,
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            text = org.olcbox.app.ui.i18n.LocalStrings.current.selectedCount(selectedIds.size),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f).padding(start = 4.dp)
+                        )
+                        IconButton(
+                            onClick = {
+                                val ids = selectedIds.toList()
+                                if (ids.isNotEmpty()) onDeleteSubscription(ids)
+                                exitSelection()
+                            },
+                            enabled = selectedIds.isNotEmpty()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Delete,
+                                contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.delete,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            }
+
             Text(
                 text = org.olcbox.app.ui.i18n.LocalStrings.current.configurations,
                 style = MaterialTheme.typography.labelMedium,
@@ -112,6 +183,67 @@ fun LocationSelectorScreen(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(start = 4.dp)
             )
+
+            // The custom-locations section. Individual inbounds inside it can be pinned (not the whole
+            // group) — pinned ones float to the top of this section. Pin state is stored per storageId
+            // in the same pinned set used for subscription groups.
+            val customSection: @Composable () -> Unit = {
+                if (customLocations.isNotEmpty()) {
+                    // Pinned inbounds first (in pin order), the rest keep their natural order.
+                    val orderedCustom = customLocations.sortedBy {
+                        val i = pinnedGroups.indexOf(it.storageId)
+                        if (i >= 0) i else Int.MAX_VALUE
+                    }
+                    Column(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            LocationGroupHeader(
+                                title = org.olcbox.app.ui.i18n.LocalStrings.current.customLocations,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            val customIds = customLocations.map { it.storageId }
+                            val isCustomRefreshing = pingsState is PingsState.Loading &&
+                                    pingsState.pendingLocationIds.any { it in customIds }
+
+                            RefreshButton(
+                                isRefreshing = isCustomRefreshing,
+                                onClick = { onRefreshClick(customIds) },
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            orderedCustom.forEach { location ->
+                                key(location.storageId) {
+                                    LocationSelectorRow(
+                                        location = location,
+                                        selectedLocationId = selectedLocationId,
+                                        pingsState = pingsState,
+                                        onLocationSelected = onLocationSelected,
+                                        onLocationSettingsClick = onLocationSettingsClick,
+                                        selectionMode = selectionMode,
+                                        isChecked = location.storageId in selectedIds,
+                                        onToggleSelect = ::toggleSelected,
+                                        onStartSelection = ::startSelection,
+                                        // Per-inbound pin (custom locations only).
+                                        showPin = true,
+                                        isPinned = location.storageId in pinnedGroups,
+                                        onTogglePin = { onToggleGroupPinned(location.storageId) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             subscriptionGroups.forEachIndexed { index, group ->
                 val groupIds = group.map { it.storageId }
@@ -197,7 +329,11 @@ fun LocationSelectorScreen(
                                             selectedLocationId = selectedLocationId,
                                             pingsState = pingsState,
                                             onLocationSelected = onLocationSelected,
-                                            onLocationSettingsClick = onLocationSettingsClick
+                                            onLocationSettingsClick = onLocationSettingsClick,
+                                            selectionMode = selectionMode,
+                                            isChecked = location.storageId in selectedIds,
+                                            onToggleSelect = ::toggleSelected,
+                                            onStartSelection = ::startSelection
                                         )
                                     }
                                 }
@@ -207,49 +343,7 @@ fun LocationSelectorScreen(
                 }
             }
 
-            if (customLocations.isNotEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        LocationGroupHeader(
-                            title = org.olcbox.app.ui.i18n.LocalStrings.current.customLocations,
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        // 2. Вычисляем состояние загрузки только для кастомных локаций
-                        val customIds = customLocations.map { it.storageId }
-                        val isCustomRefreshing = pingsState is PingsState.Loading &&
-                                pingsState.pendingLocationIds.any { it in customIds }
-
-                        RefreshButton(
-                            isRefreshing = isCustomRefreshing,
-                            onClick = { onRefreshClick(customIds) },
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        customLocations.forEach { location ->
-                            key(location.storageId) {
-                                LocationSelectorRow(
-                                    location = location,
-                                    selectedLocationId = selectedLocationId,
-                                    pingsState = pingsState,
-                                    onLocationSelected = onLocationSelected,
-                                    onLocationSettingsClick = onLocationSettingsClick
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            customSection()
 
             FilledTonalButton(
                 onClick = onAddLocationClick,
@@ -558,15 +652,30 @@ private fun SubscriptionGroupMenu(
 @Composable
 private fun LocationGroupHeader(
     title: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isPinned: Boolean = false
 ) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontWeight = FontWeight.SemiBold,
-        modifier = modifier.padding(top = 2.dp, start = 4.dp)
-    )
+    Row(
+        modifier = modifier.padding(top = 2.dp, start = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (isPinned) {
+            Icon(
+                imageVector = Icons.Filled.PushPin,
+                contentDescription = "Pinned",
+                modifier = Modifier
+                    .size(20.dp)
+                    .padding(end = 4.dp),
+                tint = MaterialTheme.colorScheme.error
+            )
+        }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
 }
 
 @Composable
@@ -616,7 +725,14 @@ private fun LocationSelectorRow(
     selectedLocationId: String?,
     pingsState: PingsState,
     onLocationSelected: (String) -> Unit,
-    onLocationSettingsClick: (String) -> Unit
+    onLocationSettingsClick: (String) -> Unit,
+    selectionMode: Boolean = false,
+    isChecked: Boolean = false,
+    onToggleSelect: (String) -> Unit = {},
+    onStartSelection: (String) -> Unit = {},
+    showPin: Boolean = false,
+    isPinned: Boolean = false,
+    onTogglePin: () -> Unit = {}
 ) {
     val pingMs = pingsState.pingFor(location.storageId)
     val isLoading = pingsState.isChecking(location.storageId)
@@ -624,11 +740,22 @@ private fun LocationSelectorRow(
 
     // Stable per-row callbacks: without remember(), each ping tick allocates fresh lambdas, which
     // forces every LocationRow to recompose (300+ rows → scroll jank when a ping pass starts).
-    val onClick = remember(location.storageId, onLocationSelected) {
-        { onLocationSelected(location.storageId) }
+    // In selection mode a tap toggles the checkbox; otherwise it selects the location as usual.
+    val onClick = remember(location.storageId, selectionMode, onLocationSelected, onToggleSelect) {
+        {
+            if (selectionMode) onToggleSelect(location.storageId)
+            else onLocationSelected(location.storageId)
+        }
     }
     val onSettings = remember(location.storageId, onLocationSettingsClick) {
         { onLocationSettingsClick(location.storageId) }
+    }
+    // Long-press enters selection mode and selects this row (or toggles if already selecting).
+    val onLongPress = remember(location.storageId, selectionMode, onStartSelection, onToggleSelect) {
+        {
+            if (selectionMode) onToggleSelect(location.storageId)
+            else onStartSelection(location.storageId)
+        }
     }
 
     LocationRow(
@@ -637,7 +764,13 @@ private fun LocationSelectorRow(
         isLoading = isLoading,
         isError = isOffline,
         pingMs = pingMs,
+        selectionMode = selectionMode,
+        isChecked = isChecked,
+        showPin = showPin,
+        isPinned = isPinned,
+        onTogglePin = onTogglePin,
         onSettingsClick = onSettings,
+        onLongClick = onLongPress,
         onClick = onClick
     )
 }

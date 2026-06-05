@@ -22,11 +22,15 @@ object XrayRouting {
     const val BLOCK_TAG = "block"
     const val PROXY_TAG = "proxy"
 
-    /** Maps the Happ/v2ray domainStrategy onto Xray's accepted values. */
-    fun domainStrategy(profile: RoutingProfile): String = when (profile.domainStrategy) {
-        "IPIfNonMatch", "IPOnDemand", "AsIs" -> profile.domainStrategy
-        "ipv4_only", "ipv6_only", "prefer_ipv4", "prefer_ipv6" -> "IPIfNonMatch"
-        else -> "AsIs"
+    /** Maps the Happ/v2ray domainStrategy onto Xray's accepted values (or the expert override). */
+    fun domainStrategy(profile: RoutingProfile): String {
+        // Expert mode: honor the explicit per-core Xray strategy when set.
+        if (profile.expertEnabled && profile.xrayDomainStrategy.isNotBlank()) return profile.xrayDomainStrategy
+        return when (profile.domainStrategy) {
+            "IPIfNonMatch", "IPOnDemand", "AsIs" -> profile.domainStrategy
+            "ipv4_only", "ipv6_only", "prefer_ipv4", "prefer_ipv6" -> "IPIfNonMatch"
+            else -> "AsIs"
+        }
     }
 
     /** The `routing` object: `{ domainStrategy, rules: [...] }`, ordered by [RoutingProfile.routeOrder]. */
@@ -36,25 +40,35 @@ object XrayRouting {
     }
 
     fun rules(profile: RoutingProfile): JsonArray = buildJsonArray {
+        bucketRules(profile).forEach { add(it) }
+        // When not a global proxy, anything unmatched falls through to direct (instead of the
+        // proxy, which is Xray's default first-outbound behaviour).
+        catchAllDirectRule(profile)?.let { add(it) }
+    }
+
+    /** The ordered direct/block/proxy field rules only (no fall-through). Reused for raw-config merge. */
+    fun bucketRules(profile: RoutingProfile): List<JsonObject> {
         val order = profile.routeOrder.split('-')
             .map { it.trim().lowercase() }
             .filter { it in RoutingProfile.DEFAULT_ORDER }
             .ifEmpty { RoutingProfile.DEFAULT_ORDER }
-        for (bucket in order) {
+        return order.mapNotNull { bucket ->
             when (bucket) {
-                "block" -> rule(profile.blockSites, profile.blockIp, BLOCK_TAG)?.let { add(it) }
-                "direct" -> rule(profile.directSites, profile.directIp, DIRECT_TAG)?.let { add(it) }
-                "proxy" -> rule(profile.proxySites, profile.proxyIp, PROXY_TAG)?.let { add(it) }
+                "block" -> rule(profile.blockSites, profile.blockIp, BLOCK_TAG)
+                "direct" -> rule(profile.directSites, profile.directIp, DIRECT_TAG)
+                "proxy" -> rule(profile.proxySites, profile.proxyIp, PROXY_TAG)
+                else -> null
             }
         }
-        // When not a global proxy, anything unmatched falls through to direct (instead of the
-        // proxy, which is Xray's default first-outbound behaviour).
-        if (!profile.globalProxy) {
-            addJsonObject {
-                put("type", "field")
-                putJsonArray("network") { add("tcp"); add("udp") }
-                put("outboundTag", DIRECT_TAG)
-            }
+    }
+
+    /** The "everything unmatched → direct" fall-through, or null for a global-proxy profile. */
+    fun catchAllDirectRule(profile: RoutingProfile): JsonObject? {
+        if (profile.globalProxy) return null
+        return buildJsonObject {
+            put("type", "field")
+            putJsonArray("network") { add("tcp"); add("udp") }
+            put("outboundTag", DIRECT_TAG)
         }
     }
 

@@ -499,11 +499,16 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         val behavior = _appBehavior.value
         val server = locationConfig.proxy?.server
         val serverPort = locationConfig.proxy?.serverPort
+        // olcRTC/Stealth (and other provider engines) carry no vless/proxy profile, so the proxy
+        // GET/HEAD probe can't build a throwaway outbound for them. When proxy mode is selected (it's
+        // now the default) but this location has no proxy, fall through to the engine-default probe
+        // instead of reporting a false "Offline".
+        val hasProxy = locationConfig.proxy != null
         when (behavior.pingMode) {
-            AppBehaviorSettings.PING_TCP -> return tcpPing(server, serverPort)
-            AppBehaviorSettings.PING_ICMP -> return icmpPing(server)
-            AppBehaviorSettings.PING_PROXY_GET -> return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "GET")
-            AppBehaviorSettings.PING_PROXY_HEAD -> return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "HEAD")
+            AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
+            AppBehaviorSettings.PING_ICMP -> if (hasProxy) return icmpPing(server)
+            AppBehaviorSettings.PING_PROXY_GET -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "GET")
+            AppBehaviorSettings.PING_PROXY_HEAD -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "HEAD")
             else -> { /* PING_AUTO → fall through to the engine-specific default below */ }
         }
         val proxyType = locationConfig.proxy?.type

@@ -48,6 +48,22 @@ data class RoutingProfile(
     @SerialName("geoipurl") val geoipUrl: String = "",
     @SerialName("geositeurl") val geositeUrl: String = "",
 
+    // --- Expert (per-core) overrides. Local extension to the Happ format; ignored by other clients. ---
+    /** When on, the per-core fields below override the generic settings for fine-grained control. */
+    @SerialName("expert") val expertEnabled: Boolean = false,
+    /** Xray `routing.domainStrategy` override (blank → derive from [domainStrategy]). */
+    @SerialName("xraydomainstrategy") val xrayDomainStrategy: String = "",
+    /** Xray inbound domain sniffing (needed for `domain:` rules to match TLS/HTTP by SNI/Host). */
+    @SerialName("xraysniffing") val xraySniffing: Boolean = true,
+    /** Xray `sniffing.routeOnly`: sniff for ROUTING only, keep dialing the original destination. */
+    @SerialName("xrayrouteonly") val xrayRouteOnly: Boolean = false,
+    /** sing-box DNS/route `strategy` override (blank → inherit the global traffic strategy). */
+    @SerialName("singboxdomainstrategy") val singboxDomainStrategy: String = "",
+    /** sing-box `sniff` action (recover the domain so domain rules match). */
+    @SerialName("singboxsniff") val singboxSniff: Boolean = true,
+    /** sing-box `resolve` action: resolve the sniffed domain to an IP so geoip/ip_cidr rules match. */
+    @SerialName("singboxresolve") val singboxResolve: Boolean = false,
+
     /** Local-only id for our storage; not part of the Happ wire format. */
     @SerialName("_id") val id: String = "",
 ) {
@@ -138,6 +154,12 @@ data class RoutingProfile(
 
         /** Domain-resolution strategies accepted by both cores (mapped per-core at build time). */
         val DOMAIN_STRATEGIES = listOf("IPIfNonMatch", "IPOnDemand", "AsIs")
+
+        /** Expert: native Xray `routing.domainStrategy` values. */
+        val XRAY_DOMAIN_STRATEGIES = listOf("AsIs", "IPIfNonMatch", "IPOnDemand")
+
+        /** Expert: native sing-box DNS/route strategy values ("" = inherit the global setting). */
+        val SINGBOX_DOMAIN_STRATEGIES = listOf("", "prefer_ipv4", "prefer_ipv6", "ipv4_only", "ipv6_only")
 
         private val exportJson = Json { encodeDefaults = false }
     }

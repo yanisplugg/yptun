@@ -299,6 +299,14 @@ private fun RoutingProfileEditor(
     var blockIp by remember { mutableStateOf(listToText(profile.blockIp)) }
     var geoipUrl by remember { mutableStateOf(profile.geoipUrl) }
     var geositeUrl by remember { mutableStateOf(profile.geositeUrl) }
+    // Expert (per-core) overrides.
+    var expertEnabled by remember { mutableStateOf(profile.expertEnabled) }
+    var xrayDomainStrategy by remember { mutableStateOf(profile.xrayDomainStrategy.ifBlank { RoutingProfile.XRAY_DOMAIN_STRATEGIES.first() }) }
+    var xraySniffing by remember { mutableStateOf(profile.xraySniffing) }
+    var xrayRouteOnly by remember { mutableStateOf(profile.xrayRouteOnly) }
+    var singboxDomainStrategy by remember { mutableStateOf(profile.singboxDomainStrategy) }
+    var singboxSniff by remember { mutableStateOf(profile.singboxSniff) }
+    var singboxResolve by remember { mutableStateOf(profile.singboxResolve) }
 
     fun assemble(): RoutingProfile = profile.copy(
         name = name.trim(),
@@ -313,6 +321,13 @@ private fun RoutingProfileEditor(
         blockIp = linesToList(blockIp),
         geoipUrl = geoipUrl.trim(),
         geositeUrl = geositeUrl.trim(),
+        expertEnabled = expertEnabled,
+        xrayDomainStrategy = xrayDomainStrategy,
+        xraySniffing = xraySniffing,
+        xrayRouteOnly = xrayRouteOnly,
+        singboxDomainStrategy = singboxDomainStrategy,
+        singboxSniff = singboxSniff,
+        singboxResolve = singboxResolve,
     )
 
     Column(
@@ -394,6 +409,45 @@ private fun RoutingProfileEditor(
             modifier = Modifier.fillMaxWidth(),
         )
 
+        // --- Expert: fine-grained, per-core routing controls ---
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(s.routingExpert, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    s.routingExpertDesc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = expertEnabled, onCheckedChange = { expertEnabled = it })
+        }
+
+        if (expertEnabled) {
+            SectionLabel("Xray")
+            SectionLabel(s.routingProfileDomainStrategy)
+            LabeledDropdown(label = xrayDomainStrategy) { dismiss ->
+                RoutingProfile.XRAY_DOMAIN_STRATEGIES.forEach { st ->
+                    DropdownMenuItem(text = { Text(st) }, onClick = { xrayDomainStrategy = st; dismiss() })
+                }
+            }
+            ExpertToggle(s.routingExpertSniffing, s.routingExpertSniffingDesc, xraySniffing) { xraySniffing = it }
+            ExpertToggle(s.routingExpertRouteOnly, s.routingExpertRouteOnlyDesc, xrayRouteOnly) { xrayRouteOnly = it }
+
+            SectionLabel("sing-box")
+            SectionLabel(s.routingProfileDomainStrategy)
+            LabeledDropdown(label = singboxDomainStrategy.ifBlank { s.routingExpertInherit }) { dismiss ->
+                RoutingProfile.SINGBOX_DOMAIN_STRATEGIES.forEach { st ->
+                    DropdownMenuItem(
+                        text = { Text(st.ifBlank { s.routingExpertInherit }) },
+                        onClick = { singboxDomainStrategy = st; dismiss() },
+                    )
+                }
+            }
+            ExpertToggle(s.routingExpertSniffing, s.routingExpertSniffingDesc, singboxSniff) { singboxSniff = it }
+            ExpertToggle(s.routingExpertResolve, s.routingExpertResolveDesc, singboxResolve) { singboxResolve = it }
+        }
+
         Spacer(Modifier.height(4.dp))
         TextButton(
             onClick = { clipboard.setText(AnnotatedString(assemble().toHappLink())) },
@@ -429,6 +483,21 @@ private fun BucketField(label: String, hint: String, value: String, onChange: (S
         minLines = 2,
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+@Composable
+private fun ExpertToggle(title: String, desc: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
 }
 
 @Composable

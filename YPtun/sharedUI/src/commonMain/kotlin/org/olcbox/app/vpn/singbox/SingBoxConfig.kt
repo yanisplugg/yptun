@@ -161,8 +161,12 @@ object SingBoxConfig {
                 put("auto_detect_interface", autoDetectInterface)
 
                 putJsonArray("rules") {
-                    // Sniff destination domain so domain rules match (can be disabled in advanced).
-                    if (advanced?.sniff != false) {
+                    // Expert per-core overrides (sing-box): explicit sniff/resolve/strategy control.
+                    val sbExpert = routingProfile?.expertEnabled == true
+                    val sbExpertStrategy = routingProfile
+                        ?.takeIf { it.expertEnabled }?.singboxDomainStrategy?.takeIf { it.isNotBlank() }
+                    // Sniff destination domain so domain rules match (advanced or expert can disable it).
+                    if (advanced?.sniff != false && (!sbExpert || routingProfile!!.singboxSniff)) {
                         addJsonObject { put("action", "sniff") }
                     }
                     // Block QUIC (HTTP/3) so clients fall back to TCP/HTTP2 through the proxy. A
@@ -209,10 +213,12 @@ object SingBoxConfig {
                     // the bypassRussia toggle) is silently skipped and RU sites wrongly use the proxy
                     // IP. Resolve the sniffed domain to an IP first so IP rules can match. The
                     // ipv4-only strategy doubles as the IPv6 lever: no AAAA → nothing routes over IPv6.
-                    if (routingProfile?.usesIpRules() == true || routing.bypassRussia) {
+                    if (routingProfile?.usesIpRules() == true || routing.bypassRussia ||
+                        (sbExpert && routingProfile!!.singboxResolve)
+                    ) {
                         addJsonObject {
                             put("action", "resolve")
-                            put("strategy", dnsStrategyOverride ?: traffic.domainStrategy)
+                            put("strategy", sbExpertStrategy ?: dnsStrategyOverride ?: traffic.domainStrategy)
                         }
                     }
                     // Advanced verbatim user rules (highest precedence).

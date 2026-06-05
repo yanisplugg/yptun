@@ -34,12 +34,18 @@ data class AppBehaviorSettings(
      * How inbounds/locations are probed by the «Пинг» button. One of [PING_MODES].
      * [PING_AUTO] keeps the per-engine default behaviour (olcRTC handshake / tunnel / TCP).
      */
-    val pingMode: String = PING_AUTO,
+    val pingMode: String = PING_PROXY_HEAD,
     /**
      * Target site for the chosen [pingMode]. Used as the host for TCP/ICMP and as the URL for the
      * proxy GET/HEAD probes. Blank → a sensible built-in default ([DEFAULT_PING_URL]).
      */
     val pingUrl: String = "",
+    /**
+     * How a ping result is rendered in the location list. One of [PING_RESULT_MODES]:
+     * [PING_RESULT_TIME] shows the latency in ms (classic), [PING_RESULT_ICON] shows a check mark
+     * when the probe succeeded (reachable / connectable) and a cross when it failed (offline / error).
+     */
+    val pingResultDisplay: String = PING_RESULT_ICON,
 ) {
     companion object {
         const val PING_AUTO = "auto"
@@ -50,6 +56,12 @@ data class AppBehaviorSettings(
 
         /** Selectable ping modes (single-choice in the UI). */
         val PING_MODES = listOf(PING_AUTO, PING_TCP, PING_ICMP, PING_PROXY_GET, PING_PROXY_HEAD)
+
+        const val PING_RESULT_TIME = "time"
+        const val PING_RESULT_ICON = "icon"
+
+        /** Selectable ping-result display modes (single-choice in the UI). */
+        val PING_RESULT_MODES = listOf(PING_RESULT_TIME, PING_RESULT_ICON)
 
         /** Default target when [pingUrl] is left blank. */
         const val DEFAULT_PING_URL = "https://www.google.com"
