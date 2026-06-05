@@ -672,7 +672,6 @@ private fun SubscriptionGroupHeader(
     val first = locations.firstOrNull()
     val title = first?.subscriptionTitle().orEmpty().ifBlank { org.olcbox.app.ui.i18n.LocalStrings.current.subscriptionsSection }
     val details = first?.subscriptionDetails()
-    val status = first?.subscriptionStatusLine()
 
     Column(modifier = modifier.padding(start = 4.dp, top = 2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -697,17 +696,6 @@ private fun SubscriptionGroupHeader(
         if (!details.isNullOrBlank()) {
             Text(
                 text = details,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        // End date + last-updated on their own line so they're always visible (not crammed/clipped).
-        if (!status.isNullOrBlank()) {
-            Text(
-                text = status,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
@@ -858,32 +846,18 @@ private fun LocationItem.subscriptionTitle(): String {
 private fun LocationItem.subscriptionDetails(): String? {
     val subscription = metadata?.subscription ?: return null
     val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
-    // Auto-refresh interval taken from the subscription (profile-update-interval header).
+    // End date (with time) + the auto-refresh interval (profile-update-interval header).
+    val expiry = subscription.expiresAtEpochMs?.let {
+        s.subscriptionExpiry(org.olcbox.app.util.IsoTime.formatDateTime(it))
+    }
     val interval = subscription.updateIntervalHours?.let { s.subscriptionEvery(it) }
 
     return listOfNotNull(
         quotaText(subscription.used, subscription.available),
+        expiry,
         subscription.refresh?.takeIf { it.isNotBlank() }?.let { "Refresh $it" },
         interval
     ).joinToString(" · ").takeIf { it.isNotBlank() }
-}
-
-/** Second header line: subscription end date (+ days-left) and how long ago it last refreshed. */
-@OptIn(kotlin.time.ExperimentalTime::class)
-private fun LocationItem.subscriptionStatusLine(): String? {
-    val subscription = metadata?.subscription ?: return null
-    val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
-    val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
-
-    val expiry = subscription.expiresAtEpochMs?.let { expiresAt ->
-        val daysLeft = (expiresAt - now).floorDiv(DAY_MILLIS)
-        s.subscriptionExpiry(org.olcbox.app.util.IsoTime.formatDate(expiresAt), daysLeft)
-    }
-    val lastUpdated = subscription.lastRefreshAtEpochMs
-        ?.takeIf { it > 0L }
-        ?.let { s.subscriptionUpdatedAgo((now - it).coerceAtLeast(0L)) }
-
-    return listOfNotNull(expiry, lastUpdated).joinToString(" · ").takeIf { it.isNotBlank() }
 }
 
 private fun quotaText(used: String?, available: String?): String? {

@@ -92,5 +92,15 @@ object IsoTime {
         return "${pad2(day)}.${pad2(month)}.$year"
     }
 
+    /** Formats an epoch-ms as `DD.MM.YYYY HH:MM:SS` (UTC, matching the panel's stored expiry). */
+    fun formatDateTime(epochMs: Long): String {
+        val (year, month, day) = civilFromDays(epochMs.floorDiv(MS_PER_DAY))
+        val secOfDay = epochMs.mod(MS_PER_DAY) / 1_000L
+        val hh = (secOfDay / 3_600L).toInt()
+        val mm = ((secOfDay % 3_600L) / 60L).toInt()
+        val ss = (secOfDay % 60L).toInt()
+        return "${pad2(day)}.${pad2(month)}.$year ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}"
+    }
+
     private fun pad2(value: Int): String = if (value in 0..9) "0$value" else value.toString()
 }
