@@ -152,6 +152,28 @@ interface Strings {
     val sbRuleSetLabel: String
     val sbInvalidJsonArray: String
 
+    // Routing tabs + manual (v2rayNG-style) rules
+    val routingTabSimple: String
+    val routingTabRules: String
+    val routingTabHapp: String
+    val routingRulesTitle: String
+    val routingRulesDesc: String
+    val routingRulesEmpty: String
+    val routingRuleAdd: String
+    val routingRuleEdit: String
+    val routingRuleDelete: String
+    val routingRuleOutbound: String
+    val routingRuleDomains: String
+    val routingRuleIps: String
+    val routingRulePort: String
+    val routingRuleNetwork: String
+    val routingRuleProtocol: String
+    val routingRuleEnabled: String
+    val routingRuleNetworkAny: String
+    val routingOutProxy: String
+    val routingOutDirect: String
+    val routingOutBlock: String
+
     // Routing profiles (Happ-style)
     val routingProfiles: String
     val routingProfilesSubtitle: String
@@ -564,6 +586,26 @@ object RuStrings : Strings {
         "Дословный JSON sing-box. Выполняется до переключателей выше. " +
             "Пример правил: [{\"domain_suffix\":[\"openai.com\"],\"outbound\":\"direct\"}]"
     override val sbRouteRulesLabel = "route.rules (JSON-массив)"
+    override val routingTabSimple = "Простой"
+    override val routingTabRules = "Правила"
+    override val routingTabHapp = "Happ"
+    override val routingRulesTitle = "Правила маршрутизации"
+    override val routingRulesDesc = "Свой список правил в стиле v2rayNG. Работает на движке sing-box; правила применяются по порядку сверху вниз."
+    override val routingRulesEmpty = "Правил пока нет. Добавьте первое."
+    override val routingRuleAdd = "Добавить правило"
+    override val routingRuleEdit = "Правило"
+    override val routingRuleDelete = "Удалить правило"
+    override val routingRuleOutbound = "Действие"
+    override val routingRuleDomains = "Домены"
+    override val routingRuleIps = "IP / geoip"
+    override val routingRulePort = "Порт"
+    override val routingRuleNetwork = "Сеть"
+    override val routingRuleProtocol = "Протокол"
+    override val routingRuleEnabled = "Включено"
+    override val routingRuleNetworkAny = "Любая"
+    override val routingOutProxy = "Через прокси"
+    override val routingOutDirect = "Напрямую"
+    override val routingOutBlock = "Блокировать"
     override val sbRuleSetLabel = "rule_set (JSON-массив)"
     override val sbInvalidJsonArray = "Некорректный JSON-массив"
     override val routingProfiles = "Профили маршрутизации"
@@ -942,6 +984,26 @@ object EnStrings : Strings {
     override val sbRouteRulesLabel = "route.rules (JSON array)"
     override val sbRuleSetLabel = "rule_set (JSON array)"
     override val sbInvalidJsonArray = "Invalid JSON array"
+    override val routingTabSimple = "Simple"
+    override val routingTabRules = "Rules"
+    override val routingTabHapp = "Happ"
+    override val routingRulesTitle = "Routing rules"
+    override val routingRulesDesc = "A custom v2rayNG-style rule list. Runs on the sing-box core; rules apply top to bottom."
+    override val routingRulesEmpty = "No rules yet. Add the first one."
+    override val routingRuleAdd = "Add rule"
+    override val routingRuleEdit = "Rule"
+    override val routingRuleDelete = "Delete rule"
+    override val routingRuleOutbound = "Action"
+    override val routingRuleDomains = "Domains"
+    override val routingRuleIps = "IP / geoip"
+    override val routingRulePort = "Port"
+    override val routingRuleNetwork = "Network"
+    override val routingRuleProtocol = "Protocol"
+    override val routingRuleEnabled = "Enabled"
+    override val routingRuleNetworkAny = "Any"
+    override val routingOutProxy = "Via proxy"
+    override val routingOutDirect = "Direct"
+    override val routingOutBlock = "Block"
     override val routingProfiles = "Routing profiles"
     override val routingProfilesSubtitle = "Happ-compatible rules — globally or per location"
     override val routingProfileGlobal = "Global profile"
@@ -1318,6 +1380,26 @@ object FaStrings : Strings {
     override val sbRouteRulesLabel = "route.rules (آرایهٔ JSON)"
     override val sbRuleSetLabel = "rule_set (آرایهٔ JSON)"
     override val sbInvalidJsonArray = "آرایهٔ JSON نامعتبر"
+    override val routingTabSimple = "ساده"
+    override val routingTabRules = "قوانین"
+    override val routingTabHapp = "Happ"
+    override val routingRulesTitle = "قوانین مسیریابی"
+    override val routingRulesDesc = "فهرست قوانین سفارشی به سبک v2rayNG. روی هستهٔ sing-box کار می‌کند؛ قوانین از بالا به پایین اعمال می‌شوند."
+    override val routingRulesEmpty = "هنوز قانونی نیست. اولین را اضافه کنید."
+    override val routingRuleAdd = "افزودن قانون"
+    override val routingRuleEdit = "قانون"
+    override val routingRuleDelete = "حذف قانون"
+    override val routingRuleOutbound = "اقدام"
+    override val routingRuleDomains = "دامنه‌ها"
+    override val routingRuleIps = "IP / geoip"
+    override val routingRulePort = "درگاه"
+    override val routingRuleNetwork = "شبکه"
+    override val routingRuleProtocol = "پروتکل"
+    override val routingRuleEnabled = "فعال"
+    override val routingRuleNetworkAny = "هر کدام"
+    override val routingOutProxy = "از طریق پراکسی"
+    override val routingOutDirect = "مستقیم"
+    override val routingOutBlock = "مسدود کردن"
     override val routingProfiles = "نمایه‌های مسیریابی"
     override val routingProfilesSubtitle = "قواعد سازگار با Happ — سراسری یا برای هر موقعیت"
     override val routingProfileGlobal = "نمایهٔ سراسری"

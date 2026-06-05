@@ -13,6 +13,17 @@ object HappRoutingParser {
 
     const val SCHEME = "happ://routing/add/"
 
+    /**
+     * Alternative `routing://` scheme prefixes (our own export format / cross-app sharing), accepted
+     * in addition to Happ's. The payload is the same base64url-json as Happ, so all three forms decode
+     * identically: `routing://routing/add/<b64>`, `routing://add/<b64>`, and bare `routing://<b64>`.
+     */
+    private val ROUTING_SCHEMES = listOf(
+        "routing://routing/add/",
+        "routing://add/",
+        "routing://",
+    )
+
     /** Distinctive Happ routing-JSON keys, used to recognise a pasted profile vs. some other config. */
     private val ROUTING_KEYS = setOf(
         "directsites", "proxysites", "blocksites", "directip", "proxyip", "blockip",
@@ -24,9 +35,16 @@ object HappRoutingParser {
         isLenient = true
     }
 
-    /** True if [link] looks like a Happ routing link (cheap prefix check). */
-    fun isHappRoutingLink(link: String): Boolean =
-        link.trim().startsWith(SCHEME, ignoreCase = true)
+    /** The matching scheme prefix for [link] (Happ or routing://), or null when none applies. */
+    private fun schemePrefixOf(link: String): String? {
+        val t = link.trim()
+        if (t.startsWith(SCHEME, ignoreCase = true)) return SCHEME
+        // Longest prefixes first so "routing://add/" wins over the bare "routing://".
+        return ROUTING_SCHEMES.firstOrNull { t.startsWith(it, ignoreCase = true) }
+    }
+
+    /** True if [link] looks like a routing link (Happ `happ://` or our `routing://` scheme). */
+    fun isHappRoutingLink(link: String): Boolean = schemePrefixOf(link) != null
 
     /** True if [text] looks like raw Happ routing JSON (a JSON object carrying routing-profile keys). */
     fun isRoutingJson(text: String): Boolean {
@@ -43,9 +61,9 @@ object HappRoutingParser {
     /** Returns the decoded profile, or null if the link is not a valid Happ routing link. */
     fun parse(link: String): RoutingProfile? {
         val trimmed = link.trim()
-        if (!isHappRoutingLink(trimmed)) return null
+        val scheme = schemePrefixOf(trimmed) ?: return null
         // Strip the scheme + any trailing #fragment / ?query before decoding the base64 payload.
-        val payload = trimmed.substring(SCHEME.length)
+        val payload = trimmed.substring(scheme.length)
             .substringBefore('#')
             .substringBefore('?')
             .trim()

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import org.olcbox.app.data.model.RoutingProfile
+import org.olcbox.app.data.model.SingBoxRule
 
 /**
  * Translates a [RoutingProfile] into sing-box `route.rules` + `route.rule_set` fragments.
@@ -95,6 +96,90 @@ object SingBoxRouting {
                     put("url", "${ipBase}geoip-$tag.srs")
                     put("download_detour", DIRECT_TAG)
                 }
+            }
+        }
+    }
+
+    // --- v2rayNG-style manual rules (sing-box only) ---
+
+    /**
+     * One sing-box `route.rules` object per enabled [SingBoxRule]. All of a rule's populated fields
+     * are combined into a single object (sing-box ANDs the fields), mirroring v2rayNG semantics.
+     * Caller inserts these into `route.rules`.
+     */
+    fun manualRules(rules: List<SingBoxRule>): JsonArray = buildJsonArray {
+        rules.filter { it.enabled && it.hasMatcher() }.forEach { rule ->
+            val s = parse(rule.domains)
+            val i = parseIp(rule.ip)
+            val domainSuffix = s.flatMap { it.domainSuffix }.distinct()
+            val domainExact = s.flatMap { it.domainExact }.distinct()
+            val domainKeyword = s.flatMap { it.domainKeyword }.distinct()
+            val domainRegex = s.flatMap { it.domainRegex }.distinct()
+            val ipCidr = i.flatMap { it.ipCidr }.distinct()
+            val ruleSetTags = (s.flatMap { it.geositeTags }.map { "geosite-$it" } +
+                i.flatMap { it.geoipTags }.map { "geoip-$it" }).distinct()
+            val singlePorts = mutableListOf<Int>()
+            val portRanges = mutableListOf<String>()
+            splitPorts(rule.port, singlePorts, portRanges)
+
+            add(buildJsonObject {
+                if (ruleSetTags.isNotEmpty()) putJsonArray("rule_set") { ruleSetTags.forEach { add(it) } }
+                if (domainSuffix.isNotEmpty()) putJsonArray("domain_suffix") { domainSuffix.forEach { add(it) } }
+                if (domainExact.isNotEmpty()) putJsonArray("domain") { domainExact.forEach { add(it) } }
+                if (domainKeyword.isNotEmpty()) putJsonArray("domain_keyword") { domainKeyword.forEach { add(it) } }
+                if (domainRegex.isNotEmpty()) putJsonArray("domain_regex") { domainRegex.forEach { add(it) } }
+                if (ipCidr.isNotEmpty()) putJsonArray("ip_cidr") { ipCidr.forEach { add(it) } }
+                if (singlePorts.isNotEmpty()) putJsonArray("port") { singlePorts.forEach { add(it) } }
+                if (portRanges.isNotEmpty()) putJsonArray("port_range") { portRanges.forEach { add(it) } }
+                if (rule.network.isNotBlank()) put("network", rule.network)
+                if (rule.protocol.isNotEmpty()) putJsonArray("protocol") { rule.protocol.forEach { add(it) } }
+                when (rule.outbound) {
+                    SingBoxRule.OUT_BLOCK -> put("action", "reject")
+                    SingBoxRule.OUT_DIRECT -> put("outbound", DIRECT_TAG)
+                    else -> put("outbound", PROXY_TAG)
+                }
+            })
+        }
+    }
+
+    /** Remote `.srs` rule-sets for every geo tag the [rules] reference. Empty when none. */
+    fun manualRuleSets(
+        rules: List<SingBoxRule>,
+        geositeBase: String = DEFAULT_GEOSITE_BASE,
+        geoipBase: String = DEFAULT_GEOIP_BASE,
+    ): JsonArray {
+        val enabled = rules.filter { it.enabled && it.hasMatcher() }
+        val geositeTags = enabled.flatMap { parse(it.domains).flatMap(Selectors::geositeTags) }.distinct()
+        val geoipTags = enabled.flatMap { parseIp(it.ip).flatMap(Selectors::geoipTags) }.distinct()
+        if (geositeTags.isEmpty() && geoipTags.isEmpty()) return JsonArray(emptyList())
+        val siteBase = geositeBase.ifBlank { DEFAULT_GEOSITE_BASE }.let { if (it.endsWith('/')) it else "$it/" }
+        val ipBase = geoipBase.ifBlank { DEFAULT_GEOIP_BASE }.let { if (it.endsWith('/')) it else "$it/" }
+        return buildJsonArray {
+            geositeTags.forEach { tag ->
+                addJsonObject {
+                    put("type", "remote"); put("tag", "geosite-$tag"); put("format", "binary")
+                    put("url", "${siteBase}geosite-$tag.srs"); put("download_detour", DIRECT_TAG)
+                }
+            }
+            geoipTags.forEach { tag ->
+                addJsonObject {
+                    put("type", "remote"); put("tag", "geoip-$tag"); put("format", "binary")
+                    put("url", "${ipBase}geoip-$tag.srs"); put("download_detour", DIRECT_TAG)
+                }
+            }
+        }
+    }
+
+    /** Splits a port field ("443, 1000:2000, 8080") into single ints and "lo:hi" ranges. */
+    private fun splitPorts(raw: String, single: MutableList<Int>, ranges: MutableList<String>) {
+        raw.split(',', ';', ' ', '\n').map { it.trim() }.filter { it.isNotEmpty() }.forEach { tok ->
+            if (tok.contains(':') || tok.contains('-')) {
+                val parts = tok.split(':', '-').map { it.trim() }
+                if (parts.size == 2 && parts[0].toIntOrNull() != null && parts[1].toIntOrNull() != null) {
+                    ranges.add("${parts[0]}:${parts[1]}")
+                }
+            } else {
+                tok.toIntOrNull()?.let { single.add(it) }
             }
         }
     }

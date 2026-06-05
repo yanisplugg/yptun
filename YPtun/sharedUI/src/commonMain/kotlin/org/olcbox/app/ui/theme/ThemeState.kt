@@ -20,6 +20,13 @@ object ThemeState {
     /** Base theme background color. */
     var background by mutableStateOf<Color?>(null)
 
+    /**
+     * Whether the device (Material You) dynamic theme is on. Mirrors the persisted setting so
+     * standalone activities (e.g. the QR scanner) render in the same theme as the main screen
+     * instead of always defaulting to dynamic.
+     */
+    var dynamicEnabled by mutableStateOf(false)
+
     /** Theme (background) swatches; first = default (black). */
     val backgroundPresets: List<Color> = listOf(
         Color(0xFF000000), // black (default)

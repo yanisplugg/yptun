@@ -15,11 +15,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -32,7 +33,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
@@ -44,9 +44,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,12 +60,16 @@ import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
 import org.olcbox.app.ui.features.locations.components.RefreshButton
 
-/** Reserved pin key for the non-subscription "Свои локации" group (it has no subscription URL). */
-const val CUSTOM_GROUP_KEY = "__custom_locations__"
-
-@Composable
-fun LocationSelectorScreen(
-    modifier: Modifier = Modifier,
+/**
+ * Emits the configuration list directly into the hosting [LazyListScope] (the Home screen is one
+ * big LazyColumn). This is what keeps long subscriptions smooth: each server row is its own lazy
+ * item, so only the handful of visible rows are composed/laid-out and they are recycled on scroll —
+ * instead of materializing all 300+ rows at once inside a plain verticalScroll Column (which janked
+ * badly while scrolling, especially during a ping pass).
+ *
+ * Items use stable keys (group key / storageId) so Compose preserves and recycles them correctly.
+ */
+fun LazyListScope.locationSelectorContent(
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
@@ -76,277 +80,246 @@ fun LocationSelectorScreen(
     onLocationSelected: (String) -> Unit,
     onLocationSettingsClick: (String) -> Unit,
     onDeleteSubscription: (List<String>) -> Unit = {},
+    // Bulk multi-select (long-press): hoisted to the host screen.
+    selectionMode: Boolean = false,
+    selectedIds: List<String> = emptyList(),
+    onToggleSelect: (String) -> Unit = {},
+    onStartSelection: (String) -> Unit = {},
     collapsedGroups: Set<String> = emptySet(),
     pinnedGroups: List<String> = emptyList(),
     pingSortedGroups: Set<String> = emptySet(),
     pingSortDescendingGroups: Set<String> = emptySet(),
+    pinnedCustomLocations: List<String> = emptyList(),
+    customLocationsPingSorted: Boolean = false,
+    customLocationsPingSortDescending: Boolean = false,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
-    onToggleGroupPingSort: (String) -> Unit = {}
+    onToggleGroupPingSort: (String) -> Unit = {},
+    onToggleCustomLocationPinned: (String) -> Unit = {},
+    onToggleCustomLocationsPingSort: () -> Unit = {}
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        val subscriptionLocations = locations.filter { !it.subscriptionUrl.isNullOrBlank() }
-        val subscriptionGroups = subscriptionLocations
-            .groupBy { it.subscriptionGroupKey() }
-            .values
-            .toList()
-            // Pinned groups float to the top, preserving pin order; the rest stay put.
-            .sortedBy { group ->
-                val key = group.firstOrNull()?.subscriptionGroupKey()
-                val pinIndex = pinnedGroups.indexOf(key)
-                if (pinIndex >= 0) pinIndex else Int.MAX_VALUE
-            }
-        val customLocations = locations.filter { it.subscriptionUrl.isNullOrBlank() }
-
-        // --- Bulk-selection (long-press to multi-select subscriptions & inbounds, then delete) ---
-        val selectedIds = remember { mutableStateListOf<String>() }
-        var selectionMode by remember { mutableStateOf(false) }
-        fun exitSelection() {
-            selectionMode = false
-            selectedIds.clear()
-        }
-        fun toggleSelected(id: String) {
-            if (id in selectedIds) selectedIds.remove(id) else selectedIds.add(id)
-            if (selectedIds.isEmpty()) selectionMode = false
-        }
-        fun startSelection(id: String) {
-            selectionMode = true
-            if (id !in selectedIds) selectedIds.add(id)
-        }
-        // Drop stale ids if the underlying list changed (e.g. after a delete).
-        val knownIds = locations.map { it.storageId }.toSet()
-        selectedIds.retainAll(knownIds)
-
-        if (locations.isEmpty()) {
-            // Don't flash the "add your first config" card during the initial async load — only show
-            // it once we know the store is actually empty.
-            if (hasLoaded) {
+    if (locations.isEmpty()) {
+        // Don't flash the "add your first config" card during the initial async load — only show
+        // it once we know the store is actually empty.
+        if (hasLoaded) {
+            item(key = "relay-setup") {
                 RelaySetupCard(
                     onAddSubscriptionClick = onAddSubscriptionClick,
                     onAddLocationClick = onAddLocationClick
                 )
             }
-            return@Column
         }
+        return
+    }
 
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (selectionMode) {
-                // Selection action bar: shows the count, a delete-all-selected button and a close.
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh
+    val subscriptionLocations = locations.filter { !it.subscriptionUrl.isNullOrBlank() }
+    val subscriptionGroups = subscriptionLocations
+        .groupBy { it.subscriptionGroupKey() }
+        .values
+        .toList()
+        // Pinned groups float to the top, preserving pin order; the rest stay put.
+        .sortedBy { group ->
+            val key = group.firstOrNull()?.subscriptionGroupKey()
+            val pinIndex = pinnedGroups.indexOf(key)
+            if (pinIndex >= 0) pinIndex else Int.MAX_VALUE
+        }
+    val customLocations = locations.filter { it.subscriptionUrl.isNullOrBlank() }
+
+    item(key = "configurations-label") {
+        Text(
+            text = org.olcbox.app.ui.i18n.LocalStrings.current.configurations,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 4.dp)
+        )
+    }
+
+    subscriptionGroups.forEach { group ->
+        val groupIds = group.map { it.storageId }
+        val groupKey = group.firstOrNull()?.subscriptionGroupKey() ?: ""
+        val isCollapsed = groupKey in collapsedGroups
+        val isPinned = groupKey in pinnedGroups
+        val isPingSorted = groupKey in pingSortedGroups
+        val isPingDescending = groupKey in pingSortDescendingGroups
+
+        item(key = "group-header-$groupKey") {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp)
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { exitSelection() }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Close,
-                                contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.cancel,
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        Text(
-                            text = org.olcbox.app.ui.i18n.LocalStrings.current.selectedCount(selectedIds.size),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f).padding(start = 4.dp)
-                        )
-                        IconButton(
-                            onClick = {
-                                val ids = selectedIds.toList()
-                                if (ids.isNotEmpty()) onDeleteSubscription(ids)
-                                exitSelection()
-                            },
-                            enabled = selectedIds.isNotEmpty()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Delete,
-                                contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.delete,
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                }
-            }
-
-            Text(
-                text = org.olcbox.app.ui.i18n.LocalStrings.current.configurations,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(start = 4.dp)
-            )
-
-            // The custom-locations section. Individual inbounds inside it can be pinned (not the whole
-            // group) — pinned ones float to the top of this section. Pin state is stored per storageId
-            // in the same pinned set used for subscription groups.
-            val customSection: @Composable () -> Unit = {
-                if (customLocations.isNotEmpty()) {
-                    // Pinned inbounds first (in pin order), the rest keep their natural order.
-                    val orderedCustom = customLocations.sortedBy {
-                        val i = pinnedGroups.indexOf(it.storageId)
-                        if (i >= 0) i else Int.MAX_VALUE
-                    }
-                    Column(
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                        // Tapping the title (with its chevron) collapses/expands the list.
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onToggleGroupCollapsed(groupKey) },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            LocationGroupHeader(
-                                title = org.olcbox.app.ui.i18n.LocalStrings.current.customLocations,
+                            Icon(
+                                imageVector = if (isCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                                contentDescription = if (isCollapsed) "Expand" else "Collapse",
+                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            SubscriptionGroupHeader(
+                                locations = group,
+                                isPinned = isPinned,
                                 modifier = Modifier.weight(1f)
                             )
-
-                            val customIds = customLocations.map { it.storageId }
-                            val isCustomRefreshing = pingsState is PingsState.Loading &&
-                                    pingsState.pendingLocationIds.any { it in customIds }
-
-                            RefreshButton(
-                                isRefreshing = isCustomRefreshing,
-                                onClick = { onRefreshClick(customIds) },
-                                tint = MaterialTheme.colorScheme.primary
-                            )
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
+                        val isGroupRefreshing = pingsState is PingsState.Loading &&
+                                pingsState.pendingLocationIds.any { it in groupIds }
 
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            orderedCustom.forEach { location ->
-                                key(location.storageId) {
-                                    LocationSelectorRow(
-                                        location = location,
-                                        selectedLocationId = selectedLocationId,
-                                        pingsState = pingsState,
-                                        onLocationSelected = onLocationSelected,
-                                        onLocationSettingsClick = onLocationSettingsClick,
-                                        selectionMode = selectionMode,
-                                        isChecked = location.storageId in selectedIds,
-                                        onToggleSelect = ::toggleSelected,
-                                        onStartSelection = ::startSelection,
-                                        // Per-inbound pin (custom locations only).
-                                        showPin = true,
-                                        isPinned = location.storageId in pinnedGroups,
-                                        onTogglePin = { onToggleGroupPinned(location.storageId) }
-                                    )
-                                }
-                            }
-                        }
+                        RefreshButton(
+                            isRefreshing = isGroupRefreshing,
+                            onClick = { onRefreshClick(groupIds) },
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+
+                        // Overflow menu: pin, sort-by-ping, delete.
+                        SubscriptionGroupMenu(
+                            isPinned = isPinned,
+                            isPingSorted = isPingSorted,
+                            isPingDescending = isPingDescending,
+                            onTogglePin = { onToggleGroupPinned(groupKey) },
+                            onTogglePingSort = { onToggleGroupPingSort(groupKey) },
+                            onDelete = { onDeleteSubscription(groupIds) }
+                        )
+                    }
+
+                    if (!isCollapsed) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TrafficProgressBar(location = group.firstOrNull())
                     }
                 }
             }
+        }
 
-            subscriptionGroups.forEachIndexed { index, group ->
-                val groupIds = group.map { it.storageId }
-                val groupKey = group.firstOrNull()?.subscriptionGroupKey() ?: ""
-                val isCollapsed = groupKey in collapsedGroups
-                val isPinned = groupKey in pinnedGroups
-                val isPingSorted = groupKey in pingSortedGroups
-                val isPingDescending = groupKey in pingSortDescendingGroups
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainer
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Tapping the title (with its chevron) collapses/expands the list.
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { onToggleGroupCollapsed(groupKey) },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = if (isCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
-                                    contentDescription = if (isCollapsed) "Expand" else "Collapse",
-                                    modifier = Modifier.size(22.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                SubscriptionGroupHeader(
-                                    locations = group,
-                                    isPinned = isPinned,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-
-                            val isGroupRefreshing = pingsState is PingsState.Loading &&
-                                    pingsState.pendingLocationIds.any { it in groupIds }
-
-                            RefreshButton(
-                                isRefreshing = isGroupRefreshing,
-                                onClick = { onRefreshClick(groupIds) },
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-
-                            // Overflow menu: pin, sort-by-ping, delete.
-                            SubscriptionGroupMenu(
-                                isPinned = isPinned,
-                                isPingSorted = isPingSorted,
-                                isPingDescending = isPingDescending,
-                                onTogglePin = { onToggleGroupPinned(groupKey) },
-                                onTogglePingSort = { onToggleGroupPingSort(groupKey) },
-                                onDelete = { onDeleteSubscription(groupIds) }
-                            )
-                        }
-
-                        if (!isCollapsed) {
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            TrafficProgressBar(location = group.firstOrNull())
-
-                            val orderedGroup = if (isPingSorted) {
-                                group.sortedWith(pingComparator(pingsState, isPingDescending))
-                            } else {
-                                group
-                            }
-
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                orderedGroup.forEach { location ->
-                                    key(location.storageId) {
-                                        LocationSelectorRow(
-                                            location = location,
-                                            selectedLocationId = selectedLocationId,
-                                            pingsState = pingsState,
-                                            onLocationSelected = onLocationSelected,
-                                            onLocationSettingsClick = onLocationSettingsClick,
-                                            selectionMode = selectionMode,
-                                            isChecked = location.storageId in selectedIds,
-                                            onToggleSelect = ::toggleSelected,
-                                            onStartSelection = ::startSelection
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        if (!isCollapsed) {
+            val orderedGroup = if (isPingSorted) {
+                group.sortedWith(pingComparator(pingsState, isPingDescending))
+            } else {
+                group
             }
 
-            customSection()
+            items(
+                items = orderedGroup,
+                key = { "row-${it.storageId}" }
+            ) { location ->
+                LocationSelectorRow(
+                    location = location,
+                    selectedLocationId = selectedLocationId,
+                    pingsState = pingsState,
+                    onLocationSelected = onLocationSelected,
+                    onLocationSettingsClick = onLocationSettingsClick,
+                    selectionMode = selectionMode,
+                    isChecked = location.storageId in selectedIds,
+                    onToggleSelect = onToggleSelect,
+                    onStartSelection = onStartSelection
+                )
+            }
+        }
+    }
 
+    if (customLocations.isNotEmpty()) {
+        item(key = "custom-header") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LocationGroupHeader(
+                    title = org.olcbox.app.ui.i18n.LocalStrings.current.customLocations,
+                    modifier = Modifier.weight(1f)
+                )
+
+                val customIds = customLocations.map { it.storageId }
+                val isCustomRefreshing = pingsState is PingsState.Loading &&
+                        pingsState.pendingLocationIds.any { it in customIds }
+
+                RefreshButton(
+                    isRefreshing = isCustomRefreshing,
+                    onClick = { onRefreshClick(customIds) },
+                    tint = MaterialTheme.colorScheme.primary
+                )
+
+                // Overflow menu: sort-by-ping for the whole "own locations" section.
+                CustomLocationsMenu(
+                    isPingSorted = customLocationsPingSorted,
+                    isPingDescending = customLocationsPingSortDescending,
+                    onTogglePingSort = onToggleCustomLocationsPingSort
+                )
+            }
+        }
+
+        // Pinned custom locations float to the top (in pin order); optionally ping-sorted.
+        val orderedCustom = run {
+            val base = if (customLocationsPingSorted) {
+                customLocations.sortedWith(pingComparator(pingsState, customLocationsPingSortDescending))
+            } else {
+                customLocations
+            }
+            base.sortedBy { loc ->
+                val pinIndex = pinnedCustomLocations.indexOf(loc.storageId)
+                if (pinIndex >= 0) pinIndex else Int.MAX_VALUE
+            }
+        }
+
+        items(
+            items = orderedCustom,
+            key = { "custom-row-${it.storageId}" }
+        ) { location ->
+            LocationSelectorRow(
+                location = location,
+                selectedLocationId = selectedLocationId,
+                pingsState = pingsState,
+                onLocationSelected = onLocationSelected,
+                onLocationSettingsClick = onLocationSettingsClick,
+                isPinned = location.storageId in pinnedCustomLocations,
+                onTogglePinned = { onToggleCustomLocationPinned(location.storageId) },
+                selectionMode = selectionMode,
+                isChecked = location.storageId in selectedIds,
+                onToggleSelect = onToggleSelect,
+                onStartSelection = onStartSelection
+            )
+        }
+    }
+
+    item(key = "add-location-button") {
+        FilledTonalButton(
+            onClick = onAddLocationClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Icon(Icons.Rounded.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = org.olcbox.app.ui.i18n.LocalStrings.current.addCustomLocation,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+
+    if (subscriptionLocations.isEmpty()) {
+        item(key = "add-subscription-button") {
             FilledTonalButton(
-                onClick = onAddLocationClick,
+                onClick = onAddSubscriptionClick,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(54.dp),
@@ -355,28 +328,10 @@ fun LocationSelectorScreen(
                 Icon(Icons.Rounded.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = org.olcbox.app.ui.i18n.LocalStrings.current.addCustomLocation,
+                    text = org.olcbox.app.ui.i18n.LocalStrings.current.addSubscription,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium
                 )
-            }
-
-            if (subscriptionLocations.isEmpty()) {
-                FilledTonalButton(
-                    onClick = onAddSubscriptionClick,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(54.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Icon(Icons.Rounded.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = org.olcbox.app.ui.i18n.LocalStrings.current.addSubscription,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
             }
         }
     }
@@ -650,32 +605,62 @@ private fun SubscriptionGroupMenu(
 }
 
 @Composable
-private fun LocationGroupHeader(
-    title: String,
-    modifier: Modifier = Modifier,
-    isPinned: Boolean = false
+private fun CustomLocationsMenu(
+    isPingSorted: Boolean,
+    isPingDescending: Boolean,
+    onTogglePingSort: () -> Unit
 ) {
-    Row(
-        modifier = modifier.padding(top = 2.dp, start = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (isPinned) {
+    var expanded by remember { mutableStateOf(false) }
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+
+    Box {
+        IconButton(onClick = { expanded = true }) {
             Icon(
-                imageVector = Icons.Filled.PushPin,
-                contentDescription = "Pinned",
-                modifier = Modifier
-                    .size(20.dp)
-                    .padding(end = 4.dp),
-                tint = MaterialTheme.colorScheme.error
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = "More",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.SemiBold
-        )
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(s.groupSortByPing) },
+                leadingIcon = {
+                    Icon(imageVector = Icons.Outlined.Sort, contentDescription = null)
+                },
+                trailingIcon = if (isPingSorted) {
+                    {
+                        Icon(
+                            imageVector = if (isPingDescending) Icons.Filled.ArrowDownward else Icons.Filled.ArrowUpward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                } else null,
+                onClick = {
+                    onTogglePingSort()
+                    expanded = false
+                }
+            )
+        }
     }
+}
+
+@Composable
+private fun LocationGroupHeader(
+    title: String,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.SemiBold,
+        modifier = modifier.padding(top = 2.dp, start = 4.dp)
+    )
 }
 
 @Composable
@@ -726,36 +711,33 @@ private fun LocationSelectorRow(
     pingsState: PingsState,
     onLocationSelected: (String) -> Unit,
     onLocationSettingsClick: (String) -> Unit,
+    isPinned: Boolean = false,
+    onTogglePinned: (() -> Unit)? = null,
     selectionMode: Boolean = false,
     isChecked: Boolean = false,
     onToggleSelect: (String) -> Unit = {},
-    onStartSelection: (String) -> Unit = {},
-    showPin: Boolean = false,
-    isPinned: Boolean = false,
-    onTogglePin: () -> Unit = {}
+    onStartSelection: (String) -> Unit = {}
 ) {
     val pingMs = pingsState.pingFor(location.storageId)
     val isLoading = pingsState.isChecking(location.storageId)
     val isOffline = pingsState.isOffline(location.storageId)
 
-    // Stable per-row callbacks: without remember(), each ping tick allocates fresh lambdas, which
-    // forces every LocationRow to recompose (300+ rows → scroll jank when a ping pass starts).
+    // Stable per-row callbacks. Keyed ONLY by storageId so their identity survives ping ticks: the
+    // parent recomposes every ~150ms during a ping pass and reallocates onLocationSelected/Settings,
+    // so keying remember() on those (instead of storageId) would invalidate every tick and force all
+    // 300+ rows to recompose → scroll jank. rememberUpdatedState keeps calling the latest callback.
+    val latestSelected by rememberUpdatedState(onLocationSelected)
+    val latestSettings by rememberUpdatedState(onLocationSettingsClick)
+    val latestToggle by rememberUpdatedState(onToggleSelect)
+    val latestStart by rememberUpdatedState(onStartSelection)
     // In selection mode a tap toggles the checkbox; otherwise it selects the location as usual.
-    val onClick = remember(location.storageId, selectionMode, onLocationSelected, onToggleSelect) {
-        {
-            if (selectionMode) onToggleSelect(location.storageId)
-            else onLocationSelected(location.storageId)
-        }
+    val onClick = remember(location.storageId, selectionMode) {
+        { if (selectionMode) latestToggle(location.storageId) else latestSelected(location.storageId) }
     }
-    val onSettings = remember(location.storageId, onLocationSettingsClick) {
-        { onLocationSettingsClick(location.storageId) }
-    }
-    // Long-press enters selection mode and selects this row (or toggles if already selecting).
-    val onLongPress = remember(location.storageId, selectionMode, onStartSelection, onToggleSelect) {
-        {
-            if (selectionMode) onToggleSelect(location.storageId)
-            else onStartSelection(location.storageId)
-        }
+    val onSettings = remember(location.storageId) { { latestSettings(location.storageId) } }
+    // Long-press starts/extends the multi-selection.
+    val onLongPress = remember(location.storageId, selectionMode) {
+        { if (selectionMode) latestToggle(location.storageId) else latestStart(location.storageId) }
     }
 
     LocationRow(
@@ -766,12 +748,11 @@ private fun LocationSelectorRow(
         pingMs = pingMs,
         selectionMode = selectionMode,
         isChecked = isChecked,
-        showPin = showPin,
-        isPinned = isPinned,
-        onTogglePin = onTogglePin,
         onSettingsClick = onSettings,
         onLongClick = onLongPress,
-        onClick = onClick
+        onClick = onClick,
+        isPinned = isPinned,
+        onTogglePinned = onTogglePinned
     )
 }
 

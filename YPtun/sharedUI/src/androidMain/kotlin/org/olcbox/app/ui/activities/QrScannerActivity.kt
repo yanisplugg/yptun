@@ -62,6 +62,7 @@ import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import org.olcbox.app.ui.theme.AppTheme
+import org.olcbox.app.ui.theme.ThemeState
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -317,7 +318,8 @@ private fun QrScannerScreen(
     onClose: () -> Unit,
     onPreviewReady: (PreviewView) -> Unit
 ) {
-    AppTheme {
+    // Match the main screen's theme (custom vs device-dynamic) instead of always using dynamic.
+    AppTheme(useDynamicColor = ThemeState.dynamicEnabled) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.surface,
             topBar = {

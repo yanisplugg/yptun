@@ -55,6 +55,27 @@ class HappRoutingParserTest {
         assertEquals(false, p.needsGeoFiles())
     }
 
+    @OptIn(ExperimentalEncodingApi::class)
+    private fun b64(jsonBody: String): String =
+        Base64.UrlSafe.encode(jsonBody.encodeToByteArray()).trimEnd('=')
+
+    @Test
+    fun parsesRoutingScheme() {
+        val body = """{"name":"RoutingScheme","directsites":["domain:ru"]}"""
+        val payload = b64(body)
+        // All three routing:// forms decode identically to the Happ link.
+        listOf(
+            "routing://routing/add/$payload",
+            "routing://add/$payload",
+            "routing://$payload",
+        ).forEach { link ->
+            assertTrue(HappRoutingParser.isHappRoutingLink(link), "should recognise $link")
+            val p = HappRoutingParser.parseAny(link)!!
+            assertEquals("RoutingScheme", p.name)
+            assertTrue(p.directSites.contains("domain:ru"))
+        }
+    }
+
     @Test
     fun rejectsNonHappLinks() {
         assertNull(HappRoutingParser.parse("https://example.com"))

@@ -67,6 +67,8 @@ internal fun RoutingProfilesContent(
     onImportLink: (String) -> Boolean,
     onSetGeoSources: (String, String) -> Unit,
     onUpdateGeo: () -> Unit,
+    // When embedded as a tab, skip the own Back-row header (the host already shows one).
+    embedded: Boolean = false,
 ) {
     val s = LocalStrings.current
     // null = list view; non-null = editing that profile (blank id → a brand-new one).
@@ -96,16 +98,18 @@ internal fun RoutingProfilesContent(
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+        if (!embedded) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                }
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = s.routingProfiles,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = s.routingProfiles,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
         }
 
         // --- Global profile selector ---

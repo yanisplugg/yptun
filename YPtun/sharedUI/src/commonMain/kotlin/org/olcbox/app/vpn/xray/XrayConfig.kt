@@ -190,12 +190,18 @@ object XrayConfig {
                 }
                 else -> null
             }
+            // When forcing a family (ipv4_only/ipv6_only) we must resolve domains for routing so the
+            // opposite-family blackhole below actually matches domain destinations (with AsIs it only
+            // catches raw IP literals, and the remote proxy is then free to pick AAAA → IPv6 leak on
+            // 2ip.io). IPIfNonMatch + queryStrategy=UseIPv4 makes Xray resolve to the chosen family.
+            val forceFamily = familyBlockRule != null
             putJsonObject("routing") {
                 if (routingProfile != null) {
                     // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
                     // blocklist (item 5): the toggles run alongside the profile, not instead of it.
                     val base = XrayRouting.routingObject(routingProfile)
-                    put("domainStrategy", base["domainStrategy"] ?: JsonPrimitive("AsIs"))
+                    val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
+                    put("domainStrategy", if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy)
                     putJsonArray("rules") {
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
@@ -203,7 +209,7 @@ object XrayConfig {
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
-                    put("domainStrategy", "AsIs")
+                    put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }

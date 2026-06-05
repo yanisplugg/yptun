@@ -77,11 +77,11 @@ fun LocationRow(
     settingsEnabled: Boolean = true,
     selectionMode: Boolean = false,
     isChecked: Boolean = false,
-    showPin: Boolean = false,
-    isPinned: Boolean = false,
-    onTogglePin: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
+    isPinned: Boolean = false,
+    // When non-null, a pin toggle is shown (used for "own" custom locations).
+    onTogglePinned: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val bgColor by animateColorAsState(
@@ -181,7 +181,6 @@ fun LocationRow(
                     Icon(
                         imageVector = Icons.Rounded.CheckCircle,
                         contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOnline,
-                        // Fixed green so the "online" tick reads the same in light/dark/dynamic themes.
                         tint = PingOkGreen,
                         modifier = Modifier.size(20.dp)
                     )
@@ -218,43 +217,39 @@ fun LocationRow(
 
         if (selectionMode) {
             // In multi-select mode the trailing controls collapse to a single checkbox.
-            Checkbox(
-                checked = isChecked,
-                onCheckedChange = { onClick() }
-            )
-        } else {
-            // Per-inbound pin toggle (custom locations): pinned rows float to the top of the section.
-            if (showPin) {
-                IconButton(
-                    onClick = onTogglePin,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
-                        contentDescription = "Pin",
-                        tint = if (isPinned) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            if (settingsEnabled) {
-                IconButton(
-                    onClick = onSettingsClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            LocationSelectionIndicator(isSelected = isSelected)
+            Checkbox(checked = isChecked, onCheckedChange = { onClick() })
+            return@Row
         }
+
+        if (onTogglePinned != null) {
+            IconButton(
+                onClick = onTogglePinned,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                    contentDescription = "Pin",
+                    tint = if (isPinned) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        if (settingsEnabled) {
+            IconButton(
+                onClick = onSettingsClick,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "Settings",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        LocationSelectionIndicator(isSelected = isSelected)
     }
 }
 
