@@ -71,7 +71,25 @@ object SingBoxConfig {
         // UDP-capable tunnels (VK-TURN / WireGuard / AmneziaWG) which carry QUIC natively — blocking
         // it there breaks those engines and is never wanted.
         blockQuic: Boolean = true,
+        // Enforce the DNS family by force-resolving every sniffed domain locally and rejecting the
+        // opposite family. Prevents a remote TCP proxy from picking AAAA (IPv6 leak). MUST be false
+        // for a full UDP tunnel (AmneziaWG/WireGuard): it carries every family itself, and the forced
+        // local resolve there routes DNS back through the tunnel proxy and breaks browsing
+        // ("err connection closed"). Domains then pass through to the tunnel to resolve, as they did
+        // before the routing rework. IP-based rules (geoip/ip_cidr) still trigger a resolve regardless.
+        forceFamilyResolve: Boolean = true,
+        // Sniff the SNI/Host and OVERRIDE the connection destination with it before routing, then
+        // resolve it to [dnsStrategyOverride]/[TrafficSettings.domainStrategy]. This is what lets a
+        // v4-only full tunnel (AmneziaWG) stay IPv4-only WITHOUT rejecting traffic: an app's own-DoH
+        // IPv6 literal (e.g. Chrome → `[2a00:…]:443`) is replaced by its domain and re-resolved to
+        // IPv4, so it rides the tunnel as IPv4 instead of leaking IPv6 or being killed by the
+        // `::/0 reject` backstop (which then only catches rare un-sniffable raw IPv6). Implemented via
+        // sing-box's (1.12, deprecated-but-functional) inbound `sniff_override_destination`.
+        sniffOverrideDestination: Boolean = false,
     ): String {
+        // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
+        // both the inbound sniff-override and the route resolve/family rules use the same value.
+        val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
         val config = buildJsonObject {
             putJsonObject("log") {
                 put("level", logLevel)
@@ -119,6 +137,13 @@ object SingBoxConfig {
                                 put("password", socksPassword)
                             }
                         }
+                    }
+                    // Force the chosen IP family on a full UDP tunnel without rejecting: sniff the
+                    // domain, replace an IP-literal destination with it, and resolve to the family.
+                    if (sniffOverrideDestination) {
+                        put("sniff", true)
+                        put("sniff_override_destination", true)
+                        put("domain_strategy", effectiveStrategy)
                     }
                 }
             }
@@ -184,7 +209,6 @@ object SingBoxConfig {
                             put("action", "reject")
                         }
                     }
-                    val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
                     // Routing profile and the advanced toggles are COMBINED (not either/or): the
                     // profile's buckets run alongside the user's verbatim rules and the
                     // bypassRussia/blockAds/block-direct toggles.
@@ -204,7 +228,9 @@ object SingBoxConfig {
                     // strategy (2ip.io shows IPv6). Resolving here with the strategy forces the family.
                     // Expert mode can also force resolve (e.g. for geoip rules) and override the strategy.
                     val expertStrategy = sbExpertStrategy ?: effectiveStrategy
-                    val forceFamily = expertStrategy == "ipv4_only" || expertStrategy == "ipv6_only"
+                    // Family enforcement is opt-out for full UDP tunnels (see [forceFamilyResolve]).
+                    val forceFamily = forceFamilyResolve &&
+                        (expertStrategy == "ipv4_only" || expertStrategy == "ipv6_only")
                     // v2rayNG-style manual rules that use IP/geoip selectors also need the sniffed
                     // domain resolved first, or `geoip:ru → direct` silently skips domain connections.
                     val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
@@ -220,15 +246,17 @@ object SingBoxConfig {
                     // ipv4_only / ipv6_only truly forces ALL traffic (incl. apps/browsers using their
                     // own DoH DNS that returns the other family, and raw IP-literal connections) onto
                     // the chosen one. Placed after `resolve` so freshly-resolved domains are caught
-                    // too. prefer_* keeps both families.
-                    when (expertStrategy) {
-                        "ipv4_only" -> addJsonObject {
-                            putJsonArray("ip_cidr") { add("::/0") }
-                            put("action", "reject")
-                        }
-                        "ipv6_only" -> addJsonObject {
-                            putJsonArray("ip_cidr") { add("0.0.0.0/0") }
-                            put("action", "reject")
+                    // too. Skipped for full UDP tunnels (forceFamily=false) and prefer_* (both families).
+                    if (forceFamily) {
+                        when (expertStrategy) {
+                            "ipv4_only" -> addJsonObject {
+                                putJsonArray("ip_cidr") { add("::/0") }
+                                put("action", "reject")
+                            }
+                            "ipv6_only" -> addJsonObject {
+                                putJsonArray("ip_cidr") { add("0.0.0.0/0") }
+                                put("action", "reject")
+                            }
                         }
                     }
                     // Advanced verbatim user rules (highest precedence).

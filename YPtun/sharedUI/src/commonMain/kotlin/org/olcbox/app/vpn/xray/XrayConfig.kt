@@ -33,6 +33,21 @@ object XrayConfig {
 
     private val json = Json { prettyPrint = true }
 
+    /**
+     * `domainStrategy` for the `direct` (freedom) outbound. CRITICAL on Android: with the default
+     * `AsIs`, freedom hands the bare hostname to Go's system resolver, which can't resolve on Android
+     * (no usable /etc/resolv.conf, and the process is unbound from any network once connected) — so
+     * `domain:ru → direct` "did nothing" on xray (RU sites never resolved) while sing-box worked.
+     * Forcing `UseIP*` makes xray resolve direct destinations through its own `dns` block (queried over
+     * protected sockets) before dialing, mirroring sing-box's direct outbound. Family-matched so it
+     * stays consistent with the ipv4_only/ipv6_only enforcement.
+     */
+    private fun directDomainStrategy(traffic: TrafficSettings): String = when (traffic.domainStrategy) {
+        "ipv4_only" -> "UseIPv4"
+        "ipv6_only" -> "UseIPv6"
+        else -> "UseIP"
+    }
+
     fun build(
         profile: ProxyProfile,
         listenPort: Int,
@@ -120,6 +135,10 @@ object XrayConfig {
                 addJsonObject {
                     put("tag", "direct")
                     put("protocol", "freedom")
+                    putJsonObject("settings") {
+                        // Resolve direct destinations via xray's own DNS, not Go's (broken on Android).
+                        put("domainStrategy", directDomainStrategy(traffic))
+                    }
                 }
                 // Always present: needed by the RU blocklist, profile block buckets AND the QUIC
                 // blackhole rule below.
@@ -315,7 +334,12 @@ object XrayConfig {
                 userOutbounds.forEach { add(it) }
                 // The profile rules reference direct/block tags — make sure they exist.
                 if (mergedRouting != null && "direct" !in userOutboundTags) {
-                    addJsonObject { put("tag", "direct"); put("protocol", "freedom") }
+                    addJsonObject {
+                        put("tag", "direct")
+                        put("protocol", "freedom")
+                        // Resolve via xray's DNS (Go's resolver can't on Android) so direct rules work.
+                        putJsonObject("settings") { put("domainStrategy", "UseIP") }
+                    }
                 }
                 if (mergedRouting != null && "block" !in userOutboundTags) {
                     addJsonObject { put("tag", "block"); put("protocol", "blackhole") }

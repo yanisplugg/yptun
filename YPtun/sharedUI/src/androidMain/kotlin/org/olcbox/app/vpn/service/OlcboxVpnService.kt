@@ -18,6 +18,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +79,7 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PASSWORD
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PORT
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME
 import org.olcbox.app.vpn.data.vpnPrefDataStore
+import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTED_SINCE
 import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING
 import org.olcbox.app.vpn.data.KEY_ANDROID_ROUTING_PROFILES
 import org.olcbox.app.vpn.data.KEY_ANDROID_APP_BEHAVIOR
@@ -297,6 +299,7 @@ class OlcboxVpnService : VpnService() {
         installMobileCallbacks()
         observeSpeedNotificationSetting()
         startLogcatCapture()
+        seedConnectedClockFromDisk()
     }
 
     /**
@@ -611,6 +614,7 @@ class OlcboxVpnService : VpnService() {
         if (requestedGeneration != generation) return
 
         if (startMobile(location, upstream, requestedGeneration, setErrorOnFailure = false)) {
+            restoreOrStartConnectedClock()
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
             updateNotification(connectedNotificationText())
@@ -668,6 +672,7 @@ class OlcboxVpnService : VpnService() {
 //                stopTransportProcesses(closeTun = true)
 //                return
 //            }
+            restoreOrStartConnectedClock()
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
             updateNotification(connectedNotificationText())
@@ -694,6 +699,7 @@ class OlcboxVpnService : VpnService() {
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
 
+        restoreOrStartConnectedClock()
         setStatus(VpnStatus.Connected)
         resetRecoveryState()
         updateNotification(connectedNotificationText())
@@ -976,6 +982,12 @@ class OlcboxVpnService : VpnService() {
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 xrayEngine().start(json, assetPath)
             } else {
+                // AmneziaWG is a full UDP tunnel: it carries QUIC natively, so don't block QUIC
+                // (that broke it like the VK-TURN regression). For the IPv4-only requirement we use
+                // sniff-override instead of a blanket IPv6 reject: the SNI replaces an app's own-DoH
+                // IPv6 literal and is re-resolved to IPv4, so traffic rides the tunnel as IPv4 (no
+                // IPv6 leak) AND Chrome's IPv6 attempts aren't rejected/flooded.
+                if (isAwg) addLog("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4 (no IPv6 leak)")
                 val json = SingBoxConfig.build(
                     profile = effectiveProfile,
                     listenPort = socksListenPort,
@@ -992,6 +1004,8 @@ class OlcboxVpnService : VpnService() {
                     routingProfile = routingProfile,
                     singboxGeositeBase = profilesState.singboxGeositeBase,
                     singboxGeoipBase = profilesState.singboxGeoipBase,
+                    blockQuic = !isAwg,
+                    sniffOverrideDestination = isAwg,
                 )
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)
@@ -1695,6 +1709,10 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun cleanup(stopService: Boolean = true) {
+        // Explicit user stop (ACTION_STOP_VPN / revoke / manager.stopVpn) resets the timer; a bare
+        // onDestroy (stopService=false, e.g. process teardown on app-swipe) must NOT, so the
+        // auto-restarted service can restore the running clock.
+        if (stopService) clearPersistedConnectedClock()
         if (cleanupJob?.isActive == true) return
 
         val status = OlcboxVpnState.status.value
@@ -1945,6 +1963,47 @@ class OlcboxVpnService : VpnService() {
         }.getOrNull() ?: return AppBehaviorSettings()
         return runCatching { Json.decodeFromString(AppBehaviorSettings.serializer(), raw) }
             .getOrDefault(AppBehaviorSettings())
+    }
+
+    /**
+     * Resolves the connection-timer start time as the tunnel goes Connected: RESTORE the persisted
+     * value when present (the process was killed by an app-swipe and auto-restarted — keep counting
+     * from the real start), otherwise stamp now and persist it (a genuine fresh connect, where the
+     * value was cleared by the user's connect/stop action). Seeds [OlcboxVpnState] so the restored
+     * time survives the transient Connecting reset on the auto-restart path.
+     */
+    private suspend fun restoreOrStartConnectedClock() {
+        val store = applicationContext.vpnPrefDataStore
+        val persisted = runCatching { store.data.first()[KEY_ANDROID_CONNECTED_SINCE] }.getOrNull() ?: 0L
+        val value = if (persisted > 0L) persisted else System.currentTimeMillis()
+        if (persisted <= 0L) {
+            runCatching { store.edit { it[KEY_ANDROID_CONNECTED_SINCE] = value } }
+        }
+        OlcboxVpnState.setConnectedSince(value)
+    }
+
+    /** On (re)start, show the persisted elapsed time immediately, before the reconnect completes. */
+    private fun seedConnectedClockFromDisk() {
+        scope.launch {
+            val persisted = runCatching {
+                applicationContext.vpnPrefDataStore.data.first()[KEY_ANDROID_CONNECTED_SINCE]
+            }.getOrNull() ?: 0L
+            if (persisted > 0L) OlcboxVpnState.setConnectedSince(persisted)
+        }
+    }
+
+    /**
+     * Clears the persisted timer. Called ONLY on an explicit user stop/connect — never on the
+     * process-teardown (onDestroy) path — so an app-swipe kill leaves the value intact to be
+     * restored by the auto-restarted service.
+     */
+    private fun clearPersistedConnectedClock() {
+        scope.launch {
+            // NonCancellable so the clear still lands if the scope is torn down mid-edit.
+            withContext(NonCancellable) {
+                runCatching { applicationContext.vpnPrefDataStore.edit { it.remove(KEY_ANDROID_CONNECTED_SINCE) } }
+            }
+        }
     }
 
     /** Applies the stored Yandex Telemost cookies to olcRTC when enabled and the carrier is Telemost. */

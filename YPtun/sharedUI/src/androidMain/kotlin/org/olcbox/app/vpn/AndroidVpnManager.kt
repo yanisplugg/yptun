@@ -42,6 +42,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
+import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTED_SINCE
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -78,6 +79,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     override val logs: StateFlow<List<String>> = OlcboxVpnState.logs
     override val status: StateFlow<VpnStatus> = OlcboxVpnState.status
     override val isConnected: StateFlow<Boolean> = OlcboxVpnState.isConnected
+    override val connectedSinceEpochMs: StateFlow<Long> = OlcboxVpnState.connectedSinceMs
     val connectionMode: StateFlow<AndroidConnectionMode> = _connectionMode.asStateFlow()
     val proxySettings: StateFlow<AndroidSocksProxySettings> = _proxySettings.asStateFlow()
     val splitTunnelSettings: StateFlow<AndroidSplitTunnelSettings> = _splitTunnelSettings.asStateFlow()
@@ -468,6 +470,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override fun startVpn() {
+        // A user-initiated connect resets the connection timer: drop any persisted start time so the
+        // service stamps a fresh one. (The auto-restart-after-app-swipe path never calls startVpn,
+        // so it keeps the persisted value and the timer continues.)
+        scope.launch {
+            runCatching { appContext.vpnPrefDataStore.edit { it.remove(KEY_ANDROID_CONNECTED_SINCE) } }
+        }
         val intent = Intent().apply {
             setClassName(context.packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
             action = OlcboxVpnActions.ACTION_START_VPN
