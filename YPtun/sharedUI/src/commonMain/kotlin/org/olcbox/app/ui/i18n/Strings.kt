@@ -458,8 +458,8 @@ interface Strings {
     val subscriptionQr: String
     val subscriptionUpdated: String
     val subscriptionNotUpdated: String
-    /** Subscription end-date line, e.g. "до 03.05.2099 20:59:00". */
-    fun subscriptionExpiry(dateTime: String): String
+    /** Subscription end-date line, e.g. "до 03.05.2099 20:59:00 · осталось 26630 дн.". */
+    fun subscriptionExpiry(dateTime: String, daysLeft: Long): String
     /** Auto-refresh interval taken from the subscription, e.g. "Обновление каждые 6 ч". */
     fun subscriptionEvery(hours: Int): String
     /** Banner above the nav bar when a newer GitHub release exists. */
@@ -874,7 +874,8 @@ object RuStrings : Strings {
     override val subscriptionQr = "QR подписки"
     override val subscriptionUpdated = "Подписка обновлена"
     override val subscriptionNotUpdated = "Подписка не обновлена"
-    override fun subscriptionExpiry(dateTime: String) = "до $dateTime"
+    override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
+        if (daysLeft < 0) "истекла $dateTime" else "до $dateTime · осталось $daysLeft дн."
     override fun subscriptionEvery(hours: Int) = "Обновление каждые $hours ч"
     override val updateBannerTitle = "Обновите приложение"
     override val updateBannerAction = "Обновить"
@@ -1282,7 +1283,8 @@ object EnStrings : Strings {
     override val subscriptionQr = "Subscription QR"
     override val subscriptionUpdated = "Subscription updated"
     override val subscriptionNotUpdated = "Subscription not updated"
-    override fun subscriptionExpiry(dateTime: String) = "until $dateTime"
+    override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
+        if (daysLeft < 0) "expired $dateTime" else "until $dateTime · $daysLeft days left"
     override fun subscriptionEvery(hours: Int) = "Updates every ${hours}h"
     override val updateBannerTitle = "Update available"
     override val updateBannerAction = "Update"
@@ -1690,7 +1692,8 @@ object FaStrings : Strings {
     override val subscriptionQr = "QR اشتراک"
     override val subscriptionUpdated = "اشتراک به‌روزرسانی شد"
     override val subscriptionNotUpdated = "اشتراک به‌روزرسانی نشد"
-    override fun subscriptionExpiry(dateTime: String) = "تا $dateTime"
+    override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
+        if (daysLeft < 0) "منقضی‌شده $dateTime" else "تا $dateTime · $daysLeft روز باقی‌مانده"
     override fun subscriptionEvery(hours: Int) = "به‌روزرسانی هر $hours ساعت"
     override val updateBannerTitle = "به‌روزرسانی موجود است"
     override val updateBannerAction = "به‌روزرسانی"

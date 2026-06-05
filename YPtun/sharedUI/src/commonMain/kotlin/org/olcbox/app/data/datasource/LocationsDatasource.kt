@@ -576,7 +576,10 @@ class LocationsRepositoryImpl(
                         headers {
                             append(
                                 HttpHeaders.Accept,
-                                "text/plain, text/markdown, application/octet-stream, */*"
+                                // Prefer JSON so Remnawave panels return the rich body (user{} with
+                                // expiresAt + traffic) instead of bare base64 links; our parser handles
+                                // both the JSON `links[]` and base64/plain bodies.
+                                "application/json, text/plain, text/markdown, application/octet-stream, */*"
                             )
                             if (requestMode == SubscriptionRequestMode.Identity) {
                                 append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)

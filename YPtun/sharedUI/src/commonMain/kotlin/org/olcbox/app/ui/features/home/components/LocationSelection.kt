@@ -843,12 +843,15 @@ private fun LocationItem.subscriptionTitle(): String {
     ).joinToString(" ")
 }
 
+@OptIn(kotlin.time.ExperimentalTime::class)
 private fun LocationItem.subscriptionDetails(): String? {
     val subscription = metadata?.subscription ?: return null
     val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
-    // End date (with time) + the auto-refresh interval (profile-update-interval header).
+    val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+    // End date (with time) + days-left + the auto-refresh interval (profile-update-interval header).
     val expiry = subscription.expiresAtEpochMs?.let {
-        s.subscriptionExpiry(org.olcbox.app.util.IsoTime.formatDateTime(it))
+        val daysLeft = (it - now).floorDiv(DAY_MILLIS)
+        s.subscriptionExpiry(org.olcbox.app.util.IsoTime.formatDateTime(it), daysLeft)
     }
     val interval = subscription.updateIntervalHours?.let { s.subscriptionEvery(it) }
 
