@@ -1459,17 +1459,27 @@ class OlcboxVpnService : VpnService() {
             // and the whole connection dies. An in-place rename keeps the link UP, so routes (by ifindex)
             // and DNS survive. On kernels that refuse to rename an UP interface we simply SKIP it
             // (best-effort, "по возможности") rather than forcibly down/up and break connectivity.
+            // CRITICAL: real phones already have rmnet_data0..N (the actual cellular netdevs), so the
+            // old "rmnet_data0, rmnet_data1…" naming collided ("File exists") and the rename silently
+            // failed — that's why hiding "didn't work". We now pick the FIRST FREE rmnet_dataN index
+            // (one that doesn't exist in /sys/class/net) for each interface. Rename is IN-PLACE only
+            // (no down/up): the link stays UP, so Android keeps the VPN DNS binding and routes (keyed
+            // by ifindex) survive — browser and routing are not disturbed. If the kernel still refuses
+            // the rename we log the real error and skip (best-effort), never forcing a link flap.
             val script = buildString {
                 append("export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH; ")
                 append("IP=\$(command -v ip || echo /system/bin/ip); ")
                 append("n=0; ")
                 append("for ifc in \$(ls /sys/class/net 2>/dev/null); do ")
                 append("case \"\$ifc\" in tun*|awg*|wg*) ")
-                append("new=rmnet_data\$n; n=\$((n+1)); ")
-                append("if \$IP link set \"\$ifc\" name \"\$new\" 2>/dev/null; then ")
-                append("echo \"\$ifc -> \$new (live)\"; ")
+                // advance n to the first rmnet_dataN name that is NOT already taken
+                append("while [ -e /sys/class/net/rmnet_data\$n ]; do n=\$((n+1)); done; ")
+                append("new=rmnet_data\$n; ")
+                append("err=\$(\$IP link set dev \"\$ifc\" name \"\$new\" 2>&1); ")
+                append("if [ \$? -eq 0 ]; then ")
+                append("echo \"\$ifc -> \$new (live)\"; n=\$((n+1)); ")
                 append("else ")
-                append("echo \"\$ifc: in-place rename not permitted, skipped (kept up to preserve DNS)\"; ")
+                append("echo \"\$ifc -> \$new failed: \$err (skipped, link kept up)\"; ")
                 append("fi;; ")
                 append("esac; done; ")
                 append("echo \"after: \$(ls /sys/class/net 2>/dev/null | tr '\\n' ' ')\"")
