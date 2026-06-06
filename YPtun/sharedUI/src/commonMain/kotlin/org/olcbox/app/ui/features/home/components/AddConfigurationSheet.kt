@@ -95,16 +95,6 @@ fun AddConfigurationSheet(
                     onClick = onImportFileClick
                 )
 
-                if (hasSubscriptions) {
-                    AddSheetAction(
-                        title = s.updateSubscriptionsAction,
-                        value = s.updateSubscriptionsSubtitle,
-                        icon = Icons.Outlined.Refresh,
-                        showChevron = false,
-                        onClick = onUpdateSubscriptionsClick
-                    )
-                }
-
                 AddSheetAction(
                     title = s.createCustomLocation,
                     value = s.createCustomLocationSubtitle,
