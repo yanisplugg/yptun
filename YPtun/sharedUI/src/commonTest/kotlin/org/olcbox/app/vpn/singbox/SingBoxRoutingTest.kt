@@ -162,4 +162,65 @@ class SingBoxRoutingTest {
         assertTrue(sets.any { it["tag"]!!.jsonPrimitive.content == "geosite-cn" })
         assertTrue(sets.any { it["tag"]!!.jsonPrimitive.content == "geoip-cn" })
     }
+
+    /** Every editor field (2-10) must emit its real sing-box route-rule key. */
+    @Test
+    fun everyFieldEmitsItsSingBoxKey() {
+        val rule = SingBoxRule(
+            name = "label",                       // 1: UI-only, must NOT be emitted
+            source = listOf("192.168.0.0/16"),    // 2: source_ip_cidr
+            sourcePort = "1000:2000,53",          // 3: source_port_range + source_port
+            networkType = listOf("wifi", "cellular"), // 4: network_type
+            client = listOf("chromium"),          // 5: client
+            networkIsExpensive = true,            // 6: network_is_expensive
+            clashMode = "Global",                 // 7: clash_mode
+            packageNames = listOf("com.x.y"),     // 8: package_name
+            // 9: action handled in dedicated tests below
+        )
+        val r = SingBoxRouting.manualRules(listOf(rule)).single().jsonObject
+
+        assertTrue(!r.containsKey("name"), "name is a UI-only label and must not be emitted")
+        assertEquals("192.168.0.0/16", r["source_ip_cidr"]!!.jsonArray[0].jsonPrimitive.content)
+        assertEquals("1000:2000", r["source_port_range"]!!.jsonArray[0].jsonPrimitive.content)
+        assertTrue(r["source_port"]!!.jsonArray.map { it.jsonPrimitive.int }.contains(53))
+        val netTypes = r["network_type"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue(netTypes.containsAll(listOf("wifi", "cellular")))
+        assertEquals("chromium", r["client"]!!.jsonArray[0].jsonPrimitive.content)
+        assertEquals(true, r["network_is_expensive"]!!.jsonPrimitive.content.toBoolean())
+        assertEquals("Global", r["clash_mode"]!!.jsonPrimitive.content)
+        assertEquals("com.x.y", r["package_name"]!!.jsonArray[0].jsonPrimitive.content)
+    }
+
+    /** Field 9: each non-route action emits its `action` token and ignores outbound. */
+    @Test
+    fun actionTokensAreEmitted() {
+        fun actionOf(token: String) = SingBoxRouting.manualRules(
+            listOf(SingBoxRule(action = token, outbound = SingBoxRule.OUT_PROXY, domains = listOf("domain:a.com")))
+        ).single().jsonObject
+
+        listOf("route-options", "sniff", "resolve", "hijack-dns", "reject").forEach { token ->
+            val r = actionOf(token)
+            assertEquals(token, r["action"]!!.jsonPrimitive.content)
+            assertTrue(!r.containsKey("outbound"), "$token must not emit outbound")
+        }
+        // action=route (default) emits outbound, no action key.
+        val route = actionOf("route")
+        assertEquals("proxy", route["outbound"]!!.jsonPrimitive.content)
+        assertTrue(!route.containsKey("action"))
+    }
+
+    /** Field 10: package_name regex expands against installed packages, merged into package_name. */
+    @Test
+    fun packageRegexExpandsAgainstInstalledPackages() {
+        val installed = listOf("com.google.android.youtube", "com.google.maps", "org.telegram.messenger")
+        val rule = SingBoxRule(packageNames = listOf("com.keep.me"), packageRegex = listOf("^com\\.google\\."))
+        val expanded = SingBoxRule.expandPackageRegex(listOf(rule), installed).single()
+        assertTrue(expanded.packageNames.contains("com.keep.me"))      // pre-existing kept
+        assertTrue(expanded.packageNames.contains("com.google.android.youtube"))
+        assertTrue(expanded.packageNames.contains("com.google.maps"))
+        assertTrue(!expanded.packageNames.contains("org.telegram.messenger")) // non-match excluded
+        // The expanded rule emits the matches as package_name.
+        val r = SingBoxRouting.manualRules(listOf(expanded)).single().jsonObject
+        assertTrue(r["package_name"]!!.jsonArray.map { it.jsonPrimitive.content }.contains("com.google.maps"))
+    }
 }
