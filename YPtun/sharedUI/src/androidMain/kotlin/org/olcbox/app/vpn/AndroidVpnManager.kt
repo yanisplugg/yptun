@@ -150,6 +150,15 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             _hwid.value = runCatching { deviceIdentityProvider.hwid() }.getOrDefault("")
         }
 
+        // First launch: pre-fetch the default geoip.dat/geosite.dat in the background so routing
+        // profiles with geosite:/geoip: selectors work immediately (instead of silently doing nothing
+        // until the first manual update). Quiet — doesn't touch _geoUpdateStatus. No-op once present.
+        scope.launch {
+            if (!GeoAssetManager.hasAssets(appContext)) {
+                runCatching { GeoAssetManager.ensureAssets(appContext, "", "") }
+            }
+        }
+
         // Keep the global ThemeState in sync with persisted custom colors.
         scope.launch {
             appContext.vpnPrefDataStore.data.collect { preferences ->

@@ -258,7 +258,7 @@ private fun SharedSettingsHubContent(
 
         SharedNavigationRow(
             title = "Update Settings",
-            value = "Nightly · every ${updateSettings.intervalHours}h",
+            value = "Release · every ${updateSettings.intervalHours}h",
             icon = Icons.Outlined.Refresh,
             onClick = onUpdatesClick
         )

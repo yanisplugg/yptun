@@ -5,6 +5,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
+/** Russian plural picker: (one, few, many) by the standard ru pluralization rules. */
+internal fun ruPlural(n: Int, one: String, few: String, many: String): String {
+    val mod100 = n % 100
+    val mod10 = n % 10
+    return when {
+        mod100 in 11..14 -> many
+        mod10 == 1 -> one
+        mod10 in 2..4 -> few
+        else -> many
+    }
+}
+
 /** Supported UI languages. [System] follows the device locale (resolved per platform). */
 enum class AppLanguage(val id: String) {
     System("system"),
@@ -127,6 +139,8 @@ interface Strings {
     val mtuLabel: String
     val blockRuDomains: String
     val blockRuDomainsSubtitle: String
+    val fakeDnsTitle: String
+    val fakeDnsSubtitle: String
     val saveAndApply: String
 
     // Routing
@@ -169,12 +183,24 @@ interface Strings {
     val routingRuleAdd: String
     val routingRuleEdit: String
     val routingRuleDelete: String
+    val routingRuleName: String
     val routingRuleOutbound: String
     val routingRuleDomains: String
     val routingRuleIps: String
+    val routingRuleSource: String
     val routingRulePort: String
+    val routingRuleSourcePort: String
     val routingRuleNetwork: String
+    val routingRuleNetworkType: String
+    val netTypeWifi: String
+    val netTypeCellular: String
+    val netTypeEthernet: String
+    val netTypeOther: String
     val routingRuleProtocol: String
+    val routingRuleClient: String
+    val routingRuleMetered: String
+    val routingRuleClashMode: String
+    val routingRuleApps: String
     val routingRuleEnabled: String
     val routingRuleNetworkAny: String
     val routingOutProxy: String
@@ -315,6 +341,38 @@ interface Strings {
     val everyAppUsesYptun: String
     val chooseAppsUseYptun: String
     val chooseAppsBypass: String
+    // Split-tunnel counts / status / detail (раздельное туннелирование)
+    fun appsCount(n: Int): String
+    fun useYptunCount(n: Int): String
+    fun onlyUseYptunCount(n: Int): String
+    fun onlyCount(n: Int): String
+    fun bypassedCount(n: Int): String
+    fun bypassYptunCount(n: Int): String
+    val allAppsUseYptunStatus: String
+    val noAppsSelectedStatus: String
+    val noAppsBypassStatus: String
+    val selectionRequired: String
+    val noBypassedAppsValue: String
+    val savedForTunMode: String
+    val appliesWhenSettingsClose: String
+    val tunModeRoutingRule: String
+    // "Bypass RU apps" preset
+    val bypassRuApps: String
+    val bypassRuOn: String
+    val ruBypassAccuracy: String
+    val ruBypassNoMatches: String
+    fun ruBypassMatchedByPackage(n: Int): String
+    val ruBypassNoneSelected: String
+    fun ruBypassAlreadySelected(n: Int): String
+    fun ruBypassAutoBypassed(n: Int): String
+    fun ruBypassAutoManual(auto: Int, manual: Int): String
+    // Update download status
+    val releaseChannelLabel: String
+    fun downloadingAsset(name: String): String
+    fun downloadFailed(error: String): String
+    fun installingAsset(name: String): String
+    /** Short hours label, e.g. "6 ч" / "6h" / "۶ ساعت". */
+    fun hoursShort(n: Int): String
 
     // Theme color picker
     val themeColor: String
@@ -332,6 +390,8 @@ interface Strings {
     val experimentalUnlocked: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
+    val showSubscriptionExpiryTitle: String
+    val showSubscriptionExpirySubtitle: String
     val telemostCookiesDescription: String
     val useTelemostCookies: String
     val useTelemostCookiesSubtitle: String
@@ -462,6 +522,14 @@ interface Strings {
     fun subscriptionExpiry(dateTime: String, daysLeft: Long): String
     /** Auto-refresh interval taken from the subscription, e.g. "Обновление каждые 6 ч". */
     fun subscriptionEvery(hours: Int): String
+    /** Second header line showing the last successful refresh, e.g. "обновлена 05.06.2026 14:30:00". */
+    fun subscriptionUpdatedAt(dateTime: String): String
+    /** Optional expiry line under the refresh line, e.g. "до 03.05.2099". */
+    fun subscriptionUntil(date: String): String
+    /** Accessibility label for the red "expiring soon" warning badge. */
+    val subscriptionExpiringSoon: String
+    /** Full expiry detail shown when tapping the warning badge, e.g. "до 06.06.2026 14:30:00 · через 1 дн.". */
+    fun subscriptionExpiryFull(dateTime: String, daysLeft: Long): String
     /** Banner above the nav bar when a newer GitHub release exists. */
     val updateBannerTitle: String
     val updateBannerAction: String
@@ -580,6 +648,8 @@ object RuStrings : Strings {
     override val mtuLabel = "MTU (1280–9000)"
     override val blockRuDomains = "Блокировать РФ-домены"
     override val blockRuDomainsSubtitle = "Встроенный список доменов РФ → 0.0.0.0. Работает на ядре Xray."
+    override val fakeDnsTitle = "FakeDNS"
+    override val fakeDnsSubtitle = "Подменяет ответы DNS фейковыми IP — приложения не видят реальные адреса, домен резолвится за прокси. Конфиг подписки со своим fakedns используется как есть."
     override val saveAndApply = "Сохранить и применить"
     override val routingTitle = "Маршрутизация и правила"
     override val bypassLan = "Обход LAN"
@@ -618,12 +688,24 @@ object RuStrings : Strings {
     override val routingRuleAdd = "Добавить правило"
     override val routingRuleEdit = "Правило"
     override val routingRuleDelete = "Удалить правило"
+    override val routingRuleName = "Название маршрута"
     override val routingRuleOutbound = "Действие"
     override val routingRuleDomains = "Домены"
     override val routingRuleIps = "IP / geoip"
+    override val routingRuleSource = "Источник (IP)"
     override val routingRulePort = "Порт"
+    override val routingRuleSourcePort = "Порт источника"
     override val routingRuleNetwork = "Сеть"
+    override val routingRuleNetworkType = "Тип сети"
+    override val netTypeWifi = "Wi-Fi"
+    override val netTypeCellular = "Сотовая"
+    override val netTypeEthernet = "Ethernet"
+    override val netTypeOther = "Другое"
     override val routingRuleProtocol = "Протокол"
+    override val routingRuleClient = "Клиент (TLS)"
+    override val routingRuleMetered = "Платная сеть"
+    override val routingRuleClashMode = "Режим Clash"
+    override val routingRuleApps = "Приложения (пакеты)"
     override val routingRuleEnabled = "Включено"
     override val routingRuleNetworkAny = "Любая"
     override val routingOutProxy = "Через прокси"
@@ -748,6 +830,34 @@ object RuStrings : Strings {
     override val everyAppUsesYptun = "Все приложения через YPtun"
     override val chooseAppsUseYptun = "Выберите приложения через YPtun"
     override val chooseAppsBypass = "Выберите приложения в обход YPtun"
+    override fun appsCount(n: Int) = "$n ${ruPlural(n, "приложение", "приложения", "приложений")}"
+    override fun useYptunCount(n: Int) = "${appsCount(n)} через YPtun"
+    override fun onlyUseYptunCount(n: Int) = "Только ${appsCount(n)} через YPtun"
+    override fun onlyCount(n: Int) = "Только ${appsCount(n)}"
+    override fun bypassedCount(n: Int) = "${appsCount(n)} в обход"
+    override fun bypassYptunCount(n: Int) = "${appsCount(n)} в обход YPtun"
+    override val allAppsUseYptunStatus = "Все приложения через YPtun"
+    override val noAppsSelectedStatus = "Приложения не выбраны"
+    override val noAppsBypassStatus = "Нет приложений в обход YPtun"
+    override val selectionRequired = "Требуется"
+    override val noBypassedAppsValue = "Нет приложений в обход"
+    override val savedForTunMode = "Сохранено для режима TUN"
+    override val appliesWhenSettingsClose = "Применится при закрытии настроек"
+    override val tunModeRoutingRule = "Правило маршрутизации режима TUN"
+    override val bypassRuApps = "Обход RU-приложений"
+    override val bypassRuOn = "Обход RU включён"
+    override val ruBypassAccuracy = "Автоопределение может быть неточным."
+    override val ruBypassNoMatches = "Нет подходящих установленных приложений"
+    override fun ruBypassMatchedByPackage(n: Int) = "${appsCount(n)} по пакету"
+    override val ruBypassNoneSelected = "RU-приложения не выбраны"
+    override fun ruBypassAlreadySelected(n: Int) = "${appsCount(n)} уже выбрано"
+    override fun ruBypassAutoBypassed(n: Int) = "${appsCount(n)} авто-обход"
+    override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto авто · $manual вручную"
+    override val releaseChannelLabel = "Релиз"
+    override fun downloadingAsset(name: String) = "Загрузка $name…"
+    override fun downloadFailed(error: String) = "Ошибка загрузки: $error"
+    override fun installingAsset(name: String) = "Установка $name"
+    override fun hoursShort(n: Int) = "$n ч"
     override val themeColor = "Цвет темы"
     override val elementColor = "Цвет элементов"
     override val textColor = "Цвет текста"
@@ -759,6 +869,8 @@ object RuStrings : Strings {
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+    override val showSubscriptionExpiryTitle = "Показывать срок подписки"
+    override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
     override val telemostCookiesDescription =
         "Cookies авторизованного аккаунта Яндекса (заголовок Cookie, напр. " +
             "«Session_id=…; yandexuid=…») — для приватных конференций. Запустить кастомное ядро " +
@@ -875,8 +987,16 @@ object RuStrings : Strings {
     override val subscriptionUpdated = "Подписка обновлена"
     override val subscriptionNotUpdated = "Подписка не обновлена"
     override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
-        if (daysLeft < 0) "истекла $dateTime" else "до $dateTime · осталось $daysLeft дн."
+        if (daysLeft < 0) "истекла $dateTime" else "до $dateTime"
     override fun subscriptionEvery(hours: Int) = "Обновление каждые $hours ч"
+    override fun subscriptionUpdatedAt(dateTime: String) = "Обновлена $dateTime"
+    override fun subscriptionUntil(date: String) = "до $date"
+    override val subscriptionExpiringSoon = "Подписка скоро закончится"
+    override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "истекла $dateTime"
+        daysLeft == 0L -> "до $dateTime · сегодня"
+        else -> "до $dateTime · через $daysLeft дн."
+    }
     override val updateBannerTitle = "Обновите приложение"
     override val updateBannerAction = "Обновить"
     override val updateManual = "Скачать с GitHub"
@@ -989,6 +1109,8 @@ object EnStrings : Strings {
     override val mtuLabel = "MTU (1280–9000)"
     override val blockRuDomains = "Block RU domains"
     override val blockRuDomainsSubtitle = "Bundled list of Russian domains → 0.0.0.0. Requires the Xray core."
+    override val fakeDnsTitle = "FakeDNS"
+    override val fakeDnsSubtitle = "Answers DNS with synthetic IPs — apps never see the real address; the domain is resolved behind the proxy. A subscription config with its own fakedns is used as-is."
     override val saveAndApply = "Save & apply"
     override val routingTitle = "Routing & rules"
     override val bypassLan = "Bypass LAN"
@@ -1029,12 +1151,24 @@ object EnStrings : Strings {
     override val routingRuleAdd = "Add rule"
     override val routingRuleEdit = "Rule"
     override val routingRuleDelete = "Delete rule"
+    override val routingRuleName = "Route name"
     override val routingRuleOutbound = "Action"
     override val routingRuleDomains = "Domains"
     override val routingRuleIps = "IP / geoip"
+    override val routingRuleSource = "Source (IP)"
     override val routingRulePort = "Port"
+    override val routingRuleSourcePort = "Source port"
     override val routingRuleNetwork = "Network"
+    override val routingRuleNetworkType = "Network type"
+    override val netTypeWifi = "Wi-Fi"
+    override val netTypeCellular = "Cellular"
+    override val netTypeEthernet = "Ethernet"
+    override val netTypeOther = "Other"
     override val routingRuleProtocol = "Protocol"
+    override val routingRuleClient = "Client (TLS)"
+    override val routingRuleMetered = "Metered network"
+    override val routingRuleClashMode = "Clash mode"
+    override val routingRuleApps = "Apps (packages)"
     override val routingRuleEnabled = "Enabled"
     override val routingRuleNetworkAny = "Any"
     override val routingOutProxy = "Via proxy"
@@ -1157,6 +1291,34 @@ object EnStrings : Strings {
     override val everyAppUsesYptun = "Every app uses YPtun"
     override val chooseAppsUseYptun = "Choose apps that use YPtun"
     override val chooseAppsBypass = "Choose apps that bypass YPtun"
+    override fun appsCount(n: Int) = if (n == 1) "1 app" else "$n apps"
+    override fun useYptunCount(n: Int) = "${appsCount(n)} use YPtun"
+    override fun onlyUseYptunCount(n: Int) = "Only ${appsCount(n)} use YPtun"
+    override fun onlyCount(n: Int) = "Only ${appsCount(n)}"
+    override fun bypassedCount(n: Int) = "${appsCount(n)} bypassed"
+    override fun bypassYptunCount(n: Int) = "${appsCount(n)} bypass YPtun"
+    override val allAppsUseYptunStatus = "All apps use YPtun"
+    override val noAppsSelectedStatus = "No apps selected"
+    override val noAppsBypassStatus = "No apps bypass YPtun"
+    override val selectionRequired = "Required"
+    override val noBypassedAppsValue = "No bypassed apps"
+    override val savedForTunMode = "Saved for TUN mode"
+    override val appliesWhenSettingsClose = "Applies when settings closes"
+    override val tunModeRoutingRule = "TUN mode routing rule"
+    override val bypassRuApps = "Bypass RU apps"
+    override val bypassRuOn = "RU bypass on"
+    override val ruBypassAccuracy = "Auto-detection may be inaccurate."
+    override val ruBypassNoMatches = "No matching installed apps"
+    override fun ruBypassMatchedByPackage(n: Int) = "${appsCount(n)} matched by package"
+    override val ruBypassNoneSelected = "No RU apps selected"
+    override fun ruBypassAlreadySelected(n: Int) = "${appsCount(n)} already selected"
+    override fun ruBypassAutoBypassed(n: Int) = "${appsCount(n)} auto-bypassed"
+    override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto auto · $manual manual"
+    override val releaseChannelLabel = "Release"
+    override fun downloadingAsset(name: String) = "Downloading $name…"
+    override fun downloadFailed(error: String) = "Download failed: $error"
+    override fun installingAsset(name: String) = "Installing $name"
+    override fun hoursShort(n: Int) = "${n}h"
     override val themeColor = "Theme color"
     override val elementColor = "Element color"
     override val textColor = "Text color"
@@ -1168,6 +1330,8 @@ object EnStrings : Strings {
     override val experimentalUnlocked = "Experimental settings unlocked"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+    override val showSubscriptionExpiryTitle = "Show subscription expiry"
+    override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val telemostCookiesDescription =
         "Cookies of a signed-in Yandex account (the Cookie header, e.g. " +
             "\"Session_id=…; yandexuid=…\") — for private conferences. A custom core cannot be " +
@@ -1284,8 +1448,16 @@ object EnStrings : Strings {
     override val subscriptionUpdated = "Subscription updated"
     override val subscriptionNotUpdated = "Subscription not updated"
     override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
-        if (daysLeft < 0) "expired $dateTime" else "until $dateTime · $daysLeft days left"
+        if (daysLeft < 0) "expired $dateTime" else "until $dateTime"
     override fun subscriptionEvery(hours: Int) = "Updates every ${hours}h"
+    override fun subscriptionUpdatedAt(dateTime: String) = "updated $dateTime"
+    override fun subscriptionUntil(date: String) = "until $date"
+    override val subscriptionExpiringSoon = "Subscription expiring soon"
+    override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "expired $dateTime"
+        daysLeft == 0L -> "until $dateTime · today"
+        else -> "until $dateTime · in $daysLeft days"
+    }
     override val updateBannerTitle = "Update available"
     override val updateBannerAction = "Update"
     override val updateManual = "Download from GitHub"
@@ -1398,6 +1570,8 @@ object FaStrings : Strings {
     override val mtuLabel = "MTU (۱۲۸۰ تا ۹۰۰۰)"
     override val blockRuDomains = "مسدودسازی دامنه‌های روسیه"
     override val blockRuDomainsSubtitle = "فهرست داخلی دامنه‌های روسیه ← 0.0.0.0. به هستهٔ Xray نیاز دارد."
+    override val fakeDnsTitle = "FakeDNS"
+    override val fakeDnsSubtitle = "پاسخ‌های DNS را با IPهای ساختگی جایگزین می‌کند — برنامه‌ها نشانی واقعی را نمی‌بینند و دامنه پشت پراکسی حل می‌شود. پیکربندی اشتراک با fakedns خودش بدون تغییر استفاده می‌شود."
     override val saveAndApply = "ذخیره و اعمال"
     override val routingTitle = "مسیریابی و قواعد"
     override val bypassLan = "دور زدن LAN"
@@ -1438,12 +1612,24 @@ object FaStrings : Strings {
     override val routingRuleAdd = "افزودن قانون"
     override val routingRuleEdit = "قانون"
     override val routingRuleDelete = "حذف قانون"
+    override val routingRuleName = "نام مسیر"
     override val routingRuleOutbound = "اقدام"
     override val routingRuleDomains = "دامنه‌ها"
     override val routingRuleIps = "IP / geoip"
+    override val routingRuleSource = "مبدأ (IP)"
     override val routingRulePort = "درگاه"
+    override val routingRuleSourcePort = "درگاه مبدأ"
     override val routingRuleNetwork = "شبکه"
+    override val routingRuleNetworkType = "نوع شبکه"
+    override val netTypeWifi = "Wi-Fi"
+    override val netTypeCellular = "سلولی"
+    override val netTypeEthernet = "اترنت"
+    override val netTypeOther = "دیگر"
     override val routingRuleProtocol = "پروتکل"
+    override val routingRuleClient = "کلاینت (TLS)"
+    override val routingRuleMetered = "شبکهٔ پولی"
+    override val routingRuleClashMode = "حالت Clash"
+    override val routingRuleApps = "برنامه‌ها (بسته‌ها)"
     override val routingRuleEnabled = "فعال"
     override val routingRuleNetworkAny = "هر کدام"
     override val routingOutProxy = "از طریق پراکسی"
@@ -1566,6 +1752,34 @@ object FaStrings : Strings {
     override val everyAppUsesYptun = "همهٔ برنامه‌ها از YPtun استفاده می‌کنند"
     override val chooseAppsUseYptun = "برنامه‌هایی را که از YPtun استفاده می‌کنند انتخاب کنید"
     override val chooseAppsBypass = "برنامه‌هایی را که YPtun را دور می‌زنند انتخاب کنید"
+    override fun appsCount(n: Int) = if (n == 1) "۱ برنامه" else "$n برنامه"
+    override fun useYptunCount(n: Int) = "${appsCount(n)} از YPtun استفاده می‌کنند"
+    override fun onlyUseYptunCount(n: Int) = "فقط ${appsCount(n)} از YPtun استفاده می‌کنند"
+    override fun onlyCount(n: Int) = "فقط ${appsCount(n)}"
+    override fun bypassedCount(n: Int) = "${appsCount(n)} دور زده‌شده"
+    override fun bypassYptunCount(n: Int) = "${appsCount(n)} YPtun را دور می‌زنند"
+    override val allAppsUseYptunStatus = "همهٔ برنامه‌ها از YPtun استفاده می‌کنند"
+    override val noAppsSelectedStatus = "هیچ برنامه‌ای انتخاب نشده"
+    override val noAppsBypassStatus = "هیچ برنامه‌ای YPtun را دور نمی‌زند"
+    override val selectionRequired = "الزامی"
+    override val noBypassedAppsValue = "هیچ برنامهٔ دور زده‌شده‌ای نیست"
+    override val savedForTunMode = "برای حالت TUN ذخیره شد"
+    override val appliesWhenSettingsClose = "هنگام بستن تنظیمات اعمال می‌شود"
+    override val tunModeRoutingRule = "قانون مسیریابی حالت TUN"
+    override val bypassRuApps = "دور زدن برنامه‌های روسی"
+    override val bypassRuOn = "دور زدن روسی روشن"
+    override val ruBypassAccuracy = "تشخیص خودکار ممکن است دقیق نباشد."
+    override val ruBypassNoMatches = "برنامهٔ نصب‌شدهٔ منطبقی یافت نشد"
+    override fun ruBypassMatchedByPackage(n: Int) = "${appsCount(n)} بر اساس بسته"
+    override val ruBypassNoneSelected = "هیچ برنامهٔ روسی انتخاب نشده"
+    override fun ruBypassAlreadySelected(n: Int) = "${appsCount(n)} از قبل انتخاب شده"
+    override fun ruBypassAutoBypassed(n: Int) = "${appsCount(n)} دور زدن خودکار"
+    override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto خودکار · $manual دستی"
+    override val releaseChannelLabel = "نسخه"
+    override fun downloadingAsset(name: String) = "در حال دانلود $name…"
+    override fun downloadFailed(error: String) = "دانلود ناموفق بود: $error"
+    override fun installingAsset(name: String) = "در حال نصب $name"
+    override fun hoursShort(n: Int) = "$n ساعت"
     override val themeColor = "رنگ پوسته"
     override val elementColor = "رنگ عناصر"
     override val textColor = "رنگ متن"
@@ -1582,6 +1796,8 @@ object FaStrings : Strings {
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
+    override val showSubscriptionExpiryTitle = "نمایش تاریخ انقضای اشتراک"
+    override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
     override val telemostCookiesDescription =
         "کوکی‌های یک حساب واردشدهٔ یاندکس (سرایند Cookie، مثلاً " +
             "«Session_id=…; yandexuid=…») — برای کنفرانس‌های خصوصی. در اندروید نمی‌توان هستهٔ " +
@@ -1693,8 +1909,16 @@ object FaStrings : Strings {
     override val subscriptionUpdated = "اشتراک به‌روزرسانی شد"
     override val subscriptionNotUpdated = "اشتراک به‌روزرسانی نشد"
     override fun subscriptionExpiry(dateTime: String, daysLeft: Long) =
-        if (daysLeft < 0) "منقضی‌شده $dateTime" else "تا $dateTime · $daysLeft روز باقی‌مانده"
+        if (daysLeft < 0) "منقضی‌شده $dateTime" else "تا $dateTime"
     override fun subscriptionEvery(hours: Int) = "به‌روزرسانی هر $hours ساعت"
+    override fun subscriptionUpdatedAt(dateTime: String) = "به‌روزرسانی‌شده $dateTime"
+    override fun subscriptionUntil(date: String) = "تا $date"
+    override val subscriptionExpiringSoon = "اشتراک به‌زودی منقضی می‌شود"
+    override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
+        daysLeft < 0 -> "منقضی‌شده $dateTime"
+        daysLeft == 0L -> "تا $dateTime · امروز"
+        else -> "تا $dateTime · $daysLeft روز دیگر"
+    }
     override val updateBannerTitle = "به‌روزرسانی موجود است"
     override val updateBannerAction = "به‌روزرسانی"
     override val updateManual = "دانلود از گیت‌هاب"

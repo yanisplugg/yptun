@@ -167,10 +167,38 @@ class LocationsRepositoryImpl(
             subscriptionProxy = subscriptionProxy
         ) ?: return false
 
+        // The data was just fetched, so stamp "now" as the last-refresh time on every imported
+        // subscription entry — otherwise a freshly added subscription shows no "обновлена …" date
+        // until its first scheduled/manual refresh.
+        val now = nowEpochMs()
+        val importedInterval = resolved.source.updateIntervalHours
+        val imported = resolved.parsed.bundle.normalized().let { bundle ->
+            bundle.copy(
+                locations = bundle.locations.map { entry ->
+                    val isSubscription = entry.metadata?.subscription != null ||
+                        !entry.subscriptionUrl.isNullOrBlank()
+                    if (!isSubscription) {
+                        entry
+                    } else {
+                        val interval = entry.metadata?.subscription?.updateIntervalHours
+                            ?: importedInterval
+                            ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS
+                        entry.copy(
+                            metadata = entry.metadata.withSubscriptionRefreshState(
+                                updateIntervalHours = interval,
+                                lastRefreshAtEpochMs = now,
+                                lastAttemptAtEpochMs = now
+                            )
+                        ).normalized()
+                    }
+                }
+            )
+        }
+
         mutationMutex.withLock {
             val merged = mergeImportedBundle(
                 current = getBundleUnlocked(),
-                imported = resolved.parsed.bundle.normalized(),
+                imported = imported,
                 replaceMatchingStorageIds = resolved.parsed.mode == ImportMode.Restore
             )
             saveBundleUnlocked(merged)
@@ -341,6 +369,31 @@ class LocationsRepositoryImpl(
             } else {
                 refreshSubscriptionsUnlocked(
                     onlyUrls = dueUrls,
+                    subscriptionProxy = subscriptionProxy
+                )
+            }
+        }
+    }
+
+    override suspend fun refreshSubscriptionsMissingExpiry(subscriptionProxy: SubscriptionFetchProxy?): Int {
+        return mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            // Group by URL; a subscription needs backfill only if NONE of its entries has a stored
+            // expiry yet (refreshed entries all share the same merged metadata).
+            val urlsMissingExpiry = bundle.locations
+                .mapNotNull { entry ->
+                    val url = entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    url to (entry.metadata?.subscription?.expiresAtEpochMs != null)
+                }
+                .groupBy({ it.first }, { it.second })
+                .filterValues { hasExpiryFlags -> hasExpiryFlags.none { it } }
+                .keys
+
+            if (urlsMissingExpiry.isEmpty()) {
+                0
+            } else {
+                refreshSubscriptionsUnlocked(
+                    onlyUrls = urlsMissingExpiry,
                     subscriptionProxy = subscriptionProxy
                 )
             }

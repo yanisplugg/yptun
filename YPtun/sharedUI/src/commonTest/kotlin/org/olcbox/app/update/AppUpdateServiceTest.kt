@@ -21,10 +21,10 @@ class AppUpdateServiceTest {
     }
 
     @Test
-    fun updateSettingsNormalizeToNightlyChannel() {
-        val settings = AppUpdateSettings(channel = ReleaseChannel.Stable)
+    fun updateSettingsNormalizeToStableChannel() {
+        val settings = AppUpdateSettings(channel = ReleaseChannel.Nightly)
 
-        assertEquals(ReleaseChannel.Nightly, settings.normalized().channel)
+        assertEquals(ReleaseChannel.Stable, settings.normalized().channel)
     }
 
     @Test
@@ -115,12 +115,40 @@ class AppUpdateServiceTest {
     }
 
     @Test
+    fun selectsReleaseApkWithoutAndroidToken() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-v2.1.0-arm64-v8a.apk", "https://example/arm64.apk"),
+            GithubReleaseAsset("YPtun-v2.1.0-armeabi-v7a.apk", "https://example/armeabi.apk"),
+            GithubReleaseAsset("YPtun-v2.1.0-x86_64.apk", "https://example/x86_64.apk"),
+            GithubReleaseAsset("YPtun-v2.1.0-universal.apk", "https://example/universal.apk")
+        )
+
+        assertEquals(
+            "https://example/arm64.apk",
+            AppUpdateService.selectAsset(assets, UpdatePlatform("android", "arm64"))?.downloadUrl
+        )
+        assertEquals(
+            "https://example/armeabi.apk",
+            AppUpdateService.selectAsset(assets, UpdatePlatform("android", "armeabi-v7a"))?.downloadUrl
+        )
+        // A device whose ABI has no dedicated apk falls back to the universal build.
+        val noAbiAssets = listOf(
+            GithubReleaseAsset("YPtun-v2.1.0-arm64-v8a.apk", "https://example/arm64.apk"),
+            GithubReleaseAsset("YPtun-v2.1.0-universal.apk", "https://example/universal.apk")
+        )
+        assertEquals(
+            "https://example/universal.apk",
+            AppUpdateService.selectAsset(noAbiAssets, UpdatePlatform("android", "armeabi-v7a"))?.downloadUrl
+        )
+    }
+
+    @Test
     fun updateSettingsPersistAndDueCheckUsesInterval() {
         val settings = AppUpdateSettings(
-            channel = ReleaseChannel.Nightly,
+            channel = ReleaseChannel.Stable,
             intervalHours = 6,
             lastCheckAtEpochMs = 1_000L,
-            lastSeenUpdateVersion = "Nightly:nightly:apk"
+            lastSeenUpdateVersion = "Stable:2.1.0:apk"
         )
         val store = InMemoryAppUpdateSettingsStore()
 

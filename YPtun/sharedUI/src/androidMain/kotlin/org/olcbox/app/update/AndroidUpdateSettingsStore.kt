@@ -11,7 +11,7 @@ class AndroidUpdateSettingsStore(context: Context) : AppUpdateSettingsStore {
     override suspend fun load(): AppUpdateSettings {
         val channel = preferences.getString(KEY_CHANNEL, null)
             ?.let { value -> runCatching { ReleaseChannel.valueOf(value) }.getOrNull() }
-            ?: ReleaseChannel.Nightly
+            ?: ReleaseChannel.Stable
 
         val lastCheck = preferences.getLong(KEY_LAST_CHECK, 0L)
             .takeIf { it > 0L }

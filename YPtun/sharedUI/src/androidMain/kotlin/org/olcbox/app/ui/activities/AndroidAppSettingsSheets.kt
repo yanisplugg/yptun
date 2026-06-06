@@ -732,7 +732,7 @@ private fun AppSettingsHubContent(
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.updates,
-                subtitle = "Nightly · ${updateSettings.intervalHours}h",
+                subtitle = "${LocalStrings.current.releaseChannelLabel} · ${LocalStrings.current.hoursShort(updateSettings.intervalHours)}",
                 icon = Icons.Outlined.Refresh,
                 enabled = true,
                 onClick = onUpdatesClick
@@ -1194,7 +1194,7 @@ private fun SplitTunnelingAppListContent(
         SettingsDetailHeader(
             title = list.title(),
             subtitle = if (list == AndroidSplitTunnelList.Bypass && russianBypassActive) {
-                RUSSIAN_BYPASS_ACCURACY_MESSAGE
+                LocalStrings.current.ruBypassAccuracy
             } else {
                 list.selectionSubtitle(selectedPackages.size)
             },
@@ -1443,7 +1443,7 @@ private fun UpdatesSettingsContent(
                 FilterChip(
                     selected = settings.intervalHours == hours,
                     onClick = { onIntervalSelected(hours) },
-                    label = { Text("${hours}h") }
+                    label = { Text(LocalStrings.current.hoursShort(hours)) }
                 )
             }
         }
@@ -2445,7 +2445,7 @@ private fun RussianBypassPresetChips(
             enabled = enabled,
             onClick = onClick,
             label = {
-                Text(if (active) "RU bypass on" else "Bypass RU apps")
+                Text(if (active) LocalStrings.current.bypassRuOn else LocalStrings.current.bypassRuApps)
             },
             leadingIcon = {
                 Icon(
@@ -2924,21 +2924,37 @@ private fun RoutingContent(
 
 /** Editable (raw-text) form of a [SingBoxRule] so text fields keep their cursor while typing. */
 private data class SbRuleDraft(
+    val name: String = "",
     val outbound: String = SingBoxRule.OUT_PROXY,
     val domains: String = "",
     val ip: String = "",
+    val source: String = "",
     val port: String = "",
+    val sourcePort: String = "",
     val network: String = "",
+    val networkType: List<String> = emptyList(),
     val protocol: String = "",
+    val client: String = "",
+    val networkIsExpensive: Boolean = false,
+    val clashMode: String = "",
+    val packageNames: String = "",
     val enabled: Boolean = true,
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
+        name = name.trim(),
         outbound = outbound,
         domains = splitList(domains),
         ip = splitList(ip),
+        source = splitList(source),
         port = port.trim(),
+        sourcePort = sourcePort.trim(),
         network = network.trim(),
+        networkType = networkType,
         protocol = splitList(protocol),
+        client = splitList(client),
+        networkIsExpensive = networkIsExpensive,
+        clashMode = clashMode.trim(),
+        packageNames = splitList(packageNames),
         enabled = enabled,
     )
 
@@ -2947,12 +2963,20 @@ private data class SbRuleDraft(
 }
 
 private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
+    name = name,
     outbound = outbound,
     domains = domains.joinToString("\n"),
     ip = ip.joinToString("\n"),
+    source = source.joinToString("\n"),
     port = port,
+    sourcePort = sourcePort,
     network = network,
+    networkType = networkType,
     protocol = protocol.joinToString(", "),
+    client = client.joinToString(", "),
+    networkIsExpensive = networkIsExpensive,
+    clashMode = clashMode,
+    packageNames = packageNames.joinToString("\n"),
     enabled = enabled,
 )
 
@@ -2985,6 +3009,15 @@ private fun SingBoxRuleCard(
                         tint = MaterialTheme.colorScheme.error)
                 }
             }
+            // Optional label for the rule (UI only; not part of the sing-box config).
+            OutlinedTextField(
+                value = draft.name,
+                onValueChange = { onChange(draft.copy(name = it)) },
+                label = { Text(s.routingRuleName) },
+                placeholder = { Text("P2P Traffic") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
             // Outbound action: proxy / direct / block.
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(
@@ -3015,6 +3048,14 @@ private fun SingBoxRuleCard(
                 minLines = 1,
                 modifier = Modifier.fillMaxWidth()
             )
+            OutlinedTextField(
+                value = draft.source,
+                onValueChange = { onChange(draft.copy(source = it)) },
+                label = { Text(s.routingRuleSource) },
+                placeholder = { Text("192.168.0.0/16") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth()
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = draft.port,
@@ -3033,6 +3074,38 @@ private fun SingBoxRuleCard(
                     modifier = Modifier.weight(1f)
                 )
             }
+            OutlinedTextField(
+                value = draft.sourcePort,
+                onValueChange = { onChange(draft.copy(sourcePort = it)) },
+                label = { Text(s.routingRuleSourcePort) },
+                placeholder = { Text("1000:2000") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.client,
+                onValueChange = { onChange(draft.copy(client = it)) },
+                label = { Text(s.routingRuleClient) },
+                placeholder = { Text("chromium, firefox") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.clashMode,
+                onValueChange = { onChange(draft.copy(clashMode = it)) },
+                label = { Text(s.routingRuleClashMode) },
+                placeholder = { Text("Rule / Global / Direct") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.packageNames,
+                onValueChange = { onChange(draft.copy(packageNames = it)) },
+                label = { Text(s.routingRuleApps) },
+                placeholder = { Text("com.google.android.youtube") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth()
+            )
             // Network: any / tcp / udp.
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("" to s.routingRuleNetworkAny, "tcp" to "TCP", "udp" to "UDP").forEach { (value, label) ->
@@ -3042,6 +3115,42 @@ private fun SingBoxRuleCard(
                         label = { Text(label) }
                     )
                 }
+            }
+            // Network type (multi-select): wifi / cellular / ethernet / other.
+            Text(
+                s.routingRuleNetworkType,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    "wifi" to s.netTypeWifi,
+                    "cellular" to s.netTypeCellular,
+                    "ethernet" to s.netTypeEthernet,
+                    "other" to s.netTypeOther,
+                ).forEach { (value, label) ->
+                    val selected = value in draft.networkType
+                    FilterChip(
+                        selected = selected,
+                        onClick = {
+                            val next = if (selected) draft.networkType - value else draft.networkType + value
+                            onChange(draft.copy(networkType = next))
+                        },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            // Metered (expensive) network match → network_is_expensive.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    s.routingRuleMetered,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = draft.networkIsExpensive,
+                    onCheckedChange = { onChange(draft.copy(networkIsExpensive = it)) }
+                )
             }
         }
     }
@@ -3094,6 +3203,7 @@ private fun TrafficSettingsContent(
     var fragInterval by remember(settings) { mutableStateOf(settings.fragmentInterval) }
     var mtu by remember(settings) { mutableStateOf(settings.mtu.toString()) }
     var blockRu by remember(settings) { mutableStateOf(settings.blockRuDomains) }
+    var fakeDns by remember(settings) { mutableStateOf(settings.fakeDnsEnabled) }
     val s = LocalStrings.current
 
     Column(
@@ -3220,6 +3330,13 @@ private fun TrafficSettingsContent(
             checked = blockRu
         ) { blockRu = it }
 
+        SettingsSectionLabel(s.fakeDnsTitle)
+        RoutingToggleRow(
+            title = s.fakeDnsTitle,
+            subtitle = s.fakeDnsSubtitle,
+            checked = fakeDns
+        ) { fakeDns = it }
+
         Button(
             onClick = {
                 onTrafficChanged(
@@ -3235,7 +3352,8 @@ private fun TrafficSettingsContent(
                         fragmentLength = fragLength,
                         fragmentInterval = fragInterval,
                         mtu = mtu.toIntOrNull() ?: 1500,
-                        blockRuDomains = blockRu
+                        blockRuDomains = blockRu,
+                        fakeDnsEnabled = fakeDns
                     ).normalized()
                 )
                 onBack()
@@ -3294,6 +3412,12 @@ private fun ApplicationBehaviorContent(
             subtitle = s.notifSpeedSubtitle,
             checked = settings.showSpeedInNotification
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
+
+        RoutingToggleRow(
+            title = s.showSubscriptionExpiryTitle,
+            subtitle = s.showSubscriptionExpirySubtitle,
+            checked = settings.showSubscriptionExpiry
+        ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
 
         SettingsSectionLabel(s.language)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3666,13 +3790,13 @@ private fun AndroidSplitTunnelSettings.settingsSummary(): String {
         AndroidSplitTunnelMode.ProxySelected -> if (proxyPackages.isEmpty()) {
             stringsFor(LocalizationState.effective).selectedAppsOnly
         } else {
-            "Only ${appCount(proxyPackages.size)}"
+            stringsFor(LocalizationState.effective).onlyCount(proxyPackages.size)
         }
 
         AndroidSplitTunnelMode.BypassSelected -> if (bypassPackages.isEmpty()) {
             stringsFor(LocalizationState.effective).bypassSelected
         } else {
-            "${appCount(bypassPackages.size)} bypassed"
+            stringsFor(LocalizationState.effective).bypassedCount(bypassPackages.size)
         }
     }
 }
@@ -3698,30 +3822,30 @@ private fun AndroidSplitTunnelMode.subtitle(settings: AndroidSplitTunnelSettings
         AndroidSplitTunnelMode.ProxySelected -> if (settings.proxyPackages.isEmpty()) {
             stringsFor(LocalizationState.effective).chooseAppsUseYptun
         } else {
-            "${appCount(settings.proxyPackages.size)} use YPtun"
+            stringsFor(LocalizationState.effective).useYptunCount(settings.proxyPackages.size)
         }
 
         AndroidSplitTunnelMode.BypassSelected -> if (settings.bypassPackages.isEmpty()) {
             stringsFor(LocalizationState.effective).chooseAppsBypass
         } else {
-            "${appCount(settings.bypassPackages.size)} bypass YPtun"
+            stringsFor(LocalizationState.effective).bypassYptunCount(settings.bypassPackages.size)
         }
     }
 }
 
 private fun AndroidSplitTunnelMode.statusTitle(settings: AndroidSplitTunnelSettings): String {
     return when (this) {
-        AndroidSplitTunnelMode.AllApps -> "All apps use YPtun"
+        AndroidSplitTunnelMode.AllApps -> stringsFor(LocalizationState.effective).allAppsUseYptunStatus
         AndroidSplitTunnelMode.ProxySelected -> if (settings.proxyPackages.isEmpty()) {
-            "No apps selected"
+            stringsFor(LocalizationState.effective).noAppsSelectedStatus
         } else {
-            "Only ${appCount(settings.proxyPackages.size)} use YPtun"
+            stringsFor(LocalizationState.effective).onlyUseYptunCount(settings.proxyPackages.size)
         }
 
         AndroidSplitTunnelMode.BypassSelected -> if (settings.bypassPackages.isEmpty()) {
-            "No apps bypass YPtun"
+            stringsFor(LocalizationState.effective).noAppsBypassStatus
         } else {
-            "${appCount(settings.bypassPackages.size)} bypass YPtun"
+            stringsFor(LocalizationState.effective).bypassYptunCount(settings.bypassPackages.size)
         }
     }
 }
@@ -3733,16 +3857,18 @@ private fun AndroidSplitTunnelMode.icon() = when (this) {
 }
 
 private fun AndroidSplitTunnelList.title(): String {
+    val s = stringsFor(LocalizationState.effective)
     return when (this) {
-        AndroidSplitTunnelList.Proxy -> "Apps Using YPtun"
-        AndroidSplitTunnelList.Bypass -> "Bypassed Apps"
+        AndroidSplitTunnelList.Proxy -> s.appsUsingYptun
+        AndroidSplitTunnelList.Bypass -> s.bypassedApps
     }
 }
 
 private fun AndroidSplitTunnelList.selectionSubtitle(count: Int): String {
+    val s = stringsFor(LocalizationState.effective)
     return when (this) {
-        AndroidSplitTunnelList.Proxy -> "${appCount(count)} use YPtun"
-        AndroidSplitTunnelList.Bypass -> "${appCount(count)} bypassed"
+        AndroidSplitTunnelList.Proxy -> s.useYptunCount(count)
+        AndroidSplitTunnelList.Bypass -> s.bypassedCount(count)
     }
 }
 
@@ -3751,13 +3877,14 @@ private fun Set<String>.russianBypassPresetValue(
     selectedMatchedCount: Int,
     presetActive: Boolean
 ): String {
+    val s = stringsFor(LocalizationState.effective)
     return when {
-        isEmpty() -> "No matching installed apps"
-        !presetActive -> "${appCount(size)} matched by package"
-        selectedMatchedCount == 0 -> "No RU apps selected"
-        autoCount == 0 -> "${appCount(selectedMatchedCount)} already selected"
-        autoCount == selectedMatchedCount -> "${appCount(autoCount)} auto-bypassed"
-        else -> "$autoCount auto · ${selectedMatchedCount - autoCount} manual"
+        isEmpty() -> s.ruBypassNoMatches
+        !presetActive -> s.ruBypassMatchedByPackage(size)
+        selectedMatchedCount == 0 -> s.ruBypassNoneSelected
+        autoCount == 0 -> s.ruBypassAlreadySelected(selectedMatchedCount)
+        autoCount == selectedMatchedCount -> s.ruBypassAutoBypassed(autoCount)
+        else -> s.ruBypassAutoManual(autoCount, selectedMatchedCount - autoCount)
     }
 }
 
@@ -3768,10 +3895,11 @@ private fun String.matchesRussianBypassPackage(): Boolean {
 }
 
 private fun Set<String>.activeListValue(requireSelection: Boolean): String {
+    val s = stringsFor(LocalizationState.effective)
     return when {
         isNotEmpty() -> appCount(size)
-        requireSelection -> "Required"
-        else -> "No bypassed apps"
+        requireSelection -> s.selectionRequired
+        else -> s.noBypassedAppsValue
     }
 }
 
@@ -3779,10 +3907,11 @@ private fun splitTunnelStatusSubtitle(
     selectedMode: AndroidConnectionMode,
     isConnectionActive: Boolean
 ): String {
+    val s = stringsFor(LocalizationState.effective)
     return when {
-        selectedMode == AndroidConnectionMode.Proxy -> "Saved for TUN mode"
-        isConnectionActive -> "Applies when settings closes"
-        else -> "TUN mode routing rule"
+        selectedMode == AndroidConnectionMode.Proxy -> s.savedForTunMode
+        isConnectionActive -> s.appliesWhenSettingsClose
+        else -> s.tunModeRoutingRule
     }
 }
 
@@ -3798,7 +3927,7 @@ private fun String.initials(): String {
 }
 
 private fun appCount(count: Int): String {
-    return if (count == 1) "1 app" else "$count apps"
+    return stringsFor(LocalizationState.effective).appsCount(count)
 }
 
 private data class AndroidAppListEntry(
@@ -3810,10 +3939,10 @@ private data class AndroidAppListEntry(
 private const val MAX_PROXY_USERNAME_LENGTH = 64
 private const val MAX_PROXY_PASSWORD_LENGTH = 64
 private const val MAX_PROXY_PORT_LENGTH = 5
-private const val RUSSIAN_BYPASS_ACCURACY_MESSAGE =
-    "Auto-detection may be inaccurate."
 private val RUSSIAN_BYPASS_PACKAGE_PREFIXES = listOf(
     "ru.",
+    // Russian apps published under a reversed "ru.com"/"*.ru" domain land as com.ru.* — count them too.
+    "com.ru.",
     "com.yandex."
 )
 private val RUSSIAN_BYPASS_PACKAGE_NAMES = setOf(

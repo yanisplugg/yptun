@@ -110,12 +110,39 @@ object SingBoxConfig {
                         put("address", traffic.directDns)
                         put("detour", "direct")
                     }
+                    // FakeDNS equivalent: hand out synthetic IPs so apps never see the real address;
+                    // the sniffed domain is resolved behind the proxy.
+                    if (traffic.fakeDnsEnabled) {
+                        addJsonObject {
+                            put("tag", "fake")
+                            put("address", "fakeip")
+                        }
+                    }
                 }
                 putJsonArray("rules") {
                     addJsonObject {
                         put("outbound", "any")
                         put("server", "direct")
                     }
+                    // Route A/AAAA queries to the fake server (A-only when forcing IPv4).
+                    if (traffic.fakeDnsEnabled) {
+                        addJsonObject {
+                            putJsonArray("query_type") {
+                                add("A")
+                                if ((dnsStrategyOverride ?: traffic.domainStrategy) != "ipv4_only") add("AAAA")
+                            }
+                            put("server", "fake")
+                        }
+                    }
+                }
+                if (traffic.fakeDnsEnabled) {
+                    putJsonObject("fakeip") {
+                        put("enabled", true)
+                        put("inet4_range", "198.18.0.0/15")
+                        put("inet6_range", "fc00::/18")
+                    }
+                    // Separate fake/real caches so a fakeip answer never poisons a direct lookup.
+                    put("independent_cache", true)
                 }
                 put("final", "remote")
                 // ipv4_only override (VK-TURN): the WireGuard tunnel is IPv4-only, so resolving

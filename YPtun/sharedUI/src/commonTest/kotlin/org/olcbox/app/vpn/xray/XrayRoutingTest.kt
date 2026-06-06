@@ -25,21 +25,28 @@ class XrayRoutingTest {
         assertEquals("IPIfNonMatch", routing["domainStrategy"]!!.jsonPrimitive.content)
 
         val rules = routing["rules"]!!.jsonArray
-        // block (ads) then direct (ru). No proxy bucket → 2 rules, no global-direct fallthrough.
-        assertEquals(2, rules.size)
+        // block (ads domain) then direct split into a domain rule + an ip rule (Xray AND-matches
+        // domain+ip in one rule, so they MUST be separate to OR them). No proxy bucket, no fallthrough.
+        assertEquals(3, rules.size)
 
         val block = rules[0].jsonObject
         assertEquals("block", block["outboundTag"]!!.jsonPrimitive.content)
         assertEquals("geosite:category-ads-all", block["domain"]!!.jsonArray[0].jsonPrimitive.content)
 
-        val direct = rules[1].jsonObject
-        assertEquals("direct", direct["outboundTag"]!!.jsonPrimitive.content)
-        val directDomains = direct["domain"]!!.jsonArray.map { it.jsonPrimitive.content }
+        val directDomainRule = rules[1].jsonObject
+        assertEquals("direct", directDomainRule["outboundTag"]!!.jsonPrimitive.content)
+        val directDomains = directDomainRule["domain"]!!.jsonArray.map { it.jsonPrimitive.content }
         assertTrue(directDomains.contains("geosite:ru"))
         assertTrue(directDomains.contains("domain:vk.com"))
-        val directIps = direct["ip"]!!.jsonArray.map { it.jsonPrimitive.content }
+        // The domain rule must NOT also carry ip (that would AND them and drop .ru on non-RU IPs).
+        assertTrue(directDomainRule["ip"] == null)
+
+        val directIpRule = rules[2].jsonObject
+        assertEquals("direct", directIpRule["outboundTag"]!!.jsonPrimitive.content)
+        val directIps = directIpRule["ip"]!!.jsonArray.map { it.jsonPrimitive.content }
         assertTrue(directIps.contains("geoip:ru"))
         assertTrue(directIps.contains("10.0.0.0/8"))
+        assertTrue(directIpRule["domain"] == null)
     }
 
     @Test

@@ -17,6 +17,13 @@ interface LocationsRepository {
         subscriptionProxy: SubscriptionFetchProxy? = null
     ): Int
     suspend fun refreshDueSubscriptions(subscriptionProxy: SubscriptionFetchProxy? = null): Int
+
+    /**
+     * One-time backfill for subscriptions imported before the expiry field was captured: force-refreshes
+     * only the URLs whose entries still have no stored expiry, ignoring the auto-refresh interval. Lets
+     * the "show subscription expiry" toggle work on existing subscriptions without re-importing them.
+     */
+    suspend fun refreshSubscriptionsMissingExpiry(subscriptionProxy: SubscriptionFetchProxy? = null): Int
     suspend fun setSubscriptionUpdateInterval(subscriptionUrl: String, hours: Int)
     suspend fun saveLocation(storageId: String, location: LocationConfig)
     suspend fun loadLocation(storageId: String): LocationConfig?

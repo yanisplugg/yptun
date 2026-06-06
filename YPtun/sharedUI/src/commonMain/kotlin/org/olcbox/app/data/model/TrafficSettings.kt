@@ -36,6 +36,13 @@ data class TrafficSettings(
      * Xray's regexp DNS hosts). Off by default.
      */
     val blockRuDomains: Boolean = false,
+    /**
+     * Enable FakeDNS: the core answers sniffed domains with synthetic IPs (Xray `fakedns` pool /
+     * sing-box `fakeip`), so apps never see the real address and the domain is resolved behind the
+     * proxy. Reduces DNS leaks/latency. Off by default; honored verbatim when a subscription's raw
+     * Xray config already carries its own `fakedns` block.
+     */
+    val fakeDnsEnabled: Boolean = false,
 ) {
     fun normalized(): TrafficSettings = copy(
         remoteDns = remoteDns.trim().ifBlank { "8.8.8.8" },

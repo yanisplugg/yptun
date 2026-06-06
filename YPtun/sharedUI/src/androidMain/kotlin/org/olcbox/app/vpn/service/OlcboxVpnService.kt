@@ -952,6 +952,7 @@ class OlcboxVpnService : VpnService() {
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                        fakeDnsEnabled = loadTrafficSettings().fakeDnsEnabled,
                     )
                 } else {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).

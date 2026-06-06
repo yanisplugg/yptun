@@ -116,11 +116,15 @@ object SingBoxRouting {
             val domainKeyword = s.flatMap { it.domainKeyword }.distinct()
             val domainRegex = s.flatMap { it.domainRegex }.distinct()
             val ipCidr = i.flatMap { it.ipCidr }.distinct()
+            val sourceIpCidr = parseIp(rule.source).flatMap { it.ipCidr }.distinct()
             val ruleSetTags = (s.flatMap { it.geositeTags }.map { "geosite-$it" } +
                 i.flatMap { it.geoipTags }.map { "geoip-$it" }).distinct()
             val singlePorts = mutableListOf<Int>()
             val portRanges = mutableListOf<String>()
             splitPorts(rule.port, singlePorts, portRanges)
+            val srcSinglePorts = mutableListOf<Int>()
+            val srcPortRanges = mutableListOf<String>()
+            splitPorts(rule.sourcePort, srcSinglePorts, srcPortRanges)
 
             add(buildJsonObject {
                 if (ruleSetTags.isNotEmpty()) putJsonArray("rule_set") { ruleSetTags.forEach { add(it) } }
@@ -129,10 +133,18 @@ object SingBoxRouting {
                 if (domainKeyword.isNotEmpty()) putJsonArray("domain_keyword") { domainKeyword.forEach { add(it) } }
                 if (domainRegex.isNotEmpty()) putJsonArray("domain_regex") { domainRegex.forEach { add(it) } }
                 if (ipCidr.isNotEmpty()) putJsonArray("ip_cidr") { ipCidr.forEach { add(it) } }
+                if (sourceIpCidr.isNotEmpty()) putJsonArray("source_ip_cidr") { sourceIpCidr.forEach { add(it) } }
                 if (singlePorts.isNotEmpty()) putJsonArray("port") { singlePorts.forEach { add(it) } }
                 if (portRanges.isNotEmpty()) putJsonArray("port_range") { portRanges.forEach { add(it) } }
+                if (srcSinglePorts.isNotEmpty()) putJsonArray("source_port") { srcSinglePorts.forEach { add(it) } }
+                if (srcPortRanges.isNotEmpty()) putJsonArray("source_port_range") { srcPortRanges.forEach { add(it) } }
                 if (rule.network.isNotBlank()) put("network", rule.network)
+                if (rule.networkType.isNotEmpty()) putJsonArray("network_type") { rule.networkType.forEach { add(it) } }
                 if (rule.protocol.isNotEmpty()) putJsonArray("protocol") { rule.protocol.forEach { add(it) } }
+                if (rule.client.isNotEmpty()) putJsonArray("client") { rule.client.forEach { add(it) } }
+                if (rule.networkIsExpensive) put("network_is_expensive", true)
+                if (rule.clashMode.isNotBlank()) put("clash_mode", rule.clashMode)
+                if (rule.packageNames.isNotEmpty()) putJsonArray("package_name") { rule.packageNames.forEach { add(it) } }
                 when (rule.outbound) {
                     SingBoxRule.OUT_BLOCK -> put("action", "reject")
                     SingBoxRule.OUT_DIRECT -> put("outbound", DIRECT_TAG)

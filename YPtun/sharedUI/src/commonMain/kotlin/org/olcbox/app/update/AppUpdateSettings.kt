@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class AppUpdateSettings(
     @SerialName("update_channel")
-    val channel: ReleaseChannel = ReleaseChannel.Nightly,
+    val channel: ReleaseChannel = ReleaseChannel.Stable,
     @SerialName("update_interval_hours")
     val intervalHours: Int = DEFAULT_INTERVAL_HOURS,
     @SerialName("last_update_check_at_epoch_ms")
@@ -17,8 +17,11 @@ data class AppUpdateSettings(
     val lastDownloadedUpdateVersion: String? = null
 ) {
     fun normalized(): AppUpdateSettings {
+        // Always track the published GitHub releases ("Stable"). The "nightly" tag does not exist in
+        // the release repo, so the old Nightly default 404'd on every check. Forcing Stable here also
+        // migrates any settings that were persisted with the stale Nightly value.
         return copy(
-            channel = ReleaseChannel.Nightly,
+            channel = ReleaseChannel.Stable,
             intervalHours = intervalHours.coerceIn(MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS)
         )
     }
