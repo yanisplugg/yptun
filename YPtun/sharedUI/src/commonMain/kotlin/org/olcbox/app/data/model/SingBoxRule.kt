@@ -30,6 +30,8 @@ data class SingBoxRule(
     val sourcePort: String = "",
     /** "" (any), "tcp" or "udp". */
     val network: String = "",
+    /** Network interface types → sing-box `network_type` (any of [NETWORK_TYPES]). Empty = any. */
+    val networkType: List<String> = emptyList(),
     /** Sniffed protocols: http / tls / quic / bittorrent. Empty = any. */
     val protocol: List<String> = emptyList(),
     /** Disabled rules are kept in the list but skipped when building the config. */
@@ -38,7 +40,8 @@ data class SingBoxRule(
     /** True when the rule has at least one matcher (otherwise it would match everything). */
     fun hasMatcher(): Boolean =
         domains.isNotEmpty() || ip.isNotEmpty() || source.isNotEmpty() || port.isNotBlank() ||
-            sourcePort.isNotBlank() || network.isNotBlank() || protocol.isNotEmpty()
+            sourcePort.isNotBlank() || network.isNotBlank() || protocol.isNotEmpty() ||
+            networkType.isNotEmpty()
 
     companion object {
         const val OUT_PROXY = "proxy"
@@ -48,6 +51,8 @@ data class SingBoxRule(
         val OUTBOUNDS = listOf(OUT_PROXY, OUT_DIRECT, OUT_BLOCK)
         val NETWORKS = listOf("", "tcp", "udp")
         val PROTOCOLS = listOf("http", "tls", "quic", "bittorrent")
+        /** sing-box `network_type` interface kinds. */
+        val NETWORK_TYPES = listOf("wifi", "cellular", "ethernet", "other")
 
         /** Newline-join a selector list for a multiline text field. */
         fun listToText(list: List<String>): String = list.joinToString("\n")

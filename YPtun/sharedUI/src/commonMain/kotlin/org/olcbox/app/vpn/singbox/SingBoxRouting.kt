@@ -139,6 +139,7 @@ object SingBoxRouting {
                 if (srcSinglePorts.isNotEmpty()) putJsonArray("source_port") { srcSinglePorts.forEach { add(it) } }
                 if (srcPortRanges.isNotEmpty()) putJsonArray("source_port_range") { srcPortRanges.forEach { add(it) } }
                 if (rule.network.isNotBlank()) put("network", rule.network)
+                if (rule.networkType.isNotEmpty()) putJsonArray("network_type") { rule.networkType.forEach { add(it) } }
                 if (rule.protocol.isNotEmpty()) putJsonArray("protocol") { rule.protocol.forEach { add(it) } }
                 when (rule.outbound) {
                     SingBoxRule.OUT_BLOCK -> put("action", "reject")

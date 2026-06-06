@@ -2932,6 +2932,7 @@ private data class SbRuleDraft(
     val port: String = "",
     val sourcePort: String = "",
     val network: String = "",
+    val networkType: List<String> = emptyList(),
     val protocol: String = "",
     val enabled: Boolean = true,
 ) {
@@ -2944,6 +2945,7 @@ private data class SbRuleDraft(
         port = port.trim(),
         sourcePort = sourcePort.trim(),
         network = network.trim(),
+        networkType = networkType,
         protocol = splitList(protocol),
         enabled = enabled,
     )
@@ -2961,6 +2963,7 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     port = port,
     sourcePort = sourcePort,
     network = network,
+    networkType = networkType,
     protocol = protocol.joinToString(", "),
     enabled = enabled,
 )
@@ -3073,6 +3076,30 @@ private fun SingBoxRuleCard(
                     FilterChip(
                         selected = draft.network == value,
                         onClick = { onChange(draft.copy(network = value)) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            // Network type (multi-select): wifi / cellular / ethernet / other.
+            Text(
+                s.routingRuleNetworkType,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    "wifi" to s.netTypeWifi,
+                    "cellular" to s.netTypeCellular,
+                    "ethernet" to s.netTypeEthernet,
+                    "other" to s.netTypeOther,
+                ).forEach { (value, label) ->
+                    val selected = value in draft.networkType
+                    FilterChip(
+                        selected = selected,
+                        onClick = {
+                            val next = if (selected) draft.networkType - value else draft.networkType + value
+                            onChange(draft.copy(networkType = next))
+                        },
                         label = { Text(label) }
                     )
                 }

@@ -191,6 +191,11 @@ interface Strings {
     val routingRulePort: String
     val routingRuleSourcePort: String
     val routingRuleNetwork: String
+    val routingRuleNetworkType: String
+    val netTypeWifi: String
+    val netTypeCellular: String
+    val netTypeEthernet: String
+    val netTypeOther: String
     val routingRuleProtocol: String
     val routingRuleEnabled: String
     val routingRuleNetworkAny: String
@@ -687,6 +692,11 @@ object RuStrings : Strings {
     override val routingRulePort = "Порт"
     override val routingRuleSourcePort = "Порт источника"
     override val routingRuleNetwork = "Сеть"
+    override val routingRuleNetworkType = "Тип сети"
+    override val netTypeWifi = "Wi-Fi"
+    override val netTypeCellular = "Сотовая"
+    override val netTypeEthernet = "Ethernet"
+    override val netTypeOther = "Другое"
     override val routingRuleProtocol = "Протокол"
     override val routingRuleEnabled = "Включено"
     override val routingRuleNetworkAny = "Любая"
@@ -1141,6 +1151,11 @@ object EnStrings : Strings {
     override val routingRulePort = "Port"
     override val routingRuleSourcePort = "Source port"
     override val routingRuleNetwork = "Network"
+    override val routingRuleNetworkType = "Network type"
+    override val netTypeWifi = "Wi-Fi"
+    override val netTypeCellular = "Cellular"
+    override val netTypeEthernet = "Ethernet"
+    override val netTypeOther = "Other"
     override val routingRuleProtocol = "Protocol"
     override val routingRuleEnabled = "Enabled"
     override val routingRuleNetworkAny = "Any"
@@ -1593,6 +1608,11 @@ object FaStrings : Strings {
     override val routingRulePort = "درگاه"
     override val routingRuleSourcePort = "درگاه مبدأ"
     override val routingRuleNetwork = "شبکه"
+    override val routingRuleNetworkType = "نوع شبکه"
+    override val netTypeWifi = "Wi-Fi"
+    override val netTypeCellular = "سلولی"
+    override val netTypeEthernet = "اترنت"
+    override val netTypeOther = "دیگر"
     override val routingRuleProtocol = "پروتکل"
     override val routingRuleEnabled = "فعال"
     override val routingRuleNetworkAny = "هر کدام"
