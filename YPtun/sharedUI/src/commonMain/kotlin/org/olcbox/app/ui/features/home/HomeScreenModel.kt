@@ -432,11 +432,30 @@ class HomeScreenViewModel(
 
     private fun startSubscriptionAutoRefresh() {
         viewModelScope.launch {
+            backfillMissingSubscriptionExpiry()
             refreshDueSubscriptionsIfNeeded()
             while (true) {
                 delay(SUBSCRIPTION_AUTO_REFRESH_POLL_MS)
                 refreshDueSubscriptionsIfNeeded()
             }
+        }
+    }
+
+    /**
+     * One-shot (per launch) backfill so the "show subscription expiry" toggle works on subscriptions
+     * imported before the expiry was captured — they have no stored expiry until refreshed. Targets
+     * only those URLs and ignores the auto-refresh interval. Best-effort; failures are ignored.
+     */
+    private suspend fun backfillMissingSubscriptionExpiry() {
+        val updatedCount = withContext(Dispatchers.IO) {
+            runCatching {
+                locationsRepository.refreshSubscriptionsMissingExpiry(
+                    subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                )
+            }.getOrDefault(0)
+        }
+        if (updatedCount > 0) {
+            loadCurrentConfigNow()
         }
     }
 

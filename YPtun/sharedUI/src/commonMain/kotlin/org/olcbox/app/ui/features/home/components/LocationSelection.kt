@@ -717,7 +717,19 @@ private fun SubscriptionGroupHeader(
                     modifier = Modifier.padding(top = 1.dp)
                 )
             }
-            // Optional expiry date ("до дд.мм.гггг"), gated on the app-settings toggle.
+            info.interval?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            // Optional expiry date ("до дд.мм.гггг"), gated on the app-settings toggle, shown last
+            // (under the auto-refresh interval line).
             if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry.current) {
                 info.expiryUntil?.takeIf { it.isNotBlank() }?.let {
                     Text(
@@ -730,17 +742,6 @@ private fun SubscriptionGroupHeader(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-            }
-            info.interval?.takeIf { it.isNotBlank() }?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 9.sp,
-                    lineHeight = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
         }
     }

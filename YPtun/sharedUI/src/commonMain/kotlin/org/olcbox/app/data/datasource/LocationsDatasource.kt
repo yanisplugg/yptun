@@ -375,6 +375,31 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun refreshSubscriptionsMissingExpiry(subscriptionProxy: SubscriptionFetchProxy?): Int {
+        return mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            // Group by URL; a subscription needs backfill only if NONE of its entries has a stored
+            // expiry yet (refreshed entries all share the same merged metadata).
+            val urlsMissingExpiry = bundle.locations
+                .mapNotNull { entry ->
+                    val url = entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    url to (entry.metadata?.subscription?.expiresAtEpochMs != null)
+                }
+                .groupBy({ it.first }, { it.second })
+                .filterValues { hasExpiryFlags -> hasExpiryFlags.none { it } }
+                .keys
+
+            if (urlsMissingExpiry.isEmpty()) {
+                0
+            } else {
+                refreshSubscriptionsUnlocked(
+                    onlyUrls = urlsMissingExpiry,
+                    subscriptionProxy = subscriptionProxy
+                )
+            }
+        }
+    }
+
     override suspend fun setSubscriptionUpdateInterval(subscriptionUrl: String, hours: Int) {
         val normalizedUrl = subscriptionUrl.trim()
         if (normalizedUrl.isBlank()) return
