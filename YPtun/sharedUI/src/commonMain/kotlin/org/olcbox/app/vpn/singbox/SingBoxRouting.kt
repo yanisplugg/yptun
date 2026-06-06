@@ -144,6 +144,7 @@ object SingBoxRouting {
                 if (rule.client.isNotEmpty()) putJsonArray("client") { rule.client.forEach { add(it) } }
                 if (rule.networkIsExpensive) put("network_is_expensive", true)
                 if (rule.clashMode.isNotBlank()) put("clash_mode", rule.clashMode)
+                if (rule.packageNames.isNotEmpty()) putJsonArray("package_name") { rule.packageNames.forEach { add(it) } }
                 when (rule.outbound) {
                     SingBoxRule.OUT_BLOCK -> put("action", "reject")
                     SingBoxRule.OUT_DIRECT -> put("outbound", DIRECT_TAG)

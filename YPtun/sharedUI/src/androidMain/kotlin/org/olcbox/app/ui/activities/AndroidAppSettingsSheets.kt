@@ -2937,6 +2937,7 @@ private data class SbRuleDraft(
     val client: String = "",
     val networkIsExpensive: Boolean = false,
     val clashMode: String = "",
+    val packageNames: String = "",
     val enabled: Boolean = true,
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
@@ -2953,6 +2954,7 @@ private data class SbRuleDraft(
         client = splitList(client),
         networkIsExpensive = networkIsExpensive,
         clashMode = clashMode.trim(),
+        packageNames = splitList(packageNames),
         enabled = enabled,
     )
 
@@ -2974,6 +2976,7 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     client = client.joinToString(", "),
     networkIsExpensive = networkIsExpensive,
     clashMode = clashMode,
+    packageNames = packageNames.joinToString("\n"),
     enabled = enabled,
 )
 
@@ -3093,6 +3096,14 @@ private fun SingBoxRuleCard(
                 label = { Text(s.routingRuleClashMode) },
                 placeholder = { Text("Rule / Global / Direct") },
                 singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.packageNames,
+                onValueChange = { onChange(draft.copy(packageNames = it)) },
+                label = { Text(s.routingRuleApps) },
+                placeholder = { Text("com.google.android.youtube") },
+                minLines = 1,
                 modifier = Modifier.fillMaxWidth()
             )
             // Network: any / tcp / udp.

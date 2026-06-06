@@ -40,6 +40,8 @@ data class SingBoxRule(
     val networkIsExpensive: Boolean = false,
     /** Match the active Clash mode → sing-box `clash_mode` (e.g. Rule / Global / Direct). Blank = any. */
     val clashMode: String = "",
+    /** Android app package names → sing-box `package_name`. Empty = any. */
+    val packageNames: List<String> = emptyList(),
     /** Disabled rules are kept in the list but skipped when building the config. */
     val enabled: Boolean = true,
 ) {
@@ -48,7 +50,7 @@ data class SingBoxRule(
         domains.isNotEmpty() || ip.isNotEmpty() || source.isNotEmpty() || port.isNotBlank() ||
             sourcePort.isNotBlank() || network.isNotBlank() || protocol.isNotEmpty() ||
             networkType.isNotEmpty() || client.isNotEmpty() || networkIsExpensive ||
-            clashMode.isNotBlank()
+            clashMode.isNotBlank() || packageNames.isNotEmpty()
 
     companion object {
         const val OUT_PROXY = "proxy"
