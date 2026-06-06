@@ -487,6 +487,11 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(core = core)
     }
 
+    /** Enables/disables the proxy (additional outbound). When off, the location exits directly. */
+    fun onProxyEnabledChanged(enabled: Boolean) {
+        editingConfig = editingConfig.copy(proxyEnabled = enabled)
+    }
+
     /** Sets this location's routing profile id ("" = global default, NONE_ID = no profile). */
     fun onRoutingProfileChanged(id: String) {
         editingConfig = editingConfig.copy(routingProfileId = id)

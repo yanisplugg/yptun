@@ -982,6 +982,7 @@ class OlcboxVpnService : VpnService() {
                             } ?: t
                         },
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                        proxyEnabled = config.proxyEnabled,
                     )
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -1011,6 +1012,7 @@ class OlcboxVpnService : VpnService() {
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     blockQuic = !isAwg,
                     sniffOverrideDestination = isAwg,
+                    proxyEnabled = config.proxyEnabled,
                 )
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)

@@ -217,6 +217,16 @@ fun LocationSettingsScreen(
             }
 
             if (config.engine == EngineType.Standard || config.engine == EngineType.Chain) {
+                // Proxy (additional outbound) on/off. When off the proxy config is kept but the
+                // location exits directly. Standard's only outbound is the proxy, so off = direct.
+                item {
+                    VkTurnSwitchRow(
+                        label = LocalStrings.current.enableProxy,
+                        checked = config.proxyEnabled,
+                        enabled = !isSaving,
+                        onCheckedChange = viewModel::onProxyEnabledChanged
+                    )
+                }
                 item {
                     ProxyField(
                         link = viewModel.editingProxyLink,

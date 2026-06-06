@@ -117,6 +117,12 @@ data class LocationConfig(
     val engine: EngineType = EngineType.Stealth,
     /** Proxy server for the sing-box engine (Standard/Chain). Null for pure Stealth. */
     val proxy: ProxyProfile? = null,
+    /**
+     * Whether the proxy (the location's additional outbound) is applied. When false the proxy config
+     * is KEPT but not used — the connection exits via a direct outbound instead. Default true.
+     */
+    @SerialName("proxy_enabled")
+    val proxyEnabled: Boolean = true,
     /** Proxy backend for Standard/Chain: Auto, sing-box or Xray. */
     val core: ProxyCore = ProxyCore.Auto,
     /**
