@@ -574,7 +574,15 @@ fun AndroidMainScreen(
             trafficSettings = trafficSettings,
             onTrafficChanged = vpnManager::setTrafficSettings,
             appBehavior = appBehavior,
-            onAppBehaviorChanged = vpnManager::setAppBehavior,
+            onAppBehaviorChanged = { newBehavior ->
+                val expiryJustEnabled = newBehavior.showSubscriptionExpiry &&
+                    !appBehavior.showSubscriptionExpiry
+                vpnManager.setAppBehavior(newBehavior)
+                // Turning the toggle on fetches the "до …" date for every subscription right away.
+                if (expiryJustEnabled) {
+                    viewModel.refreshSubscriptionExpiryNow()
+                }
+            },
             language = language,
             onLanguageChanged = vpnManager::setLanguage,
             updateSettings = updateSettings,

@@ -459,6 +459,26 @@ class HomeScreenViewModel(
         }
     }
 
+    /**
+     * Called when the user turns the "show subscription expiry" toggle ON: force-refresh every
+     * subscription now (network is ready, unlike a cold-launch backfill) so the "до …" date is
+     * fetched and shown right away. Best-effort; the location list reloads via the repository's
+     * change flow.
+     */
+    fun refreshSubscriptionExpiryNow(onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    locationsRepository.refreshSubscriptions(
+                        subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                    )
+                }
+            }
+            loadCurrentConfigNow()
+            onComplete()
+        }
+    }
+
     private suspend fun refreshDueSubscriptionsIfNeeded() {
         val updatedCount = withContext(Dispatchers.IO) {
             locationsRepository.refreshDueSubscriptions(
