@@ -187,6 +187,7 @@ interface Strings {
     val routingRuleOutbound: String
     val routingRuleDomains: String
     val routingRuleIps: String
+    val routingRuleSource: String
     val routingRulePort: String
     val routingRuleNetwork: String
     val routingRuleProtocol: String
@@ -681,6 +682,7 @@ object RuStrings : Strings {
     override val routingRuleOutbound = "Действие"
     override val routingRuleDomains = "Домены"
     override val routingRuleIps = "IP / geoip"
+    override val routingRuleSource = "Источник (IP)"
     override val routingRulePort = "Порт"
     override val routingRuleNetwork = "Сеть"
     override val routingRuleProtocol = "Протокол"
@@ -1133,6 +1135,7 @@ object EnStrings : Strings {
     override val routingRuleOutbound = "Action"
     override val routingRuleDomains = "Domains"
     override val routingRuleIps = "IP / geoip"
+    override val routingRuleSource = "Source (IP)"
     override val routingRulePort = "Port"
     override val routingRuleNetwork = "Network"
     override val routingRuleProtocol = "Protocol"
@@ -1583,6 +1586,7 @@ object FaStrings : Strings {
     override val routingRuleOutbound = "اقدام"
     override val routingRuleDomains = "دامنه‌ها"
     override val routingRuleIps = "IP / geoip"
+    override val routingRuleSource = "مبدأ (IP)"
     override val routingRulePort = "درگاه"
     override val routingRuleNetwork = "شبکه"
     override val routingRuleProtocol = "پروتکل"

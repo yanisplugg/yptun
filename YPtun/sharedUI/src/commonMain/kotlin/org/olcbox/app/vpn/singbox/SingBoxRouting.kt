@@ -116,6 +116,7 @@ object SingBoxRouting {
             val domainKeyword = s.flatMap { it.domainKeyword }.distinct()
             val domainRegex = s.flatMap { it.domainRegex }.distinct()
             val ipCidr = i.flatMap { it.ipCidr }.distinct()
+            val sourceIpCidr = parseIp(rule.source).flatMap { it.ipCidr }.distinct()
             val ruleSetTags = (s.flatMap { it.geositeTags }.map { "geosite-$it" } +
                 i.flatMap { it.geoipTags }.map { "geoip-$it" }).distinct()
             val singlePorts = mutableListOf<Int>()
@@ -129,6 +130,7 @@ object SingBoxRouting {
                 if (domainKeyword.isNotEmpty()) putJsonArray("domain_keyword") { domainKeyword.forEach { add(it) } }
                 if (domainRegex.isNotEmpty()) putJsonArray("domain_regex") { domainRegex.forEach { add(it) } }
                 if (ipCidr.isNotEmpty()) putJsonArray("ip_cidr") { ipCidr.forEach { add(it) } }
+                if (sourceIpCidr.isNotEmpty()) putJsonArray("source_ip_cidr") { sourceIpCidr.forEach { add(it) } }
                 if (singlePorts.isNotEmpty()) putJsonArray("port") { singlePorts.forEach { add(it) } }
                 if (portRanges.isNotEmpty()) putJsonArray("port_range") { portRanges.forEach { add(it) } }
                 if (rule.network.isNotBlank()) put("network", rule.network)

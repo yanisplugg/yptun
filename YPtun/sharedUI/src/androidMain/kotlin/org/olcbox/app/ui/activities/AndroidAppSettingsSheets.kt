@@ -2928,6 +2928,7 @@ private data class SbRuleDraft(
     val outbound: String = SingBoxRule.OUT_PROXY,
     val domains: String = "",
     val ip: String = "",
+    val source: String = "",
     val port: String = "",
     val network: String = "",
     val protocol: String = "",
@@ -2938,6 +2939,7 @@ private data class SbRuleDraft(
         outbound = outbound,
         domains = splitList(domains),
         ip = splitList(ip),
+        source = splitList(source),
         port = port.trim(),
         network = network.trim(),
         protocol = splitList(protocol),
@@ -2953,6 +2955,7 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     outbound = outbound,
     domains = domains.joinToString("\n"),
     ip = ip.joinToString("\n"),
+    source = source.joinToString("\n"),
     port = port,
     network = network,
     protocol = protocol.joinToString(", "),
@@ -3024,6 +3027,14 @@ private fun SingBoxRuleCard(
                 onValueChange = { onChange(draft.copy(ip = it)) },
                 label = { Text(s.routingRuleIps) },
                 placeholder = { Text("geoip:ru, 10.0.0.0/8") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.source,
+                onValueChange = { onChange(draft.copy(source = it)) },
+                label = { Text(s.routingRuleSource) },
+                placeholder = { Text("192.168.0.0/16") },
                 minLines = 1,
                 modifier = Modifier.fillMaxWidth()
             )

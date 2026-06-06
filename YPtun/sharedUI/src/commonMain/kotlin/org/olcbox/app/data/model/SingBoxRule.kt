@@ -22,6 +22,8 @@ data class SingBoxRule(
     val domains: List<String> = emptyList(),
     /** IP / geoip selectors (see class doc). */
     val ip: List<String> = emptyList(),
+    /** Source IP selectors (CIDR or bare IP) → sing-box `source_ip_cidr`. */
+    val source: List<String> = emptyList(),
     /** Ports: "443", a range "1000:2000", or comma-separated. Blank = any. */
     val port: String = "",
     /** "" (any), "tcp" or "udp". */
@@ -33,7 +35,7 @@ data class SingBoxRule(
 ) {
     /** True when the rule has at least one matcher (otherwise it would match everything). */
     fun hasMatcher(): Boolean =
-        domains.isNotEmpty() || ip.isNotEmpty() || port.isNotBlank() ||
+        domains.isNotEmpty() || ip.isNotEmpty() || source.isNotEmpty() || port.isNotBlank() ||
             network.isNotBlank() || protocol.isNotEmpty()
 
     companion object {
