@@ -34,6 +34,7 @@ import org.olcbox.app.data.model.SingBoxRule
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalStrings
+import org.olcbox.app.ui.i18n.Strings
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.ui.graphics.toArgb
@@ -2925,6 +2926,7 @@ private fun RoutingContent(
 /** Editable (raw-text) form of a [SingBoxRule] so text fields keep their cursor while typing. */
 private data class SbRuleDraft(
     val name: String = "",
+    val action: String = SingBoxRule.ACTION_ROUTE,
     val outbound: String = SingBoxRule.OUT_PROXY,
     val domains: String = "",
     val ip: String = "",
@@ -2942,6 +2944,7 @@ private data class SbRuleDraft(
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
         name = name.trim(),
+        action = action,
         outbound = outbound,
         domains = splitList(domains),
         ip = splitList(ip),
@@ -2964,6 +2967,7 @@ private data class SbRuleDraft(
 
 private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     name = name,
+    action = action,
     outbound = outbound,
     domains = domains.joinToString("\n"),
     ip = ip.joinToString("\n"),
@@ -2979,6 +2983,17 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     packageNames = packageNames.joinToString("\n"),
     enabled = enabled,
 )
+
+/** Localized label for a sing-box rule [SingBoxRule.action] token. */
+private fun routingActionLabel(s: Strings, action: String): String = when (action) {
+    SingBoxRule.ACTION_ROUTE -> s.routingActionRoute
+    SingBoxRule.ACTION_ROUTE_OPTIONS -> s.routingActionRouteOptions
+    SingBoxRule.ACTION_SNIFF -> s.routingActionSniff
+    SingBoxRule.ACTION_RESOLVE -> s.routingActionResolve
+    SingBoxRule.ACTION_HIJACK_DNS -> s.routingActionHijackDns
+    SingBoxRule.ACTION_REJECT -> s.routingActionReject
+    else -> action
+}
 
 @Composable
 private fun SingBoxRuleCard(
@@ -2998,7 +3013,7 @@ private fun SingBoxRuleCard(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    s.routingRuleOutbound,
+                    s.routingRuleEdit,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f)
@@ -3018,18 +3033,40 @@ private fun SingBoxRuleCard(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            // Outbound action: proxy / direct / block.
+            // Routing action: route / route-options / sniff / resolve / hijack-dns / reject.
+            Text(
+                s.routingRuleAction,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(
-                    SingBoxRule.OUT_PROXY to s.routingOutProxy,
-                    SingBoxRule.OUT_DIRECT to s.routingOutDirect,
-                    SingBoxRule.OUT_BLOCK to s.routingOutBlock,
-                ).forEach { (value, label) ->
+                SingBoxRule.ACTIONS.forEach { value ->
                     FilterChip(
-                        selected = draft.outbound == value,
-                        onClick = { onChange(draft.copy(outbound = value)) },
-                        label = { Text(label) }
+                        selected = draft.action == value,
+                        onClick = { onChange(draft.copy(action = value)) },
+                        label = { Text(routingActionLabel(s, value)) }
                     )
+                }
+            }
+            // Outbound (only meaningful for the "route" action): proxy / direct / block.
+            if (draft.action == SingBoxRule.ACTION_ROUTE) {
+                Text(
+                    s.routingRuleOutbound,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        SingBoxRule.OUT_PROXY to s.routingOutProxy,
+                        SingBoxRule.OUT_DIRECT to s.routingOutDirect,
+                        SingBoxRule.OUT_BLOCK to s.routingOutBlock,
+                    ).forEach { (value, label) ->
+                        FilterChip(
+                            selected = draft.outbound == value,
+                            onClick = { onChange(draft.copy(outbound = value)) },
+                            label = { Text(label) }
+                        )
+                    }
                 }
             }
             OutlinedTextField(

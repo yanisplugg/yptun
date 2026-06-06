@@ -206,6 +206,13 @@ interface Strings {
     val routingOutProxy: String
     val routingOutDirect: String
     val routingOutBlock: String
+    val routingRuleAction: String
+    val routingActionRoute: String
+    val routingActionRouteOptions: String
+    val routingActionSniff: String
+    val routingActionResolve: String
+    val routingActionHijackDns: String
+    val routingActionReject: String
 
     // Routing profiles (Happ-style)
     val routingProfiles: String
@@ -689,7 +696,7 @@ object RuStrings : Strings {
     override val routingRuleEdit = "Правило"
     override val routingRuleDelete = "Удалить правило"
     override val routingRuleName = "Название маршрута"
-    override val routingRuleOutbound = "Действие"
+    override val routingRuleOutbound = "Исходящий"
     override val routingRuleDomains = "Домены"
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "Источник (IP)"
@@ -711,6 +718,13 @@ object RuStrings : Strings {
     override val routingOutProxy = "Через прокси"
     override val routingOutDirect = "Напрямую"
     override val routingOutBlock = "Блокировать"
+    override val routingRuleAction = "Действие маршрутизации"
+    override val routingActionRoute = "Маршрут"
+    override val routingActionRouteOptions = "Опции маршрута"
+    override val routingActionSniff = "Сниффинг"
+    override val routingActionResolve = "Резолвинг"
+    override val routingActionHijackDns = "Перехват DNS"
+    override val routingActionReject = "Отклонить"
     override val sbRuleSetLabel = "rule_set (JSON-массив)"
     override val sbInvalidJsonArray = "Некорректный JSON-массив"
     override val routingProfiles = "Профили маршрутизации"
@@ -1152,7 +1166,7 @@ object EnStrings : Strings {
     override val routingRuleEdit = "Rule"
     override val routingRuleDelete = "Delete rule"
     override val routingRuleName = "Route name"
-    override val routingRuleOutbound = "Action"
+    override val routingRuleOutbound = "Outbound"
     override val routingRuleDomains = "Domains"
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "Source (IP)"
@@ -1174,6 +1188,13 @@ object EnStrings : Strings {
     override val routingOutProxy = "Via proxy"
     override val routingOutDirect = "Direct"
     override val routingOutBlock = "Block"
+    override val routingRuleAction = "Routing action"
+    override val routingActionRoute = "Route"
+    override val routingActionRouteOptions = "Route options"
+    override val routingActionSniff = "Sniff"
+    override val routingActionResolve = "Resolve"
+    override val routingActionHijackDns = "Hijack DNS"
+    override val routingActionReject = "Reject"
     override val routingProfiles = "Routing profiles"
     override val routingProfilesSubtitle = "Happ-compatible rules — globally or per location"
     override val routingProfileGlobal = "Global profile"
@@ -1613,7 +1634,7 @@ object FaStrings : Strings {
     override val routingRuleEdit = "قانون"
     override val routingRuleDelete = "حذف قانون"
     override val routingRuleName = "نام مسیر"
-    override val routingRuleOutbound = "اقدام"
+    override val routingRuleOutbound = "خروجی"
     override val routingRuleDomains = "دامنه‌ها"
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "مبدأ (IP)"
@@ -1635,6 +1656,13 @@ object FaStrings : Strings {
     override val routingOutProxy = "از طریق پراکسی"
     override val routingOutDirect = "مستقیم"
     override val routingOutBlock = "مسدود کردن"
+    override val routingRuleAction = "اقدام مسیریابی"
+    override val routingActionRoute = "مسیر"
+    override val routingActionRouteOptions = "گزینه‌های مسیر"
+    override val routingActionSniff = "شناسایی"
+    override val routingActionResolve = "تفکیک"
+    override val routingActionHijackDns = "ربودن DNS"
+    override val routingActionReject = "رد کردن"
     override val routingProfiles = "نمایه‌های مسیریابی"
     override val routingProfilesSubtitle = "قواعد سازگار با Happ — سراسری یا برای هر موقعیت"
     override val routingProfileGlobal = "نمایهٔ سراسری"

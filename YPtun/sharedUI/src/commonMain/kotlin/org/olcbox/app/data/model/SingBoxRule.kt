@@ -16,7 +16,13 @@ import kotlinx.serialization.Serializable
 data class SingBoxRule(
     /** Optional human label for the rule (shown in the editor). Not emitted to the sing-box config. */
     val name: String = "",
-    /** Where matching traffic goes: [OUT_PROXY] / [OUT_DIRECT] / [OUT_BLOCK]. */
+    /**
+     * sing-box rule `action` (one of [ACTIONS]). [ACTION_ROUTE] (default) routes to [outbound];
+     * the others ([ACTION_REJECT], [ACTION_HIJACK_DNS], [ACTION_SNIFF], [ACTION_RESOLVE],
+     * [ACTION_ROUTE_OPTIONS]) ignore [outbound].
+     */
+    val action: String = ACTION_ROUTE,
+    /** Where matching traffic goes when [action] is [ACTION_ROUTE]: [OUT_PROXY] / [OUT_DIRECT] / [OUT_BLOCK]. */
     val outbound: String = OUT_PROXY,
     /** Domain selectors (see class doc). */
     val domains: List<String> = emptyList(),
@@ -56,6 +62,20 @@ data class SingBoxRule(
         const val OUT_PROXY = "proxy"
         const val OUT_DIRECT = "direct"
         const val OUT_BLOCK = "block"
+
+        // sing-box rule actions (exact tokens from sing-box/constant/rule.go).
+        const val ACTION_ROUTE = "route"
+        const val ACTION_ROUTE_OPTIONS = "route-options"
+        const val ACTION_SNIFF = "sniff"
+        const val ACTION_RESOLVE = "resolve"
+        const val ACTION_HIJACK_DNS = "hijack-dns"
+        const val ACTION_REJECT = "reject"
+
+        /** Selectable rule actions, in editor order. */
+        val ACTIONS = listOf(
+            ACTION_ROUTE, ACTION_ROUTE_OPTIONS, ACTION_SNIFF,
+            ACTION_RESOLVE, ACTION_HIJACK_DNS, ACTION_REJECT,
+        )
 
         val OUTBOUNDS = listOf(OUT_PROXY, OUT_DIRECT, OUT_BLOCK)
         val NETWORKS = listOf("", "tcp", "udp")

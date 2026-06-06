@@ -145,10 +145,18 @@ object SingBoxRouting {
                 if (rule.networkIsExpensive) put("network_is_expensive", true)
                 if (rule.clashMode.isNotBlank()) put("clash_mode", rule.clashMode)
                 if (rule.packageNames.isNotEmpty()) putJsonArray("package_name") { rule.packageNames.forEach { add(it) } }
-                when (rule.outbound) {
-                    SingBoxRule.OUT_BLOCK -> put("action", "reject")
-                    SingBoxRule.OUT_DIRECT -> put("outbound", DIRECT_TAG)
-                    else -> put("outbound", PROXY_TAG)
+                when (rule.action) {
+                    SingBoxRule.ACTION_REJECT -> put("action", "reject")
+                    SingBoxRule.ACTION_HIJACK_DNS -> put("action", "hijack-dns")
+                    SingBoxRule.ACTION_SNIFF -> put("action", "sniff")
+                    SingBoxRule.ACTION_RESOLVE -> put("action", "resolve")
+                    SingBoxRule.ACTION_ROUTE_OPTIONS -> put("action", "route-options")
+                    // ACTION_ROUTE (default): route to the chosen outbound (block → reject).
+                    else -> when (rule.outbound) {
+                        SingBoxRule.OUT_BLOCK -> put("action", "reject")
+                        SingBoxRule.OUT_DIRECT -> put("outbound", DIRECT_TAG)
+                        else -> put("outbound", PROXY_TAG)
+                    }
                 }
             })
         }
