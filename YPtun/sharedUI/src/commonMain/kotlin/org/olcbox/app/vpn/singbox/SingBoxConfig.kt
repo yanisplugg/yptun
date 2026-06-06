@@ -86,6 +86,9 @@ object SingBoxConfig {
         // `::/0 reject` backstop (which then only catches rare un-sniffable raw IPv6). Implemented via
         // sing-box's (1.12, deprecated-but-functional) inbound `sniff_override_destination`.
         sniffOverrideDestination: Boolean = false,
+        // When false, the proxy outbound is replaced by a `direct` outbound (still tagged [PROXY_TAG])
+        // so traffic exits directly — the location's proxy is kept in config but not applied.
+        proxyEnabled: Boolean = true,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
@@ -176,16 +179,25 @@ object SingBoxConfig {
             }
 
             putJsonArray("outbounds") {
-                val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
-                add(
-                    buildProxyOutbound(
-                        profile,
-                        chained = olcrtcChainPort != null,
-                        traffic = traffic,
-                        detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null,
-                        advanced = advanced
+                val wgBaseOutbound = if (proxyEnabled) wireguardBase?.let { buildWireguardBaseOutbound(it) } else null
+                if (proxyEnabled) {
+                    add(
+                        buildProxyOutbound(
+                            profile,
+                            chained = olcrtcChainPort != null,
+                            traffic = traffic,
+                            detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null,
+                            advanced = advanced
+                        )
                     )
-                )
+                } else {
+                    // Proxy disabled: PROXY_TAG resolves to a direct outbound, so everything that would
+                    // route through the proxy exits directly instead. Proxy config is left untouched.
+                    addJsonObject {
+                        put("type", "direct")
+                        put("tag", PROXY_TAG)
+                    }
+                }
                 if (wgBaseOutbound != null) {
                     add(wgBaseOutbound)
                 }

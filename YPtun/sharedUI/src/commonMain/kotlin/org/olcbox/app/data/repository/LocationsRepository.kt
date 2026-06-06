@@ -16,7 +16,16 @@ interface LocationsRepository {
         subscriptionUrl: String,
         subscriptionProxy: SubscriptionFetchProxy? = null
     ): Int
-    suspend fun refreshDueSubscriptions(subscriptionProxy: SubscriptionFetchProxy? = null): Int
+    /**
+     * Refreshes subscriptions whose update interval has elapsed. By default the schedule is keyed off
+     * the last ATTEMPT (success or failure) so a periodic poll won't hammer an unreachable panel.
+     * With [retryFailed] = true (used once per app launch) it is keyed off the last SUCCESSFUL refresh
+     * only, so a subscription that's overdue but failed last time is retried again. Always silent.
+     */
+    suspend fun refreshDueSubscriptions(
+        subscriptionProxy: SubscriptionFetchProxy? = null,
+        retryFailed: Boolean = false
+    ): Int
 
     /**
      * One-time backfill for subscriptions imported before the expiry field was captured: force-refreshes

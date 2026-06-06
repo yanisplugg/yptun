@@ -38,6 +38,7 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
+import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.util.IsoTime
 
 interface LocationsDataSource {
@@ -342,7 +343,10 @@ class LocationsRepositoryImpl(
         return successfulRefreshes
     }
 
-    override suspend fun refreshDueSubscriptions(subscriptionProxy: SubscriptionFetchProxy?): Int {
+    override suspend fun refreshDueSubscriptions(
+        subscriptionProxy: SubscriptionFetchProxy?,
+        retryFailed: Boolean
+    ): Int {
         return mutationMutex.withLock {
             val bundle = getBundleUnlocked()
             val now = nowEpochMs()
@@ -352,13 +356,19 @@ class LocationsRepositoryImpl(
                     val metadata = entry.metadata?.subscription
                     val interval = metadata?.updateIntervalHours
                         ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS
-                    // Schedule off the last ATTEMPT (success OR failure), so a failed fetch is retried
-                    // only after the interval elapses again — "retry after the hours indicated" —
-                    // instead of being re-tried on every hourly poll while a panel is unreachable.
-                    val lastTouchAt = maxOf(
-                        metadata?.lastRefreshAtEpochMs ?: 0L,
-                        metadata?.lastAttemptAtEpochMs ?: 0L
-                    )
+                    // [retryFailed] (once per app launch): key the schedule off the last SUCCESSFUL
+                    // refresh only, so an overdue subscription that FAILED last time is retried again
+                    // (a failed attempt no longer pushes the next try out by a full interval).
+                    // Otherwise (periodic poll): key off the last ATTEMPT (success OR failure) so we
+                    // don't hammer an unreachable panel on every poll.
+                    val lastTouchAt = if (retryFailed) {
+                        metadata?.lastRefreshAtEpochMs ?: 0L
+                    } else {
+                        maxOf(
+                            metadata?.lastRefreshAtEpochMs ?: 0L,
+                            metadata?.lastAttemptAtEpochMs ?: 0L
+                        )
+                    }
                     val intervalMs = interval.toLong() * 60L * 60L * 1_000L
                     url.takeIf { lastTouchAt <= 0L || now - lastTouchAt >= intervalMs }
                 }
@@ -726,6 +736,13 @@ class LocationsRepositoryImpl(
         updateIntervalHours: Int? = null,
         subscriptionMetadata: SubscriptionMetadata? = null
     ): ParsedImport? {
+        // Our own universal inbound link (yptun://inbound?…&d=<base64 LocationConfig JSON>): carries
+        // the WHOLE location (engine, transport, proxy/AWG/VK outbound, every toggle). Checked first
+        // since it has its own scheme and restores the location verbatim.
+        parseYptunInboundText(text, subscriptionUrl)?.let {
+            return ParsedImport(it, ImportMode.Additive)
+        }
+
         parseOlcRtcText(text, subscriptionUrl, updateIntervalHours)?.let {
             return ParsedImport(it, ImportMode.Additive)
         }
@@ -980,6 +997,36 @@ class LocationsRepositoryImpl(
         )
 
         return LocationEntry.from(storageId, location, subscriptionUrl = subscriptionUrl)
+    }
+
+    /** Parses one or more `yptun://inbound…` links (one per line) into Standard/custom locations. */
+    private fun parseYptunInboundText(
+        text: String,
+        subscriptionUrl: String? = null
+    ): LocationBundleV4? {
+        if (!text.contains(YptunInboundCodec.PREFIX)) return null
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.lineSequence()
+            .map { it.normalizedImportText() }
+            .filter { it.startsWith(YptunInboundCodec.PREFIX) }
+            .mapNotNull { YptunInboundCodec.parse(it) }
+            .mapIndexed { index, parsed ->
+                val location = parsed.normalized()
+                val base = location.storageSlug().ifBlank { "location_${index + 1}" }
+                val storageId = uniqueStorageId("imported_$base", usedStorageIds)
+                LocationEntry.from(
+                    storageId = storageId,
+                    location = location,
+                    subscriptionUrl = subscriptionUrl,
+                    metadata = null
+                )
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(
+            activeLocationId = entries.firstOrNull()?.storageId,
+            locations = entries
+        )
     }
 
     private fun parseOlcRtcText(

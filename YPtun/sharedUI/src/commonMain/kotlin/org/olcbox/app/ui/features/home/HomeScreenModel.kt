@@ -433,7 +433,9 @@ class HomeScreenViewModel(
     private fun startSubscriptionAutoRefresh() {
         viewModelScope.launch {
             backfillMissingSubscriptionExpiry()
-            refreshDueSubscriptionsIfNeeded()
+            // Once per launch: retry overdue subscriptions even if they failed last time (keyed off the
+            // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.
+            refreshDueSubscriptionsIfNeeded(retryFailed = true)
             while (true) {
                 delay(SUBSCRIPTION_AUTO_REFRESH_POLL_MS)
                 refreshDueSubscriptionsIfNeeded()
@@ -479,10 +481,11 @@ class HomeScreenViewModel(
         }
     }
 
-    private suspend fun refreshDueSubscriptionsIfNeeded() {
+    private suspend fun refreshDueSubscriptionsIfNeeded(retryFailed: Boolean = false) {
         val updatedCount = withContext(Dispatchers.IO) {
             locationsRepository.refreshDueSubscriptions(
-                subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                subscriptionProxy = vpnManager.subscriptionFetchProxy(),
+                retryFailed = retryFailed
             )
         }
         if (updatedCount > 0) {

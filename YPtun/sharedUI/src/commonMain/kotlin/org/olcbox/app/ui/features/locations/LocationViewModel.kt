@@ -163,8 +163,10 @@ class LocationViewModel(
     val isFormValid: Boolean
         get() = nameError == null && editingName.isNotBlank() && when (editingConfig.engine) {
             EngineType.Stealth -> olcrtcFieldsValid
-            EngineType.Standard -> editingConfig.proxy?.isComplete() == true
-            EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
+            // With the proxy (additional outbound) disabled the location exits directly, so a complete
+            // proxy isn't required; when enabled it must be valid.
+            EngineType.Standard -> !editingConfig.proxyEnabled || editingConfig.proxy?.isComplete() == true
+            EngineType.Chain -> (!editingConfig.proxyEnabled || editingConfig.proxy?.isComplete() == true) && olcrtcFieldsValid
             EngineType.VkTurn -> vkTurnFieldsValid
         }
 
@@ -430,7 +432,10 @@ class LocationViewModel(
 
         if (id == null) {
             editingId = null
-            editingConfig = LocationConfig()
+            // New inbound: proxy (additional outbound) starts OFF — the proxy section stays hidden
+            // until the user enables it. Existing/imported locations keep their own value (default
+            // true for legacy configs saved before the field existed, so they aren't disabled).
+            editingConfig = LocationConfig(proxyEnabled = false)
             editingName = ""
             editingSubscriptionUrl = null
             editingSubscriptionIntervalHours = SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS.toString()
@@ -485,6 +490,11 @@ class LocationViewModel(
 
     fun onCoreChanged(core: ProxyCore) {
         editingConfig = editingConfig.copy(core = core)
+    }
+
+    /** Enables/disables the proxy (additional outbound). When off, the location exits directly. */
+    fun onProxyEnabledChanged(enabled: Boolean) {
+        editingConfig = editingConfig.copy(proxyEnabled = enabled)
     }
 
     /** Sets this location's routing profile id ("" = global default, NONE_ID = no profile). */

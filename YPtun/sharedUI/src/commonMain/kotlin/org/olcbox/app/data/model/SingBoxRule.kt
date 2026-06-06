@@ -16,7 +16,13 @@ import kotlinx.serialization.Serializable
 data class SingBoxRule(
     /** Optional human label for the rule (shown in the editor). Not emitted to the sing-box config. */
     val name: String = "",
-    /** Where matching traffic goes: [OUT_PROXY] / [OUT_DIRECT] / [OUT_BLOCK]. */
+    /**
+     * sing-box rule `action` (one of [ACTIONS]). [ACTION_ROUTE] (default) routes to [outbound];
+     * the others ([ACTION_REJECT], [ACTION_HIJACK_DNS], [ACTION_SNIFF], [ACTION_RESOLVE],
+     * [ACTION_ROUTE_OPTIONS]) ignore [outbound].
+     */
+    val action: String = ACTION_ROUTE,
+    /** Where matching traffic goes when [action] is [ACTION_ROUTE]: [OUT_PROXY] / [OUT_DIRECT] / [OUT_BLOCK]. */
     val outbound: String = OUT_PROXY,
     /** Domain selectors (see class doc). */
     val domains: List<String> = emptyList(),
@@ -42,6 +48,12 @@ data class SingBoxRule(
     val clashMode: String = "",
     /** Android app package names → sing-box `package_name`. Empty = any. */
     val packageNames: List<String> = emptyList(),
+    /**
+     * Regular expressions matched against installed package names. sing-box has no native
+     * package-regex field, so these are expanded to concrete packages (merged into
+     * [packageNames]) at config-build time on Android — see [expandPackageRegex]. Empty = none.
+     */
+    val packageRegex: List<String> = emptyList(),
     /** Disabled rules are kept in the list but skipped when building the config. */
     val enabled: Boolean = true,
 ) {
@@ -50,12 +62,26 @@ data class SingBoxRule(
         domains.isNotEmpty() || ip.isNotEmpty() || source.isNotEmpty() || port.isNotBlank() ||
             sourcePort.isNotBlank() || network.isNotBlank() || protocol.isNotEmpty() ||
             networkType.isNotEmpty() || client.isNotEmpty() || networkIsExpensive ||
-            clashMode.isNotBlank() || packageNames.isNotEmpty()
+            clashMode.isNotBlank() || packageNames.isNotEmpty() || packageRegex.isNotEmpty()
 
     companion object {
         const val OUT_PROXY = "proxy"
         const val OUT_DIRECT = "direct"
         const val OUT_BLOCK = "block"
+
+        // sing-box rule actions (exact tokens from sing-box/constant/rule.go).
+        const val ACTION_ROUTE = "route"
+        const val ACTION_ROUTE_OPTIONS = "route-options"
+        const val ACTION_SNIFF = "sniff"
+        const val ACTION_RESOLVE = "resolve"
+        const val ACTION_HIJACK_DNS = "hijack-dns"
+        const val ACTION_REJECT = "reject"
+
+        /** Selectable rule actions, in editor order. */
+        val ACTIONS = listOf(
+            ACTION_ROUTE, ACTION_ROUTE_OPTIONS, ACTION_SNIFF,
+            ACTION_RESOLVE, ACTION_HIJACK_DNS, ACTION_REJECT,
+        )
 
         val OUTBOUNDS = listOf(OUT_PROXY, OUT_DIRECT, OUT_BLOCK)
         val NETWORKS = listOf("", "tcp", "udp")
@@ -69,5 +95,22 @@ data class SingBoxRule(
         /** Split a free-text field (newline/comma/semicolon separated) into clean selectors. */
         fun textToList(text: String): List<String> =
             text.split('\n', '\r', ',', ';').map { it.trim() }.filter { it.isNotEmpty() }
+
+        /**
+         * Resolve [packageRegex] against the device's [installedPackages], merging every matching
+         * package into [packageNames] (sing-box has no native package-regex matcher). Invalid
+         * patterns are ignored. Returns [rules] unchanged when no rule uses a regex.
+         */
+        fun expandPackageRegex(rules: List<SingBoxRule>, installedPackages: List<String>): List<SingBoxRule> {
+            if (rules.none { it.packageRegex.isNotEmpty() }) return rules
+            return rules.map { rule ->
+                if (rule.packageRegex.isEmpty()) return@map rule
+                val regexes = rule.packageRegex.mapNotNull { runCatching { Regex(it) }.getOrNull() }
+                if (regexes.isEmpty()) return@map rule
+                val matched = installedPackages.filter { pkg -> regexes.any { it.containsMatchIn(pkg) } }
+                if (matched.isEmpty()) rule
+                else rule.copy(packageNames = (rule.packageNames + matched).distinct())
+            }
+        }
     }
 }

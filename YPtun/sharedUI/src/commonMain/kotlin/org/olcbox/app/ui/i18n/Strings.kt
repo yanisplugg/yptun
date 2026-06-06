@@ -201,11 +201,19 @@ interface Strings {
     val routingRuleMetered: String
     val routingRuleClashMode: String
     val routingRuleApps: String
+    val routingRulePackageRegex: String
     val routingRuleEnabled: String
     val routingRuleNetworkAny: String
     val routingOutProxy: String
     val routingOutDirect: String
     val routingOutBlock: String
+    val routingRuleAction: String
+    val routingActionRoute: String
+    val routingActionRouteOptions: String
+    val routingActionSniff: String
+    val routingActionResolve: String
+    val routingActionHijackDns: String
+    val routingActionReject: String
 
     // Routing profiles (Happ-style)
     val routingProfiles: String
@@ -398,6 +406,17 @@ interface Strings {
     val hideTunTitle: String
     val hideTunSubtitle: String
     val hideTunDisclaimer: String
+    val hideModuleRebootTitle: String
+    val hideModuleRebootMessage: String
+    val rebootNow: String
+    val rebootLater: String
+    val hideModuleInstalled: String
+    val hideModuleActive: String
+    val hideModuleFailed: String
+    val hideModuleDisabled: String
+    val shareHotspotTitle: String
+    val shareHotspotSubtitle: String
+    val shareHotspotDisclaimer: String
     val rootGranted: String
     val rootDenied: String
     val telemostCookieHeader: String
@@ -689,7 +708,7 @@ object RuStrings : Strings {
     override val routingRuleEdit = "Правило"
     override val routingRuleDelete = "Удалить правило"
     override val routingRuleName = "Название маршрута"
-    override val routingRuleOutbound = "Действие"
+    override val routingRuleOutbound = "Исходящий"
     override val routingRuleDomains = "Домены"
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "Источник (IP)"
@@ -706,11 +725,19 @@ object RuStrings : Strings {
     override val routingRuleMetered = "Платная сеть"
     override val routingRuleClashMode = "Режим Clash"
     override val routingRuleApps = "Приложения (пакеты)"
+    override val routingRulePackageRegex = "Регулярное выражение пакетов"
     override val routingRuleEnabled = "Включено"
     override val routingRuleNetworkAny = "Любая"
     override val routingOutProxy = "Через прокси"
     override val routingOutDirect = "Напрямую"
     override val routingOutBlock = "Блокировать"
+    override val routingRuleAction = "Действие маршрутизации"
+    override val routingActionRoute = "Маршрут"
+    override val routingActionRouteOptions = "Опции маршрута"
+    override val routingActionSniff = "Сниффинг"
+    override val routingActionResolve = "Резолвинг"
+    override val routingActionHijackDns = "Перехват DNS"
+    override val routingActionReject = "Отклонить"
     override val sbRuleSetLabel = "rule_set (JSON-массив)"
     override val sbInvalidJsonArray = "Некорректный JSON-массив"
     override val routingProfiles = "Профили маршрутизации"
@@ -878,8 +905,19 @@ object RuStrings : Strings {
     override val useTelemostCookies = "Использовать cookies Telemost"
     override val useTelemostCookiesSubtitle = "Подставлять cookies при подключении к Telemost"
     override val hideTunTitle = "Скрывать интерфейс tun0 (root)"
-    override val hideTunSubtitle = "Переименовывает tun0 после подключения, чтобы приложения не определяли VPN. Требуется root."
+    override val hideTunSubtitle = "Устанавливает Zygisk-модуль, скрывающий VPN-интерфейс от других приложений. Нужен root (Magisk) и перезагрузка."
     override val hideTunDisclaimer = "Внимание: функция использует root-доступ (su). Автор ПО не несёт ответственности за любые повреждения, потерю данных или причинение вреда устройству вследствие использования root."
+    override val hideModuleRebootTitle = "Требуется перезагрузка"
+    override val hideModuleRebootMessage = "Модуль скрытия установлен. Чтобы скрытие заработало, нужно перезагрузить устройство. Перезагрузить сейчас?"
+    override val rebootNow = "Перезагрузить"
+    override val rebootLater = "Позже"
+    override val hideModuleInstalled = "Модуль скрытия установлен"
+    override val hideModuleActive = "Скрытие уже активно"
+    override val hideModuleFailed = "Не удалось установить модуль (нужен root и Zygisk)"
+    override val hideModuleDisabled = "Скрытие отключено (применится после перезагрузки)"
+    override val shareHotspotTitle = "Раздавать VPN на точку доступа (root)"
+    override val shareHotspotSubtitle = "Пропускает трафик устройств, подключённых к вашей точке доступа, через VPN. Включите точку доступа и подключитесь к VPN. Требуется root."
+    override val shareHotspotDisclaimer = "Внимание: функция использует root-доступ (su) и меняет правила маршрутизации/iptables. Автор ПО не несёт ответственности за любые повреждения."
     override val rootGranted = "Root-доступ получен"
     override val rootDenied = "Root-доступ не предоставлен"
     override val telemostCookieHeader = "Заголовок Cookie для Telemost"
@@ -1152,7 +1190,7 @@ object EnStrings : Strings {
     override val routingRuleEdit = "Rule"
     override val routingRuleDelete = "Delete rule"
     override val routingRuleName = "Route name"
-    override val routingRuleOutbound = "Action"
+    override val routingRuleOutbound = "Outbound"
     override val routingRuleDomains = "Domains"
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "Source (IP)"
@@ -1169,11 +1207,19 @@ object EnStrings : Strings {
     override val routingRuleMetered = "Metered network"
     override val routingRuleClashMode = "Clash mode"
     override val routingRuleApps = "Apps (packages)"
+    override val routingRulePackageRegex = "Package name regex"
     override val routingRuleEnabled = "Enabled"
     override val routingRuleNetworkAny = "Any"
     override val routingOutProxy = "Via proxy"
     override val routingOutDirect = "Direct"
     override val routingOutBlock = "Block"
+    override val routingRuleAction = "Routing action"
+    override val routingActionRoute = "Route"
+    override val routingActionRouteOptions = "Route options"
+    override val routingActionSniff = "Sniff"
+    override val routingActionResolve = "Resolve"
+    override val routingActionHijackDns = "Hijack DNS"
+    override val routingActionReject = "Reject"
     override val routingProfiles = "Routing profiles"
     override val routingProfilesSubtitle = "Happ-compatible rules — globally or per location"
     override val routingProfileGlobal = "Global profile"
@@ -1339,8 +1385,19 @@ object EnStrings : Strings {
     override val useTelemostCookies = "Use Telemost cookies"
     override val useTelemostCookiesSubtitle = "Attach cookies when connecting to Telemost"
     override val hideTunTitle = "Hide tun0 interface (root)"
-    override val hideTunSubtitle = "Renames tun0 after connecting so apps can't detect the VPN. Requires root."
+    override val hideTunSubtitle = "Installs a Zygisk module that hides the VPN interface from other apps. Requires root (Magisk) and a reboot."
     override val hideTunDisclaimer = "Warning: this uses root access (su). The software author is NOT liable for any damage, data loss, or harm to your device resulting from root usage."
+    override val hideModuleRebootTitle = "Reboot required"
+    override val hideModuleRebootMessage = "The hide module is installed. A reboot is required for hiding to take effect. Reboot now?"
+    override val rebootNow = "Reboot"
+    override val rebootLater = "Later"
+    override val hideModuleInstalled = "Hide module installed"
+    override val hideModuleActive = "Hiding already active"
+    override val hideModuleFailed = "Couldn't install the module (root + Zygisk required)"
+    override val hideModuleDisabled = "Hiding disabled (applies after reboot)"
+    override val shareHotspotTitle = "Share VPN over hotspot (root)"
+    override val shareHotspotSubtitle = "Routes devices connected to your hotspot through the VPN. Turn on the hotspot and connect the VPN. Requires root."
+    override val shareHotspotDisclaimer = "Warning: this uses root access (su) and changes routing/iptables rules. The software author is NOT liable for any damage."
     override val rootGranted = "Root access granted"
     override val rootDenied = "Root access denied"
     override val telemostCookieHeader = "Telemost Cookie header"
@@ -1613,7 +1670,7 @@ object FaStrings : Strings {
     override val routingRuleEdit = "قانون"
     override val routingRuleDelete = "حذف قانون"
     override val routingRuleName = "نام مسیر"
-    override val routingRuleOutbound = "اقدام"
+    override val routingRuleOutbound = "خروجی"
     override val routingRuleDomains = "دامنه‌ها"
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "مبدأ (IP)"
@@ -1630,11 +1687,19 @@ object FaStrings : Strings {
     override val routingRuleMetered = "شبکهٔ پولی"
     override val routingRuleClashMode = "حالت Clash"
     override val routingRuleApps = "برنامه‌ها (بسته‌ها)"
+    override val routingRulePackageRegex = "عبارت منظم نام بسته"
     override val routingRuleEnabled = "فعال"
     override val routingRuleNetworkAny = "هر کدام"
     override val routingOutProxy = "از طریق پراکسی"
     override val routingOutDirect = "مستقیم"
     override val routingOutBlock = "مسدود کردن"
+    override val routingRuleAction = "اقدام مسیریابی"
+    override val routingActionRoute = "مسیر"
+    override val routingActionRouteOptions = "گزینه‌های مسیر"
+    override val routingActionSniff = "شناسایی"
+    override val routingActionResolve = "تفکیک"
+    override val routingActionHijackDns = "ربودن DNS"
+    override val routingActionReject = "رد کردن"
     override val routingProfiles = "نمایه‌های مسیریابی"
     override val routingProfilesSubtitle = "قواعد سازگار با Happ — سراسری یا برای هر موقعیت"
     override val routingProfileGlobal = "نمایهٔ سراسری"
@@ -1787,8 +1852,19 @@ object FaStrings : Strings {
     override val qrShare = "QR / هم‌رسانی"
     override val refresh = "بازآوری"
     override val hideTunTitle = "پنهان‌کردن رابط tun0 (روت)"
-    override val hideTunSubtitle = "پس از اتصال tun0 را تغییر نام می‌دهد تا برنامه‌ها VPN را تشخیص ندهند. نیازمند روت."
+    override val hideTunSubtitle = "یک ماژول Zygisk نصب می‌کند که رابط VPN را از سایر برنامه‌ها پنهان می‌کند. نیازمند روت (Magisk) و ری‌استارت."
     override val hideTunDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) استفاده می‌کند. سازندهٔ نرم‌افزار مسئولیتی در قبال آسیب، از دست رفتن داده یا خرابی دستگاه ناشی از استفاده از روت ندارد."
+    override val hideModuleRebootTitle = "نیاز به راه‌اندازی مجدد"
+    override val hideModuleRebootMessage = "ماژول مخفی‌سازی نصب شد. برای فعال‌شدن مخفی‌سازی باید دستگاه را ری‌استارت کنید. اکنون ری‌استارت شود؟"
+    override val rebootNow = "ری‌استارت"
+    override val rebootLater = "بعداً"
+    override val hideModuleInstalled = "ماژول مخفی‌سازی نصب شد"
+    override val hideModuleActive = "مخفی‌سازی از قبل فعال است"
+    override val hideModuleFailed = "نصب ماژول ناموفق بود (نیازمند روت و Zygisk)"
+    override val hideModuleDisabled = "مخفی‌سازی غیرفعال شد (پس از ری‌استارت اعمال می‌شود)"
+    override val shareHotspotTitle = "اشتراک VPN روی هات‌اسپات (روت)"
+    override val shareHotspotSubtitle = "ترافیک دستگاه‌های متصل به هات‌اسپات شما را از طریق VPN عبور می‌دهد. هات‌اسپات را روشن و به VPN متصل شوید. نیازمند روت."
+    override val shareHotspotDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) و تغییر قوانین مسیریابی/iptables استفاده می‌کند. سازندهٔ نرم‌افزار مسئول هیچ آسیبی نیست."
     override val rootGranted = "دسترسی روت اعطا شد"
     override val rootDenied = "دسترسی روت رد شد"
     override val experimental = "آزمایشی"

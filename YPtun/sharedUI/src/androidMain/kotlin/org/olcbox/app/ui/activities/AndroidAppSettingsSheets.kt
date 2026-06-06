@@ -34,6 +34,7 @@ import org.olcbox.app.data.model.SingBoxRule
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalStrings
+import org.olcbox.app.ui.i18n.Strings
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.ui.graphics.toArgb
@@ -2692,7 +2693,6 @@ private fun RoutingContent(
     var blockText by remember(routing) { mutableStateOf(RoutingRules.domainsToText(routing.blockDomains)) }
     var customRules by remember(routing) { mutableStateOf(routing.customRulesJson) }
     var customRuleSets by remember(routing) { mutableStateOf(routing.customRuleSetsJson) }
-    var advancedExpanded by remember(routing) { mutableStateOf(routing.customRulesJson.isNotBlank() || routing.customRuleSetsJson.isNotBlank()) }
     // v2rayNG-style ordered rules (sing-box). Edited as drafts (raw text) so the cursor stays put;
     // converted back to [SingBoxRule] on save. Kept ALONGSIDE the Happ routing profiles.
     val ruleDrafts = remember(routing) { mutableStateListOf<SbRuleDraft>().apply { addAll(routing.rules.map { it.toDraft() }) } }
@@ -2785,70 +2785,10 @@ private fun RoutingContent(
                 RoutingToggleRow(s.bypassRussia, s.bypassRussiaSubtitle, bypassRu) { bypassRu = it }
                 RoutingToggleRow(s.blockAds, s.blockAdsSubtitle, blockAds) { blockAds = it }
 
-                OutlinedTextField(
-                    value = directText,
-                    onValueChange = { directText = it },
-                    label = { Text(s.directDomains) },
-                    placeholder = { Text(s.domainsPlaceholder) },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = blockText,
-                    onValueChange = { blockText = it },
-                    label = { Text(s.blockedDomains) },
-                    placeholder = { Text(s.domainsPlaceholder) },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Advanced: raw sing-box routing rules for power users.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { advancedExpanded = !advancedExpanded }
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        s.sbRoutingAdvanced,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        if (advancedExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                        contentDescription = null
-                    )
-                }
-                if (advancedExpanded) {
-                    Text(
-                        s.sbRoutingAdvancedDesc,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = customRules,
-                        onValueChange = { customRules = it },
-                        label = { Text(s.sbRouteRulesLabel) },
-                        placeholder = { Text("[{\"domain_suffix\":[\"example.com\"],\"outbound\":\"direct\"}]") },
-                        isError = !rulesValid,
-                        supportingText = if (!rulesValid) ({ Text(s.sbInvalidJsonArray) }) else null,
-                        minLines = 3,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = customRuleSets,
-                        onValueChange = { customRuleSets = it },
-                        label = { Text(s.sbRuleSetLabel) },
-                        placeholder = { Text("[{\"type\":\"remote\",\"tag\":\"my-set\",\"format\":\"binary\",\"url\":\"https://…\",\"download_detour\":\"direct\"}]") },
-                        isError = !ruleSetsValid,
-                        supportingText = if (!ruleSetsValid) ({ Text(s.sbInvalidJsonArray) }) else null,
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                // Direct/blocked domain fields and the raw sing-box "advanced" routing editor are
+                // intentionally hidden from the Simple tab. The underlying values (directText,
+                // blockText, customRules, customRuleSets) are still round-tripped by saveRouting()
+                // so any previously-configured rules keep applying — only the editing UI is removed.
 
                 Button(
                     onClick = { saveRouting() },
@@ -2925,6 +2865,7 @@ private fun RoutingContent(
 /** Editable (raw-text) form of a [SingBoxRule] so text fields keep their cursor while typing. */
 private data class SbRuleDraft(
     val name: String = "",
+    val action: String = SingBoxRule.ACTION_ROUTE,
     val outbound: String = SingBoxRule.OUT_PROXY,
     val domains: String = "",
     val ip: String = "",
@@ -2938,10 +2879,12 @@ private data class SbRuleDraft(
     val networkIsExpensive: Boolean = false,
     val clashMode: String = "",
     val packageNames: String = "",
+    val packageRegex: String = "",
     val enabled: Boolean = true,
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
         name = name.trim(),
+        action = action,
         outbound = outbound,
         domains = splitList(domains),
         ip = splitList(ip),
@@ -2955,6 +2898,8 @@ private data class SbRuleDraft(
         networkIsExpensive = networkIsExpensive,
         clashMode = clashMode.trim(),
         packageNames = splitList(packageNames),
+        // Regex patterns may legitimately contain spaces, so split only on line/comma/semicolon.
+        packageRegex = packageRegex.split('\n', ',', ';').map { it.trim() }.filter { it.isNotEmpty() },
         enabled = enabled,
     )
 
@@ -2964,6 +2909,7 @@ private data class SbRuleDraft(
 
 private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     name = name,
+    action = action,
     outbound = outbound,
     domains = domains.joinToString("\n"),
     ip = ip.joinToString("\n"),
@@ -2977,8 +2923,20 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     networkIsExpensive = networkIsExpensive,
     clashMode = clashMode,
     packageNames = packageNames.joinToString("\n"),
+    packageRegex = packageRegex.joinToString("\n"),
     enabled = enabled,
 )
+
+/** Localized label for a sing-box rule [SingBoxRule.action] token. */
+private fun routingActionLabel(s: Strings, action: String): String = when (action) {
+    SingBoxRule.ACTION_ROUTE -> s.routingActionRoute
+    SingBoxRule.ACTION_ROUTE_OPTIONS -> s.routingActionRouteOptions
+    SingBoxRule.ACTION_SNIFF -> s.routingActionSniff
+    SingBoxRule.ACTION_RESOLVE -> s.routingActionResolve
+    SingBoxRule.ACTION_HIJACK_DNS -> s.routingActionHijackDns
+    SingBoxRule.ACTION_REJECT -> s.routingActionReject
+    else -> action
+}
 
 @Composable
 private fun SingBoxRuleCard(
@@ -2998,7 +2956,7 @@ private fun SingBoxRuleCard(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    s.routingRuleOutbound,
+                    s.routingRuleEdit,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f)
@@ -3018,18 +2976,40 @@ private fun SingBoxRuleCard(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            // Outbound action: proxy / direct / block.
+            // Routing action: route / route-options / sniff / resolve / hijack-dns / reject.
+            Text(
+                s.routingRuleAction,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(
-                    SingBoxRule.OUT_PROXY to s.routingOutProxy,
-                    SingBoxRule.OUT_DIRECT to s.routingOutDirect,
-                    SingBoxRule.OUT_BLOCK to s.routingOutBlock,
-                ).forEach { (value, label) ->
+                SingBoxRule.ACTIONS.forEach { value ->
                     FilterChip(
-                        selected = draft.outbound == value,
-                        onClick = { onChange(draft.copy(outbound = value)) },
-                        label = { Text(label) }
+                        selected = draft.action == value,
+                        onClick = { onChange(draft.copy(action = value)) },
+                        label = { Text(routingActionLabel(s, value)) }
                     )
+                }
+            }
+            // Outbound (only meaningful for the "route" action): proxy / direct / block.
+            if (draft.action == SingBoxRule.ACTION_ROUTE) {
+                Text(
+                    s.routingRuleOutbound,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        SingBoxRule.OUT_PROXY to s.routingOutProxy,
+                        SingBoxRule.OUT_DIRECT to s.routingOutDirect,
+                        SingBoxRule.OUT_BLOCK to s.routingOutBlock,
+                    ).forEach { (value, label) ->
+                        FilterChip(
+                            selected = draft.outbound == value,
+                            onClick = { onChange(draft.copy(outbound = value)) },
+                            label = { Text(label) }
+                        )
+                    }
                 }
             }
             OutlinedTextField(
@@ -3103,6 +3083,14 @@ private fun SingBoxRuleCard(
                 onValueChange = { onChange(draft.copy(packageNames = it)) },
                 label = { Text(s.routingRuleApps) },
                 placeholder = { Text("com.google.android.youtube") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.packageRegex,
+                onValueChange = { onChange(draft.copy(packageRegex = it)) },
+                label = { Text(s.routingRulePackageRegex) },
+                placeholder = { Text("^com\\.google\\..*") },
                 minLines = 1,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -3583,12 +3571,63 @@ private fun ExperimentalContent(
 
         SettingsSectionLabel("Root")
         val rootScope = rememberCoroutineScope()
+        var showRebootDialog by remember { mutableStateOf(false) }
         RoutingToggleRow(
             title = s.hideTunTitle,
             subtitle = s.hideTunSubtitle,
             checked = settings.hideTunInterface
         ) { enabled ->
             onChanged(settings.copy(hideTunInterface = enabled))
+            rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                if (enabled) {
+                    // Install the bundled Zygisk hide module (or re-enable it if already present).
+                    val result = org.olcbox.app.vpn.VpnHideModule.enable(context)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        val msg = when (result) {
+                            org.olcbox.app.vpn.VpnHideModule.Result.INSTALLED -> s.hideModuleInstalled
+                            org.olcbox.app.vpn.VpnHideModule.Result.ENABLED -> s.hideModuleInstalled
+                            org.olcbox.app.vpn.VpnHideModule.Result.ALREADY_ACTIVE -> s.hideModuleActive
+                            org.olcbox.app.vpn.VpnHideModule.Result.NO_ROOT -> s.rootDenied
+                            org.olcbox.app.vpn.VpnHideModule.Result.FAILED -> s.hideModuleFailed
+                        }
+                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+                        if (result.needsReboot) showRebootDialog = true
+                    }
+                } else {
+                    org.olcbox.app.vpn.VpnHideModule.disable(context)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, s.hideModuleDisabled, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+        Text(
+            text = s.hideTunDisclaimer,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
+        if (showRebootDialog) {
+            AlertDialog(
+                onDismissRequest = { showRebootDialog = false },
+                title = { Text(s.hideModuleRebootTitle) },
+                text = { Text(s.hideModuleRebootMessage) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showRebootDialog = false
+                        rootScope.launch(kotlinx.coroutines.Dispatchers.IO) { org.olcbox.app.vpn.VpnHideModule.reboot() }
+                    }) { Text(s.rebootNow) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRebootDialog = false }) { Text(s.rebootLater) }
+                }
+            )
+        }
+        RoutingToggleRow(
+            title = s.shareHotspotTitle,
+            subtitle = s.shareHotspotSubtitle,
+            checked = settings.shareVpnHotspot
+        ) { enabled ->
+            onChanged(settings.copy(shareVpnHotspot = enabled))
             // Trigger the superuser prompt right away so the user grants root before connecting.
             if (enabled) {
                 rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -3606,7 +3645,7 @@ private fun ExperimentalContent(
             }
         }
         Text(
-            text = s.hideTunDisclaimer,
+            text = s.shareHotspotDisclaimer,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error
         )

@@ -221,7 +221,8 @@ private fun IosApp(
                     dependencies.homeViewModel.onCopyFullConfigClicked()
                 },
                 onShareLocationRequested = { config: LocationConfig ->
-                    platformBridge.shareText("Location", ConfigShareService.olcRtcUri(config))
+                    // Share our universal yptun:// link (carries the whole inbound incl. proxy + toggles).
+                    platformBridge.shareText("Location", org.olcbox.app.data.share.YptunInboundCodec.compose(config))
                 },
                 onSaveLogsRequested = { onSaved, onError ->
                     dependencies.homeViewModel.onSaveLogsToFile(

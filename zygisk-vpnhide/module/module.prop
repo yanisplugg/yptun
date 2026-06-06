@@ -1,0 +1,6 @@
+id=olcvpnhide
+name=Olc VPN Hide (Zygisk)
+version=v1.0.0
+versionCode=1
+author=olcbox
+description=Hides VPN interfaces (tun/ppp/tap/wg/awg) from apps by hooking getifaddrs in app processes. Installed/managed by the Olc VPN app's experimental "Hide tun0" toggle.

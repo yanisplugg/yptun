@@ -87,6 +87,7 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_TRAFFIC
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
+import org.olcbox.app.data.model.SingBoxRule
 import org.olcbox.app.vpn.geo.GeoAssetManager
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
@@ -704,7 +705,10 @@ class OlcboxVpnService : VpnService() {
         resetRecoveryState()
         updateNotification(connectedNotificationText())
         addLog("VPN tunnel established")
-        maybeHideTunInterface()
+        // Interface hiding is handled by the bundled Zygisk module (VpnHideModule), not by renaming
+        // the tun here — renaming an UP VpnService tun is refused by the kernel (EBUSY) and, if forced
+        // via down/up, detaches Android's name-keyed `oif tun0` rules and breaks per-app VPN routing.
+        maybeShareVpnHotspot()
         startWatchdog()
     }
 
@@ -978,6 +982,7 @@ class OlcboxVpnService : VpnService() {
                             } ?: t
                         },
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                        proxyEnabled = config.proxyEnabled,
                     )
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -1007,6 +1012,7 @@ class OlcboxVpnService : VpnService() {
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     blockQuic = !isAwg,
                     sniffOverrideDestination = isAwg,
+                    proxyEnabled = config.proxyEnabled,
                 )
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)
@@ -1432,54 +1438,112 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
+
     /**
-     * EXPERIMENTAL (root): when [AppBehaviorSettings.hideTunInterface] is on, rename every VPN-looking
-     * netdev (`tun*` from VpnService, `awg*`/`wg*` from AmneziaWG/WireGuard) to an innocuous
-     * `rmnet9x` name so apps that detect a VPN by enumerating interface names no longer see it. Routes
-     * are keyed by interface index, not name, so renaming doesn't drop connectivity.
-     *
-     * Enumerates `/sys/class/net` at run time instead of hardcoding `tun0`/`tun1`: the real index
-     * varies (another VPN may already hold `tun0`) and AmneziaWG's interface isn't a `tun*`. An
-     * interface that doesn't exist (e.g. AmneziaWG runs in userspace netstack with no kernel netdev)
-     * is simply skipped. Best-effort — silently no-ops without root. The user is warned (disclaimer in
-     * the UI) that the author isn't liable for any root-induced damage.
+     * ip-rule priority for the hotspot-share rules. MUST be a value Android's netd does NOT use for
+     * its own rules (it uses 0/10000/11000/15998-22999/25000/29998/31000/32000), and teardown ALWAYS
+     * matches on `iif <tether>` too — never a blind "del priority", which would wipe Android's rules.
      */
-    private suspend fun maybeHideTunInterface() {
-        if (!loadAppBehavior().hideTunInterface) return
+    private val hotspotRulePref = 26000
+
+    /** Tether/hotspot interface name candidates (softAP, USB-RNDIS, BT-PAN). */
+    private val hotspotIfaces = listOf("ap0", "ap1", "wlan1", "wlan2", "softap0", "swlan0", "rndis0", "usb0", "bt-pan")
+
+    /** True once [maybeShareVpnHotspot] installed its rules — gates [teardownVpnHotspotShare] so we
+     *  never spawn `su` (root prompt) on disconnect for users who never enabled the feature. */
+    @Volatile private var hotspotShareApplied = false
+
+    /**
+     * EXPERIMENTAL (root): when [AppBehaviorSettings.shareVpnHotspot] is on, route hotspot/tethered
+     * clients through the VPN. Android sends tethering straight to the upstream (bypassing the VPN);
+     * we add `ip rule iif <tether> lookup <vpn-table>` (so client ingress uses the VPN routing table)
+     * plus iptables forwarding + NAT (MASQUERADE) on the tun and TCP-MSS clamping. The iif rules are
+     * added for every candidate tether name — a name that doesn't exist yet stays "detached" and
+     * attaches automatically when the user turns the hotspot on. Best-effort; silently no-ops without
+     * root. Does NOT touch the phone's own traffic (only FORWARDed packets), so browsing/routing are
+     * unaffected. Torn down on disconnect by [teardownVpnHotspotShare].
+     */
+    private suspend fun maybeShareVpnHotspot() {
+        if (!loadAppBehavior().shareVpnHotspot) return
         withContext(Dispatchers.IO) {
-            // Rename tun*/awg*/wg* to a REALISTIC cellular-style name (rmnet_data0, rmnet_data1…) so
-            // apps that bypass the VPN (split-tunnel) and enumerate interfaces see a normal radio iface
-            // instead of an obvious "tun0". We FIRST try to rename without touching link state — on
-            // kernels that allow it the active tunnel is never interrupted (no connectivity drop). Only
-            // if that fails do we fall back to the down→rename→up cycle. Routes are keyed by ifindex,
-            // not name, so the rename itself doesn't break routing.
-            // IMPORTANT: rename ONLY in place (no down/up). Bringing the active VPN tun DOWN makes
-            // Android tear down the DNS binding for the VPN network → Chrome shows "DNS probe started"
-            // and the whole connection dies. An in-place rename keeps the link UP, so routes (by ifindex)
-            // and DNS survive. On kernels that refuse to rename an UP interface we simply SKIP it
-            // (best-effort, "по возможности") rather than forcibly down/up and break connectivity.
+            val pref = hotspotRulePref
+            val aps = hotspotIfaces.joinToString(" ")
             val script = buildString {
                 append("export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH; ")
                 append("IP=\$(command -v ip || echo /system/bin/ip); ")
-                append("n=0; ")
-                append("for ifc in \$(ls /sys/class/net 2>/dev/null); do ")
-                append("case \"\$ifc\" in tun*|awg*|wg*) ")
-                append("new=rmnet_data\$n; n=\$((n+1)); ")
-                append("if \$IP link set \"\$ifc\" name \"\$new\" 2>/dev/null; then ")
-                append("echo \"\$ifc -> \$new (live)\"; ")
-                append("else ")
-                append("echo \"\$ifc: in-place rename not permitted, skipped (kept up to preserve DNS)\"; ")
-                append("fi;; ")
-                append("esac; done; ")
-                append("echo \"after: \$(ls /sys/class/net 2>/dev/null | tr '\\n' ' ')\"")
+                append("IPT=\$(command -v iptables || echo /system/bin/iptables); ")
+                append("IP6T=\$(command -v ip6tables || echo /system/bin/ip6tables); ")
+                // Detect the VPN tun and its routing table from its default route.
+                append("L=\$(\$IP route show table all | grep -m1 '^default dev tun'); ")
+                append("TUN=\$(echo \"\$L\" | sed -n 's/^default dev \\([^ ]*\\) table \\([^ ]*\\).*/\\1/p'); ")
+                append("TBL=\$(echo \"\$L\" | sed -n 's/^default dev \\([^ ]*\\) table \\([^ ]*\\).*/\\2/p'); ")
+                append("if [ -z \"\$TUN\" ] || [ -z \"\$TBL\" ]; then echo 'no VPN tun/table found'; exit 0; fi; ")
+                append("echo 1 > /proc/sys/net/ipv4/ip_forward; ")
+                append("echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null; ")
+                // Route each candidate tether iface's ingress into the VPN table (v4 + v6).
+                append("for ap in $aps; do ")
+                append("\$IP rule del iif \"\$ap\" lookup \"\$TBL\" priority $pref 2>/dev/null; ")
+                append("\$IP rule add iif \"\$ap\" lookup \"\$TBL\" priority $pref 2>/dev/null; ")
+                append("\$IP -6 rule del iif \"\$ap\" lookup \"\$TBL\" priority $pref 2>/dev/null; ")
+                append("\$IP -6 rule add iif \"\$ap\" lookup \"\$TBL\" priority $pref 2>/dev/null; ")
+                append("done; ")
+                // Forwarding + NAT on the tun (insert at top so Android's FORWARD policy can't drop it).
+                append("\$IPT -C FORWARD -o \"\$TUN\" -j ACCEPT 2>/dev/null || \$IPT -I FORWARD -o \"\$TUN\" -j ACCEPT; ")
+                append("\$IPT -C FORWARD -i \"\$TUN\" -j ACCEPT 2>/dev/null || \$IPT -I FORWARD -i \"\$TUN\" -j ACCEPT; ")
+                append("\$IPT -t nat -C POSTROUTING -o \"\$TUN\" -j MASQUERADE 2>/dev/null || \$IPT -t nat -I POSTROUTING -o \"\$TUN\" -j MASQUERADE; ")
+                append("\$IPT -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -o \"\$TUN\" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \$IPT -t mangle -I FORWARD -p tcp --tcp-flags SYN,RST SYN -o \"\$TUN\" -j TCPMSS --clamp-mss-to-pmtu; ")
+                append("\$IP6T -C FORWARD -o \"\$TUN\" -j ACCEPT 2>/dev/null || \$IP6T -I FORWARD -o \"\$TUN\" -j ACCEPT; ")
+                append("\$IP6T -C FORWARD -i \"\$TUN\" -j ACCEPT 2>/dev/null || \$IP6T -I FORWARD -i \"\$TUN\" -j ACCEPT; ")
+                append("\$IP6T -t nat -C POSTROUTING -o \"\$TUN\" -j MASQUERADE 2>/dev/null || \$IP6T -t nat -I POSTROUTING -o \"\$TUN\" -j MASQUERADE 2>/dev/null; ")
+                append("echo \"hotspot share on via \$TUN table \$TBL (tether: $aps)\"")
             }
             runCatching {
                 val p = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
                 val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
                 val code = p.waitFor()
-                addLog("Hide tun (root): exit=$code${if (out.isNotBlank()) " — $out" else " — no tun/awg/wg netdev found"}")
+                hotspotShareApplied = true
+                addLog("Hotspot share (root): exit=$code${if (out.isNotBlank()) " — $out" else ""}")
             }.onFailure {
-                addLog("Hide tun (root) failed (no su / denied): ${it.message}")
+                addLog("Hotspot share (root) failed (no su / denied): ${it.message}")
+            }
+        }
+    }
+
+    /**
+     * Removes everything [maybeShareVpnHotspot] installed (our priority-[hotspotRulePref] ip-rules and
+     * the per-tun iptables forward/NAT/MSS rules). Idempotent and safe to call even when the feature
+     * was never enabled. Runs on every disconnect so stale rules never linger.
+     */
+    private suspend fun teardownVpnHotspotShare() {
+        if (!hotspotShareApplied) return
+        hotspotShareApplied = false
+        withContext(Dispatchers.IO) {
+            val pref = hotspotRulePref
+            val aps = hotspotIfaces.joinToString(" ")
+            val script = buildString {
+                append("export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH; ")
+                append("IP=\$(command -v ip || echo /system/bin/ip); ")
+                append("IPT=\$(command -v iptables || echo /system/bin/iptables); ")
+                append("IP6T=\$(command -v ip6tables || echo /system/bin/ip6tables); ")
+                // Drop ONLY our iif rules — matched by iif+priority so Android's own priority-$pref
+                // rules (oif <iface>) are never touched. Loop in case of duplicates.
+                append("for ap in $aps; do ")
+                append("while \$IP rule del iif \"\$ap\" priority $pref 2>/dev/null; do :; done; ")
+                append("while \$IP -6 rule del iif \"\$ap\" priority $pref 2>/dev/null; do :; done; ")
+                append("done; ")
+                // Remove the forward/NAT/MSS rules for any tun the VPN may have used.
+                append("for TUN in tun0 tun1 tun2 tun3; do ")
+                append("\$IPT -D FORWARD -o \"\$TUN\" -j ACCEPT 2>/dev/null; ")
+                append("\$IPT -D FORWARD -i \"\$TUN\" -j ACCEPT 2>/dev/null; ")
+                append("\$IPT -t nat -D POSTROUTING -o \"\$TUN\" -j MASQUERADE 2>/dev/null; ")
+                append("\$IPT -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o \"\$TUN\" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; ")
+                append("\$IP6T -D FORWARD -o \"\$TUN\" -j ACCEPT 2>/dev/null; ")
+                append("\$IP6T -D FORWARD -i \"\$TUN\" -j ACCEPT 2>/dev/null; ")
+                append("\$IP6T -t nat -D POSTROUTING -o \"\$TUN\" -j MASQUERADE 2>/dev/null; ")
+                append("done")
+            }
+            runCatching {
+                ProcessBuilder("su", "-c", script).redirectErrorStream(true).start().waitFor()
             }
         }
     }
@@ -1748,6 +1812,7 @@ class OlcboxVpnService : VpnService() {
 
         cleanupJob = scope.launch {
             try {
+                teardownVpnHotspotShare()
                 stopVisibleVpnProcesses()
                 if (generation == cleanupGeneration) {
                     setStatus(VpnStatus.Disconnected)
@@ -1895,8 +1960,15 @@ class OlcboxVpnService : VpnService() {
         val raw = runCatching {
             applicationContext.vpnPrefDataStore.data.first()[KEY_ANDROID_ROUTING]
         }.getOrNull() ?: return RoutingRules()
-        return runCatching { Json.decodeFromString(RoutingRules.serializer(), raw) }
+        val routing = runCatching { Json.decodeFromString(RoutingRules.serializer(), raw) }
             .getOrDefault(RoutingRules())
+        // sing-box has no native package-regex matcher: expand each rule's regex against the
+        // device's installed packages into concrete `package_name` entries before building.
+        if (routing.rules.none { it.packageRegex.isNotEmpty() }) return routing
+        val installed = runCatching {
+            packageManager.getInstalledPackages(0).map { it.packageName }
+        }.getOrDefault(emptyList())
+        return routing.copy(rules = SingBoxRule.expandPackageRegex(routing.rules, installed))
     }
 
     private suspend fun loadRoutingProfilesState(): RoutingProfilesState {

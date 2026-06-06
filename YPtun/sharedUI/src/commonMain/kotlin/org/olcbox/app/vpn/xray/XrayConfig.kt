@@ -108,6 +108,9 @@ object XrayConfig {
         // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
         // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
         blockQuic: Boolean = true,
+        // When false, the proxy outbound is replaced by a `freedom` (direct) outbound tagged
+        // [PROXY_TAG] — traffic exits directly; the location's proxy is kept in config but not applied.
+        proxyEnabled: Boolean = true,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
@@ -173,15 +176,26 @@ object XrayConfig {
 
             val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
             putJsonArray("outbounds") {
-                add(
-                    buildProxyOutbound(
-                        profile,
-                        chained = olcrtcChainPort != null,
-                        traffic = traffic,
-                        detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null,
+                if (proxyEnabled) {
+                    add(
+                        buildProxyOutbound(
+                            profile,
+                            chained = olcrtcChainPort != null,
+                            traffic = traffic,
+                            detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null,
+                        )
                     )
-                )
-                if (wgBaseOutbound != null) add(wgBaseOutbound)
+                    if (wgBaseOutbound != null) add(wgBaseOutbound)
+                } else {
+                    // Proxy disabled: PROXY_TAG resolves to a direct (freedom) outbound.
+                    addJsonObject {
+                        put("tag", PROXY_TAG)
+                        put("protocol", "freedom")
+                        putJsonObject("settings") {
+                            put("domainStrategy", directDomainStrategy(traffic))
+                        }
+                    }
+                }
                 addJsonObject {
                     put("tag", "direct")
                     put("protocol", "freedom")
