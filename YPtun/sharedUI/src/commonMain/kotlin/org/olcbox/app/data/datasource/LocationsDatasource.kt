@@ -38,6 +38,7 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
+import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.util.IsoTime
 
 interface LocationsDataSource {
@@ -726,6 +727,13 @@ class LocationsRepositoryImpl(
         updateIntervalHours: Int? = null,
         subscriptionMetadata: SubscriptionMetadata? = null
     ): ParsedImport? {
+        // Our own universal inbound link (yptun://inbound?…&d=<base64 LocationConfig JSON>): carries
+        // the WHOLE location (engine, transport, proxy/AWG/VK outbound, every toggle). Checked first
+        // since it has its own scheme and restores the location verbatim.
+        parseYptunInboundText(text, subscriptionUrl)?.let {
+            return ParsedImport(it, ImportMode.Additive)
+        }
+
         parseOlcRtcText(text, subscriptionUrl, updateIntervalHours)?.let {
             return ParsedImport(it, ImportMode.Additive)
         }
@@ -980,6 +988,36 @@ class LocationsRepositoryImpl(
         )
 
         return LocationEntry.from(storageId, location, subscriptionUrl = subscriptionUrl)
+    }
+
+    /** Parses one or more `yptun://inbound…` links (one per line) into Standard/custom locations. */
+    private fun parseYptunInboundText(
+        text: String,
+        subscriptionUrl: String? = null
+    ): LocationBundleV4? {
+        if (!text.contains(YptunInboundCodec.PREFIX)) return null
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.lineSequence()
+            .map { it.normalizedImportText() }
+            .filter { it.startsWith(YptunInboundCodec.PREFIX) }
+            .mapNotNull { YptunInboundCodec.parse(it) }
+            .mapIndexed { index, parsed ->
+                val location = parsed.normalized()
+                val base = location.storageSlug().ifBlank { "location_${index + 1}" }
+                val storageId = uniqueStorageId("imported_$base", usedStorageIds)
+                LocationEntry.from(
+                    storageId = storageId,
+                    location = location,
+                    subscriptionUrl = subscriptionUrl,
+                    metadata = null
+                )
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(
+            activeLocationId = entries.firstOrNull()?.storageId,
+            locations = entries
+        )
     }
 
     private fun parseOlcRtcText(
