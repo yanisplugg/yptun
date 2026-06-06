@@ -38,6 +38,8 @@ data class SingBoxRule(
     val client: List<String> = emptyList(),
     /** Match metered (expensive) networks → sing-box `network_is_expensive`. */
     val networkIsExpensive: Boolean = false,
+    /** Match the active Clash mode → sing-box `clash_mode` (e.g. Rule / Global / Direct). Blank = any. */
+    val clashMode: String = "",
     /** Disabled rules are kept in the list but skipped when building the config. */
     val enabled: Boolean = true,
 ) {
@@ -45,7 +47,8 @@ data class SingBoxRule(
     fun hasMatcher(): Boolean =
         domains.isNotEmpty() || ip.isNotEmpty() || source.isNotEmpty() || port.isNotBlank() ||
             sourcePort.isNotBlank() || network.isNotBlank() || protocol.isNotEmpty() ||
-            networkType.isNotEmpty() || client.isNotEmpty() || networkIsExpensive
+            networkType.isNotEmpty() || client.isNotEmpty() || networkIsExpensive ||
+            clashMode.isNotBlank()
 
     companion object {
         const val OUT_PROXY = "proxy"

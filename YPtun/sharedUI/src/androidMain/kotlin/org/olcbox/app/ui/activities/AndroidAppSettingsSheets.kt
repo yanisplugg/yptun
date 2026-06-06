@@ -2936,6 +2936,7 @@ private data class SbRuleDraft(
     val protocol: String = "",
     val client: String = "",
     val networkIsExpensive: Boolean = false,
+    val clashMode: String = "",
     val enabled: Boolean = true,
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
@@ -2951,6 +2952,7 @@ private data class SbRuleDraft(
         protocol = splitList(protocol),
         client = splitList(client),
         networkIsExpensive = networkIsExpensive,
+        clashMode = clashMode.trim(),
         enabled = enabled,
     )
 
@@ -2971,6 +2973,7 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     protocol = protocol.joinToString(", "),
     client = client.joinToString(", "),
     networkIsExpensive = networkIsExpensive,
+    clashMode = clashMode,
     enabled = enabled,
 )
 
@@ -3081,6 +3084,14 @@ private fun SingBoxRuleCard(
                 onValueChange = { onChange(draft.copy(client = it)) },
                 label = { Text(s.routingRuleClient) },
                 placeholder = { Text("chromium, firefox") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.clashMode,
+                onValueChange = { onChange(draft.copy(clashMode = it)) },
+                label = { Text(s.routingRuleClashMode) },
+                placeholder = { Text("Rule / Global / Direct") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
