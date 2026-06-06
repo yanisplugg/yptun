@@ -122,6 +122,9 @@ object SingBoxRouting {
             val singlePorts = mutableListOf<Int>()
             val portRanges = mutableListOf<String>()
             splitPorts(rule.port, singlePorts, portRanges)
+            val srcSinglePorts = mutableListOf<Int>()
+            val srcPortRanges = mutableListOf<String>()
+            splitPorts(rule.sourcePort, srcSinglePorts, srcPortRanges)
 
             add(buildJsonObject {
                 if (ruleSetTags.isNotEmpty()) putJsonArray("rule_set") { ruleSetTags.forEach { add(it) } }
@@ -133,6 +136,8 @@ object SingBoxRouting {
                 if (sourceIpCidr.isNotEmpty()) putJsonArray("source_ip_cidr") { sourceIpCidr.forEach { add(it) } }
                 if (singlePorts.isNotEmpty()) putJsonArray("port") { singlePorts.forEach { add(it) } }
                 if (portRanges.isNotEmpty()) putJsonArray("port_range") { portRanges.forEach { add(it) } }
+                if (srcSinglePorts.isNotEmpty()) putJsonArray("source_port") { srcSinglePorts.forEach { add(it) } }
+                if (srcPortRanges.isNotEmpty()) putJsonArray("source_port_range") { srcPortRanges.forEach { add(it) } }
                 if (rule.network.isNotBlank()) put("network", rule.network)
                 if (rule.protocol.isNotEmpty()) putJsonArray("protocol") { rule.protocol.forEach { add(it) } }
                 when (rule.outbound) {

@@ -26,6 +26,8 @@ data class SingBoxRule(
     val source: List<String> = emptyList(),
     /** Ports: "443", a range "1000:2000", or comma-separated. Blank = any. */
     val port: String = "",
+    /** Source ports: "443", a range "1000:2000", or comma-separated → `source_port`/`source_port_range`. */
+    val sourcePort: String = "",
     /** "" (any), "tcp" or "udp". */
     val network: String = "",
     /** Sniffed protocols: http / tls / quic / bittorrent. Empty = any. */
@@ -36,7 +38,7 @@ data class SingBoxRule(
     /** True when the rule has at least one matcher (otherwise it would match everything). */
     fun hasMatcher(): Boolean =
         domains.isNotEmpty() || ip.isNotEmpty() || source.isNotEmpty() || port.isNotBlank() ||
-            network.isNotBlank() || protocol.isNotEmpty()
+            sourcePort.isNotBlank() || network.isNotBlank() || protocol.isNotEmpty()
 
     companion object {
         const val OUT_PROXY = "proxy"

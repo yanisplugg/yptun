@@ -189,6 +189,7 @@ interface Strings {
     val routingRuleIps: String
     val routingRuleSource: String
     val routingRulePort: String
+    val routingRuleSourcePort: String
     val routingRuleNetwork: String
     val routingRuleProtocol: String
     val routingRuleEnabled: String
@@ -684,6 +685,7 @@ object RuStrings : Strings {
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "Источник (IP)"
     override val routingRulePort = "Порт"
+    override val routingRuleSourcePort = "Порт источника"
     override val routingRuleNetwork = "Сеть"
     override val routingRuleProtocol = "Протокол"
     override val routingRuleEnabled = "Включено"
@@ -1137,6 +1139,7 @@ object EnStrings : Strings {
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "Source (IP)"
     override val routingRulePort = "Port"
+    override val routingRuleSourcePort = "Source port"
     override val routingRuleNetwork = "Network"
     override val routingRuleProtocol = "Protocol"
     override val routingRuleEnabled = "Enabled"
@@ -1588,6 +1591,7 @@ object FaStrings : Strings {
     override val routingRuleIps = "IP / geoip"
     override val routingRuleSource = "مبدأ (IP)"
     override val routingRulePort = "درگاه"
+    override val routingRuleSourcePort = "درگاه مبدأ"
     override val routingRuleNetwork = "شبکه"
     override val routingRuleProtocol = "پروتکل"
     override val routingRuleEnabled = "فعال"

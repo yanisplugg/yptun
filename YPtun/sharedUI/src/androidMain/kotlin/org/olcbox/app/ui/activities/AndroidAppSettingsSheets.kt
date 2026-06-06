@@ -2930,6 +2930,7 @@ private data class SbRuleDraft(
     val ip: String = "",
     val source: String = "",
     val port: String = "",
+    val sourcePort: String = "",
     val network: String = "",
     val protocol: String = "",
     val enabled: Boolean = true,
@@ -2941,6 +2942,7 @@ private data class SbRuleDraft(
         ip = splitList(ip),
         source = splitList(source),
         port = port.trim(),
+        sourcePort = sourcePort.trim(),
         network = network.trim(),
         protocol = splitList(protocol),
         enabled = enabled,
@@ -2957,6 +2959,7 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     ip = ip.joinToString("\n"),
     source = source.joinToString("\n"),
     port = port,
+    sourcePort = sourcePort,
     network = network,
     protocol = protocol.joinToString(", "),
     enabled = enabled,
@@ -3056,6 +3059,14 @@ private fun SingBoxRuleCard(
                     modifier = Modifier.weight(1f)
                 )
             }
+            OutlinedTextField(
+                value = draft.sourcePort,
+                onValueChange = { onChange(draft.copy(sourcePort = it)) },
+                label = { Text(s.routingRuleSourcePort) },
+                placeholder = { Text("1000:2000") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
             // Network: any / tcp / udp.
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("" to s.routingRuleNetworkAny, "tcp" to "TCP", "udp" to "UDP").forEach { (value, label) ->
