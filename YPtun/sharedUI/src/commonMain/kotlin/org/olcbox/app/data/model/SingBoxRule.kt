@@ -34,6 +34,8 @@ data class SingBoxRule(
     val networkType: List<String> = emptyList(),
     /** Sniffed protocols: http / tls / quic / bittorrent. Empty = any. */
     val protocol: List<String> = emptyList(),
+    /** Sniffed TLS client fingerprints → sing-box `client` (e.g. chromium, firefox, safari). Empty = any. */
+    val client: List<String> = emptyList(),
     /** Disabled rules are kept in the list but skipped when building the config. */
     val enabled: Boolean = true,
 ) {
@@ -41,7 +43,7 @@ data class SingBoxRule(
     fun hasMatcher(): Boolean =
         domains.isNotEmpty() || ip.isNotEmpty() || source.isNotEmpty() || port.isNotBlank() ||
             sourcePort.isNotBlank() || network.isNotBlank() || protocol.isNotEmpty() ||
-            networkType.isNotEmpty()
+            networkType.isNotEmpty() || client.isNotEmpty()
 
     companion object {
         const val OUT_PROXY = "proxy"

@@ -2934,6 +2934,7 @@ private data class SbRuleDraft(
     val network: String = "",
     val networkType: List<String> = emptyList(),
     val protocol: String = "",
+    val client: String = "",
     val enabled: Boolean = true,
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
@@ -2947,6 +2948,7 @@ private data class SbRuleDraft(
         network = network.trim(),
         networkType = networkType,
         protocol = splitList(protocol),
+        client = splitList(client),
         enabled = enabled,
     )
 
@@ -2965,6 +2967,7 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     network = network,
     networkType = networkType,
     protocol = protocol.joinToString(", "),
+    client = client.joinToString(", "),
     enabled = enabled,
 )
 
@@ -3067,6 +3070,14 @@ private fun SingBoxRuleCard(
                 onValueChange = { onChange(draft.copy(sourcePort = it)) },
                 label = { Text(s.routingRuleSourcePort) },
                 placeholder = { Text("1000:2000") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.client,
+                onValueChange = { onChange(draft.copy(client = it)) },
+                label = { Text(s.routingRuleClient) },
+                placeholder = { Text("chromium, firefox") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
