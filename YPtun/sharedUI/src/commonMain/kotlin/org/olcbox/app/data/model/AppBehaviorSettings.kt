@@ -52,6 +52,11 @@ data class AppBehaviorSettings(
      * when the probe succeeded (reachable / connectable) and a cross when it failed (offline / error).
      */
     val pingResultDisplay: String = PING_RESULT_ICON,
+    /**
+     * Show the subscription expiry date ("до дд.мм.гггг") under the last-refresh line in the
+     * subscription group header. Off by default; the urgent (≤2 days) red badge is always shown.
+     */
+    val showSubscriptionExpiry: Boolean = false,
 ) {
     companion object {
         const val PING_AUTO = "auto"

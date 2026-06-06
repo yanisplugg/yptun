@@ -63,6 +63,13 @@ import org.olcbox.app.util.parseEmojiAndName
  */
 val LocalPingResultDisplay = staticCompositionLocalOf { AppBehaviorSettings.PING_RESULT_TIME }
 
+/**
+ * Whether the subscription group header shows the expiry date ("до дд.мм.гггг") under the
+ * last-refresh line. Provided near the app root from the persisted app-behavior toggle; off by
+ * default so other platforms keep their look until they wire it up.
+ */
+val LocalShowSubscriptionExpiry = staticCompositionLocalOf { false }
+
 /** Fixed "success green" for the ping tick — theme-independent so it's always clearly green. */
 private val PingOkGreen = Color(0xFF22C55E)
 

@@ -387,7 +387,8 @@ fun AndroidMainScreen(
     }
 
     androidx.compose.runtime.CompositionLocalProvider(
-        org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay
+        org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay,
+        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry
     ) {
     OlcboxAppContent(
         homeViewModel = viewModel,

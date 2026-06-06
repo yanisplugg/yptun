@@ -717,6 +717,20 @@ private fun SubscriptionGroupHeader(
                     modifier = Modifier.padding(top = 1.dp)
                 )
             }
+            // Optional expiry date ("до дд.мм.гггг"), gated on the app-settings toggle.
+            if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry.current) {
+                info.expiryUntil?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 9.sp,
+                        lineHeight = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
             info.interval?.takeIf { it.isNotBlank() }?.let {
                 Text(
                     text = it,
@@ -911,6 +925,8 @@ private fun LocationItem.subscriptionTitle(): String {
  */
 private data class SubscriptionInfo(
     val expiryDateTime: String?,
+    /** Date-only "до дд.мм.гггг" line, shown when the "show expiry" toggle is on. */
+    val expiryUntil: String?,
     val daysLeft: Long?,
     val expiryUrgent: Boolean,
     val interval: String?,
@@ -928,6 +944,9 @@ private fun LocationItem.subscriptionInfo(): SubscriptionInfo? {
         daysLeft = (it - now).floorDiv(DAY_MILLIS)
         org.olcbox.app.util.IsoTime.formatLocalDateTime(it)
     }
+    val expiryUntil = subscription.expiresAtEpochMs?.let {
+        s.subscriptionUntil(org.olcbox.app.util.IsoTime.formatLocalDate(it))
+    }
     val expiryUrgent = daysLeft?.let { it <= 2 } ?: false
     val interval = subscription.updateIntervalHours?.let { s.subscriptionEvery(it) }
     // Last successful refresh, shown on the left of the second header row.
@@ -937,6 +956,7 @@ private fun LocationItem.subscriptionInfo(): SubscriptionInfo? {
 
     val info = SubscriptionInfo(
         expiryDateTime = expiryDateTime,
+        expiryUntil = expiryUntil,
         daysLeft = daysLeft,
         expiryUrgent = expiryUrgent,
         interval = interval,

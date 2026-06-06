@@ -3304,6 +3304,12 @@ private fun ApplicationBehaviorContent(
             checked = settings.showSpeedInNotification
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
+        RoutingToggleRow(
+            title = s.showSubscriptionExpiryTitle,
+            subtitle = s.showSubscriptionExpirySubtitle,
+            checked = settings.showSubscriptionExpiry
+        ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
+
         SettingsSectionLabel(s.language)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val options = listOf(

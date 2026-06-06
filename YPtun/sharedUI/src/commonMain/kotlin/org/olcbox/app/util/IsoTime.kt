@@ -118,5 +118,15 @@ object IsoTime {
         return formatDateTime(epochMs + offsetSeconds * 1_000L)
     }
 
+    /** Same as [formatDate] but in the device's local time zone (matches [formatLocalDateTime]). */
+    @OptIn(kotlin.time.ExperimentalTime::class)
+    fun formatLocalDate(epochMs: Long): String {
+        val instant = kotlin.time.Instant.fromEpochMilliseconds(epochMs)
+        val offsetSeconds = instant
+            .offsetIn(kotlinx.datetime.TimeZone.currentSystemDefault())
+            .totalSeconds
+        return formatDate(epochMs + offsetSeconds * 1_000L)
+    }
+
     private fun pad2(value: Int): String = if (value in 0..9) "0$value" else value.toString()
 }

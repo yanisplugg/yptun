@@ -378,6 +378,8 @@ interface Strings {
     val experimentalUnlocked: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
+    val showSubscriptionExpiryTitle: String
+    val showSubscriptionExpirySubtitle: String
     val telemostCookiesDescription: String
     val useTelemostCookies: String
     val useTelemostCookiesSubtitle: String
@@ -510,6 +512,8 @@ interface Strings {
     fun subscriptionEvery(hours: Int): String
     /** Second header line showing the last successful refresh, e.g. "обновлена 05.06.2026 14:30:00". */
     fun subscriptionUpdatedAt(dateTime: String): String
+    /** Optional expiry line under the refresh line, e.g. "до 03.05.2099". */
+    fun subscriptionUntil(date: String): String
     /** Accessibility label for the red "expiring soon" warning badge. */
     val subscriptionExpiringSoon: String
     /** Full expiry detail shown when tapping the warning badge, e.g. "до 06.06.2026 14:30:00 · через 1 дн.". */
@@ -841,6 +845,8 @@ object RuStrings : Strings {
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+    override val showSubscriptionExpiryTitle = "Показывать срок подписки"
+    override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
     override val telemostCookiesDescription =
         "Cookies авторизованного аккаунта Яндекса (заголовок Cookie, напр. " +
             "«Session_id=…; yandexuid=…») — для приватных конференций. Запустить кастомное ядро " +
@@ -960,6 +966,7 @@ object RuStrings : Strings {
         if (daysLeft < 0) "истекла $dateTime" else "до $dateTime"
     override fun subscriptionEvery(hours: Int) = "Обновление каждые $hours ч"
     override fun subscriptionUpdatedAt(dateTime: String) = "Обновлена $dateTime"
+    override fun subscriptionUntil(date: String) = "до $date"
     override val subscriptionExpiringSoon = "Подписка скоро закончится"
     override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
         daysLeft < 0 -> "истекла $dateTime"
@@ -1287,6 +1294,8 @@ object EnStrings : Strings {
     override val experimentalUnlocked = "Experimental settings unlocked"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+    override val showSubscriptionExpiryTitle = "Show subscription expiry"
+    override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val telemostCookiesDescription =
         "Cookies of a signed-in Yandex account (the Cookie header, e.g. " +
             "\"Session_id=…; yandexuid=…\") — for private conferences. A custom core cannot be " +
@@ -1406,6 +1415,7 @@ object EnStrings : Strings {
         if (daysLeft < 0) "expired $dateTime" else "until $dateTime"
     override fun subscriptionEvery(hours: Int) = "Updates every ${hours}h"
     override fun subscriptionUpdatedAt(dateTime: String) = "updated $dateTime"
+    override fun subscriptionUntil(date: String) = "until $date"
     override val subscriptionExpiringSoon = "Subscription expiring soon"
     override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
         daysLeft < 0 -> "expired $dateTime"
@@ -1738,6 +1748,8 @@ object FaStrings : Strings {
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
+    override val showSubscriptionExpiryTitle = "نمایش تاریخ انقضای اشتراک"
+    override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
     override val telemostCookiesDescription =
         "کوکی‌های یک حساب واردشدهٔ یاندکس (سرایند Cookie، مثلاً " +
             "«Session_id=…; yandexuid=…») — برای کنفرانس‌های خصوصی. در اندروید نمی‌توان هستهٔ " +
@@ -1852,6 +1864,7 @@ object FaStrings : Strings {
         if (daysLeft < 0) "منقضی‌شده $dateTime" else "تا $dateTime"
     override fun subscriptionEvery(hours: Int) = "به‌روزرسانی هر $hours ساعت"
     override fun subscriptionUpdatedAt(dateTime: String) = "به‌روزرسانی‌شده $dateTime"
+    override fun subscriptionUntil(date: String) = "تا $date"
     override val subscriptionExpiringSoon = "اشتراک به‌زودی منقضی می‌شود"
     override fun subscriptionExpiryFull(dateTime: String, daysLeft: Long) = when {
         daysLeft < 0 -> "منقضی‌شده $dateTime"
