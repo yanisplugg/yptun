@@ -343,7 +343,10 @@ class LocationsRepositoryImpl(
         return successfulRefreshes
     }
 
-    override suspend fun refreshDueSubscriptions(subscriptionProxy: SubscriptionFetchProxy?): Int {
+    override suspend fun refreshDueSubscriptions(
+        subscriptionProxy: SubscriptionFetchProxy?,
+        retryFailed: Boolean
+    ): Int {
         return mutationMutex.withLock {
             val bundle = getBundleUnlocked()
             val now = nowEpochMs()
@@ -353,13 +356,19 @@ class LocationsRepositoryImpl(
                     val metadata = entry.metadata?.subscription
                     val interval = metadata?.updateIntervalHours
                         ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS
-                    // Schedule off the last ATTEMPT (success OR failure), so a failed fetch is retried
-                    // only after the interval elapses again — "retry after the hours indicated" —
-                    // instead of being re-tried on every hourly poll while a panel is unreachable.
-                    val lastTouchAt = maxOf(
-                        metadata?.lastRefreshAtEpochMs ?: 0L,
-                        metadata?.lastAttemptAtEpochMs ?: 0L
-                    )
+                    // [retryFailed] (once per app launch): key the schedule off the last SUCCESSFUL
+                    // refresh only, so an overdue subscription that FAILED last time is retried again
+                    // (a failed attempt no longer pushes the next try out by a full interval).
+                    // Otherwise (periodic poll): key off the last ATTEMPT (success OR failure) so we
+                    // don't hammer an unreachable panel on every poll.
+                    val lastTouchAt = if (retryFailed) {
+                        metadata?.lastRefreshAtEpochMs ?: 0L
+                    } else {
+                        maxOf(
+                            metadata?.lastRefreshAtEpochMs ?: 0L,
+                            metadata?.lastAttemptAtEpochMs ?: 0L
+                        )
+                    }
                     val intervalMs = interval.toLong() * 60L * 60L * 1_000L
                     url.takeIf { lastTouchAt <= 0L || now - lastTouchAt >= intervalMs }
                 }
