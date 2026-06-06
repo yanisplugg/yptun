@@ -3571,24 +3571,32 @@ private fun ExperimentalContent(
 
         SettingsSectionLabel("Root")
         val rootScope = rememberCoroutineScope()
+        var showRebootDialog by remember { mutableStateOf(false) }
         RoutingToggleRow(
             title = s.hideTunTitle,
             subtitle = s.hideTunSubtitle,
             checked = settings.hideTunInterface
         ) { enabled ->
             onChanged(settings.copy(hideTunInterface = enabled))
-            // Trigger the superuser prompt right away so the user grants root before connecting.
-            if (enabled) {
-                rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val ok = runCatching {
-                        val p = ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start()
-                        p.inputStream.bufferedReader().use { it.readText() }
-                        p.waitFor() == 0
-                    }.getOrDefault(false)
+            rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                if (enabled) {
+                    // Install the bundled Zygisk hide module (or re-enable it if already present).
+                    val result = org.olcbox.app.vpn.VpnHideModule.enable(context)
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        android.widget.Toast.makeText(
-                            context, if (ok) s.rootGranted else s.rootDenied, android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        val msg = when (result) {
+                            org.olcbox.app.vpn.VpnHideModule.Result.INSTALLED -> s.hideModuleInstalled
+                            org.olcbox.app.vpn.VpnHideModule.Result.ENABLED -> s.hideModuleInstalled
+                            org.olcbox.app.vpn.VpnHideModule.Result.ALREADY_ACTIVE -> s.hideModuleActive
+                            org.olcbox.app.vpn.VpnHideModule.Result.NO_ROOT -> s.rootDenied
+                            org.olcbox.app.vpn.VpnHideModule.Result.FAILED -> s.hideModuleFailed
+                        }
+                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+                        if (result.needsReboot) showRebootDialog = true
+                    }
+                } else {
+                    org.olcbox.app.vpn.VpnHideModule.disable(context)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, s.hideModuleDisabled, android.widget.Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -3598,6 +3606,22 @@ private fun ExperimentalContent(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error
         )
+        if (showRebootDialog) {
+            AlertDialog(
+                onDismissRequest = { showRebootDialog = false },
+                title = { Text(s.hideModuleRebootTitle) },
+                text = { Text(s.hideModuleRebootMessage) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showRebootDialog = false
+                        rootScope.launch(kotlinx.coroutines.Dispatchers.IO) { org.olcbox.app.vpn.VpnHideModule.reboot() }
+                    }) { Text(s.rebootNow) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRebootDialog = false }) { Text(s.rebootLater) }
+                }
+            )
+        }
         RoutingToggleRow(
             title = s.shareHotspotTitle,
             subtitle = s.shareHotspotSubtitle,

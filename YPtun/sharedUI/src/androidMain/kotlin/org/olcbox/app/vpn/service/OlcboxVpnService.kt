@@ -705,7 +705,9 @@ class OlcboxVpnService : VpnService() {
         resetRecoveryState()
         updateNotification(connectedNotificationText())
         addLog("VPN tunnel established")
-        maybeHideTunInterface()
+        // Interface hiding is handled by the bundled Zygisk module (VpnHideModule), not by renaming
+        // the tun here — renaming an UP VpnService tun is refused by the kernel (EBUSY) and, if forced
+        // via down/up, detaches Android's name-keyed `oif tun0` rules and breaks per-app VPN routing.
         maybeShareVpnHotspot()
         startWatchdog()
     }
@@ -1434,67 +1436,6 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
-    /**
-     * EXPERIMENTAL (root): when [AppBehaviorSettings.hideTunInterface] is on, rename every VPN-looking
-     * netdev (`tun*` from VpnService, `awg*`/`wg*` from AmneziaWG/WireGuard) to an innocuous
-     * `rmnet9x` name so apps that detect a VPN by enumerating interface names no longer see it. Routes
-     * are keyed by interface index, not name, so renaming doesn't drop connectivity.
-     *
-     * Enumerates `/sys/class/net` at run time instead of hardcoding `tun0`/`tun1`: the real index
-     * varies (another VPN may already hold `tun0`) and AmneziaWG's interface isn't a `tun*`. An
-     * interface that doesn't exist (e.g. AmneziaWG runs in userspace netstack with no kernel netdev)
-     * is simply skipped. Best-effort — silently no-ops without root. The user is warned (disclaimer in
-     * the UI) that the author isn't liable for any root-induced damage.
-     */
-    private suspend fun maybeHideTunInterface() {
-        if (!loadAppBehavior().hideTunInterface) return
-        withContext(Dispatchers.IO) {
-            // Rename tun*/awg*/wg* to a REALISTIC cellular-style name (rmnet_data0, rmnet_data1…) so
-            // apps that bypass the VPN (split-tunnel) and enumerate interfaces see a normal radio iface
-            // instead of an obvious "tun0". We FIRST try to rename without touching link state — on
-            // kernels that allow it the active tunnel is never interrupted (no connectivity drop). Only
-            // if that fails do we fall back to the down→rename→up cycle. Routes are keyed by ifindex,
-            // not name, so the rename itself doesn't break routing.
-            // IMPORTANT: rename ONLY in place (no down/up). Bringing the active VPN tun DOWN makes
-            // Android tear down the DNS binding for the VPN network → Chrome shows "DNS probe started"
-            // and the whole connection dies. An in-place rename keeps the link UP, so routes (by ifindex)
-            // and DNS survive. On kernels that refuse to rename an UP interface we simply SKIP it
-            // (best-effort, "по возможности") rather than forcibly down/up and break connectivity.
-            // CRITICAL: real phones already have rmnet_data0..N (the actual cellular netdevs), so the
-            // old "rmnet_data0, rmnet_data1…" naming collided ("File exists") and the rename silently
-            // failed — that's why hiding "didn't work". We now pick the FIRST FREE rmnet_dataN index
-            // (one that doesn't exist in /sys/class/net) for each interface. Rename is IN-PLACE only
-            // (no down/up): the link stays UP, so Android keeps the VPN DNS binding and routes (keyed
-            // by ifindex) survive — browser and routing are not disturbed. If the kernel still refuses
-            // the rename we log the real error and skip (best-effort), never forcing a link flap.
-            val script = buildString {
-                append("export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH; ")
-                append("IP=\$(command -v ip || echo /system/bin/ip); ")
-                append("n=0; ")
-                append("for ifc in \$(ls /sys/class/net 2>/dev/null); do ")
-                append("case \"\$ifc\" in tun*|awg*|wg*) ")
-                // advance n to the first rmnet_dataN name that is NOT already taken
-                append("while [ -e /sys/class/net/rmnet_data\$n ]; do n=\$((n+1)); done; ")
-                append("new=rmnet_data\$n; ")
-                append("err=\$(\$IP link set dev \"\$ifc\" name \"\$new\" 2>&1); ")
-                append("if [ \$? -eq 0 ]; then ")
-                append("echo \"\$ifc -> \$new (live)\"; n=\$((n+1)); ")
-                append("else ")
-                append("echo \"\$ifc -> \$new failed: \$err (skipped, link kept up)\"; ")
-                append("fi;; ")
-                append("esac; done; ")
-                append("echo \"after: \$(ls /sys/class/net 2>/dev/null | tr '\\n' ' ')\"")
-            }
-            runCatching {
-                val p = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
-                val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
-                val code = p.waitFor()
-                addLog("Hide tun (root): exit=$code${if (out.isNotBlank()) " — $out" else " — no tun/awg/wg netdev found"}")
-            }.onFailure {
-                addLog("Hide tun (root) failed (no su / denied): ${it.message}")
-            }
-        }
-    }
 
     /**
      * ip-rule priority for the hotspot-share rules. MUST be a value Android's netd does NOT use for

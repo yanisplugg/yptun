@@ -406,6 +406,14 @@ interface Strings {
     val hideTunTitle: String
     val hideTunSubtitle: String
     val hideTunDisclaimer: String
+    val hideModuleRebootTitle: String
+    val hideModuleRebootMessage: String
+    val rebootNow: String
+    val rebootLater: String
+    val hideModuleInstalled: String
+    val hideModuleActive: String
+    val hideModuleFailed: String
+    val hideModuleDisabled: String
     val shareHotspotTitle: String
     val shareHotspotSubtitle: String
     val shareHotspotDisclaimer: String
@@ -897,8 +905,16 @@ object RuStrings : Strings {
     override val useTelemostCookies = "Использовать cookies Telemost"
     override val useTelemostCookiesSubtitle = "Подставлять cookies при подключении к Telemost"
     override val hideTunTitle = "Скрывать интерфейс tun0 (root)"
-    override val hideTunSubtitle = "Переименовывает tun0 после подключения, чтобы приложения не определяли VPN. Требуется root."
+    override val hideTunSubtitle = "Устанавливает Zygisk-модуль, скрывающий VPN-интерфейс от других приложений. Нужен root (Magisk) и перезагрузка."
     override val hideTunDisclaimer = "Внимание: функция использует root-доступ (su). Автор ПО не несёт ответственности за любые повреждения, потерю данных или причинение вреда устройству вследствие использования root."
+    override val hideModuleRebootTitle = "Требуется перезагрузка"
+    override val hideModuleRebootMessage = "Модуль скрытия установлен. Чтобы скрытие заработало, нужно перезагрузить устройство. Перезагрузить сейчас?"
+    override val rebootNow = "Перезагрузить"
+    override val rebootLater = "Позже"
+    override val hideModuleInstalled = "Модуль скрытия установлен"
+    override val hideModuleActive = "Скрытие уже активно"
+    override val hideModuleFailed = "Не удалось установить модуль (нужен root и Zygisk)"
+    override val hideModuleDisabled = "Скрытие отключено (применится после перезагрузки)"
     override val shareHotspotTitle = "Раздавать VPN на точку доступа (root)"
     override val shareHotspotSubtitle = "Пропускает трафик устройств, подключённых к вашей точке доступа, через VPN. Включите точку доступа и подключитесь к VPN. Требуется root."
     override val shareHotspotDisclaimer = "Внимание: функция использует root-доступ (su) и меняет правила маршрутизации/iptables. Автор ПО не несёт ответственности за любые повреждения."
@@ -1369,8 +1385,16 @@ object EnStrings : Strings {
     override val useTelemostCookies = "Use Telemost cookies"
     override val useTelemostCookiesSubtitle = "Attach cookies when connecting to Telemost"
     override val hideTunTitle = "Hide tun0 interface (root)"
-    override val hideTunSubtitle = "Renames tun0 after connecting so apps can't detect the VPN. Requires root."
+    override val hideTunSubtitle = "Installs a Zygisk module that hides the VPN interface from other apps. Requires root (Magisk) and a reboot."
     override val hideTunDisclaimer = "Warning: this uses root access (su). The software author is NOT liable for any damage, data loss, or harm to your device resulting from root usage."
+    override val hideModuleRebootTitle = "Reboot required"
+    override val hideModuleRebootMessage = "The hide module is installed. A reboot is required for hiding to take effect. Reboot now?"
+    override val rebootNow = "Reboot"
+    override val rebootLater = "Later"
+    override val hideModuleInstalled = "Hide module installed"
+    override val hideModuleActive = "Hiding already active"
+    override val hideModuleFailed = "Couldn't install the module (root + Zygisk required)"
+    override val hideModuleDisabled = "Hiding disabled (applies after reboot)"
     override val shareHotspotTitle = "Share VPN over hotspot (root)"
     override val shareHotspotSubtitle = "Routes devices connected to your hotspot through the VPN. Turn on the hotspot and connect the VPN. Requires root."
     override val shareHotspotDisclaimer = "Warning: this uses root access (su) and changes routing/iptables rules. The software author is NOT liable for any damage."
@@ -1828,8 +1852,16 @@ object FaStrings : Strings {
     override val qrShare = "QR / هم‌رسانی"
     override val refresh = "بازآوری"
     override val hideTunTitle = "پنهان‌کردن رابط tun0 (روت)"
-    override val hideTunSubtitle = "پس از اتصال tun0 را تغییر نام می‌دهد تا برنامه‌ها VPN را تشخیص ندهند. نیازمند روت."
+    override val hideTunSubtitle = "یک ماژول Zygisk نصب می‌کند که رابط VPN را از سایر برنامه‌ها پنهان می‌کند. نیازمند روت (Magisk) و ری‌استارت."
     override val hideTunDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) استفاده می‌کند. سازندهٔ نرم‌افزار مسئولیتی در قبال آسیب، از دست رفتن داده یا خرابی دستگاه ناشی از استفاده از روت ندارد."
+    override val hideModuleRebootTitle = "نیاز به راه‌اندازی مجدد"
+    override val hideModuleRebootMessage = "ماژول مخفی‌سازی نصب شد. برای فعال‌شدن مخفی‌سازی باید دستگاه را ری‌استارت کنید. اکنون ری‌استارت شود؟"
+    override val rebootNow = "ری‌استارت"
+    override val rebootLater = "بعداً"
+    override val hideModuleInstalled = "ماژول مخفی‌سازی نصب شد"
+    override val hideModuleActive = "مخفی‌سازی از قبل فعال است"
+    override val hideModuleFailed = "نصب ماژول ناموفق بود (نیازمند روت و Zygisk)"
+    override val hideModuleDisabled = "مخفی‌سازی غیرفعال شد (پس از ری‌استارت اعمال می‌شود)"
     override val shareHotspotTitle = "اشتراک VPN روی هات‌اسپات (روت)"
     override val shareHotspotSubtitle = "ترافیک دستگاه‌های متصل به هات‌اسپات شما را از طریق VPN عبور می‌دهد. هات‌اسپات را روشن و به VPN متصل شوید. نیازمند روت."
     override val shareHotspotDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) و تغییر قوانین مسیریابی/iptables استفاده می‌کند. سازندهٔ نرم‌افزار مسئول هیچ آسیبی نیست."
