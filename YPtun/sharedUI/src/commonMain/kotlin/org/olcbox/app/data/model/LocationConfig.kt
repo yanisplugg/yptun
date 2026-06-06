@@ -172,10 +172,10 @@ data class LocationConfig(
     fun isComplete(): Boolean = when (engine) {
         // olcRTC needs a room id + key.
         EngineType.Stealth -> id.isNotBlank() && key.isNotBlank()
-        // sing-box needs a valid proxy server.
-        EngineType.Standard -> proxy?.isComplete() == true
-        // Chain needs both: a proxy and the olcRTC stealth tunnel to wrap it.
-        EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
+        // sing-box needs a valid proxy server — unless the proxy is disabled (then it exits direct).
+        EngineType.Standard -> !proxyEnabled || proxy?.isComplete() == true
+        // Chain needs the olcRTC stealth tunnel, plus a valid proxy unless the proxy is disabled.
+        EngineType.Chain -> (!proxyEnabled || proxy?.isComplete() == true) && id.isNotBlank() && key.isNotBlank()
         // VK-TURN needs the freeturn link, the per-client VK call link and the WireGuard outbound.
         EngineType.VkTurn -> vkturn?.isComplete() == true && !proxy?.rawOutbound.isNullOrBlank()
     }

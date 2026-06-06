@@ -227,31 +227,34 @@ fun LocationSettingsScreen(
                         onCheckedChange = viewModel::onProxyEnabledChanged
                     )
                 }
-                item {
-                    ProxyField(
-                        link = viewModel.editingProxyLink,
-                        currentProxy = config.proxy,
-                        error = viewModel.proxyError,
-                        enabled = !isSaving,
-                        onChange = viewModel::onProxyLinkChanged
-                    )
-                }
-                item {
-                    CoreSelector(
-                        selected = config.core,
-                        enabled = !isSaving,
-                        onSelected = viewModel::onCoreChanged
-                    )
-                }
-                // Advanced core options appear only when a specific core (not Auto) is chosen.
-                if (config.core != ProxyCore.Auto) {
+                // The proxy section (link + core + advanced) is shown only when the proxy is enabled.
+                if (config.proxyEnabled) {
                     item {
-                        AdvancedCoreSection(
-                            core = config.core,
-                            advanced = config.advanced ?: AdvancedCoreConfig(),
+                        ProxyField(
+                            link = viewModel.editingProxyLink,
+                            currentProxy = config.proxy,
+                            error = viewModel.proxyError,
                             enabled = !isSaving,
-                            onChange = viewModel::updateAdvanced
+                            onChange = viewModel::onProxyLinkChanged
                         )
+                    }
+                    item {
+                        CoreSelector(
+                            selected = config.core,
+                            enabled = !isSaving,
+                            onSelected = viewModel::onCoreChanged
+                        )
+                    }
+                    // Advanced core options appear only when a specific core (not Auto) is chosen.
+                    if (config.core != ProxyCore.Auto) {
+                        item {
+                            AdvancedCoreSection(
+                                core = config.core,
+                                advanced = config.advanced ?: AdvancedCoreConfig(),
+                                enabled = !isSaving,
+                                onChange = viewModel::updateAdvanced
+                            )
+                        }
                     }
                 }
             }
