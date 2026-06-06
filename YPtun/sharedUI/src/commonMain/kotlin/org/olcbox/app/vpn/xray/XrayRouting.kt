@@ -52,12 +52,12 @@ object XrayRouting {
             .map { it.trim().lowercase() }
             .filter { it in RoutingProfile.DEFAULT_ORDER }
             .ifEmpty { RoutingProfile.DEFAULT_ORDER }
-        return order.mapNotNull { bucket ->
+        return order.flatMap { bucket ->
             when (bucket) {
-                "block" -> rule(profile.blockSites, profile.blockIp, BLOCK_TAG)
-                "direct" -> rule(profile.directSites, profile.directIp, DIRECT_TAG)
-                "proxy" -> rule(profile.proxySites, profile.proxyIp, PROXY_TAG)
-                else -> null
+                "block" -> bucketSplitRules(profile.blockSites, profile.blockIp, BLOCK_TAG)
+                "direct" -> bucketSplitRules(profile.directSites, profile.directIp, DIRECT_TAG)
+                "proxy" -> bucketSplitRules(profile.proxySites, profile.proxyIp, PROXY_TAG)
+                else -> emptyList()
             }
         }
     }
@@ -72,16 +72,30 @@ object XrayRouting {
         }
     }
 
-    /** A single field rule for a bucket, or null when both lists are empty. */
-    private fun rule(sites: List<String>, ips: List<String>, tag: String): JsonObject? {
+    /**
+     * SEPARATE domain and ip rules for a bucket (a domain rule and/or an ip rule, same outboundTag).
+     *
+     * CRITICAL: Xray AND-matches `domain` and `ip` WITHIN a single rule — a rule with both only fires
+     * when the destination domain matches AND its resolved IP matches. Combining them (the old form)
+     * made `domain:ru → direct` apply only to .ru sites that ALSO resolve to a Russian IP, so .ru sites
+     * on foreign CDNs leaked through the proxy — i.e. "routing ignored on xray/xhttp" while sing-box
+     * (which already splits the matchers into OR'd rules) worked. Emitting them as two rules makes them
+     * OR (match domain OR match ip), matching sing-box and the user's intent.
+     */
+    private fun bucketSplitRules(sites: List<String>, ips: List<String>, tag: String): List<JsonObject> {
         val s = sites.map { it.trim() }.filter { it.isNotEmpty() }
         val i = ips.map { it.trim() }.filter { it.isNotEmpty() }
-        if (s.isEmpty() && i.isEmpty()) return null
-        return buildJsonObject {
-            put("type", "field")
-            if (s.isNotEmpty()) putJsonArray("domain") { s.forEach { add(it) } }
-            if (i.isNotEmpty()) putJsonArray("ip") { i.forEach { add(it) } }
-            put("outboundTag", tag)
+        return buildList {
+            if (s.isNotEmpty()) add(buildJsonObject {
+                put("type", "field")
+                putJsonArray("domain") { s.forEach { add(it) } }
+                put("outboundTag", tag)
+            })
+            if (i.isNotEmpty()) add(buildJsonObject {
+                put("type", "field")
+                putJsonArray("ip") { i.forEach { add(it) } }
+                put("outboundTag", tag)
+            })
         }
     }
 }
