@@ -406,6 +406,9 @@ interface Strings {
     val hideTunTitle: String
     val hideTunSubtitle: String
     val hideTunDisclaimer: String
+    val shareHotspotTitle: String
+    val shareHotspotSubtitle: String
+    val shareHotspotDisclaimer: String
     val rootGranted: String
     val rootDenied: String
     val telemostCookieHeader: String
@@ -896,6 +899,9 @@ object RuStrings : Strings {
     override val hideTunTitle = "Скрывать интерфейс tun0 (root)"
     override val hideTunSubtitle = "Переименовывает tun0 после подключения, чтобы приложения не определяли VPN. Требуется root."
     override val hideTunDisclaimer = "Внимание: функция использует root-доступ (su). Автор ПО не несёт ответственности за любые повреждения, потерю данных или причинение вреда устройству вследствие использования root."
+    override val shareHotspotTitle = "Раздавать VPN на точку доступа (root)"
+    override val shareHotspotSubtitle = "Пропускает трафик устройств, подключённых к вашей точке доступа, через VPN. Включите точку доступа и подключитесь к VPN. Требуется root."
+    override val shareHotspotDisclaimer = "Внимание: функция использует root-доступ (su) и меняет правила маршрутизации/iptables. Автор ПО не несёт ответственности за любые повреждения."
     override val rootGranted = "Root-доступ получен"
     override val rootDenied = "Root-доступ не предоставлен"
     override val telemostCookieHeader = "Заголовок Cookie для Telemost"
@@ -1365,6 +1371,9 @@ object EnStrings : Strings {
     override val hideTunTitle = "Hide tun0 interface (root)"
     override val hideTunSubtitle = "Renames tun0 after connecting so apps can't detect the VPN. Requires root."
     override val hideTunDisclaimer = "Warning: this uses root access (su). The software author is NOT liable for any damage, data loss, or harm to your device resulting from root usage."
+    override val shareHotspotTitle = "Share VPN over hotspot (root)"
+    override val shareHotspotSubtitle = "Routes devices connected to your hotspot through the VPN. Turn on the hotspot and connect the VPN. Requires root."
+    override val shareHotspotDisclaimer = "Warning: this uses root access (su) and changes routing/iptables rules. The software author is NOT liable for any damage."
     override val rootGranted = "Root access granted"
     override val rootDenied = "Root access denied"
     override val telemostCookieHeader = "Telemost Cookie header"
@@ -1821,6 +1830,9 @@ object FaStrings : Strings {
     override val hideTunTitle = "پنهان‌کردن رابط tun0 (روت)"
     override val hideTunSubtitle = "پس از اتصال tun0 را تغییر نام می‌دهد تا برنامه‌ها VPN را تشخیص ندهند. نیازمند روت."
     override val hideTunDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) استفاده می‌کند. سازندهٔ نرم‌افزار مسئولیتی در قبال آسیب، از دست رفتن داده یا خرابی دستگاه ناشی از استفاده از روت ندارد."
+    override val shareHotspotTitle = "اشتراک VPN روی هات‌اسپات (روت)"
+    override val shareHotspotSubtitle = "ترافیک دستگاه‌های متصل به هات‌اسپات شما را از طریق VPN عبور می‌دهد. هات‌اسپات را روشن و به VPN متصل شوید. نیازمند روت."
+    override val shareHotspotDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) و تغییر قوانین مسیریابی/iptables استفاده می‌کند. سازندهٔ نرم‌افزار مسئول هیچ آسیبی نیست."
     override val rootGranted = "دسترسی روت اعطا شد"
     override val rootDenied = "دسترسی روت رد شد"
     override val experimental = "آزمایشی"

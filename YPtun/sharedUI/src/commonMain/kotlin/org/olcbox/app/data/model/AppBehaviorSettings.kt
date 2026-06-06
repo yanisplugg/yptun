@@ -22,6 +22,13 @@ data class AppBehaviorSettings(
      * VPN by enumerating interface names no longer see it. Requires root (`su`); best-effort.
      */
     val hideTunInterface: Boolean = false,
+    /**
+     * EXPERIMENTAL (root): route hotspot/tethered clients' traffic through the VPN tunnel. Android
+     * normally sends tethering straight to the upstream (bypassing the VPN); with this on, the
+     * service installs ip-rules + iptables forwarding/NAT so devices connected to the phone's
+     * hotspot also go through the VPN. Requires root (`su`); best-effort, torn down on disconnect.
+     */
+    val shareVpnHotspot: Boolean = false,
     /** Subscription group keys whose server list is collapsed (chevron). */
     val collapsedSubscriptionGroups: Set<String> = emptySet(),
     /** Subscription group keys pinned to the top, in pin order. */

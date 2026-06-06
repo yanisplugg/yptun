@@ -3598,6 +3598,33 @@ private fun ExperimentalContent(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error
         )
+        RoutingToggleRow(
+            title = s.shareHotspotTitle,
+            subtitle = s.shareHotspotSubtitle,
+            checked = settings.shareVpnHotspot
+        ) { enabled ->
+            onChanged(settings.copy(shareVpnHotspot = enabled))
+            // Trigger the superuser prompt right away so the user grants root before connecting.
+            if (enabled) {
+                rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val ok = runCatching {
+                        val p = ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start()
+                        p.inputStream.bufferedReader().use { it.readText() }
+                        p.waitFor() == 0
+                    }.getOrDefault(false)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context, if (ok) s.rootGranted else s.rootDenied, android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+        Text(
+            text = s.shareHotspotDisclaimer,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
     }
 }
 
