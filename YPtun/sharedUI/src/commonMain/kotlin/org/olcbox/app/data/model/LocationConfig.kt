@@ -508,6 +508,9 @@ data class LocationEntry(
     val endpoint: LocationEndpointConfig? = null,
     val engine: EngineType? = null,
     val proxy: ProxyProfile? = null,
+    /** Whether the proxy (additional outbound) is applied; default true keeps legacy entries enabled. */
+    @SerialName("proxy_enabled")
+    val proxyEnabled: Boolean = true,
     val core: ProxyCore? = null,
     val vkturn: VkTurnConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
@@ -577,6 +580,7 @@ data class LocationEntry(
                     ?: LocationConfig.DEFAULT_VP8_BATCH,
                 engine = engine ?: EngineType.Stealth,
                 proxy = proxy,
+                proxyEnabled = proxyEnabled,
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
                 advanced = advanced,
@@ -599,6 +603,7 @@ data class LocationEntry(
             ),
             engine = config.engine,
             proxy = config.proxy,
+            proxyEnabled = config.proxyEnabled,
             core = config.core,
             vkturn = config.vkturn,
             advanced = config.advanced,
@@ -629,6 +634,7 @@ data class LocationEntry(
                 ),
                 engine = config.engine,
                 proxy = config.proxy,
+                proxyEnabled = config.proxyEnabled,
                 core = config.core,
                 vkturn = config.vkturn,
                 advanced = config.advanced,
