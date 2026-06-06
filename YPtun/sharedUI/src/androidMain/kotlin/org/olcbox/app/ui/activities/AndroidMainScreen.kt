@@ -181,12 +181,12 @@ fun AndroidMainScreen(
     fun showUpdateResult(info: AppUpdateInfo, manual: Boolean) {
         if (info.isDownloaded(updateSettings)) {
             updateOffer = null
-            updateStatusText = s.latestAlreadyDownloaded(info.channel.name.lowercase())
+            updateStatusText = s.latestAlreadyDownloaded(s.releaseChannelLabel)
         } else if (info.isUpdateAvailable) {
             // Auto checks only raise the banner; the full offer sheet pops on a manual check (or when
             // the user taps the banner). Avoids a sheet ambushing the user on every launch.
             if (manual) updateOffer = info
-            updateStatusText = s.channelUpdateAvailable(info.channel.name, info.version)
+            updateStatusText = s.channelUpdateAvailable(s.releaseChannelLabel, info.version)
         } else {
             updateOffer = null
             updateStatusText = s.upToDate
@@ -204,7 +204,7 @@ fun AndroidMainScreen(
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
-            updateStatusText = s.checkingChannel(previousSettings.channel.name.lowercase())
+            updateStatusText = s.checkingChannel(s.releaseChannelLabel.lowercase())
             val result = service.check(
                 previousSettings.channel,
                 vpnManager.subscriptionFetchProxy()
@@ -241,17 +241,17 @@ fun AndroidMainScreen(
             }
 
             updateDownloadProgress = 0f
-            updateStatusText = "Downloading ${info.asset.name}..."
+            updateStatusText = s.downloadingAsset(info.asset.name)
             val result = updateInstaller.download(info.asset) { progress ->
                 updateDownloadProgress = progress
             }
             val file = result.getOrElse { error ->
-                updateStatusText = "Download failed: ${error.message ?: "unknown error"}"
+                updateStatusText = s.downloadFailed(error.message ?: s.updateCheckFailed)
                 updateDownloadProgress = null
                 Toast.makeText(context, updateStatusText, Toast.LENGTH_LONG).show()
                 return@launch
             }
-            updateStatusText = "Installing ${info.asset.name}"
+            updateStatusText = s.installingAsset(info.asset.name)
             saveUpdateSettings(
                 updateSettings.copy(
                     lastSeenUpdateVersion = info.identity(),

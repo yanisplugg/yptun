@@ -162,15 +162,20 @@ class AppUpdateService(
             assets: List<GithubReleaseAsset>,
             platform: UpdatePlatform
         ): GithubReleaseAsset? {
+            // Match on the ABI token alone — release assets are named like "YPtun-v2.1.0-arm64-v8a.apk"
+            // and do NOT carry an "android" token, so requiring one here skipped every real asset.
             val preferredExtensions = platform.preferredExtensions
+            val apkAssets = assets.filter { it.name.lowercase().endsWith(".apk") }
             val exactAbiAsset = platform.androidArchTokens.firstNotNullOfOrNull { archToken ->
-                selectAssetByTokens(assets, listOf("android", archToken), preferredExtensions)
+                selectAssetByTokens(apkAssets, listOf(archToken), preferredExtensions)
             }
             if (exactAbiAsset != null) return exactAbiAsset
 
-            val universalCandidates = assets.filter { asset ->
+            // No ABI-specific apk for this device: fall back to a universal apk (one without any known
+            // ABI token in its name, e.g. "YPtun-v2.1.0-universal.apk").
+            val universalCandidates = apkAssets.filter { asset ->
                 val name = asset.name.lowercase()
-                "android" in name && knownAndroidArchTokens.none { it in name }
+                knownAndroidArchTokens.none { it in name }
             }
 
             return selectPreferredAsset(universalCandidates, preferredExtensions)

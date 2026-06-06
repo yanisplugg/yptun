@@ -732,7 +732,7 @@ private fun AppSettingsHubContent(
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.updates,
-                subtitle = "Nightly · ${updateSettings.intervalHours}h",
+                subtitle = "${LocalStrings.current.releaseChannelLabel} · ${LocalStrings.current.hoursShort(updateSettings.intervalHours)}",
                 icon = Icons.Outlined.Refresh,
                 enabled = true,
                 onClick = onUpdatesClick
@@ -1194,7 +1194,7 @@ private fun SplitTunnelingAppListContent(
         SettingsDetailHeader(
             title = list.title(),
             subtitle = if (list == AndroidSplitTunnelList.Bypass && russianBypassActive) {
-                RUSSIAN_BYPASS_ACCURACY_MESSAGE
+                LocalStrings.current.ruBypassAccuracy
             } else {
                 list.selectionSubtitle(selectedPackages.size)
             },
@@ -1443,7 +1443,7 @@ private fun UpdatesSettingsContent(
                 FilterChip(
                     selected = settings.intervalHours == hours,
                     onClick = { onIntervalSelected(hours) },
-                    label = { Text("${hours}h") }
+                    label = { Text(LocalStrings.current.hoursShort(hours)) }
                 )
             }
         }
@@ -2445,7 +2445,7 @@ private fun RussianBypassPresetChips(
             enabled = enabled,
             onClick = onClick,
             label = {
-                Text(if (active) "RU bypass on" else "Bypass RU apps")
+                Text(if (active) LocalStrings.current.bypassRuOn else LocalStrings.current.bypassRuApps)
             },
             leadingIcon = {
                 Icon(
@@ -3675,13 +3675,13 @@ private fun AndroidSplitTunnelSettings.settingsSummary(): String {
         AndroidSplitTunnelMode.ProxySelected -> if (proxyPackages.isEmpty()) {
             stringsFor(LocalizationState.effective).selectedAppsOnly
         } else {
-            "Only ${appCount(proxyPackages.size)}"
+            stringsFor(LocalizationState.effective).onlyCount(proxyPackages.size)
         }
 
         AndroidSplitTunnelMode.BypassSelected -> if (bypassPackages.isEmpty()) {
             stringsFor(LocalizationState.effective).bypassSelected
         } else {
-            "${appCount(bypassPackages.size)} bypassed"
+            stringsFor(LocalizationState.effective).bypassedCount(bypassPackages.size)
         }
     }
 }
@@ -3707,30 +3707,30 @@ private fun AndroidSplitTunnelMode.subtitle(settings: AndroidSplitTunnelSettings
         AndroidSplitTunnelMode.ProxySelected -> if (settings.proxyPackages.isEmpty()) {
             stringsFor(LocalizationState.effective).chooseAppsUseYptun
         } else {
-            "${appCount(settings.proxyPackages.size)} use YPtun"
+            stringsFor(LocalizationState.effective).useYptunCount(settings.proxyPackages.size)
         }
 
         AndroidSplitTunnelMode.BypassSelected -> if (settings.bypassPackages.isEmpty()) {
             stringsFor(LocalizationState.effective).chooseAppsBypass
         } else {
-            "${appCount(settings.bypassPackages.size)} bypass YPtun"
+            stringsFor(LocalizationState.effective).bypassYptunCount(settings.bypassPackages.size)
         }
     }
 }
 
 private fun AndroidSplitTunnelMode.statusTitle(settings: AndroidSplitTunnelSettings): String {
     return when (this) {
-        AndroidSplitTunnelMode.AllApps -> "All apps use YPtun"
+        AndroidSplitTunnelMode.AllApps -> stringsFor(LocalizationState.effective).allAppsUseYptunStatus
         AndroidSplitTunnelMode.ProxySelected -> if (settings.proxyPackages.isEmpty()) {
-            "No apps selected"
+            stringsFor(LocalizationState.effective).noAppsSelectedStatus
         } else {
-            "Only ${appCount(settings.proxyPackages.size)} use YPtun"
+            stringsFor(LocalizationState.effective).onlyUseYptunCount(settings.proxyPackages.size)
         }
 
         AndroidSplitTunnelMode.BypassSelected -> if (settings.bypassPackages.isEmpty()) {
-            "No apps bypass YPtun"
+            stringsFor(LocalizationState.effective).noAppsBypassStatus
         } else {
-            "${appCount(settings.bypassPackages.size)} bypass YPtun"
+            stringsFor(LocalizationState.effective).bypassYptunCount(settings.bypassPackages.size)
         }
     }
 }
@@ -3742,16 +3742,18 @@ private fun AndroidSplitTunnelMode.icon() = when (this) {
 }
 
 private fun AndroidSplitTunnelList.title(): String {
+    val s = stringsFor(LocalizationState.effective)
     return when (this) {
-        AndroidSplitTunnelList.Proxy -> "Apps Using YPtun"
-        AndroidSplitTunnelList.Bypass -> "Bypassed Apps"
+        AndroidSplitTunnelList.Proxy -> s.appsUsingYptun
+        AndroidSplitTunnelList.Bypass -> s.bypassedApps
     }
 }
 
 private fun AndroidSplitTunnelList.selectionSubtitle(count: Int): String {
+    val s = stringsFor(LocalizationState.effective)
     return when (this) {
-        AndroidSplitTunnelList.Proxy -> "${appCount(count)} use YPtun"
-        AndroidSplitTunnelList.Bypass -> "${appCount(count)} bypassed"
+        AndroidSplitTunnelList.Proxy -> s.useYptunCount(count)
+        AndroidSplitTunnelList.Bypass -> s.bypassedCount(count)
     }
 }
 
@@ -3760,13 +3762,14 @@ private fun Set<String>.russianBypassPresetValue(
     selectedMatchedCount: Int,
     presetActive: Boolean
 ): String {
+    val s = stringsFor(LocalizationState.effective)
     return when {
-        isEmpty() -> "No matching installed apps"
-        !presetActive -> "${appCount(size)} matched by package"
-        selectedMatchedCount == 0 -> "No RU apps selected"
-        autoCount == 0 -> "${appCount(selectedMatchedCount)} already selected"
-        autoCount == selectedMatchedCount -> "${appCount(autoCount)} auto-bypassed"
-        else -> "$autoCount auto · ${selectedMatchedCount - autoCount} manual"
+        isEmpty() -> s.ruBypassNoMatches
+        !presetActive -> s.ruBypassMatchedByPackage(size)
+        selectedMatchedCount == 0 -> s.ruBypassNoneSelected
+        autoCount == 0 -> s.ruBypassAlreadySelected(selectedMatchedCount)
+        autoCount == selectedMatchedCount -> s.ruBypassAutoBypassed(autoCount)
+        else -> s.ruBypassAutoManual(autoCount, selectedMatchedCount - autoCount)
     }
 }
 
@@ -3777,10 +3780,11 @@ private fun String.matchesRussianBypassPackage(): Boolean {
 }
 
 private fun Set<String>.activeListValue(requireSelection: Boolean): String {
+    val s = stringsFor(LocalizationState.effective)
     return when {
         isNotEmpty() -> appCount(size)
-        requireSelection -> "Required"
-        else -> "No bypassed apps"
+        requireSelection -> s.selectionRequired
+        else -> s.noBypassedAppsValue
     }
 }
 
@@ -3788,10 +3792,11 @@ private fun splitTunnelStatusSubtitle(
     selectedMode: AndroidConnectionMode,
     isConnectionActive: Boolean
 ): String {
+    val s = stringsFor(LocalizationState.effective)
     return when {
-        selectedMode == AndroidConnectionMode.Proxy -> "Saved for TUN mode"
-        isConnectionActive -> "Applies when settings closes"
-        else -> "TUN mode routing rule"
+        selectedMode == AndroidConnectionMode.Proxy -> s.savedForTunMode
+        isConnectionActive -> s.appliesWhenSettingsClose
+        else -> s.tunModeRoutingRule
     }
 }
 
@@ -3807,7 +3812,7 @@ private fun String.initials(): String {
 }
 
 private fun appCount(count: Int): String {
-    return if (count == 1) "1 app" else "$count apps"
+    return stringsFor(LocalizationState.effective).appsCount(count)
 }
 
 private data class AndroidAppListEntry(
@@ -3819,10 +3824,10 @@ private data class AndroidAppListEntry(
 private const val MAX_PROXY_USERNAME_LENGTH = 64
 private const val MAX_PROXY_PASSWORD_LENGTH = 64
 private const val MAX_PROXY_PORT_LENGTH = 5
-private const val RUSSIAN_BYPASS_ACCURACY_MESSAGE =
-    "Auto-detection may be inaccurate."
 private val RUSSIAN_BYPASS_PACKAGE_PREFIXES = listOf(
     "ru.",
+    // Russian apps published under a reversed "ru.com"/"*.ru" domain land as com.ru.* — count them too.
+    "com.ru.",
     "com.yandex."
 )
 private val RUSSIAN_BYPASS_PACKAGE_NAMES = setOf(

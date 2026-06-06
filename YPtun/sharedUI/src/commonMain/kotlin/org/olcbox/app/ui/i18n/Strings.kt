@@ -5,6 +5,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
+/** Russian plural picker: (one, few, many) by the standard ru pluralization rules. */
+internal fun ruPlural(n: Int, one: String, few: String, many: String): String {
+    val mod100 = n % 100
+    val mod10 = n % 10
+    return when {
+        mod100 in 11..14 -> many
+        mod10 == 1 -> one
+        mod10 in 2..4 -> few
+        else -> many
+    }
+}
+
 /** Supported UI languages. [System] follows the device locale (resolved per platform). */
 enum class AppLanguage(val id: String) {
     System("system"),
@@ -317,6 +329,38 @@ interface Strings {
     val everyAppUsesYptun: String
     val chooseAppsUseYptun: String
     val chooseAppsBypass: String
+    // Split-tunnel counts / status / detail (раздельное туннелирование)
+    fun appsCount(n: Int): String
+    fun useYptunCount(n: Int): String
+    fun onlyUseYptunCount(n: Int): String
+    fun onlyCount(n: Int): String
+    fun bypassedCount(n: Int): String
+    fun bypassYptunCount(n: Int): String
+    val allAppsUseYptunStatus: String
+    val noAppsSelectedStatus: String
+    val noAppsBypassStatus: String
+    val selectionRequired: String
+    val noBypassedAppsValue: String
+    val savedForTunMode: String
+    val appliesWhenSettingsClose: String
+    val tunModeRoutingRule: String
+    // "Bypass RU apps" preset
+    val bypassRuApps: String
+    val bypassRuOn: String
+    val ruBypassAccuracy: String
+    val ruBypassNoMatches: String
+    fun ruBypassMatchedByPackage(n: Int): String
+    val ruBypassNoneSelected: String
+    fun ruBypassAlreadySelected(n: Int): String
+    fun ruBypassAutoBypassed(n: Int): String
+    fun ruBypassAutoManual(auto: Int, manual: Int): String
+    // Update download status
+    val releaseChannelLabel: String
+    fun downloadingAsset(name: String): String
+    fun downloadFailed(error: String): String
+    fun installingAsset(name: String): String
+    /** Short hours label, e.g. "6 ч" / "6h" / "۶ ساعت". */
+    fun hoursShort(n: Int): String
 
     // Theme color picker
     val themeColor: String
@@ -758,6 +802,34 @@ object RuStrings : Strings {
     override val everyAppUsesYptun = "Все приложения через YPtun"
     override val chooseAppsUseYptun = "Выберите приложения через YPtun"
     override val chooseAppsBypass = "Выберите приложения в обход YPtun"
+    override fun appsCount(n: Int) = "$n ${ruPlural(n, "приложение", "приложения", "приложений")}"
+    override fun useYptunCount(n: Int) = "${appsCount(n)} через YPtun"
+    override fun onlyUseYptunCount(n: Int) = "Только ${appsCount(n)} через YPtun"
+    override fun onlyCount(n: Int) = "Только ${appsCount(n)}"
+    override fun bypassedCount(n: Int) = "${appsCount(n)} в обход"
+    override fun bypassYptunCount(n: Int) = "${appsCount(n)} в обход YPtun"
+    override val allAppsUseYptunStatus = "Все приложения через YPtun"
+    override val noAppsSelectedStatus = "Приложения не выбраны"
+    override val noAppsBypassStatus = "Нет приложений в обход YPtun"
+    override val selectionRequired = "Требуется"
+    override val noBypassedAppsValue = "Нет приложений в обход"
+    override val savedForTunMode = "Сохранено для режима TUN"
+    override val appliesWhenSettingsClose = "Применится при закрытии настроек"
+    override val tunModeRoutingRule = "Правило маршрутизации режима TUN"
+    override val bypassRuApps = "Обход RU-приложений"
+    override val bypassRuOn = "Обход RU включён"
+    override val ruBypassAccuracy = "Автоопределение может быть неточным."
+    override val ruBypassNoMatches = "Нет подходящих установленных приложений"
+    override fun ruBypassMatchedByPackage(n: Int) = "${appsCount(n)} по пакету"
+    override val ruBypassNoneSelected = "RU-приложения не выбраны"
+    override fun ruBypassAlreadySelected(n: Int) = "${appsCount(n)} уже выбрано"
+    override fun ruBypassAutoBypassed(n: Int) = "${appsCount(n)} авто-обход"
+    override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto авто · $manual вручную"
+    override val releaseChannelLabel = "Релиз"
+    override fun downloadingAsset(name: String) = "Загрузка $name…"
+    override fun downloadFailed(error: String) = "Ошибка загрузки: $error"
+    override fun installingAsset(name: String) = "Установка $name"
+    override fun hoursShort(n: Int) = "$n ч"
     override val themeColor = "Цвет темы"
     override val elementColor = "Цвет элементов"
     override val textColor = "Цвет текста"
@@ -1176,6 +1248,34 @@ object EnStrings : Strings {
     override val everyAppUsesYptun = "Every app uses YPtun"
     override val chooseAppsUseYptun = "Choose apps that use YPtun"
     override val chooseAppsBypass = "Choose apps that bypass YPtun"
+    override fun appsCount(n: Int) = if (n == 1) "1 app" else "$n apps"
+    override fun useYptunCount(n: Int) = "${appsCount(n)} use YPtun"
+    override fun onlyUseYptunCount(n: Int) = "Only ${appsCount(n)} use YPtun"
+    override fun onlyCount(n: Int) = "Only ${appsCount(n)}"
+    override fun bypassedCount(n: Int) = "${appsCount(n)} bypassed"
+    override fun bypassYptunCount(n: Int) = "${appsCount(n)} bypass YPtun"
+    override val allAppsUseYptunStatus = "All apps use YPtun"
+    override val noAppsSelectedStatus = "No apps selected"
+    override val noAppsBypassStatus = "No apps bypass YPtun"
+    override val selectionRequired = "Required"
+    override val noBypassedAppsValue = "No bypassed apps"
+    override val savedForTunMode = "Saved for TUN mode"
+    override val appliesWhenSettingsClose = "Applies when settings closes"
+    override val tunModeRoutingRule = "TUN mode routing rule"
+    override val bypassRuApps = "Bypass RU apps"
+    override val bypassRuOn = "RU bypass on"
+    override val ruBypassAccuracy = "Auto-detection may be inaccurate."
+    override val ruBypassNoMatches = "No matching installed apps"
+    override fun ruBypassMatchedByPackage(n: Int) = "${appsCount(n)} matched by package"
+    override val ruBypassNoneSelected = "No RU apps selected"
+    override fun ruBypassAlreadySelected(n: Int) = "${appsCount(n)} already selected"
+    override fun ruBypassAutoBypassed(n: Int) = "${appsCount(n)} auto-bypassed"
+    override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto auto · $manual manual"
+    override val releaseChannelLabel = "Release"
+    override fun downloadingAsset(name: String) = "Downloading $name…"
+    override fun downloadFailed(error: String) = "Download failed: $error"
+    override fun installingAsset(name: String) = "Installing $name"
+    override fun hoursShort(n: Int) = "${n}h"
     override val themeColor = "Theme color"
     override val elementColor = "Element color"
     override val textColor = "Text color"
@@ -1594,6 +1694,34 @@ object FaStrings : Strings {
     override val everyAppUsesYptun = "همهٔ برنامه‌ها از YPtun استفاده می‌کنند"
     override val chooseAppsUseYptun = "برنامه‌هایی را که از YPtun استفاده می‌کنند انتخاب کنید"
     override val chooseAppsBypass = "برنامه‌هایی را که YPtun را دور می‌زنند انتخاب کنید"
+    override fun appsCount(n: Int) = if (n == 1) "۱ برنامه" else "$n برنامه"
+    override fun useYptunCount(n: Int) = "${appsCount(n)} از YPtun استفاده می‌کنند"
+    override fun onlyUseYptunCount(n: Int) = "فقط ${appsCount(n)} از YPtun استفاده می‌کنند"
+    override fun onlyCount(n: Int) = "فقط ${appsCount(n)}"
+    override fun bypassedCount(n: Int) = "${appsCount(n)} دور زده‌شده"
+    override fun bypassYptunCount(n: Int) = "${appsCount(n)} YPtun را دور می‌زنند"
+    override val allAppsUseYptunStatus = "همهٔ برنامه‌ها از YPtun استفاده می‌کنند"
+    override val noAppsSelectedStatus = "هیچ برنامه‌ای انتخاب نشده"
+    override val noAppsBypassStatus = "هیچ برنامه‌ای YPtun را دور نمی‌زند"
+    override val selectionRequired = "الزامی"
+    override val noBypassedAppsValue = "هیچ برنامهٔ دور زده‌شده‌ای نیست"
+    override val savedForTunMode = "برای حالت TUN ذخیره شد"
+    override val appliesWhenSettingsClose = "هنگام بستن تنظیمات اعمال می‌شود"
+    override val tunModeRoutingRule = "قانون مسیریابی حالت TUN"
+    override val bypassRuApps = "دور زدن برنامه‌های روسی"
+    override val bypassRuOn = "دور زدن روسی روشن"
+    override val ruBypassAccuracy = "تشخیص خودکار ممکن است دقیق نباشد."
+    override val ruBypassNoMatches = "برنامهٔ نصب‌شدهٔ منطبقی یافت نشد"
+    override fun ruBypassMatchedByPackage(n: Int) = "${appsCount(n)} بر اساس بسته"
+    override val ruBypassNoneSelected = "هیچ برنامهٔ روسی انتخاب نشده"
+    override fun ruBypassAlreadySelected(n: Int) = "${appsCount(n)} از قبل انتخاب شده"
+    override fun ruBypassAutoBypassed(n: Int) = "${appsCount(n)} دور زدن خودکار"
+    override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto خودکار · $manual دستی"
+    override val releaseChannelLabel = "نسخه"
+    override fun downloadingAsset(name: String) = "در حال دانلود $name…"
+    override fun downloadFailed(error: String) = "دانلود ناموفق بود: $error"
+    override fun installingAsset(name: String) = "در حال نصب $name"
+    override fun hoursShort(n: Int) = "$n ساعت"
     override val themeColor = "رنگ پوسته"
     override val elementColor = "رنگ عناصر"
     override val textColor = "رنگ متن"

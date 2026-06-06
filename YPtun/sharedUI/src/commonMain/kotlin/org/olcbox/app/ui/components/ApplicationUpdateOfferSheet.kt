@@ -59,7 +59,7 @@ fun ApplicationUpdateOfferSheet(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "${info.channel.name} ${info.version}",
+                    text = "${s.releaseChannelLabel} ${info.version}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
