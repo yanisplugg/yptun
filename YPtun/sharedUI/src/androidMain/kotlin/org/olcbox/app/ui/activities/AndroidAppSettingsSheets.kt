@@ -2693,7 +2693,6 @@ private fun RoutingContent(
     var blockText by remember(routing) { mutableStateOf(RoutingRules.domainsToText(routing.blockDomains)) }
     var customRules by remember(routing) { mutableStateOf(routing.customRulesJson) }
     var customRuleSets by remember(routing) { mutableStateOf(routing.customRuleSetsJson) }
-    var advancedExpanded by remember(routing) { mutableStateOf(routing.customRulesJson.isNotBlank() || routing.customRuleSetsJson.isNotBlank()) }
     // v2rayNG-style ordered rules (sing-box). Edited as drafts (raw text) so the cursor stays put;
     // converted back to [SingBoxRule] on save. Kept ALONGSIDE the Happ routing profiles.
     val ruleDrafts = remember(routing) { mutableStateListOf<SbRuleDraft>().apply { addAll(routing.rules.map { it.toDraft() }) } }
@@ -2786,70 +2785,10 @@ private fun RoutingContent(
                 RoutingToggleRow(s.bypassRussia, s.bypassRussiaSubtitle, bypassRu) { bypassRu = it }
                 RoutingToggleRow(s.blockAds, s.blockAdsSubtitle, blockAds) { blockAds = it }
 
-                OutlinedTextField(
-                    value = directText,
-                    onValueChange = { directText = it },
-                    label = { Text(s.directDomains) },
-                    placeholder = { Text(s.domainsPlaceholder) },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = blockText,
-                    onValueChange = { blockText = it },
-                    label = { Text(s.blockedDomains) },
-                    placeholder = { Text(s.domainsPlaceholder) },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Advanced: raw sing-box routing rules for power users.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { advancedExpanded = !advancedExpanded }
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        s.sbRoutingAdvanced,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        if (advancedExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                        contentDescription = null
-                    )
-                }
-                if (advancedExpanded) {
-                    Text(
-                        s.sbRoutingAdvancedDesc,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = customRules,
-                        onValueChange = { customRules = it },
-                        label = { Text(s.sbRouteRulesLabel) },
-                        placeholder = { Text("[{\"domain_suffix\":[\"example.com\"],\"outbound\":\"direct\"}]") },
-                        isError = !rulesValid,
-                        supportingText = if (!rulesValid) ({ Text(s.sbInvalidJsonArray) }) else null,
-                        minLines = 3,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = customRuleSets,
-                        onValueChange = { customRuleSets = it },
-                        label = { Text(s.sbRuleSetLabel) },
-                        placeholder = { Text("[{\"type\":\"remote\",\"tag\":\"my-set\",\"format\":\"binary\",\"url\":\"https://…\",\"download_detour\":\"direct\"}]") },
-                        isError = !ruleSetsValid,
-                        supportingText = if (!ruleSetsValid) ({ Text(s.sbInvalidJsonArray) }) else null,
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                // Direct/blocked domain fields and the raw sing-box "advanced" routing editor are
+                // intentionally hidden from the Simple tab. The underlying values (directText,
+                // blockText, customRules, customRuleSets) are still round-tripped by saveRouting()
+                // so any previously-configured rules keep applying — only the editing UI is removed.
 
                 Button(
                     onClick = { saveRouting() },
