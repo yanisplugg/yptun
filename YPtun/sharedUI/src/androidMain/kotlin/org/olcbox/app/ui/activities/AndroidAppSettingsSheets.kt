@@ -2935,6 +2935,7 @@ private data class SbRuleDraft(
     val networkType: List<String> = emptyList(),
     val protocol: String = "",
     val client: String = "",
+    val networkIsExpensive: Boolean = false,
     val enabled: Boolean = true,
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
@@ -2949,6 +2950,7 @@ private data class SbRuleDraft(
         networkType = networkType,
         protocol = splitList(protocol),
         client = splitList(client),
+        networkIsExpensive = networkIsExpensive,
         enabled = enabled,
     )
 
@@ -2968,6 +2970,7 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     networkType = networkType,
     protocol = protocol.joinToString(", "),
     client = client.joinToString(", "),
+    networkIsExpensive = networkIsExpensive,
     enabled = enabled,
 )
 
@@ -3114,6 +3117,18 @@ private fun SingBoxRuleCard(
                         label = { Text(label) }
                     )
                 }
+            }
+            // Metered (expensive) network match → network_is_expensive.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    s.routingRuleMetered,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = draft.networkIsExpensive,
+                    onCheckedChange = { onChange(draft.copy(networkIsExpensive = it)) }
+                )
             }
         }
     }

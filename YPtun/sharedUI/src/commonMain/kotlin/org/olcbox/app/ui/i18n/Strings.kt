@@ -198,6 +198,7 @@ interface Strings {
     val netTypeOther: String
     val routingRuleProtocol: String
     val routingRuleClient: String
+    val routingRuleMetered: String
     val routingRuleEnabled: String
     val routingRuleNetworkAny: String
     val routingOutProxy: String
@@ -700,6 +701,7 @@ object RuStrings : Strings {
     override val netTypeOther = "Другое"
     override val routingRuleProtocol = "Протокол"
     override val routingRuleClient = "Клиент (TLS)"
+    override val routingRuleMetered = "Платная сеть"
     override val routingRuleEnabled = "Включено"
     override val routingRuleNetworkAny = "Любая"
     override val routingOutProxy = "Через прокси"
@@ -1160,6 +1162,7 @@ object EnStrings : Strings {
     override val netTypeOther = "Other"
     override val routingRuleProtocol = "Protocol"
     override val routingRuleClient = "Client (TLS)"
+    override val routingRuleMetered = "Metered network"
     override val routingRuleEnabled = "Enabled"
     override val routingRuleNetworkAny = "Any"
     override val routingOutProxy = "Via proxy"
@@ -1618,6 +1621,7 @@ object FaStrings : Strings {
     override val netTypeOther = "دیگر"
     override val routingRuleProtocol = "پروتکل"
     override val routingRuleClient = "کلاینت (TLS)"
+    override val routingRuleMetered = "شبکهٔ پولی"
     override val routingRuleEnabled = "فعال"
     override val routingRuleNetworkAny = "هر کدام"
     override val routingOutProxy = "از طریق پراکسی"
