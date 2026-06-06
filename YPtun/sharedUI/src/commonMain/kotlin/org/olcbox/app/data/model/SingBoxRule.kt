@@ -48,6 +48,12 @@ data class SingBoxRule(
     val clashMode: String = "",
     /** Android app package names → sing-box `package_name`. Empty = any. */
     val packageNames: List<String> = emptyList(),
+    /**
+     * Regular expressions matched against installed package names. sing-box has no native
+     * package-regex field, so these are expanded to concrete packages (merged into
+     * [packageNames]) at config-build time on Android — see [expandPackageRegex]. Empty = none.
+     */
+    val packageRegex: List<String> = emptyList(),
     /** Disabled rules are kept in the list but skipped when building the config. */
     val enabled: Boolean = true,
 ) {
@@ -56,7 +62,7 @@ data class SingBoxRule(
         domains.isNotEmpty() || ip.isNotEmpty() || source.isNotEmpty() || port.isNotBlank() ||
             sourcePort.isNotBlank() || network.isNotBlank() || protocol.isNotEmpty() ||
             networkType.isNotEmpty() || client.isNotEmpty() || networkIsExpensive ||
-            clashMode.isNotBlank() || packageNames.isNotEmpty()
+            clashMode.isNotBlank() || packageNames.isNotEmpty() || packageRegex.isNotEmpty()
 
     companion object {
         const val OUT_PROXY = "proxy"
@@ -89,5 +95,22 @@ data class SingBoxRule(
         /** Split a free-text field (newline/comma/semicolon separated) into clean selectors. */
         fun textToList(text: String): List<String> =
             text.split('\n', '\r', ',', ';').map { it.trim() }.filter { it.isNotEmpty() }
+
+        /**
+         * Resolve [packageRegex] against the device's [installedPackages], merging every matching
+         * package into [packageNames] (sing-box has no native package-regex matcher). Invalid
+         * patterns are ignored. Returns [rules] unchanged when no rule uses a regex.
+         */
+        fun expandPackageRegex(rules: List<SingBoxRule>, installedPackages: List<String>): List<SingBoxRule> {
+            if (rules.none { it.packageRegex.isNotEmpty() }) return rules
+            return rules.map { rule ->
+                if (rule.packageRegex.isEmpty()) return@map rule
+                val regexes = rule.packageRegex.mapNotNull { runCatching { Regex(it) }.getOrNull() }
+                if (regexes.isEmpty()) return@map rule
+                val matched = installedPackages.filter { pkg -> regexes.any { it.containsMatchIn(pkg) } }
+                if (matched.isEmpty()) rule
+                else rule.copy(packageNames = (rule.packageNames + matched).distinct())
+            }
+        }
     }
 }

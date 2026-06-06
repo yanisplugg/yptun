@@ -87,6 +87,7 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_TRAFFIC
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
+import org.olcbox.app.data.model.SingBoxRule
 import org.olcbox.app.vpn.geo.GeoAssetManager
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
@@ -1895,8 +1896,15 @@ class OlcboxVpnService : VpnService() {
         val raw = runCatching {
             applicationContext.vpnPrefDataStore.data.first()[KEY_ANDROID_ROUTING]
         }.getOrNull() ?: return RoutingRules()
-        return runCatching { Json.decodeFromString(RoutingRules.serializer(), raw) }
+        val routing = runCatching { Json.decodeFromString(RoutingRules.serializer(), raw) }
             .getOrDefault(RoutingRules())
+        // sing-box has no native package-regex matcher: expand each rule's regex against the
+        // device's installed packages into concrete `package_name` entries before building.
+        if (routing.rules.none { it.packageRegex.isNotEmpty() }) return routing
+        val installed = runCatching {
+            packageManager.getInstalledPackages(0).map { it.packageName }
+        }.getOrDefault(emptyList())
+        return routing.copy(rules = SingBoxRule.expandPackageRegex(routing.rules, installed))
     }
 
     private suspend fun loadRoutingProfilesState(): RoutingProfilesState {

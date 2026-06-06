@@ -201,6 +201,7 @@ interface Strings {
     val routingRuleMetered: String
     val routingRuleClashMode: String
     val routingRuleApps: String
+    val routingRulePackageRegex: String
     val routingRuleEnabled: String
     val routingRuleNetworkAny: String
     val routingOutProxy: String
@@ -713,6 +714,7 @@ object RuStrings : Strings {
     override val routingRuleMetered = "Платная сеть"
     override val routingRuleClashMode = "Режим Clash"
     override val routingRuleApps = "Приложения (пакеты)"
+    override val routingRulePackageRegex = "Регулярное выражение пакетов"
     override val routingRuleEnabled = "Включено"
     override val routingRuleNetworkAny = "Любая"
     override val routingOutProxy = "Через прокси"
@@ -1183,6 +1185,7 @@ object EnStrings : Strings {
     override val routingRuleMetered = "Metered network"
     override val routingRuleClashMode = "Clash mode"
     override val routingRuleApps = "Apps (packages)"
+    override val routingRulePackageRegex = "Package name regex"
     override val routingRuleEnabled = "Enabled"
     override val routingRuleNetworkAny = "Any"
     override val routingOutProxy = "Via proxy"
@@ -1651,6 +1654,7 @@ object FaStrings : Strings {
     override val routingRuleMetered = "شبکهٔ پولی"
     override val routingRuleClashMode = "حالت Clash"
     override val routingRuleApps = "برنامه‌ها (بسته‌ها)"
+    override val routingRulePackageRegex = "عبارت منظم نام بسته"
     override val routingRuleEnabled = "فعال"
     override val routingRuleNetworkAny = "هر کدام"
     override val routingOutProxy = "از طریق پراکسی"

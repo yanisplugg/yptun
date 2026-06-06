@@ -2940,6 +2940,7 @@ private data class SbRuleDraft(
     val networkIsExpensive: Boolean = false,
     val clashMode: String = "",
     val packageNames: String = "",
+    val packageRegex: String = "",
     val enabled: Boolean = true,
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
@@ -2958,6 +2959,8 @@ private data class SbRuleDraft(
         networkIsExpensive = networkIsExpensive,
         clashMode = clashMode.trim(),
         packageNames = splitList(packageNames),
+        // Regex patterns may legitimately contain spaces, so split only on line/comma/semicolon.
+        packageRegex = packageRegex.split('\n', ',', ';').map { it.trim() }.filter { it.isNotEmpty() },
         enabled = enabled,
     )
 
@@ -2981,6 +2984,7 @@ private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
     networkIsExpensive = networkIsExpensive,
     clashMode = clashMode,
     packageNames = packageNames.joinToString("\n"),
+    packageRegex = packageRegex.joinToString("\n"),
     enabled = enabled,
 )
 
@@ -3140,6 +3144,14 @@ private fun SingBoxRuleCard(
                 onValueChange = { onChange(draft.copy(packageNames = it)) },
                 label = { Text(s.routingRuleApps) },
                 placeholder = { Text("com.google.android.youtube") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = draft.packageRegex,
+                onValueChange = { onChange(draft.copy(packageRegex = it)) },
+                label = { Text(s.routingRulePackageRegex) },
+                placeholder = { Text("^com\\.google\\..*") },
                 minLines = 1,
                 modifier = Modifier.fillMaxWidth()
             )
