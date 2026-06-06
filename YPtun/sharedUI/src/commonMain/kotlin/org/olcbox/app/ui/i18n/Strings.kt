@@ -183,6 +183,7 @@ interface Strings {
     val routingRuleAdd: String
     val routingRuleEdit: String
     val routingRuleDelete: String
+    val routingRuleName: String
     val routingRuleOutbound: String
     val routingRuleDomains: String
     val routingRuleIps: String
@@ -676,6 +677,7 @@ object RuStrings : Strings {
     override val routingRuleAdd = "Добавить правило"
     override val routingRuleEdit = "Правило"
     override val routingRuleDelete = "Удалить правило"
+    override val routingRuleName = "Название маршрута"
     override val routingRuleOutbound = "Действие"
     override val routingRuleDomains = "Домены"
     override val routingRuleIps = "IP / geoip"
@@ -1127,6 +1129,7 @@ object EnStrings : Strings {
     override val routingRuleAdd = "Add rule"
     override val routingRuleEdit = "Rule"
     override val routingRuleDelete = "Delete rule"
+    override val routingRuleName = "Route name"
     override val routingRuleOutbound = "Action"
     override val routingRuleDomains = "Domains"
     override val routingRuleIps = "IP / geoip"
@@ -1576,6 +1579,7 @@ object FaStrings : Strings {
     override val routingRuleAdd = "افزودن قانون"
     override val routingRuleEdit = "قانون"
     override val routingRuleDelete = "حذف قانون"
+    override val routingRuleName = "نام مسیر"
     override val routingRuleOutbound = "اقدام"
     override val routingRuleDomains = "دامنه‌ها"
     override val routingRuleIps = "IP / geoip"

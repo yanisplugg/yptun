@@ -14,6 +14,8 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class SingBoxRule(
+    /** Optional human label for the rule (shown in the editor). Not emitted to the sing-box config. */
+    val name: String = "",
     /** Where matching traffic goes: [OUT_PROXY] / [OUT_DIRECT] / [OUT_BLOCK]. */
     val outbound: String = OUT_PROXY,
     /** Domain selectors (see class doc). */

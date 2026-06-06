@@ -2924,6 +2924,7 @@ private fun RoutingContent(
 
 /** Editable (raw-text) form of a [SingBoxRule] so text fields keep their cursor while typing. */
 private data class SbRuleDraft(
+    val name: String = "",
     val outbound: String = SingBoxRule.OUT_PROXY,
     val domains: String = "",
     val ip: String = "",
@@ -2933,6 +2934,7 @@ private data class SbRuleDraft(
     val enabled: Boolean = true,
 ) {
     fun toRule(): SingBoxRule = SingBoxRule(
+        name = name.trim(),
         outbound = outbound,
         domains = splitList(domains),
         ip = splitList(ip),
@@ -2947,6 +2949,7 @@ private data class SbRuleDraft(
 }
 
 private fun SingBoxRule.toDraft(): SbRuleDraft = SbRuleDraft(
+    name = name,
     outbound = outbound,
     domains = domains.joinToString("\n"),
     ip = ip.joinToString("\n"),
@@ -2985,6 +2988,15 @@ private fun SingBoxRuleCard(
                         tint = MaterialTheme.colorScheme.error)
                 }
             }
+            // Optional label for the rule (UI only; not part of the sing-box config).
+            OutlinedTextField(
+                value = draft.name,
+                onValueChange = { onChange(draft.copy(name = it)) },
+                label = { Text(s.routingRuleName) },
+                placeholder = { Text("P2P Traffic") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
             // Outbound action: proxy / direct / block.
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(
