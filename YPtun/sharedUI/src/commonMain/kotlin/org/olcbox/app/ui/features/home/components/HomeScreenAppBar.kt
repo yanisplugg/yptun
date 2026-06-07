@@ -33,6 +33,8 @@ fun HomeScreenAppBar(
     onSplitTunnelingClick: () -> Unit = {},
     onAddClick: () -> Unit = {},
     showOverflowMenu: Boolean = false,
+    onDeleteUnreachable: () -> Unit = {},
+    onDeleteDuplicates: () -> Unit = {},
     onDeleteAllSubscriptions: () -> Unit = {},
     onDeleteAllConfigs: () -> Unit = {}
 ) {
@@ -93,6 +95,22 @@ fun HomeScreenAppBar(
                     expanded = overflowExpanded,
                     onDismissRequest = { overflowExpanded = false }
                 ) {
+                    DropdownMenuItem(
+                        text = { Text(org.olcbox.app.ui.i18n.LocalStrings.current.menuDeleteUnreachable) },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                        onClick = {
+                            overflowExpanded = false
+                            onDeleteUnreachable()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(org.olcbox.app.ui.i18n.LocalStrings.current.menuDeleteDuplicates) },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                        onClick = {
+                            overflowExpanded = false
+                            onDeleteDuplicates()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text(org.olcbox.app.ui.i18n.LocalStrings.current.menuDeleteAllSubscriptions) },
                         leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },

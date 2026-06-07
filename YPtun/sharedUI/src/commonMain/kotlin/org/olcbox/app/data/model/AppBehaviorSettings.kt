@@ -2,6 +2,30 @@ package org.olcbox.app.data.model
 
 import kotlinx.serialization.Serializable
 
+/**
+ * A user-created group (folder) on the Home list. Holds whole subscriptions and/or individual custom
+ * locations, which physically move inside the folder. Members are tagged keys: [MEMBER_SUB_PREFIX] +
+ * subscription URL for a whole subscription, or [MEMBER_LOC_PREFIX] + storageId for a custom location.
+ */
+@Serializable
+data class CustomGroup(
+    val id: String,
+    val name: String,
+    val members: List<String> = emptyList(),
+    /** Folder pinned to the top of the list (in [AppBehaviorSettings.customGroups] order). */
+    val pinned: Boolean = false,
+    /** Folder body collapsed (chevron). */
+    val collapsed: Boolean = false,
+) {
+    companion object {
+        const val MEMBER_SUB_PREFIX = "sub:"
+        const val MEMBER_LOC_PREFIX = "loc:"
+
+        fun subMember(subscriptionUrl: String) = "$MEMBER_SUB_PREFIX$subscriptionUrl"
+        fun locMember(storageId: String) = "$MEMBER_LOC_PREFIX$storageId"
+    }
+}
+
 /** General application behavior toggles (the "Настройки приложения" screen). */
 @Serializable
 data class AppBehaviorSettings(
@@ -60,18 +84,31 @@ data class AppBehaviorSettings(
      */
     val pingResultDisplay: String = PING_RESULT_ICON,
     /**
+     * How many locations are probed in parallel during a ping pass — the knob controlling ping speed.
+     * Clamped to [MIN_PING_PARALLELISM]..[MAX_PING_PARALLELISM]; default [DEFAULT_PING_PARALLELISM].
+     * Higher = faster sweeps but more concurrent local proxies (and more chance of a transient
+     * port-collision false "недоступен" on huge lists — see custom-locations ping note).
+     */
+    val pingParallelism: Int = DEFAULT_PING_PARALLELISM,
+    /**
      * Persist the last ping results so they are shown again when the app is reopened (instead of a
      * blank list). Off by default. When on, the latest successful results are saved into
      * [lastPingResults] after each ping pass and restored on launch.
      */
     val savePingResults: Boolean = false,
-    /** Last saved ping results (storage id → latency ms), used only when [savePingResults] is on. */
-    val lastPingResults: Map<String, Int> = emptyMap(),
+    /**
+     * Last saved ping results (storage id → latency ms), used only when [savePingResults] is on.
+     * A `null` value means the location was probed but unreachable/failed — those are persisted too
+     * so the "недоступен" state survives a restart (not just the successful ones).
+     */
+    val lastPingResults: Map<String, Int?> = emptyMap(),
     /**
      * Show the subscription expiry date ("до дд.мм.гггг") under the last-refresh line in the
      * subscription group header. Off by default; the urgent (≤2 days) red badge is always shown.
      */
     val showSubscriptionExpiry: Boolean = false,
+    /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
+    val customGroups: List<CustomGroup> = emptyList(),
 ) {
     companion object {
         const val PING_AUTO = "auto"
@@ -89,10 +126,32 @@ data class AppBehaviorSettings(
         /** Selectable ping-result display modes (single-choice in the UI). */
         val PING_RESULT_MODES = listOf(PING_RESULT_TIME, PING_RESULT_ICON)
 
-        /** Default target, pre-filled into [pingUrl] (and the fallback when it is cleared). */
-        const val DEFAULT_PING_URL = "https://google.com"
+        /**
+         * Default probe target. A `generate_204` endpoint: a tiny TCP HTTP request that returns an
+         * empty 204 — designed for connectivity checks and reliable through the tunnel. Plain
+         * `https://google.com` (the [LEGACY_PING_URL]) was a poor probe: Google forces HTTP/3 (QUIC),
+         * which the tunnel blocks, so the GET probe got "no response" and falsely marked servers down.
+         */
+        const val DEFAULT_PING_URL = "https://www.gstatic.com/generate_204"
+
+        /** The previous default; auto-migrated to [DEFAULT_PING_URL] so existing users get the fix. */
+        const val LEGACY_PING_URL = "https://google.com"
+
+        /** Parallel ping streams: how many locations are probed at once. */
+        const val DEFAULT_PING_PARALLELISM = 5
+        const val MIN_PING_PARALLELISM = 1
+        const val MAX_PING_PARALLELISM = 20
     }
 
-    /** [pingUrl] trimmed, or [DEFAULT_PING_URL] when blank. */
-    fun effectivePingUrl(): String = pingUrl.trim().ifBlank { DEFAULT_PING_URL }
+    /**
+     * [pingUrl] trimmed, or [DEFAULT_PING_URL] when blank OR still on the legacy google.com default
+     * (auto-migrated so users who never customised it stop getting false "unreachable" on google).
+     */
+    fun effectivePingUrl(): String = pingUrl.trim().let {
+        if (it.isBlank() || it == LEGACY_PING_URL) DEFAULT_PING_URL else it
+    }
+
+    /** [pingParallelism] clamped to the supported range. */
+    fun effectivePingParallelism(): Int =
+        pingParallelism.coerceIn(MIN_PING_PARALLELISM, MAX_PING_PARALLELISM)
 }

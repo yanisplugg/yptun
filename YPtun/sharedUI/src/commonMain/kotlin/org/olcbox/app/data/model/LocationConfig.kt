@@ -200,6 +200,22 @@ data class LocationConfig(
         else -> isComplete()
     }
 
+    /**
+     * Identity used to detect duplicate locations: the connection-defining fields only. The display
+     * [name] AND the proxy display [ProxyProfile.tag] are blanked, because the same server is commonly
+     * saved under different names/remarks (e.g. imported twice with a different label) — those are
+     * still duplicates. Suitable as a map/set key — all nested types are value (data) classes, so
+     * structural equality holds.
+     */
+    fun dedupKey(): LocationConfig {
+        val n = normalized()
+        return n.copy(
+            name = "",
+            proxy = n.proxy?.dedupNormalized(),
+            proxy2 = n.proxy2?.dedupNormalized()
+        )
+    }
+
     fun displayName(): String = name.ifBlank { id }
 
     fun providerName(): String = providerDisplayName(bypassProvider)

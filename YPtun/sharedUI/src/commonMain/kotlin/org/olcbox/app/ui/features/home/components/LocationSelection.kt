@@ -21,7 +21,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.PushPin
@@ -56,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.olcbox.app.data.model.CustomGroup
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
@@ -97,7 +101,15 @@ fun LazyListScope.locationSelectorContent(
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {},
     onToggleCustomLocationPinned: (String) -> Unit = {},
-    onToggleCustomLocationsPingSort: () -> Unit = {}
+    onToggleCustomLocationsPingSort: () -> Unit = {},
+    // User-created folders that reorganise the list (members move inside them).
+    customGroups: List<CustomGroup> = emptyList(),
+    onToggleFolderCollapsed: (String) -> Unit = {},
+    onToggleFolderPinned: (String) -> Unit = {},
+    onRenameFolder: (CustomGroup) -> Unit = {},
+    onDeleteFolder: (String) -> Unit = {},
+    // Open the "choose folder" picker for the given member keys (move/remove a whole subscription).
+    onRequestMoveToFolder: (List<String>) -> Unit = {}
 ) {
     if (locations.isEmpty()) {
         // Don't flash the "add your first config" card during the initial async load — only show
@@ -114,7 +126,21 @@ fun LazyListScope.locationSelectorContent(
     }
 
     val subscriptionLocations = locations.filter { !it.subscriptionUrl.isNullOrBlank() }
-    val subscriptionGroups = subscriptionLocations
+    val allCustomLocations = locations.filter { it.subscriptionUrl.isNullOrBlank() }
+
+    // Folder membership: whole subscriptions (by group key) and individual custom locations (by id)
+    // that the user filed into a [CustomGroup]. These are pulled OUT of the default sections and
+    // rendered inside their folder instead.
+    val folderSubKeys = customGroups.flatMap { folder ->
+        folder.members.filter { it.startsWith(CustomGroup.MEMBER_SUB_PREFIX) }
+            .map { it.removePrefix(CustomGroup.MEMBER_SUB_PREFIX) }
+    }.toSet()
+    val folderLocIds = customGroups.flatMap { folder ->
+        folder.members.filter { it.startsWith(CustomGroup.MEMBER_LOC_PREFIX) }
+            .map { it.removePrefix(CustomGroup.MEMBER_LOC_PREFIX) }
+    }.toSet()
+
+    fun groupsOf(list: List<LocationItem>): List<List<LocationItem>> = list
         .groupBy { it.subscriptionGroupKey() }
         .values
         .toList()
@@ -124,7 +150,11 @@ fun LazyListScope.locationSelectorContent(
             val pinIndex = pinnedGroups.indexOf(key)
             if (pinIndex >= 0) pinIndex else Int.MAX_VALUE
         }
-    val customLocations = locations.filter { it.subscriptionUrl.isNullOrBlank() }
+
+    val subscriptionGroups = groupsOf(
+        subscriptionLocations.filter { it.subscriptionGroupKey() !in folderSubKeys }
+    )
+    val customLocations = allCustomLocations.filter { it.storageId !in folderLocIds }
 
     item(key = "configurations-label") {
         Text(
@@ -136,7 +166,9 @@ fun LazyListScope.locationSelectorContent(
         )
     }
 
-    subscriptionGroups.forEach { group ->
+    // One subscription group (header + rows). A local function so folders can render their member
+    // subscriptions with the exact same UI as the top-level section.
+    fun renderSubscriptionGroup(group: List<LocationItem>) {
         val groupIds = group.map { it.storageId }
         val groupKey = group.firstOrNull()?.subscriptionGroupKey() ?: ""
         val isCollapsed = groupKey in collapsedGroups
@@ -197,6 +229,7 @@ fun LazyListScope.locationSelectorContent(
                             isPingDescending = isPingDescending,
                             onTogglePin = { onToggleGroupPinned(groupKey) },
                             onTogglePingSort = { onToggleGroupPingSort(groupKey) },
+                            onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) }
                         )
                     }
@@ -234,6 +267,75 @@ fun LazyListScope.locationSelectorContent(
             }
         }
     }
+
+    // ── Folders (user-created groups) first: pinned folders float to the top, then declaration order.
+    customGroups
+        .sortedByDescending { it.pinned }
+        .forEach { folder ->
+            val subKeys = folder.members
+                .filter { it.startsWith(CustomGroup.MEMBER_SUB_PREFIX) }
+                .map { it.removePrefix(CustomGroup.MEMBER_SUB_PREFIX) }
+                .toSet()
+            val locIds = folder.members
+                .filter { it.startsWith(CustomGroup.MEMBER_LOC_PREFIX) }
+                .map { it.removePrefix(CustomGroup.MEMBER_LOC_PREFIX) }
+                .toSet()
+            val memberSubGroups = groupsOf(
+                subscriptionLocations.filter { it.subscriptionGroupKey() in subKeys }
+            )
+            val memberCustom = allCustomLocations.filter { it.storageId in locIds }
+            val memberIds = memberSubGroups.flatten().map { it.storageId } + memberCustom.map { it.storageId }
+
+            item(key = "folder-header-${folder.id}") {
+                val isFolderRefreshing = pingsState is PingsState.Loading &&
+                        pingsState.pendingLocationIds.any { it in memberIds }
+                FolderGroupHeader(
+                    folder = folder,
+                    memberCount = memberSubGroups.size + memberCustom.size,
+                    isRefreshing = isFolderRefreshing,
+                    onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
+                    onRefresh = { onRefreshClick(memberIds) },
+                    onTogglePin = { onToggleFolderPinned(folder.id) },
+                    onRename = { onRenameFolder(folder) },
+                    onDelete = { onDeleteFolder(folder.id) }
+                )
+            }
+
+            if (!folder.collapsed) {
+                memberSubGroups.forEach { renderSubscriptionGroup(it) }
+                items(
+                    items = memberCustom,
+                    key = { "folder-${folder.id}-custom-${it.storageId}" }
+                ) { location ->
+                    LocationSelectorRow(
+                        location = location,
+                        selectedLocationId = selectedLocationId,
+                        pingsState = pingsState,
+                        onLocationSelected = onLocationSelected,
+                        onLocationSettingsClick = onLocationSettingsClick,
+                        isPinned = location.storageId in pinnedCustomLocations,
+                        onTogglePinned = { onToggleCustomLocationPinned(location.storageId) },
+                        selectionMode = selectionMode,
+                        isChecked = location.storageId in selectedIds,
+                        onToggleSelect = onToggleSelect,
+                        onStartSelection = onStartSelection
+                    )
+                }
+                if (memberIds.isEmpty()) {
+                    item(key = "folder-empty-${folder.id}") {
+                        Text(
+                            text = org.olcbox.app.ui.i18n.LocalStrings.current.folderEmpty,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+    // ── Then the un-foldered subscription groups.
+    subscriptionGroups.forEach { renderSubscriptionGroup(it) }
 
     if (customLocations.isNotEmpty()) {
         item(key = "custom-header") {
@@ -535,6 +637,7 @@ private fun SubscriptionGroupMenu(
     isPingDescending: Boolean,
     onTogglePin: () -> Unit,
     onTogglePingSort: () -> Unit,
+    onMoveToFolder: () -> Unit,
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -582,6 +685,14 @@ private fun SubscriptionGroupMenu(
                 } else null,
                 onClick = {
                     onTogglePingSort()
+                    expanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text(s.moveToFolder) },
+                leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, contentDescription = null) },
+                onClick = {
+                    onMoveToFolder()
                     expanded = false
                 }
             )
@@ -645,6 +756,124 @@ private fun CustomLocationsMenu(
                     onTogglePingSort()
                     expanded = false
                 }
+            )
+        }
+    }
+}
+
+/** Header for a user-created folder ([CustomGroup]): chevron + name + member count, refresh-all, menu. */
+@Composable
+private fun FolderGroupHeader(
+    folder: CustomGroup,
+    memberCount: Int,
+    isRefreshing: Boolean,
+    onToggleCollapsed: () -> Unit,
+    onRefresh: () -> Unit,
+    onTogglePin: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onToggleCollapsed() },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (folder.collapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                    contentDescription = if (folder.collapsed) "Expand" else "Collapse",
+                    modifier = Modifier.size(22.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    imageVector = if (folder.pinned) Icons.Filled.PushPin else Icons.Outlined.Folder,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = folder.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = memberCount.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                )
+            }
+
+            RefreshButton(
+                isRefreshing = isRefreshing,
+                onClick = onRefresh,
+                tint = MaterialTheme.colorScheme.primary
+            )
+
+            FolderGroupMenu(
+                isPinned = folder.pinned,
+                onTogglePin = onTogglePin,
+                onRename = onRename,
+                onDelete = onDelete
+            )
+        }
+    }
+}
+
+@Composable
+private fun FolderGroupMenu(
+    isPinned: Boolean,
+    onTogglePin: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = "More",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(if (isPinned) s.groupUnpinFromTop else s.groupPinToTop) },
+                leadingIcon = {
+                    Icon(if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, contentDescription = null)
+                },
+                onClick = { onTogglePin(); expanded = false }
+            )
+            DropdownMenuItem(
+                text = { Text(s.folderRename) },
+                leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                onClick = { onRename(); expanded = false }
+            )
+            DropdownMenuItem(
+                text = { Text(s.folderDelete, color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(Icons.Outlined.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                },
+                onClick = { onDelete(); expanded = false }
             )
         }
     }
@@ -901,12 +1130,23 @@ private fun PingsState.isOffline(locationId: String): Boolean {
     }
 }
 
-private fun LocationItem.subscriptionGroupKey(): String {
+internal fun LocationItem.subscriptionGroupKey(): String {
     return listOfNotNull(
         metadata?.subscription?.name?.takeIf { it.isNotBlank() },
         subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }
     ).joinToString("|").ifBlank { storageId }
 }
+
+/**
+ * The [CustomGroup] member key this location contributes when filed into a folder: a whole
+ * subscription is keyed by its group key, a custom location by its storage id.
+ */
+internal fun LocationItem.folderMemberKey(): String =
+    if (!subscriptionUrl.isNullOrBlank()) {
+        CustomGroup.subMember(subscriptionGroupKey())
+    } else {
+        CustomGroup.locMember(storageId)
+    }
 
 private fun LocationItem.subscriptionTitle(): String {
     val subscription = metadata?.subscription

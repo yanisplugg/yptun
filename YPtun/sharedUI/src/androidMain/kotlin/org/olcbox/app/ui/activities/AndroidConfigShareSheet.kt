@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -52,6 +53,8 @@ internal fun AndroidConfigShareSheet(
     val context = LocalContext.current
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // QR encoding throws when the payload exceeds the QR capacity (e.g. a long AmneziaWG config),
+    // which used to crash the app on share. Tolerate it: null bitmap → show a notice, keep copy/share.
     val qrBitmap = remember(payload) { createQrBitmap(payload) }
 
     ModalBottomSheet(
@@ -74,19 +77,39 @@ internal fun AndroidConfigShareSheet(
 
             Spacer(Modifier.height(18.dp))
 
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 2.dp
-            ) {
-                Image(
-                    bitmap = qrBitmap.asImageBitmap(),
-                    contentDescription = "QR code",
-                    modifier = Modifier
-                        .size(248.dp)
-                        .padding(12.dp),
-                    contentScale = ContentScale.Fit
-                )
+            if (qrBitmap != null) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 2.dp
+                ) {
+                    Image(
+                        bitmap = qrBitmap.asImageBitmap(),
+                        contentDescription = "QR code",
+                        modifier = Modifier
+                            .size(248.dp)
+                            .padding(12.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    tonalElevation = 2.dp,
+                    modifier = Modifier.size(248.dp)
+                ) {
+                    Text(
+                        text = s.qrTooLarge,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp)
+                            .wrapContentHeight(Alignment.CenterVertically)
+                    )
+                }
             }
 
             Spacer(Modifier.height(16.dp))
@@ -149,7 +172,7 @@ private fun Context.sharePayload(payload: String, title: String) {
     )
 }
 
-private fun createQrBitmap(content: String): Bitmap {
+private fun createQrBitmap(content: String): Bitmap? = runCatching {
     val size = 768
     val matrix = MultiFormatWriter().encode(content, BarcodeFormat.QR_CODE, size, size)
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
@@ -158,5 +181,5 @@ private fun createQrBitmap(content: String): Bitmap {
             bitmap.setPixel(x, y, if (matrix[x, y]) 0xff000000.toInt() else 0xffffffff.toInt())
         }
     }
-    return bitmap
-}
+    bitmap
+}.getOrNull()

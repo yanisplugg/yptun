@@ -141,6 +141,22 @@ data class ProxyProfile(
 
     fun displayName(): String = tag.ifBlank { "$server:$serverPort" }
 
+    /**
+     * Identity used for duplicate detection: blanks the display [tag] and canonicalises [awgConfig]
+     * (drops `#` comment lines — where the AmneziaWG name is stored — and normalises line endings /
+     * whitespace), so the same server saved under different labels compares equal. Without this, two
+     * identical AmneziaWG configs that only differ by their `# Name` header were not seen as duplicates
+     * (VLESS/etc. already worked because their name lives in [tag], not the structured fields).
+     */
+    fun dedupNormalized(): ProxyProfile = copy(
+        tag = "",
+        awgConfig = awgConfig
+            .split('\n')
+            .map { it.replace("\r", "").trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .joinToString("\n")
+    )
+
     companion object {
         const val TYPE_VLESS = "vless"
         const val TYPE_VMESS = "vmess"

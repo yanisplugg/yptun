@@ -35,6 +35,7 @@ import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
+import org.olcbox.app.data.share.ShareLinkComposer
 
 /**
  * @Immutable: instances are never mutated in place (a new one is built on every change), so Compose
@@ -92,13 +93,13 @@ class LocationViewModel(
         private set
 
     /**
-     * Invoked when a ping pass completes, with the latest successful (non-null) results. The host can
-     * persist them so they survive an app restart (see [AppBehaviorSettings.savePingResults]).
+     * Invoked when a ping pass completes, with the latest results — including failed/unreachable
+     * locations (value `null`), so the host can persist the offline state too, not just the
+     * successful ones (see [AppBehaviorSettings.savePingResults]).
      */
-    var onPingsCompleted: ((Map<String, Int>) -> Unit)? = null
+    var onPingsCompleted: ((Map<String, Int?>) -> Unit)? = null
 
     private val activePingJobs = mutableMapOf<String, Job>()
-    private val pingSemaphore = Semaphore(LOCATION_PING_PARALLELISM)
     // Source-of-truth ping map during a refresh pass. Each completion updates this in place (O(1))
     // instead of copying the whole map; the UI state is then refreshed on a throttled cadence (see
     // [schedulePingEmit]) so 300+ completions no longer trigger 300 full-list recompositions + 300
@@ -257,10 +258,14 @@ class LocationViewModel(
 
     fun refreshPings(
         targetLocationIds: List<String>? = null,
+        parallelism: Int = LOCATION_PING_PARALLELISM,
         performPing: suspend (LocationConfig) -> Long?,
         onComplete: (onlineCount: Int, totalCount: Int) -> Unit = { _, _ -> },
         onError: (String) -> Unit = {}
     ) {
+        // Probe up to [parallelism] locations at once (the ping-speed knob). A fresh semaphore per pass
+        // so a changed setting takes effect immediately.
+        val semaphore = Semaphore(parallelism.coerceIn(1, 20))
         val previousPings = currentPingsSnapshot()
         // Seed the live map with prior results so a targeted refresh doesn't drop other groups' pings.
         livePings.clear()
@@ -299,7 +304,7 @@ class LocationViewModel(
             val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
                 try {
                     val ping = try {
-                        pingSemaphore.withPermit {
+                        semaphore.withPermit {
                             checkLocationPing(location, performPing)?.toInt()
                         }
                     } catch (e: CancellationException) {
@@ -403,12 +408,15 @@ class LocationViewModel(
         pingEmitJob?.cancel()
         pingEmitJob = null
         emitPingState()
-        // Pass complete — hand the successful results to the host for optional persistence.
-        onPingsCompleted?.invoke(livePings.mapNotNull { (id, ms) -> ms?.let { id to it } }.toMap())
+        // Pass complete — hand all results (successful AND failed/null) to the host for optional persistence.
+        onPingsCompleted?.invoke(livePings.toMap())
     }
 
-    /** Restores previously-saved ping results so they show on launch (until the next ping pass). */
-    fun seedPings(pings: Map<String, Int>) {
+    /**
+     * Restores previously-saved ping results so they show on launch (until the next ping pass).
+     * Values may be `null` for locations that were saved as unreachable/failed.
+     */
+    fun seedPings(pings: Map<String, Int?>) {
         if (pings.isEmpty()) return
         pings.forEach { (id, ms) -> livePings[id] = ms }
         if (activePingJobs.isEmpty()) {
@@ -470,6 +478,12 @@ class LocationViewModel(
             editingId = id
             editingConfig = location?.config?.normalized() ?: LocationConfig()
             editingName = editingConfig.displayName()
+            // Repopulate the proxy link fields from the stored config so the second-proxy toggle and
+            // its link survive reopening/editing (otherwise the field showed blank and the cascade
+            // looked disabled). These links are display-only — saving keeps editingConfig.proxy/proxy2
+            // unless the user actually edits the field.
+            editingProxyLink = editingConfig.proxy?.let { ShareLinkComposer.compose(it) }.orEmpty()
+            editingProxy2Link = editingConfig.proxy2?.let { ShareLinkComposer.compose(it) }.orEmpty()
             editingSubscriptionUrl = location?.subscriptionUrl
             editingSubscriptionIntervalHours = (
                 location?.metadata?.subscription?.updateIntervalHours
@@ -719,8 +733,24 @@ class LocationViewModel(
         viewModelScope.launch {
             isSaving = true
 
-            val id = editingId ?: "custom_${(100..999).random()}"
             val finalConfig = editingConfig.copy(name = editingName).normalized()
+
+            // Dedup on add: if this is a brand-new location identical to one already saved, just select
+            // the existing one instead of creating a duplicate.
+            if (editingId == null) {
+                val key = finalConfig.dedupKey()
+                val existing = locations.firstOrNull { it.config?.dedupKey() == key }
+                if (existing != null) {
+                    locationsRepository.setActiveLocationId(existing.storageId)
+                    loadLocations()
+                    delay(600)
+                    onComplete()
+                    isSaving = false
+                    return@launch
+                }
+            }
+
+            val id = editingId ?: "custom_${(100..999).random()}"
 
             locationsRepository.saveLocation(id, finalConfig)
             editingSubscriptionUrl?.let { url ->
@@ -767,6 +797,68 @@ class LocationViewModel(
         deleteLocations(ids, onComplete)
     }
 
+    /**
+     * Storage ids of CUSTOM (non-subscription) locations that were probed and found unreachable
+     * (a present-but-null entry in the latest ping results). Subscription locations are never included.
+     */
+    private fun unreachableCustomLocationIds(): List<String> {
+        val pings = currentPingsSnapshot()
+        return locations
+            .filter { it.subscriptionUrl.isNullOrBlank() }
+            // VK-TURN can't be pinged (its result is always null) — NEVER treat it as unreachable / delete it.
+            .filter { it.config?.engine != EngineType.VkTurn }
+            .map { it.storageId }
+            .filter { pings.containsKey(it) && pings[it] == null }
+    }
+
+    /**
+     * Deletes custom locations that the last ping pass marked unreachable. Subscriptions are left
+     * untouched. [onComplete] receives how many were removed (0 = nothing matched).
+     */
+    fun deleteUnreachableCustomLocations(onComplete: (Int) -> Unit = {}) {
+        val ids = unreachableCustomLocationIds()
+        if (ids.isEmpty()) {
+            onComplete(0)
+            return
+        }
+        deleteLocations(ids) { onComplete(ids.size) }
+    }
+
+    /**
+     * Storage ids of CUSTOM locations whose configuration duplicates another location's. Subscription
+     * entries seed the "seen" set first (so a custom copy of a subscription server counts as the
+     * duplicate), and within the custom list the first occurrence is kept. Subscriptions are never
+     * returned for deletion.
+     */
+    private fun duplicateCustomLocationIds(): List<String> {
+        val seen = mutableSetOf<LocationConfig>()
+        // Seed with subscription configs first so a custom duplicate of a subscription server is removed.
+        locations
+            .filter { !it.subscriptionUrl.isNullOrBlank() }
+            .forEach { it.config?.dedupKey()?.let(seen::add) }
+        val duplicates = mutableListOf<String>()
+        locations
+            .filter { it.subscriptionUrl.isNullOrBlank() }
+            .forEach { item ->
+                val key = item.config?.dedupKey() ?: return@forEach
+                if (!seen.add(key)) duplicates.add(item.storageId)
+            }
+        return duplicates
+    }
+
+    /**
+     * Deletes duplicate custom locations (identical configuration), keeping one copy of each.
+     * Subscriptions are left untouched. [onComplete] receives how many were removed.
+     */
+    fun deleteDuplicateLocations(onComplete: (Int) -> Unit = {}) {
+        val ids = duplicateCustomLocationIds()
+        if (ids.isEmpty()) {
+            onComplete(0)
+            return
+        }
+        deleteLocations(ids) { onComplete(ids.size) }
+    }
+
     private companion object {
         // Retry a few times: the proxy-HEAD probe spins a throwaway xray that binds a random local
         // port, so under a big batch (300+ "own" locations pinged at once) a transient port collision
@@ -774,7 +866,7 @@ class LocationViewModel(
         const val LOCATION_PING_ATTEMPTS = 3
         const val LOCATION_PING_TIMEOUT_MS = 12_000L
         const val LOCATION_PING_RETRY_DELAY_MS = 150L
-        const val LOCATION_PING_PARALLELISM = 4
+        const val LOCATION_PING_PARALLELISM = 5
         const val PING_EMIT_THROTTLE_MS = 150L
     }
 
