@@ -217,42 +217,55 @@ fun LocationSettingsScreen(
             }
 
             if (config.engine == EngineType.Standard || config.engine == EngineType.Chain) {
-                // Proxy (additional outbound) on/off. When off the proxy config is kept but the
-                // location exits directly. Standard's only outbound is the proxy, so off = direct.
+                // Main proxy (основной аутбаунд) is the always-on primary outbound, but its editor field
+                // is hidden by request — it comes from the imported/subscription config (config.proxy)
+                // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
                 item {
-                    VkTurnSwitchRow(
-                        label = LocalStrings.current.enableProxy,
-                        checked = config.proxyEnabled,
+                    CoreSelector(
+                        selected = config.core,
                         enabled = !isSaving,
-                        onCheckedChange = viewModel::onProxyEnabledChanged
+                        onSelected = viewModel::onCoreChanged
                     )
                 }
-                // The proxy section (link + core + advanced) is shown only when the proxy is enabled.
-                if (config.proxyEnabled) {
+                // Advanced core options appear only when a specific core (not Auto) is chosen.
+                if (config.core != ProxyCore.Auto) {
                     item {
-                        ProxyField(
-                            link = viewModel.editingProxyLink,
-                            currentProxy = config.proxy,
-                            error = viewModel.proxyError,
+                        AdvancedCoreSection(
+                            core = config.core,
+                            advanced = config.advanced ?: AdvancedCoreConfig(),
                             enabled = !isSaving,
-                            onChange = viewModel::onProxyLinkChanged
+                            onChange = viewModel::updateAdvanced
                         )
                     }
-                    item {
-                        CoreSelector(
-                            selected = config.core,
-                            enabled = !isSaving,
-                            onSelected = viewModel::onCoreChanged
-                        )
+                }
+                // Optional SECOND (cascade) proxy. Toggling it on reveals a second link chained ON TOP
+                // of the main: traffic → main → second. Toggling off clears it (→ main only).
+                item {
+                    var additionalOn by remember(config.proxy2 != null) {
+                        mutableStateOf(config.proxy2 != null)
                     }
-                    // Advanced core options appear only when a specific core (not Auto) is chosen.
-                    if (config.core != ProxyCore.Auto) {
-                        item {
-                            AdvancedCoreSection(
-                                core = config.core,
-                                advanced = config.advanced ?: AdvancedCoreConfig(),
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        VkTurnSwitchRow(
+                            label = LocalStrings.current.enableAdditionalProxy,
+                            checked = additionalOn,
+                            enabled = !isSaving,
+                            onCheckedChange = { on ->
+                                additionalOn = on
+                                if (!on) viewModel.onProxy2LinkChanged("")
+                            }
+                        )
+                        if (additionalOn) {
+                            ProxyField(
+                                title = LocalStrings.current.additionalProxySection,
+                                subtitle = LocalStrings.current.additionalProxySubtitle,
+                                link = viewModel.editingProxy2Link,
+                                currentProxy = config.proxy2,
+                                error = viewModel.proxy2Error,
                                 enabled = !isSaving,
-                                onChange = viewModel::updateAdvanced
+                                onChange = viewModel::onProxy2LinkChanged
                             )
                         }
                     }
@@ -420,6 +433,8 @@ private fun EngineSelector(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProxyField(
+    title: String,
+    subtitle: String,
     link: String,
     currentProxy: ProxyProfile?,
     error: String?,
@@ -431,8 +446,8 @@ private fun ProxyField(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         SectionTitle(
-            title = LocalStrings.current.proxySection,
-            subtitle = LocalStrings.current.proxySectionSubtitle
+            title = title,
+            subtitle = subtitle
         )
         OutlinedTextField(
             value = link,

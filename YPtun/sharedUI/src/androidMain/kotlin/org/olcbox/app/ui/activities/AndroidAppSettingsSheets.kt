@@ -3499,6 +3499,12 @@ private fun PingSettingsContent(
                 )
             }
         }
+
+        RoutingToggleRow(
+            title = s.savePingResultsTitle,
+            subtitle = s.savePingResultsSubtitle,
+            checked = settings.savePingResults
+        ) { onChanged(settings.copy(savePingResults = it)) }
     }
 }
 

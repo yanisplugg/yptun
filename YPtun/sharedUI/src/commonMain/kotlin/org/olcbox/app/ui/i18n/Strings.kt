@@ -467,6 +467,11 @@ interface Strings {
     val engineSection: String
     val proxySection: String
     val proxySectionSubtitle: String
+    // Standard/Chain cascade: a main proxy (always on) + an optional second proxy chained on top.
+    val mainProxySection: String
+    val additionalProxySection: String
+    val additionalProxySubtitle: String
+    val enableAdditionalProxy: String
     val freeturnTransportSection: String
     val freeturnTransportSubtitle: String
     val wireguardSubtitle: String
@@ -509,6 +514,8 @@ interface Strings {
     val pingMethod: String
     val pingTarget: String
     val pingTargetHint: String
+    val savePingResultsTitle: String
+    val savePingResultsSubtitle: String
     val pingModeAuto: String
     val pingModeTcp: String
     val pingModeIcmp: String
@@ -963,6 +970,11 @@ object RuStrings : Strings {
     override val proxySection = "Прокси"
     override val proxySectionSubtitle =
         "Вставьте ссылку vless/vmess/trojan/ss, конфигурацию AmneziaWG или JSON-исходящего sing-box"
+    override val mainProxySection = "Основной прокси"
+    override val additionalProxySection = "Второй прокси"
+    override val additionalProxySubtitle =
+        "Поверх основного: трафик → основной прокси → этот"
+    override val enableAdditionalProxy = "Дополнительный прокси (каскад)"
     override val freeturnTransportSection = "Транспорт Freeturn"
     override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
     override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
@@ -999,7 +1011,10 @@ object RuStrings : Strings {
     override val pingSettingsSubtitle = "Способ проверки инбаундов"
     override val pingMethod = "Способ пинга"
     override val pingTarget = "Сайт для пинга"
-    override val pingTargetHint = "Например: https://www.google.com"
+    override val pingTargetHint = "Например: https://google.com"
+    override val savePingResultsTitle = "Сохранять результаты пингов"
+    override val savePingResultsSubtitle =
+        "Показывать последние результаты при повторном открытии приложения"
     override val pingModeAuto = "Авто"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -1443,6 +1458,11 @@ object EnStrings : Strings {
     override val proxySection = "Proxy"
     override val proxySectionSubtitle =
         "Paste a vless/vmess/trojan/ss link, an AmneziaWG config, or a sing-box outbound JSON"
+    override val mainProxySection = "Main proxy"
+    override val additionalProxySection = "Second proxy"
+    override val additionalProxySubtitle =
+        "On top of the main: traffic → main proxy → this"
+    override val enableAdditionalProxy = "Additional proxy (cascade)"
     override val freeturnTransportSection = "Freeturn transport"
     override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
     override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
@@ -1479,7 +1499,10 @@ object EnStrings : Strings {
     override val pingSettingsSubtitle = "How inbounds are probed"
     override val pingMethod = "Ping method"
     override val pingTarget = "Ping target site"
-    override val pingTargetHint = "e.g. https://www.google.com"
+    override val pingTargetHint = "e.g. https://google.com"
+    override val savePingResultsTitle = "Save ping results"
+    override val savePingResultsSubtitle =
+        "Show the last results again when the app is reopened"
     override val pingModeAuto = "Auto"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -1923,6 +1946,11 @@ object FaStrings : Strings {
     override val proxySection = "پراکسی"
     override val proxySectionSubtitle =
         "یک پیوند vless/vmess/trojan/ss، پیکربندی AmneziaWG یا JSON خروجی sing-box را بچسبانید"
+    override val mainProxySection = "پراکسی اصلی"
+    override val additionalProxySection = "پراکسی دوم"
+    override val additionalProxySubtitle =
+        "روی پراکسی اصلی: ترافیک ← پراکسی اصلی ← این"
+    override val enableAdditionalProxy = "پراکسی اضافی (آبشاری)"
     override val freeturnTransportSection = "حامل Freeturn"
     override val freeturnTransportSubtitle = "نقطهٔ پایانی بازپخش VK TURN و مبهم‌سازی"
     override val wireguardSubtitle = "تونل sing-box از طریق شنودگر محلی freeturn شماره‌گیری می‌کند"
@@ -1959,7 +1987,10 @@ object FaStrings : Strings {
     override val pingSettingsSubtitle = "نحوه بررسی ورودی‌ها"
     override val pingMethod = "روش پینگ"
     override val pingTarget = "سایت هدف پینگ"
-    override val pingTargetHint = "مثال: https://www.google.com"
+    override val pingTargetHint = "مثال: https://google.com"
+    override val savePingResultsTitle = "ذخیرهٔ نتایج پینگ"
+    override val savePingResultsSubtitle =
+        "نمایش آخرین نتایج هنگام بازکردن دوبارهٔ برنامه"
     override val pingModeAuto = "خودکار"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"

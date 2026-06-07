@@ -52,13 +52,21 @@ data class AppBehaviorSettings(
      * Target site for the chosen [pingMode]. Used as the host for TCP/ICMP and as the URL for the
      * proxy GET/HEAD probes. Blank → a sensible built-in default ([DEFAULT_PING_URL]).
      */
-    val pingUrl: String = "",
+    val pingUrl: String = DEFAULT_PING_URL,
     /**
      * How a ping result is rendered in the location list. One of [PING_RESULT_MODES]:
      * [PING_RESULT_TIME] shows the latency in ms (classic), [PING_RESULT_ICON] shows a check mark
      * when the probe succeeded (reachable / connectable) and a cross when it failed (offline / error).
      */
     val pingResultDisplay: String = PING_RESULT_ICON,
+    /**
+     * Persist the last ping results so they are shown again when the app is reopened (instead of a
+     * blank list). Off by default. When on, the latest successful results are saved into
+     * [lastPingResults] after each ping pass and restored on launch.
+     */
+    val savePingResults: Boolean = false,
+    /** Last saved ping results (storage id → latency ms), used only when [savePingResults] is on. */
+    val lastPingResults: Map<String, Int> = emptyMap(),
     /**
      * Show the subscription expiry date ("до дд.мм.гггг") under the last-refresh line in the
      * subscription group header. Off by default; the urgent (≤2 days) red badge is always shown.
@@ -81,8 +89,8 @@ data class AppBehaviorSettings(
         /** Selectable ping-result display modes (single-choice in the UI). */
         val PING_RESULT_MODES = listOf(PING_RESULT_TIME, PING_RESULT_ICON)
 
-        /** Default target when [pingUrl] is left blank. */
-        const val DEFAULT_PING_URL = "https://www.google.com"
+        /** Default target, pre-filled into [pingUrl] (and the fallback when it is cleared). */
+        const val DEFAULT_PING_URL = "https://google.com"
     }
 
     /** [pingUrl] trimmed, or [DEFAULT_PING_URL] when blank. */

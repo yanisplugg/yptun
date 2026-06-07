@@ -835,6 +835,9 @@ class OlcboxVpnService : VpnService() {
 
         val chained = config.engine == EngineType.Chain
         val chainPort = chainOlcrtcPort
+        // Optional SECOND/cascade proxy chained on top of the main: traffic exits via it, dialing
+        // through the main (→ olcRTC for Chain). Null = single hop (main is the exit).
+        val secondProfile = config.proxy2?.takeIf { it.isComplete() }
         return try {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
 
@@ -939,6 +942,12 @@ class OlcboxVpnService : VpnService() {
                 activeProxyCore = ProxyCore.SingBox
                 addLog("Geo databases unavailable for Xray → using sing-box for routing (it downloads its own rule-sets)")
             }
+            // The cascade runs both hops in one core. An xhttp second proxy can only run on Xray, so
+            // force it (overriding the geo fallback above) — sing-box can't carry xhttp.
+            if (secondProfile?.network == ProxyProfile.NETWORK_XHTTP && activeProxyCore != ProxyCore.Xray) {
+                activeProxyCore = ProxyCore.Xray
+                addLog("Second (cascade) proxy uses xhttp → forcing Xray core")
+            }
             if (activeProxyCore == ProxyCore.Xray) {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""
@@ -982,7 +991,7 @@ class OlcboxVpnService : VpnService() {
                             } ?: t
                         },
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
-                        proxyEnabled = config.proxyEnabled,
+                        secondProfile = secondProfile,
                     )
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -1012,7 +1021,7 @@ class OlcboxVpnService : VpnService() {
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     blockQuic = !isAwg,
                     sniffOverrideDestination = isAwg,
-                    proxyEnabled = config.proxyEnabled,
+                    secondProfile = secondProfile,
                 )
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)

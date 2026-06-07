@@ -91,6 +91,12 @@ class LocationViewModel(
     var pingsState by mutableStateOf<PingsState>(PingsState.Idle)
         private set
 
+    /**
+     * Invoked when a ping pass completes, with the latest successful (non-null) results. The host can
+     * persist them so they survive an app restart (see [AppBehaviorSettings.savePingResults]).
+     */
+    var onPingsCompleted: ((Map<String, Int>) -> Unit)? = null
+
     private val activePingJobs = mutableMapOf<String, Job>()
     private val pingSemaphore = Semaphore(LOCATION_PING_PARALLELISM)
     // Source-of-truth ping map during a refresh pass. Each completion updates this in place (O(1))
@@ -137,6 +143,13 @@ class LocationViewModel(
     var proxyError by mutableStateOf<String?>(null)
         private set
 
+    /** Pasted link for the optional SECOND (cascade) proxy, chained on top of the main proxy. */
+    var editingProxy2Link by mutableStateOf("")
+        private set
+
+    var proxy2Error by mutableStateOf<String?>(null)
+        private set
+
     private val olcrtcFieldsValid: Boolean
         get() = serverError == null && keyError == null &&
                 editingConfig.id.isNotBlank() && editingConfig.key.isNotBlank()
@@ -163,10 +176,10 @@ class LocationViewModel(
     val isFormValid: Boolean
         get() = nameError == null && editingName.isNotBlank() && when (editingConfig.engine) {
             EngineType.Stealth -> olcrtcFieldsValid
-            // With the proxy (additional outbound) disabled the location exits directly, so a complete
-            // proxy isn't required; when enabled it must be valid.
-            EngineType.Standard -> !editingConfig.proxyEnabled || editingConfig.proxy?.isComplete() == true
-            EngineType.Chain -> (!editingConfig.proxyEnabled || editingConfig.proxy?.isComplete() == true) && olcrtcFieldsValid
+            // The main proxy is always the primary outbound, so it must be valid. The optional second
+            // (cascade) proxy is either parsed-and-complete or null, so it never blocks saving.
+            EngineType.Standard -> editingConfig.proxy?.isComplete() == true
+            EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
             EngineType.VkTurn -> vkTurnFieldsValid
         }
 
@@ -390,6 +403,17 @@ class LocationViewModel(
         pingEmitJob?.cancel()
         pingEmitJob = null
         emitPingState()
+        // Pass complete — hand the successful results to the host for optional persistence.
+        onPingsCompleted?.invoke(livePings.mapNotNull { (id, ms) -> ms?.let { id to it } }.toMap())
+    }
+
+    /** Restores previously-saved ping results so they show on launch (until the next ping pass). */
+    fun seedPings(pings: Map<String, Int>) {
+        if (pings.isEmpty()) return
+        pings.forEach { (id, ms) -> livePings[id] = ms }
+        if (activePingJobs.isEmpty()) {
+            pingsState = PingsState.Success(livePings.toMap())
+        }
     }
 
     private suspend fun checkLocationPing(
@@ -426,7 +450,9 @@ class LocationViewModel(
         serverError = null
         keyError = null
         proxyError = null
+        proxy2Error = null
         editingProxyLink = ""
+        editingProxy2Link = ""
         isSaving = false
         providerDrafts.clear()
 
@@ -538,9 +564,11 @@ class LocationViewModel(
             updateVkTurnDraft { it }
         } else if (previous == EngineType.VkTurn) {
             // Drop the derived WireGuard outbound so it does not leak into proxy-based engines.
-            editingConfig = editingConfig.copy(vkturn = null, proxy = null)
+            editingConfig = editingConfig.copy(vkturn = null, proxy = null, proxy2 = null)
             editingProxyLink = ""
+            editingProxy2Link = ""
             proxyError = null
+            proxy2Error = null
         }
     }
 
@@ -560,6 +588,25 @@ class LocationViewModel(
         } else {
             editingConfig = editingConfig.copy(proxy = null)
             proxyError = "Unrecognized proxy link or sing-box config"
+        }
+    }
+
+    /** Parses a pasted link for the optional SECOND (cascade) proxy into [editingConfig].proxy2. */
+    fun onProxy2LinkChanged(value: String) {
+        editingProxy2Link = value
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) {
+            editingConfig = editingConfig.copy(proxy2 = null)
+            proxy2Error = null
+            return
+        }
+        val profile = ShareLinkParser.parse(trimmed) ?: rawOutboundProfile(trimmed)
+        if (profile != null && profile.isComplete()) {
+            editingConfig = editingConfig.copy(proxy2 = profile)
+            proxy2Error = null
+        } else {
+            editingConfig = editingConfig.copy(proxy2 = null)
+            proxy2Error = "Unrecognized proxy link or sing-box config"
         }
     }
 
