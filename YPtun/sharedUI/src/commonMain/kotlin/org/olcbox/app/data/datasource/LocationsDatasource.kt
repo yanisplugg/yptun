@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -28,7 +29,11 @@ import org.olcbox.app.data.importer.SubscriptionDecoder
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
+import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.FakeDnsSpec
+import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
@@ -82,7 +87,9 @@ class LocationsRepositoryImpl(
         val profileTitle: String? = null,
         val userInfo: String? = null,
         /** Best-effort JSON from the Remnawave `<url>/info` endpoint (carries user.expiresAt etc.). */
-        val infoJson: String? = null
+        val infoJson: String? = null,
+        /** Best-effort rich Xray JSON (Happ-UA fetch) used only to extract the FakeDNS spec. */
+        val fakednsJson: String? = null
     )
 
     private data class DownloadedSubscription(
@@ -90,7 +97,8 @@ class LocationsRepositoryImpl(
         val updateIntervalHours: Int?,
         val profileTitle: String? = null,
         val userInfo: String? = null,
-        val infoJson: String? = null
+        val infoJson: String? = null,
+        val fakednsJson: String? = null
     )
 
     private data class ParsedImport(
@@ -197,8 +205,22 @@ class LocationsRepositoryImpl(
         }
 
         mutationMutex.withLock {
+            val current = getBundleUnlocked()
+            // Re-importing the SAME subscription URL must behave like a refresh: drop the old entries
+            // from that URL first so freshly-parsed fields (typed profile, transports, FakeDNS spec)
+            // REPLACE the stale ones, instead of being dropped as duplicates by the additive merge.
+            // Without this, an old import (e.g. before FakeDNS extraction existed) sticks around and
+            // re-adding the subscription never picks up the new fields.
+            val subUrl = resolved.source.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }
+            val basis = if (subUrl != null) {
+                current.copy(
+                    locations = current.locations.filterNot { it.subscriptionUrl?.trim() == subUrl }
+                )
+            } else {
+                current
+            }
             val merged = mergeImportedBundle(
-                current = getBundleUnlocked(),
+                current = basis,
                 imported = imported,
                 replaceMatchingStorageIds = resolved.parsed.mode == ImportMode.Restore
             )
@@ -573,7 +595,7 @@ class LocationsRepositoryImpl(
             ?: fallbackSubscriptionInterval
             ?: source.subscriptionUrl?.let { SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS }
 
-        return parseImport(
+        val parsed = parseImport(
             source.content.normalizedImportText(),
             source.subscriptionUrl,
             initialSubscriptionInterval,
@@ -585,7 +607,37 @@ class LocationsRepositoryImpl(
             // Persist the auto-refresh interval (profile-update-interval header) onto the metadata at
             // import time too, so it's shown and used even before the first scheduled refresh.
             ).withSubscriptionInterval(initialSubscriptionInterval)
+        ) ?: return null
+
+        // Enrich with FakeDNS recovered from the Happ-UA body (the only variant that carries it). The
+        // pool + dns.hosts are identical across all servers of a subscription, so a single spec is
+        // attached to every parsed location that doesn't already have one (the main YPtun/base64 import
+        // produces none). xhttp/raw-Xray locations run verbatim on Xray and are left untouched.
+        val fakeDnsSpec = source.fakednsJson?.let { fakeDnsSpecFromSubscriptionBody(it) } ?: return parsed
+        val enriched = parsed.bundle.copy(
+            locations = parsed.bundle.locations.map { entry ->
+                if (entry.fakeDns != null ||
+                    !entry.proxy?.rawXrayConfig.isNullOrBlank() ||
+                    entry.proxy?.network == ProxyProfile.NETWORK_XHTTP
+                ) {
+                    entry
+                } else {
+                    entry.copy(fakeDns = fakeDnsSpec).normalized()
+                }
+            }
         )
+        return parsed.copy(bundle = enriched)
+    }
+
+    /** Parses a rich Xray subscription body (array or single object) and returns its FakeDNS spec, or null. */
+    private fun fakeDnsSpecFromSubscriptionBody(body: String): FakeDnsSpec? {
+        val element = runCatching { json.parseToJsonElement(body.trim()) }.getOrNull() ?: return null
+        val config = when {
+            element is JsonObject -> element
+            else -> runCatching { element.jsonArray }.getOrNull()
+                ?.firstNotNullOfOrNull { it.jsonObjectOrNull()?.takeIf { o -> o["fakedns"] != null } }
+        } ?: return null
+        return fakeDnsSpecFromXray(config)
     }
 
     private suspend fun resolveImportSource(
@@ -615,10 +667,19 @@ class LocationsRepositoryImpl(
                     requestMode = requestMode,
                     profileTitle = downloaded.profileTitle,
                     userInfo = downloaded.userInfo,
-                    infoJson = downloaded.infoJson
+                    infoJson = downloaded.infoJson,
+                    fakednsJson = downloaded.fakednsJson
                 )
             }
     }
+
+    /** Resolves the user's subscription User-Agent choice ([SubscriptionUserAgentHolder]) to a string. */
+    private fun subscriptionUserAgent(): String =
+        if (SubscriptionUserAgentHolder.mode == AppBehaviorSettings.SUB_UA_YPTUN) {
+            CurrentAppInfo.userAgent
+        } else {
+            AppBehaviorSettings.HAPP_USER_AGENT
+        }
 
     private suspend fun downloadTextFromUrl(
         url: String,
@@ -648,19 +709,18 @@ class LocationsRepositoryImpl(
                                 // both the JSON `links[]` and base64/plain bodies.
                                 "application/json, text/plain, text/markdown, application/octet-stream, */*"
                             )
+                            // Panels do User-Agent content-negotiation: our own "YPtun/x" (and a browser
+                            // UA) get only bare base64 vless links, while a recognised client UA gets the
+                            // RICH per-server Xray JSON (with dns.hosts / routing / FAKEDNS). We support
+                            // that JSON (parseRawXray), and it's the only way to receive the server's
+                            // FakeDNS config — so always present as Happ, the de-facto "full config" UA.
+                            append(HttpHeaders.UserAgent, subscriptionUserAgent())
                             if (requestMode == SubscriptionRequestMode.Identity) {
-                                append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
                                 append("x-hwid", hwid.orEmpty())
                                 // Remnawave HWID device-limit descriptors.
                                 append("x-device-os", DeviceInfo.os)
                                 append("x-ver-os", DeviceInfo.osVersion)
                                 append("x-device-model", DeviceInfo.model)
-                            } else {
-                                append(
-                                    HttpHeaders.UserAgent,
-                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                                )
                             }
                         }
                     }
@@ -682,7 +742,7 @@ class LocationsRepositoryImpl(
                     val infoResponse = client.get(url.trim().trimEnd('/') + "/info") {
                         headers {
                             append(HttpHeaders.Accept, "application/json")
-                            append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
+                            append(HttpHeaders.UserAgent, subscriptionUserAgent())
                             if (requestMode == SubscriptionRequestMode.Identity) {
                                 append("x-hwid", hwid.orEmpty())
                             }
@@ -691,12 +751,35 @@ class LocationsRepositoryImpl(
                     if (infoResponse.status.value in 200..299) infoResponse.bodyAsText() else null
                 }.getOrNull()?.takeIf { it.isNotBlank() }
 
+                // FakeDNS enrichment: the server's fakeip pool + dns.hosts only ship in the rich Xray
+                // JSON returned under the "Happ/1.0" UA. The MAIN fetch above keeps the user's chosen UA
+                // (default YPtun → clean names/links), so do a SEPARATE Happ-UA fetch here purely to
+                // recover the FakeDNS config and attach it later. Skipped (reuse main) when the main UA
+                // already is Happ. Best-effort: any failure just means no FakeDNS.
+                val fakednsJson = if (subscriptionUserAgent() == AppBehaviorSettings.HAPP_USER_AGENT) {
+                    content
+                } else {
+                    runCatching {
+                        val happResponse = client.get(url) {
+                            headers {
+                                append(HttpHeaders.Accept, "application/json, text/plain, */*")
+                                append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
+                                if (requestMode == SubscriptionRequestMode.Identity) {
+                                    append("x-hwid", hwid.orEmpty())
+                                }
+                            }
+                        }
+                        if (happResponse.status.value in 200..299) happResponse.bodyAsText() else null
+                    }.getOrNull()?.takeIf { it.trimStart().startsWith("[") || it.trimStart().startsWith("{") }
+                }
+
                 DownloadedSubscription(
                     content = content,
                     updateIntervalHours = response.profileUpdateIntervalHours(),
                     profileTitle = response.headers["profile-title"]?.let { decodeProfileTitle(it) },
                     userInfo = response.headers["subscription-userinfo"]?.trim(),
-                    infoJson = infoJson
+                    infoJson = infoJson,
+                    fakednsJson = fakednsJson
                 )
             }
         } finally {
@@ -1472,20 +1555,36 @@ class LocationsRepositoryImpl(
             "$server:$port"
         )
 
-        val profile = ProxyProfile(
-            tag = name,
-            type = protocol,
-            server = server,
-            serverPort = port,
-            // Keep THIS config (the array element), not the whole array, as the verbatim payload.
-            rawXrayConfig = root.toString()
-        )
-        val location = LocationConfig(
-            name = name,
-            engine = EngineType.Standard,
-            proxy = profile,
-            core = org.olcbox.app.data.model.ProxyCore.Xray
-        ).normalized()
+        // Try to fully translate the Xray proxy outbound into typed sing-box-runnable fields PLUS a
+        // FakeDNS spec (fakeip pool + dns.hosts blackholes). When that succeeds, the location runs on
+        // EITHER core — sing-box reproduces FakeDNS natively (dns.fakeip), so FakeDNS no longer needs
+        // xray-core. Only an xhttp/splithttp transport (sing-box can't serve it) keeps the verbatim
+        // Xray template + forced Xray core.
+        val typed = typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
+        val location = if (typed != null) {
+            LocationConfig(
+                name = name,
+                engine = EngineType.Standard,
+                proxy = typed,
+                core = ProxyCore.Auto,
+                fakeDns = fakeDnsSpecFromXray(root),
+            ).normalized()
+        } else {
+            // Untranslatable (xhttp / unknown transport) → run the whole template verbatim on Xray.
+            LocationConfig(
+                name = name,
+                engine = EngineType.Standard,
+                proxy = ProxyProfile(
+                    tag = name,
+                    type = protocol,
+                    server = server,
+                    serverPort = port,
+                    // Keep THIS config (the array element), not the whole array, as the verbatim payload.
+                    rawXrayConfig = root.toString()
+                ),
+                core = ProxyCore.Xray
+            ).normalized()
+        }
 
         val base = "${server}_$port"
             .lowercase()
@@ -1499,6 +1598,157 @@ class LocationsRepositoryImpl(
             subscriptionUrl = subscriptionUrl,
             metadata = null
         )
+    }
+
+    /**
+     * Maps an Xray proxy outbound (vless/vmess/trojan/shadowsocks) to a typed [ProxyProfile] that the
+     * sing-box core can dial directly. Returns null when the transport is xhttp/splithttp or otherwise
+     * not serviceable by sing-box (the caller then keeps the verbatim Xray template instead).
+     */
+    private fun typedProfileFromXrayOutbound(
+        outbound: JsonObject,
+        protocol: String,
+        server: String,
+        port: Int,
+        name: String,
+    ): ProxyProfile? {
+        val settings = outbound["settings"]?.jsonObjectOrNull()
+        val stream = outbound["streamSettings"]?.jsonObjectOrNull()
+
+        // Xray network → ProxyProfile network. xhttp/splithttp are Xray-only → bail (verbatim Xray).
+        val xrayNet = stream?.string("network")?.lowercase() ?: "tcp"
+        val network = when (xrayNet) {
+            "tcp", "raw" -> ProxyProfile.NETWORK_TCP
+            "ws", "websocket" -> ProxyProfile.NETWORK_WS
+            "grpc", "gun" -> ProxyProfile.NETWORK_GRPC
+            "h2", "http" -> ProxyProfile.NETWORK_HTTP
+            "httpupgrade" -> ProxyProfile.NETWORK_HTTPUPGRADE
+            "xhttp", "splithttp" -> return null
+            else -> return null
+        }
+
+        val security = when (stream?.string("security")?.lowercase()) {
+            "reality" -> ProxyProfile.SECURITY_REALITY
+            "tls", "xtls" -> ProxyProfile.SECURITY_TLS
+            else -> ProxyProfile.SECURITY_NONE
+        }
+
+        // Per-protocol credentials (vless/vmess use vnext[].users[]; trojan/ss use servers[]).
+        val vnextUser = settings?.get("vnext")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.firstOrNull()?.jsonObjectOrNull()
+            ?.get("users")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.firstOrNull()?.jsonObjectOrNull()
+        val ssServer = settings?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.firstOrNull()?.jsonObjectOrNull()
+
+        // TLS/REALITY parameters live in stream.{realitySettings|tlsSettings}.
+        val tls = stream?.get("realitySettings")?.jsonObjectOrNull()
+            ?: stream?.get("tlsSettings")?.jsonObjectOrNull()
+        val sni = tls?.string("serverName") ?: ""
+        val fingerprint = tls?.string("fingerprint") ?: ""
+        val alpn = (tls?.get("alpn") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            ?: emptyList()
+        val allowInsecure = (tls?.get("allowInsecure") as? JsonPrimitive)?.contentOrNull == "true"
+        val realityPbk = tls?.string("publicKey") ?: ""
+        val realityShortId = tls?.string("shortId") ?: ""
+
+        // Transport-specific path/host/serviceName.
+        val wsLike = stream?.get("wsSettings")?.jsonObjectOrNull()
+            ?: stream?.get("httpupgradeSettings")?.jsonObjectOrNull()
+        val grpc = stream?.get("grpcSettings")?.jsonObjectOrNull()
+        val path = when (network) {
+            ProxyProfile.NETWORK_GRPC -> grpc?.string("serviceName") ?: ""
+            else -> wsLike?.string("path") ?: ""
+        }
+        val host = wsLike?.string("host")
+            ?: (wsLike?.get("headers")?.jsonObjectOrNull()?.string("Host"))
+            ?: ""
+
+        return when (protocol) {
+            "vless", "vmess" -> {
+                val uuid = vnextUser?.string("id") ?: return null
+                if (uuid.isBlank()) return null
+                ProxyProfile(
+                    tag = name,
+                    type = protocol,
+                    server = server,
+                    serverPort = port,
+                    uuid = uuid,
+                    flow = vnextUser.string("flow") ?: "",
+                    alterId = vnextUser.int("alterId") ?: 0,
+                    cipher = vnextUser.string("security") ?: "auto",
+                    network = network,
+                    security = security,
+                    sni = sni,
+                    alpn = alpn,
+                    fingerprint = fingerprint,
+                    allowInsecure = allowInsecure,
+                    realityPublicKey = realityPbk,
+                    realityShortId = realityShortId,
+                    path = path,
+                    host = host,
+                )
+            }
+            "trojan" -> {
+                val pass = ssServer?.string("password") ?: return null
+                ProxyProfile(
+                    tag = name, type = ProxyProfile.TYPE_TROJAN, server = server, serverPort = port,
+                    password = pass, network = network, security = security, sni = sni, alpn = alpn,
+                    fingerprint = fingerprint, allowInsecure = allowInsecure,
+                    realityPublicKey = realityPbk, realityShortId = realityShortId, path = path, host = host,
+                )
+            }
+            "shadowsocks" -> {
+                val pass = ssServer?.string("password") ?: return null
+                ProxyProfile(
+                    tag = name, type = ProxyProfile.TYPE_SHADOWSOCKS, server = server, serverPort = port,
+                    password = pass, method = ssServer.string("method") ?: "",
+                    network = network,
+                )
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Extracts a [FakeDnsSpec] from a full Xray config: the `fakedns` pool range and the `dns.hosts`
+     * entries that map a domain to `0.0.0.0` (blackhole). Returns null when the config has no fakedns.
+     */
+    private fun fakeDnsSpecFromXray(root: JsonObject): FakeDnsSpec? {
+        val pool = (root["fakedns"] as? JsonArray)?.firstOrNull()?.jsonObjectOrNull()
+        // Xray also accepts a bare object for `fakedns`.
+        val poolObj = pool ?: root["fakedns"]?.jsonObjectOrNull()
+        val hasFakeDns = poolObj != null || (root["fakedns"] != null)
+        if (!hasFakeDns) return null
+
+        val inet4 = poolObj?.string("ipPool")?.takeIf { it.contains('.') } ?: "198.18.0.0/15"
+        val inet6 = poolObj?.string("ipPool")?.takeIf { it.contains(':') } ?: "fc00::/18"
+
+        // dns.hosts: keys mapping to "0.0.0.0" are blackholes. Keys are "regexp:<re>", "domain:<d>",
+        // "geosite:..." or a plain domain. Translate regexp/domain/plain into sing-box domain_regex.
+        val hosts = (root["dns"] as? JsonObject)?.get("hosts") as? JsonObject
+        val blockRegex = hosts?.mapNotNull { (key, value) ->
+            val blocks = when (value) {
+                is JsonPrimitive -> value.contentOrNull == "0.0.0.0"
+                is JsonArray -> value.any { (it as? JsonPrimitive)?.contentOrNull == "0.0.0.0" }
+                else -> false
+            }
+            if (!blocks) return@mapNotNull null
+            when {
+                key.startsWith("regexp:") -> key.removePrefix("regexp:")
+                key.startsWith("domain:") -> {
+                    val d = key.removePrefix("domain:").replace(".", "\\.")
+                    "(^|\\.)$d$"
+                }
+                key.startsWith("geosite:") || key.startsWith("geoip:") -> null // not regex-translatable
+                else -> {
+                    val d = key.replace(".", "\\.")
+                    "(^|\\.)$d$"
+                }
+            }
+        }.orEmpty().filterNotNull()
+
+        return FakeDnsSpec(inet4Range = inet4, inet6Range = inet6, blockRegex = blockRegex)
     }
 
     private fun parseOlcRtcUri(line: String): ParsedOlcRtcUri? {

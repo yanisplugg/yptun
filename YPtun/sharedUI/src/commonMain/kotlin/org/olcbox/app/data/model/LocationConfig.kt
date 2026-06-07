@@ -101,6 +101,20 @@ data class AdvancedCoreConfig(
     @SerialName("tls_fragment") val tlsFragment: Boolean = false,
 )
 
+/**
+ * FakeDNS plumbing extracted from an imported Xray config so the sing-box core can reproduce it
+ * natively (sing-box `dns.fakeip`). Handing out synthetic IPs from [inet4Range]/[inet6Range] means
+ * apps never see the real address; the sniffed domain is resolved behind the proxy. [blockRegex]
+ * carries the config's `dns.hosts` regex entries that mapped a domain to `0.0.0.0` (a blackhole),
+ * reproduced as sing-box `domain_regex → reject` route rules.
+ */
+@Serializable
+data class FakeDnsSpec(
+    @SerialName("inet4_range") val inet4Range: String = "198.18.0.0/15",
+    @SerialName("inet6_range") val inet6Range: String = "fc00::/18",
+    @SerialName("block_regex") val blockRegex: List<String> = emptyList(),
+)
+
 @Serializable
 data class LocationConfig(
     val name: String = "",
@@ -148,6 +162,13 @@ data class LocationConfig(
      */
     @SerialName("routing_profile_id")
     val routingProfileId: String = "",
+    /**
+     * FakeDNS spec translated from an imported Xray config (fakeip pool + dns.hosts blackholes). When
+     * non-null, the sing-box core enables native fakeip with these ranges and reject rules, so FakeDNS
+     * works on sing-box too — not only on xray-core. Null = no FakeDNS for this location.
+     */
+    @SerialName("fake_dns")
+    val fakeDns: FakeDnsSpec? = null,
 ) {
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
@@ -166,7 +187,18 @@ data class LocationConfig(
             core = core,
             vkturn = vkturn,
             routingProfileId = routingProfileId.trim(),
+            fakeDns = fakeDns,
         )
+    }
+
+    /**
+     * True when the imported config can ONLY be served by xray-core: an xhttp/splithttp transport
+     * (sing-box can't serve it over VK). FakeDNS is NOT here — it now runs on either core (sing-box via
+     * its native fakeip, see [fakeDns]). When true, [resolvedCore] forces Xray and the editor blocks
+     * the sing-box choice.
+     */
+    fun requiresXray(): Boolean = listOfNotNull(proxy, proxy2).any { p ->
+        p.network == ProxyProfile.NETWORK_XHTTP
     }
 
     /** Resolves [ProxyCore.Auto] to a concrete backend based on the proxy transport. */
@@ -543,6 +575,8 @@ data class LocationEntry(
     val core: ProxyCore? = null,
     val vkturn: VkTurnConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
+    @SerialName("fake_dns")
+    val fakeDns: FakeDnsSpec? = null,
     @SerialName("routing_profile_id")
     val routingProfileId: String? = null,
     @SerialName("auth_provider")
@@ -614,6 +648,7 @@ data class LocationEntry(
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
                 advanced = advanced,
+                fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
             ).normalized()
         }
@@ -638,6 +673,7 @@ data class LocationEntry(
             core = config.core,
             vkturn = config.vkturn,
             advanced = config.advanced,
+            fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
@@ -670,6 +706,7 @@ data class LocationEntry(
                 core = config.core,
                 vkturn = config.vkturn,
                 advanced = config.advanced,
+                fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },
                 authProvider = config.bypassProvider,
                 transport = LocationTransportConfig.from(config),

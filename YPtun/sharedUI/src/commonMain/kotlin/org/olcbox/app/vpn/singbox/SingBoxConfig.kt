@@ -14,6 +14,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.olcbox.app.data.model.AdvancedCoreConfig
+import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingRules
@@ -36,6 +37,25 @@ object SingBoxConfig {
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
     private const val SOCKS_IN_TAG = "socks-in"
+
+    /**
+     * Well-known DNS-over-HTTPS/TLS endpoints that browsers & apps dial directly (often over IPv6),
+     * bypassing the tunnel's resolver. Rejected by domain under strict-family / fakeip so the app falls
+     * back to the system resolver (→ tunnel → fake IPv4). Matched as domain_suffix (covers subdomains
+     * like chrome.cloudflare-dns.com, mozilla.cloudflare-dns.com).
+     */
+    private val DOH_BLOCK_SUFFIXES = listOf(
+        "cloudflare-dns.com",
+        "dns.google",
+        "dns.google.com",
+        "one.one.one.one",
+        "dns.quad9.net",
+        "doh.opendns.com",
+        "dns.nextdns.io",
+        "doh.cleanbrowsing.org",
+        "dns.adguard.com",
+        "dns.adguard-dns.com",
+    )
 
     /** Raw-outbound types that do not support sing-box smux and must not get a multiplex block. */
     private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks")
@@ -94,10 +114,20 @@ object SingBoxConfig {
         // turn dials through olcRTC/WG. So: client → [olcRTC/WG] → main → second → internet. Null = the
         // main proxy is the single exit (PROXY_TAG), exactly as before.
         secondProfile: ProxyProfile? = null,
+        // Per-location FakeDNS translated from an imported Xray config (fakeip pool + dns.hosts
+        // blackholes). When non-null, FakeDNS is enabled on sing-box natively with these ranges and the
+        // blackhole domains become `domain_regex → reject` route rules — so FakeDNS works on sing-box
+        // too, not only xray-core. Overrides the (now per-config) [TrafficSettings.fakeDnsEnabled].
+        fakeDnsSpec: FakeDnsSpec? = null,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
         val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
+        // FakeDNS is on when either the (legacy global) traffic toggle is set OR this location carries a
+        // translated spec. The pool ranges come from the spec when present, else the defaults.
+        val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null
+        val fake4Range = fakeDnsSpec?.inet4Range?.takeIf { it.isNotBlank() } ?: "198.18.0.0/15"
+        val fake6Range = fakeDnsSpec?.inet6Range?.takeIf { it.isNotBlank() } ?: "fc00::/18"
         val config = buildJsonObject {
             putJsonObject("log") {
                 put("level", logLevel)
@@ -120,7 +150,7 @@ object SingBoxConfig {
                     }
                     // FakeDNS equivalent: hand out synthetic IPs so apps never see the real address;
                     // the sniffed domain is resolved behind the proxy.
-                    if (traffic.fakeDnsEnabled) {
+                    if (fakeEnabled) {
                         addJsonObject {
                             put("tag", "fake")
                             put("address", "fakeip")
@@ -132,22 +162,27 @@ object SingBoxConfig {
                         put("outbound", "any")
                         put("server", "direct")
                     }
-                    // Route A/AAAA queries to the fake server (A-only when forcing IPv4).
-                    if (traffic.fakeDnsEnabled) {
+                    // Route BOTH A and AAAA to the fake server. Faking AAAA even under ipv4_only is
+                    // deliberate: it hands the app a fake IPv6 (fc00::/18) instead of letting it learn the
+                    // server's REAL IPv6, which the strict `::/0 reject` would then kill ("ERR_CONNECTION"
+                    // on Google over v6). sing-box restores the fake v6 to the domain before the IP rules,
+                    // so it's tunnelled as IPv4 — only genuine real IPv6 hits the reject. (When fakeip is
+                    // off this block doesn't run, so non-fakeip ipv4_only behaviour is unchanged.)
+                    if (fakeEnabled) {
                         addJsonObject {
                             putJsonArray("query_type") {
                                 add("A")
-                                if ((dnsStrategyOverride ?: traffic.domainStrategy) != "ipv4_only") add("AAAA")
+                                add("AAAA")
                             }
                             put("server", "fake")
                         }
                     }
                 }
-                if (traffic.fakeDnsEnabled) {
+                if (fakeEnabled) {
                     putJsonObject("fakeip") {
                         put("enabled", true)
-                        put("inet4_range", "198.18.0.0/15")
-                        put("inet6_range", "fc00::/18")
+                        put("inet4_range", fake4Range)
+                        put("inet6_range", fake6Range)
                     }
                     // Separate fake/real caches so a fakeip answer never poisons a direct lookup.
                     put("independent_cache", true)
@@ -263,6 +298,36 @@ object SingBoxConfig {
                         addJsonObject {
                             put("network", "udp")
                             putJsonArray("port") { add(443) }
+                            put("action", "reject")
+                        }
+                    }
+                    // App-level DoH/DoT bypass: browsers (Chrome, Firefox…) ship hardcoded DNS-over-HTTPS
+                    // endpoints, often reached over IPv6. Under strict "IPv4 only" the `::/0 reject` below
+                    // would kill those connections and leave the app with NO DNS (google.com → connection
+                    // closed). Reject the DoH endpoints BY DOMAIN instead, so the app cleanly falls back to
+                    // the system resolver — which rides the tunnel and (with fakeip) returns a fake IPv4.
+                    // Net effect: DNS works, stays on IPv4, and there is no v6 leak. Enabled whenever a
+                    // strict family is enforced or fakeip is active (both want all DNS via the system path).
+                    val blockAppDoh = fakeEnabled ||
+                        effectiveStrategy == "ipv4_only" || effectiveStrategy == "ipv6_only"
+                    if (blockAppDoh) {
+                        addJsonObject {
+                            putJsonArray("domain_suffix") { DOH_BLOCK_SUFFIXES.forEach { add(it) } }
+                            put("action", "reject")
+                        }
+                        // Firefox canary domain: returning NXDOMAIN/reject here disables its auto-DoH.
+                        addJsonObject {
+                            putJsonArray("domain") { add("use-application-dns.net") }
+                            put("action", "reject")
+                        }
+                    }
+                    // FakeDNS blackholes: the imported Xray config's dns.hosts entries that mapped a
+                    // domain to 0.0.0.0 (e.g. regexp:(^|\.)gov\.ru$ → block). Reproduced as a sniffed
+                    // domain_regex reject so the same domains die on sing-box too. Placed early (after
+                    // QUIC) so a blocked domain dies before any proxy/direct rule can carry it.
+                    if (fakeDnsSpec != null && fakeDnsSpec.blockRegex.isNotEmpty()) {
+                        addJsonObject {
+                            putJsonArray("domain_regex") { fakeDnsSpec.blockRegex.forEach { add(it) } }
                             put("action", "reject")
                         }
                     }

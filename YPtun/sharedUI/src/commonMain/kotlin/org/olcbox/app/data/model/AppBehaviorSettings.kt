@@ -26,6 +26,16 @@ data class CustomGroup(
     }
 }
 
+/**
+ * Process-wide holder for the chosen subscription User-Agent mode. The subscription fetch (deep in the
+ * locations repository, with no access to the settings store) reads this; the platform settings layer
+ * keeps it in sync with [AppBehaviorSettings.subscriptionUserAgent] on load and on every change.
+ */
+object SubscriptionUserAgentHolder {
+    @Volatile
+    var mode: String = AppBehaviorSettings.SUB_UA_YPTUN
+}
+
 /** General application behavior toggles (the "Настройки приложения" screen). */
 @Serializable
 data class AppBehaviorSettings(
@@ -109,8 +119,26 @@ data class AppBehaviorSettings(
     val showSubscriptionExpiry: Boolean = false,
     /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
     val customGroups: List<CustomGroup> = emptyList(),
+    /**
+     * Which User-Agent the app sends for the MAIN subscription fetch (names / title / links). Panels do
+     * UA content-negotiation: [SUB_UA_YPTUN] (the app's own UA) usually yields clean base64 links with
+     * proper server names; [SUB_UA_HAPP] ("Happ/1.0") yields the rich per-server Xray JSON but often
+     * with junk remarks. Independently of this, FakeDNS is ALWAYS enriched from a Happ-UA fetch (the
+     * only variant that carries the server's fakeip pool + dns.hosts). Default [SUB_UA_YPTUN] = clean
+     * names + FakeDNS from Happ. One of [SUBSCRIPTION_UA_MODES].
+     */
+    val subscriptionUserAgent: String = SUB_UA_YPTUN,
 ) {
     companion object {
+        const val SUB_UA_HAPP = "happ"
+        const val SUB_UA_YPTUN = "yptun"
+
+        /** The literal UA string sent for [SUB_UA_HAPP]. */
+        const val HAPP_USER_AGENT = "Happ/1.0"
+
+        /** Selectable subscription User-Agent modes (single-choice in the UI). */
+        val SUBSCRIPTION_UA_MODES = listOf(SUB_UA_HAPP, SUB_UA_YPTUN)
+
         const val PING_AUTO = "auto"
         const val PING_TCP = "tcp"
         const val PING_ICMP = "icmp"

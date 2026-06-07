@@ -425,6 +425,8 @@ interface Strings {
     val notifSpeedSubtitle: String
     val showSubscriptionExpiryTitle: String
     val showSubscriptionExpirySubtitle: String
+    val subscriptionUserAgentLabel: String
+    val subscriptionUserAgentSubtitle: String
     val telemostCookiesDescription: String
     val useTelemostCookies: String
     val useTelemostCookiesSubtitle: String
@@ -510,6 +512,7 @@ interface Strings {
     val additionalCalls: String
     val coreSection: String
     val coreSubtitle: String
+    val coreSubtitleXrayOnly: String
     val connectionType: String
     val vp8Options: String
     val vp8OptionsSubtitle: String
@@ -959,6 +962,8 @@ object RuStrings : Strings {
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
     override val showSubscriptionExpiryTitle = "Показывать срок подписки"
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
+    override val subscriptionUserAgentLabel = "User-Agent подписки"
+    override val subscriptionUserAgentSubtitle = "Happ/1.0 запрашивает полный конфиг (FakeDNS, dns.hosts); YPtun — обычно только ссылки"
     override val telemostCookiesDescription =
         "Cookies авторизованного аккаунта Яндекса (заголовок Cookie, напр. " +
             "«Session_id=…; yandexuid=…») — для приватных конференций. Запустить кастомное ядро " +
@@ -1045,6 +1050,7 @@ object RuStrings : Strings {
     override val additionalCalls = "Дополнительные звонки"
     override val coreSection = "Ядро"
     override val coreSubtitle = "«Авто» выбирает Xray для xhttp, иначе sing-box"
+    override val coreSubtitleXrayOnly = "xhttp — только Xray, sing-box недоступен"
     override val connectionType = "Тип подключения"
     override val vp8Options = "Параметры VP8"
     override val vp8OptionsSubtitle = "Тонкая настройка производительности потока"
@@ -1476,6 +1482,8 @@ object EnStrings : Strings {
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
     override val showSubscriptionExpiryTitle = "Show subscription expiry"
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
+    override val subscriptionUserAgentLabel = "Subscription User-Agent"
+    override val subscriptionUserAgentSubtitle = "Happ/1.0 fetches the full config (FakeDNS, dns.hosts); YPtun usually returns only links"
     override val telemostCookiesDescription =
         "Cookies of a signed-in Yandex account (the Cookie header, e.g. " +
             "\"Session_id=…; yandexuid=…\") — for private conferences. A custom core cannot be " +
@@ -1562,6 +1570,7 @@ object EnStrings : Strings {
     override val additionalCalls = "Additional calls"
     override val coreSection = "Core"
     override val coreSubtitle = "Auto picks Xray for xhttp, otherwise sing-box"
+    override val coreSubtitleXrayOnly = "xhttp — Xray only, sing-box unavailable"
     override val connectionType = "Connection type"
     override val vp8Options = "VP8 options"
     override val vp8OptionsSubtitle = "Fine-tune stream performance"
@@ -2009,6 +2018,8 @@ object FaStrings : Strings {
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
     override val showSubscriptionExpiryTitle = "نمایش تاریخ انقضای اشتراک"
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
+    override val subscriptionUserAgentLabel = "User-Agent اشتراک"
+    override val subscriptionUserAgentSubtitle = "Happ/1.0 پیکربندی کامل (FakeDNS، dns.hosts) را می‌گیرد؛ YPtun معمولاً فقط لینک‌ها"
     override val telemostCookiesDescription =
         "کوکی‌های یک حساب واردشدهٔ یاندکس (سرایند Cookie، مثلاً " +
             "«Session_id=…; yandexuid=…») — برای کنفرانس‌های خصوصی. در اندروید نمی‌توان هستهٔ " +
@@ -2079,6 +2090,7 @@ object FaStrings : Strings {
     override val additionalCalls = "تماس‌های اضافی"
     override val coreSection = "هسته"
     override val coreSubtitle = "«خودکار» برای xhttp از Xray و در غیر این صورت از sing-box استفاده می‌کند"
+    override val coreSubtitleXrayOnly = "xhttp فقط Xray؛ sing-box در دسترس نیست"
     override val connectionType = "نوع اتصال"
     override val vp8Options = "گزینه‌های VP8"
     override val vp8OptionsSubtitle = "تنظیم دقیق کارایی جریان"

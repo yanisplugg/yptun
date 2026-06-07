@@ -224,6 +224,8 @@ fun LocationSettingsScreen(
                     CoreSelector(
                         selected = config.core,
                         enabled = !isSaving,
+                        // xhttp / FakeDNS configs can only run on xray-core — lock out sing-box.
+                        singBoxLocked = config.requiresXray(),
                         onSelected = viewModel::onCoreChanged
                     )
                 }
@@ -936,6 +938,7 @@ private fun AdvancedCoreSection(
 private fun CoreSelector(
     selected: ProxyCore,
     enabled: Boolean,
+    singBoxLocked: Boolean = false,
     onSelected: (ProxyCore) -> Unit
 ) {
     val options = listOf(ProxyCore.Auto, ProxyCore.SingBox, ProxyCore.Xray)
@@ -945,15 +948,21 @@ private fun CoreSelector(
     ) {
         SectionTitle(
             title = LocalStrings.current.coreSection,
-            subtitle = LocalStrings.current.coreSubtitle
+            subtitle = if (singBoxLocked) {
+                LocalStrings.current.coreSubtitleXrayOnly
+            } else {
+                LocalStrings.current.coreSubtitle
+            }
         )
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             options.forEachIndexed { index, core ->
+                // sing-box is disabled for xhttp / FakeDNS configs (xray-core only).
+                val itemEnabled = enabled && !(singBoxLocked && core == ProxyCore.SingBox)
                 SegmentedButton(
                     shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
                     selected = selected == core,
                     onClick = { onSelected(core) },
-                    enabled = enabled,
+                    enabled = itemEnabled,
                     label = {
                         Text(
                             text = coreLabel(core),

@@ -1021,8 +1021,17 @@ class OlcboxVpnService : VpnService() {
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     blockQuic = !isAwg,
                     sniffOverrideDestination = isAwg,
+                    // STRICT "IPv4 only": forceFamilyResolve (default true) keeps the `::/0 reject` so a real
+                    // IPv6 destination never leaves. This stays on EVEN with fakeip — but fakeip now also
+                    // hands out a fake IPv6 (fc00::/18) for AAAA, which sing-box restores to the domain
+                    // BEFORE the IP rules, so fake v6 is tunnelled as IPv4 while only REAL v6 hits the
+                    // reject. Combined with the DoH-domain block, apps resolve everything via fakeip → no
+                    // real IPv6 ever appears → google works under strict IPv4.
                     secondProfile = secondProfile,
+                    // FakeDNS translated from an imported Xray config → reproduced natively on sing-box.
+                    fakeDnsSpec = config.fakeDns,
                 )
+                if (config.fakeDns != null) addLog("FakeDNS spec present → enabling sing-box fakeip (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)
             }
