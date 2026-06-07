@@ -92,10 +92,11 @@ class LocationViewModel(
         private set
 
     /**
-     * Invoked when a ping pass completes, with the latest successful (non-null) results. The host can
-     * persist them so they survive an app restart (see [AppBehaviorSettings.savePingResults]).
+     * Invoked when a ping pass completes, with the latest results — including failed/unreachable
+     * locations (value `null`), so the host can persist the offline state too, not just the
+     * successful ones (see [AppBehaviorSettings.savePingResults]).
      */
-    var onPingsCompleted: ((Map<String, Int>) -> Unit)? = null
+    var onPingsCompleted: ((Map<String, Int?>) -> Unit)? = null
 
     private val activePingJobs = mutableMapOf<String, Job>()
     private val pingSemaphore = Semaphore(LOCATION_PING_PARALLELISM)
@@ -403,12 +404,15 @@ class LocationViewModel(
         pingEmitJob?.cancel()
         pingEmitJob = null
         emitPingState()
-        // Pass complete — hand the successful results to the host for optional persistence.
-        onPingsCompleted?.invoke(livePings.mapNotNull { (id, ms) -> ms?.let { id to it } }.toMap())
+        // Pass complete — hand all results (successful AND failed/null) to the host for optional persistence.
+        onPingsCompleted?.invoke(livePings.toMap())
     }
 
-    /** Restores previously-saved ping results so they show on launch (until the next ping pass). */
-    fun seedPings(pings: Map<String, Int>) {
+    /**
+     * Restores previously-saved ping results so they show on launch (until the next ping pass).
+     * Values may be `null` for locations that were saved as unreachable/failed.
+     */
+    fun seedPings(pings: Map<String, Int?>) {
         if (pings.isEmpty()) return
         pings.forEach { (id, ms) -> livePings[id] = ms }
         if (activePingJobs.isEmpty()) {
@@ -719,8 +723,24 @@ class LocationViewModel(
         viewModelScope.launch {
             isSaving = true
 
-            val id = editingId ?: "custom_${(100..999).random()}"
             val finalConfig = editingConfig.copy(name = editingName).normalized()
+
+            // Dedup on add: if this is a brand-new location identical to one already saved, just select
+            // the existing one instead of creating a duplicate.
+            if (editingId == null) {
+                val key = finalConfig.dedupKey()
+                val existing = locations.firstOrNull { it.config?.dedupKey() == key }
+                if (existing != null) {
+                    locationsRepository.setActiveLocationId(existing.storageId)
+                    loadLocations()
+                    delay(600)
+                    onComplete()
+                    isSaving = false
+                    return@launch
+                }
+            }
+
+            val id = editingId ?: "custom_${(100..999).random()}"
 
             locationsRepository.saveLocation(id, finalConfig)
             editingSubscriptionUrl?.let { url ->
@@ -765,6 +785,68 @@ class LocationViewModel(
     fun deleteAllLocations(onComplete: () -> Unit = {}) {
         val ids = locations.map { it.storageId }
         deleteLocations(ids, onComplete)
+    }
+
+    /**
+     * Storage ids of CUSTOM (non-subscription) locations that were probed and found unreachable
+     * (a present-but-null entry in the latest ping results). Subscription locations are never included.
+     */
+    private fun unreachableCustomLocationIds(): List<String> {
+        val pings = currentPingsSnapshot()
+        return locations
+            .filter { it.subscriptionUrl.isNullOrBlank() }
+            // VK-TURN can't be pinged (its result is always null) — NEVER treat it as unreachable / delete it.
+            .filter { it.config?.engine != EngineType.VkTurn }
+            .map { it.storageId }
+            .filter { pings.containsKey(it) && pings[it] == null }
+    }
+
+    /**
+     * Deletes custom locations that the last ping pass marked unreachable. Subscriptions are left
+     * untouched. [onComplete] receives how many were removed (0 = nothing matched).
+     */
+    fun deleteUnreachableCustomLocations(onComplete: (Int) -> Unit = {}) {
+        val ids = unreachableCustomLocationIds()
+        if (ids.isEmpty()) {
+            onComplete(0)
+            return
+        }
+        deleteLocations(ids) { onComplete(ids.size) }
+    }
+
+    /**
+     * Storage ids of CUSTOM locations whose configuration duplicates another location's. Subscription
+     * entries seed the "seen" set first (so a custom copy of a subscription server counts as the
+     * duplicate), and within the custom list the first occurrence is kept. Subscriptions are never
+     * returned for deletion.
+     */
+    private fun duplicateCustomLocationIds(): List<String> {
+        val seen = mutableSetOf<LocationConfig>()
+        // Seed with subscription configs first so a custom duplicate of a subscription server is removed.
+        locations
+            .filter { !it.subscriptionUrl.isNullOrBlank() }
+            .forEach { it.config?.dedupKey()?.let(seen::add) }
+        val duplicates = mutableListOf<String>()
+        locations
+            .filter { it.subscriptionUrl.isNullOrBlank() }
+            .forEach { item ->
+                val key = item.config?.dedupKey() ?: return@forEach
+                if (!seen.add(key)) duplicates.add(item.storageId)
+            }
+        return duplicates
+    }
+
+    /**
+     * Deletes duplicate custom locations (identical configuration), keeping one copy of each.
+     * Subscriptions are left untouched. [onComplete] receives how many were removed.
+     */
+    fun deleteDuplicateLocations(onComplete: (Int) -> Unit = {}) {
+        val ids = duplicateCustomLocationIds()
+        if (ids.isEmpty()) {
+            onComplete(0)
+            return
+        }
+        deleteLocations(ids) { onComplete(ids.size) }
     }
 
     private companion object {

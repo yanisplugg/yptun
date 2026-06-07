@@ -84,6 +84,16 @@ interface Strings {
     val deleteAllConfigsMessage: String
     val menuDeleteAllSubscriptions: String
     val menuDeleteAllConfigs: String
+    val menuDeleteUnreachable: String
+    val menuDeleteDuplicates: String
+    val deleteUnreachableTitle: String
+    val deleteUnreachableMessage: String
+    val deleteDuplicatesTitle: String
+    val deleteDuplicatesMessage: String
+    fun unreachableDeleted(count: Int): String
+    fun duplicatesDeleted(count: Int): String
+    val noUnreachableFound: String
+    val noDuplicatesFound: String
 
     // Settings hub
     val settings: String
@@ -620,6 +630,18 @@ object RuStrings : Strings {
         "Будут удалены все конфигурации и подписки. Это действие необратимо."
     override val menuDeleteAllSubscriptions = "Удалить все подписки"
     override val menuDeleteAllConfigs = "Удалить все конфигурации"
+    override val menuDeleteUnreachable = "Удалить недоступные"
+    override val menuDeleteDuplicates = "Удалить дубликаты"
+    override val deleteUnreachableTitle = "Удалить недоступные?"
+    override val deleteUnreachableMessage =
+        "Будут удалены собственные локации, которые при последнем пинге оказались недоступны. Подписки не затрагиваются."
+    override val deleteDuplicatesTitle = "Удалить дубликаты?"
+    override val deleteDuplicatesMessage =
+        "Будут удалены повторяющиеся собственные локации с одинаковой конфигурацией (останется по одной). Подписки не затрагиваются."
+    override fun unreachableDeleted(count: Int) = "Удалено недоступных: $count"
+    override fun duplicatesDeleted(count: Int) = "Удалено дубликатов: $count"
+    override val noUnreachableFound = "Недоступные локации не найдены"
+    override val noDuplicatesFound = "Дубликаты не найдены"
     override val settings = "Настройки"
     override val dynamicTheme = "Динамическая тема"
     override val dynamicThemeOn = "Системные цвета Android"
@@ -1108,6 +1130,18 @@ object EnStrings : Strings {
         "All configurations and subscriptions will be removed. This cannot be undone."
     override val menuDeleteAllSubscriptions = "Delete all subscriptions"
     override val menuDeleteAllConfigs = "Delete all configs"
+    override val menuDeleteUnreachable = "Delete unreachable"
+    override val menuDeleteDuplicates = "Delete duplicates"
+    override val deleteUnreachableTitle = "Delete unreachable?"
+    override val deleteUnreachableMessage =
+        "Custom locations that were unreachable on the last ping will be removed. Subscriptions are not touched."
+    override val deleteDuplicatesTitle = "Delete duplicates?"
+    override val deleteDuplicatesMessage =
+        "Duplicate custom locations with identical configuration will be removed (one copy kept). Subscriptions are not touched."
+    override fun unreachableDeleted(count: Int) = "Unreachable removed: $count"
+    override fun duplicatesDeleted(count: Int) = "Duplicates removed: $count"
+    override val noUnreachableFound = "No unreachable locations found"
+    override val noDuplicatesFound = "No duplicates found"
     override val settings = "Settings"
     override val dynamicTheme = "Dynamic theme"
     override val dynamicThemeOn = "Using Android system colors"
@@ -1596,6 +1630,18 @@ object FaStrings : Strings {
         "همهٔ پیکربندی‌ها و اشتراک‌ها حذف می‌شوند. این کار بازگشت‌ناپذیر است."
     override val menuDeleteAllSubscriptions = "حذف همهٔ اشتراک‌ها"
     override val menuDeleteAllConfigs = "حذف همهٔ پیکربندی‌ها"
+    override val menuDeleteUnreachable = "حذف موارد در دسترس‌نبودن"
+    override val menuDeleteDuplicates = "حذف موارد تکراری"
+    override val deleteUnreachableTitle = "موارد در دسترس‌نبودن حذف شوند؟"
+    override val deleteUnreachableMessage =
+        "موقعیت‌های سفارشی که در آخرین پینگ در دسترس نبودند حذف می‌شوند. اشتراک‌ها دست‌نخورده می‌مانند."
+    override val deleteDuplicatesTitle = "موارد تکراری حذف شوند؟"
+    override val deleteDuplicatesMessage =
+        "موقعیت‌های سفارشی تکراری با پیکربندی یکسان حذف می‌شوند (یک نسخه باقی می‌ماند). اشتراک‌ها دست‌نخورده می‌مانند."
+    override fun unreachableDeleted(count: Int) = "موارد در دسترس‌نبودن حذف‌شده: $count"
+    override fun duplicatesDeleted(count: Int) = "موارد تکراری حذف‌شده: $count"
+    override val noUnreachableFound = "موقعیت در دسترس‌نبودنی یافت نشد"
+    override val noDuplicatesFound = "موردی تکراری یافت نشد"
     override val settings = "تنظیمات"
     override val dynamicTheme = "پوستهٔ پویا"
     override val dynamicThemeOn = "استفاده از رنگ‌های سیستم اندروید"

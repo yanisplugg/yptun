@@ -175,6 +175,16 @@ fun HomeScreen(
                 locationViewModel.deleteAllSubscriptions { afterDeletion(s.subscriptionsDeleted) }
             PendingDelete.AllConfigs ->
                 locationViewModel.deleteAllLocations { afterDeletion(s.configsDeleted) }
+            PendingDelete.Unreachable ->
+                locationViewModel.deleteUnreachableCustomLocations { count ->
+                    if (count > 0) afterDeletion(s.unreachableDeleted(count))
+                    else scope.launch { snackbarHostState.showSnackbar(s.noUnreachableFound) }
+                }
+            PendingDelete.Duplicates ->
+                locationViewModel.deleteDuplicateLocations { count ->
+                    if (count > 0) afterDeletion(s.duplicatesDeleted(count))
+                    else scope.launch { snackbarHostState.showSnackbar(s.noDuplicatesFound) }
+                }
         }
     }
 
@@ -195,6 +205,8 @@ fun HomeScreen(
                 onSplitTunnelingClick = onSplitTunnelingClick,
                 onAddClick = { isAddSheetOpen = true },
                 showOverflowMenu = locations.isNotEmpty(),
+                onDeleteUnreachable = { requestDelete(PendingDelete.Unreachable) },
+                onDeleteDuplicates = { requestDelete(PendingDelete.Duplicates) },
                 onDeleteAllSubscriptions = { requestDelete(PendingDelete.AllSubscriptions) },
                 onDeleteAllConfigs = { requestDelete(PendingDelete.AllConfigs) }
             )
@@ -436,6 +448,10 @@ fun HomeScreen(
                     s.deleteAllSubscriptionsMessage
                 PendingDelete.AllConfigs -> s.deleteAllConfigsTitle to
                     s.deleteAllConfigsMessage
+                PendingDelete.Unreachable -> s.deleteUnreachableTitle to
+                    s.deleteUnreachableMessage
+                PendingDelete.Duplicates -> s.deleteDuplicatesTitle to
+                    s.deleteDuplicatesMessage
             }
             AlertDialog(
                 onDismissRequest = { pendingDelete = null },
@@ -461,6 +477,8 @@ private sealed interface PendingDelete {
     data class Subscription(val ids: List<String>) : PendingDelete
     data object AllSubscriptions : PendingDelete
     data object AllConfigs : PendingDelete
+    data object Unreachable : PendingDelete
+    data object Duplicates : PendingDelete
 }
 
 @Composable

@@ -65,8 +65,12 @@ data class AppBehaviorSettings(
      * [lastPingResults] after each ping pass and restored on launch.
      */
     val savePingResults: Boolean = false,
-    /** Last saved ping results (storage id → latency ms), used only when [savePingResults] is on. */
-    val lastPingResults: Map<String, Int> = emptyMap(),
+    /**
+     * Last saved ping results (storage id → latency ms), used only when [savePingResults] is on.
+     * A `null` value means the location was probed but unreachable/failed — those are persisted too
+     * so the "недоступен" state survives a restart (not just the successful ones).
+     */
+    val lastPingResults: Map<String, Int?> = emptyMap(),
     /**
      * Show the subscription expiry date ("до дд.мм.гггг") under the last-refresh line in the
      * subscription group header. Off by default; the urgent (≤2 days) red badge is always shown.
