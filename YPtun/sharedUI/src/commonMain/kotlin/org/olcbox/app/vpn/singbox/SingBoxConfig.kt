@@ -38,6 +38,25 @@ object SingBoxConfig {
     private const val WG_BASE_TAG = "wireguard-base"
     private const val SOCKS_IN_TAG = "socks-in"
 
+    /**
+     * Well-known DNS-over-HTTPS/TLS endpoints that browsers & apps dial directly (often over IPv6),
+     * bypassing the tunnel's resolver. Rejected by domain under strict-family / fakeip so the app falls
+     * back to the system resolver (→ tunnel → fake IPv4). Matched as domain_suffix (covers subdomains
+     * like chrome.cloudflare-dns.com, mozilla.cloudflare-dns.com).
+     */
+    private val DOH_BLOCK_SUFFIXES = listOf(
+        "cloudflare-dns.com",
+        "dns.google",
+        "dns.google.com",
+        "one.one.one.one",
+        "dns.quad9.net",
+        "doh.opendns.com",
+        "dns.nextdns.io",
+        "doh.cleanbrowsing.org",
+        "dns.adguard.com",
+        "dns.adguard-dns.com",
+    )
+
     /** Raw-outbound types that do not support sing-box smux and must not get a multiplex block. */
     private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks")
 
@@ -274,6 +293,26 @@ object SingBoxConfig {
                         addJsonObject {
                             put("network", "udp")
                             putJsonArray("port") { add(443) }
+                            put("action", "reject")
+                        }
+                    }
+                    // App-level DoH/DoT bypass: browsers (Chrome, Firefox…) ship hardcoded DNS-over-HTTPS
+                    // endpoints, often reached over IPv6. Under strict "IPv4 only" the `::/0 reject` below
+                    // would kill those connections and leave the app with NO DNS (google.com → connection
+                    // closed). Reject the DoH endpoints BY DOMAIN instead, so the app cleanly falls back to
+                    // the system resolver — which rides the tunnel and (with fakeip) returns a fake IPv4.
+                    // Net effect: DNS works, stays on IPv4, and there is no v6 leak. Enabled whenever a
+                    // strict family is enforced or fakeip is active (both want all DNS via the system path).
+                    val blockAppDoh = fakeEnabled ||
+                        effectiveStrategy == "ipv4_only" || effectiveStrategy == "ipv6_only"
+                    if (blockAppDoh) {
+                        addJsonObject {
+                            putJsonArray("domain_suffix") { DOH_BLOCK_SUFFIXES.forEach { add(it) } }
+                            put("action", "reject")
+                        }
+                        // Firefox canary domain: returning NXDOMAIN/reject here disables its auto-DoH.
+                        addJsonObject {
+                            putJsonArray("domain") { add("use-application-dns.net") }
                             put("action", "reject")
                         }
                     }

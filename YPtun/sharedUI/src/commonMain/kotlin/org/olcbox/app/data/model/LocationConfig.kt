@@ -575,6 +575,8 @@ data class LocationEntry(
     val core: ProxyCore? = null,
     val vkturn: VkTurnConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
+    @SerialName("fake_dns")
+    val fakeDns: FakeDnsSpec? = null,
     @SerialName("routing_profile_id")
     val routingProfileId: String? = null,
     @SerialName("auth_provider")
@@ -646,6 +648,7 @@ data class LocationEntry(
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
                 advanced = advanced,
+                fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
             ).normalized()
         }
@@ -670,6 +673,7 @@ data class LocationEntry(
             core = config.core,
             vkturn = config.vkturn,
             advanced = config.advanced,
+            fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
@@ -702,6 +706,7 @@ data class LocationEntry(
                 core = config.core,
                 vkturn = config.vkturn,
                 advanced = config.advanced,
+                fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },
                 authProvider = config.bypassProvider,
                 transport = LocationTransportConfig.from(config),

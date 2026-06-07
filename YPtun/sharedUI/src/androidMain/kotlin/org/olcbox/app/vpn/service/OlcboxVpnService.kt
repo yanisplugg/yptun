@@ -1021,14 +1021,11 @@ class OlcboxVpnService : VpnService() {
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     blockQuic = !isAwg,
                     sniffOverrideDestination = isAwg,
-                    // "IPv4 only" on a TCP proxy must NOT blanket-reject every IPv6 destination: apps that
-                    // dial their own hardcoded IPv6 (Chrome's DoH → cloudflare-dns.com over v6) arrive as a
-                    // raw v6 literal with no domain to downgrade, so the `::/0 reject` killed their DNS and
-                    // made google.com "connection closed" (other, already-cached sites still worked). The
-                    // ipv4_only DNS strategy already drops AAAA for ordinary lookups, so normal traffic
-                    // stays v4 without the reject — matching the working "prefer IPv4" behaviour. Keep the
-                    // reject only for the AmneziaWG full tunnel (it pairs it with sniff-override).
-                    forceFamilyResolve = isAwg,
+                    // Keep STRICT IPv4: the `::/0 reject` (forceFamilyResolve, default true) kills any IPv6
+                    // so "IPv4 only" truly leaks no v6 (incl. routing-profile direct rules). Apps that dial
+                    // their own hardcoded-IPv6 DoH (Chrome → cloudflare-dns.com) would be killed by it, so
+                    // SingBoxConfig now BLOCKS those DoH endpoints by domain → the app falls back to system
+                    // DNS, which (with fakeip) returns a fake IPv4 → google.com works without any v6.
                     secondProfile = secondProfile,
                     // FakeDNS translated from an imported Xray config → reproduced natively on sing-box.
                     fakeDnsSpec = config.fakeDns,

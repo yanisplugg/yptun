@@ -3399,6 +3399,10 @@ private fun ApplicationBehaviorContent(
             checked = settings.showSubscriptionExpiry
         ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
 
+        // Subscription User-Agent selector intentionally hidden from the UI: the default (YPtun main
+        // fetch + automatic FakeDNS enrichment from a Happ-UA fetch) is correct for everyone. The
+        // setting is kept in the model for forward-compat / debugging.
+
         SettingsSectionLabel(s.language)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val options = listOf(

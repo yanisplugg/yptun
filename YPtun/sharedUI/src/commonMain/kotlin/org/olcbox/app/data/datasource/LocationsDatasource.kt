@@ -29,6 +29,8 @@ import org.olcbox.app.data.importer.SubscriptionDecoder
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
+import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyCore
@@ -85,7 +87,9 @@ class LocationsRepositoryImpl(
         val profileTitle: String? = null,
         val userInfo: String? = null,
         /** Best-effort JSON from the Remnawave `<url>/info` endpoint (carries user.expiresAt etc.). */
-        val infoJson: String? = null
+        val infoJson: String? = null,
+        /** Best-effort rich Xray JSON (Happ-UA fetch) used only to extract the FakeDNS spec. */
+        val fakednsJson: String? = null
     )
 
     private data class DownloadedSubscription(
@@ -93,7 +97,8 @@ class LocationsRepositoryImpl(
         val updateIntervalHours: Int?,
         val profileTitle: String? = null,
         val userInfo: String? = null,
-        val infoJson: String? = null
+        val infoJson: String? = null,
+        val fakednsJson: String? = null
     )
 
     private data class ParsedImport(
@@ -200,8 +205,22 @@ class LocationsRepositoryImpl(
         }
 
         mutationMutex.withLock {
+            val current = getBundleUnlocked()
+            // Re-importing the SAME subscription URL must behave like a refresh: drop the old entries
+            // from that URL first so freshly-parsed fields (typed profile, transports, FakeDNS spec)
+            // REPLACE the stale ones, instead of being dropped as duplicates by the additive merge.
+            // Without this, an old import (e.g. before FakeDNS extraction existed) sticks around and
+            // re-adding the subscription never picks up the new fields.
+            val subUrl = resolved.source.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }
+            val basis = if (subUrl != null) {
+                current.copy(
+                    locations = current.locations.filterNot { it.subscriptionUrl?.trim() == subUrl }
+                )
+            } else {
+                current
+            }
             val merged = mergeImportedBundle(
-                current = getBundleUnlocked(),
+                current = basis,
                 imported = imported,
                 replaceMatchingStorageIds = resolved.parsed.mode == ImportMode.Restore
             )
@@ -576,7 +595,7 @@ class LocationsRepositoryImpl(
             ?: fallbackSubscriptionInterval
             ?: source.subscriptionUrl?.let { SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS }
 
-        return parseImport(
+        val parsed = parseImport(
             source.content.normalizedImportText(),
             source.subscriptionUrl,
             initialSubscriptionInterval,
@@ -588,7 +607,37 @@ class LocationsRepositoryImpl(
             // Persist the auto-refresh interval (profile-update-interval header) onto the metadata at
             // import time too, so it's shown and used even before the first scheduled refresh.
             ).withSubscriptionInterval(initialSubscriptionInterval)
+        ) ?: return null
+
+        // Enrich with FakeDNS recovered from the Happ-UA body (the only variant that carries it). The
+        // pool + dns.hosts are identical across all servers of a subscription, so a single spec is
+        // attached to every parsed location that doesn't already have one (the main YPtun/base64 import
+        // produces none). xhttp/raw-Xray locations run verbatim on Xray and are left untouched.
+        val fakeDnsSpec = source.fakednsJson?.let { fakeDnsSpecFromSubscriptionBody(it) } ?: return parsed
+        val enriched = parsed.bundle.copy(
+            locations = parsed.bundle.locations.map { entry ->
+                if (entry.fakeDns != null ||
+                    !entry.proxy?.rawXrayConfig.isNullOrBlank() ||
+                    entry.proxy?.network == ProxyProfile.NETWORK_XHTTP
+                ) {
+                    entry
+                } else {
+                    entry.copy(fakeDns = fakeDnsSpec).normalized()
+                }
+            }
         )
+        return parsed.copy(bundle = enriched)
+    }
+
+    /** Parses a rich Xray subscription body (array or single object) and returns its FakeDNS spec, or null. */
+    private fun fakeDnsSpecFromSubscriptionBody(body: String): FakeDnsSpec? {
+        val element = runCatching { json.parseToJsonElement(body.trim()) }.getOrNull() ?: return null
+        val config = when {
+            element is JsonObject -> element
+            else -> runCatching { element.jsonArray }.getOrNull()
+                ?.firstNotNullOfOrNull { it.jsonObjectOrNull()?.takeIf { o -> o["fakedns"] != null } }
+        } ?: return null
+        return fakeDnsSpecFromXray(config)
     }
 
     private suspend fun resolveImportSource(
@@ -618,10 +667,19 @@ class LocationsRepositoryImpl(
                     requestMode = requestMode,
                     profileTitle = downloaded.profileTitle,
                     userInfo = downloaded.userInfo,
-                    infoJson = downloaded.infoJson
+                    infoJson = downloaded.infoJson,
+                    fakednsJson = downloaded.fakednsJson
                 )
             }
     }
+
+    /** Resolves the user's subscription User-Agent choice ([SubscriptionUserAgentHolder]) to a string. */
+    private fun subscriptionUserAgent(): String =
+        if (SubscriptionUserAgentHolder.mode == AppBehaviorSettings.SUB_UA_YPTUN) {
+            CurrentAppInfo.userAgent
+        } else {
+            AppBehaviorSettings.HAPP_USER_AGENT
+        }
 
     private suspend fun downloadTextFromUrl(
         url: String,
@@ -651,19 +709,18 @@ class LocationsRepositoryImpl(
                                 // both the JSON `links[]` and base64/plain bodies.
                                 "application/json, text/plain, text/markdown, application/octet-stream, */*"
                             )
+                            // Panels do User-Agent content-negotiation: our own "YPtun/x" (and a browser
+                            // UA) get only bare base64 vless links, while a recognised client UA gets the
+                            // RICH per-server Xray JSON (with dns.hosts / routing / FAKEDNS). We support
+                            // that JSON (parseRawXray), and it's the only way to receive the server's
+                            // FakeDNS config — so always present as Happ, the de-facto "full config" UA.
+                            append(HttpHeaders.UserAgent, subscriptionUserAgent())
                             if (requestMode == SubscriptionRequestMode.Identity) {
-                                append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
                                 append("x-hwid", hwid.orEmpty())
                                 // Remnawave HWID device-limit descriptors.
                                 append("x-device-os", DeviceInfo.os)
                                 append("x-ver-os", DeviceInfo.osVersion)
                                 append("x-device-model", DeviceInfo.model)
-                            } else {
-                                append(
-                                    HttpHeaders.UserAgent,
-                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                                )
                             }
                         }
                     }
@@ -685,7 +742,7 @@ class LocationsRepositoryImpl(
                     val infoResponse = client.get(url.trim().trimEnd('/') + "/info") {
                         headers {
                             append(HttpHeaders.Accept, "application/json")
-                            append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
+                            append(HttpHeaders.UserAgent, subscriptionUserAgent())
                             if (requestMode == SubscriptionRequestMode.Identity) {
                                 append("x-hwid", hwid.orEmpty())
                             }
@@ -694,12 +751,35 @@ class LocationsRepositoryImpl(
                     if (infoResponse.status.value in 200..299) infoResponse.bodyAsText() else null
                 }.getOrNull()?.takeIf { it.isNotBlank() }
 
+                // FakeDNS enrichment: the server's fakeip pool + dns.hosts only ship in the rich Xray
+                // JSON returned under the "Happ/1.0" UA. The MAIN fetch above keeps the user's chosen UA
+                // (default YPtun → clean names/links), so do a SEPARATE Happ-UA fetch here purely to
+                // recover the FakeDNS config and attach it later. Skipped (reuse main) when the main UA
+                // already is Happ. Best-effort: any failure just means no FakeDNS.
+                val fakednsJson = if (subscriptionUserAgent() == AppBehaviorSettings.HAPP_USER_AGENT) {
+                    content
+                } else {
+                    runCatching {
+                        val happResponse = client.get(url) {
+                            headers {
+                                append(HttpHeaders.Accept, "application/json, text/plain, */*")
+                                append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
+                                if (requestMode == SubscriptionRequestMode.Identity) {
+                                    append("x-hwid", hwid.orEmpty())
+                                }
+                            }
+                        }
+                        if (happResponse.status.value in 200..299) happResponse.bodyAsText() else null
+                    }.getOrNull()?.takeIf { it.trimStart().startsWith("[") || it.trimStart().startsWith("{") }
+                }
+
                 DownloadedSubscription(
                     content = content,
                     updateIntervalHours = response.profileUpdateIntervalHours(),
                     profileTitle = response.headers["profile-title"]?.let { decodeProfileTitle(it) },
                     userInfo = response.headers["subscription-userinfo"]?.trim(),
-                    infoJson = infoJson
+                    infoJson = infoJson,
+                    fakednsJson = fakednsJson
                 )
             }
         } finally {
