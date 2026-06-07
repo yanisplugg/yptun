@@ -103,6 +103,26 @@ fun AndroidMainScreen(
     val pendingVpnAction = remember {
         mutableStateOf<PendingVpnPermissionAction?>(null)
     }
+    // Persist / restore last ping results across app restarts (AppBehaviorSettings.savePingResults).
+    // Keyed on the toggle: settings load async, so when it flips on we seed the saved results (once)
+    // and route future ping-pass completions back into settings; when off we stop and clear them.
+    val pingsSeeded = remember { mutableStateOf(false) }
+    LaunchedEffect(appBehavior.savePingResults) {
+        if (appBehavior.savePingResults) {
+            if (!pingsSeeded.value && appBehavior.lastPingResults.isNotEmpty()) {
+                locationViewModel.seedPings(appBehavior.lastPingResults)
+            }
+            pingsSeeded.value = true
+            locationViewModel.onPingsCompleted = { results ->
+                vpnManager.setAppBehavior(vpnManager.appBehavior.value.copy(lastPingResults = results))
+            }
+        } else {
+            locationViewModel.onPingsCompleted = null
+            if (vpnManager.appBehavior.value.lastPingResults.isNotEmpty()) {
+                vpnManager.setAppBehavior(vpnManager.appBehavior.value.copy(lastPingResults = emptyMap()))
+            }
+        }
+    }
     var isAppSettingsOpen by remember { mutableStateOf(false) }
     var appSettingsInitialRoute by remember { mutableStateOf(AppSettingsInitialRoute.Hub) }
     var shareSheetPayload by remember { mutableStateOf<Pair<String, String>?>(null) }

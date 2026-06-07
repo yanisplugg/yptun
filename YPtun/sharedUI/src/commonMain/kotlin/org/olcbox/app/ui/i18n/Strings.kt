@@ -514,6 +514,8 @@ interface Strings {
     val pingMethod: String
     val pingTarget: String
     val pingTargetHint: String
+    val savePingResultsTitle: String
+    val savePingResultsSubtitle: String
     val pingModeAuto: String
     val pingModeTcp: String
     val pingModeIcmp: String
@@ -1009,7 +1011,10 @@ object RuStrings : Strings {
     override val pingSettingsSubtitle = "Способ проверки инбаундов"
     override val pingMethod = "Способ пинга"
     override val pingTarget = "Сайт для пинга"
-    override val pingTargetHint = "Например: https://www.google.com"
+    override val pingTargetHint = "Например: https://google.com"
+    override val savePingResultsTitle = "Сохранять результаты пингов"
+    override val savePingResultsSubtitle =
+        "Показывать последние результаты при повторном открытии приложения"
     override val pingModeAuto = "Авто"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -1494,7 +1499,10 @@ object EnStrings : Strings {
     override val pingSettingsSubtitle = "How inbounds are probed"
     override val pingMethod = "Ping method"
     override val pingTarget = "Ping target site"
-    override val pingTargetHint = "e.g. https://www.google.com"
+    override val pingTargetHint = "e.g. https://google.com"
+    override val savePingResultsTitle = "Save ping results"
+    override val savePingResultsSubtitle =
+        "Show the last results again when the app is reopened"
     override val pingModeAuto = "Auto"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -1979,7 +1987,10 @@ object FaStrings : Strings {
     override val pingSettingsSubtitle = "نحوه بررسی ورودی‌ها"
     override val pingMethod = "روش پینگ"
     override val pingTarget = "سایت هدف پینگ"
-    override val pingTargetHint = "مثال: https://www.google.com"
+    override val pingTargetHint = "مثال: https://google.com"
+    override val savePingResultsTitle = "ذخیرهٔ نتایج پینگ"
+    override val savePingResultsSubtitle =
+        "نمایش آخرین نتایج هنگام بازکردن دوبارهٔ برنامه"
     override val pingModeAuto = "خودکار"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"

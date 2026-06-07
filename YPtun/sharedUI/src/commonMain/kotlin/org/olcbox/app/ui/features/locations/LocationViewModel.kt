@@ -91,6 +91,12 @@ class LocationViewModel(
     var pingsState by mutableStateOf<PingsState>(PingsState.Idle)
         private set
 
+    /**
+     * Invoked when a ping pass completes, with the latest successful (non-null) results. The host can
+     * persist them so they survive an app restart (see [AppBehaviorSettings.savePingResults]).
+     */
+    var onPingsCompleted: ((Map<String, Int>) -> Unit)? = null
+
     private val activePingJobs = mutableMapOf<String, Job>()
     private val pingSemaphore = Semaphore(LOCATION_PING_PARALLELISM)
     // Source-of-truth ping map during a refresh pass. Each completion updates this in place (O(1))
@@ -397,6 +403,17 @@ class LocationViewModel(
         pingEmitJob?.cancel()
         pingEmitJob = null
         emitPingState()
+        // Pass complete — hand the successful results to the host for optional persistence.
+        onPingsCompleted?.invoke(livePings.mapNotNull { (id, ms) -> ms?.let { id to it } }.toMap())
+    }
+
+    /** Restores previously-saved ping results so they show on launch (until the next ping pass). */
+    fun seedPings(pings: Map<String, Int>) {
+        if (pings.isEmpty()) return
+        pings.forEach { (id, ms) -> livePings[id] = ms }
+        if (activePingJobs.isEmpty()) {
+            pingsState = PingsState.Success(livePings.toMap())
+        }
     }
 
     private suspend fun checkLocationPing(
