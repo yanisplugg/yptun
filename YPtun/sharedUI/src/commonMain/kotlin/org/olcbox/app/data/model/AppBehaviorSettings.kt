@@ -126,8 +126,16 @@ data class AppBehaviorSettings(
         /** Selectable ping-result display modes (single-choice in the UI). */
         val PING_RESULT_MODES = listOf(PING_RESULT_TIME, PING_RESULT_ICON)
 
-        /** Default target, pre-filled into [pingUrl] (and the fallback when it is cleared). */
-        const val DEFAULT_PING_URL = "https://google.com"
+        /**
+         * Default probe target. A `generate_204` endpoint: a tiny TCP HTTP request that returns an
+         * empty 204 — designed for connectivity checks and reliable through the tunnel. Plain
+         * `https://google.com` (the [LEGACY_PING_URL]) was a poor probe: Google forces HTTP/3 (QUIC),
+         * which the tunnel blocks, so the GET probe got "no response" and falsely marked servers down.
+         */
+        const val DEFAULT_PING_URL = "https://www.gstatic.com/generate_204"
+
+        /** The previous default; auto-migrated to [DEFAULT_PING_URL] so existing users get the fix. */
+        const val LEGACY_PING_URL = "https://google.com"
 
         /** Parallel ping streams: how many locations are probed at once. */
         const val DEFAULT_PING_PARALLELISM = 5
@@ -135,8 +143,13 @@ data class AppBehaviorSettings(
         const val MAX_PING_PARALLELISM = 20
     }
 
-    /** [pingUrl] trimmed, or [DEFAULT_PING_URL] when blank. */
-    fun effectivePingUrl(): String = pingUrl.trim().ifBlank { DEFAULT_PING_URL }
+    /**
+     * [pingUrl] trimmed, or [DEFAULT_PING_URL] when blank OR still on the legacy google.com default
+     * (auto-migrated so users who never customised it stop getting false "unreachable" on google).
+     */
+    fun effectivePingUrl(): String = pingUrl.trim().let {
+        if (it.isBlank() || it == LEGACY_PING_URL) DEFAULT_PING_URL else it
+    }
 
     /** [pingParallelism] clamped to the supported range. */
     fun effectivePingParallelism(): Int =

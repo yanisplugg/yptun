@@ -59,6 +59,7 @@ fun OlcboxAppContent(
     onRenameFolder: (id: String, name: String) -> Unit = { _, _ -> },
     onDeleteFolder: (id: String) -> Unit = {},
     onAddToFolder: (id: String, memberKeys: List<String>) -> Unit = { _, _ -> },
+    onRemoveFromFolder: (memberKeys: List<String>) -> Unit = {},
     onToggleFolderPinned: (String) -> Unit = {},
     onToggleFolderCollapsed: (String) -> Unit = {}
 ) {
@@ -141,6 +142,7 @@ fun OlcboxAppContent(
                     onRenameFolder = onRenameFolder,
                     onDeleteFolder = onDeleteFolder,
                     onAddToFolder = onAddToFolder,
+                    onRemoveFromFolder = onRemoveFromFolder,
                     onToggleFolderPinned = onToggleFolderPinned,
                     onToggleFolderCollapsed = onToggleFolderCollapsed
                 )

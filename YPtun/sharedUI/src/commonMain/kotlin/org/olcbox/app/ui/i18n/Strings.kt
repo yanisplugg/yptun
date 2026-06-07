@@ -96,6 +96,7 @@ interface Strings {
     val newFolderTitle: String
     val folderNameHint: String
     val moveToFolder: String
+    val removeFromFolder: String
     val chooseFolderTitle: String
     val newFolderOption: String
     val folderCreate: String
@@ -658,6 +659,7 @@ object RuStrings : Strings {
     override val newFolderTitle = "Новая группа"
     override val folderNameHint = "Название группы"
     override val moveToFolder = "В группу"
+    override val removeFromFolder = "Убрать из групп"
     override val chooseFolderTitle = "Выберите группу"
     override val newFolderOption = "Новая группа…"
     override val folderCreate = "Создать"
@@ -1174,6 +1176,7 @@ object EnStrings : Strings {
     override val newFolderTitle = "New group"
     override val folderNameHint = "Group name"
     override val moveToFolder = "To group"
+    override val removeFromFolder = "Remove from groups"
     override val chooseFolderTitle = "Choose a group"
     override val newFolderOption = "New group…"
     override val folderCreate = "Create"
@@ -1690,6 +1693,7 @@ object FaStrings : Strings {
     override val newFolderTitle = "گروه جدید"
     override val folderNameHint = "نام گروه"
     override val moveToFolder = "به گروه"
+    override val removeFromFolder = "حذف از گروه‌ها"
     override val chooseFolderTitle = "یک گروه انتخاب کنید"
     override val newFolderOption = "گروه جدید…"
     override val folderCreate = "ساختن"

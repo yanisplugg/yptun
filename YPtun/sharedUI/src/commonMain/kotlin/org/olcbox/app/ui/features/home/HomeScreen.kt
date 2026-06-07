@@ -111,6 +111,7 @@ fun HomeScreen(
     onRenameFolder: (id: String, name: String) -> Unit = { _, _ -> },
     onDeleteFolder: (id: String) -> Unit = {},
     onAddToFolder: (id: String, memberKeys: List<String>) -> Unit = { _, _ -> },
+    onRemoveFromFolder: (memberKeys: List<String>) -> Unit = {},
     onToggleFolderPinned: (String) -> Unit = {},
     onToggleFolderCollapsed: (String) -> Unit = {}
 ) {
@@ -392,7 +393,8 @@ fun HomeScreen(
                 onToggleFolderCollapsed = onToggleFolderCollapsed,
                 onToggleFolderPinned = onToggleFolderPinned,
                 onRenameFolder = { folder -> folderDialog = FolderDialog.Rename(folder.id, folder.name) },
-                onDeleteFolder = { id -> pendingFolderDelete = id }
+                onDeleteFolder = { id -> pendingFolderDelete = id },
+                onRequestMoveToFolder = { keys -> chooseFolderForMembers = keys }
             )
 
             item(key = "bottom-spacer") {
@@ -564,6 +566,13 @@ fun HomeScreen(
                                 onAddToFolder(folder.id, memberKeys)
                                 chooseFolderForMembers = null
                             }) { Text(folder.name) }
+                        }
+                        // Pull the items out of every folder (back to the main list).
+                        if (customGroups.isNotEmpty()) {
+                            TextButton(onClick = {
+                                onRemoveFromFolder(memberKeys)
+                                chooseFolderForMembers = null
+                            }) { Text(s.removeFromFolder, color = MaterialTheme.colorScheme.error) }
                         }
                     }
                 },

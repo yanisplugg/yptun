@@ -550,6 +550,11 @@ fun AndroidMainScreen(
             }
             vpnManager.setAppBehavior(appBehavior.copy(customGroups = updated))
         },
+        onRemoveFromFolder = { memberKeys ->
+            val keySet = memberKeys.toSet()
+            val updated = appBehavior.customGroups.map { it.copy(members = it.members - keySet) }
+            vpnManager.setAppBehavior(appBehavior.copy(customGroups = updated))
+        },
         onToggleFolderPinned = { id ->
             val updated = appBehavior.customGroups.map { if (it.id == id) it.copy(pinned = !it.pinned) else it }
             vpnManager.setAppBehavior(appBehavior.copy(customGroups = updated))

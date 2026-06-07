@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
@@ -106,7 +107,9 @@ fun LazyListScope.locationSelectorContent(
     onToggleFolderCollapsed: (String) -> Unit = {},
     onToggleFolderPinned: (String) -> Unit = {},
     onRenameFolder: (CustomGroup) -> Unit = {},
-    onDeleteFolder: (String) -> Unit = {}
+    onDeleteFolder: (String) -> Unit = {},
+    // Open the "choose folder" picker for the given member keys (move/remove a whole subscription).
+    onRequestMoveToFolder: (List<String>) -> Unit = {}
 ) {
     if (locations.isEmpty()) {
         // Don't flash the "add your first config" card during the initial async load — only show
@@ -226,6 +229,7 @@ fun LazyListScope.locationSelectorContent(
                             isPingDescending = isPingDescending,
                             onTogglePin = { onToggleGroupPinned(groupKey) },
                             onTogglePingSort = { onToggleGroupPingSort(groupKey) },
+                            onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) }
                         )
                     }
@@ -633,6 +637,7 @@ private fun SubscriptionGroupMenu(
     isPingDescending: Boolean,
     onTogglePin: () -> Unit,
     onTogglePingSort: () -> Unit,
+    onMoveToFolder: () -> Unit,
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -680,6 +685,14 @@ private fun SubscriptionGroupMenu(
                 } else null,
                 onClick = {
                     onTogglePingSort()
+                    expanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text(s.moveToFolder) },
+                leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, contentDescription = null) },
+                onClick = {
+                    onMoveToFolder()
                     expanded = false
                 }
             )
