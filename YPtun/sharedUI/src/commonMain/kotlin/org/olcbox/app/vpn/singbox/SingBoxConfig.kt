@@ -162,12 +162,17 @@ object SingBoxConfig {
                         put("outbound", "any")
                         put("server", "direct")
                     }
-                    // Route A/AAAA queries to the fake server (A-only when forcing IPv4).
+                    // Route BOTH A and AAAA to the fake server. Faking AAAA even under ipv4_only is
+                    // deliberate: it hands the app a fake IPv6 (fc00::/18) instead of letting it learn the
+                    // server's REAL IPv6, which the strict `::/0 reject` would then kill ("ERR_CONNECTION"
+                    // on Google over v6). sing-box restores the fake v6 to the domain before the IP rules,
+                    // so it's tunnelled as IPv4 — only genuine real IPv6 hits the reject. (When fakeip is
+                    // off this block doesn't run, so non-fakeip ipv4_only behaviour is unchanged.)
                     if (fakeEnabled) {
                         addJsonObject {
                             putJsonArray("query_type") {
                                 add("A")
-                                if ((dnsStrategyOverride ?: traffic.domainStrategy) != "ipv4_only") add("AAAA")
+                                add("AAAA")
                             }
                             put("server", "fake")
                         }

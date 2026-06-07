@@ -3399,9 +3399,10 @@ private fun ApplicationBehaviorContent(
             checked = settings.showSubscriptionExpiry
         ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
 
-        // Subscription User-Agent selector intentionally hidden from the UI: the default (YPtun main
-        // fetch + automatic FakeDNS enrichment from a Happ-UA fetch) is correct for everyone. The
-        // setting is kept in the model for forward-compat / debugging.
+        // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
+        // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
+        // The selector code is preserved (unused) in [SubscriptionUserAgentSelector] below and can be
+        // dropped back into this screen if it ever needs to be exposed again.
 
         SettingsSectionLabel(s.language)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3418,6 +3419,40 @@ private fun ApplicationBehaviorContent(
                     label = { Text(title) }
                 )
             }
+        }
+    }
+}
+
+/**
+ * Subscription User-Agent selector. PRESERVED but intentionally NOT shown anywhere (no UI). The fetch
+ * defaults to YPtun + automatic FakeDNS enrichment from a Happ-UA request, which is right for everyone;
+ * this lets the choice be re-exposed later (drop a call into AppBehaviorSettingsContent) without
+ * rewriting it. Suppress the "unused" lint since keeping it is deliberate.
+ */
+@Suppress("unused")
+@Composable
+private fun SubscriptionUserAgentSelector(
+    settings: AppBehaviorSettings,
+    onChanged: (AppBehaviorSettings) -> Unit
+) {
+    val s = LocalStrings.current
+    SettingsSectionLabel(s.subscriptionUserAgentLabel)
+    Text(
+        text = s.subscriptionUserAgentSubtitle,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val uaOptions = listOf(
+            AppBehaviorSettings.SUB_UA_HAPP to "Happ/1.0",
+            AppBehaviorSettings.SUB_UA_YPTUN to "YPtun",
+        )
+        uaOptions.forEach { (mode, title) ->
+            FilterChip(
+                selected = settings.subscriptionUserAgent == mode,
+                onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
+                label = { Text(title) }
+            )
         }
     }
 }
