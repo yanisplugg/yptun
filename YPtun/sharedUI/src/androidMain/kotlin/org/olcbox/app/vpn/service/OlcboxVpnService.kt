@@ -1022,7 +1022,10 @@ class OlcboxVpnService : VpnService() {
                     blockQuic = !isAwg,
                     sniffOverrideDestination = isAwg,
                     secondProfile = secondProfile,
+                    // FakeDNS translated from an imported Xray config → reproduced natively on sing-box.
+                    fakeDnsSpec = config.fakeDns,
                 )
+                if (config.fakeDns != null) addLog("FakeDNS spec present → enabling sing-box fakeip (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 singBoxEngine().start(json)
             }

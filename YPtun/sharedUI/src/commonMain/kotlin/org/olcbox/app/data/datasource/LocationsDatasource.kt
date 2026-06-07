@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -29,6 +30,8 @@ import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.FakeDnsSpec
+import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
@@ -1472,20 +1475,36 @@ class LocationsRepositoryImpl(
             "$server:$port"
         )
 
-        val profile = ProxyProfile(
-            tag = name,
-            type = protocol,
-            server = server,
-            serverPort = port,
-            // Keep THIS config (the array element), not the whole array, as the verbatim payload.
-            rawXrayConfig = root.toString()
-        )
-        val location = LocationConfig(
-            name = name,
-            engine = EngineType.Standard,
-            proxy = profile,
-            core = org.olcbox.app.data.model.ProxyCore.Xray
-        ).normalized()
+        // Try to fully translate the Xray proxy outbound into typed sing-box-runnable fields PLUS a
+        // FakeDNS spec (fakeip pool + dns.hosts blackholes). When that succeeds, the location runs on
+        // EITHER core — sing-box reproduces FakeDNS natively (dns.fakeip), so FakeDNS no longer needs
+        // xray-core. Only an xhttp/splithttp transport (sing-box can't serve it) keeps the verbatim
+        // Xray template + forced Xray core.
+        val typed = typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
+        val location = if (typed != null) {
+            LocationConfig(
+                name = name,
+                engine = EngineType.Standard,
+                proxy = typed,
+                core = ProxyCore.Auto,
+                fakeDns = fakeDnsSpecFromXray(root),
+            ).normalized()
+        } else {
+            // Untranslatable (xhttp / unknown transport) → run the whole template verbatim on Xray.
+            LocationConfig(
+                name = name,
+                engine = EngineType.Standard,
+                proxy = ProxyProfile(
+                    tag = name,
+                    type = protocol,
+                    server = server,
+                    serverPort = port,
+                    // Keep THIS config (the array element), not the whole array, as the verbatim payload.
+                    rawXrayConfig = root.toString()
+                ),
+                core = ProxyCore.Xray
+            ).normalized()
+        }
 
         val base = "${server}_$port"
             .lowercase()
@@ -1499,6 +1518,157 @@ class LocationsRepositoryImpl(
             subscriptionUrl = subscriptionUrl,
             metadata = null
         )
+    }
+
+    /**
+     * Maps an Xray proxy outbound (vless/vmess/trojan/shadowsocks) to a typed [ProxyProfile] that the
+     * sing-box core can dial directly. Returns null when the transport is xhttp/splithttp or otherwise
+     * not serviceable by sing-box (the caller then keeps the verbatim Xray template instead).
+     */
+    private fun typedProfileFromXrayOutbound(
+        outbound: JsonObject,
+        protocol: String,
+        server: String,
+        port: Int,
+        name: String,
+    ): ProxyProfile? {
+        val settings = outbound["settings"]?.jsonObjectOrNull()
+        val stream = outbound["streamSettings"]?.jsonObjectOrNull()
+
+        // Xray network → ProxyProfile network. xhttp/splithttp are Xray-only → bail (verbatim Xray).
+        val xrayNet = stream?.string("network")?.lowercase() ?: "tcp"
+        val network = when (xrayNet) {
+            "tcp", "raw" -> ProxyProfile.NETWORK_TCP
+            "ws", "websocket" -> ProxyProfile.NETWORK_WS
+            "grpc", "gun" -> ProxyProfile.NETWORK_GRPC
+            "h2", "http" -> ProxyProfile.NETWORK_HTTP
+            "httpupgrade" -> ProxyProfile.NETWORK_HTTPUPGRADE
+            "xhttp", "splithttp" -> return null
+            else -> return null
+        }
+
+        val security = when (stream?.string("security")?.lowercase()) {
+            "reality" -> ProxyProfile.SECURITY_REALITY
+            "tls", "xtls" -> ProxyProfile.SECURITY_TLS
+            else -> ProxyProfile.SECURITY_NONE
+        }
+
+        // Per-protocol credentials (vless/vmess use vnext[].users[]; trojan/ss use servers[]).
+        val vnextUser = settings?.get("vnext")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.firstOrNull()?.jsonObjectOrNull()
+            ?.get("users")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.firstOrNull()?.jsonObjectOrNull()
+        val ssServer = settings?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.firstOrNull()?.jsonObjectOrNull()
+
+        // TLS/REALITY parameters live in stream.{realitySettings|tlsSettings}.
+        val tls = stream?.get("realitySettings")?.jsonObjectOrNull()
+            ?: stream?.get("tlsSettings")?.jsonObjectOrNull()
+        val sni = tls?.string("serverName") ?: ""
+        val fingerprint = tls?.string("fingerprint") ?: ""
+        val alpn = (tls?.get("alpn") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            ?: emptyList()
+        val allowInsecure = (tls?.get("allowInsecure") as? JsonPrimitive)?.contentOrNull == "true"
+        val realityPbk = tls?.string("publicKey") ?: ""
+        val realityShortId = tls?.string("shortId") ?: ""
+
+        // Transport-specific path/host/serviceName.
+        val wsLike = stream?.get("wsSettings")?.jsonObjectOrNull()
+            ?: stream?.get("httpupgradeSettings")?.jsonObjectOrNull()
+        val grpc = stream?.get("grpcSettings")?.jsonObjectOrNull()
+        val path = when (network) {
+            ProxyProfile.NETWORK_GRPC -> grpc?.string("serviceName") ?: ""
+            else -> wsLike?.string("path") ?: ""
+        }
+        val host = wsLike?.string("host")
+            ?: (wsLike?.get("headers")?.jsonObjectOrNull()?.string("Host"))
+            ?: ""
+
+        return when (protocol) {
+            "vless", "vmess" -> {
+                val uuid = vnextUser?.string("id") ?: return null
+                if (uuid.isBlank()) return null
+                ProxyProfile(
+                    tag = name,
+                    type = protocol,
+                    server = server,
+                    serverPort = port,
+                    uuid = uuid,
+                    flow = vnextUser.string("flow") ?: "",
+                    alterId = vnextUser.int("alterId") ?: 0,
+                    cipher = vnextUser.string("security") ?: "auto",
+                    network = network,
+                    security = security,
+                    sni = sni,
+                    alpn = alpn,
+                    fingerprint = fingerprint,
+                    allowInsecure = allowInsecure,
+                    realityPublicKey = realityPbk,
+                    realityShortId = realityShortId,
+                    path = path,
+                    host = host,
+                )
+            }
+            "trojan" -> {
+                val pass = ssServer?.string("password") ?: return null
+                ProxyProfile(
+                    tag = name, type = ProxyProfile.TYPE_TROJAN, server = server, serverPort = port,
+                    password = pass, network = network, security = security, sni = sni, alpn = alpn,
+                    fingerprint = fingerprint, allowInsecure = allowInsecure,
+                    realityPublicKey = realityPbk, realityShortId = realityShortId, path = path, host = host,
+                )
+            }
+            "shadowsocks" -> {
+                val pass = ssServer?.string("password") ?: return null
+                ProxyProfile(
+                    tag = name, type = ProxyProfile.TYPE_SHADOWSOCKS, server = server, serverPort = port,
+                    password = pass, method = ssServer.string("method") ?: "",
+                    network = network,
+                )
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Extracts a [FakeDnsSpec] from a full Xray config: the `fakedns` pool range and the `dns.hosts`
+     * entries that map a domain to `0.0.0.0` (blackhole). Returns null when the config has no fakedns.
+     */
+    private fun fakeDnsSpecFromXray(root: JsonObject): FakeDnsSpec? {
+        val pool = (root["fakedns"] as? JsonArray)?.firstOrNull()?.jsonObjectOrNull()
+        // Xray also accepts a bare object for `fakedns`.
+        val poolObj = pool ?: root["fakedns"]?.jsonObjectOrNull()
+        val hasFakeDns = poolObj != null || (root["fakedns"] != null)
+        if (!hasFakeDns) return null
+
+        val inet4 = poolObj?.string("ipPool")?.takeIf { it.contains('.') } ?: "198.18.0.0/15"
+        val inet6 = poolObj?.string("ipPool")?.takeIf { it.contains(':') } ?: "fc00::/18"
+
+        // dns.hosts: keys mapping to "0.0.0.0" are blackholes. Keys are "regexp:<re>", "domain:<d>",
+        // "geosite:..." or a plain domain. Translate regexp/domain/plain into sing-box domain_regex.
+        val hosts = (root["dns"] as? JsonObject)?.get("hosts") as? JsonObject
+        val blockRegex = hosts?.mapNotNull { (key, value) ->
+            val blocks = when (value) {
+                is JsonPrimitive -> value.contentOrNull == "0.0.0.0"
+                is JsonArray -> value.any { (it as? JsonPrimitive)?.contentOrNull == "0.0.0.0" }
+                else -> false
+            }
+            if (!blocks) return@mapNotNull null
+            when {
+                key.startsWith("regexp:") -> key.removePrefix("regexp:")
+                key.startsWith("domain:") -> {
+                    val d = key.removePrefix("domain:").replace(".", "\\.")
+                    "(^|\\.)$d$"
+                }
+                key.startsWith("geosite:") || key.startsWith("geoip:") -> null // not regex-translatable
+                else -> {
+                    val d = key.replace(".", "\\.")
+                    "(^|\\.)$d$"
+                }
+            }
+        }.orEmpty().filterNotNull()
+
+        return FakeDnsSpec(inet4Range = inet4, inet6Range = inet6, blockRegex = blockRegex)
     }
 
     private fun parseOlcRtcUri(line: String): ParsedOlcRtcUri? {

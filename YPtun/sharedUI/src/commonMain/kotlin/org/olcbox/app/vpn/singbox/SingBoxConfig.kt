@@ -14,6 +14,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.olcbox.app.data.model.AdvancedCoreConfig
+import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingRules
@@ -94,10 +95,20 @@ object SingBoxConfig {
         // turn dials through olcRTC/WG. So: client → [olcRTC/WG] → main → second → internet. Null = the
         // main proxy is the single exit (PROXY_TAG), exactly as before.
         secondProfile: ProxyProfile? = null,
+        // Per-location FakeDNS translated from an imported Xray config (fakeip pool + dns.hosts
+        // blackholes). When non-null, FakeDNS is enabled on sing-box natively with these ranges and the
+        // blackhole domains become `domain_regex → reject` route rules — so FakeDNS works on sing-box
+        // too, not only xray-core. Overrides the (now per-config) [TrafficSettings.fakeDnsEnabled].
+        fakeDnsSpec: FakeDnsSpec? = null,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
         val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
+        // FakeDNS is on when either the (legacy global) traffic toggle is set OR this location carries a
+        // translated spec. The pool ranges come from the spec when present, else the defaults.
+        val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null
+        val fake4Range = fakeDnsSpec?.inet4Range?.takeIf { it.isNotBlank() } ?: "198.18.0.0/15"
+        val fake6Range = fakeDnsSpec?.inet6Range?.takeIf { it.isNotBlank() } ?: "fc00::/18"
         val config = buildJsonObject {
             putJsonObject("log") {
                 put("level", logLevel)
@@ -120,7 +131,7 @@ object SingBoxConfig {
                     }
                     // FakeDNS equivalent: hand out synthetic IPs so apps never see the real address;
                     // the sniffed domain is resolved behind the proxy.
-                    if (traffic.fakeDnsEnabled) {
+                    if (fakeEnabled) {
                         addJsonObject {
                             put("tag", "fake")
                             put("address", "fakeip")
@@ -133,7 +144,7 @@ object SingBoxConfig {
                         put("server", "direct")
                     }
                     // Route A/AAAA queries to the fake server (A-only when forcing IPv4).
-                    if (traffic.fakeDnsEnabled) {
+                    if (fakeEnabled) {
                         addJsonObject {
                             putJsonArray("query_type") {
                                 add("A")
@@ -143,11 +154,11 @@ object SingBoxConfig {
                         }
                     }
                 }
-                if (traffic.fakeDnsEnabled) {
+                if (fakeEnabled) {
                     putJsonObject("fakeip") {
                         put("enabled", true)
-                        put("inet4_range", "198.18.0.0/15")
-                        put("inet6_range", "fc00::/18")
+                        put("inet4_range", fake4Range)
+                        put("inet6_range", fake6Range)
                     }
                     // Separate fake/real caches so a fakeip answer never poisons a direct lookup.
                     put("independent_cache", true)
@@ -263,6 +274,16 @@ object SingBoxConfig {
                         addJsonObject {
                             put("network", "udp")
                             putJsonArray("port") { add(443) }
+                            put("action", "reject")
+                        }
+                    }
+                    // FakeDNS blackholes: the imported Xray config's dns.hosts entries that mapped a
+                    // domain to 0.0.0.0 (e.g. regexp:(^|\.)gov\.ru$ → block). Reproduced as a sniffed
+                    // domain_regex reject so the same domains die on sing-box too. Placed early (after
+                    // QUIC) so a blocked domain dies before any proxy/direct rule can carry it.
+                    if (fakeDnsSpec != null && fakeDnsSpec.blockRegex.isNotEmpty()) {
+                        addJsonObject {
+                            putJsonArray("domain_regex") { fakeDnsSpec.blockRegex.forEach { add(it) } }
                             put("action", "reject")
                         }
                     }
