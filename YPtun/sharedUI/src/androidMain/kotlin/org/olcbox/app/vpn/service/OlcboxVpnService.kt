@@ -1021,6 +1021,13 @@ class OlcboxVpnService : VpnService() {
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     blockQuic = !isAwg,
                     sniffOverrideDestination = isAwg,
+                    // FakeDNS + "IPv4 only": don't add the blanket `::/0 reject`. With fakeip, ordinary
+                    // lookups only ever get a fake v4 (AAAA is dropped by the ipv4_only DNS strategy), so
+                    // there's no v6 leak to guard against — but the reject ALSO kills apps that dial their
+                    // own IPv6 literal (Chrome's DoH → chrome.cloudflare-dns.com over v6), which breaks
+                    // their DNS and made google.com "connection closed". Matches the working prefer_ipv4
+                    // behaviour without forcing the user off the "IPv4 only" toggle.
+                    forceFamilyResolve = config.fakeDns == null,
                     secondProfile = secondProfile,
                     // FakeDNS translated from an imported Xray config → reproduced natively on sing-box.
                     fakeDnsSpec = config.fakeDns,
