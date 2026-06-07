@@ -28,6 +28,9 @@ import org.olcbox.app.data.model.TrafficSettings
 object XrayConfig {
 
     private const val PROXY_TAG = "proxy"
+    // Main (first-hop) proxy when a second/cascade proxy is present: the second exits as PROXY_TAG and
+    // dials THROUGH this. With no second proxy the main itself is PROXY_TAG (the exit).
+    private const val PROXY_BASE_TAG = "proxy-base"
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
 
@@ -108,10 +111,11 @@ object XrayConfig {
         // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
         // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
         blockQuic: Boolean = true,
-        // When false, the proxy is not applied: in Chain the [PROXY_TAG] exit becomes olcRTC's SOCKS so
-        // traffic still rides the stealth tunnel (the "main outbound"); otherwise (Standard, no chain
-        // base) it becomes a `freedom` (direct) outbound. The proxy config is kept either way, just not dialed.
-        proxyEnabled: Boolean = true,
+        // Optional SECOND proxy chained ON TOP of [profile] (the main). When present, traffic exits via
+        // this proxy (tag [PROXY_TAG], emitted first so it's Xray's default outbound) which dials THROUGH
+        // the main (tag [PROXY_BASE_TAG]); the main dials through olcRTC/WG. So: client → [olcRTC/WG] →
+        // main → second → internet. Null = the main proxy is the single exit (PROXY_TAG), as before.
+        secondProfile: ProxyProfile? = null,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
@@ -176,32 +180,46 @@ object XrayConfig {
             }
 
             val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
+            // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
+            val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
+            val second = secondProfile?.takeIf { it.isComplete() }
             putJsonArray("outbounds") {
-                if (proxyEnabled) {
+                if (second != null) {
+                    // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG, emitted FIRST so it is
+                    // Xray's default outbound), which dials THROUGH the main (PROXY_BASE_TAG); the main
+                    // dials through olcRTC/WG. Keeping the second as PROXY_TAG means the default route and
+                    // routing rules transparently use the real exit.
+                    add(
+                        buildProxyOutbound(
+                            second,
+                            chained = false,
+                            traffic = traffic,
+                            detourTagOverride = PROXY_BASE_TAG,
+                            tag = PROXY_TAG,
+                        )
+                    )
                     add(
                         buildProxyOutbound(
                             profile,
                             chained = olcrtcChainPort != null,
                             traffic = traffic,
-                            detourTagOverride = if (wgBaseOutbound != null) WG_BASE_TAG else null,
+                            detourTagOverride = baseDetour,
+                            tag = PROXY_BASE_TAG,
                         )
                     )
-                    if (wgBaseOutbound != null) add(wgBaseOutbound)
-                } else if (olcrtcChainPort != null) {
-                    // Proxy disabled in Chain: the default outbound becomes olcRTC's local SOCKS so traffic
-                    // still rides the stealth tunnel (the "main outbound"). Turning the proxy off must only
-                    // drop the extra proxy hop — NOT fall back to a direct, no-VPN exit.
-                    add(olcrtcSocksOutbound(PROXY_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
                 } else {
-                    // Proxy disabled with no chain base (Standard): exit directly (the proxy was the only hop).
-                    addJsonObject {
-                        put("tag", PROXY_TAG)
-                        put("protocol", "freedom")
-                        putJsonObject("settings") {
-                            put("domainStrategy", directDomainStrategy(traffic))
-                        }
-                    }
+                    // Single hop: the main proxy IS the exit (tag PROXY_TAG), dialing through olcRTC/WG.
+                    add(
+                        buildProxyOutbound(
+                            profile,
+                            chained = olcrtcChainPort != null,
+                            traffic = traffic,
+                            detourTagOverride = baseDetour,
+                            tag = PROXY_TAG,
+                        )
+                    )
                 }
+                if (wgBaseOutbound != null) add(wgBaseOutbound)
                 addJsonObject {
                     put("tag", "direct")
                     put("protocol", "freedom")
@@ -233,9 +251,8 @@ object XrayConfig {
                         }
                     }
                 }
-                // olcRTC chain detour — only while the proxy is enabled (the proxy outbound dials through
-                // this tag). With the proxy off, PROXY_TAG already IS the olcRTC SOCKS above.
-                if (olcrtcChainPort != null && proxyEnabled) {
+                // olcRTC chain detour: the main proxy (PROXY_TAG or PROXY_BASE_TAG) dials through this.
+                if (olcrtcChainPort != null) {
                     add(olcrtcSocksOutbound(OLCRTC_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
                 }
             }
@@ -527,12 +544,15 @@ object XrayConfig {
         profile: ProxyProfile,
         chained: Boolean,
         traffic: TrafficSettings = TrafficSettings(),
-        // When set, the proxy dials through this outbound tag (e.g. the VK-TURN WireGuard base);
-        // takes precedence over the olcRTC chain detour.
+        // When set, the proxy dials through this outbound tag (e.g. the VK-TURN WireGuard base, or the
+        // main proxy when this is the cascade exit); takes precedence over the olcRTC chain detour.
         detourTagOverride: String? = null,
+        // Outbound tag to emit. [PROXY_TAG] for the exit (default), [PROXY_BASE_TAG] for the main hop
+        // when a second/cascade proxy exits in front of it.
+        tag: String = PROXY_TAG,
     ) = buildJsonObject {
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
-        put("tag", PROXY_TAG)
+        put("tag", tag)
         put("protocol", profile.type)
 
         putJsonObject("settings") {

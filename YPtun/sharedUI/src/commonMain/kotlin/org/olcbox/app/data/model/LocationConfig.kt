@@ -115,11 +115,20 @@ data class LocationConfig(
     val vp8Batch: Int = DEFAULT_VP8_BATCH,
     /** Which core serves the local SOCKS5: olcRTC (Stealth), sing-box (Standard) or both (Chain). */
     val engine: EngineType = EngineType.Stealth,
-    /** Proxy server for the sing-box engine (Standard/Chain). Null for pure Stealth. */
+    /** Main proxy server for the sing-box engine (Standard/Chain) — the primary outbound, ALWAYS
+     *  applied. Null for pure Stealth. For Chain it rides inside the olcRTC tunnel. */
     val proxy: ProxyProfile? = null,
     /**
-     * Whether the proxy (the location's additional outbound) is applied. When false the proxy config
-     * is KEPT but not used — the connection exits via a direct outbound instead. Default true.
+     * Optional SECOND proxy chained ON TOP of [proxy] (a cascade): traffic exits via this proxy, which
+     * dials through the main one — client → [olcRTC] → main → second → internet. Null = single hop
+     * (main only). Toggled in the editor; cleared when the toggle is off.
+     */
+    @SerialName("proxy2")
+    val proxy2: ProxyProfile? = null,
+    /**
+     * Deprecated/vestigial. Previously gated whether [proxy] was applied (off = direct). The main proxy
+     * is now ALWAYS applied; the editor toggle controls [proxy2] instead. Kept only for back-compat
+     * parsing of older saved locations.
      */
     @SerialName("proxy_enabled")
     val proxyEnabled: Boolean = true,
@@ -153,6 +162,7 @@ data class LocationConfig(
             vp8Batch = sanitizeVp8Batch(vp8Batch),
             engine = engine,
             proxy = proxy,
+            proxy2 = proxy2,
             core = core,
             vkturn = vkturn,
             routingProfileId = routingProfileId.trim(),
@@ -172,10 +182,10 @@ data class LocationConfig(
     fun isComplete(): Boolean = when (engine) {
         // olcRTC needs a room id + key.
         EngineType.Stealth -> id.isNotBlank() && key.isNotBlank()
-        // sing-box needs a valid proxy server — unless the proxy is disabled (then it exits direct).
-        EngineType.Standard -> !proxyEnabled || proxy?.isComplete() == true
-        // Chain needs the olcRTC stealth tunnel, plus a valid proxy unless the proxy is disabled.
-        EngineType.Chain -> (!proxyEnabled || proxy?.isComplete() == true) && id.isNotBlank() && key.isNotBlank()
+        // sing-box needs a valid main proxy server (always the primary outbound). [proxy2] is optional.
+        EngineType.Standard -> proxy?.isComplete() == true
+        // Chain needs the olcRTC stealth tunnel plus a valid main proxy. [proxy2] is optional.
+        EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
         // VK-TURN needs the freeturn link, the per-client VK call link and the WireGuard outbound.
         EngineType.VkTurn -> vkturn?.isComplete() == true && !proxy?.rawOutbound.isNullOrBlank()
     }
@@ -508,7 +518,10 @@ data class LocationEntry(
     val endpoint: LocationEndpointConfig? = null,
     val engine: EngineType? = null,
     val proxy: ProxyProfile? = null,
-    /** Whether the proxy (additional outbound) is applied; default true keeps legacy entries enabled. */
+    /** Optional second proxy chained on top of [proxy] (cascade). See [LocationConfig.proxy2]. */
+    @SerialName("proxy2")
+    val proxy2: ProxyProfile? = null,
+    /** Vestigial; the main proxy is always applied now. Kept for back-compat parsing. */
     @SerialName("proxy_enabled")
     val proxyEnabled: Boolean = true,
     val core: ProxyCore? = null,
@@ -580,6 +593,7 @@ data class LocationEntry(
                     ?: LocationConfig.DEFAULT_VP8_BATCH,
                 engine = engine ?: EngineType.Stealth,
                 proxy = proxy,
+                proxy2 = proxy2,
                 proxyEnabled = proxyEnabled,
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
@@ -603,6 +617,7 @@ data class LocationEntry(
             ),
             engine = config.engine,
             proxy = config.proxy,
+            proxy2 = config.proxy2,
             proxyEnabled = config.proxyEnabled,
             core = config.core,
             vkturn = config.vkturn,
@@ -634,6 +649,7 @@ data class LocationEntry(
                 ),
                 engine = config.engine,
                 proxy = config.proxy,
+                proxy2 = config.proxy2,
                 proxyEnabled = config.proxyEnabled,
                 core = config.core,
                 vkturn = config.vkturn,

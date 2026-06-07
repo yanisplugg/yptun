@@ -467,6 +467,11 @@ interface Strings {
     val engineSection: String
     val proxySection: String
     val proxySectionSubtitle: String
+    // Standard/Chain cascade: a main proxy (always on) + an optional second proxy chained on top.
+    val mainProxySection: String
+    val additionalProxySection: String
+    val additionalProxySubtitle: String
+    val enableAdditionalProxy: String
     val freeturnTransportSection: String
     val freeturnTransportSubtitle: String
     val wireguardSubtitle: String
@@ -963,6 +968,11 @@ object RuStrings : Strings {
     override val proxySection = "Прокси"
     override val proxySectionSubtitle =
         "Вставьте ссылку vless/vmess/trojan/ss, конфигурацию AmneziaWG или JSON-исходящего sing-box"
+    override val mainProxySection = "Основной прокси"
+    override val additionalProxySection = "Второй прокси"
+    override val additionalProxySubtitle =
+        "Поверх основного: трафик → основной прокси → этот"
+    override val enableAdditionalProxy = "Дополнительный прокси (каскад)"
     override val freeturnTransportSection = "Транспорт Freeturn"
     override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
     override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
@@ -1443,6 +1453,11 @@ object EnStrings : Strings {
     override val proxySection = "Proxy"
     override val proxySectionSubtitle =
         "Paste a vless/vmess/trojan/ss link, an AmneziaWG config, or a sing-box outbound JSON"
+    override val mainProxySection = "Main proxy"
+    override val additionalProxySection = "Second proxy"
+    override val additionalProxySubtitle =
+        "On top of the main: traffic → main proxy → this"
+    override val enableAdditionalProxy = "Additional proxy (cascade)"
     override val freeturnTransportSection = "Freeturn transport"
     override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
     override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
@@ -1923,6 +1938,11 @@ object FaStrings : Strings {
     override val proxySection = "پراکسی"
     override val proxySectionSubtitle =
         "یک پیوند vless/vmess/trojan/ss، پیکربندی AmneziaWG یا JSON خروجی sing-box را بچسبانید"
+    override val mainProxySection = "پراکسی اصلی"
+    override val additionalProxySection = "پراکسی دوم"
+    override val additionalProxySubtitle =
+        "روی پراکسی اصلی: ترافیک ← پراکسی اصلی ← این"
+    override val enableAdditionalProxy = "پراکسی اضافی (آبشاری)"
     override val freeturnTransportSection = "حامل Freeturn"
     override val freeturnTransportSubtitle = "نقطهٔ پایانی بازپخش VK TURN و مبهم‌سازی"
     override val wireguardSubtitle = "تونل sing-box از طریق شنودگر محلی freeturn شماره‌گیری می‌کند"
