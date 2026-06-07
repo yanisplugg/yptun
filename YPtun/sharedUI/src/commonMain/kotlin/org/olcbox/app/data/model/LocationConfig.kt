@@ -211,8 +211,8 @@ data class LocationConfig(
         val n = normalized()
         return n.copy(
             name = "",
-            proxy = n.proxy?.copy(tag = ""),
-            proxy2 = n.proxy2?.copy(tag = "")
+            proxy = n.proxy?.dedupNormalized(),
+            proxy2 = n.proxy2?.dedupNormalized()
         )
     }
 

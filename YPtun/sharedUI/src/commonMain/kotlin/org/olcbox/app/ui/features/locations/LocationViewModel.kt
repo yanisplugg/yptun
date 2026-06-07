@@ -35,6 +35,7 @@ import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
+import org.olcbox.app.data.share.ShareLinkComposer
 
 /**
  * @Immutable: instances are never mutated in place (a new one is built on every change), so Compose
@@ -99,7 +100,6 @@ class LocationViewModel(
     var onPingsCompleted: ((Map<String, Int?>) -> Unit)? = null
 
     private val activePingJobs = mutableMapOf<String, Job>()
-    private val pingSemaphore = Semaphore(LOCATION_PING_PARALLELISM)
     // Source-of-truth ping map during a refresh pass. Each completion updates this in place (O(1))
     // instead of copying the whole map; the UI state is then refreshed on a throttled cadence (see
     // [schedulePingEmit]) so 300+ completions no longer trigger 300 full-list recompositions + 300
@@ -258,10 +258,14 @@ class LocationViewModel(
 
     fun refreshPings(
         targetLocationIds: List<String>? = null,
+        parallelism: Int = LOCATION_PING_PARALLELISM,
         performPing: suspend (LocationConfig) -> Long?,
         onComplete: (onlineCount: Int, totalCount: Int) -> Unit = { _, _ -> },
         onError: (String) -> Unit = {}
     ) {
+        // Probe up to [parallelism] locations at once (the ping-speed knob). A fresh semaphore per pass
+        // so a changed setting takes effect immediately.
+        val semaphore = Semaphore(parallelism.coerceIn(1, 20))
         val previousPings = currentPingsSnapshot()
         // Seed the live map with prior results so a targeted refresh doesn't drop other groups' pings.
         livePings.clear()
@@ -300,7 +304,7 @@ class LocationViewModel(
             val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
                 try {
                     val ping = try {
-                        pingSemaphore.withPermit {
+                        semaphore.withPermit {
                             checkLocationPing(location, performPing)?.toInt()
                         }
                     } catch (e: CancellationException) {
@@ -474,6 +478,12 @@ class LocationViewModel(
             editingId = id
             editingConfig = location?.config?.normalized() ?: LocationConfig()
             editingName = editingConfig.displayName()
+            // Repopulate the proxy link fields from the stored config so the second-proxy toggle and
+            // its link survive reopening/editing (otherwise the field showed blank and the cascade
+            // looked disabled). These links are display-only — saving keeps editingConfig.proxy/proxy2
+            // unless the user actually edits the field.
+            editingProxyLink = editingConfig.proxy?.let { ShareLinkComposer.compose(it) }.orEmpty()
+            editingProxy2Link = editingConfig.proxy2?.let { ShareLinkComposer.compose(it) }.orEmpty()
             editingSubscriptionUrl = location?.subscriptionUrl
             editingSubscriptionIntervalHours = (
                 location?.metadata?.subscription?.updateIntervalHours
@@ -856,7 +866,7 @@ class LocationViewModel(
         const val LOCATION_PING_ATTEMPTS = 3
         const val LOCATION_PING_TIMEOUT_MS = 12_000L
         const val LOCATION_PING_RETRY_DELAY_MS = 150L
-        const val LOCATION_PING_PARALLELISM = 4
+        const val LOCATION_PING_PARALLELISM = 5
         const val PING_EMIT_THROTTLE_MS = 150L
     }
 

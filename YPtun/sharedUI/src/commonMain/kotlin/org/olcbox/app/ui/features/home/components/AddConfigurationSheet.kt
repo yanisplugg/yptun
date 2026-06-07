@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Input
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
@@ -48,7 +49,8 @@ fun AddConfigurationSheet(
     onPasteLinkClick: () -> Unit,
     onImportFileClick: () -> Unit,
     onUpdateSubscriptionsClick: () -> Unit,
-    onAddCustomLocationClick: () -> Unit
+    onAddCustomLocationClick: () -> Unit,
+    onCreateGroupClick: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -100,6 +102,13 @@ fun AddConfigurationSheet(
                     value = s.createCustomLocationSubtitle,
                     icon = Icons.Outlined.Add,
                     onClick = onAddCustomLocationClick
+                )
+
+                AddSheetAction(
+                    title = s.createFolder,
+                    value = s.folderNameHint,
+                    icon = Icons.Outlined.CreateNewFolder,
+                    onClick = onCreateGroupClick
                 )
             }
         }

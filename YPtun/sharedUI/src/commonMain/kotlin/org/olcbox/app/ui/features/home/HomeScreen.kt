@@ -18,12 +18,14 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.TextButton
@@ -52,6 +54,9 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.time.TimeSource
+import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.data.model.CustomGroup
+import org.olcbox.app.ui.features.home.components.folderMemberKey
 import org.olcbox.app.ui.components.StartButton
 import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
@@ -81,6 +86,8 @@ fun HomeScreen(
     onOpenLocationSettings: (String?) -> Unit,
     onAddLocation: () -> Unit,
     confirmBeforeDelete: Boolean = true,
+    /** How many locations to probe in parallel during a ping pass (the ping-speed knob). */
+    pingParallelism: Int = AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
     /** A newer app release is available on GitHub → show the "update app" banner above the nav bar. */
     updateAvailable: Boolean = false,
     /** Tapping the update banner's button — opens the update offer (auto/manual). */
@@ -97,11 +104,23 @@ fun HomeScreen(
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {},
     onToggleCustomLocationPinned: (String) -> Unit = {},
-    onToggleCustomLocationsPingSort: () -> Unit = {}
+    onToggleCustomLocationsPingSort: () -> Unit = {},
+    // Folders (user-created groups).
+    customGroups: List<CustomGroup> = emptyList(),
+    onCreateFolder: (name: String, memberKeys: List<String>) -> Unit = { _, _ -> },
+    onRenameFolder: (id: String, name: String) -> Unit = { _, _ -> },
+    onDeleteFolder: (id: String) -> Unit = {},
+    onAddToFolder: (id: String, memberKeys: List<String>) -> Unit = { _, _ -> },
+    onToggleFolderPinned: (String) -> Unit = {},
+    onToggleFolderCollapsed: (String) -> Unit = {}
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<PendingDelete?>(null) }
+    // Folder dialogs: create / rename (a small name dialog), "choose folder" target sheet, delete confirm.
+    var folderDialog by remember { mutableStateOf<FolderDialog?>(null) }
+    var chooseFolderForMembers by remember { mutableStateOf<List<String>?>(null) }
+    var pendingFolderDelete by remember { mutableStateOf<String?>(null) }
     val s = LocalStrings.current
 
     // Bulk-selection: long-press a row to enter multi-select, tick several, then delete them at once.
@@ -155,6 +174,7 @@ fun HomeScreen(
     fun refreshHttpPings(targetLocationIds: List<String>? = null) {
         locationViewModel.refreshPings(
             targetLocationIds = targetLocationIds,
+            parallelism = pingParallelism,
             performPing = { config ->
                 viewModel.performPingFor(config)
             },
@@ -298,6 +318,21 @@ fun HomeScreen(
                             )
                             IconButton(
                                 onClick = {
+                                    // Resolve selected rows to folder member keys (whole subscription or
+                                    // single custom location), de-duplicated, then pick a target folder.
+                                    val keys = selectedIds.toList()
+                                        .mapNotNull { id -> locations.firstOrNull { it.storageId == id } }
+                                        .map { it.folderMemberKey() }
+                                        .distinct()
+                                    if (keys.isNotEmpty()) chooseFolderForMembers = keys
+                                    exitSelection()
+                                },
+                                enabled = selectedIds.isNotEmpty()
+                            ) {
+                                Icon(Icons.Outlined.CreateNewFolder, contentDescription = s.moveToFolder)
+                            }
+                            IconButton(
+                                onClick = {
                                     val ids = selectedIds.toList()
                                     if (ids.isNotEmpty()) requestDelete(PendingDelete.Subscription(ids))
                                     exitSelection()
@@ -352,7 +387,12 @@ fun HomeScreen(
                 onToggleGroupPinned = onToggleGroupPinned,
                 onToggleGroupPingSort = onToggleGroupPingSort,
                 onToggleCustomLocationPinned = onToggleCustomLocationPinned,
-                onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort
+                onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort,
+                customGroups = customGroups,
+                onToggleFolderCollapsed = onToggleFolderCollapsed,
+                onToggleFolderPinned = onToggleFolderPinned,
+                onRenameFolder = { folder -> folderDialog = FolderDialog.Rename(folder.id, folder.name) },
+                onDeleteFolder = { id -> pendingFolderDelete = id }
             )
 
             item(key = "bottom-spacer") {
@@ -436,6 +476,10 @@ fun HomeScreen(
                 onAddCustomLocationClick = {
                     isAddSheetOpen = false
                     onAddLocation()
+                },
+                onCreateGroupClick = {
+                    isAddSheetOpen = false
+                    folderDialog = FolderDialog.Create(emptyList())
                 }
             )
         }
@@ -470,6 +514,93 @@ fun HomeScreen(
                 }
             )
         }
+
+        // Create / rename folder: a single text field dialog.
+        folderDialog?.let { dialog ->
+            var name by remember(dialog) { mutableStateOf(dialog.initialName) }
+            AlertDialog(
+                onDismissRequest = { folderDialog = null },
+                title = { Text(if (dialog is FolderDialog.Rename) s.folderRename else s.newFolderTitle) },
+                text = {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        singleLine = true,
+                        label = { Text(s.folderNameHint) }
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = name.isNotBlank(),
+                        onClick = {
+                            val trimmed = name.trim()
+                            when (dialog) {
+                                is FolderDialog.Rename -> onRenameFolder(dialog.id, trimmed)
+                                is FolderDialog.Create -> onCreateFolder(trimmed, dialog.memberKeys)
+                            }
+                            folderDialog = null
+                        }
+                    ) { Text(if (dialog is FolderDialog.Rename) s.folderSave else s.folderCreate) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { folderDialog = null }) { Text(s.cancel) }
+                }
+            )
+        }
+
+        // "Choose a folder" for the selected items: pick an existing folder or create a new one.
+        chooseFolderForMembers?.let { memberKeys ->
+            AlertDialog(
+                onDismissRequest = { chooseFolderForMembers = null },
+                title = { Text(s.chooseFolderTitle) },
+                text = {
+                    Column {
+                        TextButton(onClick = {
+                            folderDialog = FolderDialog.Create(memberKeys)
+                            chooseFolderForMembers = null
+                        }) { Text(s.newFolderOption) }
+                        customGroups.forEach { folder ->
+                            TextButton(onClick = {
+                                onAddToFolder(folder.id, memberKeys)
+                                chooseFolderForMembers = null
+                            }) { Text(folder.name) }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { chooseFolderForMembers = null }) { Text(s.cancel) }
+                }
+            )
+        }
+
+        // Delete folder confirmation.
+        pendingFolderDelete?.let { id ->
+            AlertDialog(
+                onDismissRequest = { pendingFolderDelete = null },
+                title = { Text(s.folderDeleteTitle) },
+                text = { Text(s.folderDeleteMessage) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        onDeleteFolder(id)
+                        pendingFolderDelete = null
+                    }) { Text(s.delete, color = MaterialTheme.colorScheme.error) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingFolderDelete = null }) { Text(s.cancel) }
+                }
+            )
+        }
+    }
+}
+
+private sealed interface FolderDialog {
+    val initialName: String
+    data class Create(val memberKeys: List<String>) : FolderDialog {
+        override val initialName: String get() = ""
+    }
+    data class Rename(val id: String, val name: String) : FolderDialog {
+        override val initialName: String get() = name
     }
 }
 

@@ -128,6 +128,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -3505,6 +3506,55 @@ private fun PingSettingsContent(
             subtitle = s.savePingResultsSubtitle,
             checked = settings.savePingResults
         ) { onChanged(settings.copy(savePingResults = it)) }
+
+        PingParallelismRow(
+            value = settings.effectivePingParallelism(),
+            onChange = { onChanged(settings.copy(pingParallelism = it)) }
+        )
+    }
+}
+
+/** Stepper for the parallel-ping count (ping speed): default 5, range 1..20. */
+@Composable
+private fun PingParallelismRow(value: Int, onChange: (Int) -> Unit) {
+    val s = LocalStrings.current
+    val min = AppBehaviorSettings.MIN_PING_PARALLELISM
+    val max = AppBehaviorSettings.MAX_PING_PARALLELISM
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = s.pingThreadsTitle,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = s.pingThreadsSubtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        OutlinedButton(
+            onClick = { onChange((value - 1).coerceIn(min, max)) },
+            enabled = value > min,
+            contentPadding = PaddingValues(0.dp),
+            modifier = Modifier.size(40.dp)
+        ) { Text("−", style = MaterialTheme.typography.titleLarge) }
+        Text(
+            text = value.toString(),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(40.dp)
+        )
+        OutlinedButton(
+            onClick = { onChange((value + 1).coerceIn(min, max)) },
+            enabled = value < max,
+            contentPadding = PaddingValues(0.dp),
+            modifier = Modifier.size(40.dp)
+        ) { Text("+", style = MaterialTheme.typography.titleLarge) }
     }
 }
 

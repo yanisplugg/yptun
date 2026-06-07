@@ -86,6 +86,20 @@ interface Strings {
     val menuDeleteAllConfigs: String
     val menuDeleteUnreachable: String
     val menuDeleteDuplicates: String
+    // Folders (user-created groups)
+    val createFolder: String
+    val folderEmpty: String
+    val folderRename: String
+    val folderDelete: String
+    val folderDeleteTitle: String
+    val folderDeleteMessage: String
+    val newFolderTitle: String
+    val folderNameHint: String
+    val moveToFolder: String
+    val chooseFolderTitle: String
+    val newFolderOption: String
+    val folderCreate: String
+    val folderSave: String
     val deleteUnreachableTitle: String
     val deleteUnreachableMessage: String
     val deleteDuplicatesTitle: String
@@ -454,6 +468,7 @@ interface Strings {
     fun cannotOpenFilePicker(msg: String): String
     val configCopied: String
     val copied: String
+    val qrTooLarge: String
 
     // VK call link dialog
     val vkCallLink: String
@@ -526,6 +541,8 @@ interface Strings {
     val pingTargetHint: String
     val savePingResultsTitle: String
     val savePingResultsSubtitle: String
+    val pingThreadsTitle: String
+    val pingThreadsSubtitle: String
     val pingModeAuto: String
     val pingModeTcp: String
     val pingModeIcmp: String
@@ -632,6 +649,19 @@ object RuStrings : Strings {
     override val menuDeleteAllConfigs = "Удалить все конфигурации"
     override val menuDeleteUnreachable = "Удалить недоступные"
     override val menuDeleteDuplicates = "Удалить дубликаты"
+    override val createFolder = "Создать группу"
+    override val folderEmpty = "Группа пуста — добавьте локации через долгое нажатие"
+    override val folderRename = "Переименовать"
+    override val folderDelete = "Удалить группу"
+    override val folderDeleteTitle = "Удалить группу?"
+    override val folderDeleteMessage = "Группа будет удалена. Локации и подписки из неё не удаляются — они вернутся в общий список."
+    override val newFolderTitle = "Новая группа"
+    override val folderNameHint = "Название группы"
+    override val moveToFolder = "В группу"
+    override val chooseFolderTitle = "Выберите группу"
+    override val newFolderOption = "Новая группа…"
+    override val folderCreate = "Создать"
+    override val folderSave = "Сохранить"
     override val deleteUnreachableTitle = "Удалить недоступные?"
     override val deleteUnreachableMessage =
         "Будут удалены собственные локации, которые при последнем пинге оказались недоступны. Подписки не затрагиваются."
@@ -972,6 +1002,7 @@ object RuStrings : Strings {
     override fun cannotOpenFilePicker(msg: String) = "Не удалось открыть выбор файла: $msg"
     override val configCopied = "Конфигурация скопирована"
     override val copied = "Скопировано"
+    override val qrTooLarge = "Конфигурация слишком большая для QR-кода. Используйте «Копировать» или «Поделиться»."
     override val vkCallLink = "Ссылка на звонок VK"
     override fun vkCallLinkBody(name: String) =
         "Вставьте ссылку-приглашение VK Звонков для «$name». Можно вставить несколько ссылок " +
@@ -1037,6 +1068,8 @@ object RuStrings : Strings {
     override val savePingResultsTitle = "Сохранять результаты пингов"
     override val savePingResultsSubtitle =
         "Показывать последние результаты при повторном открытии приложения"
+    override val pingThreadsTitle = "Потоки пинга"
+    override val pingThreadsSubtitle = "Сколько локаций пинговать одновременно (1–20)"
     override val pingModeAuto = "Авто"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -1132,6 +1165,19 @@ object EnStrings : Strings {
     override val menuDeleteAllConfigs = "Delete all configs"
     override val menuDeleteUnreachable = "Delete unreachable"
     override val menuDeleteDuplicates = "Delete duplicates"
+    override val createFolder = "Create group"
+    override val folderEmpty = "Group is empty — add locations via long-press"
+    override val folderRename = "Rename"
+    override val folderDelete = "Delete group"
+    override val folderDeleteTitle = "Delete group?"
+    override val folderDeleteMessage = "The group will be removed. Its locations and subscriptions are not deleted — they return to the main list."
+    override val newFolderTitle = "New group"
+    override val folderNameHint = "Group name"
+    override val moveToFolder = "To group"
+    override val chooseFolderTitle = "Choose a group"
+    override val newFolderOption = "New group…"
+    override val folderCreate = "Create"
+    override val folderSave = "Save"
     override val deleteUnreachableTitle = "Delete unreachable?"
     override val deleteUnreachableMessage =
         "Custom locations that were unreachable on the last ping will be removed. Subscriptions are not touched."
@@ -1472,6 +1518,7 @@ object EnStrings : Strings {
     override fun cannotOpenFilePicker(msg: String) = "Cannot open file picker: $msg"
     override val configCopied = "Config copied"
     override val copied = "Copied"
+    override val qrTooLarge = "Config is too large for a QR code. Use Copy or Share instead."
     override val vkCallLink = "VK call link"
     override fun vkCallLinkBody(name: String) =
         "Paste your VK Calls join link for \"$name\". You can paste several links " +
@@ -1537,6 +1584,8 @@ object EnStrings : Strings {
     override val savePingResultsTitle = "Save ping results"
     override val savePingResultsSubtitle =
         "Show the last results again when the app is reopened"
+    override val pingThreadsTitle = "Ping threads"
+    override val pingThreadsSubtitle = "How many locations to ping at once (1–20)"
     override val pingModeAuto = "Auto"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -1632,6 +1681,19 @@ object FaStrings : Strings {
     override val menuDeleteAllConfigs = "حذف همهٔ پیکربندی‌ها"
     override val menuDeleteUnreachable = "حذف موارد در دسترس‌نبودن"
     override val menuDeleteDuplicates = "حذف موارد تکراری"
+    override val createFolder = "ساخت گروه"
+    override val folderEmpty = "گروه خالی است — با فشار طولانی موقعیت‌ها را اضافه کنید"
+    override val folderRename = "تغییر نام"
+    override val folderDelete = "حذف گروه"
+    override val folderDeleteTitle = "گروه حذف شود؟"
+    override val folderDeleteMessage = "گروه حذف می‌شود. موقعیت‌ها و اشتراک‌های آن حذف نمی‌شوند و به فهرست اصلی بازمی‌گردند."
+    override val newFolderTitle = "گروه جدید"
+    override val folderNameHint = "نام گروه"
+    override val moveToFolder = "به گروه"
+    override val chooseFolderTitle = "یک گروه انتخاب کنید"
+    override val newFolderOption = "گروه جدید…"
+    override val folderCreate = "ساختن"
+    override val folderSave = "ذخیره"
     override val deleteUnreachableTitle = "موارد در دسترس‌نبودن حذف شوند؟"
     override val deleteUnreachableMessage =
         "موقعیت‌های سفارشی که در آخرین پینگ در دسترس نبودند حذف می‌شوند. اشتراک‌ها دست‌نخورده می‌مانند."
@@ -1972,6 +2034,7 @@ object FaStrings : Strings {
     override fun cannotOpenFilePicker(msg: String) = "بازکردن انتخابگر پرونده ممکن نشد: $msg"
     override val configCopied = "پیکربندی رونوشت شد"
     override val copied = "رونوشت شد"
+    override val qrTooLarge = "پیکربندی برای کد QR بیش از حد بزرگ است. از «رونوشت» یا «هم‌رسانی» استفاده کنید."
     override val vkCallLink = "پیوند تماس VK"
     override fun vkCallLinkBody(name: String) =
         "پیوند پیوستن VK Calls خود را برای «$name» بچسبانید. می‌توانید چند پیوند " +
@@ -2037,6 +2100,8 @@ object FaStrings : Strings {
     override val savePingResultsTitle = "ذخیرهٔ نتایج پینگ"
     override val savePingResultsSubtitle =
         "نمایش آخرین نتایج هنگام بازکردن دوبارهٔ برنامه"
+    override val pingThreadsTitle = "رشته‌های پینگ"
+    override val pingThreadsSubtitle = "چند موقعیت هم‌زمان پینگ شوند (۱ تا ۲۰)"
     override val pingModeAuto = "خودکار"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"

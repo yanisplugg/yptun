@@ -29,7 +29,16 @@ object YptunInboundCodec {
     @OptIn(ExperimentalEncodingApi::class)
     fun compose(config: LocationConfig): String {
         val payload = json.encodeToString(LocationConfig.serializer(), config.normalized())
-        val b64 = Base64.UrlSafe.encode(payload.encodeToByteArray()).trimEnd('=')
+            .encodeToByteArray()
+        // Prefer a DEFLATE-compressed link (`c=`) when it's actually smaller — keeps large configs
+        // (e.g. an AmneziaWG INI) short enough to fit in a QR code. Falls back to the plain `d=` form
+        // when compression isn't available (Apple targets) or doesn't help.
+        val compressed = deflateOrNull(payload)
+        if (compressed != null && compressed.size < payload.size) {
+            val c = Base64.UrlSafe.encode(compressed).trimEnd('=')
+            return "$PREFIX?v=2&c=$c"
+        }
+        val b64 = Base64.UrlSafe.encode(payload).trimEnd('=')
         return "$PREFIX?v=1&d=$b64"
     }
 
@@ -38,29 +47,34 @@ object YptunInboundCodec {
     fun parse(uri: String): LocationConfig? {
         val t = uri.trim()
         if (!t.startsWith(PREFIX)) return null
-        val data = extractData(t) ?: return null
-        val bytes = runCatching { Base64.UrlSafe.decode(repad(data)) }.getOrNull() ?: return null
+        val extracted = extractData(t) ?: return null
+        val raw = runCatching { Base64.UrlSafe.decode(repad(extracted.value)) }.getOrNull() ?: return null
+        val bytes = if (extracted.compressed) inflateOrNull(raw) ?: return null else raw
         val text = bytes.decodeToString()
         return runCatching { json.decodeFromString(LocationConfig.serializer(), text) }
             .getOrNull()
             ?.normalized()
     }
 
-    /** Pulls the base64 payload from the `d`/`data` query param, or a bare `#<payload>` fragment. */
-    private fun extractData(uri: String): String? {
+    /** A base64 payload plus whether it is DEFLATE-compressed (the `c=` param) or plain (`d=`). */
+    private data class ExtractedData(val value: String, val compressed: Boolean)
+
+    /** Pulls the base64 payload from the `c=` (compressed), `d`/`data` (plain) params, or `#<payload>`. */
+    private fun extractData(uri: String): ExtractedData? {
         val afterScheme = uri.removePrefix(PREFIX)
-        // Query form: ?v=1&d=XXXX  (params split on & / ;)
+        // Query form: ?v=2&c=XXXX or ?v=1&d=XXXX  (params split on & / ;)
         val q = afterScheme.substringAfter('?', "").substringBefore('#')
         if (q.isNotEmpty()) {
             q.split('&', ';').forEach { pair ->
                 val k = pair.substringBefore('=')
                 val v = pair.substringAfter('=', "")
-                if ((k == "d" || k == "data") && v.isNotBlank()) return v
+                if (k == "c" && v.isNotBlank()) return ExtractedData(v, compressed = true)
+                if ((k == "d" || k == "data") && v.isNotBlank()) return ExtractedData(v, compressed = false)
             }
         }
-        // Fragment fallback: #XXXX
+        // Fragment fallback: #XXXX (always plain)
         val frag = afterScheme.substringAfter('#', "")
-        return frag.takeIf { it.isNotBlank() }
+        return frag.takeIf { it.isNotBlank() }?.let { ExtractedData(it, compressed = false) }
     }
 
     /** Restore base64 padding so both padded and unpadded payloads decode. */

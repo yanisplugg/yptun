@@ -10,6 +10,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.data.model.CustomGroup
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.ui.features.home.HomeScreen
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
@@ -36,6 +38,7 @@ fun OlcboxAppContent(
     onAppSettingsClick: () -> Unit,
     onSplitTunnelingClick: () -> Unit = {},
     confirmBeforeDelete: Boolean = true,
+    pingParallelism: Int = AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
     updateAvailable: Boolean = false,
     onUpdateClick: () -> Unit = {},
     onUnlockExperimental: () -> Unit = {},
@@ -50,7 +53,14 @@ fun OlcboxAppContent(
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {},
     onToggleCustomLocationPinned: (String) -> Unit = {},
-    onToggleCustomLocationsPingSort: () -> Unit = {}
+    onToggleCustomLocationsPingSort: () -> Unit = {},
+    customGroups: List<CustomGroup> = emptyList(),
+    onCreateFolder: (name: String, memberKeys: List<String>) -> Unit = { _, _ -> },
+    onRenameFolder: (id: String, name: String) -> Unit = { _, _ -> },
+    onDeleteFolder: (id: String) -> Unit = {},
+    onAddToFolder: (id: String, memberKeys: List<String>) -> Unit = { _, _ -> },
+    onToggleFolderPinned: (String) -> Unit = {},
+    onToggleFolderCollapsed: (String) -> Unit = {}
 ) {
     val homeScrollState = rememberLazyListState()
 
@@ -110,6 +120,7 @@ fun OlcboxAppContent(
                         onNavigate(AppScreen.LocationSettings(null))
                     },
                     confirmBeforeDelete = confirmBeforeDelete,
+                    pingParallelism = pingParallelism,
                     updateAvailable = updateAvailable,
                     onUpdateClick = onUpdateClick,
                     onUnlockExperimental = onUnlockExperimental,
@@ -124,7 +135,14 @@ fun OlcboxAppContent(
                     onToggleGroupPinned = onToggleGroupPinned,
                     onToggleGroupPingSort = onToggleGroupPingSort,
                     onToggleCustomLocationPinned = onToggleCustomLocationPinned,
-                    onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort
+                    onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort,
+                    customGroups = customGroups,
+                    onCreateFolder = onCreateFolder,
+                    onRenameFolder = onRenameFolder,
+                    onDeleteFolder = onDeleteFolder,
+                    onAddToFolder = onAddToFolder,
+                    onToggleFolderPinned = onToggleFolderPinned,
+                    onToggleFolderCollapsed = onToggleFolderCollapsed
                 )
             }
 

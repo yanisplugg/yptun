@@ -462,6 +462,7 @@ fun AndroidMainScreen(
         showSplitTunnelingButton = false,
         canScanQr = true,
         confirmBeforeDelete = appBehavior.confirmBeforeDelete,
+        pingParallelism = appBehavior.effectivePingParallelism(),
         updateAvailable = updateAvailable != null,
         onUpdateClick = { updateAvailable?.let { updateOffer = it } },
         collapsedGroups = appBehavior.collapsedSubscriptionGroups,
@@ -518,6 +519,44 @@ fun AndroidMainScreen(
                 )
             }
             vpnManager.setAppBehavior(updated)
+        },
+        customGroups = appBehavior.customGroups,
+        onCreateFolder = { name, memberKeys ->
+            val folder = org.olcbox.app.data.model.CustomGroup(
+                id = "folder_${kotlin.random.Random.nextInt(100_000, 999_999)}",
+                name = name,
+                members = memberKeys
+            )
+            // New members may already sit in another folder — keep each item in only one folder.
+            val cleaned = appBehavior.customGroups.map { g -> g.copy(members = g.members - memberKeys.toSet()) }
+            vpnManager.setAppBehavior(appBehavior.copy(customGroups = cleaned + folder))
+        },
+        onRenameFolder = { id, name ->
+            val updated = appBehavior.customGroups.map { if (it.id == id) it.copy(name = name) else it }
+            vpnManager.setAppBehavior(appBehavior.copy(customGroups = updated))
+        },
+        onDeleteFolder = { id ->
+            vpnManager.setAppBehavior(appBehavior.copy(customGroups = appBehavior.customGroups.filterNot { it.id == id }))
+        },
+        onAddToFolder = { id, memberKeys ->
+            val keySet = memberKeys.toSet()
+            val updated = appBehavior.customGroups.map { g ->
+                when (g.id) {
+                    // Add to the target folder (de-duplicated)…
+                    id -> g.copy(members = (g.members + memberKeys).distinct())
+                    // …and remove from any other folder so an item lives in a single folder.
+                    else -> g.copy(members = g.members - keySet)
+                }
+            }
+            vpnManager.setAppBehavior(appBehavior.copy(customGroups = updated))
+        },
+        onToggleFolderPinned = { id ->
+            val updated = appBehavior.customGroups.map { if (it.id == id) it.copy(pinned = !it.pinned) else it }
+            vpnManager.setAppBehavior(appBehavior.copy(customGroups = updated))
+        },
+        onToggleFolderCollapsed = { id ->
+            val updated = appBehavior.customGroups.map { if (it.id == id) it.copy(collapsed = !it.collapsed) else it }
+            vpnManager.setAppBehavior(appBehavior.copy(customGroups = updated))
         },
         onAppSettingsClick = {
             appSettingsInitialRoute = AppSettingsInitialRoute.Hub

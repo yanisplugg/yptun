@@ -2,6 +2,30 @@ package org.olcbox.app.data.model
 
 import kotlinx.serialization.Serializable
 
+/**
+ * A user-created group (folder) on the Home list. Holds whole subscriptions and/or individual custom
+ * locations, which physically move inside the folder. Members are tagged keys: [MEMBER_SUB_PREFIX] +
+ * subscription URL for a whole subscription, or [MEMBER_LOC_PREFIX] + storageId for a custom location.
+ */
+@Serializable
+data class CustomGroup(
+    val id: String,
+    val name: String,
+    val members: List<String> = emptyList(),
+    /** Folder pinned to the top of the list (in [AppBehaviorSettings.customGroups] order). */
+    val pinned: Boolean = false,
+    /** Folder body collapsed (chevron). */
+    val collapsed: Boolean = false,
+) {
+    companion object {
+        const val MEMBER_SUB_PREFIX = "sub:"
+        const val MEMBER_LOC_PREFIX = "loc:"
+
+        fun subMember(subscriptionUrl: String) = "$MEMBER_SUB_PREFIX$subscriptionUrl"
+        fun locMember(storageId: String) = "$MEMBER_LOC_PREFIX$storageId"
+    }
+}
+
 /** General application behavior toggles (the "Настройки приложения" screen). */
 @Serializable
 data class AppBehaviorSettings(
@@ -60,6 +84,13 @@ data class AppBehaviorSettings(
      */
     val pingResultDisplay: String = PING_RESULT_ICON,
     /**
+     * How many locations are probed in parallel during a ping pass — the knob controlling ping speed.
+     * Clamped to [MIN_PING_PARALLELISM]..[MAX_PING_PARALLELISM]; default [DEFAULT_PING_PARALLELISM].
+     * Higher = faster sweeps but more concurrent local proxies (and more chance of a transient
+     * port-collision false "недоступен" on huge lists — see custom-locations ping note).
+     */
+    val pingParallelism: Int = DEFAULT_PING_PARALLELISM,
+    /**
      * Persist the last ping results so they are shown again when the app is reopened (instead of a
      * blank list). Off by default. When on, the latest successful results are saved into
      * [lastPingResults] after each ping pass and restored on launch.
@@ -76,6 +107,8 @@ data class AppBehaviorSettings(
      * subscription group header. Off by default; the urgent (≤2 days) red badge is always shown.
      */
     val showSubscriptionExpiry: Boolean = false,
+    /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
+    val customGroups: List<CustomGroup> = emptyList(),
 ) {
     companion object {
         const val PING_AUTO = "auto"
@@ -95,8 +128,17 @@ data class AppBehaviorSettings(
 
         /** Default target, pre-filled into [pingUrl] (and the fallback when it is cleared). */
         const val DEFAULT_PING_URL = "https://google.com"
+
+        /** Parallel ping streams: how many locations are probed at once. */
+        const val DEFAULT_PING_PARALLELISM = 5
+        const val MIN_PING_PARALLELISM = 1
+        const val MAX_PING_PARALLELISM = 20
     }
 
     /** [pingUrl] trimmed, or [DEFAULT_PING_URL] when blank. */
     fun effectivePingUrl(): String = pingUrl.trim().ifBlank { DEFAULT_PING_URL }
+
+    /** [pingParallelism] clamped to the supported range. */
+    fun effectivePingParallelism(): Int =
+        pingParallelism.coerceIn(MIN_PING_PARALLELISM, MAX_PING_PARALLELISM)
 }
