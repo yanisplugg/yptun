@@ -286,49 +286,143 @@ fun LazyListScope.locationSelectorContent(
             val memberCustom = allCustomLocations.filter { it.storageId in locIds }
             val memberIds = memberSubGroups.flatten().map { it.storageId } + memberCustom.map { it.storageId }
 
-            item(key = "folder-header-${folder.id}") {
+            // The whole folder is ONE item: a single tinted Surface (the group's colour) holding the
+            // header AND all members, so an expanded folder reads as one continuous container with no
+            // gaps between its subscriptions/locations. (Folders hold few items, so non-lazy is fine.)
+            item(key = "folder-${folder.id}") {
                 val isFolderRefreshing = pingsState is PingsState.Loading &&
                         pingsState.pendingLocationIds.any { it in memberIds }
-                FolderGroupHeader(
-                    folder = folder,
-                    memberCount = memberSubGroups.size + memberCustom.size,
-                    isRefreshing = isFolderRefreshing,
-                    onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
-                    onRefresh = { onRefreshClick(memberIds) },
-                    onTogglePin = { onToggleFolderPinned(folder.id) },
-                    onRename = { onRenameFolder(folder) },
-                    onDelete = { onDeleteFolder(folder.id) }
-                )
-            }
-
-            if (!folder.collapsed) {
-                memberSubGroups.forEach { renderSubscriptionGroup(it) }
-                items(
-                    items = memberCustom,
-                    key = { "folder-${folder.id}-custom-${it.storageId}" }
-                ) { location ->
-                    LocationSelectorRow(
-                        location = location,
-                        selectedLocationId = selectedLocationId,
-                        pingsState = pingsState,
-                        onLocationSelected = onLocationSelected,
-                        onLocationSettingsClick = onLocationSettingsClick,
-                        isPinned = location.storageId in pinnedCustomLocations,
-                        onTogglePinned = { onToggleCustomLocationPinned(location.storageId) },
-                        selectionMode = selectionMode,
-                        isChecked = location.storageId in selectedIds,
-                        onToggleSelect = onToggleSelect,
-                        onStartSelection = onStartSelection
-                    )
-                }
-                if (memberIds.isEmpty()) {
-                    item(key = "folder-empty-${folder.id}") {
-                        Text(
-                            text = org.olcbox.app.ui.i18n.LocalStrings.current.folderEmpty,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FolderGroupHeader(
+                            folder = folder,
+                            memberCount = memberSubGroups.size + memberCustom.size,
+                            isRefreshing = isFolderRefreshing,
+                            onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
+                            onRefresh = { onRefreshClick(memberIds) },
+                            onTogglePin = { onToggleFolderPinned(folder.id) },
+                            onRename = { onRenameFolder(folder) },
+                            onDelete = { onDeleteFolder(folder.id) }
                         )
+
+                        if (!folder.collapsed) {
+                            // Member subscriptions: each a card inside the folder fill.
+                            memberSubGroups.forEach { mGroup ->
+                                val mIds = mGroup.map { it.storageId }
+                                val mKey = mGroup.firstOrNull()?.subscriptionGroupKey() ?: ""
+                                val mCollapsed = mKey in collapsedGroups
+                                val mPinned = mKey in pinnedGroups
+                                val mPingSorted = mKey in pingSortedGroups
+                                val mPingDesc = mKey in pingSortDescendingGroups
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainer
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .clickable { onToggleGroupCollapsed(mKey) },
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (mCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                                                    contentDescription = if (mCollapsed) "Expand" else "Collapse",
+                                                    modifier = Modifier.size(22.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                SubscriptionGroupHeader(
+                                                    locations = mGroup,
+                                                    isPinned = mPinned,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            }
+                                            val mRefreshing = pingsState is PingsState.Loading &&
+                                                    pingsState.pendingLocationIds.any { it in mIds }
+                                            RefreshButton(
+                                                isRefreshing = mRefreshing,
+                                                onClick = { onRefreshClick(mIds) },
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                            SubscriptionGroupMenu(
+                                                isPinned = mPinned,
+                                                isPingSorted = mPingSorted,
+                                                isPingDescending = mPingDesc,
+                                                onTogglePin = { onToggleGroupPinned(mKey) },
+                                                onTogglePingSort = { onToggleGroupPingSort(mKey) },
+                                                onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
+                                                onDelete = { onDeleteSubscription(mIds) }
+                                            )
+                                        }
+                                        if (!mCollapsed) {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            TrafficProgressBar(location = mGroup.firstOrNull())
+                                            val ordered = if (mPingSorted) {
+                                                mGroup.sortedWith(pingComparator(pingsState, mPingDesc))
+                                            } else {
+                                                mGroup
+                                            }
+                                            ordered.forEach { location ->
+                                                LocationSelectorRow(
+                                                    location = location,
+                                                    selectedLocationId = selectedLocationId,
+                                                    pingsState = pingsState,
+                                                    onLocationSelected = onLocationSelected,
+                                                    onLocationSettingsClick = onLocationSettingsClick,
+                                                    selectionMode = selectionMode,
+                                                    isChecked = location.storageId in selectedIds,
+                                                    onToggleSelect = onToggleSelect,
+                                                    onStartSelection = onStartSelection
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Member custom locations: rows directly on the folder fill.
+                            memberCustom.forEach { location ->
+                                LocationSelectorRow(
+                                    location = location,
+                                    selectedLocationId = selectedLocationId,
+                                    pingsState = pingsState,
+                                    onLocationSelected = onLocationSelected,
+                                    onLocationSettingsClick = onLocationSettingsClick,
+                                    isPinned = location.storageId in pinnedCustomLocations,
+                                    onTogglePinned = { onToggleCustomLocationPinned(location.storageId) },
+                                    selectionMode = selectionMode,
+                                    isChecked = location.storageId in selectedIds,
+                                    onToggleSelect = onToggleSelect,
+                                    onStartSelection = onStartSelection
+                                )
+                            }
+
+                            if (memberIds.isEmpty()) {
+                                Text(
+                                    text = org.olcbox.app.ui.i18n.LocalStrings.current.folderEmpty,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+                                    modifier = Modifier.padding(start = 10.dp, top = 2.dp, bottom = 4.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -773,13 +867,9 @@ private fun FolderGroupHeader(
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.secondaryContainer
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+    // No own Surface — the folder block already provides the tinted container background.
+    Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -833,7 +923,6 @@ private fun FolderGroupHeader(
                 onRename = onRename,
                 onDelete = onDelete
             )
-        }
     }
 }
 
