@@ -938,7 +938,7 @@ private fun AdvancedCoreSection(
 private fun CoreSelector(
     selected: ProxyCore,
     enabled: Boolean,
-    singBoxLocked: Boolean,
+    singBoxLocked: Boolean = false,
     onSelected: (ProxyCore) -> Unit
 ) {
     val options = listOf(ProxyCore.Auto, ProxyCore.SingBox, ProxyCore.Xray)
