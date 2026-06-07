@@ -760,16 +760,17 @@ class LocationsRepositoryImpl(
             return ParsedImport(it, ImportMode.Additive)
         }
 
-        // Proxy share links / subscriptions (vless, vmess, trojan, ss, base64 blobs and
-        // JSON panels with a "links" array) become sing-box (Standard) locations.
-        parseProxyText(text, subscriptionUrl, subscriptionMetadata)?.let {
+        // Full raw Xray config — a single object OR an array of them (Happ/Remnawave subscriptions
+        // ship one complete Xray config per server, each with its own dns.hosts / routing / fakedns).
+        // MUST run before the proxy/sing-box parsers, otherwise the config is downgraded to a bare
+        // sing-box vless and its fakedns / RU-direct DNS hosts are lost.
+        parseRawXray(text, subscriptionUrl)?.let {
             return ParsedImport(it, ImportMode.Additive)
         }
 
-        // Full raw Xray config (has "outbounds" with a "protocol"-style proxy, typically also
-        // "dns"/"routing") → a Standard/Xray location that runs the config verbatim, so custom
-        // dns.hosts / routing.rules are honored. Checked before sing-box (which keys off "type").
-        parseRawXray(text, subscriptionUrl)?.let {
+        // Proxy share links / subscriptions (vless, vmess, trojan, ss, base64 blobs and
+        // JSON panels with a "links" array) become sing-box (Standard) locations.
+        parseProxyText(text, subscriptionUrl, subscriptionMetadata)?.let {
             return ParsedImport(it, ImportMode.Additive)
         }
 
@@ -1419,9 +1420,34 @@ class LocationsRepositoryImpl(
         subscriptionUrl: String? = null
     ): LocationBundleV4? {
         val trimmed = text.trim()
-        if (!trimmed.startsWith("{")) return null
-        val root = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: return null
+        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null
+        val element = runCatching { json.parseToJsonElement(trimmed) }.getOrNull() ?: return null
 
+        // Accept a single Xray config object OR an ARRAY of full Xray configs (Happ/Remnawave-style
+        // subscriptions ship one complete config per server). Each is kept verbatim so its dns.hosts /
+        // routing / fakedns are honored — instead of being downgraded to a bare sing-box vless.
+        val configs: List<JsonObject> = when {
+            element is JsonObject -> listOf(element)
+            else -> runCatching { element.jsonArray }.getOrNull()
+                ?.mapNotNull { it.jsonObjectOrNull() } ?: return null
+        }
+
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = configs.mapNotNull { parseSingleRawXrayEntry(it, usedStorageIds, subscriptionUrl) }
+        if (entries.isEmpty()) return null
+
+        return LocationBundleV4(
+            activeLocationId = entries.firstOrNull()?.storageId,
+            locations = entries
+        )
+    }
+
+    /** Builds one verbatim-Xray location from a single full Xray config object, or null if it isn't one. */
+    private fun parseSingleRawXrayEntry(
+        root: JsonObject,
+        usedStorageIds: MutableSet<String>,
+        subscriptionUrl: String?
+    ): LocationEntry? {
         val outbounds = runCatching { root["outbounds"]?.jsonArray }.getOrNull()
             ?.mapNotNull { it.jsonObjectOrNull() } ?: return null
 
@@ -1451,7 +1477,8 @@ class LocationsRepositoryImpl(
             type = protocol,
             server = server,
             serverPort = port,
-            rawXrayConfig = trimmed
+            // Keep THIS config (the array element), not the whole array, as the verbatim payload.
+            rawXrayConfig = root.toString()
         )
         val location = LocationConfig(
             name = name,
@@ -1464,18 +1491,13 @@ class LocationsRepositoryImpl(
             .lowercase()
             .map { if (it.isLetterOrDigit()) it else '_' }
             .joinToString("")
-        val storageId = uniqueStorageId("imported_$base", mutableSetOf())
+        val storageId = uniqueStorageId("imported_$base", usedStorageIds)
 
-        val entry = LocationEntry.from(
+        return LocationEntry.from(
             storageId = storageId,
             location = location,
             subscriptionUrl = subscriptionUrl,
             metadata = null
-        )
-
-        return LocationBundleV4(
-            activeLocationId = entry.storageId,
-            locations = listOf(entry)
         )
     }
 
