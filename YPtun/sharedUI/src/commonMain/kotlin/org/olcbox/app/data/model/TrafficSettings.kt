@@ -37,14 +37,16 @@ data class TrafficSettings(
      */
     val blockRuDomains: Boolean = false,
     /**
-     * Enable FakeDNS: the core answers sniffed domains with synthetic IPs (Xray `fakedns` pool /
-     * sing-box `fakeip`), so apps never see the real address and the domain is resolved behind the
-     * proxy. Reduces DNS leaks/latency. Off by default; honored verbatim when a subscription's raw
-     * Xray config already carries its own `fakedns` block.
+     * Vestigial global FakeDNS toggle. FakeDNS is no longer a global switch — it is applied PER
+     * location/subscription: a raw Xray config that carries its own `fakedns` block is honored
+     * verbatim (so the feature follows the config that asked for it), and configs that don't have it
+     * never get it injected. [normalized] forces this off so the old global path can't fire.
      */
     val fakeDnsEnabled: Boolean = false,
 ) {
     fun normalized(): TrafficSettings = copy(
+        // FakeDNS is per-config now (honored verbatim from the location's own raw config), never global.
+        fakeDnsEnabled = false,
         remoteDns = remoteDns.trim().ifBlank { "8.8.8.8" },
         directDns = directDns.trim().ifBlank { "223.5.5.5" },
         domainStrategy = domainStrategy.takeIf { it in STRATEGIES } ?: "ipv4_only",

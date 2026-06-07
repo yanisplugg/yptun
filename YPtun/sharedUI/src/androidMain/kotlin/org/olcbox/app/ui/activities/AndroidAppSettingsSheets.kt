@@ -3192,7 +3192,6 @@ private fun TrafficSettingsContent(
     var fragInterval by remember(settings) { mutableStateOf(settings.fragmentInterval) }
     var mtu by remember(settings) { mutableStateOf(settings.mtu.toString()) }
     var blockRu by remember(settings) { mutableStateOf(settings.blockRuDomains) }
-    var fakeDns by remember(settings) { mutableStateOf(settings.fakeDnsEnabled) }
     val s = LocalStrings.current
 
     Column(
@@ -3319,13 +3318,6 @@ private fun TrafficSettingsContent(
             checked = blockRu
         ) { blockRu = it }
 
-        SettingsSectionLabel(s.fakeDnsTitle)
-        RoutingToggleRow(
-            title = s.fakeDnsTitle,
-            subtitle = s.fakeDnsSubtitle,
-            checked = fakeDns
-        ) { fakeDns = it }
-
         Button(
             onClick = {
                 onTrafficChanged(
@@ -3342,7 +3334,6 @@ private fun TrafficSettingsContent(
                         fragmentInterval = fragInterval,
                         mtu = mtu.toIntOrNull() ?: 1500,
                         blockRuDomains = blockRu,
-                        fakeDnsEnabled = fakeDns
                     ).normalized()
                 )
                 onBack()

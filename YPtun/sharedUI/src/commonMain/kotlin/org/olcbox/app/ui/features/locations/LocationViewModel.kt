@@ -36,6 +36,7 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.ShareLinkComposer
+import org.olcbox.app.data.share.YptunInboundCodec
 
 /**
  * @Immutable: instances are never mutated in place (a new one is built on every change), so Compose
@@ -614,7 +615,7 @@ class LocationViewModel(
             proxy2Error = null
             return
         }
-        val profile = ShareLinkParser.parse(trimmed) ?: rawOutboundProfile(trimmed)
+        val profile = proxyFromAnyLink(trimmed)
         if (profile != null && profile.isComplete()) {
             editingConfig = editingConfig.copy(proxy2 = profile)
             proxy2Error = null
@@ -622,6 +623,18 @@ class LocationViewModel(
             editingConfig = editingConfig.copy(proxy2 = null)
             proxy2Error = "Unrecognized proxy link or sing-box config"
         }
+    }
+
+    /**
+     * Resolves a pasted cascade-proxy link to a [ProxyProfile]: a normal share link / sing-box JSON,
+     * OR a `yptun://inbound` link (carrying a whole [LocationConfig]) — in which case its primary proxy
+     * (or second proxy) is used as the cascade hop.
+     */
+    private fun proxyFromAnyLink(trimmed: String): ProxyProfile? {
+        ShareLinkParser.parse(trimmed)?.let { return it }
+        rawOutboundProfile(trimmed)?.let { return it }
+        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy ?: config.proxy2 }
+        return null
     }
 
     private fun rawOutboundProfile(text: String): ProxyProfile? {
@@ -691,7 +704,7 @@ class LocationViewModel(
     private fun validateName(name: String) {
         nameError = when {
             name.isBlank() -> "Name cannot be empty"
-            name.length > 30 -> "Name is too long (max 30 chars)"
+            name.length > 45 -> "Name is too long (max 45 chars)"
             else -> null
         }
     }

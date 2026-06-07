@@ -67,7 +67,16 @@ func Version() string {
 // milliseconds — or -1 on any failure. This is the per-server "real delay" probe (à la v2rayNG /
 // Happ): it needs no system VPN/TUN and is independent of the main running instance, so the server
 // list can be pinged through the proxy while disconnected.
-func MeasureDelay(configJSON, url, method string, timeoutMs int) int64 {
+func MeasureDelay(configJSON, url, method string, timeoutMs int) (result int64) {
+	// Frequent/parallel pings spin up and tear down many throwaway instances; xray-core can panic
+	// on teardown ("send on closed channel") when a background goroutine writes after Close. Recover
+	// so a single probe failing never aborts the whole process (the user-visible app crash).
+	defer func() {
+		if r := recover(); r != nil {
+			result = -1
+		}
+	}()
+
 	config, err := serial.LoadJSONConfig(bytes.NewReader([]byte(configJSON)))
 	if err != nil {
 		return -1
@@ -79,7 +88,13 @@ func MeasureDelay(configJSON, url, method string, timeoutMs int) int64 {
 	if err := inst.Start(); err != nil {
 		return -1
 	}
-	defer inst.Close()
+	defer func() {
+		// Let in-flight connections drain a touch before teardown, then close defensively (the close
+		// itself can panic on the xray-core race) without taking the process down.
+		defer func() { _ = recover() }()
+		time.Sleep(50 * time.Millisecond)
+		_ = inst.Close()
+	}()
 
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	if timeout <= 0 {
