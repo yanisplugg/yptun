@@ -530,7 +530,13 @@ class LocationViewModel(
     }
 
     fun onCoreChanged(core: ProxyCore) {
-        editingConfig = editingConfig.copy(core = core)
+        // xhttp / FakeDNS configs can only run on xray-core: silently coerce a sing-box pick to Xray.
+        val effective = if (core == ProxyCore.SingBox && editingConfig.requiresXray()) {
+            ProxyCore.Xray
+        } else {
+            core
+        }
+        editingConfig = editingConfig.copy(core = effective)
     }
 
     /** Enables/disables the proxy (additional outbound). When off, the location exits directly. */

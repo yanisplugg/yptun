@@ -169,10 +169,24 @@ data class LocationConfig(
         )
     }
 
+    /**
+     * True when the imported config can ONLY be served by xray-core — either an xhttp/splithttp
+     * transport (sing-box can't serve it over VK) or a FakeDNS pool in the raw Xray config (sing-box's
+     * fakedns path is unreliable here, which is why "auto" was falling back to a broken sing-box).
+     * When true, [resolvedCore] forces Xray and the editor blocks the sing-box choice.
+     */
+    fun requiresXray(): Boolean = listOfNotNull(proxy, proxy2).any { p ->
+        p.network == ProxyProfile.NETWORK_XHTTP ||
+            p.rawXrayConfig?.contains("fakedns", ignoreCase = true) == true
+    }
+
     /** Resolves [ProxyCore.Auto] to a concrete backend based on the proxy transport. */
     fun resolvedCore(): ProxyCore = when {
         // A full raw Xray config can only be run by xray-core, regardless of the stored choice.
         !proxy?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
+        // xhttp/splithttp transport or a configured FakeDNS pool always demands xray-core, even if a
+        // stale stored choice says sing-box.
+        requiresXray() -> ProxyCore.Xray
         core == ProxyCore.Auto ->
             if (proxy?.network == ProxyProfile.NETWORK_XHTTP) ProxyCore.Xray else ProxyCore.SingBox
         else -> core

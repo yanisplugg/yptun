@@ -510,6 +510,7 @@ interface Strings {
     val additionalCalls: String
     val coreSection: String
     val coreSubtitle: String
+    val coreSubtitleXrayOnly: String
     val connectionType: String
     val vp8Options: String
     val vp8OptionsSubtitle: String
@@ -1045,6 +1046,7 @@ object RuStrings : Strings {
     override val additionalCalls = "Дополнительные звонки"
     override val coreSection = "Ядро"
     override val coreSubtitle = "«Авто» выбирает Xray для xhttp, иначе sing-box"
+    override val coreSubtitleXrayOnly = "xhttp/FakeDNS — только Xray, sing-box недоступен"
     override val connectionType = "Тип подключения"
     override val vp8Options = "Параметры VP8"
     override val vp8OptionsSubtitle = "Тонкая настройка производительности потока"
@@ -1562,6 +1564,7 @@ object EnStrings : Strings {
     override val additionalCalls = "Additional calls"
     override val coreSection = "Core"
     override val coreSubtitle = "Auto picks Xray for xhttp, otherwise sing-box"
+    override val coreSubtitleXrayOnly = "xhttp/FakeDNS — Xray only, sing-box unavailable"
     override val connectionType = "Connection type"
     override val vp8Options = "VP8 options"
     override val vp8OptionsSubtitle = "Fine-tune stream performance"
@@ -2079,6 +2082,7 @@ object FaStrings : Strings {
     override val additionalCalls = "تماس‌های اضافی"
     override val coreSection = "هسته"
     override val coreSubtitle = "«خودکار» برای xhttp از Xray و در غیر این صورت از sing-box استفاده می‌کند"
+    override val coreSubtitleXrayOnly = "xhttp/FakeDNS فقط Xray؛ sing-box در دسترس نیست"
     override val connectionType = "نوع اتصال"
     override val vp8Options = "گزینه‌های VP8"
     override val vp8OptionsSubtitle = "تنظیم دقیق کارایی جریان"
