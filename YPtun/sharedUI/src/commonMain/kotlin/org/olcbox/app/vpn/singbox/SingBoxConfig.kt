@@ -86,8 +86,9 @@ object SingBoxConfig {
         // `::/0 reject` backstop (which then only catches rare un-sniffable raw IPv6). Implemented via
         // sing-box's (1.12, deprecated-but-functional) inbound `sniff_override_destination`.
         sniffOverrideDestination: Boolean = false,
-        // When false, the proxy outbound is replaced by a `direct` outbound (still tagged [PROXY_TAG])
-        // so traffic exits directly — the location's proxy is kept in config but not applied.
+        // When false, the proxy is not applied: in Chain the [PROXY_TAG] exit becomes olcRTC's SOCKS so
+        // traffic still rides the stealth tunnel (the "main outbound"); otherwise (Standard, no chain
+        // base) it becomes a `direct` outbound. The proxy config is kept either way, just not dialed.
         proxyEnabled: Boolean = true,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
@@ -190,9 +191,14 @@ object SingBoxConfig {
                             advanced = advanced
                         )
                     )
+                } else if (olcrtcChainPort != null) {
+                    // Proxy disabled in Chain: PROXY_TAG becomes olcRTC's local SOCKS so traffic still
+                    // rides the stealth tunnel (the "main outbound"). Turning the proxy off must only drop
+                    // the extra proxy hop — NOT fall back to a direct, no-VPN exit.
+                    add(olcrtcSocksOutbound(PROXY_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
                 } else {
-                    // Proxy disabled: PROXY_TAG resolves to a direct outbound, so everything that would
-                    // route through the proxy exits directly instead. Proxy config is left untouched.
+                    // Proxy disabled with no chain base (Standard): the proxy is the only outbound, so
+                    // there is nothing to fall back to — exit directly. Proxy config is left untouched.
                     addJsonObject {
                         put("type", "direct")
                         put("tag", PROXY_TAG)
@@ -201,18 +207,11 @@ object SingBoxConfig {
                 if (wgBaseOutbound != null) {
                     add(wgBaseOutbound)
                 }
-                if (olcrtcChainPort != null) {
-                    addJsonObject {
-                        put("type", "socks")
-                        put("tag", OLCRTC_TAG)
-                        put("server", "127.0.0.1")
-                        put("server_port", olcrtcChainPort)
-                        put("version", "5")
-                        if (olcrtcChainUser.isNotBlank()) {
-                            put("username", olcrtcChainUser)
-                            put("password", olcrtcChainPass)
-                        }
-                    }
+                // olcRTC chain detour — only while the proxy is enabled (the proxy outbound dials through
+                // this tag). With the proxy off, PROXY_TAG already IS the olcRTC SOCKS above, so emitting a
+                // second identical outbound would be redundant.
+                if (olcrtcChainPort != null && proxyEnabled) {
+                    add(olcrtcSocksOutbound(OLCRTC_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
                 }
                 addJsonObject {
                     put("type", "direct")
@@ -460,6 +459,24 @@ object SingBoxConfig {
             buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
         }
     }
+
+    /**
+     * A SOCKS5 outbound pointing at olcRTC's local listener on [port]. Used as the chain detour
+     * ([OLCRTC_TAG]) and, when the proxy is disabled, as the exit itself ([PROXY_TAG]) so Chain
+     * traffic keeps riding the stealth tunnel instead of leaking out directly.
+     */
+    private fun olcrtcSocksOutbound(tag: String, port: Int, user: String, pass: String): JsonObject =
+        buildJsonObject {
+            put("type", "socks")
+            put("tag", tag)
+            put("server", "127.0.0.1")
+            put("server_port", port)
+            put("version", "5")
+            if (user.isNotBlank()) {
+                put("username", user)
+                put("password", pass)
+            }
+        }
 
     /** A raw WireGuard outbound used as a chain base (tagged [WG_BASE_TAG], no mux/detour). */
     private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {

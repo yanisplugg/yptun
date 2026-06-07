@@ -108,8 +108,9 @@ object XrayConfig {
         // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
         // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
         blockQuic: Boolean = true,
-        // When false, the proxy outbound is replaced by a `freedom` (direct) outbound tagged
-        // [PROXY_TAG] — traffic exits directly; the location's proxy is kept in config but not applied.
+        // When false, the proxy is not applied: in Chain the [PROXY_TAG] exit becomes olcRTC's SOCKS so
+        // traffic still rides the stealth tunnel (the "main outbound"); otherwise (Standard, no chain
+        // base) it becomes a `freedom` (direct) outbound. The proxy config is kept either way, just not dialed.
         proxyEnabled: Boolean = true,
     ): String {
         val config = buildJsonObject {
@@ -186,8 +187,13 @@ object XrayConfig {
                         )
                     )
                     if (wgBaseOutbound != null) add(wgBaseOutbound)
+                } else if (olcrtcChainPort != null) {
+                    // Proxy disabled in Chain: the default outbound becomes olcRTC's local SOCKS so traffic
+                    // still rides the stealth tunnel (the "main outbound"). Turning the proxy off must only
+                    // drop the extra proxy hop — NOT fall back to a direct, no-VPN exit.
+                    add(olcrtcSocksOutbound(PROXY_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
                 } else {
-                    // Proxy disabled: PROXY_TAG resolves to a direct (freedom) outbound.
+                    // Proxy disabled with no chain base (Standard): exit directly (the proxy was the only hop).
                     addJsonObject {
                         put("tag", PROXY_TAG)
                         put("protocol", "freedom")
@@ -227,27 +233,10 @@ object XrayConfig {
                         }
                     }
                 }
-                if (olcrtcChainPort != null) {
-                    addJsonObject {
-                        put("tag", OLCRTC_TAG)
-                        put("protocol", "socks")
-                        putJsonObject("settings") {
-                            putJsonArray("servers") {
-                                addJsonObject {
-                                    put("address", "127.0.0.1")
-                                    put("port", olcrtcChainPort)
-                                    if (olcrtcChainUser.isNotBlank()) {
-                                        putJsonArray("users") {
-                                            addJsonObject {
-                                                put("user", olcrtcChainUser)
-                                                put("pass", olcrtcChainPass)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // olcRTC chain detour — only while the proxy is enabled (the proxy outbound dials through
+                // this tag). With the proxy off, PROXY_TAG already IS the olcRTC SOCKS above.
+                if (olcrtcChainPort != null && proxyEnabled) {
+                    add(olcrtcSocksOutbound(OLCRTC_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
                 }
             }
 
@@ -471,6 +460,33 @@ object XrayConfig {
      * Converts the sing-box WireGuard outbound stored in [profile].rawOutbound into an Xray
      * `wireguard` outbound (tag [WG_BASE_TAG]) so a chained proxy can dial through the VK tunnel.
      */
+    /**
+     * A SOCKS outbound pointing at olcRTC's local listener on [port], in Xray schema. Used as the
+     * chain detour ([OLCRTC_TAG]) and, when the proxy is disabled, as the default exit ([PROXY_TAG])
+     * so Chain traffic keeps riding the stealth tunnel instead of leaking out directly.
+     */
+    private fun olcrtcSocksOutbound(tag: String, port: Int, user: String, pass: String): JsonObject =
+        buildJsonObject {
+            put("tag", tag)
+            put("protocol", "socks")
+            putJsonObject("settings") {
+                putJsonArray("servers") {
+                    addJsonObject {
+                        put("address", "127.0.0.1")
+                        put("port", port)
+                        if (user.isNotBlank()) {
+                            putJsonArray("users") {
+                                addJsonObject {
+                                    put("user", user)
+                                    put("pass", pass)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
     private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
         val o = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
