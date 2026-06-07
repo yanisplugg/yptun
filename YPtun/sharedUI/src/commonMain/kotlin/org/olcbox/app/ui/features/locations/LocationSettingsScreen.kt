@@ -217,18 +217,9 @@ fun LocationSettingsScreen(
             }
 
             if (config.engine == EngineType.Standard || config.engine == EngineType.Chain) {
-                // Main proxy (основной аутбаунд) — the location's primary outbound, ALWAYS applied.
-                item {
-                    ProxyField(
-                        title = LocalStrings.current.mainProxySection,
-                        subtitle = LocalStrings.current.proxySectionSubtitle,
-                        link = viewModel.editingProxyLink,
-                        currentProxy = config.proxy,
-                        error = viewModel.proxyError,
-                        enabled = !isSaving,
-                        onChange = viewModel::onProxyLinkChanged
-                    )
-                }
+                // Main proxy (основной аутбаунд) is the always-on primary outbound, but its editor field
+                // is hidden by request — it comes from the imported/subscription config (config.proxy)
+                // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
                 item {
                     CoreSelector(
                         selected = config.core,
