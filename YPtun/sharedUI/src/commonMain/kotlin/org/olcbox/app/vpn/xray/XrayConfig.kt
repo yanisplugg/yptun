@@ -619,13 +619,20 @@ object XrayConfig {
             }
         }
 
-        put("streamSettings", buildStreamSettings(profile, fragmentDialer = traffic.fragmentEnabled && detourTag == null))
+        // A local SOCKS hop (AmneziaWG base) is plaintext loopback: it must NOT get TLS/stream
+        // settings, TLS-fragment dialing or mux — those are for real remote proxy servers and would
+        // corrupt the loopback SOCKS handshake (e.g. fragment splits the SOCKS bytes → connection
+        // reset). Emit it bare, like olcrtcSocksOutbound. Only the detour (proxySettings) still applies.
+        val isLocalSocks = profile.type == "socks"
+        if (!isLocalSocks) {
+            put("streamSettings", buildStreamSettings(profile, fragmentDialer = traffic.fragmentEnabled && detourTag == null))
+        }
 
         if (detourTag != null) {
             putJsonObject("proxySettings") { put("tag", detourTag) }
         }
 
-        if (traffic.muxEnabled) {
+        if (traffic.muxEnabled && !isLocalSocks) {
             putJsonObject("mux") {
                 put("enabled", true)
                 put("concurrency", traffic.muxMaxConnections)
