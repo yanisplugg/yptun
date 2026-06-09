@@ -160,6 +160,8 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
     inputs.dir(coresRepoDir.resolve("../free-turn-proxy/internal"))
     // AmneziaWG SOCKS bridge (sibling module) + its local amneziawg-go fork.
     inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
+    // Hysteria2 SOCKS bridge (sibling module on apernet/hysteria).
+    inputs.dir(coresRepoDir.resolve("../hysteria2proxy/hy2"))
     // olcrtc (sibling replace module) bound packages — track so edits (e.g. telemost cookies)
     // re-trigger the bind.
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
@@ -186,6 +188,7 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         "github.com/sagernet/sing-box/experimental/libbox",
         "github.com/samosvalishe/free-turn-proxy/freeturn",
         "github.com/olc/awgproxy/awg",
+        "github.com/olc/hysteria2proxy/hy2",
         "kazcores/xraybridge"
     )
 }

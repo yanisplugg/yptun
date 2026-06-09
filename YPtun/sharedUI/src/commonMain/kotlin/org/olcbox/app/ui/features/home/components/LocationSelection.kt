@@ -30,6 +30,8 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Sort
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.SyncDisabled
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
@@ -85,6 +87,8 @@ fun LazyListScope.locationSelectorContent(
     onLocationSelected: (String) -> Unit,
     onLocationSettingsClick: (String) -> Unit,
     onDeleteSubscription: (List<String>) -> Unit = {},
+    // Toggle a single subscription's automatic refresh (keyed by its URL).
+    onSetSubscriptionAutoUpdate: (subscriptionUrl: String, enabled: Boolean) -> Unit = { _, _ -> },
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -208,6 +212,7 @@ fun LazyListScope.locationSelectorContent(
                             )
                             SubscriptionGroupHeader(
                                 locations = group,
+                                pingsState = pingsState,
                                 isPinned = isPinned,
                                 modifier = Modifier.weight(1f)
                             )
@@ -222,13 +227,19 @@ fun LazyListScope.locationSelectorContent(
                             tint = MaterialTheme.colorScheme.primary
                         )
 
-                        // Overflow menu: pin, sort-by-ping, delete.
+                        // Overflow menu: pin, sort-by-ping, auto-update, delete.
+                        val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
+                        val groupSubUrl = group.firstOrNull()?.subscriptionUrl
                         SubscriptionGroupMenu(
                             isPinned = isPinned,
                             isPingSorted = isPingSorted,
                             isPingDescending = isPingDescending,
+                            autoUpdateEnabled = groupAutoUpdate,
                             onTogglePin = { onToggleGroupPinned(groupKey) },
                             onTogglePingSort = { onToggleGroupPingSort(groupKey) },
+                            onToggleAutoUpdate = {
+                                groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
+                            },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) }
                         )
@@ -350,6 +361,7 @@ fun LazyListScope.locationSelectorContent(
                                                 )
                                                 SubscriptionGroupHeader(
                                                     locations = mGroup,
+                                                    pingsState = pingsState,
                                                     isPinned = mPinned,
                                                     modifier = Modifier.weight(1f)
                                                 )
@@ -361,12 +373,18 @@ fun LazyListScope.locationSelectorContent(
                                                 onClick = { onRefreshClick(mIds) },
                                                 tint = MaterialTheme.colorScheme.primary
                                             )
+                                            val mAutoUpdate = mGroup.none { it.metadata?.subscription?.autoUpdateEnabled == false }
+                                            val mSubUrl = mGroup.firstOrNull()?.subscriptionUrl
                                             SubscriptionGroupMenu(
                                                 isPinned = mPinned,
                                                 isPingSorted = mPingSorted,
                                                 isPingDescending = mPingDesc,
+                                                autoUpdateEnabled = mAutoUpdate,
                                                 onTogglePin = { onToggleGroupPinned(mKey) },
                                                 onTogglePingSort = { onToggleGroupPingSort(mKey) },
+                                                onToggleAutoUpdate = {
+                                                    mSubUrl?.let { onSetSubscriptionAutoUpdate(it, !mAutoUpdate) }
+                                                },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) }
                                             )
@@ -729,8 +747,10 @@ private fun SubscriptionGroupMenu(
     isPinned: Boolean,
     isPingSorted: Boolean,
     isPingDescending: Boolean,
+    autoUpdateEnabled: Boolean,
     onTogglePin: () -> Unit,
     onTogglePingSort: () -> Unit,
+    onToggleAutoUpdate: () -> Unit,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -779,6 +799,28 @@ private fun SubscriptionGroupMenu(
                 } else null,
                 onClick = {
                     onTogglePingSort()
+                    expanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text(s.groupAutoUpdate) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = if (autoUpdateEnabled) Icons.Outlined.Sync else Icons.Outlined.SyncDisabled,
+                        contentDescription = null
+                    )
+                },
+                trailingIcon = if (autoUpdateEnabled) {
+                    {
+                        Icon(
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                } else null,
+                onClick = {
+                    onToggleAutoUpdate()
                     expanded = false
                 }
             )
@@ -985,6 +1027,7 @@ private fun LocationGroupHeader(
 @Composable
 private fun SubscriptionGroupHeader(
     locations: List<LocationItem>,
+    pingsState: PingsState,
     isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -1016,6 +1059,22 @@ private fun SubscriptionGroupHeader(
                 ExpiryWarningBadge(
                     dateTime = info.expiryDateTime,
                     daysLeft = info.daysLeft ?: 0L
+                )
+            }
+            // Optional "live/total" badge: servers that answered the last ping pass, gated on the toggle.
+            if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount.current &&
+                locations.isNotEmpty()
+            ) {
+                val alive = locations.count { pingsState.pingFor(it.storageId) != null }
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "$alive/${locations.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (alive > 0) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                 )
             }
         }

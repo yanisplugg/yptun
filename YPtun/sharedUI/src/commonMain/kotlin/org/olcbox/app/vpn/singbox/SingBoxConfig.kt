@@ -393,6 +393,17 @@ object SingBoxConfig {
                         }
                     }
                     if (routing.blockAds) {
+                        // Exempt core Google infrastructure BEFORE the ad reject: the SagerNet
+                        // category-ads-all rule-set is aggressive and otherwise takes down google.com
+                        // (and its essential subresources). These are NOT ad-serving domains — the real
+                        // ad domains (googlesyndication/doubleclick/googleadservices/…) live elsewhere and
+                        // stay blocked. First-match-wins, so this must precede the reject.
+                        addJsonObject {
+                            putJsonArray("domain_suffix") {
+                                add("google.com"); add("gstatic.com"); add("googleapis.com")
+                            }
+                            put("outbound", PROXY_TAG)
+                        }
                         addJsonObject {
                             put("rule_set", "geosite-ads")
                             put("action", "reject")

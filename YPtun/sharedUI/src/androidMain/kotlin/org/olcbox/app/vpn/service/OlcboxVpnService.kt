@@ -40,6 +40,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import awg.Awg
 import awg.LogWriter as AwgLogWriter
 import awg.Protector as AwgProtector
+import hy2.Hy2
+import hy2.LogWriter as Hy2LogWriter
+import hy2.Protector as Hy2Protector
 import xraybridge.Xraybridge
 import xraybridge.Protector as XrayProtector
 import freeturn.Freeturn
@@ -93,6 +96,8 @@ import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.data.model.VkTurnConfig
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -121,6 +126,8 @@ class OlcboxVpnService : VpnService() {
     }
 
     private var lastNotificationStatus = ""
+    /** Display name of the currently-connecting/connected location, shown in the notification. */
+    @Volatile private var connectedLocationName = ""
     @Volatile private var showSpeedInNotif = false
 
     private var startupJob: Job? = null
@@ -434,6 +441,14 @@ class OlcboxVpnService : VpnService() {
                 }
             })
         }.onFailure { Log.w(TAG, "awg setProtector failed", it) }
+        runCatching {
+            Hy2.setProtector(object : Hy2Protector {
+                override fun protect(fd: Long): Boolean {
+                    if (connectionMode == AndroidConnectionMode.Proxy) return true
+                    return this@OlcboxVpnService.protect(fd.toInt())
+                }
+            })
+        }.onFailure { Log.w(TAG, "hy2 setProtector failed", it) }
         Mobile.setProviders()
         Mobile.setLogWriter(object : LogWriter {
             override fun writeLog(msg: String) {
@@ -597,6 +612,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private suspend fun reconnectTransport(location: LocationConfig, requestedGeneration: Long) {
+        connectedLocationName = location.displayName()
         setStatus(VpnStatus.Reconnecting)
         updateNotification(ns.notifReconnecting)
         val upstream = findActiveUpstreamNetwork()
@@ -635,6 +651,7 @@ class OlcboxVpnService : VpnService() {
         isMigration: Boolean,
         isRestart: Boolean
     ) {
+        connectedLocationName = location.displayName()
         setStatus(if (isMigration || isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
         updateNotification(ns.notifConnecting)
         stopTransportProcesses(closeTun = true, waitForSocksPort = true)
@@ -871,9 +888,17 @@ class OlcboxVpnService : VpnService() {
                 addLog("olcRTC chain ready on 127.0.0.1:$chainPort")
             }
 
-            // AmneziaWG: raise the awgproxy SOCKS and route the proxy through it (sing-box only).
-            val effectiveProfile = prepareAmneziaWgProxy(profile)
+            // AmneziaWG / Hysteria2: raise a local SOCKS (awgproxy / hysteria2proxy) and route the
+            // proxy through it. Both are full UDP tunnels (carry QUIC natively), modeled as a socks
+            // outbound → sing-box core, exactly like the AmneziaWG path.
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
+            val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
+            val effectiveProfile = when {
+                isAwg -> prepareAmneziaWgProxy(profile)
+                isHy2 -> prepareHysteria2Proxy(profile)
+                else -> profile
+            }
+            val isLocalUdpTunnel = isAwg || isHy2
 
             // Happ-style routing profile (per-location override → global default), if any.
             val profilesState = loadRoutingProfilesState()
@@ -893,7 +918,7 @@ class OlcboxVpnService : VpnService() {
                 )
             }
 
-            activeProxyCore = if (isAwg) ProxyCore.SingBox else config.resolvedCore()
+            activeProxyCore = if (isLocalUdpTunnel) ProxyCore.SingBox else config.resolvedCore()
             // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
@@ -1003,6 +1028,7 @@ class OlcboxVpnService : VpnService() {
                 // IPv6 literal and is re-resolved to IPv4, so traffic rides the tunnel as IPv4 (no
                 // IPv6 leak) AND Chrome's IPv6 attempts aren't rejected/flooded.
                 if (isAwg) addLog("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4 (no IPv6 leak)")
+                if (isHy2) addLog("Hysteria2 outbound: QUIC allowed + sniff-override→IPv4 (no IPv6 leak)")
                 val json = SingBoxConfig.build(
                     profile = effectiveProfile,
                     listenPort = socksListenPort,
@@ -1019,8 +1045,8 @@ class OlcboxVpnService : VpnService() {
                     routingProfile = routingProfile,
                     singboxGeositeBase = profilesState.singboxGeositeBase,
                     singboxGeoipBase = profilesState.singboxGeoipBase,
-                    blockQuic = !isAwg,
-                    sniffOverrideDestination = isAwg,
+                    blockQuic = !isLocalUdpTunnel,
+                    sniffOverrideDestination = isLocalUdpTunnel,
                     // STRICT "IPv4 only": forceFamilyResolve (default true) keeps the `::/0 reject` so a real
                     // IPv6 destination never leaves. This stays on EVEN with fakeip — but fakeip now also
                     // hands out a fake IPv6 (fc00::/18) for AAAA, which sing-box restores to the domain
@@ -1927,6 +1953,7 @@ class OlcboxVpnService : VpnService() {
         runCatching { xray?.stop() }
         runCatching { Freeturn.stop() }
         runCatching { Awg.stop() }
+        runCatching { Hy2.stop() }
         val provider = lastMobileProvider
         val wasRunning = Mobile.isRunning()
         runCatching { Mobile.stop() }
@@ -1970,6 +1997,55 @@ class OlcboxVpnService : VpnService() {
             type = "socks",
             server = "127.0.0.1",
             serverPort = awgLocalPort,
+            rawOutbound = raw,
+        )
+    }
+
+    private val hy2LocalPort: Int get() = socksListenPort + 3
+
+    /**
+     * If [profile] is Hysteria2, raise the hysteria2proxy SOCKS5 from its config and return a SOCKS
+     * proxy pointing at it, so sing-box (standalone or chained) routes through the Hysteria2 tunnel.
+     * Otherwise returns [profile] unchanged. Mirrors [prepareAmneziaWgProxy].
+     */
+    private suspend fun prepareHysteria2Proxy(profile: ProxyProfile): ProxyProfile {
+        if (profile.type != ProxyProfile.TYPE_HYSTERIA2) return profile
+        runCatching { Hy2.stop() }
+        Hy2.setDebug(false)
+        Hy2.setLogWriter(object : Hy2LogWriter {
+            override fun writeLog(line: String) {
+                val trimmed = line.trimEnd()
+                addLog("hy2: $trimmed")
+                Log.v("hy2", trimmed)
+            }
+        })
+        val cfg = buildJsonObject {
+            put("server", profile.server)
+            put("port", profile.serverPort)
+            if (profile.hy2Ports.isNotBlank()) put("ports", profile.hy2Ports)
+            put("auth", profile.password)
+            put("sni", profile.sni.ifBlank { profile.server })
+            put("insecure", profile.allowInsecure)
+            if (profile.hy2Obfs.isNotBlank()) {
+                put("obfs", profile.hy2Obfs)
+                put("obfsPassword", profile.hy2ObfsPassword)
+            }
+            if (profile.hy2UpMbps > 0) put("upMbps", profile.hy2UpMbps)
+            if (profile.hy2DownMbps > 0) put("downMbps", profile.hy2DownMbps)
+        }.toString()
+        val listen = "127.0.0.1:$hy2LocalPort"
+        addLog("Starting Hysteria2 SOCKS on $listen")
+        Hy2.start(cfg, listen)
+        if (!awaitSocksPortOpen(hy2LocalPort, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("Hysteria2 SOCKS port $hy2LocalPort did not open")
+        }
+        val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
+            "\"server_port\":$hy2LocalPort,\"version\":\"5\"}"
+        return ProxyProfile(
+            tag = profile.tag.ifBlank { "Hysteria2" },
+            type = "socks",
+            server = "127.0.0.1",
+            serverPort = hy2LocalPort,
             rawOutbound = raw,
         )
     }
@@ -2527,8 +2603,14 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun buildNotification(status: String, speed: CharSequence? = null): Notification {
-        val title = "YPtun ${activeModeLabel()}"
-        val body: CharSequence = speed ?: status
+        val title = "YPtun"
+        // Body is the status line (the active server name when connected). When the
+        // live speed is shown, append it right next to the name.
+        val body: CharSequence = if (speed != null) {
+            android.text.SpannableStringBuilder(status).append("   ").append(speed)
+        } else {
+            status
+        }
         // Status-bar icon: our cat-head silhouette (system tints it monochrome).
         // Resolved by name because this lives in androidApp's resources, not sharedUI's R.
         val statIcon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
@@ -2631,7 +2713,12 @@ class OlcboxVpnService : VpnService() {
     /** Localized strings for notifications, resolved against the user's current language choice. */
     private val ns get() = stringsFor(LocalizationState.effective)
 
-    private fun connectedNotificationText(): String = ns.notifConnectedMode(activeModeLabel())
+    /**
+     * Connected-state notification body: the active server's display name.
+     * Falls back to the generic "Connected · VPN/Proxy" line if the name is empty.
+     */
+    private fun connectedNotificationText(): String =
+        connectedLocationName.ifBlank { ns.notifConnectedMode(activeModeLabel()) }
 
     private class AuthenticatedSocksProxy(
         private val listenPort: Int,
@@ -2873,6 +2960,10 @@ class OlcboxVpnService : VpnService() {
 
         private fun addLog(msg: String) {
             OlcboxVpnState.addLog(msg)
+            // Mirror to logcat at INFO so the full connect/recovery flow is visible via `adb logcat
+            // OlcboxVpnService:I` (the in-app journal lives in-process only). The logcat-capture loop
+            // skips the OlcboxVpnService tag, so this never echoes back into the journal.
+            android.util.Log.i(TAG, msg)
         }
     }
 }

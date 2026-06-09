@@ -117,6 +117,11 @@ data class AppBehaviorSettings(
      * subscription group header. Off by default; the urgent (≤2 days) red badge is always shown.
      */
     val showSubscriptionExpiry: Boolean = false,
+    /**
+     * Show a "live/total" badge in each subscription header — how many of its servers responded to
+     * the last ping pass out of the total. Off by default.
+     */
+    val showSubscriptionAliveCount: Boolean = false,
     /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
     val customGroups: List<CustomGroup> = emptyList(),
     /**

@@ -70,6 +70,7 @@ interface Strings {
     val groupPinToTop: String
     val groupUnpinFromTop: String
     val groupSortByPing: String
+    val groupAutoUpdate: String
     val groupDelete: String
 
     // Delete dialogs
@@ -545,6 +546,8 @@ interface Strings {
     val pingTargetHint: String
     val savePingResultsTitle: String
     val savePingResultsSubtitle: String
+    val showAliveCountTitle: String
+    val showAliveCountSubtitle: String
     val pingThreadsTitle: String
     val pingThreadsSubtitle: String
     val pingModeAuto: String
@@ -636,6 +639,7 @@ object RuStrings : Strings {
     override val groupPinToTop = "Закрепить наверху"
     override val groupUnpinFromTop = "Открепить"
     override val groupSortByPing = "Сортировать по пингу"
+    override val groupAutoUpdate = "Автообновление"
     override val groupDelete = "Удалить подписку"
     override val delete = "Удалить"
     override val cancel = "Отмена"
@@ -1076,6 +1080,9 @@ object RuStrings : Strings {
     override val savePingResultsTitle = "Сохранять результаты пингов"
     override val savePingResultsSubtitle =
         "Показывать последние результаты при повторном открытии приложения"
+    override val showAliveCountTitle = "Счётчик доступных серверов"
+    override val showAliveCountSubtitle =
+        "В шапке подписки показывать «живые/всего» по последнему пингу"
     override val pingThreadsTitle = "Потоки пинга"
     override val pingThreadsSubtitle = "Сколько локаций пинговать одновременно (1–20)"
     override val pingModeAuto = "Авто"
@@ -1156,6 +1163,7 @@ object EnStrings : Strings {
     override val groupPinToTop = "Pin to top"
     override val groupUnpinFromTop = "Unpin"
     override val groupSortByPing = "Sort by ping"
+    override val groupAutoUpdate = "Auto-update"
     override val groupDelete = "Delete subscription"
     override val delete = "Delete"
     override val cancel = "Cancel"
@@ -1596,6 +1604,9 @@ object EnStrings : Strings {
     override val savePingResultsTitle = "Save ping results"
     override val savePingResultsSubtitle =
         "Show the last results again when the app is reopened"
+    override val showAliveCountTitle = "Reachable server counter"
+    override val showAliveCountSubtitle =
+        "Show \"live/total\" in the subscription header from the last ping pass"
     override val pingThreadsTitle = "Ping threads"
     override val pingThreadsSubtitle = "How many locations to ping at once (1–20)"
     override val pingModeAuto = "Auto"
@@ -1676,6 +1687,7 @@ object FaStrings : Strings {
     override val groupPinToTop = "سنجاق به بالا"
     override val groupUnpinFromTop = "برداشتن سنجاق"
     override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
+    override val groupAutoUpdate = "به‌روزرسانی خودکار"
     override val groupDelete = "حذف اشتراک"
     override val delete = "حذف"
     override val cancel = "انصراف"
@@ -2116,6 +2128,9 @@ object FaStrings : Strings {
     override val savePingResultsTitle = "ذخیرهٔ نتایج پینگ"
     override val savePingResultsSubtitle =
         "نمایش آخرین نتایج هنگام بازکردن دوبارهٔ برنامه"
+    override val showAliveCountTitle = "شمارندهٔ سرورهای در دسترس"
+    override val showAliveCountSubtitle =
+        "نمایش «فعال/کل» در سربرگ اشتراک بر اساس آخرین پینگ"
     override val pingThreadsTitle = "رشته‌های پینگ"
     override val pingThreadsSubtitle = "چند موقعیت هم‌زمان پینگ شوند (۱ تا ۲۰)"
     override val pingModeAuto = "خودکار"

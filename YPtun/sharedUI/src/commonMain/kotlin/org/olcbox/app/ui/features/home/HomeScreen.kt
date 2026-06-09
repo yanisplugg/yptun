@@ -377,6 +377,9 @@ fun HomeScreen(
                 onDeleteSubscription = { ids ->
                     requestDelete(PendingDelete.Subscription(ids))
                 },
+                onSetSubscriptionAutoUpdate = { url, enabled ->
+                    locationViewModel.setSubscriptionAutoUpdate(url, enabled)
+                },
                 collapsedGroups = collapsedGroups,
                 pinnedGroups = pinnedGroups,
                 pingSortedGroups = pingSortedGroups,

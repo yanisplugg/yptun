@@ -69,15 +69,18 @@ class ShareLinkParserTest {
             vless://uuid-a@a.com:443?security=tls&flow=xtls-rprx-vision#A
             trojan://pw@b.com:443?sni=b.com#B
             ss://YWVzLTEyOC1nY206cHc@c.com:8388#C
-            hysteria2://ignored@d.com:443#D
+            hysteria2://pw@d.com:443?sni=d.com&obfs=salamander&obfs-password=op#D
         """.trimIndent()
 
         val profiles = ShareLinkParser.parseSubscription(body)
 
-        assertEquals(3, profiles.size)
+        assertEquals(4, profiles.size)
         assertEquals(ProxyProfile.TYPE_VLESS, profiles[0].type)
         assertEquals(ProxyProfile.TYPE_TROJAN, profiles[1].type)
         assertEquals(ProxyProfile.TYPE_SHADOWSOCKS, profiles[2].type)
+        assertEquals(ProxyProfile.TYPE_HYSTERIA2, profiles[3].type)
+        assertEquals("d.com", profiles[3].server)
+        assertEquals("salamander", profiles[3].hy2Obfs)
     }
 
     @Test

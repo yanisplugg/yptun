@@ -475,7 +475,14 @@ data class SubscriptionMetadata(
      * "retry after the hours indicated" — instead of hammering a down panel every poll.
      */
     @SerialName("last_attempt_at_epoch_ms")
-    val lastAttemptAtEpochMs: Long? = null
+    val lastAttemptAtEpochMs: Long? = null,
+    /**
+     * Per-subscription auto-update switch. When false, the periodic/launch due-check skips this
+     * subscription entirely (a manual refresh still works). Defaults to true so existing
+     * subscriptions keep auto-updating.
+     */
+    @SerialName("auto_update_enabled")
+    val autoUpdateEnabled: Boolean = true
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -504,7 +511,8 @@ data class SubscriptionMetadata(
                 updateIntervalHours == null &&
                 lastRefreshAtEpochMs == null &&
                 expiresAtEpochMs == null &&
-                lastAttemptAtEpochMs == null
+                lastAttemptAtEpochMs == null &&
+                autoUpdateEnabled
     }
 
     companion object {

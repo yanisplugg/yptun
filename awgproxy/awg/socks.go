@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/netip"
 	"strconv"
@@ -72,6 +73,8 @@ func socksTCPConnect(client net.Conn, tnet *netstack.Net, target string) {
 	defer cancel()
 	remote, err := tnet.DialContext(ctx, "tcp", target)
 	if err != nil {
+		// Only failures are logged (success would be one line per connection → journal spam).
+		log.New(logSink, "", 0).Printf("socks connect to %s failed: %v", target, err)
 		_ = writeSocksReply(client, 0x05) // connection refused
 		return
 	}

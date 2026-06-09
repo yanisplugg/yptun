@@ -408,7 +408,8 @@ fun AndroidMainScreen(
 
     androidx.compose.runtime.CompositionLocalProvider(
         org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay,
-        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry
+        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry,
+        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides appBehavior.showSubscriptionAliveCount
     ) {
     OlcboxAppContent(
         homeViewModel = viewModel,

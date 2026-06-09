@@ -297,6 +297,7 @@ class LocationsRepositoryImpl(
         groupedByUrl.forEach { (url, previousEntries) ->
             val attemptTimestamp = nowEpochMs()
             val previousInterval = previousEntries.subscriptionUpdateIntervalHours()
+            val previousAutoUpdate = previousEntries.subscriptionAutoUpdateEnabled()
             val resolved = resolveParsedImport(
                 text = url,
                 fallbackSubscriptionInterval = previousInterval,
@@ -339,7 +340,8 @@ class LocationsRepositoryImpl(
                     metadata = entry.metadata.withSubscriptionRefreshState(
                         updateIntervalHours = updateInterval,
                         lastRefreshAtEpochMs = attemptTimestamp,
-                        lastAttemptAtEpochMs = attemptTimestamp
+                        lastAttemptAtEpochMs = attemptTimestamp,
+                        autoUpdateEnabled = previousAutoUpdate
                     )
                 ).normalized()
             }
@@ -376,6 +378,8 @@ class LocationsRepositoryImpl(
                 .mapNotNull { entry ->
                     val url = entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                     val metadata = entry.metadata?.subscription
+                    // Respect the per-subscription auto-update switch — skip when the user turned it off.
+                    if (metadata?.autoUpdateEnabled == false) return@mapNotNull null
                     val interval = metadata?.updateIntervalHours
                         ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS
                     // [retryFailed] (once per app launch): key the schedule off the last SUCCESSFUL
@@ -448,6 +452,26 @@ class LocationsRepositoryImpl(
                 } else {
                     entry.copy(
                         metadata = entry.metadata.withSubscriptionInterval(interval)
+                    ).normalized()
+                }
+            }
+
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
+    override suspend fun setSubscriptionAutoUpdate(subscriptionUrl: String, enabled: Boolean) {
+        val normalizedUrl = subscriptionUrl.trim()
+        if (normalizedUrl.isBlank()) return
+
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            val updated = bundle.locations.map { entry ->
+                if (entry.subscriptionUrl?.trim() != normalizedUrl) {
+                    entry
+                } else {
+                    entry.copy(
+                        metadata = entry.metadata.withSubscriptionAutoUpdate(enabled)
                     ).normalized()
                 }
             }
@@ -1959,6 +1983,11 @@ class LocationsRepositoryImpl(
         }
     }
 
+    /** Auto-update is considered disabled for the group if ANY of its entries has it turned off. */
+    private fun List<LocationEntry>.subscriptionAutoUpdateEnabled(): Boolean {
+        return none { entry -> entry.metadata?.subscription?.autoUpdateEnabled == false }
+    }
+
     private fun SubscriptionMetadata?.withSubscriptionInterval(hours: Int?): SubscriptionMetadata? {
         if (hours == null) return this
         return (this ?: SubscriptionMetadata()).copy(
@@ -1971,21 +2000,32 @@ class LocationsRepositoryImpl(
         return withSubscriptionRefreshState(
             updateIntervalHours = hours,
             lastRefreshAtEpochMs = this?.subscription?.lastRefreshAtEpochMs,
-            lastAttemptAtEpochMs = this?.subscription?.lastAttemptAtEpochMs
+            lastAttemptAtEpochMs = this?.subscription?.lastAttemptAtEpochMs,
+            autoUpdateEnabled = this?.subscription?.autoUpdateEnabled ?: true
         )
+    }
+
+    /** Flips the per-subscription auto-update switch, keeping the rest of the metadata intact. */
+    private fun LocationMetadata?.withSubscriptionAutoUpdate(enabled: Boolean): LocationMetadata {
+        val subscription = this?.subscription ?: SubscriptionMetadata()
+        return (this ?: LocationMetadata()).copy(
+            subscription = subscription.copy(autoUpdateEnabled = enabled)
+        ).normalized()
     }
 
     private fun LocationMetadata?.withSubscriptionRefreshState(
         updateIntervalHours: Int,
         lastRefreshAtEpochMs: Long?,
-        lastAttemptAtEpochMs: Long? = lastRefreshAtEpochMs
+        lastAttemptAtEpochMs: Long? = lastRefreshAtEpochMs,
+        autoUpdateEnabled: Boolean = this?.subscription?.autoUpdateEnabled ?: true
     ): LocationMetadata {
         val subscription = this?.subscription ?: SubscriptionMetadata()
         return (this ?: LocationMetadata()).copy(
             subscription = subscription.copy(
                 updateIntervalHours = updateIntervalHours,
                 lastRefreshAtEpochMs = lastRefreshAtEpochMs,
-                lastAttemptAtEpochMs = lastAttemptAtEpochMs
+                lastAttemptAtEpochMs = lastAttemptAtEpochMs,
+                autoUpdateEnabled = autoUpdateEnabled
             )
         ).normalized()
     }
