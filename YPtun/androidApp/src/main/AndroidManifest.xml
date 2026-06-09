@@ -105,7 +105,7 @@
         <service
             android:name=".QuickSettingsTileService"
             android:label="@string/qs_tile_label"
-            android:icon="@drawable/ic_stat_yptun"
+            android:icon="@drawable/ic_qs_tile_cat"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true"
             tools:targetApi="24">
