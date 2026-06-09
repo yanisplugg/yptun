@@ -598,6 +598,24 @@ object XrayConfig {
                         }
                     }
                 }
+
+                // Local SOCKS5 hop — currently the AmneziaWG outbound (prepareAmneziaWgProxy raises an
+                // awgproxy SOCKS on 127.0.0.1 and hands it over as a type="socks" profile). Without this
+                // branch the outbound had an empty `settings` (no server) on Xray, so a cascade whose
+                // second proxy is xhttp (which forces the Xray core) had a dead AmneziaWG base hop.
+                "socks" -> {
+                    putJsonArray("servers") {
+                        addJsonObject {
+                            put("address", profile.server)
+                            put("port", profile.serverPort)
+                            if (profile.password.isNotBlank()) {
+                                putJsonArray("users") {
+                                    addJsonObject { put("user", ""); put("pass", profile.password) }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
