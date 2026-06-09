@@ -2960,6 +2960,10 @@ class OlcboxVpnService : VpnService() {
 
         private fun addLog(msg: String) {
             OlcboxVpnState.addLog(msg)
+            // Mirror to logcat at INFO so the full connect/recovery flow is visible via `adb logcat
+            // OlcboxVpnService:I` (the in-app journal lives in-process only). The logcat-capture loop
+            // skips the OlcboxVpnService tag, so this never echoes back into the journal.
+            android.util.Log.i(TAG, msg)
         }
     }
 }
