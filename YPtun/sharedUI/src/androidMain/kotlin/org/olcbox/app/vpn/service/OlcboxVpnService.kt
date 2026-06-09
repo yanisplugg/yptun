@@ -121,6 +121,8 @@ class OlcboxVpnService : VpnService() {
     }
 
     private var lastNotificationStatus = ""
+    /** Display name of the currently-connecting/connected location, shown in the notification. */
+    @Volatile private var connectedLocationName = ""
     @Volatile private var showSpeedInNotif = false
 
     private var startupJob: Job? = null
@@ -597,6 +599,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private suspend fun reconnectTransport(location: LocationConfig, requestedGeneration: Long) {
+        connectedLocationName = location.displayName()
         setStatus(VpnStatus.Reconnecting)
         updateNotification(ns.notifReconnecting)
         val upstream = findActiveUpstreamNetwork()
@@ -635,6 +638,7 @@ class OlcboxVpnService : VpnService() {
         isMigration: Boolean,
         isRestart: Boolean
     ) {
+        connectedLocationName = location.displayName()
         setStatus(if (isMigration || isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
         updateNotification(ns.notifConnecting)
         stopTransportProcesses(closeTun = true, waitForSocksPort = true)
@@ -2527,8 +2531,14 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun buildNotification(status: String, speed: CharSequence? = null): Notification {
-        val title = "YPtun ${activeModeLabel()}"
-        val body: CharSequence = speed ?: status
+        val title = "YPtun"
+        // Body is the status line (the active server name when connected). When the
+        // live speed is shown, append it right next to the name.
+        val body: CharSequence = if (speed != null) {
+            android.text.SpannableStringBuilder(status).append("   ").append(speed)
+        } else {
+            status
+        }
         // Status-bar icon: our cat-head silhouette (system tints it monochrome).
         // Resolved by name because this lives in androidApp's resources, not sharedUI's R.
         val statIcon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
@@ -2631,7 +2641,12 @@ class OlcboxVpnService : VpnService() {
     /** Localized strings for notifications, resolved against the user's current language choice. */
     private val ns get() = stringsFor(LocalizationState.effective)
 
-    private fun connectedNotificationText(): String = ns.notifConnectedMode(activeModeLabel())
+    /**
+     * Connected-state notification body: the active server's display name.
+     * Falls back to the generic "Connected · VPN/Proxy" line if the name is empty.
+     */
+    private fun connectedNotificationText(): String =
+        connectedLocationName.ifBlank { ns.notifConnectedMode(activeModeLabel()) }
 
     private class AuthenticatedSocksProxy(
         private val listenPort: Int,
