@@ -4,7 +4,7 @@
 
 ### Fast, censorship-resistant VPN for Android
 
-*VLESS · Reality · XHTTP over **Xray** & **sing-box**, obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls — and, above all, sheer versatility: even **olcRTC** support that makes your traffic look like a video call.*
+*VLESS · Reality · XHTTP over **Xray** & **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls — and, above all, sheer versatility: even **olcRTC** support that makes your traffic look like a video call.*
 
 <br>
 
@@ -37,6 +37,19 @@ It bundles **several circumvention engines** in one app, so when one method gets
 
 ---
 
+## 🆕 What's new in 2.3
+
+| | |
+|---|---|
+| 🚀 **Hysteria2 protocol** | Full **Hysteria2** (QUIC) support: import via `hysteria2://`/`hy2://` links and QR, **Salamander** obfuscation, port-hopping, bandwidth tuning. Share a config just like the other protocols. |
+| 🔗 **Second (cascade) proxy** | Chain two proxies: traffic exits via the second, dialing through the first. Works over **AmneziaWG** too (including an xhttp exit). |
+| 🔔 **Server name in the notification** | When connected, the shade shows the active server (and optional speed). |
+| 🗂️ **Sharper subscriptions** | **Per-subscription** auto-update toggle and a **reachable-server** counter ("live/total") from the last ping pass. |
+| 🎯 **Fewer false blocks** | Ad-blocking no longer takes down `google.com` and its infrastructure. |
+| 🐱 **Polish** | Black launch background, silhouette logo on the Quick Settings tile, correct tile long-press. |
+
+---
+
 ## 🆕 What's new in 2.0
 
 | | |
@@ -55,7 +68,7 @@ It bundles **several circumvention engines** in one app, so when one method gets
 | | |
 |---|---|
 | 🔀 **Multiple engines** | **Xray**, **sing-box**, **AmneziaWG** and **VK-TURN** — the core is auto-picked per protocol, or forced. |
-| 🧬 **Protocols** | VLESS · VMess · Trojan · Shadowsocks · WireGuard / AmneziaWG |
+| 🧬 **Protocols** | VLESS · VMess · Trojan · Shadowsocks · **Hysteria2** · WireGuard / AmneziaWG |
 | 🚇 **Transports** | TCP · WS · gRPC · HTTPUpgrade · **XHTTP** · TLS · **Reality** · uTLS fingerprints |
 | 🎭 **olcRTC support** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport (by openlibrecommunity) — traffic rides real video-call services (Jazz, Telemost, WB Stream, Jitsi), so to DPI it's an ordinary call, not a proxy. |
 | 📥 **Smart import** | vless/vmess/trojan/ss links, base64 blobs, panel JSON, **full raw Xray / sing-box configs**, AmneziaWG `.conf`/QR, olcRTC URIs, and Happ profiles. |
@@ -63,7 +76,7 @@ It bundles **several circumvention engines** in one app, so when one method gets
 | 🧱 **DPI evasion** | TLS fragmentation, multiplexing, AmneziaWG obfuscation, QUIC blocking. |
 | 🔒 **Leak-safe** | Captures **both IPv4 and IPv6** — nothing escapes the tunnel. |
 | 📱 **Split tunneling** | Pick exactly which apps go through the VPN. |
-| 🗂️ **Subscriptions** | Auto-refresh, traffic/usage display, groups with collapse/pin/sort-by-ping. |
+| 🗂️ **Subscriptions** | Auto-refresh (toggle it **per subscription**), reachable-server counter, traffic/usage display, groups with collapse/pin/sort-by-ping. |
 
 ---
 
@@ -107,6 +120,7 @@ All native cores are compiled into **one** `gomobile` library (a single Go runti
 
 - **Xray / sing-box** — classic proxy cores. VLESS+Reality, XHTTP, WS+TLS, etc. The core is auto-picked per transport.
 - **AmneziaWG** — WireGuard with obfuscation: the handshake and packets don't look like "plain" WireGuard, which is often fingerprinted and dropped.
+- **Hysteria2** — a fast QUIC-based protocol with Salamander obfuscation and port-hopping; holds up well on lossy / unstable links.
 - **VK-TURN** — spins up a local WireGuard and routes it through the TURN servers of VK calls; several "calls" are bonded for throughput.
 - **olcRTC** — disguise as a video call: traffic rides genuine conferencing services, so to DPI it looks like a live call.
 
@@ -179,6 +193,7 @@ cores/            Go glue: one gomobile AAR bundling sing-box + olcRTC + Xray + 
 olcrtc/           olcRTC — video-call disguise transport          (third-party, vendored)
 sing-box/         sing-box / libbox                               (vendored)
 awgproxy/         AmneziaWG wrapper → local SOCKS5                 (Go module)
+hysteria2proxy/   Hysteria2 (apernet) wrapper → local SOCKS5        (Go module)
 free-turn-proxy/  VK-TURN — tunnel over VK calls                  (Go module)
 amneziawg-go/     AmneziaWG implementation                        (vendored)
 ```
