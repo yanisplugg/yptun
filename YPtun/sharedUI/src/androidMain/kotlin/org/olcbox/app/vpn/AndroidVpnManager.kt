@@ -569,6 +569,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).
                 if (OlcboxVpnState.activeSocks != null) tunnelPing()
                 else awgProbePing(locationConfig.proxy?.awgConfig.orEmpty())
+            proxyType == ProxyProfile.TYPE_HYSTERIA2 ->
+                // Hysteria2 is UDP/QUIC-only (TCP to the port usually fails), so before connecting
+                // an ICMP probe to the server host gives the truest path RTT; once up, measure through
+                // the live tunnel.
+                if (OlcboxVpnState.activeSocks != null) tunnelPing()
+                else icmpPing(locationConfig.proxy?.server.orEmpty())
             // Plain proxies: TCP latency to the (reachable) proxy server.
             locationConfig.engine == EngineType.Standard ->
                 tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
@@ -742,6 +748,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     OlcboxVpnState.addLog("Proxy $method ping: no response via AmneziaWG for $url")
                     null
                 }
+            }
+            // Hysteria2 is QUIC-based and not xray-serviceable; the via-proxy URL test isn't available
+            // (use Auto/ICMP ping mode instead).
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2) {
+                OlcboxVpnState.addLog("Proxy $method ping: Hysteria2 not supported (use Auto/ICMP)")
+                return@withContext null
             }
             if (profile.server.isBlank()) {
                 OlcboxVpnState.addLog("Proxy $method ping: location has no proxy server")

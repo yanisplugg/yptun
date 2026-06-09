@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/olc/awgproxy v0.0.0
+	github.com/olc/hysteria2proxy v0.0.0
 	github.com/openlibrecommunity/olcrtc v0.0.0
 	github.com/sagernet/sing-box v1.12.25
 	github.com/samosvalishe/free-turn-proxy v0.0.0
@@ -24,7 +25,9 @@ require (
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/anytls/sing-anytls v0.0.11 // indirect
-	github.com/apernet/quic-go v0.59.1-0.20260217092621-db4786c77a22 // indirect
+	github.com/apernet/hysteria/core/v2 v2.9.2 // indirect
+	github.com/apernet/hysteria/extras/v2 v2.9.2 // indirect
+	github.com/apernet/quic-go v0.59.1-0.20260425001925-6c6cc9bcb716 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
@@ -43,6 +46,7 @@ require (
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6 // indirect
 	github.com/cretz/bine v0.2.0 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
 	github.com/dennwc/iters v1.2.2 // indirect
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e // indirect
@@ -127,6 +131,7 @@ require (
 	github.com/pion/webrtc/v4 v4.2.13 // indirect
 	github.com/pires/go-proxyproto v0.11.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
@@ -152,6 +157,8 @@ require (
 	github.com/sagernet/tailscale v1.80.3-sing-box-1.12-mod.2 // indirect
 	github.com/sagernet/wireguard-go v0.0.1-beta.7 // indirect
 	github.com/sagernet/ws v0.0.0-20231204124109-acfe8907c854 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e // indirect
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 // indirect
 	github.com/tailscale/golang-x-crypto v0.0.0-20240604161659-3fde5e568aa4 // indirect
@@ -219,5 +226,7 @@ replace github.com/sagernet/sing-box => ../sing-box
 replace github.com/samosvalishe/free-turn-proxy => ../free-turn-proxy
 
 replace github.com/olc/awgproxy => ../awgproxy
+
+replace github.com/olc/hysteria2proxy => ../hysteria2proxy
 
 replace github.com/amnezia-vpn/amneziawg-go => ../amneziawg-go

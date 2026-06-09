@@ -19,6 +19,7 @@ object ShareLinkParser {
             trimmed.startsWith("vmess://", true) -> parseVmess(trimmed)
             trimmed.startsWith("trojan://", true) -> parseTrojan(trimmed)
             trimmed.startsWith("ss://", true) -> parseShadowsocks(trimmed)
+            trimmed.startsWith("hysteria2://", true) || trimmed.startsWith("hy2://", true) -> parseHysteria2(trimmed)
             // amneziawg://<base64url(wg-quick INI)> — the compact link form produced by sharing.
             trimmed.startsWith("amneziawg://", true) -> {
                 val payload = trimmed.substring("amneziawg://".length).substringBefore('#')
@@ -134,6 +135,48 @@ object ShareLinkParser {
             realityShortId = params["sid"].orEmpty(),
             path = path,
             host = params["host"].orEmpty(),
+        )
+    }
+
+    // --- hysteria2://auth@host:port/?sni=&insecure=&obfs=salamander&obfs-password=&mport=&up=&down=#name ---
+    private fun parseHysteria2(uri: String): ProxyProfile? {
+        val scheme = if (uri.startsWith("hy2://", true)) "hy2://" else "hysteria2://"
+        val withoutScheme = uri.substring(scheme.length)
+        val remark = withoutScheme.substringAfter('#', "").let(UriCodec::percentDecode)
+        val beforeFragment = withoutScheme.substringBefore('#')
+        val query = beforeFragment.substringAfter('?', "")
+        var authority = beforeFragment.substringBefore('?').trimEnd('/')
+
+        var auth = ""
+        val atIndex = authority.lastIndexOf('@')
+        if (atIndex >= 0) {
+            auth = UriCodec.percentDecode(authority.substring(0, atIndex))
+            authority = authority.substring(atIndex + 1)
+        }
+        val hostPort = UriCodec.splitHostPort(authority)
+        val host = hostPort?.first ?: authority.trim('[', ']')
+        val port = hostPort?.second ?: 443 // hysteria2 default
+        if (host.isBlank()) return null
+
+        val params = UriCodec.parseQuery(query)
+        // up/down may be "100" or "100 mbps" — take the leading integer.
+        fun mbps(v: String?): Int = v.orEmpty().trim().takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+
+        return ProxyProfile(
+            tag = remark,
+            type = ProxyProfile.TYPE_HYSTERIA2,
+            server = host,
+            serverPort = port,
+            password = auth,
+            security = ProxyProfile.SECURITY_TLS, // hysteria2 always runs over QUIC+TLS
+            sni = (params["sni"] ?: params["peer"]).orEmpty(),
+            alpn = params["alpn"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
+            allowInsecure = params["insecure"] == "1" || params["insecure"] == "true",
+            hy2Obfs = params["obfs"].orEmpty().lowercase(),
+            hy2ObfsPassword = params["obfs-password"].orEmpty(),
+            hy2UpMbps = mbps(params["up"]),
+            hy2DownMbps = mbps(params["down"]),
+            hy2Ports = (params["mport"] ?: params["ports"]).orEmpty(),
         )
     }
 

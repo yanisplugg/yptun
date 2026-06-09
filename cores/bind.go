@@ -9,6 +9,7 @@ package kazcores
 
 import (
 	_ "github.com/olc/awgproxy/awg"
+	_ "github.com/olc/hysteria2proxy/hy2"
 	_ "github.com/openlibrecommunity/olcrtc/mobile"
 	_ "github.com/sagernet/sing-box/experimental/libbox"
 	_ "github.com/samosvalishe/free-turn-proxy/freeturn"

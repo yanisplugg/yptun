@@ -1035,6 +1035,7 @@ private fun engineProtocolLabel(type: String): String = when (type) {
     ProxyProfile.TYPE_TROJAN -> "Trojan"
     ProxyProfile.TYPE_SHADOWSOCKS -> "Shadowsocks"
     ProxyProfile.TYPE_AMNEZIAWG -> "AmneziaWG"
+    ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria2"
     else -> type.uppercase()
 }
 

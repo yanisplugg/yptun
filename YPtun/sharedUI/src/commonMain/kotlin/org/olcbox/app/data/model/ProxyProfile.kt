@@ -125,8 +125,25 @@ data class ProxyProfile(
      */
     @SerialName("awg_config")
     val awgConfig: String = "",
+    /**
+     * Hysteria2 ([TYPE_HYSTERIA2]) parameters. Auth uses [password]; server/[serverPort], [sni],
+     * [alpn] and [allowInsecure] are reused. The hysteria2proxy module raises a local SOCKS5 from
+     * these (like AmneziaWG). Obfs is Salamander when [hy2Obfs] == "salamander"; [hy2Ports] is an
+     * optional port-hopping spec ("443,1000-2000"); up/down are bandwidth hints in Mbps (0 = auto).
+     */
+    @SerialName("hy2_obfs")
+    val hy2Obfs: String = "",
+    @SerialName("hy2_obfs_password")
+    val hy2ObfsPassword: String = "",
+    @SerialName("hy2_up_mbps")
+    val hy2UpMbps: Int = 0,
+    @SerialName("hy2_down_mbps")
+    val hy2DownMbps: Int = 0,
+    @SerialName("hy2_ports")
+    val hy2Ports: String = "",
 ) {
     fun isComplete(): Boolean {
+        if (type == TYPE_HYSTERIA2) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_AMNEZIAWG) return awgConfig.isNotBlank()
         if (!rawXrayConfig.isNullOrBlank()) return true
         if (!rawOutbound.isNullOrBlank()) return true
@@ -163,6 +180,7 @@ data class ProxyProfile(
         const val TYPE_TROJAN = "trojan"
         const val TYPE_SHADOWSOCKS = "shadowsocks"
         const val TYPE_AMNEZIAWG = "amneziawg"
+        const val TYPE_HYSTERIA2 = "hysteria2"
 
         const val NETWORK_TCP = "tcp"
         const val NETWORK_WS = "ws"

@@ -31,8 +31,29 @@ object ShareLinkComposer {
             ProxyProfile.TYPE_TROJAN -> composeTrojan(profile)
             ProxyProfile.TYPE_SHADOWSOCKS -> composeShadowsocks(profile)
             ProxyProfile.TYPE_VMESS -> composeVmess(profile)
+            ProxyProfile.TYPE_HYSTERIA2 -> composeHysteria2(profile)
             else -> profile.rawOutbound?.takeIf { it.isNotBlank() }
         }
+    }
+
+    private fun composeHysteria2(p: ProxyProfile): String = buildString {
+        append("hysteria2://")
+        if (p.password.isNotBlank()) append(percentEncode(p.password)).append('@')
+        append(p.server).append(':').append(p.serverPort)
+        val params = buildList {
+            if (p.sni.isNotBlank()) add("sni" to p.sni)
+            if (p.allowInsecure) add("insecure" to "1")
+            if (p.alpn.isNotEmpty()) add("alpn" to p.alpn.joinToString(","))
+            if (p.hy2Obfs.isNotBlank()) add("obfs" to p.hy2Obfs)
+            if (p.hy2ObfsPassword.isNotBlank()) add("obfs-password" to p.hy2ObfsPassword)
+            if (p.hy2Ports.isNotBlank()) add("mport" to p.hy2Ports)
+            if (p.hy2UpMbps > 0) add("up" to p.hy2UpMbps.toString())
+            if (p.hy2DownMbps > 0) add("down" to p.hy2DownMbps.toString())
+        }
+        if (params.isNotEmpty()) {
+            append("/?").append(params.joinToString("&") { (k, v) -> "$k=${percentEncode(v)}" })
+        }
+        appendRemark(p.tag)
     }
 
     private fun composeVless(p: ProxyProfile): String = buildString {
