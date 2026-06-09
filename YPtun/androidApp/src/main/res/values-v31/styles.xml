@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Android 12+ system splash screen. Force the splash background to black so
+        the app icon no longer sits on the platform's grey backdrop.
+    -->
+    <style name="Theme.YPtun" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowSplashScreenBackground">@android:color/black</item>
+    </style>
+</resources>

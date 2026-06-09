@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        App theme. Parent stays Theme.Material.NoActionBar (the Compose UI paints
+        its own colors on top); we only force a black window background so the
+        launch/splash screen is black instead of the platform's grey, matching
+        the in-app background.
+    -->
+    <style name="Theme.YPtun" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
