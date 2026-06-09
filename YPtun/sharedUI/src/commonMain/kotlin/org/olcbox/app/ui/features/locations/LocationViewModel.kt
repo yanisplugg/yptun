@@ -796,6 +796,14 @@ class LocationViewModel(
         }
     }
 
+    /** Turns automatic refresh on/off for a single subscription (by URL), then reloads the list. */
+    fun setSubscriptionAutoUpdate(subscriptionUrl: String, enabled: Boolean) {
+        viewModelScope.launch {
+            locationsRepository.setSubscriptionAutoUpdate(subscriptionUrl, enabled)
+            loadLocations()
+        }
+    }
+
     /** Deletes several locations at once (e.g. all configs of one subscription) in a single rewrite. */
     fun deleteLocations(ids: List<String>, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
