@@ -546,6 +546,8 @@ interface Strings {
     val pingTargetHint: String
     val savePingResultsTitle: String
     val savePingResultsSubtitle: String
+    val showAliveCountTitle: String
+    val showAliveCountSubtitle: String
     val pingThreadsTitle: String
     val pingThreadsSubtitle: String
     val pingModeAuto: String
@@ -1078,6 +1080,9 @@ object RuStrings : Strings {
     override val savePingResultsTitle = "Сохранять результаты пингов"
     override val savePingResultsSubtitle =
         "Показывать последние результаты при повторном открытии приложения"
+    override val showAliveCountTitle = "Счётчик доступных серверов"
+    override val showAliveCountSubtitle =
+        "В шапке подписки показывать «живые/всего» по последнему пингу"
     override val pingThreadsTitle = "Потоки пинга"
     override val pingThreadsSubtitle = "Сколько локаций пинговать одновременно (1–20)"
     override val pingModeAuto = "Авто"
@@ -1599,6 +1604,9 @@ object EnStrings : Strings {
     override val savePingResultsTitle = "Save ping results"
     override val savePingResultsSubtitle =
         "Show the last results again when the app is reopened"
+    override val showAliveCountTitle = "Reachable server counter"
+    override val showAliveCountSubtitle =
+        "Show \"live/total\" in the subscription header from the last ping pass"
     override val pingThreadsTitle = "Ping threads"
     override val pingThreadsSubtitle = "How many locations to ping at once (1–20)"
     override val pingModeAuto = "Auto"
@@ -2120,6 +2128,9 @@ object FaStrings : Strings {
     override val savePingResultsTitle = "ذخیرهٔ نتایج پینگ"
     override val savePingResultsSubtitle =
         "نمایش آخرین نتایج هنگام بازکردن دوبارهٔ برنامه"
+    override val showAliveCountTitle = "شمارندهٔ سرورهای در دسترس"
+    override val showAliveCountSubtitle =
+        "نمایش «فعال/کل» در سربرگ اشتراک بر اساس آخرین پینگ"
     override val pingThreadsTitle = "رشته‌های پینگ"
     override val pingThreadsSubtitle = "چند موقعیت هم‌زمان پینگ شوند (۱ تا ۲۰)"
     override val pingModeAuto = "خودکار"

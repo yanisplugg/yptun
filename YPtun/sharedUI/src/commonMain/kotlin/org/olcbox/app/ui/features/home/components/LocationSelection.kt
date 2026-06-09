@@ -212,6 +212,7 @@ fun LazyListScope.locationSelectorContent(
                             )
                             SubscriptionGroupHeader(
                                 locations = group,
+                                pingsState = pingsState,
                                 isPinned = isPinned,
                                 modifier = Modifier.weight(1f)
                             )
@@ -360,6 +361,7 @@ fun LazyListScope.locationSelectorContent(
                                                 )
                                                 SubscriptionGroupHeader(
                                                     locations = mGroup,
+                                                    pingsState = pingsState,
                                                     isPinned = mPinned,
                                                     modifier = Modifier.weight(1f)
                                                 )
@@ -1025,6 +1027,7 @@ private fun LocationGroupHeader(
 @Composable
 private fun SubscriptionGroupHeader(
     locations: List<LocationItem>,
+    pingsState: PingsState,
     isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -1056,6 +1059,22 @@ private fun SubscriptionGroupHeader(
                 ExpiryWarningBadge(
                     dateTime = info.expiryDateTime,
                     daysLeft = info.daysLeft ?: 0L
+                )
+            }
+            // Optional "live/total" badge: servers that answered the last ping pass, gated on the toggle.
+            if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount.current &&
+                locations.isNotEmpty()
+            ) {
+                val alive = locations.count { pingsState.pingFor(it.storageId) != null }
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "$alive/${locations.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (alive > 0) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                 )
             }
         }

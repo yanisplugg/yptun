@@ -70,6 +70,12 @@ val LocalPingResultDisplay = staticCompositionLocalOf { AppBehaviorSettings.PING
  */
 val LocalShowSubscriptionExpiry = staticCompositionLocalOf { false }
 
+/**
+ * Whether subscription headers show a "live/total" badge (servers that answered the last ping pass).
+ * Provided near the app root from the persisted app-behavior toggle; off by default.
+ */
+val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
+
 /** Fixed "success green" for the ping tick — theme-independent so it's always clearly green. */
 private val PingOkGreen = Color(0xFF22C55E)
 
