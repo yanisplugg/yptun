@@ -624,11 +624,24 @@ object XrayConfig {
         // corrupt the loopback SOCKS handshake (e.g. fragment splits the SOCKS bytes → connection
         // reset). Emit it bare, like olcrtcSocksOutbound. Only the detour (proxySettings) still applies.
         val isLocalSocks = profile.type == "socks"
+        // Cascade exit chaining: the second/exit proxy reaches its server THROUGH the base proxy
+        // ([PROXY_BASE_TAG]). Use transport-level chaining (sockopt.dialerProxy) instead of
+        // proxy-level chaining (proxySettings). proxySettings drops the exit's OWN transport, so an
+        // xhttp exit was sending raw VLESS to the server, which replied with its HTTP web-fallback
+        // ("unexpected response version. Expecting 0 but actually 72" = 'H'). dialerProxy keeps the
+        // exit's xhttp/ws/TLS intact and only routes its underlying socket through the base. Other
+        // detours (olcRTC [OLCRTC_TAG] / VK-TURN WireGuard [WG_BASE_TAG]) keep proxySettings, which
+        // already works for them — so this change is scoped strictly to the cascade exit.
+        val dialerProxyTag = if (detourTag == PROXY_BASE_TAG) detourTag else null
         if (!isLocalSocks) {
-            put("streamSettings", buildStreamSettings(profile, fragmentDialer = traffic.fragmentEnabled && detourTag == null))
+            put("streamSettings", buildStreamSettings(
+                profile,
+                fragmentDialer = traffic.fragmentEnabled && detourTag == null,
+                dialerProxyTag = dialerProxyTag
+            ))
         }
 
-        if (detourTag != null) {
+        if (detourTag != null && dialerProxyTag == null) {
             putJsonObject("proxySettings") { put("tag", detourTag) }
         }
 
@@ -640,8 +653,17 @@ object XrayConfig {
         }
     }
 
-    private fun buildStreamSettings(profile: ProxyProfile, fragmentDialer: Boolean = false) = buildJsonObject {
-        if (fragmentDialer) {
+    private fun buildStreamSettings(
+        profile: ProxyProfile,
+        fragmentDialer: Boolean = false,
+        // When set, the transport's underlying socket is dialed through this outbound tag
+        // (transport-level chaining that preserves THIS profile's transport, e.g. xhttp). Mutually
+        // exclusive with [fragmentDialer] in practice (fragment only runs when there is no detour).
+        dialerProxyTag: String? = null,
+    ) = buildJsonObject {
+        if (dialerProxyTag != null) {
+            putJsonObject("sockopt") { put("dialerProxy", dialerProxyTag) }
+        } else if (fragmentDialer) {
             putJsonObject("sockopt") { put("dialerProxy", "fragment") }
         }
         val network = when (profile.network) {
