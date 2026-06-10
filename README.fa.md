@@ -14,7 +14,7 @@
 
 ![پلتفرم](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![هسته‌ها](https://img.shields.io/badge/cores-Xray%20%2B%20sing--box-blueviolet?style=flat-square)
-![مجوز](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
+![مجوز](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
 
 <br>
 
@@ -164,8 +164,9 @@ YPtun یک پروژه‌ی **Kotlin Multiplatform** است: همه‌ی منطق
 
 ## 📄 مجوز
 
-[MIT](LICENSE) برای اپ. اجزای vendored مجوز خودشان را حفظ می‌کنند
-(`sing-box/LICENSE`، `olcrtc/LICENSE`، `amneziawg-go/LICENSE`).
+[GPL-3.0](LICENSE) — اپ تحت GNU GPL v3.0 منتشر می‌شود، چون شامل **sing-box**
+(آن هم GPL-3.0) است؛ کپی‌لفت به کل اثر تسری می‌یابد. اجزای vendored مجوز خودشان را
+حفظ می‌کنند (`sing-box` — GPL-3.0، Xray — MPL-2.0، `amneziawg-go` — MIT، `olcrtc` — WTFPL).
 
 </div>
 

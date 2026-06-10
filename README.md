@@ -14,7 +14,7 @@
 
 ![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Ядра](https://img.shields.io/badge/%D1%8F%D0%B4%D1%80%D0%B0-Xray%20%2B%20sing--box-blueviolet?style=flat-square)
-![Лицензия](https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-MIT-lightgrey?style=flat-square)
+![Лицензия](https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-GPL--3.0-blue?style=flat-square)
 
 <br>
 
@@ -231,8 +231,10 @@ PR и issue приветствуются. Перед началом заглян
 
 ## 📄 Лицензия
 
-[MIT](LICENSE) на приложение. Вендоренные компоненты сохраняют свои лицензии
-(`sing-box/LICENSE`, `olcrtc/LICENSE`, `amneziawg-go/LICENSE`).
+[GPL-3.0](LICENSE) — приложение распространяется под GNU GPL v3.0, так как включает
+**sing-box** (тоже GPL-3.0): копилефт распространяется на весь продукт. Вендоренные
+компоненты сохраняют свои лицензии (`sing-box` — GPL-3.0, Xray — MPL-2.0,
+`amneziawg-go` — MIT, `olcrtc` — WTFPL).
 
 <div align="center">
 <br>
