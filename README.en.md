@@ -14,7 +14,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Cores](https://img.shields.io/badge/cores-Xray%20%2B%20sing--box-blueviolet?style=flat-square)
-![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
+![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
 
 <br>
 
@@ -231,8 +231,10 @@ Standing on the shoulders of giants:
 
 ## 📄 License
 
-[MIT](LICENSE) for the app. Vendored components keep their own licenses
-(`sing-box/LICENSE`, `olcrtc/LICENSE`, `amneziawg-go/LICENSE`).
+[GPL-3.0](LICENSE) — the app is distributed under the GNU GPL v3.0 because it bundles
+**sing-box** (also GPL-3.0); copyleft extends to the whole combined work. Vendored
+components keep their own licenses (`sing-box` — GPL-3.0, Xray — MPL-2.0,
+`amneziawg-go` — MIT, `olcrtc` — WTFPL).
 
 <div align="center">
 <br>
