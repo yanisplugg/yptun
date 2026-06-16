@@ -385,15 +385,23 @@ object SingBoxConfig {
                     // own DoH DNS that returns the other family, and raw IP-literal connections) onto
                     // the chosen one. Placed after `resolve` so freshly-resolved domains are caught
                     // too. Skipped for full UDP tunnels (forceFamily=false) and prefer_* (both families).
+                    //
+                    // method=drop (NOT the default RST): under strict IPv4 a browser that opens google
+                    // (or its own DoH endpoint) over real IPv6 must fail SOFTLY so Happy-Eyeballs falls
+                    // back to IPv4. A hard RST ("reject" default) instead surfaced as ERR_CONNECTION_RESET
+                    // on google.com (the app "jumped to DoH over IPv6" and got reset). Dropping silently
+                    // makes the v6 attempt time out and the app retries on IPv4 — no leak, no reset.
                     if (forceFamily) {
                         when (expertStrategy) {
                             "ipv4_only" -> addJsonObject {
                                 putJsonArray("ip_cidr") { add("::/0") }
                                 put("action", "reject")
+                                put("method", "drop")
                             }
                             "ipv6_only" -> addJsonObject {
                                 putJsonArray("ip_cidr") { add("0.0.0.0/0") }
                                 put("action", "reject")
+                                put("method", "drop")
                             }
                         }
                     }
