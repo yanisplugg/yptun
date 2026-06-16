@@ -428,6 +428,9 @@ interface Strings {
     val showSubscriptionExpirySubtitle: String
     val subscriptionUserAgentLabel: String
     val subscriptionUserAgentSubtitle: String
+    val globalEngineLabel: String
+    val globalEngineSubtitle: String
+    val globalEngineAuto: String
     val telemostCookiesDescription: String
     val useTelemostCookies: String
     val useTelemostCookiesSubtitle: String
@@ -968,6 +971,9 @@ object RuStrings : Strings {
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 запрашивает полный конфиг (FakeDNS, dns.hosts); YPtun — обычно только ссылки"
+    override val globalEngineLabel = "Движок для VLESS (глобально)"
+    override val globalEngineSubtitle = "Ядро для VLESS и похожих транспортов, когда в настройках сервера выбрано «Авто». Настройка сервера важнее этой. xhttp всегда использует Xray."
+    override val globalEngineAuto = "Авто"
     override val telemostCookiesDescription =
         "Cookies авторизованного аккаунта Яндекса (заголовок Cookie, напр. " +
             "«Session_id=…; yandexuid=…») — для приватных конференций. Запустить кастомное ядро " +
@@ -1492,6 +1498,9 @@ object EnStrings : Strings {
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 fetches the full config (FakeDNS, dns.hosts); YPtun usually returns only links"
+    override val globalEngineLabel = "VLESS engine (global)"
+    override val globalEngineSubtitle = "Core for VLESS-like transports when a server's setting is \"Auto\". The per-server choice overrides this. xhttp always uses Xray."
+    override val globalEngineAuto = "Auto"
     override val telemostCookiesDescription =
         "Cookies of a signed-in Yandex account (the Cookie header, e.g. " +
             "\"Session_id=…; yandexuid=…\") — for private conferences. A custom core cannot be " +
@@ -2032,6 +2041,9 @@ object FaStrings : Strings {
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 پیکربندی کامل (FakeDNS، dns.hosts) را می‌گیرد؛ YPtun معمولاً فقط لینک‌ها"
+    override val globalEngineLabel = "موتور VLESS (سراسری)"
+    override val globalEngineSubtitle = "هسته برای ترنسپورت‌های مشابه VLESS وقتی تنظیم سرور روی «خودکار» است. تنظیم هر سرور بر این اولویت دارد. xhttp همیشه از Xray استفاده می‌کند."
+    override val globalEngineAuto = "خودکار"
     override val telemostCookiesDescription =
         "کوکی‌های یک حساب واردشدهٔ یاندکس (سرایند Cookie، مثلاً " +
             "«Session_id=…; yandexuid=…») — برای کنفرانس‌های خصوصی. در اندروید نمی‌توان هستهٔ " +
