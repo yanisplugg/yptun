@@ -9,7 +9,6 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/namegen"
 
 	tlsclient "github.com/bogdanfinn/tls-client"
-	"github.com/bogdanfinn/tls-client/profiles"
 )
 
 // getTokenChain выполняет 4-шаговый обмен токенами VK для одной пары client_id/secret
@@ -23,12 +22,7 @@ func (c *Client) getTokenChain(ctx context.Context, link string, streamID int, c
 		SecChUaPlatform: `"Windows"`,
 	}
 
-	httpClient, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(),
-		tlsclient.WithTimeoutSeconds(20),
-		tlsclient.WithClientProfile(profiles.Chrome_146),
-		tlsclient.WithCookieJar(jar),
-		tlsclient.WithDialer(c.dialer),
-	)
+	httpClient, err := c.newTLSClient(jar)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("failed to initialize tls_client: %w", err)
 	}

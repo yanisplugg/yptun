@@ -109,8 +109,8 @@ func TestFetchFallsBackThroughCredentialsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if u != "user-c" || p != "pass-c" || addr != "server-c:443" {
-		t.Fatalf("unexpected creds: u=%q p=%q addr=%q", u, p, addr)
+	if u != "user-c" || p != "pass-c" || len(addr) != 1 || addr[0] != "server-c:443" {
+		t.Fatalf("unexpected creds: u=%q p=%q addr=%v", u, p, addr)
 	}
 	if calls.Load() != 3 {
 		t.Errorf("expected to walk all 3 creds, called %d times", calls.Load())
@@ -156,7 +156,7 @@ func TestGetCredentialsCacheHit(t *testing.T) {
 		t.Errorf("expected single fetch, got %d", calls.Load())
 	}
 
-	// Sibling-stream addr round-robin: stream 0 -> addr[0], stream 1 -> addr[1].
+	// Sibling-stream primary round-robin: stream 0 -> addr[0], stream 1 -> addr[1].
 	_, _, addr0, err := c.GetCredentials(context.Background(), "L", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -165,8 +165,8 @@ func TestGetCredentialsCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if addr0 == addr1 {
-		t.Errorf("expected round-robin addrs, both = %q", addr0)
+	if addr0[0] == addr1[0] {
+		t.Errorf("expected round-robin primary, both = %q", addr0[0])
 	}
 }
 

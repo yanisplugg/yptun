@@ -246,10 +246,13 @@ detect_arch() {
 
 pkg_install() {
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -y -qq >/dev/null 2>&1 || true
-        apt-get install -y -qq "$@" >/dev/null 2>&1 || true
-    elif command -v dnf >/dev/null 2>&1; then dnf install -y -q "$@" >/dev/null 2>&1 || true
-    elif command -v yum >/dev/null 2>&1; then yum install -y -q "$@" >/dev/null 2>&1 || true
+        # noninteractive: debconf/needrestart рисуют диалог в /dev/tty и виснут под спиннером.
+        # Lock::Timeout: unattended-upgrades на свежей системе держит dpkg-lock.
+        export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
+        apt-get -o DPkg::Lock::Timeout=300 update -y -qq >/dev/null 2>&1 || true
+        apt-get -o DPkg::Lock::Timeout=300 install -y -qq "$@" </dev/null || true
+    elif command -v dnf >/dev/null 2>&1; then dnf install -y -q "$@" </dev/null || true
+    elif command -v yum >/dev/null 2>&1; then yum install -y -q "$@" </dev/null || true
     fi
 }
 export -f pkg_install

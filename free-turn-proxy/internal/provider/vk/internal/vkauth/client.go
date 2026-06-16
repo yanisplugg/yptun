@@ -101,9 +101,11 @@ func New(cfg Config) *Client {
 	return c
 }
 
-// GetCredentials возвращает (username, password, server-addr) для TURN-allocate,
-// обращаясь к VK (с throttle + кэшем) только при необходимости.
-func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) (string, string, string, error) {
+// GetCredentials возвращает (username, password, server-addrs) для TURN-allocate,
+// обращаясь к VK (с throttle + кэшем) только при необходимости. Адреса отдаются
+// в порядке предпочтения для streamID (предпочтительный первым) — pipeline
+// пробует их по очереди при allocate.
+func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) (string, string, []string, error) {
 	cache := c.store.Get(streamID)
 	cacheID := c.store.CacheID(streamID)
 
@@ -111,10 +113,10 @@ func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) 
 	if cache.creds.Link == link && time.Now().Before(cache.creds.ExpiresAt) && len(cache.creds.ServerAddrs) > 0 {
 		expires := time.Until(cache.creds.ExpiresAt)
 		u, p := cache.creds.Username, cache.creds.Password
-		addr := cache.creds.ServerAddrs[streamID%len(cache.creds.ServerAddrs)]
+		addrs := orderAddrs(cache.creds.ServerAddrs, streamID)
 		cache.mutex.RUnlock()
-		c.log.Debugf("[STREAM %d] [VK Auth] Using cached credentials (cache=%d, expires in %v, server=%s)", streamID, cacheID, expires, addr)
-		return u, p, addr, nil
+		c.log.Debugf("[STREAM %d] [VK Auth] Using cached credentials (cache=%d, expires in %v, server=%s)", streamID, cacheID, expires, addrs[0])
+		return u, p, addrs, nil
 	}
 	cache.mutex.RUnlock()
 
@@ -122,13 +124,12 @@ func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) 
 	defer cache.mutex.Unlock()
 
 	if cache.creds.Link == link && time.Now().Before(cache.creds.ExpiresAt) && len(cache.creds.ServerAddrs) > 0 {
-		addr := cache.creds.ServerAddrs[streamID%len(cache.creds.ServerAddrs)]
-		return cache.creds.Username, cache.creds.Password, addr, nil
+		return cache.creds.Username, cache.creds.Password, orderAddrs(cache.creds.ServerAddrs, streamID), nil
 	}
 
 	user, pass, addrs, err := c.fetchSerialized(ctx, link, streamID)
 	if err != nil {
-		return "", "", "", err
+		return "", "", nil, err
 	}
 
 	cache.creds = TurnCredentials{
@@ -138,8 +139,23 @@ func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) 
 		ExpiresAt:   time.Now().Add(CredentialLifetime - CacheSafetyMargin),
 		Link:        link,
 	}
-	addr := addrs[streamID%len(addrs)]
-	return user, pass, addr, nil
+	return user, pass, orderAddrs(addrs, streamID), nil
+}
+
+// orderAddrs возвращает копию addrs, ротированную так, что предпочтительный
+// для streamID адрес стоит первым, остальные — следом (сохраняя порядок).
+// Раскидывает primary по стримам (балансировка relay-IP), оставляя остальные
+// как фоллбэк при DPI-дропе.
+func orderAddrs(addrs []string, streamID int) []string {
+	n := len(addrs)
+	if n <= 1 {
+		return append([]string(nil), addrs...)
+	}
+	k := streamID % n
+	out := make([]string, 0, n)
+	out = append(out, addrs[k:]...)
+	out = append(out, addrs[:k]...)
+	return out
 }
 
 // HandleAuthError увеличивает счётчик ошибок аутентификации кэша потока и

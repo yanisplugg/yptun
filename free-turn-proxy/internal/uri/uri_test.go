@@ -5,76 +5,97 @@ import (
 	"testing"
 )
 
-func TestParse(t *testing.T) {
+func TestRoundTrip(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		want    *Config
-		wantErr bool
+		name string
+		cfg  *Config
 	}{
 		{
-			name:  "Full URI",
-			input: "freeturn://vk?tcp<mode=tcpfwd&obf-profile=rtpopus&bond=true>@127.0.0.1:56000#d823fa$MyServer",
-			want: &Config{
-				Provider:   "vk",
-				Transport:  "tcp",
-				Mode:       "tcpfwd",
-				Bond:       true,
-				ObfProfile: "rtpopus",
-				Peer:       "127.0.0.1:56000",
-				ObfKey:     "d823fa",
-				Comment:    "MyServer",
+			name: "full",
+			cfg: &Config{
+				Version:        currentVersion,
+				Provider:       "vk",
+				Peer:           "127.0.0.1:56000",
+				Transport:      "udp",
+				Mode:           "tcp",
+				Bond:           true,
+				ObfProfile:     "rtpopus",
+				ObfKey:         "d823fa",
+				N:              16,
+				StreamsPerCred: 8,
+				ClientID:       "abc123",
+				Listen:         "127.0.0.1:9000",
+				DNSMode:        "doh",
+				DNSServers:     "1.1.1.1,8.8.8.8",
+				ManualCaptcha:  true,
+				Comment:        "MyServer",
 			},
-			wantErr: false,
 		},
 		{
-			name:  "Minimal URI",
-			input: "freeturn://vk@1.2.3.4",
-			want: &Config{
+			name: "minimal",
+			cfg: &Config{
+				Version:  currentVersion,
 				Provider: "vk",
-				Peer:     "1.2.3.4",
+				Peer:     "1.2.3.4:56000",
 			},
-			wantErr: false,
 		},
 		{
-			name:    "Invalid scheme",
-			input:   "http://vk",
-			wantErr: true,
-		},
-		{
-			name:    "Empty provider",
-			input:   "freeturn://",
-			wantErr: true,
+			name: "unicode comment",
+			cfg: &Config{
+				Version:  currentVersion,
+				Provider: "vk",
+				Peer:     "1.2.3.4:56000",
+				Mode:     "udp",
+				Comment:  "Сервер РФ",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Parse(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Parse() error = %v, wantErr %v", err, tt.wantErr)
-				return
+			got, err := Parse(tt.cfg.String())
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
 			}
-			if !tt.wantErr && !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Parse() got = %v, want %v", got, tt.want)
+			if !reflect.DeepEqual(got, tt.cfg) {
+				t.Errorf("round-trip mismatch\n got = %+v\nwant = %+v", got, tt.cfg)
 			}
 		})
 	}
 }
 
-func TestString(t *testing.T) {
+func TestObfNoneOmitted(t *testing.T) {
 	cfg := &Config{
+		Version:    currentVersion,
 		Provider:   "vk",
-		Transport:  "udp",
-		Mode:       "udp",
-		ObfProfile: "rtpopus",
-		Peer:       "1.1.1.1:56000",
-		ObfKey:     "abc",
-		Comment:    "comment",
+		Peer:       "1.2.3.4:56000",
+		ObfProfile: "none",
+		ObfKey:     "ignored",
 	}
+	got, err := Parse(cfg.String())
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got.ObfProfile != "" || got.ObfKey != "" {
+		t.Errorf("obf none must be omitted, got profile=%q key=%q", got.ObfProfile, got.ObfKey)
+	}
+}
 
-	expected := "freeturn://vk?udp<mode=udp&obf-profile=rtpopus>@1.1.1.1:56000#abc$comment"
-	if got := cfg.String(); got != expected {
-		t.Errorf("String() = %v, want %v", got, expected)
+func TestParseErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"bad scheme", "http://vk"},
+		{"empty payload", "freeturn://"},
+		{"bad base64", "freeturn://!!!notbase64!!!"},
+		{"bad json", "freeturn://Zm9vYmFy"}, // base64("foobar")
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Parse(tt.input); err == nil {
+				t.Errorf("Parse(%q) expected error, got nil", tt.input)
+			}
+		})
 	}
 }

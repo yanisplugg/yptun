@@ -189,12 +189,14 @@ func run(ctx context.Context, cfg *config.Client, links []string) error {
 	}
 	logger.Infof("provider=%s links=%d", prov.Name(), len(links))
 
-	getCreds := func(ctx context.Context, streamID int) (string, string, string, error) {
+	// 1.2.0: Credentials.ServerAddr (single) became ServerAddrs ([]string, primary-first) and
+	// GetCredsFunc now returns the candidate list so DialTURN can fall back across relay IPs.
+	getCreds := func(ctx context.Context, streamID int) (string, string, []string, error) {
 		c, cerr := prov.GetCredentials(ctx, streamID)
 		if cerr != nil {
-			return "", "", "", cerr
+			return "", "", nil, cerr
 		}
-		return c.User, c.Pass, c.ServerAddr, nil
+		return c.User, c.Pass, c.ServerAddrs, nil
 	}
 
 	if cfg.Proxy.Mode != config.ProxyModeUDP {

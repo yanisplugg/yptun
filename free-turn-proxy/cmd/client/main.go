@@ -37,54 +37,35 @@ var version = "dev"
 const dtlsHandshakeConcurrency = 3
 
 func main() {
-	cfg, err := config.ParseClient(os.Args[1:], os.Stderr)
+	args := os.Args[1:]
+
+	// -sub: тянем список серверов до парсинга и подсовываем URI первой ноды
+	// (Nodes[0], без failover) позиционным freeturn:// - ParseClient применит его
+	// тем же путём, что и URI из CLI. Подписка должна стоять до парсинга: она даёт
+	// peer, без которого ParseClient падает на валидации.
+	if subURL := config.PeekSubURL(args); subURL != "" {
+		s, ferr := sub.Fetch(context.Background(), subURL)
+		if ferr != nil {
+			log.Fatalf("failed to fetch subscription: %v", ferr)
+		}
+		if len(s.Nodes) == 0 || s.Nodes[0].URI == nil {
+			log.Fatalf("no nodes found in subscription")
+		}
+		args = append(args, s.Nodes[0].URI.String())
+	}
+
+	cfg, err := config.ParseClient(args, os.Stderr)
 	if err != nil {
 		// -help/-h: usage уже напечатан в ParseClient, выходим штатно.
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
 		}
-		// логгер ещё не создан — единственный fatal до его инициализации.
+		// логгер ещё не создан - единственный fatal до его инициализации.
 		log.Fatalf("%v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	if cfg.SubURL != "" {
-		s, ferr := sub.Fetch(ctx, cfg.SubURL)
-		if ferr != nil {
-			log.Fatalf("failed to fetch subscription: %v", ferr)
-		}
-		if len(s.Nodes) == 0 {
-			log.Fatalf("no nodes found in subscription")
-		}
-
-		// Берем первый сервер из подписки
-		node := s.Nodes[0]
-		ucfg := node.URI
-		if ucfg.Provider != "" {
-			cfg.Provider.Name = ucfg.Provider
-		}
-		if ucfg.Transport != "" {
-			cfg.TURN.TransportUDP = ucfg.Transport == "udp"
-		}
-		if ucfg.Mode != "" {
-			cfg.Proxy.Mode = config.ClientProxyMode(ucfg.Mode, ucfg.Bond)
-		}
-		if ucfg.ObfProfile != "" {
-			cfg.Obf.Profile = config.ObfProfile(ucfg.ObfProfile)
-		}
-		if ucfg.ObfKey != "" {
-			if k, derr := hex.DecodeString(ucfg.ObfKey); derr == nil {
-				cfg.Obf.Key = k
-			} else {
-				log.Fatalf("invalid hex in obf-key: %v", derr)
-			}
-		}
-		if ucfg.Peer != "" {
-			cfg.Proxy.Peer = ucfg.Peer
-		}
-	}
 
 	cfg.ClientID = resolveClientID(cfg.ClientID)
 
@@ -140,12 +121,12 @@ func main() {
 	}
 	logger.Infof("provider=%s", prov.Name())
 
-	getCreds := func(ctx context.Context, streamID int) (string, string, string, error) {
+	getCreds := func(ctx context.Context, streamID int) (string, string, []string, error) {
 		c, err := prov.GetCredentials(ctx, streamID)
 		if err != nil {
-			return "", "", "", err
+			return "", "", nil, err
 		}
-		return c.User, c.Pass, c.ServerAddr, nil
+		return c.User, c.Pass, c.ServerAddrs, nil
 	}
 
 	if cfg.Proxy.Mode != config.ProxyModeUDP {
@@ -226,9 +207,14 @@ func resolveClientID(cliID string) string {
 		ClientID string `json:"client_id"`
 	}
 
-	path := filepath.Join(filepath.Dir(os.Args[0]), "client_config.json")
-	b, err := os.ReadFile(path) //nolint:gosec // фиксированное имя рядом с бинарём, не пользовательский ввод
-	if err == nil {
+	paths := clientConfigPaths()
+
+	// Чтение: первый файл с непустым client_id.
+	for _, path := range paths {
+		b, err := os.ReadFile(path) //nolint:gosec // фиксированное имя из clientConfigPaths, не пользовательский ввод
+		if err != nil {
+			continue
+		}
 		var lc localCfg
 		if err := json.Unmarshal(b, &lc); err == nil && lc.ClientID != "" {
 			return lc.ClientID
@@ -243,10 +229,51 @@ func resolveClientID(cliID string) string {
 	newID := hex.EncodeToString(idBytes)
 
 	lc := localCfg{ClientID: newID}
-	b, _ = json.MarshalIndent(lc, "", "  ")
-	if err := os.WriteFile(path, b, 0o600); err != nil { //nolint:gosec // path фиксирован рядом с бинарём; 0o600 для auth-токена
-		log.Printf("warning: failed to save client ID to %s: %v", path, err) //nolint:gosec // path не пользовательский ввод
+	b, _ := json.MarshalIndent(lc, "", "  ")
+
+	// Запись: первый доступный для записи путь. На Android каталог рядом с
+	// бинарём (/data/app/.../lib/arm64) read-only — падаем на UserConfigDir,
+	// затем TempDir. Иначе ID не сохраняется и ротируется на каждый запуск,
+	// ломая allowlist (-clients-file) и статистику.
+	for _, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			continue
+		}
+		if err := os.WriteFile(path, b, 0o600); err == nil { //nolint:gosec // 0o600 для auth-токена
+			return newID
+		}
 	}
+	log.Printf("warning: failed to persist client ID to any writable path (%v); ID will rotate next launch", paths)
 
 	return newID
+}
+
+// clientConfigPaths возвращает кандидатов client_config.json в порядке
+// предпочтения: рядом с бинарём (desktop, переносимость), затем per-user
+// UserConfigDir и TempDir (Android, где каталог бинаря read-only).
+func clientConfigPaths() []string {
+	const name = "client_config.json"
+	seen := map[string]bool{}
+	var dirs []string
+	add := func(d string) {
+		if d == "" || seen[d] {
+			return
+		}
+		seen[d] = true
+		dirs = append(dirs, d)
+	}
+	if exe, err := os.Executable(); err == nil {
+		add(filepath.Dir(exe))
+	}
+	add(filepath.Dir(os.Args[0]))
+	if cfgDir, err := os.UserConfigDir(); err == nil {
+		add(filepath.Join(cfgDir, "free-turn-proxy"))
+	}
+	add(os.TempDir())
+
+	paths := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		paths = append(paths, filepath.Join(d, name))
+	}
+	return paths
 }
