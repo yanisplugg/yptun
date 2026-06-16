@@ -51,9 +51,12 @@ object XrayConfig {
      * stays consistent with the ipv4_only/ipv6_only enforcement.
      */
     private fun directDomainStrategy(traffic: TrafficSettings): String = when (traffic.domainStrategy) {
-        "ipv4_only" -> "UseIPv4"
         "ipv6_only" -> "UseIPv6"
-        else -> "UseIP"
+        // ipv4_only AND the hybrid prefer_* strategies all force the DIRECT (freedom) outbound to IPv4.
+        // Hybrid would otherwise resolve direct/bypass destinations dual-stack (UseIP) and dial the
+        // user's REAL IPv6 for domain:ru → direct, leaking it. Pinning direct to IPv4 keeps bypass
+        // traffic off real IPv6; proxied traffic is unaffected (it exits via the proxy's own IP).
+        else -> "UseIPv4"
     }
 
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
@@ -459,7 +462,9 @@ object XrayConfig {
                         put("tag", "direct")
                         put("protocol", "freedom")
                         // Resolve via xray's DNS (Go's resolver can't on Android) so direct rules work.
-                        putJsonObject("settings") { put("domainStrategy", "UseIP") }
+                        // UseIPv4 (not UseIP) so the merged profile's domain:ru → direct never dials the
+                        // user's real IPv6 (no leak), matching the typed-config direct outbound above.
+                        putJsonObject("settings") { put("domainStrategy", "UseIPv4") }
                     }
                 }
                 if (mergedRouting != null && "block" !in userOutboundTags) {

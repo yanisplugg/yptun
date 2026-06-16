@@ -270,6 +270,17 @@ object SingBoxConfig {
                 addJsonObject {
                     put("type", "direct")
                     put("tag", "direct")
+                    // IPv6-leak guard for HYBRID modes (prefer_ipv4/prefer_ipv6): the direct/bypass path
+                    // (domain:ru → direct) would otherwise dial the user's REAL IPv6 for dual-stack sites,
+                    // exposing it on a leak check ("domain:ru goes direct only over IPv4, IPv6 leaks").
+                    // Force the direct outbound to IPv4 so bypass traffic NEVER egresses over real IPv6;
+                    // sing-box re-resolves the sniffed domain to A here, so even an IPv6-literal direct
+                    // connection is dialed as IPv4. Proxied traffic is untouched (still dual-stack via the
+                    // proxy's own IP — no user-IP leak there). ipv4_only/ipv6_only already pin a family
+                    // globally (route reject), so only the prefer_* hybrids need this.
+                    if (effectiveStrategy == "prefer_ipv4" || effectiveStrategy == "prefer_ipv6") {
+                        put("domain_strategy", "ipv4_only")
+                    }
                 }
             }
 
@@ -315,6 +326,11 @@ object SingBoxConfig {
                             putJsonArray("domain_suffix") { DOH_BLOCK_SUFFIXES.forEach { add(it) } }
                             put("action", "reject")
                         }
+                        // NOTE: we deliberately do NOT reject the DoH resolver IPs (1.1.1.1, 8.8.8.8…) by
+                        // ip_cidr here. Many users set Android "Private DNS" to one of those IPs (DoT on
+                        // :853), so the SYSTEM resolver itself dials them — an IP reject would kill ALL DNS
+                        // (No address associated with hostname) and break geoip routing (Russia-direct).
+                        // The domain block above is enough for browsers that resolve the DoH host by name.
                         // Firefox canary domain: returning NXDOMAIN/reject here disables its auto-DoH.
                         addJsonObject {
                             putJsonArray("domain") { add("use-application-dns.net") }
