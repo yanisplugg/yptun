@@ -114,6 +114,13 @@ func SetLogWriter(w LogWriter) {
 	}
 }
 
+// olcrtcVersion identifies the vendored olcRTC core build (upstream commit + update date). Bump it
+// whenever the core is re-synced from upstream; surfaced in the app's settings.
+const olcrtcVersion = "2026.06.16-9af4aff"
+
+// Version returns the olcRTC core version for display in the app.
+func Version() string { return olcrtcVersion }
+
 // SetProviders registers built-in carriers, links, and transports.
 func SetProviders() {
 	registerDefaults()
