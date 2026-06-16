@@ -148,22 +148,6 @@ func Mobile() error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Container
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Docker builds the image using docker.
-func Docker() error {
-	tag := envOr("DOCKER_TAG", "olcrtc:latest")
-	return sh.RunV("docker", "build", "-t", tag, ".")
-}
-
-// Podman builds the image using podman.
-func Podman() error {
-	tag := envOr("DOCKER_TAG", "olcrtc:latest")
-	return sh.RunV("podman", "build", "-t", tag, ".")
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Quality
 // ─────────────────────────────────────────────────────────────────────────────
 

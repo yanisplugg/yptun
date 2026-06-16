@@ -38,7 +38,7 @@
 - [ ] session / app (`internal/app/session`, `pkg/`)
 - [ ] config / CLI / URI / sub
 - [ ] mobile (`mobile/`)
-- [ ] CI / Docker / mage
+- [ ] CI / mage
 - [ ] docs / examples
 - [ ] другое:
 

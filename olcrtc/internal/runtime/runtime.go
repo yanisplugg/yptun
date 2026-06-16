@@ -28,6 +28,10 @@ const (
 	// MinSmuxWirePayload is the smallest useful encrypted transport payload
 	// cap that can still carry a non-empty smux frame.
 	MinSmuxWirePayload = SmuxWireOverhead + 1
+
+	smuxMaxFrameSize     = 32 * 1024
+	smuxMaxReceiveBuffer = 8 * 1024 * 1024
+	smuxMaxStreamBuffer  = 512 * 1024
 )
 
 // ErrKeyRequired is returned when no encryption key is provided.
@@ -63,15 +67,15 @@ func SmuxConfig(maxWirePayload int) *smux.Config {
 	cfg := smux.DefaultConfig()
 	cfg.Version = 2
 	cfg.KeepAliveDisabled = false
-	cfg.MaxFrameSize = 32768
+	cfg.MaxFrameSize = smuxMaxFrameSize
 	if maxWirePayload >= MinSmuxWirePayload {
 		maxFrameSize := maxWirePayload - SmuxWireOverhead
 		if maxFrameSize < cfg.MaxFrameSize {
 			cfg.MaxFrameSize = maxFrameSize
 		}
 	}
-	cfg.MaxReceiveBuffer = 16 * 1024 * 1024
-	cfg.MaxStreamBuffer = 1024 * 1024
+	cfg.MaxReceiveBuffer = smuxMaxReceiveBuffer
+	cfg.MaxStreamBuffer = smuxMaxStreamBuffer
 	cfg.KeepAliveInterval = 10 * time.Second
 	cfg.KeepAliveTimeout = 30 * time.Second
 	return cfg

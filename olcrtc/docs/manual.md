@@ -12,7 +12,7 @@
 > **Важно:** Обязательно проверяйте, есть ли сервис видеозвонков у вас в белых списках. Если его там нет - используйте другой. Список всех сервисов в белых списках скоро будет опубликован.
 
 
-Этот способ для тех кто хочет собрать бинарник руками без Docker/Podman.
+Этот способ для тех кто хочет собрать нативный бинарник руками.
 Нужен Go 1.26+, mage, git.
 
 ---
@@ -428,8 +428,6 @@ sudo systemctl restart olcrtc-client
 mage build    # собрать для текущей платформы
 mage cross    # собрать для всех платформ
 mage mobile   # собрать Android AAR
-mage docker   # собрать образ через docker
-mage podman   # собрать образ через podman
 mage clean    # удалить build/
 ```
 
@@ -482,7 +480,6 @@ SOAK_CARRIERS=jitsi SOAK_DURATION=30m mage soak
 - `E2E_CARRIERS`, `E2E_TRANSPORTS`, `E2E_TIMEOUT`, `E2E_STRESS`, `E2E_STRESS_DURATION`
 - `STRESS_BULK_DURATION`, `STRESS_ECHO_DURATION`, `STRESS_CASE_TIMEOUT`, `STRESS_TIMEOUT`
 - `SOAK_CARRIERS`, `SOAK_TRANSPORTS`, `SOAK_DURATION`, `SOAK_CHAOS`
-- `DOCKER_TAG`
 
 ---
 
@@ -578,6 +575,6 @@ data: data
 
 ---
 
-Используешь скрипты вместо ручной сборки? -> [Быстрый старт](fast.md)
+Нужен короткий путь без подробностей? -> [Быстрый старт](fast.md)
 
 Все настройки и матрица совместимости -> [settings.md](settings.md)

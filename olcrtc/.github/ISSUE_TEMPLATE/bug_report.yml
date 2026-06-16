@@ -31,7 +31,7 @@ body:
     id: version
     attributes:
       label: Версия olcrtc
-      description: Тег релиза, имя ветки и git commit (`git rev-parse --short HEAD`). Если собирал из docker - пиши тег образа.
+      description: Тег релиза, имя ветки и git commit (`git rev-parse --short HEAD`).
       placeholder: "main @ a1b2c3d  /  v0.x.y  /  refactor/universal-carrier @ ef01234"
     validations:
       required: true
@@ -42,8 +42,8 @@ body:
       label: Способ сборки/запуска
       options:
         - Native
-        - Docker / docker compose
-        - Podman / script
+        - Native binary
+        - Mobile / gomobile
         - Other
     validations:
       required: true
@@ -170,8 +170,6 @@ body:
       description: |
         Полные логи с момента запуска до момента ошибки.
         Если запуск через systemd - `journalctl -u olcrtc -n 500 --no-pager`. 
-        Если docker - `docker logs <container>`.
-        Если запуск через podman - `podman logs -f <container> `.
       render: shell
     validations:
       required: true
@@ -205,6 +203,6 @@ body:
     id: extra
     attributes:
       label: Дополнительно
-      description: Что ещё может быть полезно - версия podman/docker, нестандартный конфиг (failover, traffic shaping, lifecycle), временные паттерны (бьёт раз в сутки, после сна и т.п.), известные обходы.
+      description: Что ещё может быть полезно - нестандартный конфиг (failover, traffic shaping, lifecycle), временные паттерны (бьёт раз в сутки, после сна и т.п.), известные обходы.
     validations:
       required: false

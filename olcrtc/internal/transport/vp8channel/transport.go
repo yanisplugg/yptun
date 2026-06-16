@@ -32,13 +32,13 @@ import (
 const (
 	defaultMaxPayloadSize = 60 * 1024
 	defaultConnectTimeout = 60 * time.Second
-	rtpBufSize = 65536
+	rtpBufSize            = 65536
 	// outboundQueueSize bounds KCP packets waiting for the paced writer. Sized
 	// to a couple of send windows so KCP's flush never blocks (a blocked
 	// WriteTo would stall KCP's update loop and delay ACKs); the paced writer
 	// keeps it drained so this depth is headroom, not standing latency.
-	outboundQueueSize    = 2048
-	inboundQueueSize     = 8192
+	outboundQueueSize    = 1536
+	inboundQueueSize     = 4096
 	canSendHighWatermark = 90 // percent
 	keepaliveIdlePeriod  = 100 * time.Millisecond
 )

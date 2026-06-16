@@ -8,13 +8,16 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/crypto"
+	"github.com/openlibrecommunity/olcrtc/internal/framing"
 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
@@ -65,6 +68,8 @@ type Server struct {
 	controlStop    context.CancelFunc
 	sessMu         sync.RWMutex
 	peerSessions   map[string]*peerSession
+	peersMu        sync.Mutex
+	peerStats      map[string]peerStat
 	reinstallMu    sync.Mutex
 	wg             sync.WaitGroup
 	authHook       handshake.AuthFunc
@@ -83,6 +88,13 @@ type Server struct {
 	health         *runtime.HealthTracker
 	done           chan struct{}
 	doneOnce       sync.Once
+}
+
+// peerStat holds the per-session info needed to report the live peer count
+// and a disconnect summary.
+type peerStat struct {
+	deviceID string
+	openedAt time.Time
 }
 
 type peerSession struct {
@@ -175,6 +187,7 @@ func Run(ctx context.Context, cfg Config) error {
 		liveness:       cfg.Liveness,
 		health:         runtime.NewHealthTracker(cfg.OnHealth),
 		peerSessions:   make(map[string]*peerSession),
+		peerStats:      make(map[string]peerStat),
 		done:           make(chan struct{}),
 	}
 	s.setupResolver()
@@ -282,6 +295,7 @@ func (s *Server) bringUpLink(
 		return fmt.Errorf("failed to connect link: %w", err)
 	}
 	logger.Infof("Link connected")
+	s.logPeersLine()
 
 	s.wg.Add(1)
 	go func() {
@@ -317,6 +331,19 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 	s.reinstallMu.Lock()
 	defer s.reinstallMu.Unlock()
 
+	// Close the old muxconn immediately so that any in-flight Push calls
+	// (from data arriving on a new bridge before this reinstall completes)
+	// are discarded rather than feeding stale frames into the dying smux
+	// session. Without this, a client that reconnects faster than the
+	// server can push new-session smux frames into the old muxconn,
+	// corrupting the old smux session's stream state (manifests as
+	// "frame too large" on the control stream).
+	s.sessMu.RLock()
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+	s.sessMu.RUnlock()
+
 	// Pre-build the replacement so we can swap atomically below.
 	newConn := muxconn.New(s.ln, s.cipher)
 	newSess, err := smux.Server(newConn, smuxConfig(linkMaxPayload(s.ln)))
@@ -335,7 +362,6 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 		return
 	}
 	oldSess := s.session
-	oldConn := s.conn
 	oldControl := s.controlStrm
 	oldControlStop := s.controlStop
 	oldSID := s.sessionID
@@ -353,14 +379,12 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 	if oldSess != nil {
 		_ = oldSess.Close()
 	}
-	if oldConn != nil {
-		_ = oldConn.Close()
-	}
 	if oldControl != nil {
 		_ = oldControl.Close()
 	}
 	if oldSID != "" {
 		s.onClose(oldSID, "reconnect")
+		s.trackPeerClose(oldSID, "reconnect")
 	}
 }
 
@@ -393,6 +417,7 @@ func (s *Server) closeSession() {
 	}
 	if oldSID != "" {
 		s.onClose(oldSID, "closed")
+		s.trackPeerClose(oldSID, "closed")
 	}
 	for _, ps := range peers {
 		s.closePeerSession(ps, "closed")
@@ -425,7 +450,54 @@ func (s *Server) closePeerSession(ps *peerSession, reason string) {
 	}
 	if ps.sessionID != "" {
 		s.onClose(ps.sessionID, reason)
+		s.trackPeerClose(ps.sessionID, reason)
 	}
+}
+
+// trackPeerOpen records a newly opened session and logs the live peer summary.
+func (s *Server) trackPeerOpen(sessionID, deviceID string) {
+	s.peersMu.Lock()
+	s.peerStats[sessionID] = peerStat{deviceID: deviceID, openedAt: time.Now()}
+	line := s.peersLineLocked()
+	s.peersMu.Unlock()
+	logger.Infof("peer connected: device=%s session=%s", deviceID, sessionID)
+	logger.Infof("%s", line)
+}
+
+// trackPeerClose drops a closed session and logs a disconnect summary plus the
+// live peer summary.
+func (s *Server) trackPeerClose(sessionID, reason string) {
+	s.peersMu.Lock()
+	st, ok := s.peerStats[sessionID]
+	if !ok {
+		s.peersMu.Unlock()
+		return // session was never tracked (or already removed) - avoid double count
+	}
+	delete(s.peerStats, sessionID)
+	line := s.peersLineLocked()
+	s.peersMu.Unlock()
+	logger.Infof("peer disconnected: device=%s session=%s reason=%s duration=%s",
+		st.deviceID, sessionID, reason, time.Since(st.openedAt).Round(time.Second))
+	logger.Infof("%s", line)
+}
+
+// peersLineLocked builds the "Current peers count: N, Devices: [...]" summary
+// line from the live sessions. The caller must hold peersMu.
+func (s *Server) peersLineLocked() string {
+	devices := make([]string, 0, len(s.peerStats))
+	for _, st := range s.peerStats {
+		devices = append(devices, st.deviceID)
+	}
+	sort.Strings(devices)
+	return fmt.Sprintf("Current peers count: %d, Devices: [%s]", len(s.peerStats), strings.Join(devices, ", "))
+}
+
+// logPeersLine logs the current peer summary line (count + device list).
+func (s *Server) logPeersLine() {
+	s.peersMu.Lock()
+	line := s.peersLineLocked()
+	s.peersMu.Unlock()
+	logger.Infof("%s", line)
 }
 
 func notifyControlClose(stream *smux.Stream) {
@@ -575,37 +647,52 @@ func (s *Server) handshakeReady() bool {
 }
 
 func (s *Server) acceptHandshake(ctx context.Context, sess *smux.Session) bool {
-	stream, err := sess.AcceptStream()
-	if err != nil {
-		select {
-		case <-ctx.Done():
+	// Retry loop: after a session reinstall, stale control frames from the
+	// old client smux session may arrive on the new smux session with a
+	// matching stream ID. These raw JSON bytes (e.g. CONTROL_PING) are
+	// interpreted by the framing layer as an impossibly large length prefix,
+	// triggering ErrFrameTooLarge. We close the polluted stream and accept
+	// the next one (the real handshake).
+	const maxStaleRetries = 3
+	for retry := 0; retry <= maxStaleRetries; retry++ {
+		stream, err := sess.AcceptStream()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return false
+			default:
+			}
+			logger.Debugf("AcceptStream(control) returned %v - reinstalling session", err)
+			s.resetLinkPeer()
+			s.reinstallSession(sess)
 			return false
-		default:
 		}
-		logger.Debugf("AcceptStream(control) returned %v - reinstalling session", err)
-		s.resetLinkPeer()
-		s.reinstallSession(sess)
-		return false
+		_ = stream.SetDeadline(time.Now().Add(handshake.DefaultTimeout))
+		hello, sid, err := handshake.Server(stream, s.authHook)
+		_ = stream.SetDeadline(time.Time{})
+		if err != nil {
+			_ = stream.Close()
+			if errors.Is(err, framing.ErrFrameTooLarge) && retry < maxStaleRetries {
+				logger.Debugf("handshake: discarding stale stream (attempt %d): %v", retry+1, err)
+				continue
+			}
+			logger.Warnf("handshake failed: %v", err)
+			s.resetLinkPeer()
+			s.reinstallSession(sess)
+			return false
+		}
+		s.sessMu.Lock()
+		s.deviceID = hello.DeviceID
+		s.sessionID = sid
+		s.sessMu.Unlock()
+		s.recordSession(sid)
+		s.onOpen(sid, hello.DeviceID, hello.Claims)
+		s.trackPeerOpen(sid, hello.DeviceID)
+		logger.Infof("session %s opened (device=%s)", sid, hello.DeviceID)
+		s.startControlLoop(ctx, sess, stream)
+		return true
 	}
-	_ = stream.SetDeadline(time.Now().Add(handshake.DefaultTimeout))
-	hello, sid, err := handshake.Server(stream, s.authHook)
-	_ = stream.SetDeadline(time.Time{})
-	if err != nil {
-		logger.Warnf("handshake failed: %v", err)
-		_ = stream.Close()
-		s.resetLinkPeer()
-		s.reinstallSession(sess)
-		return false
-	}
-	s.sessMu.Lock()
-	s.deviceID = hello.DeviceID
-	s.sessionID = sid
-	s.sessMu.Unlock()
-	s.recordSession(sid)
-	s.onOpen(sid, hello.DeviceID, hello.Claims)
-	logger.Infof("session %s opened (device=%s)", sid, hello.DeviceID)
-	s.startControlLoop(ctx, sess, stream)
-	return true
+	return false
 }
 
 func (s *Server) servePeer(ps *peerSession) {
@@ -635,29 +722,38 @@ func (s *Server) servePeer(ps *peerSession) {
 }
 
 func (s *Server) acceptPeerHandshake(ps *peerSession) bool {
-	stream, err := ps.session.AcceptStream()
-	if err != nil {
-		if !s.stopping() {
-			logger.Debugf("AcceptStream(control peer=%s) returned %v", ps.peerID, err)
+	const maxStaleRetries = 3
+	for retry := 0; retry <= maxStaleRetries; retry++ {
+		stream, err := ps.session.AcceptStream()
+		if err != nil {
+			if !s.stopping() {
+				logger.Debugf("AcceptStream(control peer=%s) returned %v", ps.peerID, err)
+			}
+			return false
 		}
-		return false
+		_ = stream.SetDeadline(time.Now().Add(handshake.DefaultTimeout))
+		hello, sid, err := handshake.Server(stream, s.authHook)
+		_ = stream.SetDeadline(time.Time{})
+		if err != nil {
+			_ = stream.Close()
+			if errors.Is(err, framing.ErrFrameTooLarge) && retry < maxStaleRetries {
+				logger.Debugf("handshake failed peer=%s: discarding stale stream (attempt %d): %v", ps.peerID, retry+1, err)
+				continue
+			}
+			logger.Warnf("handshake failed peer=%s: %v", ps.peerID, err)
+			return false
+		}
+		ps.controlStrm = stream
+		ps.deviceID = hello.DeviceID
+		ps.sessionID = sid
+		s.recordSession(sid)
+		s.onOpen(sid, hello.DeviceID, hello.Claims)
+		s.trackPeerOpen(sid, hello.DeviceID)
+		logger.Infof("session %s opened (device=%s peer=%s)", sid, hello.DeviceID, ps.peerID)
+		s.startPeerControlLoop(ps, stream)
+		return true
 	}
-	_ = stream.SetDeadline(time.Now().Add(handshake.DefaultTimeout))
-	hello, sid, err := handshake.Server(stream, s.authHook)
-	_ = stream.SetDeadline(time.Time{})
-	if err != nil {
-		logger.Warnf("handshake failed peer=%s: %v", ps.peerID, err)
-		_ = stream.Close()
-		return false
-	}
-	ps.controlStrm = stream
-	ps.deviceID = hello.DeviceID
-	ps.sessionID = sid
-	s.recordSession(sid)
-	s.onOpen(sid, hello.DeviceID, hello.Claims)
-	logger.Infof("session %s opened (device=%s peer=%s)", sid, hello.DeviceID, ps.peerID)
-	s.startPeerControlLoop(ps, stream)
-	return true
+	return false
 }
 
 func (s *Server) resetLinkPeer() {

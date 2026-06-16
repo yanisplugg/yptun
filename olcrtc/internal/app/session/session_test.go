@@ -22,14 +22,14 @@ func TestApplyTransportDefaults(t *testing.T) {
 		{
 			name: "vp8",
 			in:   Config{Transport: transportVP8},
-			want: Config{Transport: transportVP8, VP8: VP8Config{FPS: 60, BatchSize: 64}},
+			want: Config{Transport: transportVP8, VP8: VP8Config{FPS: 30, BatchSize: 64}},
 		},
 		{
 			name: "sei",
 			in:   Config{Transport: transportSEI},
 			want: Config{
 				Transport: transportSEI,
-				SEI:       SEIConfig{FPS: 60, BatchSize: 64, FragmentSize: 900, AckTimeoutMS: 2000},
+				SEI:       SEIConfig{FPS: 30, BatchSize: 64, FragmentSize: 900, AckTimeoutMS: 2000},
 			},
 		},
 		{

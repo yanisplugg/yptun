@@ -175,18 +175,19 @@ func (c *Client) bringUpLink(
 	cancel context.CancelFunc,
 ) error {
 	ln, err := transport.New(ctx, cfg.Transport, transport.Config{
-		Carrier:   cfg.Carrier,
-		RoomURL:   cfg.RoomURL,
-		Engine:    cfg.Engine,
-		URL:       cfg.URL,
-		Token:     cfg.Token,
-		ChannelID: cfg.ChannelID,
-		DeviceID:  c.deviceID,
-		Name:      names.Generate(),
-		OnData:    c.onData,
-		DNSServer: cfg.DNSServer,
-		Options:   cfg.TransportOptions,
-		Traffic:   cfg.Traffic,
+		Carrier:             cfg.Carrier,
+		RoomURL:             cfg.RoomURL,
+		Engine:              cfg.Engine,
+		URL:                 cfg.URL,
+		Token:               cfg.Token,
+		ChannelID:           cfg.ChannelID,
+		DeviceID:            c.deviceID,
+		Name:                names.Generate(),
+		OnData:              c.onData,
+		DNSServer:           cfg.DNSServer,
+		RequireTargetedPeer: true,
+		Options:             cfg.TransportOptions,
+		Traffic:             cfg.Traffic,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create link: %w", err)
@@ -334,6 +335,16 @@ func (c *Client) handleReconnect(ctx context.Context, cfg Config, cancel context
 	logger.Infof("client reconnect reason=%s - tearing down smux session", reason)
 	c.resetLinkPeer()
 
+	// Close the old muxconn immediately so any in-flight Push from data
+	// arriving on the new bridge is discarded. Without this, the server
+	// side that reconnected faster can push frames into our old muxconn,
+	// corrupting the dying smux session.
+	c.sessMu.RLock()
+	if c.conn != nil {
+		_ = c.conn.Close()
+	}
+	c.sessMu.RUnlock()
+
 	// Install a fresh muxconn immediately so onData never hits nil while
 	// the old session is being torn down. tryReopenSession will swap it
 	// again with its own conn on each attempt.
@@ -343,7 +354,6 @@ func (c *Client) handleReconnect(ctx context.Context, cfg Config, cancel context
 	oldControl := c.controlStrm
 	oldControlStop := c.controlStop
 	oldSess := c.session
-	oldConn := c.conn
 	c.conn = newConn
 	c.session = nil
 	c.controlStrm = nil
@@ -356,9 +366,6 @@ func (c *Client) handleReconnect(ctx context.Context, cfg Config, cancel context
 	}
 	if oldSess != nil {
 		_ = oldSess.Close()
-	}
-	if oldConn != nil {
-		_ = oldConn.Close()
 	}
 	if oldControl != nil {
 		_ = oldControl.Close()

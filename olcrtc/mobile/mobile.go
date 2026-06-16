@@ -718,7 +718,7 @@ func ensureDefaultConfigLocked() {
 			transport:        defaultTransport,
 			dnsServer:        defaultDNSServer,
 			socksListenHost:  defaultSocksHost,
-			vp8FPS:           60,
+			vp8FPS:           30,
 			vp8BatchSize:     8,
 			livenessInterval: control.DefaultInterval,
 			livenessTimeout:  control.DefaultTimeout,

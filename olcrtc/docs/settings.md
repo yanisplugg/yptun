@@ -145,22 +145,22 @@ transport. Используй одинаковые traffic-настройки н
 
 ## vp8channel
 
-**Рекомендуется: `fps: 60`, `batch_size: 64`** (числа лучше чётные, больший batch = выше скорость)
+**Рекомендуется: `fps: 30`, `batch_size: 64`** (меньше FPS снижает CPU-нагрузку, больший batch = выше скорость)
 
 | YAML поле | Описание | По умолчанию |
 |-----------|----------|:------------:|
-| `vp8.fps` | FPS VP8 потока | `60` |
+| `vp8.fps` | FPS VP8 потока | `30` |
 | `vp8.batch_size` | Кадров за тик | `64` |
 
 ---
 
 ## seichannel
 
-**Рекомендуется: `fps: 60`, `batch_size: 64`, `fragment_size: 900`, `ack_timeout_ms: 2000`**
+**Рекомендуется: `fps: 30`, `batch_size: 64`, `fragment_size: 900`, `ack_timeout_ms: 2000`**
 
 | YAML поле | Описание | По умолчанию |
 |-----------|----------|:------------:|
-| `sei.fps` | FPS H264 потока | `60` |
+| `sei.fps` | FPS H264 потока | `30` |
 | `sei.batch_size` | Кадров за тик | `64` |
 | `sei.fragment_size` | Размер фрагмента в байтах | `900` |
 | `sei.ack_timeout_ms` | Таймаут ACK в миллисекундах | `2000` |
@@ -169,7 +169,7 @@ transport. Используй одинаковые traffic-настройки н
 
 ## videochannel
 
-**Рекомендуется: `codec: qrcode`, `width: 1080`, `height: 1080`, `fps: 60`, `bitrate: "5000k"`, `hw: none`**
+**Рекомендуется: `codec: qrcode`, `width: 1080`, `height: 1080`, `fps: 30`, `bitrate: "5000k"`, `hw: none`**
 
 | YAML поле | Описание | По умолчанию |
 |-----------|----------|:------------:|
@@ -276,7 +276,7 @@ net:
   transport: vp8channel
   dns: "8.8.8.8:53"
 vp8:
-  fps: 60
+  fps: 30
   batch_size: 64
 data: data
 ```
@@ -297,7 +297,7 @@ socks:
   host: "127.0.0.1"
   port: 8808
 vp8:
-  fps: 60
+  fps: 30
   batch_size: 64
 data: data
 ```
@@ -319,7 +319,7 @@ net:
   transport: seichannel
   dns: "8.8.8.8:53"
 sei:
-  fps: 60
+  fps: 30
   batch_size: 64
   fragment_size: 900
   ack_timeout_ms: 2000
@@ -342,7 +342,7 @@ socks:
   host: "127.0.0.1"
   port: 8808
 sei:
-  fps: 60
+  fps: 30
   batch_size: 64
   fragment_size: 900
   ack_timeout_ms: 2000
@@ -367,7 +367,7 @@ video:
   codec: qrcode
   width: 1080
   height: 1080
-  fps: 60
+  fps: 30
   bitrate: "5000k"
   hw: none
 data: data
@@ -392,7 +392,7 @@ video:
   codec: qrcode
   width: 1080
   height: 1080
-  fps: 60
+  fps: 30
   bitrate: "5000k"
   hw: none
 data: data

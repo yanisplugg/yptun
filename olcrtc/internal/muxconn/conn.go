@@ -36,11 +36,11 @@ var ErrClosed = errors.New("muxconn: closed")
 const (
 	// inboundQueue is the buffered capacity of the Push -> Read pipeline.
 	// It absorbs short Read stalls without applying back-pressure to the
-	// transport callback. Frames are typically smux-sized (well under
-	// 16 KiB), so 256 amounts to a few MiB of in-flight data, which is
-	// enough for sustained throughput on every transport we have without
-	// unbounded growth on a stuck reader.
-	inboundQueue = 256
+	// transport callback. Frames are typically smux-sized (up to 32 KiB),
+	// so 128 amounts to a few MiB of in-flight data, which is
+	// enough for sustained throughput without letting a stuck reader retain
+	// a large pool-backed working set per connection.
+	inboundQueue = 128
 
 	// pooledFrameCap is the capacity each pooled plaintext buffer is born
 	// with. It is sized to fit the largest smux frame any of our
@@ -246,7 +246,7 @@ func (c *Conn) Write(p []byte) (int, error) {
 	// latency to interactive request/response traffic. Fall back to a
 	// modest sleep only if the link is truly congested.
 	const (
-		fastSpinAttempts = 200
+		fastSpinAttempts = 16
 		slowPollDelay    = 2 * time.Millisecond
 	)
 	for attempt := 0; ; attempt++ {

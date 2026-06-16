@@ -24,16 +24,17 @@ type streamTransport struct {
 // New creates a datachannel transport backed by a carrier engine.
 func New(ctx context.Context, cfg transport.Config) (transport.Transport, error) {
 	sess, err := enginebuiltin.Open(ctx, cfg.Carrier, enginebuiltin.Config{
-		RoomURL:    cfg.RoomURL,
-		Name:       cfg.Name,
-		OnData:     cfg.OnData,
-		OnPeerData: cfg.OnPeerData,
-		DNSServer:  cfg.DNSServer,
-		ProxyAddr:  cfg.ProxyAddr,
-		ProxyPort:  cfg.ProxyPort,
-		Engine:     cfg.Engine,
-		URL:        cfg.URL,
-		Token:      cfg.Token,
+		RoomURL:             cfg.RoomURL,
+		Name:                cfg.Name,
+		OnData:              cfg.OnData,
+		OnPeerData:          cfg.OnPeerData,
+		DNSServer:           cfg.DNSServer,
+		ProxyAddr:           cfg.ProxyAddr,
+		ProxyPort:           cfg.ProxyPort,
+		Engine:              cfg.Engine,
+		URL:                 cfg.URL,
+		Token:               cfg.Token,
+		RequireTargetedPeer: cfg.RequireTargetedPeer,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open engine session: %w", err)

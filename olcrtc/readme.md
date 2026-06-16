@@ -39,8 +39,6 @@ Community ui client: [alananisimov/olcbox](https://github.com/alananisimov/olcbo
 
 [More info](docs/about.md)
 
-[Docker setup](docs/docker.md)
-
 [Client URI format](docs/uri.md)
 
 [Client subscription format](docs/sub.md)
@@ -53,7 +51,7 @@ Encrypted TCP-over-WebRTC tunnel. Traffic is disguised as a regular video call o
 
 **Transports:** `datachannel` - `vp8channel` - `seichannel` - `videochannel`
 
-**Platforms:** Linux, macOS, Windows, Android (gomobile), Docker, embeddable Go library
+**Platforms:** Linux, macOS, Windows, Android (gomobile), embeddable Go library
 
 ```
 app -> SOCKS5 -> olcrtc cnc -> WebRTC/SFU service -> olcrtc srv -> internet
