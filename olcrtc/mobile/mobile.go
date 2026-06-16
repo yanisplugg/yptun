@@ -54,9 +54,12 @@ var (
 )
 
 const (
-	defaultTransport   = "vp8channel"
-	dataTransport      = "datachannel"
-	defaultDNSServer   = "8.8.8.8:53"
+	defaultTransport = "vp8channel"
+	dataTransport    = "datachannel"
+	// Preference-ordered list (configureDefaultResolver probes & sticks to the first that answers):
+	// Yandex first so DNS keeps working on RU IPv4-only mobile where Cloudflare/Google UDP/53 are
+	// blocked. Used by Check/Ping; the live tunnel gets the same list via SetDNS from the app.
+	defaultDNSServer   = "77.88.8.8:53,8.8.8.8:53,1.1.1.1:53"
 	defaultHTTPPingURL = "https://www.google.com/generate_204"
 	defaultSocksHost   = "127.0.0.1"
 	carrierWBStream    = "wbstream"

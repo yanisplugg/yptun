@@ -1447,7 +1447,10 @@ class OlcboxVpnService : VpnService() {
         val config = location.normalized()
         Mobile.setProviders()
         Mobile.setTransport(config.transport)
-        Mobile.setDNS("1.1.1.1:53")
+        // Preference-ordered DNS list (olcRTC probes & sticks to the first that actually answers):
+        // Yandex first — it stays reachable on RU IPv4-only mobile where Cloudflare/Google UDP/53 are
+        // blocked, which previously left OLCRTC unable to resolve ("doesn't work on IPv4-only").
+        Mobile.setDNS("77.88.8.8:53,8.8.8.8:53,1.1.1.1:53")
         Mobile.setSocksListenHost(socksListenHost)
         Mobile.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
     }
