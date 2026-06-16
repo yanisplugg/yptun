@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/pion/logging"
@@ -36,7 +37,10 @@ type Stream struct {
 	Relay net.PacketConn
 	// ServerUDPAddr — резолвнутый UDP-адрес TURN-сервера (host:port).
 	ServerUDPAddr *net.UDPAddr
-	close         func() error
+	// PermDead закрывается при стойком провале ChannelBind refresh (relay
+	// блэкхолит data-path) - вызывающий рециклит allocation. См. permwatch.go.
+	PermDead <-chan struct{}
+	close    func() error
 }
 
 // Close освобождает аллокацию, TURN-клиент и транспорт.
@@ -103,15 +107,27 @@ func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAdd
 	} else {
 		addrFamily = turn.RequestedAddressFamilyIPv6
 	}
+
+	// Standalone CreatePermission refresh VK реджектит 400 — глушим (24h).
+	// Permission держится живым через ChannelBind refresh (RFC 8656 §11);
+	// блэкхол ловим по провалу этого байнда (см. permwatch.go).
+	permDead := make(chan struct{})
+	var permOnce sync.Once
+	loggerFactory := &permWatchFactory{
+		inner:     logging.NewDefaultLoggerFactory(),
+		threshold: permFailThreshold,
+		onDead:    func() { permOnce.Do(func() { close(permDead) }) },
+	}
 	client, err := turn.NewClient(&turn.ClientConfig{
-		STUNServerAddr:         turnServerAddr,
-		TURNServerAddr:         turnServerAddr,
-		Conn:                   turnConn,
-		Net:                    netconn.New(),
-		Username:               user,
-		Password:               pass,
-		RequestedAddressFamily: addrFamily,
-		LoggerFactory:          logging.NewDefaultLoggerFactory(),
+		STUNServerAddr:            turnServerAddr,
+		TURNServerAddr:            turnServerAddr,
+		Conn:                      turnConn,
+		Net:                       netconn.New(),
+		Username:                  user,
+		Password:                  pass,
+		RequestedAddressFamily:    addrFamily,
+		PermissionRefreshInterval: 24 * time.Hour,
+		LoggerFactory:             loggerFactory,
 	})
 	if err != nil {
 		if cerr := closeConn(); cerr != nil {
@@ -138,6 +154,7 @@ func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAdd
 	return &Stream{
 		Relay:         relay,
 		ServerUDPAddr: turnServerUDPAddr,
+		PermDead:      permDead,
 		close: func() error {
 			var firstErr error
 			if cerr := relay.Close(); cerr != nil {

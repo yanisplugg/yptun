@@ -76,6 +76,13 @@ func SetLogWriter(w LogWriter) {
 	log.SetOutput(logBridge{w: w})
 }
 
+// freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
+// Bump it whenever the vendored core is updated; surfaced in the app's settings.
+const freeturnVersion = "1.2.0"
+
+// Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
+func Version() string { return freeturnVersion }
+
 // SetDebug toggles verbose logging for subsequent Start calls.
 func SetDebug(enabled bool) { debug.Store(enabled) }
 
@@ -189,12 +196,14 @@ func run(ctx context.Context, cfg *config.Client, links []string) error {
 	}
 	logger.Infof("provider=%s links=%d", prov.Name(), len(links))
 
-	getCreds := func(ctx context.Context, streamID int) (string, string, string, error) {
+	// 1.2.0: Credentials.ServerAddr (single) became ServerAddrs ([]string, primary-first) and
+	// GetCredsFunc now returns the candidate list so DialTURN can fall back across relay IPs.
+	getCreds := func(ctx context.Context, streamID int) (string, string, []string, error) {
 		c, cerr := prov.GetCredentials(ctx, streamID)
 		if cerr != nil {
-			return "", "", "", cerr
+			return "", "", nil, cerr
 		}
-		return c.User, c.Pass, c.ServerAddr, nil
+		return c.User, c.Pass, c.ServerAddrs, nil
 	}
 
 	if cfg.Proxy.Mode != config.ProxyModeUDP {

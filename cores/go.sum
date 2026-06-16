@@ -460,8 +460,8 @@ github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3i
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 github.com/zarazaex69/gr v0.1.5 h1:Lpr4WrNXHL/ma65ZXeQH2UyFi6HziJoqqjaYCLisOQY=
 github.com/zarazaex69/gr v0.1.5/go.mod h1:hAk5j/s2QFlvr3bJkjPwakZENsMBx6VOUN1GwYzYoRw=
-github.com/zarazaex69/j v0.0.0-20260531163510-49ce21cd3cc5 h1:85Mpm3Bk+TT3PTdfa+rVmte1X0K/Fg4YkaLL0lwhjok=
-github.com/zarazaex69/j v0.0.0-20260531163510-49ce21cd3cc5/go.mod h1:7/ypJTenOIPx23fpo5uF7l4u+rxZqg9cFbTL/N77Ktc=
+github.com/zarazaex69/j v0.0.0-20260615090630-e98457d32f7f h1:FrB7dZHP+OOcFGEPobrXTPJByc9K35NHEcOQCOqeeps=
+github.com/zarazaex69/j v0.0.0-20260615090630-e98457d32f7f/go.mod h1:7/ypJTenOIPx23fpo5uF7l4u+rxZqg9cFbTL/N77Ktc=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=
 github.com/zeebo/assert v1.3.0/go.mod h1:Pq9JiuJQpG8JLJdtkwrJESF0Foym2/D9XMU5ciN/wJ0=
 github.com/zeebo/blake3 v0.2.4 h1:KYQPkhpRtcqh0ssGYcKLG1JYvddkEA8QwCM/yBqhaZI=

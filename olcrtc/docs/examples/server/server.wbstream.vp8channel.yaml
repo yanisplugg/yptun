@@ -32,7 +32,7 @@ socks:
   proxy_pass: ""
 
 vp8:
-  fps: 60
+  fps: 30
   batch_size: 64
 
 data: data

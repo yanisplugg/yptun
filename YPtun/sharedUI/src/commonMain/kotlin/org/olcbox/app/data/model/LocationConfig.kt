@@ -62,11 +62,17 @@ data class VkTurnConfig(
     /** UDP payload (WireGuard/AmneziaWG) needs udprelay; TCP proxy needs tcpfwd. */
     fun requiredMode(): String = if (outbound == OUTBOUND_PROXY) "tcp" else "udp"
 
-    /** Resolves [proxyCore]==Auto to a concrete backend for the given exit/chain [profile]. */
-    fun resolvedProxyCore(profile: ProxyProfile?): ProxyCore = when {
+    /**
+     * Resolves [proxyCore]==Auto to a concrete backend for the given exit/chain [profile], honoring
+     * the app-wide [globalCore] default. Precedence mirrors [LocationConfig.resolvedCore]: an explicit
+     * per-location [proxyCore] wins, then a raw-Xray/xhttp transport forces Xray, then the global
+     * default, then sing-box. [globalCore]==Auto keeps the original behaviour.
+     */
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
         proxyCore != ProxyCore.Auto -> proxyCore
         !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
         profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        globalCore != ProxyCore.Auto -> globalCore
         else -> ProxyCore.SingBox
     }
 
@@ -201,13 +207,23 @@ data class LocationConfig(
         p.network == ProxyProfile.NETWORK_XHTTP
     }
 
-    /** Resolves [ProxyCore.Auto] to a concrete backend based on the proxy transport. */
-    fun resolvedCore(): ProxyCore = when {
+    /**
+     * Resolves [ProxyCore.Auto] to a concrete backend based on the proxy transport and the app-wide
+     * [globalCore] default. Precedence (highest first): a raw Xray config (Xray-only) → the explicit
+     * per-location [core] → a transport only Xray can serve (xhttp) → the global default → sing-box.
+     * So a per-location choice always wins over the global one, which in turn wins over the sing-box
+     * default. [globalCore]==Auto (the historical caller) keeps the original behaviour exactly.
+     */
+    fun resolvedCore(globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
         // A full raw Xray config can only be run by xray-core, regardless of the stored choice.
         !proxy?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
-        core == ProxyCore.Auto ->
-            if (proxy?.network == ProxyProfile.NETWORK_XHTTP) ProxyCore.Xray else ProxyCore.SingBox
-        else -> core
+        // Explicit per-location override beats the global default.
+        core != ProxyCore.Auto -> core
+        // xhttp/splithttp can only be served by xray-core.
+        proxy?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        // App-wide engine preference (ranks below the per-location setting).
+        globalCore != ProxyCore.Auto -> globalCore
+        else -> ProxyCore.SingBox
     }
 
     /** True when this config has everything its [engine] needs to connect. */

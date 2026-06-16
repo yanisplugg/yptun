@@ -11,13 +11,12 @@ require (
 	github.com/magefile/mage v1.17.2
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/logging v0.2.4
-	github.com/pion/rtcp v1.2.16
 	github.com/pion/rtp v1.10.2
 	github.com/pion/webrtc/v4 v4.2.13
 	github.com/xtaci/kcp-go/v5 v5.6.72
 	github.com/xtaci/smux v1.5.57
 	github.com/zarazaex69/gr v0.1.5
-	github.com/zarazaex69/j v0.0.0-20260531163510-49ce21cd3cc5
+	github.com/zarazaex69/j v0.0.0-20260615090630-e98457d32f7f
 	golang.org/x/crypto v0.52.0
 	golang.org/x/mobile v0.0.0-20260520154334-0e4426e1883d
 	golang.org/x/sys v0.45.0
@@ -61,6 +60,7 @@ require (
 	github.com/pion/ice/v4 v4.2.5 // indirect
 	github.com/pion/mdns/v2 v2.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
+	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/sctp v1.10.0 // indirect
 	github.com/pion/sdp/v3 v3.0.18 // indirect
 	github.com/pion/srtp/v3 v3.0.10 // indirect

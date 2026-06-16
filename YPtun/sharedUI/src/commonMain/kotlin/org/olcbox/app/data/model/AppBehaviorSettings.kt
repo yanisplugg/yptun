@@ -133,6 +133,14 @@ data class AppBehaviorSettings(
      * names + FakeDNS from Happ. One of [SUBSCRIPTION_UA_MODES].
      */
     val subscriptionUserAgent: String = SUB_UA_YPTUN,
+    /**
+     * App-wide default engine for VLESS-like proxy transports (Standard/Chain exit, VK-TURN
+     * exit/chain). Applied ONLY when the per-location core is [ProxyCore.Auto]; an explicit
+     * per-location choice (e.g. Xray) always wins — the global default ranks BELOW it. A transport
+     * that only one core can serve (xhttp/raw-Xray → Xray) also overrides this. [ProxyCore.Auto]
+     * (default) keeps the original behaviour: sing-box unless the transport forces Xray.
+     */
+    val globalProxyCore: ProxyCore = ProxyCore.Auto,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"

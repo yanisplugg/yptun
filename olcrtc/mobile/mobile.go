@@ -54,9 +54,12 @@ var (
 )
 
 const (
-	defaultTransport   = "vp8channel"
-	dataTransport      = "datachannel"
-	defaultDNSServer   = "8.8.8.8:53"
+	defaultTransport = "vp8channel"
+	dataTransport    = "datachannel"
+	// Preference-ordered list (configureDefaultResolver probes & sticks to the first that answers):
+	// Yandex first so DNS keeps working on RU IPv4-only mobile where Cloudflare/Google UDP/53 are
+	// blocked. Used by Check/Ping; the live tunnel gets the same list via SetDNS from the app.
+	defaultDNSServer   = "77.88.8.8:53,8.8.8.8:53,1.1.1.1:53"
 	defaultHTTPPingURL = "https://www.google.com/generate_204"
 	defaultSocksHost   = "127.0.0.1"
 	carrierWBStream    = "wbstream"
@@ -110,6 +113,13 @@ func SetLogWriter(w LogWriter) {
 		log.SetOutput(&logBridge{w: w})
 	}
 }
+
+// olcrtcVersion identifies the vendored olcRTC core build (upstream commit + update date). Bump it
+// whenever the core is re-synced from upstream; surfaced in the app's settings.
+const olcrtcVersion = "2026.06.16-9af4aff"
+
+// Version returns the olcRTC core version for display in the app.
+func Version() string { return olcrtcVersion }
 
 // SetProviders registers built-in carriers, links, and transports.
 func SetProviders() {
@@ -715,7 +725,7 @@ func ensureDefaultConfigLocked() {
 			transport:        defaultTransport,
 			dnsServer:        defaultDNSServer,
 			socksListenHost:  defaultSocksHost,
-			vp8FPS:           60,
+			vp8FPS:           30,
 			vp8BatchSize:     8,
 			livenessInterval: control.DefaultInterval,
 			livenessTimeout:  control.DefaultTimeout,

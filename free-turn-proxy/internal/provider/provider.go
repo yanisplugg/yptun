@@ -17,13 +17,14 @@ import (
 )
 
 // Credentials — выданные провайдером TURN-реквизиты для одного стрима.
-// Адрес уже разрешён до конкретного host:port; pipeline не делает round-robin
-// по нескольким адресам — это ответственность провайдера.
+// ServerAddrs — кандидаты host:port в порядке предпочтения (первый —
+// предпочтительный для этого streamID). Pipeline пробует их по очереди при
+// allocate: если первый не проходит (DPI-дроп/RST), берёт следующий.
 type Credentials struct {
-	User       string
-	Pass       string
-	ServerAddr string    // host:port
-	ExpiresAt  time.Time // 0 если провайдер не сообщает дедлайн
+	User        string
+	Pass        string
+	ServerAddrs []string  // host:port, primary-first
+	ExpiresAt   time.Time // 0 если провайдер не сообщает дедлайн
 }
 
 // Provider — источник TURN-реквизитов для клиентского pipeline.

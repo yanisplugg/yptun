@@ -1,10 +1,10 @@
 // Package config парсит CLI-флаги клиента и сервера.
 //
 // Функции Parse* без побочных эффектов: валидируют ввод и декодируют wrap-ключ,
-// но не трогают сеть, DNS и состояние процесса. Подключение этих эффектов —
+// но не трогают сеть, DNS и состояние процесса. Подключение этих эффектов -
 // ответственность main() после возврата Parse*.
 //
-// Опции сгруппированы по доменам (TURN, Obf, Proxy, VK, DNS, Log) — структура
+// Опции сгруппированы по доменам (TURN, Obf, Proxy, VK, DNS, Log) - структура
 // зеркалит концептуальные слои прокси.
 package config
 
@@ -38,7 +38,7 @@ const (
 	ProxyModeTCPFwdBond ProxyMode = "tcpfwd-bond" // -mode tcp -bond: bond TCP по N smux-сессиям
 )
 
-// TURNOpts — опции TURN-сервера (куда и как подключаться).
+// TURNOpts - опции TURN-сервера (куда и как подключаться).
 type TURNOpts struct {
 	Host         string // -turn: переопределить IP/host TURN-сервера
 	Port         string // -port: переопределить порт TURN
@@ -47,7 +47,7 @@ type TURNOpts struct {
 }
 
 // ObfProfile выбирает wire-профиль обфускации TURN-payload.
-// Профили живут в internal/wire/<profile>/ — сейчас только rtpopus,
+// Профили живут в internal/wire/<profile>/ - сейчас только rtpopus,
 // под добавление новых (rtph264, vp8 и т.д.).
 type ObfProfile string
 
@@ -56,7 +56,7 @@ const (
 	ObfProfileRTPOpus ObfProfile = "rtpopus" // RTP/opus + ChaCha20-Poly1305 AEAD
 )
 
-// ObfOpts — опции обфускации TURN-payload.
+// ObfOpts - опции обфускации TURN-payload.
 type ObfOpts struct {
 	Profile ObfProfile // -obf-profile: none (default) | rtpopus
 	Key     []byte     // -obf-key (декодированный): 32-байтовый общий ключ; nil если Profile=none
@@ -66,7 +66,7 @@ type ObfOpts struct {
 // Enabled возвращает true когда выбран реальный профиль обфускации.
 func (o ObfOpts) Enabled() bool { return o.Profile != ObfProfileNone }
 
-// ProxyOpts — опции прокси прикладного уровня.
+// ProxyOpts - опции прокси прикладного уровня.
 type ProxyOpts struct {
 	Mode    ProxyMode // udp | tcpfwd | tcpfwd-bond (сервер: udp | tcpfwd)
 	Listen  string    // -listen: локальный bind (клиент: WG/TCP entry; сервер: TURN entry)
@@ -74,7 +74,7 @@ type ProxyOpts struct {
 	Peer    string    // -peer: адрес серверного прокси, куда дозванивается клиент (только клиент)
 }
 
-// VKOpts — опции VK-учёток и captcha (только клиент, провайдер "vk").
+// VKOpts - опции VK-учёток и captcha (только клиент, провайдер "vk").
 type VKOpts struct {
 	Link           string // -link (нормализован до join-кода)
 	StreamsPerCred int    // -streams-per-cred
@@ -91,24 +91,24 @@ const (
 	ProviderVK = "vk"
 )
 
-// DNSOpts — опции DNS-резолвинга (только клиент).
+// DNSOpts - опции DNS-резолвинга (только клиент).
 type DNSOpts struct {
 	Mode    string   // -dns-mode: plain | doh | auto
 	Servers []string // -dns-servers (через запятую); nil если флаг пуст
 }
 
-// LogOpts — опции логирования.
+// LogOpts - опции логирования.
 type LogOpts struct {
 	Debug bool // -debug
 }
 
-// KCPOpts — параметры KCP-туннеля, хардкодятся из DefaultProfile/FEC{}.
+// KCPOpts - параметры KCP-туннеля, хардкодятся из DefaultProfile/FEC{}.
 type KCPOpts struct {
 	Profile kcptun.Profile
 	FEC     kcptun.FEC
 }
 
-// Client — разобранные и провалидированные CLI-опции клиента.
+// Client - разобранные и провалидированные CLI-опции клиента.
 type Client struct {
 	TURN     TURNOpts
 	Obf      ObfOpts
@@ -122,7 +122,7 @@ type Client struct {
 	SubURL   string
 }
 
-// Server — разобранные и провалидированные CLI-опции сервера.
+// Server - разобранные и провалидированные CLI-опции сервера.
 type Server struct {
 	Obf         ObfOpts
 	Proxy       ProxyOpts
@@ -131,8 +131,28 @@ type Server struct {
 	ClientsFile string // -clients-file
 }
 
+// PeekSubURL вытаскивает значение -sub из сырых args без полного парсинга.
+// Нужно до ParseClient: подписка отдаёт peer, без которого ParseClient падает
+// на валидации. Вызывающий тянет подписку и подсовывает URI ноды позиционным
+// аргументом - дальше применение идёт общим путём в ParseClient.
+func PeekSubURL(args []string) string {
+	for i := range args {
+		a := args[i]
+		if v, ok := strings.CutPrefix(a, "-sub="); ok {
+			return v
+		}
+		if v, ok := strings.CutPrefix(a, "--sub="); ok {
+			return v
+		}
+		if (a == "-sub" || a == "--sub") && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 // ParseClient разбирает args (без имени программы) в Client.
-// При flag.ErrHelp возвращает (nil, flag.ErrHelp) — вызывающий выходит штатно.
+// При flag.ErrHelp возвращает (nil, flag.ErrHelp) - вызывающий выходит штатно.
 func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 	fs := flag.NewFlagSet("client", flag.ContinueOnError)
 	if errOut != nil {
@@ -221,6 +241,12 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 			if ucfg.Bond {
 				*bond = true
 			}
+			if ucfg.N > 0 {
+				c.TURN.N = ucfg.N
+			}
+			if ucfg.StreamsPerCred > 0 {
+				c.VK.StreamsPerCred = ucfg.StreamsPerCred
+			}
 			if ucfg.ObfProfile != "" {
 				c.Obf.Profile = ObfProfile(ucfg.ObfProfile)
 			}
@@ -230,11 +256,27 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 			if ucfg.Peer != "" {
 				c.Proxy.Peer = ucfg.Peer
 			}
+			if ucfg.ClientID != "" {
+				c.ClientID = ucfg.ClientID
+			}
+			if ucfg.Listen != "" {
+				c.Proxy.Listen = ucfg.Listen
+			}
+			if ucfg.DNSMode != "" {
+				c.DNS.Mode = ucfg.DNSMode
+			}
+			if ucfg.DNSServers != "" {
+				*dnsServers = ucfg.DNSServers
+			}
+			if ucfg.ManualCaptcha {
+				c.VK.ManualCaptcha = true
+			}
 		}
 	}
 
-	// Пересчитываем Proxy Mode после возможного изменения из URI
+	// Пересчитываем после возможного изменения из URI
 	c.Proxy.Mode = ClientProxyMode(*mode, *bond)
+	c.TURN.TransportUDP = *transport == "udp"
 
 	switch *transport {
 	case "tcp", "udp":

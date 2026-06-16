@@ -3,20 +3,27 @@ package sub
 import (
 	"strings"
 	"testing"
+
+	"github.com/samosvalishe/free-turn-proxy/internal/uri"
 )
 
 func TestParse(t *testing.T) {
-	data := `#name: Test Sub
-#refresh: 1h
-#color: #123456
+	link1 := (&uri.Config{
+		Version: 1, Provider: "vk", Peer: "1.1.1.1:56000", Mode: "tcp",
+	}).String()
+	link2 := (&uri.Config{
+		Version: 1, Provider: "vk", Peer: "2.2.2.2:56000",
+	}).String()
 
-freeturn://vk?tcp<mode=tcpfwd>@1.1.1.1:56000#key$comment1
-##name: Server 1
-##ip: 1.1.1.1
+	data := "#name: Test Sub\n" +
+		"#refresh: 1h\n" +
+		"#color: #123456\n\n" +
+		link1 + "\n" +
+		"##name: Server 1\n" +
+		"##ip: 1.1.1.1\n\n" +
+		link2 + "\n" +
+		"##name: Server 2\n"
 
-freeturn://vk@2.2.2.2
-##name: Server 2
-`
 	s, err := Parse(strings.NewReader(data))
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
@@ -43,7 +50,7 @@ freeturn://vk@2.2.2.2
 	if n1.IP != "1.1.1.1" {
 		t.Errorf("Node[0].IP = %v, want 1.1.1.1", n1.IP)
 	}
-	if n1.URI.Provider != "vk" || n1.URI.Transport != "tcp" {
+	if n1.URI.Provider != "vk" || n1.URI.Mode != "tcp" {
 		t.Errorf("Node[0].URI = %+v", n1.URI)
 	}
 
@@ -51,7 +58,7 @@ freeturn://vk@2.2.2.2
 	if n2.Name != "Server 2" {
 		t.Errorf("Node[1].Name = %v, want Server 2", n2.Name)
 	}
-	if n2.URI.Peer != "2.2.2.2" {
-		t.Errorf("Node[1].URI.Peer = %v, want 2.2.2.2", n2.URI.Peer)
+	if n2.URI.Peer != "2.2.2.2:56000" {
+		t.Errorf("Node[1].URI.Peer = %v, want 2.2.2.2:56000", n2.URI.Peer)
 	}
 }

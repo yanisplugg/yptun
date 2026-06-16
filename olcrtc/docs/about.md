@@ -188,7 +188,6 @@ data: data
 | `internal/client` | SOCKS5 listener, client-side smux |
 | `internal/control` | liveness ping/pong |
 | `internal/supervisor` | failover profiles |
-| `script` | интерактивные launchers и Docker entrypoint |
 | `docs` | документация и примеры YAML |
 
 ## Сборка
@@ -201,11 +200,9 @@ mage cross
 mage test
 mage lint
 mage mobile
-mage docker
-mage podman
 ```
 
-Go версия в сборочных скриптах: `1.25`. Для `videochannel` нужен `ffmpeg`; для `codec: tile` требуется разрешение `1080x1080`.
+Go версия: `1.26+`. Для `videochannel` нужен `ffmpeg`; для `codec: tile` требуется разрешение `1080x1080`.
 
 ## Public API
 

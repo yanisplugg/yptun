@@ -271,6 +271,17 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 
 	const maxPayload = 1600
 
+	// PermDead закрывается при блэкхоле data-path (см. turndial/permwatch.go) —
+	// отменяем turnctx, TURNLoop делает свежий allocate.
+	wg.Go(func() {
+		select {
+		case <-turnctx.Done():
+		case <-stream.PermDead:
+			deps.log().Warnf("[STREAM %d] TURN channel-bind умер — рецикл allocation", streamID)
+			turncancel()
+		}
+	})
+
 	wg.Go(func() {
 		defer turncancel()
 		// При obf читаем payload сразу в buf[HeaderLen:], чтобы WrapInPlace

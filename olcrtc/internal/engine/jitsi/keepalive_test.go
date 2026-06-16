@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
+	"github.com/pion/webrtc/v4"
 )
 
 func newSilentSession(t *testing.T) *Session {
@@ -301,6 +302,23 @@ func TestRequestReconnectIdempotent(t *testing.T) {
 	case <-js.reconnectCh:
 		t.Fatal("more than one reconnect enqueued — duplicate-suppression broken")
 	default:
+	}
+}
+
+func TestPeerConnectionFailureRequestsReconnect(t *testing.T) {
+	js := newSilentSession(t)
+	js.SetShouldReconnect(func() bool { return true })
+
+	var endedReason string
+	js.SetEndedCallback(func(reason string) { endedReason = reason })
+
+	js.handlePeerConnectionState(webrtc.PeerConnectionStateFailed)
+
+	if endedReason != "" {
+		t.Fatalf("peer failure ended session: %q", endedReason)
+	}
+	if !reconnectQueued(js) {
+		t.Fatal("peer failure did not enqueue reconnect")
 	}
 }
 

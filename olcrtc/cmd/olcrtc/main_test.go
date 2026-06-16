@@ -88,7 +88,7 @@ func TestRunWithConfigValidationAndDataDirErrors(t *testing.T) {
 		Mode:      "srv",
 		Transport: "datachannel",
 		Auth:      "jitsi",
-		RoomID:    "https://meet.small-dm.ru/test",
+		RoomID:    "https://meet.handyweb.org/test",
 		KeyHex:    "key",
 		DNSServer: "8.8.8.8:53",
 	}
@@ -135,7 +135,7 @@ link: direct
 auth:
   provider: jitsi
 room:
-  id: https://meet.small-dm.ru/test
+  id: https://meet.handyweb.org/test
 crypto:
   key: key
 net:
@@ -164,8 +164,8 @@ func TestRunWithArgsAppliesTransportDefaults(t *testing.T) {
 	oldRunSession := runSession
 	t.Cleanup(func() { runSession = oldRunSession })
 	runSession = func(_ context.Context, cfg session.Config) error {
-		if cfg.VP8.FPS != 60 || cfg.VP8.BatchSize != 64 {
-			t.Errorf("VP8 defaults = fps %d batch %d, want 60/64", cfg.VP8.FPS, cfg.VP8.BatchSize)
+		if cfg.VP8.FPS != 30 || cfg.VP8.BatchSize != 64 {
+			t.Errorf("VP8 defaults = fps %d batch %d, want 30/64", cfg.VP8.FPS, cfg.VP8.BatchSize)
 		}
 		return nil
 	}
@@ -204,8 +204,8 @@ func TestRunWithArgsFailoverProfiles(t *testing.T) {
 	var seen []string
 	runSession = func(_ context.Context, cfg session.Config) error {
 		seen = append(seen, cfg.Auth+"/"+cfg.Transport)
-		if cfg.Auth == "wbstream" && (cfg.VP8.FPS != 60 || cfg.VP8.BatchSize != 64) {
-			t.Errorf("VP8 defaults = fps %d batch %d, want 60/64", cfg.VP8.FPS, cfg.VP8.BatchSize)
+		if cfg.Auth == "wbstream" && (cfg.VP8.FPS != 30 || cfg.VP8.BatchSize != 64) {
+			t.Errorf("VP8 defaults = fps %d batch %d, want 30/64", cfg.VP8.FPS, cfg.VP8.BatchSize)
 		}
 		return errBoom
 	}

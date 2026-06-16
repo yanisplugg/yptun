@@ -48,7 +48,8 @@ func TestSetupCipherRejectsBadInput(t *testing.T) {
 
 func TestSmuxConfig(t *testing.T) {
 	cfg := smuxConfig(0)
-	if cfg.Version != 2 || cfg.KeepAliveDisabled || cfg.MaxFrameSize != 32768 || cfg.MaxReceiveBuffer != 16*1024*1024 {
+	if cfg.Version != 2 || cfg.KeepAliveDisabled || cfg.MaxFrameSize != 32768 ||
+		cfg.MaxReceiveBuffer != 8*1024*1024 || cfg.MaxStreamBuffer != 512*1024 {
 		t.Fatalf("smuxConfig(0) = %+v", cfg)
 	}
 	capped := smuxConfig(4096)

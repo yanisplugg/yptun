@@ -37,7 +37,6 @@ type Node struct {
 	Comment   string
 }
 
-// Fetch скачивает и парсит подписку по URL
 func Fetch(ctx context.Context, url string) (*Sub, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -61,7 +60,6 @@ func Fetch(ctx context.Context, url string) (*Sub, error) {
 	return Parse(resp.Body)
 }
 
-// Parse читает Reader и возвращает структуру Sub
 func Parse(r io.Reader) (*Sub, error) {
 	s := &Sub{}
 	scanner := bufio.NewScanner(r)

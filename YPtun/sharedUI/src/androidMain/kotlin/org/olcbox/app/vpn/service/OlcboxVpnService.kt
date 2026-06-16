@@ -918,7 +918,10 @@ class OlcboxVpnService : VpnService() {
                 )
             }
 
-            activeProxyCore = if (isLocalUdpTunnel) ProxyCore.SingBox else config.resolvedCore()
+            // App-wide engine default (Auto/sing-box/Xray); applied only when the location core is Auto
+            // and the transport doesn't force a core — a per-location choice still wins (see resolvedCore).
+            val globalCore = loadAppBehavior().globalProxyCore
+            activeProxyCore = if (isLocalUdpTunnel) ProxyCore.SingBox else config.resolvedCore(globalCore)
             // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
@@ -1200,9 +1203,11 @@ class OlcboxVpnService : VpnService() {
             val profileWantsXray = routingProfile != null &&
                 (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
                 proxyForCore != null && proxyForCore.type in XRAY_SUPPORTED_TYPES
+            // App-wide engine default applies to the VK-TURN exit/chain proxy too (per-location wins).
+            val globalCore = loadAppBehavior().globalProxyCore
             val useXray = proxyForCore != null &&
                 outboundType != VkTurnConfig.OUTBOUND_AMNEZIAWG &&
-                (vk.resolvedProxyCore(proxyForCore) == ProxyCore.Xray || profileWantsXray)
+                (vk.resolvedProxyCore(proxyForCore, globalCore) == ProxyCore.Xray || profileWantsXray)
 
             if (useXray) {
                 val assetPath = ensureGeoAssetPath(routingProfile)
@@ -1442,7 +1447,10 @@ class OlcboxVpnService : VpnService() {
         val config = location.normalized()
         Mobile.setProviders()
         Mobile.setTransport(config.transport)
-        Mobile.setDNS("1.1.1.1:53")
+        // Preference-ordered DNS list (olcRTC probes & sticks to the first that actually answers):
+        // Yandex first — it stays reachable on RU IPv4-only mobile where Cloudflare/Google UDP/53 are
+        // blocked, which previously left OLCRTC unable to resolve ("doesn't work on IPv4-only").
+        Mobile.setDNS("77.88.8.8:53,8.8.8.8:53,1.1.1.1:53")
         Mobile.setSocksListenHost(socksListenHost)
         Mobile.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
     }

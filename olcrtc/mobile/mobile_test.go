@@ -177,7 +177,7 @@ func TestStartWithInjectedRunnerLifecycle(t *testing.T) {
 		opts, _ := cfg.TransportOptions.(vp8channel.Options)
 		if cfg.Transport != dataTransport || cfg.Carrier != "jitsi" ||
 			cfg.RoomURL != testRoomID || cfg.DeviceID != "client" || cfg.LocalAddr != "0.0.0.0:1080" ||
-			cfg.DNSServer != defaultDNSServer || opts.FPS != 60 || opts.BatchSize != 8 ||
+			cfg.DNSServer != defaultDNSServer || opts.FPS != 30 || opts.BatchSize != 8 ||
 			cfg.Liveness.Interval != 2500*time.Millisecond ||
 			cfg.Liveness.Timeout != 750*time.Millisecond ||
 			cfg.Liveness.Failures != 4 {

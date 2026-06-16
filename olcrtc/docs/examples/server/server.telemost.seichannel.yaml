@@ -32,7 +32,7 @@ socks:
   proxy_pass: ""
 
 sei:
-  fps: 60
+  fps: 30
   batch_size: 64
   fragment_size: 900
   ack_timeout_ms: 2000

@@ -155,7 +155,7 @@ crypto:
 net:
   transport: vp8channel
 vp8:
-  fps: 60
+  fps: 30
   batch_size: 64
 data: data
 ```
@@ -179,7 +179,7 @@ crypto:
 net:
   transport: seichannel
 sei:
-  fps: 60
+  fps: 30
   batch_size: 64
   fragment_size: 900
   ack_timeout_ms: 2000
@@ -207,7 +207,7 @@ net:
 video:
   width: 1080
   height: 1080
-  fps: 60
+  fps: 30
   bitrate: "5000k"
   hw: none
   codec: qrcode

@@ -1,7 +1,7 @@
 # Формат подписок `sub.md`
 
 Для удобного распространения списка серверов `Free Turn Proxy` поддерживает систему подписок.
-Файл `sub.md` — это обычный текстовый файл, который хостится на любом HTTP-сервере.
+Файл `sub.md` - это обычный текстовый файл, который хостится на любом HTTP-сервере.
 
 ## Использование в клиенте
 
@@ -25,15 +25,18 @@
 #refresh: 1h
 #color: #4A90E2
 
-freeturn://vk?tcp<mode=udp&obf-profile=rtpopus>@1.2.3.4:56000#d823fa...$RU-Server
+freeturn://eyJ2IjoxLCJwcm92aWRlciI6InZrIiwicGVlciI6IjEuMi4zLjQ6NTYwMDAifQ
 ##name: RU-1
 ##ip: 1.2.3.4
 ##comment: Основной сервер в Москве
 
-freeturn://vk?udp<mode=udp&obf-profile=rtpopus>@5.6.7.8:56000#abc123...$EU-Backup
+freeturn://eyJ2IjoxLCJwcm92aWRlciI6InZrIiwicGVlciI6IjUuNi43Ljg6NTYwMDAifQ
 ##name: EU-Backup
 ##comment: Резервный сервер
 ```
+
+`freeturn://` теперь несёт base64url(json) со всеми параметрами подключения - формат
+описан в [docs/uri.md](uri.md).
 
 | Поле | Описание |
 |------|----------|

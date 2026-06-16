@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	defaultFPS       = 60
+	defaultFPS       = 30
 	defaultBatchSize = 64
 	// defaultMaxBytesPerSec paces the wire byte-rate just under the Telemost
 	// SFU's measured per-slot policer knee (~1.4 MiB/s). Above it the SFU

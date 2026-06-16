@@ -51,9 +51,12 @@ object XrayConfig {
      * stays consistent with the ipv4_only/ipv6_only enforcement.
      */
     private fun directDomainStrategy(traffic: TrafficSettings): String = when (traffic.domainStrategy) {
-        "ipv4_only" -> "UseIPv4"
         "ipv6_only" -> "UseIPv6"
-        else -> "UseIP"
+        // ipv4_only AND the hybrid prefer_* strategies all force the DIRECT (freedom) outbound to IPv4.
+        // Hybrid would otherwise resolve direct/bypass destinations dual-stack (UseIP) and dial the
+        // user's REAL IPv6 for domain:ru → direct, leaking it. Pinning direct to IPv4 keeps bypass
+        // traffic off real IPv6; proxied traffic is unaffected (it exits via the proxy's own IP).
+        else -> "UseIPv4"
     }
 
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
@@ -459,7 +462,9 @@ object XrayConfig {
                         put("tag", "direct")
                         put("protocol", "freedom")
                         // Resolve via xray's DNS (Go's resolver can't on Android) so direct rules work.
-                        putJsonObject("settings") { put("domainStrategy", "UseIP") }
+                        // UseIPv4 (not UseIP) so the merged profile's domain:ru → direct never dials the
+                        // user's real IPv6 (no leak), matching the typed-config direct outbound above.
+                        putJsonObject("settings") { put("domainStrategy", "UseIPv4") }
                     }
                 }
                 if (mergedRouting != null && "block" !in userOutboundTags) {
@@ -629,10 +634,16 @@ object XrayConfig {
         // proxy-level chaining (proxySettings). proxySettings drops the exit's OWN transport, so an
         // xhttp exit was sending raw VLESS to the server, which replied with its HTTP web-fallback
         // ("unexpected response version. Expecting 0 but actually 72" = 'H'). dialerProxy keeps the
-        // exit's xhttp/ws/TLS intact and only routes its underlying socket through the base. Other
-        // detours (olcRTC [OLCRTC_TAG] / VK-TURN WireGuard [WG_BASE_TAG]) keep proxySettings, which
-        // already works for them — so this change is scoped strictly to the cascade exit.
-        val dialerProxyTag = if (detourTag == PROXY_BASE_TAG) detourTag else null
+        // exit's xhttp/ws/TLS intact and only routes its underlying socket through the base.
+        //
+        // The same proxySettings/xhttp breakage hits ANY detour, not just the cascade exit: a VK-TURN
+        // WireGuard chain proxy ([WG_BASE_TAG]) or an olcRTC Chain proxy ([OLCRTC_TAG]) that is xhttp
+        // also lost its transport under proxySettings ("vkturn cascade xhttp doesn't work"). So use
+        // dialerProxy whenever the profile carries an xhttp transport over a detour, in addition to the
+        // cascade-exit case. Non-xhttp profiles over WG/olcRTC keep proxySettings (unchanged, works).
+        val needsDialerProxy = detourTag != null &&
+            (detourTag == PROXY_BASE_TAG || profile.network == ProxyProfile.NETWORK_XHTTP)
+        val dialerProxyTag = if (needsDialerProxy) detourTag else null
         if (!isLocalSocks) {
             put("streamSettings", buildStreamSettings(
                 profile,

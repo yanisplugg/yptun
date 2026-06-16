@@ -180,7 +180,7 @@ require (
 	github.com/xtaci/smux v1.5.57 // indirect
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
 	github.com/zarazaex69/gr v0.1.5 // indirect
-	github.com/zarazaex69/j v0.0.0-20260531163510-49ce21cd3cc5 // indirect
+	github.com/zarazaex69/j v0.0.0-20260615090630-e98457d32f7f // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect

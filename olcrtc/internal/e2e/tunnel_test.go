@@ -43,7 +43,7 @@ const (
 	localDNSServer      = "127.0.0.1:53"
 	videoHWNone         = "none"
 	testClientDeviceID  = "client-1"
-	defaultJitsiRoomURL = "https://meet.small-dm.ru/deadbeef"
+	defaultJitsiRoomURL = "https://meet.handyweb.org/deadbeef"
 )
 
 var (
@@ -684,17 +684,7 @@ func realE2ECaseExpectation(carrierName, transportName string) realE2EExpectatio
 		}
 		return realE2EExpectPass
 	case "jitsi":
-		// datachannel works reliably. Video-sending transports
-		// (videochannel, seichannel, vp8channel) are unstable: JVB's
-		// SinglePortUdpHarvester fails ICE for the first endpoint when
-		// both peers send video through the same TURN relay. This is a
-		// server-side issue, not an olcrtc bug.
-		switch transportName {
-		case transportVideo, transportSEI, transportVP8:
-			return realE2EExpectUnstable
-		default:
-			return realE2EExpectPass
-		}
+		return realE2EExpectPass
 	default:
 		return realE2EExpectPass
 	}
@@ -716,7 +706,7 @@ func realE2EExpectationLabel(expectation realE2EExpectation) string {
 // logUnstableOutcome records the result of an Unstable matrix entry
 // without failing the test. Unstable combos exist to keep the matrix
 // honest about transports that flap against a particular carrier
-// (e.g. seichannel against meet.small-dm.ru's bandwidth allocator)
+// (e.g. seichannel against meet.handyweb.org's bandwidth allocator)
 // while still surfacing whether the run happened to pass or fail.
 func logUnstableOutcome(t *testing.T, label, carrierName, transportName string, err error) {
 	t.Helper()
@@ -784,7 +774,7 @@ func TestRealE2ECaseExpectation(t *testing.T) {
 			transport: transportVP8,
 			want:      realE2EExpectPass,
 		},
-		// jitsi: datachannel works; video transports are unstable (JVB ICE bug)
+		// jitsi: datachannel must pass, other transports expected to fail
 		{
 			name:      "jitsi datachannel is expected to pass",
 			carrier:   "jitsi",
@@ -792,22 +782,22 @@ func TestRealE2ECaseExpectation(t *testing.T) {
 			want:      realE2EExpectPass,
 		},
 		{
-			name:      "jitsi vp8channel is unstable",
+			name:      "jitsi vp8channel",
 			carrier:   "jitsi",
 			transport: transportVP8,
-			want:      realE2EExpectUnstable,
+			want:      realE2EExpectPass,
 		},
 		{
-			name:      "jitsi videochannel is unstable",
+			name:      "jitsi videochannel",
 			carrier:   "jitsi",
 			transport: transportVideo,
-			want:      realE2EExpectUnstable,
+			want:      realE2EExpectPass,
 		},
 		{
-			name:      "jitsi seichannel is unstable",
+			name:      "jitsi seichannel",
 			carrier:   "jitsi",
 			transport: transportSEI,
-			want:      realE2EExpectUnstable,
+			want:      realE2EExpectPass,
 		},
 	}
 
@@ -852,7 +842,7 @@ func realRoomURL(ctx context.Context, t *testing.T, carrierName string) string {
 		return ""
 	case "jitsi":
 		// Jitsi has no notion of "creating" a room - names are conjured
-		// on first join. The default flag points at meet.small-dm.ru
+		// on first join. The default flag points at meet.handyweb.org
 		// by default. When the flag is left at its default value, a
 		// per-process random suffix is appended
 		// to the slug: two participants share a single room by design (one
@@ -920,7 +910,7 @@ func validSessionConfig(mode, carrierName, transportName string) session.Config 
 			Width: 1080, Height: 1080, FPS: 30, Bitrate: "1M",
 			HW: videoHWNone, Codec: "tile", TileModule: 4, TileRS: 20,
 		},
-		VP8: session.VP8Config{FPS: 60, BatchSize: 64},
+		VP8: session.VP8Config{FPS: 30, BatchSize: 64},
 		SEI: session.SEIConfig{FPS: 30, BatchSize: 4, FragmentSize: 512, AckTimeoutMS: 1500},
 	}
 }
@@ -935,7 +925,7 @@ func e2eTransportOptions(transportName string) transport.Options {
 		return videochannel.Options{
 			Width:      1080,
 			Height:     1080,
-			FPS:        60,
+			FPS:        30,
 			Bitrate:    "5000k",
 			HW:         videoHWNone,
 			QRSize:     512,
@@ -945,9 +935,9 @@ func e2eTransportOptions(transportName string) transport.Options {
 			TileRS:     20,
 		}
 	case "vp8channel":
-		return vp8channel.Options{FPS: 60, BatchSize: 64}
+		return vp8channel.Options{FPS: 30, BatchSize: 64}
 	case "seichannel":
-		return seichannel.Options{FPS: 60, BatchSize: 64, FragmentSize: 512, AckTimeoutMS: 1500}
+		return seichannel.Options{FPS: 30, BatchSize: 64, FragmentSize: 512, AckTimeoutMS: 1500}
 	}
 	return nil
 }

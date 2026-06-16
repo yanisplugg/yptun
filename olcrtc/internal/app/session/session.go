@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,9 +46,9 @@ const (
 	defaultVideoBitrate    = "2M"
 	defaultVideoHW         = "none"
 	defaultVideoQRRecovery = "low"
-	defaultVP8FPS          = 60
+	defaultVP8FPS          = 30
 	defaultVP8BatchSize    = 64
-	defaultSEIFPS          = 60
+	defaultSEIFPS          = 30
 	defaultSEIBatchSize    = 64
 	defaultSEIFragmentSize = 900
 	defaultSEIAckTimeoutMS = 2000
@@ -622,17 +624,69 @@ func Run(ctx context.Context, cfg Config) error {
 	return run(ctx)
 }
 
+// dnsProbeDomain is a stable, widely-resolvable name used to test whether a candidate UDP/53 resolver
+// actually answers. A plain dial can't tell — a UDP "connect" succeeds even to a blackholed server —
+// so we send a real query and check for a reply.
+const dnsProbeDomain = "dns.google"
+
+// configureDefaultResolver points net.DefaultResolver at the configured upstream DNS. dnsServer may be
+// a single "ip:port" OR a comma-separated list tried in PREFERENCE order. On restrictive IPv4-only
+// mobile networks the international resolvers (Cloudflare 1.1.1.1, Google 8.8.8.8) are frequently
+// UDP/53-blocked while a RU resolver (Yandex 77.88.8.8) still answers — pinning a single dead server
+// left OLCRTC unable to resolve provider hostnames ("doesn't work on IPv4-only"). So on first use we
+// probe the candidates with a real query and stick to the first that responds.
 func configureDefaultResolver(dnsServer string) {
-	if dnsServer == "" {
+	servers := make([]string, 0, 4)
+	for _, s := range strings.Split(dnsServer, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			servers = append(servers, s)
+		}
+	}
+	if len(servers) == 0 {
 		return
 	}
+
+	dialServer := func(ctx context.Context, network, server string) (net.Conn, error) {
+		d := net.Dialer{Timeout: 3 * time.Second}
+		return d.DialContext(ctx, network, server)
+	}
+
+	var (
+		probeOnce sync.Once
+		picked    string
+	)
 	net.DefaultResolver = &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 3 * time.Second}
-			return d.DialContext(ctx, network, dnsServer)
+			probeOnce.Do(func() { picked = pickReachableDNS(servers, dialServer) })
+			server := picked
+			if server == "" {
+				server = servers[0] // none probed clean — fall back to the first listed
+			}
+			return dialServer(ctx, network, server)
 		},
 	}
+}
+
+// pickReachableDNS returns the first server that answers a real probe query (over the same dialer the
+// resolver will use), or "" when none answered (the caller then falls back to the first listed server).
+func pickReachableDNS(servers []string, dial func(context.Context, string, string) (net.Conn, error)) string {
+	for _, server := range servers {
+		srv := server
+		probe := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return dial(ctx, network, srv)
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, err := probe.LookupHost(ctx, dnsProbeDomain)
+		cancel()
+		if err == nil {
+			return srv
+		}
+	}
+	return ""
 }
 
 func runOnce(

@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.2.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.1.1...v1.2.0) (2026-06-11)
+
+
+### Features
+
+* **uri:** переход на base64url(json), расширенные параметры ([402606e](https://github.com/samosvalishe/free-turn-proxy/commit/402606e4f747c9c78d0c8389815f9e320c0480b1))
+
+## [1.1.1](https://github.com/samosvalishe/free-turn-proxy/compare/v1.1.0...v1.1.1) (2026-06-11)
+
+
+### Bug Fixes
+
+* **dnsdial:** убрать динамический фоллбэк на DoH ([40796b4](https://github.com/samosvalishe/free-turn-proxy/commit/40796b48449e184d8eea31d822b6461f206cd815))
+
+## [1.1.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.0.3...v1.1.0) (2026-06-11)
+
+
+### Features
+
+* **turn:** фоллбэк по нескольким relay-адресам при allocate ([40000fd](https://github.com/samosvalishe/free-turn-proxy/commit/40000fde5d82023f8552e2a0255b6ca50324b8ed))
+
+
+### Bug Fixes
+
+* **dnsdial:** динамический фоллбэк на DoH при отказе UDP/53 после пробы ([f24c541](https://github.com/samosvalishe/free-turn-proxy/commit/f24c5416de91349fd6a0332cb4e4744da4ca95fc))
+* **install:** неинтерактивный apt, чтобы needrestart/debconf не вешали установку ([b518dc4](https://github.com/samosvalishe/free-turn-proxy/commit/b518dc40b23f34942d684cbb7422fef9ddda28b3))
+* **turndial:** детект блэкхола по ChannelBind, не CreatePermission refresh ([2534bbe](https://github.com/samosvalishe/free-turn-proxy/commit/2534bbe96ae22af9fc17c322b337aa37ae77f086))
+* **udprelay:** детект блэкхола permission по логу pion вместо трафик-эвристики ([106a485](https://github.com/samosvalishe/free-turn-proxy/commit/106a48533cfab863c09e08ff7cbac4868736e69e))
+
+## [1.0.3](https://github.com/samosvalishe/free-turn-proxy/compare/v1.0.2...v1.0.3) (2026-06-04)
+
+
+### Bug Fixes
+
+* bump go toolchain ([3cb39d4](https://github.com/samosvalishe/free-turn-proxy/commit/3cb39d40f6e630b638d0ce44398da7022ceb2353))
+* **captcha:** обновить captchaScriptVersion до 1.1.1348 ([1ff8dd9](https://github.com/samosvalishe/free-turn-proxy/commit/1ff8dd9cbaaa79858aaa4be68a404d89252480db))
+* **client:** сохранять client_id в доступный для записи каталог ([3bdc8e8](https://github.com/samosvalishe/free-turn-proxy/commit/3bdc8e815af871feeea53946964917eaa3a6c0ce))
+* **udprelay:** рециклить стрим при блэкхоле TURN permission ([a337bb0](https://github.com/samosvalishe/free-turn-proxy/commit/a337bb0a634bba6783891f2c085a31123353c496))
+* **vkauth:** фрагментировать ClientHello на control plane ([56da9fe](https://github.com/samosvalishe/free-turn-proxy/commit/56da9fecdc5603c14073cd8632338d0c0f1b27f5))
+
 ## [1.0.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.0.1...v1.0.2) (2026-06-01)
 
 

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.SingBoxRule
 import org.olcbox.app.data.model.TrafficSettings
@@ -796,6 +797,8 @@ private fun AppSettingsHubContent(
             SettingsGroupDivider()
             val xrayVer = remember { runCatching { xraybridge.Xraybridge.version() }.getOrNull()?.ifBlank { null } ?: "—" }
             val singboxVer = remember { runCatching { libbox.Libbox.version() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val vkturnVer = remember { runCatching { freeturn.Freeturn.version() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val olcrtcVer = remember { runCatching { mobile.Mobile.version() }.getOrNull()?.ifBlank { null } ?: "—" }
             SettingsGroupRow(
                 title = s.xrayVersion(xrayVer),
                 icon = Icons.Outlined.Tune,
@@ -805,6 +808,20 @@ private fun AppSettingsHubContent(
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.singboxVersion(singboxVer),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.olcrtcVersion(olcrtcVer),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.vkturnVersion(vkturnVer),
                 icon = Icons.Outlined.Tune,
                 enabled = true,
                 showChevron = false
@@ -3403,6 +3420,29 @@ private fun ApplicationBehaviorContent(
         // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
         // The selector code is preserved (unused) in [SubscriptionUserAgentSelector] below and can be
         // dropped back into this screen if it ever needs to be exposed again.
+
+        // App-wide engine for VLESS-like transports. Applies only when a server's own core is "Auto";
+        // an explicit per-server choice overrides it (xhttp/raw-Xray always force Xray regardless).
+        SettingsSectionLabel(s.globalEngineLabel)
+        Text(
+            text = s.globalEngineSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val engineOptions = listOf(
+                ProxyCore.Auto to s.globalEngineAuto,
+                ProxyCore.SingBox to "sing-box",
+                ProxyCore.Xray to "Xray",
+            )
+            engineOptions.forEach { (core, title) ->
+                FilterChip(
+                    selected = settings.globalProxyCore == core,
+                    onClick = { onChanged(settings.copy(globalProxyCore = core)) },
+                    label = { Text(title) }
+                )
+            }
+        }
 
         SettingsSectionLabel(s.language)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
