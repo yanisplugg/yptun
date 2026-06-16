@@ -629,10 +629,16 @@ object XrayConfig {
         // proxy-level chaining (proxySettings). proxySettings drops the exit's OWN transport, so an
         // xhttp exit was sending raw VLESS to the server, which replied with its HTTP web-fallback
         // ("unexpected response version. Expecting 0 but actually 72" = 'H'). dialerProxy keeps the
-        // exit's xhttp/ws/TLS intact and only routes its underlying socket through the base. Other
-        // detours (olcRTC [OLCRTC_TAG] / VK-TURN WireGuard [WG_BASE_TAG]) keep proxySettings, which
-        // already works for them — so this change is scoped strictly to the cascade exit.
-        val dialerProxyTag = if (detourTag == PROXY_BASE_TAG) detourTag else null
+        // exit's xhttp/ws/TLS intact and only routes its underlying socket through the base.
+        //
+        // The same proxySettings/xhttp breakage hits ANY detour, not just the cascade exit: a VK-TURN
+        // WireGuard chain proxy ([WG_BASE_TAG]) or an olcRTC Chain proxy ([OLCRTC_TAG]) that is xhttp
+        // also lost its transport under proxySettings ("vkturn cascade xhttp doesn't work"). So use
+        // dialerProxy whenever the profile carries an xhttp transport over a detour, in addition to the
+        // cascade-exit case. Non-xhttp profiles over WG/olcRTC keep proxySettings (unchanged, works).
+        val needsDialerProxy = detourTag != null &&
+            (detourTag == PROXY_BASE_TAG || profile.network == ProxyProfile.NETWORK_XHTTP)
+        val dialerProxyTag = if (needsDialerProxy) detourTag else null
         if (!isLocalSocks) {
             put("streamSettings", buildStreamSettings(
                 profile,
