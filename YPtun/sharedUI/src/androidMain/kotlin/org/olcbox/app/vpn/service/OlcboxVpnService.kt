@@ -178,6 +178,9 @@ class OlcboxVpnService : VpnService() {
     private var xray: XrayEngine? = null
     private var engineType: EngineType = EngineType.Stealth
     private var activeMtu: Int = TUN_MTU
+    // Snapshotted from the (suspend) traffic settings in [startMobile] so the non-suspend
+    // [writeTun2socksConfig] can decide whether to drop the bridge's IPv6 (strict "IPv4 only").
+    private var activeIpv4Only: Boolean = false
     private var activeProxyCore: ProxyCore = ProxyCore.SingBox
 
     private data class StartOptions(
@@ -740,7 +743,9 @@ class OlcboxVpnService : VpnService() {
         setErrorOnFailure: Boolean
     ): Boolean {
         engineType = location.engine
-        activeMtu = loadTrafficSettings().mtu
+        val trafficSettings = loadTrafficSettings()
+        activeMtu = trafficSettings.mtu
+        activeIpv4Only = trafficSettings.normalized().domainStrategy == "ipv4_only"
         showSpeedInNotif = loadAppBehavior().showSpeedInNotification
         return when (location.engine) {
             EngineType.Stealth -> startStealthCore(location, upstream, requestedGeneration, setErrorOnFailure)
@@ -1711,8 +1716,8 @@ class OlcboxVpnService : VpnService() {
         // surface a (server-side) IPv6 on a leak-check. The system TUN still routes ::/0 into the tunnel
         // (see establishSystemVpnTunnel), so the refused IPv6 is blackholed, never leaked to the iface.
         // prefer_ipv4/prefer_ipv6/ipv6_only keep dual-stack (the cores handle the family there).
-        val v4Only = loadTrafficSettings().normalized().domainStrategy == "ipv4_only"
-        val ipv6Line = if (v4Only) "# ipv6 disabled (IPv4 only)" else "ipv6: '$TUN_IPV6_ADDRESS'"
+        // [activeIpv4Only] is snapshotted in startMobile (loadTrafficSettings is suspend; this fn isn't).
+        val ipv6Line = if (activeIpv4Only) "# ipv6 disabled (IPv4 only)" else "ipv6: '$TUN_IPV6_ADDRESS'"
 
         file.writeText(
             """
