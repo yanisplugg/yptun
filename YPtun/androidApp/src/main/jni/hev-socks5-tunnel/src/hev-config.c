@@ -400,6 +400,14 @@ hev_config_parse_doc (yaml_document_t *doc)
     if (!root || YAML_MAPPING_NODE != root->type)
         return -1;
 
+    /* Reset address statics before (re)parsing: the lib runs in a long-lived process and is
+     * re-init'd on every reconnect, so a key ABSENT from the new config (e.g. `ipv6` omitted for
+     * "IPv4 only") must NOT inherit a stale value from a previous dual-stack config. Without this,
+     * hev_config_get_tunnel_ipv6_address() would still return the old address and IPv6 would not be
+     * dropped after switching to IPv4-only on a warm process. */
+    tun_ipv4_address[0] = '\0';
+    tun_ipv6_address[0] = '\0';
+
     for (pair = root->data.mapping.pairs.start;
          pair < root->data.mapping.pairs.top; pair++) {
         yaml_node_t *node;

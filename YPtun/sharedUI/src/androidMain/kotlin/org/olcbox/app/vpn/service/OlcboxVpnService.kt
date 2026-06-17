@@ -1704,6 +1704,16 @@ class OlcboxVpnService : VpnService() {
     private fun writeTun2socksConfig(): File {
         val file = File(filesDir, TUN2SOCKS_CONFIG_FILE_NAME)
 
+        // "IPv4 only" (global domain strategy): drop the tun's IPv6 address from the bridge config so
+        // hev-socks5-tunnel REFUSES every IPv6 session (no `tunnel.ipv6` ⇒ ipv6_enabled=0 in the native
+        // bridge). This makes "IPv4 only" truly DROP IPv6 for EVERY engine — including olcRTC(Stealth)
+        // and VK-TURN, which run no sing-box/Xray family enforcement and would otherwise carry IPv6 and
+        // surface a (server-side) IPv6 on a leak-check. The system TUN still routes ::/0 into the tunnel
+        // (see establishSystemVpnTunnel), so the refused IPv6 is blackholed, never leaked to the iface.
+        // prefer_ipv4/prefer_ipv6/ipv6_only keep dual-stack (the cores handle the family there).
+        val v4Only = loadTrafficSettings().normalized().domainStrategy == "ipv4_only"
+        val ipv6Line = if (v4Only) "# ipv6 disabled (IPv4 only)" else "ipv6: '$TUN_IPV6_ADDRESS'"
+
         file.writeText(
             """
             tunnel:
@@ -1711,7 +1721,7 @@ class OlcboxVpnService : VpnService() {
               mtu: $activeMtu
               multi-queue: false
               ipv4: $TUN_IPV4_ADDRESS
-              ipv6: '$TUN_IPV6_ADDRESS'
+              $ipv6Line
 
             socks5:
               address: ${socksConnectHost()}
