@@ -412,21 +412,26 @@ private fun EngineSelector(
     ) {
         SectionTitle(title = LocalStrings.current.engineSection, subtitle = engineSubtitle(selected))
 
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            options.forEachIndexed { index, engine ->
-                SegmentedButton(
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
-                    selected = selected == engine,
-                    onClick = { onSelected(engine) },
-                    enabled = enabled,
-                    label = {
-                        Text(
-                            text = engineLabel(engine),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                )
+        // Two rows of two (instead of all four on one line) so the engine names aren't cramped /
+        // ellipsised. Each chunk is its own SingleChoiceSegmentedButtonRow so the segmented styling
+        // (rounded outer ends per row) is preserved; the Column's spacing separates the two rows.
+        options.chunked(2).forEach { rowOptions ->
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                rowOptions.forEachIndexed { index, engine ->
+                    SegmentedButton(
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = rowOptions.size),
+                        selected = selected == engine,
+                        onClick = { onSelected(engine) },
+                        enabled = enabled,
+                        label = {
+                            Text(
+                                text = engineLabel(engine),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
+                }
             }
         }
     }
