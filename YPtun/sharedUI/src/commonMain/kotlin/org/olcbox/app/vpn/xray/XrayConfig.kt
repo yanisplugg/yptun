@@ -292,21 +292,13 @@ object XrayConfig {
             // catches raw IP literals, and the remote proxy is then free to pick AAAA → IPv6 leak on
             // 2ip.io). IPIfNonMatch + queryStrategy=UseIPv4 makes Xray resolve to the chosen family.
             val forceFamily = familyBlockRule != null
-            // prefer_ipv4 must ALSO resolve domains for routing (→ IPIfNonMatch). Otherwise (AsIs) the
-            // bare domain is handed to the EXIT proxy, whose server is then free to dial AAAA — so a
-            // domain:ru→DIRECT site (e.g. 2ip.ru) showed the real IPv4 (direct, resolved to A) but the
-            // tunnel's IPv6 (a sub-request that fell to the proxy and the server picked v6). Resolving
-            // to IPv4 client-side (queryStrategy=UseIPv4 for prefer_ipv4) makes the resolved v4 IP the
-            // destination sent to the proxy, so the exit can't pick v6 → no tunnel IPv6 on a leak check.
-            // No hard ::/0 block (familyBlockRule stays null) — prefer_ipv4 is softer than ipv4_only.
-            val resolveForRouting = forceFamily || traffic.domainStrategy == "prefer_ipv4"
             putJsonObject("routing") {
                 if (routingProfile != null) {
                     // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
                     // blocklist (item 5): the toggles run alongside the profile, not instead of it.
                     val base = XrayRouting.routingObject(routingProfile)
                     val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
-                    put("domainStrategy", if (resolveForRouting) JsonPrimitive("IPIfNonMatch") else baseStrategy)
+                    put("domainStrategy", if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy)
                     putJsonArray("rules") {
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
                         dnsOutRules.forEach { add(it) }
@@ -316,7 +308,7 @@ object XrayConfig {
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
-                    put("domainStrategy", if (resolveForRouting) "IPIfNonMatch" else "AsIs")
+                    put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
                         dnsOutRules.forEach { add(it) }
                         if (blockQuic) add(quicBlockRule)
