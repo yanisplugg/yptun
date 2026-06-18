@@ -11,6 +11,8 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -65,8 +67,16 @@ class OlcrtcRoomManager(
 
     /**
      * Starts [rooms] (capped at [maxRooms]) on consecutive loopback ports from [basePort], then the
-     * balancer on [listenHost]:[listenPort]. Returns true if at least one room is up and the balancer
-     * is listening. Rooms that fail to come up are skipped (logged), not fatal.
+     * balancer on [listenHost]:[listenPort].
+     *
+     * FAST CONNECT: returns as soon as the FIRST room is ready — the main one OR any extra, whichever
+     * connects first — and starts the balancer over just that room. The REMAINING rooms keep connecting
+     * on their own threads in the background and append their port to [backendPorts] (which is @Volatile
+     * and re-read per connection) as each comes up, so the pool grows without restarting the balancer.
+     * This avoids the old "wait for ALL rooms (up to readyTimeoutMs each) before connecting" stall.
+     *
+     * Returns true if at least one room came up and the balancer is listening. Rooms that fail to come
+     * up are skipped (logged), not fatal.
      */
     fun start(
         rooms: List<RoomSpec>,
@@ -78,11 +88,17 @@ class OlcrtcRoomManager(
         maxRooms: Int = 5,
         readyTimeoutMs: Int = 20_000,
     ): Boolean {
+        val specs = rooms.take(maxRooms)
+        if (specs.isEmpty()) {
+            log("multiroom: no room specs to start")
+            return false
+        }
         // Start every room IN PARALLEL: a room that can't connect must NOT block or break the others —
         // each blocks up to readyTimeoutMs, so sequential would stall the whole tunnel on one bad room.
-        // We then run with whatever came up (failures are skipped, logged).
         val ports = Collections.synchronizedList(mutableListOf<Int>())
-        val threads = rooms.take(maxRooms).mapIndexed { i, r ->
+        // Fires the instant ANY room is ready, so we can start the balancer without waiting for the rest.
+        val firstReady = CountDownLatch(1)
+        specs.forEachIndexed { i, r ->
             val port = basePort + i
             Thread {
                 try {
@@ -90,22 +106,34 @@ class OlcrtcRoomManager(
                         r.carrier, r.transport, r.room, r.clientId, r.keyHex,
                         port.toLong(), user, pass, readyTimeoutMs.toLong(),
                     )
+                    // Stopped while this room was still connecting → don't leave it dangling. stop() may
+                    // have already drained the Go registry (or skipped it, finding no handles yet), so a
+                    // late arrival must stop ITSELF or it leaks. The @Volatile `stopped` read is the gate.
+                    if (stopped) {
+                        runCatching { Mobile.stopRoom(h) }
+                        return@Thread
+                    }
                     synchronized(handles) { handles.add(h) }
-                    ports.add(port)
+                    synchronized(ports) {
+                        ports.add(port)
+                        backendPorts = ports.sorted() // publish: connectToLiveRoom re-reads this live
+                    }
                     log("multiroom: room ${i + 1} (${r.carrier}/${r.room}) ready on 127.0.0.1:$port")
+                    firstReady.countDown()
                 } catch (e: Exception) {
                     log("multiroom: room ${i + 1} (${r.carrier}/${r.room}) failed (skipped): ${e.message}")
                 }
-            }
+            }.apply { isDaemon = true }.start()
         }
-        threads.forEach { it.start() }
-        threads.forEach { it.join() }
-        if (ports.isEmpty()) {
-            log("multiroom: no rooms came up")
+
+        // Wait only for the FIRST room. Each startRoom is bounded by readyTimeoutMs, so a small scheduling
+        // grace on top guarantees that, if this await times out, every room has resolved and none came up.
+        val firstUp = firstReady.await((readyTimeoutMs + 2_000).toLong(), TimeUnit.MILLISECONDS)
+        if (!firstUp) {
+            log("multiroom: no rooms came up within ${readyTimeoutMs}ms")
             return false
         }
-        backendPorts = ports.toList().sorted()
-        log("multiroom: ${ports.size}/${rooms.take(maxRooms).size} room(s) up")
+        log("multiroom: first room up (${backendPorts.size} ready so far) — balancer up, rest connect in background")
         return startBalancer(listenHost, listenPort)
     }
 
