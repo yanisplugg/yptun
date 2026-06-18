@@ -226,6 +226,22 @@ data class LocationConfig(
         else -> ProxyCore.SingBox
     }
 
+    /**
+     * The VK-TURN exit artifact required by the chosen [VkTurnConfig.outbound] is present. The exit
+     * lives in [proxy] but in DIFFERENT fields per outbound, so a single `rawOutbound` check wrongly
+     * rejected the proxy/AmneziaWG exits (rawOutbound is only set for plain WireGuard) — that made a
+     * "Proxy (tcp) + bonding" VK-TURN location fail isStorable and VANISH on save.
+     */
+    private fun vkTurnExitPresent(): Boolean = when (vkturn?.outbound) {
+        // TCP proxy exit (vless/vmess/trojan/ss) dialled through the freeturn tcp listener — a normal
+        // ProxyProfile (server/uuid/…), NOT a rawOutbound blob.
+        VkTurnConfig.OUTBOUND_PROXY -> proxy?.isComplete() == true
+        // AmneziaWG exit keeps its wg-quick INI in awgConfig (not rawOutbound).
+        VkTurnConfig.OUTBOUND_AMNEZIAWG -> !proxy?.awgConfig.isNullOrBlank()
+        // Plain WireGuard exit: the sing-box outbound JSON in rawOutbound.
+        else -> !proxy?.rawOutbound.isNullOrBlank()
+    }
+
     /** True when this config has everything its [engine] needs to connect. */
     fun isComplete(): Boolean = when (engine) {
         // olcRTC needs a room id + key.
@@ -234,8 +250,8 @@ data class LocationConfig(
         EngineType.Standard -> proxy?.isComplete() == true
         // Chain needs the olcRTC stealth tunnel plus a valid main proxy. [proxy2] is optional.
         EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
-        // VK-TURN needs the freeturn link, the per-client VK call link and the WireGuard outbound.
-        EngineType.VkTurn -> vkturn?.isComplete() == true && !proxy?.rawOutbound.isNullOrBlank()
+        // VK-TURN needs the freeturn link, the per-client VK call link and the chosen exit artifact.
+        EngineType.VkTurn -> vkturn?.isComplete() == true && vkTurnExitPresent()
     }
 
     /**
@@ -244,7 +260,7 @@ data class LocationConfig(
      * link is filled in after import, so the location is kept (and shown) without it.
      */
     fun isStorable(): Boolean = when (engine) {
-        EngineType.VkTurn -> vkturn?.isStorable() == true && !proxy?.rawOutbound.isNullOrBlank()
+        EngineType.VkTurn -> vkturn?.isStorable() == true && vkTurnExitPresent()
         else -> isComplete()
     }
 
