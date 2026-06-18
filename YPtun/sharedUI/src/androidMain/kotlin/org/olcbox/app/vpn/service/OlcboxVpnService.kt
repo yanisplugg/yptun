@@ -815,7 +815,18 @@ class OlcboxVpnService : VpnService() {
                         pass = socksPassword,
                     )
                 }
-                if (!ok) throw IllegalStateException("Multi-room: no rooms came up")
+                if (!ok) {
+                    // Don't leave the user offline if multi-room can't bring a room/balancer up — clean it
+                    // up and fall back to the proven single-room path (the main room via the singleton).
+                    addLog("Multi-room failed to start — falling back to single room")
+                    olcrtcRoomManager?.let { runCatching { it.stop() } }
+                    olcrtcRoomManager = null
+                    Mobile.startWithTransport(
+                        config.bypassProvider, config.transport, config.id, deviceId, config.key,
+                        targetSocksPort.toLong(), socksUsername, socksPassword,
+                    )
+                    Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+                }
             } else {
                 addLog(
                     "Starting olcRTC provider=${config.bypassProvider}, " +
