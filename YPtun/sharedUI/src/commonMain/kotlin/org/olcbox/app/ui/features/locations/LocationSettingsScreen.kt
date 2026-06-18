@@ -4,12 +4,16 @@ import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -54,6 +58,7 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +66,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -395,7 +402,6 @@ private fun SectionTitle(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EngineSelector(
     selected: EngineType,
@@ -414,47 +420,81 @@ private fun EngineSelector(
     ) {
         SectionTitle(title = LocalStrings.current.engineSection, subtitle = engineSubtitle(selected))
 
-        // Four engines as ONE 2×2 block — two segmented rows with NO gap between them, so it reads as a
-        // single control. Only the block's OUTER corners are rounded (top row rounds the top, bottom row
-        // the bottom; inner edges square), so the rows visually merge into one rounded panel. Same
-        // SegmentedButton styling, just no longer cramped onto a single line.
-        val corner = 20.dp
-        val rows = options.chunked(2)
-        Column(modifier = Modifier.fillMaxWidth()) {
-            rows.forEachIndexed { rowIndex, rowOptions ->
-                val topRow = rowIndex == 0
-                val bottomRow = rowIndex == rows.lastIndex
-                // Pull every row after the first up by one border width so its top outline overlaps the
-                // previous row's bottom outline into a SINGLE divider line — no seam/gap, one solid block.
-                val rowModifier = Modifier
-                    .fillMaxWidth()
-                    .then(if (topRow) Modifier else Modifier.offset(y = (-1).dp))
-                SingleChoiceSegmentedButtonRow(modifier = rowModifier) {
-                    rowOptions.forEachIndexed { index, engine ->
-                        val leftCol = index == 0
-                        val rightCol = index == rowOptions.lastIndex
-                        SegmentedButton(
-                            shape = RoundedCornerShape(
-                                topStart = if (topRow && leftCol) corner else 0.dp,
-                                topEnd = if (topRow && rightCol) corner else 0.dp,
-                                bottomStart = if (bottomRow && leftCol) corner else 0.dp,
-                                bottomEnd = if (bottomRow && rightCol) corner else 0.dp,
-                            ),
+        // ONE cohesive 2×2 block: a single rounded outline drawn ONCE around all four engines, with thin
+        // inner dividers between the cells — no per-row pills, no offset hack, no seam/gap. Two rows of
+        // two equal-width cells; the row height tracks the tallest cell (IntrinsicSize.Min) so the
+        // vertical divider spans it. clip() rounds the selected-cell highlight to the block's corners.
+        val shape = RoundedCornerShape(20.dp)
+        val outline = MaterialTheme.colorScheme.outline
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .border(BorderStroke(1.dp, outline), shape)
+        ) {
+            options.chunked(2).forEachIndexed { rowIndex, rowOptions ->
+                if (rowIndex > 0) HorizontalDivider(color = outline)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min)
+                ) {
+                    rowOptions.forEachIndexed { colIndex, engine ->
+                        if (colIndex > 0) VerticalDivider(color = outline)
+                        EngineCell(
+                            label = engineLabel(engine),
                             selected = selected == engine,
-                            onClick = { onSelected(engine) },
                             enabled = enabled,
-                            label = {
-                                Text(
-                                    text = engineLabel(engine),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            onClick = { onSelected(engine) },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/** A single segment of the 2×2 engine block: fills its half, highlights (filled + check) when selected. */
+@Composable
+private fun EngineCell(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+    val content = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        selected -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Row(
+        modifier = modifier
+            .fillMaxHeight()
+            .background(background)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 14.dp, horizontal = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (selected) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = null,
+                tint = content,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            text = label,
+            color = content,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelLarge
+        )
     }
 }
 
