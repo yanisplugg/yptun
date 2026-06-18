@@ -42,6 +42,11 @@ class OlcrtcRoomManager(
         val keyHex: String,
     )
 
+    private companion object {
+        // Larger than the 8 KiB default so the byte pump does fewer syscalls at high throughput.
+        const val COPY_BUFFER = 64 * 1024
+    }
+
     private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val handles = mutableListOf<Long>()
     private var serverSocket: ServerSocket? = null
@@ -134,11 +139,11 @@ class OlcrtcRoomManager(
                 liveSockets.add(upstream)
                 val u = upstream
                 val a = launch {
-                    runCatching { downstream.getInputStream().copyTo(u.getOutputStream()) }
+                    runCatching { downstream.getInputStream().copyTo(u.getOutputStream(), COPY_BUFFER) }
                     runCatching { u.shutdownOutput() }
                 }
                 val b = launch {
-                    runCatching { u.getInputStream().copyTo(downstream.getOutputStream()) }
+                    runCatching { u.getInputStream().copyTo(downstream.getOutputStream(), COPY_BUFFER) }
                     runCatching { downstream.shutdownOutput() }
                 }
                 a.join(); b.join()
