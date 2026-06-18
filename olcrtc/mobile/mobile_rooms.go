@@ -15,6 +15,10 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/transport/vp8channel"
 )
 
+// roomReconnectBackoff is the pause before an independent room re-runs its client after an unexpected
+// exit (connection lost). Keeps a dropped room from hot-looping while it self-heals.
+const roomReconnectBackoff = 3 * time.Second
+
 //nolint:gochecknoglobals // handle registry for the multi-room instances (parallels the singleton state).
 var (
 	roomsMu    sync.Mutex
@@ -61,30 +65,43 @@ func StartRoom(
 	readyCh := make(chan struct{})
 	var readyOnce sync.Once
 
+	clientCfg := client.Config{
+		Transport: transportName,
+		Carrier:   carrierName,
+		RoomURL:   buildRoomURL(carrierName, roomID),
+		KeyHex:    keyHex,
+		DeviceID:  clientID,
+		LocalAddr: socksListenAddr(cfg.socksListenHost, socksPort),
+		DNSServer: cfg.dnsServer,
+		SOCKSUser: socksUser,
+		SOCKSPass: socksPass,
+		TransportOptions: vp8channel.Options{
+			FPS:       cfg.vp8FPS,
+			BatchSize: cfg.vp8BatchSize,
+		},
+		Liveness: livenessConfig(cfg),
+	}
+
 	go func() {
 		defer cancelFunc()
-		err := runClientWithReady(
-			ctx,
-			client.Config{
-				Transport: transportName,
-				Carrier:   carrierName,
-				RoomURL:   buildRoomURL(carrierName, roomID),
-				KeyHex:    keyHex,
-				DeviceID:  clientID,
-				LocalAddr: socksListenAddr(cfg.socksListenHost, socksPort),
-				DNSServer: cfg.dnsServer,
-				SOCKSUser: socksUser,
-				SOCKSPass: socksPass,
-				TransportOptions: vp8channel.Options{
-					FPS:       cfg.vp8FPS,
-					BatchSize: cfg.vp8BatchSize,
-				},
-				Liveness: livenessConfig(cfg),
-			},
-			func() { readyOnce.Do(func() { close(readyCh) }) },
-		)
+		// Self-healing: re-run the client whenever it returns (connection lost) until the room is
+		// StopRoom'd. Without this an unexpected drop would leave a DEAD room in the registry that the
+		// balancer keeps dialling → constant disconnects. The singleton Start gets this via the Kotlin
+		// watchdog; an independent room reconnects ITSELF here. SOCKS listener stays on the same port,
+		// readyOnce keeps the first-ready signal one-shot across reconnects.
+		var lastErr error
+		for ctx.Err() == nil {
+			lastErr = runClientWithReady(ctx, clientCfg, func() { readyOnce.Do(func() { close(readyCh) }) })
+			if ctx.Err() != nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(roomReconnectBackoff):
+			}
+		}
 		roomsMu.Lock()
-		inst.errRun = err
+		inst.errRun = lastErr
 		roomsMu.Unlock()
 		close(inst.done)
 	}()

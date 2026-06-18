@@ -2,29 +2,35 @@ package org.olcbox.app.vpn.service
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import mobile.Mobile
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Multi-room olcRTC manager: raises up to N INDEPENDENT olcRTC room instances (different room/provider
  * each) via the core's handle-based [Mobile.startRoom], then fronts them with a tiny round-robin TCP
- * balancer on [listenPort] (the port the TUN bridge dials). Each NEW connection is forwarded to the
- * next room's SOCKS listener, so parallel flows (speed-test / torrent / browser) spread across rooms
- * and the bandwidth aggregates — without splitting a single flow (no reordering).
+ * balancer on [start]'s listenPort (the port the TUN bridge dials). Each NEW connection is forwarded to
+ * the next LIVE room's SOCKS listener, so parallel flows (speed-test / torrent / browser) spread across
+ * rooms and the bandwidth aggregates — without splitting a single flow (no reordering).
  *
  * Security: every room SOCKS listener AND the balancer live on 127.0.0.1 ONLY and are reached with the
- * same [user]/[pass] the bridge already uses, so no other local app can ride the tunnel. The balancer
- * is a transparent byte pump — the SOCKS5 handshake (incl. auth) passes through to the room verbatim,
- * which is why the bridge, balancer and rooms all share one credential pair.
+ * same user/pass the bridge already uses, so no other local app can ride the tunnel. The balancer is a
+ * transparent byte pump — the SOCKS5 handshake (incl. auth) passes through to the room verbatim, which
+ * is why the bridge, balancer and rooms all share one credential pair.
+ *
+ * Lifecycle: ALL coroutines run on a private [managerScope] and ALL live sockets are tracked, so [stop]
+ * deterministically closes the listener, every in-flight forwarded connection AND every room — releasing
+ * the bridge port immediately (otherwise the next connect, even a different vless engine, hits "SOCKS
+ * port still in use").
  */
 class OlcrtcRoomManager(
-    private val scope: CoroutineScope,
     private val log: (String) -> Unit,
 ) {
     /** One olcRTC room to raise. */
@@ -36,21 +42,26 @@ class OlcrtcRoomManager(
         val keyHex: String,
     )
 
+    private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val handles = mutableListOf<Long>()
     private var serverSocket: ServerSocket? = null
-    private var acceptJob: Job? = null
+    // Every socket the manager owns (the accepted downstream + the upstream to a room) — closed on stop
+    // so blocking copy loops unblock and the OS releases everything at once.
+    private val liveSockets: MutableSet<Socket> = Collections.synchronizedSet(mutableSetOf())
 
     @Volatile
     private var backendPorts: List<Int> = emptyList()
+
+    @Volatile
+    private var stopped = false
     private val rr = AtomicInteger(0)
 
-    /** Number of rooms that actually came up. */
     val roomsUp: Int get() = handles.size
 
     /**
      * Starts [rooms] (capped at [maxRooms]) on consecutive loopback ports from [basePort], then the
      * balancer on [listenHost]:[listenPort]. Returns true if at least one room is up and the balancer
-     * is listening. Best-effort: rooms that fail to come up are skipped (logged), not fatal.
+     * is listening. Rooms that fail to come up are skipped (logged), not fatal.
      */
     fun start(
         rooms: List<RoomSpec>,
@@ -91,21 +102,15 @@ class OlcrtcRoomManager(
             ss.reuseAddress = true
             ss.bind(InetSocketAddress(host, port))
             serverSocket = ss
-            acceptJob = scope.launch(Dispatchers.IO) {
+            managerScope.launch {
                 log("multiroom: round-robin balancer on $host:$port over ${backendPorts.size} room(s)")
-                while (isActive) {
+                while (isActive && !stopped) {
                     val downstream = try {
                         ss.accept()
                     } catch (_: Exception) {
                         break
                     }
-                    val ports = backendPorts
-                    if (ports.isEmpty()) {
-                        runCatching { downstream.close() }
-                        continue
-                    }
-                    val idx = (rr.getAndIncrement() % ports.size + ports.size) % ports.size
-                    forward(downstream, host, ports[idx])
+                    forward(downstream, host)
                 }
             }
             true
@@ -115,39 +120,69 @@ class OlcrtcRoomManager(
         }
     }
 
-    /** Pipes one accepted connection to a room's SOCKS, both directions, then closes both ends. */
-    private fun forward(downstream: Socket, host: String, backendPort: Int) {
-        scope.launch(Dispatchers.IO) {
-            val upstream = Socket()
+    /** Pipes one accepted connection to a LIVE room's SOCKS (trying each room once), both ways. */
+    private fun forward(downstream: Socket, host: String) {
+        liveSockets.add(downstream)
+        managerScope.launch {
+            var upstream: Socket? = null
             try {
-                upstream.connect(InetSocketAddress(host, backendPort), 5_000)
-                val a = launch(Dispatchers.IO) {
-                    runCatching { downstream.getInputStream().copyTo(upstream.getOutputStream()) }
-                    runCatching { upstream.shutdownOutput() }
+                upstream = connectToLiveRoom(host)
+                if (upstream == null) {
+                    log("multiroom: no live room to forward to")
+                    return@launch
                 }
-                val b = launch(Dispatchers.IO) {
-                    runCatching { upstream.getInputStream().copyTo(downstream.getOutputStream()) }
+                liveSockets.add(upstream)
+                val u = upstream
+                val a = launch {
+                    runCatching { downstream.getInputStream().copyTo(u.getOutputStream()) }
+                    runCatching { u.shutdownOutput() }
+                }
+                val b = launch {
+                    runCatching { u.getInputStream().copyTo(downstream.getOutputStream()) }
                     runCatching { downstream.shutdownOutput() }
                 }
                 a.join(); b.join()
             } catch (_: Exception) {
-                // connect/copy failure — drop the connection (the app retries).
+                // drop the connection; the app retries
             } finally {
-                runCatching { upstream.close() }
+                upstream?.let { liveSockets.remove(it); runCatching { it.close() } }
+                liveSockets.remove(downstream)
                 runCatching { downstream.close() }
             }
         }
     }
 
-    /** Stops the balancer and every room instance. Safe to call multiple times. */
+    /** Round-robins across [backendPorts], returning the first room we can actually connect to. */
+    private fun connectToLiveRoom(host: String): Socket? {
+        val ports = backendPorts
+        if (ports.isEmpty()) return null
+        repeat(ports.size) {
+            val idx = (rr.getAndIncrement() % ports.size + ports.size) % ports.size
+            val s = Socket()
+            try {
+                s.connect(InetSocketAddress(host, ports[idx]), 4_000)
+                return s
+            } catch (_: Exception) {
+                runCatching { s.close() }
+            }
+        }
+        return null
+    }
+
+    /** Stops the balancer, every in-flight connection and every room. Idempotent; releases the port. */
     fun stop() {
+        stopped = true
+        backendPorts = emptyList()
         runCatching { serverSocket?.close() }
         serverSocket = null
-        acceptJob?.cancel()
-        acceptJob = null
-        backendPorts = emptyList()
+        // Close every tracked socket so blocking copy loops unblock immediately (coroutine cancel does
+        // NOT interrupt blocking java.net IO).
+        synchronized(liveSockets) {
+            liveSockets.toList().forEach { runCatching { it.close() } }
+            liveSockets.clear()
+        }
+        runCatching { managerScope.cancel() }
         if (handles.isNotEmpty()) {
-            // StopAllRooms cancels every handle in one core call (also catches any we lost track of).
             runCatching { Mobile.stopAllRooms() }
             handles.clear()
         }

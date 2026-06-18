@@ -803,7 +803,7 @@ class OlcboxVpnService : VpnService() {
                     )
                 }
                 addLog("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + round-robin balancer")
-                val mgr = OlcrtcRoomManager(scope, ::addLog)
+                val mgr = OlcrtcRoomManager(::addLog)
                 olcrtcRoomManager = mgr
                 val ok = withContext(Dispatchers.IO) {
                     mgr.start(
