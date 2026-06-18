@@ -450,6 +450,17 @@ private fun MultiRoomSection(
                         onValueSelected = { v -> onChange(index) { it.copy(provider = v, transport = "") } },
                         valueLabel = { it }
                     )
+                    // Per-room transport: each room may run a DIFFERENT transport than the main one (the
+                    // data model + multiRoomSpecs already honour ExtraRoom.transport). Only offered when
+                    // the provider actually supports more than one, mirroring the main transport row.
+                    if (LocationConfig.supportedTransportsForProvider(prov).size > 1) {
+                        TransportPicker(
+                            selectedProvider = prov,
+                            selectedTransport = room.transport,
+                            enabled = !saving,
+                            onTransportSelected = { v -> onChange(index) { it.copy(transport = v) } }
+                        )
+                    }
                     SettingsTextField(
                         value = room.room,
                         onValueChange = { v -> onChange(index) { it.copy(room = v) } },
