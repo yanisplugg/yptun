@@ -623,7 +623,18 @@ class LocationViewModel(
         }
         val profile = proxyFromAnyLink(trimmed)
         if (profile != null && profile.isComplete()) {
-            editingConfig = editingConfig.copy(proxy2 = profile)
+            // For Standard/Chain the MAIN proxy editor is hidden (it normally comes from an import), so
+            // this "additional proxy" is the ONLY visible proxy field. If there's no valid main proxy
+            // yet, the user clearly means THIS to be their proxy → assign it as the main (otherwise the
+            // location can't save: Chain/Standard isFormValid requires a complete main proxy). When a
+            // main proxy already exists, it's a genuine SECOND/cascade hop (proxy2).
+            val isChainOrStd = editingConfig.engine == EngineType.Standard || editingConfig.engine == EngineType.Chain
+            if (isChainOrStd && editingConfig.proxy?.isComplete() != true) {
+                editingConfig = editingConfig.copy(proxy = profile)
+                editingProxyLink = trimmed
+            } else {
+                editingConfig = editingConfig.copy(proxy2 = profile)
+            }
             proxy2Error = null
         } else {
             editingConfig = editingConfig.copy(proxy2 = null)
