@@ -129,6 +129,10 @@ class OlcboxVpnService : VpnService() {
     /** Display name of the currently-connecting/connected location, shown in the notification. */
     @Volatile private var connectedLocationName = ""
     @Volatile private var showSpeedInNotif = false
+    // "connected/total rooms" in the notification (olcRTC multi-room only). [activeMultiRoomTotal] is
+    // the number of rooms configured for the current connection (0 = not multi-room).
+    @Volatile private var showRoomsInNotif = false
+    @Volatile private var activeMultiRoomTotal = 0
 
     private var startupJob: Job? = null
     private var watchdogJob: Job? = null
@@ -368,15 +372,17 @@ class OlcboxVpnService : VpnService() {
         scope.launch {
             applicationContext.vpnPrefDataStore.data
                 .map { prefs ->
-                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map false
+                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map false to false
                     runCatching {
-                        Json.decodeFromString(AppBehaviorSettings.serializer(), raw).showSpeedInNotification
-                    }.getOrDefault(false)
+                        val s = Json.decodeFromString(AppBehaviorSettings.serializer(), raw)
+                        s.showSpeedInNotification to s.showRoomsInNotification
+                    }.getOrDefault(false to false)
                 }
                 .distinctUntilChanged()
-                .collect { enabled ->
-                    showSpeedInNotif = enabled
-                    if (!enabled && OlcboxVpnState.status.value is VpnStatus.Connected) {
+                .collect { (speed, rooms) ->
+                    showSpeedInNotif = speed
+                    showRoomsInNotif = rooms
+                    if (OlcboxVpnState.status.value is VpnStatus.Connected) {
                         updateNotification(connectedNotificationText())
                     }
                 }
@@ -757,7 +763,10 @@ class OlcboxVpnService : VpnService() {
         activeMtu = trafficSettings.mtu
         activeDropBridgeIpv6 = trafficSettings.normalized().domainStrategy
             .let { it == "ipv4_only" || it == "prefer_ipv4" }
-        showSpeedInNotif = loadAppBehavior().showSpeedInNotification
+        loadAppBehavior().let {
+            showSpeedInNotif = it.showSpeedInNotification
+            showRoomsInNotif = it.showRoomsInNotification
+        }
         return when (location.engine) {
             EngineType.Stealth -> startStealthCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.Standard,
@@ -805,6 +814,7 @@ class OlcboxVpnService : VpnService() {
                 addLog("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + round-robin balancer")
                 val mgr = OlcrtcRoomManager(::addLog)
                 olcrtcRoomManager = mgr
+                activeMultiRoomTotal = specs.size
                 val ok = withContext(Dispatchers.IO) {
                     mgr.start(
                         rooms = specs,
@@ -821,6 +831,7 @@ class OlcboxVpnService : VpnService() {
                     addLog("Multi-room failed to start — falling back to single room")
                     olcrtcRoomManager?.let { runCatching { it.stop() } }
                     olcrtcRoomManager = null
+                    activeMultiRoomTotal = 0
                     Mobile.startWithTransport(
                         config.bypassProvider, config.transport, config.id, deviceId, config.key,
                         targetSocksPort.toLong(), socksUsername, socksPassword,
@@ -1845,11 +1856,17 @@ class OlcboxVpnService : VpnService() {
             var prev: Tun2SocksStats? = null
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
                 val cur = readTun2SocksStats()
+                // Re-evaluate the base text each tick when showing the rooms count so "up/total" updates
+                // live as rooms (re)connect; otherwise reuse the last status (cheap).
+                val base = if (showRoomsInNotif) connectedNotificationText()
+                else lastNotificationStatus.ifBlank { ns.notifConnected }
                 if (showSpeedInNotif && cur != null && prev != null) {
                     val secs = (SPEED_INTERVAL_MS / 1000.0).coerceAtLeast(0.5)
                     val down = ((cur.rxBytes - prev.rxBytes).coerceAtLeast(0L) / secs).toLong()
                     val up = ((cur.txBytes - prev.txBytes).coerceAtLeast(0L) / secs).toLong()
-                    updateNotification(lastNotificationStatus.ifBlank { ns.notifConnected }, speedLine(down, up))
+                    updateNotification(base, speedLine(down, up))
+                } else if (showRoomsInNotif) {
+                    updateNotification(base)
                 }
                 prev = cur
                 delay(SPEED_INTERVAL_MS)
@@ -2301,6 +2318,7 @@ class OlcboxVpnService : VpnService() {
             runCatching { it.stop() }
             olcrtcRoomManager = null
         }
+        activeMultiRoomTotal = 0
         stopMobile()
         waitForSocksPortReleased(socksPort)
     }
@@ -2821,8 +2839,16 @@ class OlcboxVpnService : VpnService() {
      * Connected-state notification body: the active server's display name.
      * Falls back to the generic "Connected · VPN/Proxy" line if the name is empty.
      */
-    private fun connectedNotificationText(): String =
-        connectedLocationName.ifBlank { ns.notifConnectedMode(activeModeLabel()) }
+    private fun connectedNotificationText(): String {
+        val base = connectedLocationName.ifBlank { ns.notifConnectedMode(activeModeLabel()) }
+        if (showRoomsInNotif && olcrtcRoomManager != null && activeMultiRoomTotal > 0 &&
+            (engineType == EngineType.Stealth || engineType == EngineType.Chain)
+        ) {
+            val up = runCatching { Mobile.roomsRunning() }.getOrDefault(0)
+            return "$base · $up/$activeMultiRoomTotal комнат"
+        }
+        return base
+    }
 
     private class AuthenticatedSocksProxy(
         private val listenPort: Int,

@@ -78,26 +78,34 @@ class OlcrtcRoomManager(
         maxRooms: Int = 5,
         readyTimeoutMs: Int = 20_000,
     ): Boolean {
-        val ports = mutableListOf<Int>()
-        rooms.take(maxRooms).forEachIndexed { i, r ->
+        // Start every room IN PARALLEL: a room that can't connect must NOT block or break the others —
+        // each blocks up to readyTimeoutMs, so sequential would stall the whole tunnel on one bad room.
+        // We then run with whatever came up (failures are skipped, logged).
+        val ports = Collections.synchronizedList(mutableListOf<Int>())
+        val threads = rooms.take(maxRooms).mapIndexed { i, r ->
             val port = basePort + i
-            try {
-                val h = Mobile.startRoom(
-                    r.carrier, r.transport, r.room, r.clientId, r.keyHex,
-                    port.toLong(), user, pass, readyTimeoutMs.toLong(),
-                )
-                handles.add(h)
-                ports.add(port)
-                log("multiroom: room ${i + 1} (${r.carrier}/${r.room}) ready on 127.0.0.1:$port")
-            } catch (e: Exception) {
-                log("multiroom: room ${i + 1} (${r.carrier}/${r.room}) failed: ${e.message}")
+            Thread {
+                try {
+                    val h = Mobile.startRoom(
+                        r.carrier, r.transport, r.room, r.clientId, r.keyHex,
+                        port.toLong(), user, pass, readyTimeoutMs.toLong(),
+                    )
+                    synchronized(handles) { handles.add(h) }
+                    ports.add(port)
+                    log("multiroom: room ${i + 1} (${r.carrier}/${r.room}) ready on 127.0.0.1:$port")
+                } catch (e: Exception) {
+                    log("multiroom: room ${i + 1} (${r.carrier}/${r.room}) failed (skipped): ${e.message}")
+                }
             }
         }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
         if (ports.isEmpty()) {
             log("multiroom: no rooms came up")
             return false
         }
-        backendPorts = ports
+        backendPorts = ports.toList().sorted()
+        log("multiroom: ${ports.size}/${rooms.take(maxRooms).size} room(s) up")
         return startBalancer(listenHost, listenPort)
     }
 

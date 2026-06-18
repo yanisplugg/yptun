@@ -3411,6 +3411,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
         RoutingToggleRow(
+            title = "Комнаты в уведомлении",
+            subtitle = "Показывать «подключено/всего» комнат — только olcRTC и только при мультикомнате",
+            checked = settings.showRoomsInNotification
+        ) { onChanged(settings.copy(showRoomsInNotification = it)) }
+
+        RoutingToggleRow(
             title = s.showSubscriptionExpiryTitle,
             subtitle = s.showSubscriptionExpirySubtitle,
             checked = settings.showSubscriptionExpiry

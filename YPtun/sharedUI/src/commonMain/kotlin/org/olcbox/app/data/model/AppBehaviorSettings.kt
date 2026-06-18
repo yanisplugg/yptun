@@ -45,6 +45,8 @@ data class AppBehaviorSettings(
     val confirmBeforeDelete: Boolean = true,
     /** Show live download/upload speed in the foreground notification. */
     val showSpeedInNotification: Boolean = false,
+    /** Show "connected/total rooms" in the notification (olcRTC multi-room only). */
+    val showRoomsInNotification: Boolean = false,
     /** Hidden "Experimental" section unlocked by tapping the connection timer 5×. */
     val experimentalUnlocked: Boolean = false,
     /** Yandex auth cookie header for Telemost (e.g. "Session_id=…; yandexuid=…"). */
