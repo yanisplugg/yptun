@@ -8,7 +8,7 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// Profile — настраиваемые KCP-параметры. Обе стороны туннеля должны совпадать.
+// Profile - настраиваемые KCP-параметры. Обе стороны туннеля должны совпадать.
 type Profile struct {
 	NoDelay    int
 	Interval   int
@@ -26,7 +26,7 @@ type FEC struct {
 	Parity int
 }
 
-// DefaultProfile — исторический balanced-профиль, поставляемый с прокси.
+// DefaultProfile - исторический balanced-профиль, поставляемый с прокси.
 func DefaultProfile() Profile {
 	return Profile{
 		NoDelay:    1,
@@ -80,7 +80,7 @@ func (d *DtlsPacketConn) SetWriteDeadline(t time.Time) error {
 }
 
 // NewKCPOverDTLS создаёт KCP-сессию поверх DTLS-соединения.
-// isServer: true — серверная сторона (listener), false — клиентская (dialer).
+// isServer: true - серверная сторона (listener), false - клиентская (dialer).
 func NewKCPOverDTLS(dtlsConn net.Conn, isServer bool, profile Profile, fec FEC) (*kcp.UDPSession, error) {
 	pc := NewDtlsPacketConn(dtlsConn)
 

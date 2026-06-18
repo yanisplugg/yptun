@@ -7,13 +7,13 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
 )
 
-// VKCredentials — пара app_id/app_secret для получения анонимных токенов.
+// VKCredentials - пара app_id/app_secret для получения анонимных токенов.
 type VKCredentials struct {
 	ClientID     string
 	ClientSecret string
 }
 
-// TurnCredentials — разрешённые TURN-реквизиты для группы потоков.
+// TurnCredentials - разрешённые TURN-реквизиты для группы потоков.
 type TurnCredentials struct {
 	Username    string
 	Password    string
@@ -22,9 +22,9 @@ type TurnCredentials struct {
 	Link        string
 }
 
-// DefaultCredentials — публичные app_id/secret VK SDK, извлечённые из
+// DefaultCredentials - публичные app_id/secret VK SDK, извлечённые из
 // официальных VK-клиентов (web/mobile/video). Это НЕ приватные креды
-// пользователя — VK раздаёт их в JS-бандле страницы калла. Клиент перебирает
+// пользователя - VK раздаёт их в JS-бандле страницы калла. Клиент перебирает
 // по порядку при ошибках авторизации.
 //
 //nolint:gosec // public VK SDK app credentials, not user secrets
@@ -48,7 +48,7 @@ const (
 // Sentinel-ошибки auth-потока. Строковые формы стабильны (используются в логах).
 //
 // ErrCaptchaWaitRequired и ErrFatalCaptchaNoStreams также матчатся через
-// provider.ErrBackoffActive / provider.ErrFatalNoStreams — pipeline проверяет
+// provider.ErrBackoffActive / provider.ErrFatalNoStreams - pipeline проверяет
 // generic-sentinels, vkauth-внутренний код может проверять и старые.
 var (
 	ErrCaptchaWaitRequired   = errors.Join(provider.ErrBackoffActive, errors.New("CAPTCHA_WAIT_REQUIRED"))

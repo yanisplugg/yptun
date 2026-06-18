@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// fakePC blocks forever on ReadFrom and accepts writes — enough to keep the
+// fakePC blocks forever on ReadFrom and accepts writes - enough to keep the
 // DTLS handshake stuck so we can exercise the gate/cancel paths.
 type fakePC struct{}
 

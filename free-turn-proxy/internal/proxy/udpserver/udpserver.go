@@ -65,7 +65,7 @@ func Handle(ctx context.Context, logger logx.Logger, conn net.Conn, connectAddr 
 }
 
 // copyOne читает из src и пишет в dst до отмены ctx или ошибки любой стороны.
-// Каждый read/write сбрасывает idle timeout — зависший конец закрывается, а не висит.
+// Каждый read/write сбрасывает idle timeout - зависший конец закрывается, а не висит.
 func copyOne(ctx context.Context, logger logx.Logger, src, dst net.Conn, count func(int)) {
 	buf := make([]byte, udpRelayBufSize)
 	for {

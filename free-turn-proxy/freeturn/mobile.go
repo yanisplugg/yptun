@@ -78,7 +78,7 @@ func SetLogWriter(w LogWriter) {
 
 // freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
 // Bump it whenever the vendored core is updated; surfaced in the app's settings.
-const freeturnVersion = "1.2.0"
+const freeturnVersion = "1.3.2"
 
 // Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
 func Version() string { return freeturnVersion }
@@ -221,6 +221,9 @@ func run(ctx context.Context, cfg *config.Client, links []string) error {
 			Host:         cfg.TURN.Host,
 			Port:         cfg.TURN.Port,
 			TransportUDP: cfg.TURN.TransportUDP,
+			// 1.3.0: the obf wire layer became a Codec interface (none | rtpopus | rtpopus2), so the
+			// profile is threaded alongside the key (NewClientObf(profile, key) inside the relay).
+			Profile:      string(cfg.Obf.Profile),
 			ObfKey:       cfg.Obf.Key,
 			GetCreds:     tcpfwd.GetCredsFunc(getCreds),
 			KCPProfile:   cfg.KCP.Profile,
@@ -238,6 +241,8 @@ func run(ctx context.Context, cfg *config.Client, links []string) error {
 		Host:         cfg.TURN.Host,
 		Port:         cfg.TURN.Port,
 		TransportUDP: cfg.TURN.TransportUDP,
+		// 1.3.0 obf Codec profile (none | rtpopus | rtpopus2); threaded with the key.
+		Profile:      string(cfg.Obf.Profile),
 		ObfKey:       cfg.Obf.Key,
 		GetCreds:     udprelay.GetCredsFunc(getCreds),
 		ClientID:     cfg.ClientID,

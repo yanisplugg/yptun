@@ -53,9 +53,10 @@ func TestIsAuthError(t *testing.T) {
 func TestStoreCacheGrouping(t *testing.T) {
 	t.Parallel()
 
+	// streamID 1-based (как в pipeline): потоки 1..10 -> cache 0, 11..20 -> cache 1.
 	s := NewStore(10)
-	if s.CacheID(0) != 0 || s.CacheID(9) != 0 || s.CacheID(10) != 1 {
-		t.Fatalf("unexpected cache grouping: 0→%d 9→%d 10→%d", s.CacheID(0), s.CacheID(9), s.CacheID(10))
+	if s.CacheID(1) != 0 || s.CacheID(10) != 0 || s.CacheID(11) != 1 {
+		t.Fatalf("unexpected cache grouping: 1->%d 10->%d 11->%d", s.CacheID(1), s.CacheID(10), s.CacheID(11))
 	}
 	a := s.Get(3)
 	b := s.Get(7)
@@ -65,6 +66,18 @@ func TestStoreCacheGrouping(t *testing.T) {
 	}
 	if a == c {
 		t.Error("streams 3 and 13 should not share cache (groups 0 vs 1)")
+	}
+
+	// streams-per-cred == n: все потоки 1..n делят один кэш - поток n не должен
+	// переваливать в отдельный bucket (регрессия на -n 7 -streams-per-cred 7).
+	s7 := NewStore(7)
+	for id := 1; id <= 7; id++ {
+		if s7.CacheID(id) != 0 {
+			t.Errorf("streams-per-cred=7: stream %d -> cache %d, want 0", id, s7.CacheID(id))
+		}
+	}
+	if s7.CacheID(8) != 1 {
+		t.Errorf("streams-per-cred=7: stream 8 -> cache %d, want 1", s7.CacheID(8))
 	}
 }
 

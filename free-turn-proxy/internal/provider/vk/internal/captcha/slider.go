@@ -45,7 +45,7 @@ func (s *captchaSession) solveSliderCaptcha(
 ) (string, error) {
 	values := [][2]string{
 		{"session_token", sessionToken},
-		{"domain", "vk.com"},
+		{"domain", "vk.ru"},
 		{"adFp", ""},
 		{"access_token", ""},
 		{"captcha_settings", settings},
@@ -81,7 +81,7 @@ func (s *captchaSession) solveSliderCaptcha(
 	}
 	if _, err := s.captchaRequest("captchaNotRobot.componentDone", [][2]string{
 		{"session_token", sessionToken},
-		{"domain", "vk.com"},
+		{"domain", "vk.ru"},
 		{"adFp", ""},
 		{"access_token", ""},
 		{"browser_fp", browserFP},

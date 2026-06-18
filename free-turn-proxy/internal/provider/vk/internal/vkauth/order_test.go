@@ -30,7 +30,7 @@ func TestOrderAddrs(t *testing.T) {
 		t.Errorf("orderAddrs mutated input: %v", addrs)
 	}
 
-	// Один адрес — копия из одного элемента.
+	// Один адрес - копия из одного элемента.
 	if got := orderAddrs([]string{"x"}, 5); !slices.Equal(got, []string{"x"}) {
 		t.Errorf("single addr: got %v", got)
 	}

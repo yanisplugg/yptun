@@ -15,12 +15,11 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/common"
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 	"github.com/samosvalishe/free-turn-proxy/internal/stats"
-	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
 )
 
 // DTLSLoop поддерживает единственное DTLS-подключение для streamID, перезапуская
 // его при сбое с backoff 10-30s (пропускается при активном provider-backoff,
-// если предыдущая ошибка — дедлайн). connchan получает свежую половину
+// если предыдущая ошибка - дедлайн). connchan получает свежую половину
 // AsyncPacketPipe на каждой попытке; okchan (non-nil только для потока 1)
 // сигнализирует о первом успешном handshake.
 func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, inboundChan <-chan *Packet, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) {
@@ -237,7 +236,7 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	relayConn := stream.Relay
 	deps.log().Debugf("[STREAM %d] TURN server IP: %s", streamID, stream.ServerUDPAddr.IP)
 
-	// Инкремент до ResetErrors — конкурентные наблюдатели HandleAuthError видят
+	// Инкремент до ResetErrors - конкурентные наблюдатели HandleAuthError видят
 	// поток подключённым до сброса счётчика ошибок.
 	deps.ConnectedStreams.Add(1)
 	deps.Auth.ResetErrors(streamID)
@@ -262,7 +261,7 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 		}
 	})
 	var internalPipeAddr atomic.Value
-	obfConn, obfErr := common.NewClientObf(params.ObfKey)
+	obfConn, obfErr := common.NewClientObf(params.Profile, params.ObfKey)
 	if obfErr != nil {
 		deps.log().Errorf("[STREAM %d] OBF init failed: %v", streamID, obfErr)
 		turncancel()
@@ -271,13 +270,13 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 
 	const maxPayload = 1600
 
-	// PermDead закрывается при блэкхоле data-path (см. turndial/permwatch.go) —
+	// PermDead закрывается при блэкхоле data-path (см. turndial/permwatch.go) -
 	// отменяем turnctx, TURNLoop делает свежий allocate.
 	wg.Go(func() {
 		select {
 		case <-turnctx.Done():
 		case <-stream.PermDead:
-			deps.log().Warnf("[STREAM %d] TURN channel-bind умер — рецикл allocation", streamID)
+			deps.log().Warnf("[STREAM %d] TURN channel-bind умер - рецикл allocation", streamID)
 			turncancel()
 		}
 	})
@@ -288,8 +287,8 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 		// дописал заголовок+tag без копии payload.
 		var buf, readSlot []byte
 		if obfConn != nil {
-			buf = make([]byte, rtpopus.MaxWire(maxPayload))
-			readSlot = buf[rtpopus.HeaderLen : rtpopus.HeaderLen+maxPayload]
+			buf = make([]byte, obfConn.MaxWire(maxPayload))
+			readSlot = buf[obfConn.HeaderLen() : obfConn.HeaderLen()+maxPayload]
 		} else {
 			buf = make([]byte, maxPayload)
 			readSlot = buf
@@ -336,7 +335,7 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 		defer turncancel()
 		readBufLen := maxPayload
 		if obfConn != nil {
-			readBufLen = rtpopus.MaxWire(maxPayload)
+			readBufLen = obfConn.MaxWire(maxPayload)
 		}
 		buf := make([]byte, readBufLen)
 		for {

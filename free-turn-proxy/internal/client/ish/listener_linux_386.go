@@ -46,10 +46,10 @@ func (l *listener) Accept() (net.Conn, error) {
 		addrlen := uintptr(128)
 
 		// i386 сетевые syscall'ы мультиплексируются через socketcall (102).
-		// SYS_ACCEPT — subcall 5.
+		// SYS_ACCEPT - subcall 5.
 		args := [3]uintptr{uintptr(l.fd), uintptr(unsafe.Pointer(&addr[0])), uintptr(unsafe.Pointer(&addrlen))}
 
-		// Syscall6 — чтобы хватило регистров аргументов на этой платформе.
+		// Syscall6 - чтобы хватило регистров аргументов на этой платформе.
 		r1, _, errno := syscall.Syscall6(102, 5, uintptr(unsafe.Pointer(&args)), 0, 0, 0, 0)
 		if errno != 0 {
 			if errno == syscall.EINTR {
@@ -63,7 +63,7 @@ func (l *listener) Accept() (net.Conn, error) {
 		_ = syscall.SetsockoptInt(nfd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 256*1024)
 		_ = syscall.SetsockoptInt(nfd, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 256*1024)
 
-		// избегаем net.FileConn — она регистрирует fd в Go epoll poller'е, что в
+		// избегаем net.FileConn - она регистрирует fd в Go epoll poller'е, что в
 		// iSH стабильно падает с EEXIST. Возвращаем кастомный blocking net.Conn.
 		conn := &ishConn{fd: nfd}
 		return conn, nil

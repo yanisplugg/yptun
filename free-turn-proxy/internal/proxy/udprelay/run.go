@@ -1,6 +1,6 @@
 // Package udprelay реализует UDP-режим прокси: терминирует DTLS от локального
 // пира (WireGuard) и ретранслирует пакеты через per-stream TURN-аллокацию
-// обратно к удалённому пиру. Run — точка входа; владеет локальным listener,
+// обратно к удалённому пиру. Run - точка входа; владеет локальным listener,
 // fan-in входящего dispatch и per-stream DTLS/TURN циклами.
 package udprelay
 
@@ -21,7 +21,7 @@ import (
 // GetCredsFunc реэкспортирован из common, чтобы вызывающие не выходили за пределы импортов пакета.
 type GetCredsFunc = common.GetCredsFunc
 
-// AuthHandler — подмножество provider.Provider, необходимое пакету.
+// AuthHandler - подмножество provider.Provider, необходимое пакету.
 // Определено как локальный интерфейс, чтобы тесты могли подменять fake без
 // импорта реализации провайдера. Sentinel-ошибки auth-флоу проверяются через
 // provider.ErrXxx.
@@ -32,24 +32,25 @@ type AuthHandler interface {
 	BackoffUntilUnix() int64
 }
 
-// Params — per-stream конфигурация TURN/wrap, общая для DTLS и TURN циклов.
+// Params - per-stream конфигурация TURN/wrap, общая для DTLS и TURN циклов.
 type Params struct {
 	Host         string
 	Port         string
 	TransportUDP bool
+	Profile      string
 	ObfKey       []byte
 	GetCreds     GetCredsFunc
 	ClientID     string
 }
 
-// streamStartBarrier — максимум, который стримы 2..N ждут прогрева кэша
+// streamStartBarrier - максимум, который стримы 2..N ждут прогрева кэша
 // credentials стримом 1 перед стартом. Защита от вечного стопора, если
 // стрим 1 не поднимается.
 const streamStartBarrier = 20 * time.Second
 
 // ErrFatal возвращается из Run, когда поток встречает условие, требующее
 // завершения всего приложения (см. provider.ErrFatalNoStreams). Вызывающий
-// должен проверить через errors.Is и вызвать os.Exit сам — udprelay не
+// должен проверить через errors.Is и вызвать os.Exit сам - udprelay не
 // вмешивается в хост-процесс.
 var ErrFatal = errors.New("udprelay: fatal error")
 
@@ -62,7 +63,7 @@ type Deps struct {
 	Log              logx.Logger
 	ActiveLocalPeer  *atomic.Value
 	ConnectedStreams *atomic.Int32
-	// fatalCh — внутренний сигнальный канал; устанавливается Run, пишется
+	// fatalCh - внутренний сигнальный канал; устанавливается Run, пишется
 	// TURNLoop, читается Run для проброса фатальной ошибки наверх.
 	fatalCh chan error
 }
@@ -74,12 +75,12 @@ func (d *Deps) log() logx.Logger {
 	return d.Log
 }
 
-// Run — точка входа UDP-режима. Биндит listenAddr, распределяет входящие пакеты
+// Run - точка входа UDP-режима. Биндит listenAddr, распределяет входящие пакеты
 // в общую очередь и запускает numStreams пар (DTLSLoop, TURNLoop).
 // connectedStreams принадлежит вызывающему (provider может читать через свой
 // StreamsAlive-аналог) и инкрементируется/декрементируется в oneTURN.
 // Возвращается после выхода всех потоков (т.е. при отмене ctx).
-// При фатальной provider-ошибке возвращает ErrFatal — вызывающий делает
+// При фатальной provider-ошибке возвращает ErrFatal - вызывающий делает
 // os.Exit без вмешательства udprelay в хост-процесс.
 func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, logger logx.Logger, connectedStreams *atomic.Int32, params *Params, peer *net.UDPAddr, listenAddr string, numStreams int) error {
 	listenConn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp", listenAddr)
@@ -124,7 +125,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 	// Остальные стримы ждут этот сигнал (или ctx/safety-timeout), чтобы не бить
 	// по VK API одновременно: стрим 1 прогревает кэш credentials
 	// (streams-per-cred), после чего 2..N переиспользуют тёплый кэш вместо N
-	// параллельных запросов к VK — это снимает thundering herd на старте
+	// параллельных запросов к VK - это снимает thundering herd на старте
 	// (частая причина rate-limit/captcha при одновременном подъёме всех стримов).
 	okchan := make(chan struct{}, 1)
 	{
@@ -137,7 +138,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 		})
 	}
 
-	// Барьер: ждём первый успешный стрим, отмену ctx, либо safety-timeout —
+	// Барьер: ждём первый успешный стрим, отмену ctx, либо safety-timeout -
 	// если стрим 1 не поднимается, не стопорим остальные навсегда (liveness).
 	select {
 	case <-okchan:

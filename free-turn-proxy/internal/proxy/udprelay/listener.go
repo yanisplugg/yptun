@@ -9,8 +9,8 @@ import (
 
 const inboundQueueCap = 2000
 
-// Packet — пулированная UDP-датаграмма, передаваемая из listener'а в per-stream
-// DTLS-воркер. N — заполненный префикс Data.
+// Packet - пулированная UDP-датаграмма, передаваемая из listener'а в per-stream
+// DTLS-воркер. N - заполненный префикс Data.
 type Packet struct {
 	Data []byte
 	N    int
@@ -24,7 +24,7 @@ var packetPool = sync.Pool{
 
 // runListener читает пакеты из listenConn, обновляет кэш active-peer
 // и публикует каждый пакет в inboundChan. При переполнении канала пакет
-// отбрасывается — цикл чтения остаётся wait-free.
+// отбрасывается - цикл чтения остаётся wait-free.
 func runListener(ctx context.Context, listenConn net.PacketConn, activeLocalPeer *atomic.Value, inboundChan chan<- *Packet) {
 	// Pointer-кэш последнего виденного адреса local peer. Позволяет избежать
 	// per-packet аллокации addr.String() на горячем WG ingest пути:

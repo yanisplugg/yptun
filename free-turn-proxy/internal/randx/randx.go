@@ -1,4 +1,4 @@
-// Package randx — тонкая обёртка над crypto/rand с API в стиле math/rand.
+// Package randx - тонкая обёртка над crypto/rand с API в стиле math/rand.
 // Используется там, где gosec G404 бьёт по math/rand: антифингерпринт-jitter,
 // случайные задержки, выбор имён/паттернов. CSPRNG здесь не критичен по
 // производительности, зато снимает шум линтера и убирает PRNG-предсказуемость.
@@ -22,7 +22,7 @@ func IntN(n int) int {
 	return int(v.Int64())
 }
 
-// Intn — алиас IntN для совместимости с math/rand.
+// Intn - алиас IntN для совместимости с math/rand.
 func Intn(n int) int { return IntN(n) }
 
 // Float64 возвращает число из [0.0, 1.0) с 53 битами мантиссы.

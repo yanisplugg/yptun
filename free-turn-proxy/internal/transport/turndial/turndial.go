@@ -17,6 +17,7 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/turn/v5"
 	"github.com/samosvalishe/free-turn-proxy/internal/netconn"
+	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 )
 
 // Config конфигурирует один вызов Open.
@@ -25,17 +26,17 @@ type Config struct {
 	HostOverride string
 	// PortOverride, если непустой, заменяет port из lookup credentials.
 	PortOverride string
-	// TransportUDP=true — dial TURN по UDP; иначе по TCP через STUNConn.
+	// TransportUDP=true - dial TURN по UDP; иначе по TCP через STUNConn.
 	TransportUDP bool
-	// DialTimeout ограничивает TCP dial. Ноль → 5s.
+	// DialTimeout ограничивает TCP dial. Ноль -> 5s.
 	DialTimeout time.Duration
 }
 
-// Stream — активная TURN-аллокация с зависимостями. Close разрушает в обратном порядке.
+// Stream - активная TURN-аллокация с зависимостями. Close разрушает в обратном порядке.
 type Stream struct {
-	// Relay — выделенный relay PacketConn из turn.Client.Allocate.
+	// Relay - выделенный relay PacketConn из turn.Client.Allocate.
 	Relay net.PacketConn
-	// ServerUDPAddr — резолвнутый UDP-адрес TURN-сервера (host:port).
+	// ServerUDPAddr - резолвнутый UDP-адрес TURN-сервера (host:port).
 	ServerUDPAddr *net.UDPAddr
 	// PermDead закрывается при стойком провале ChannelBind refresh (relay
 	// блэкхолит data-path) - вызывающий рециклит allocation. См. permwatch.go.
@@ -52,8 +53,8 @@ func (s *Stream) Close() error {
 	return s.close()
 }
 
-// Open подключается к TURN, создаёт turn.Client и выделяет relay. rawAddr —
-// host:port из lookup credentials; user/pass — долгосрочные TURN-реквизиты.
+// Open подключается к TURN, создаёт turn.Client и выделяет relay. rawAddr -
+// host:port из lookup credentials; user/pass - долгосрочные TURN-реквизиты.
 func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAddr string) (*Stream, error) {
 	urlhost, urlport, err := net.SplitHostPort(rawAddr)
 	if err != nil {
@@ -96,7 +97,9 @@ func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAdd
 		if derr != nil {
 			return nil, fmt.Errorf("dial TURN (tcp): %w", derr)
 		}
-		wrapped := &netconn.SplitFirstWriteConn{Conn: c, SplitAt: 6, Delay: 20 * time.Millisecond}
+		// Рез внутри STUN magic cookie (байты 4-7) рвёт DPI-матч на cookie.
+		// Offset рандомен в [5,7] - убирает статический фингерпринт фикс-offset.
+		wrapped := &netconn.SplitFirstWriteConn{Conn: c, SplitAt: 5 + randx.Intn(3), Delay: 20 * time.Millisecond}
 		turnConn = turn.NewSTUNConn(wrapped)
 		closeConn = c.Close
 	}
@@ -108,7 +111,7 @@ func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAdd
 		addrFamily = turn.RequestedAddressFamilyIPv6
 	}
 
-	// Standalone CreatePermission refresh VK реджектит 400 — глушим (24h).
+	// Standalone CreatePermission refresh VK реджектит 400 - глушим (24h).
 	// Permission держится живым через ChannelBind refresh (RFC 8656 §11);
 	// блэкхол ловим по провалу этого байнда (см. permwatch.go).
 	permDead := make(chan struct{})

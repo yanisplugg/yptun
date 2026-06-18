@@ -1,6 +1,6 @@
 // Package bondserver реализует серверную сторону bonded VLESS lane:
 // одно backend TCP-соединение, мультиплексированное по N smux-потокам с общим
-// ConnID. Wire-формат фреймов — internal/wire/bondframe; пакет соединяет
+// ConnID. Wire-формат фреймов - internal/wire/bondframe; пакет соединяет
 // copy-loop backend TCP ↔ lanes и реестр per-ConnID.
 package bondserver
 
@@ -17,7 +17,7 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// laneStream — подмножество *smux.Stream, нужное serverLane. Определено как
+// laneStream - подмножество *smux.Stream, нужное serverLane. Определено как
 // интерфейс, чтобы юнит-тесты могли подменять in-memory pipe без смоделированной
 // smux-сессии.
 type laneStream interface {
@@ -26,7 +26,7 @@ type laneStream interface {
 	SetDeadline(time.Time) error
 }
 
-// Deps — зависимости хост-процесса для bond-сервера.
+// Deps - зависимости хост-процесса для bond-сервера.
 type Deps struct {
 	Log logx.Logger
 }
@@ -283,8 +283,8 @@ func (c *serverConn) copyBackendToBond(backendConn net.Conn) {
 	for {
 		n, err := backendConn.Read(buf)
 		if n > 0 {
-			// writeToNextLane — синхронная запись (WriteFrame возвращается до
-			// переключения lane), поэтому buf[:n] передаётся напрямую — аналог bondclient.
+			// writeToNextLane - синхронная запись (WriteFrame возвращается до
+			// переключения lane), поэтому buf[:n] передаётся напрямую - аналог bondclient.
 			if writeErr := c.writeToNextLane(seq, buf[:n], &laneIdx); writeErr != nil {
 				c.deps.log().Errorf("[bond %d] lane write data error: %v", c.id, writeErr)
 				return

@@ -19,7 +19,7 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 
 // Dialer конфигурирует DTLS-handshake клиента.
 type Dialer struct {
-	// HandshakeTimeout ограничивает контекст handshake. Ноль — без таймаута.
+	// HandshakeTimeout ограничивает контекст handshake. Ноль - без таймаута.
 	HandshakeTimeout time.Duration
 	// HandshakeSem, если non-nil, ограничивает параллельные handshake
 	// (Dial блокируется до появления слота или отмены ctx).
@@ -31,7 +31,7 @@ type Dialer struct {
 // Self-signed сертификат генерируется заново на каждый handshake: каждая
 // TURN-сессия и каждый реконнект получают уникальный fingerprint, чтобы не
 // коррелировать N параллельных стримов с одного IP как ботный трафик
-// (DTLS здесь — для обфускации, не аутентификации; см. doc.go).
+// (DTLS здесь - для обфускации, не аутентификации; см. doc.go).
 func (d *Dialer) Dial(ctx context.Context, pc net.PacketConn, peer *net.UDPAddr) (*dtls.Conn, error) {
 	certificate, err := GenerateSelfSignedCert()
 	if err != nil {

@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.3.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.3.1...v1.3.2) (2026-06-17)
+
+
+### Bug Fixes
+
+* **dnsdial:** вернуть простую UDP-пробу auto до auto-пробы реального хоста ([7d1ae10](https://github.com/samosvalishe/free-turn-proxy/commit/7d1ae10a473dcd030a2e9b3261a559038fda8bbd))
+
+## [1.3.1](https://github.com/samosvalishe/free-turn-proxy/compare/v1.3.0...v1.3.1) (2026-06-17)
+
+
+### Bug Fixes
+
+* **dnsdial:** не вешать старт auto на DoH-пробу ([1ec4fd4](https://github.com/samosvalishe/free-turn-proxy/commit/1ec4fd463dbdd2312ccfdd2caf1e9b5e4dc98c0c))
+
+## [1.3.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.2.0...v1.3.0) (2026-06-17)
+
+
+### Features
+
+* **dnsdial:** auto-проба реального хоста с DoH recovery ([1ec2b26](https://github.com/samosvalishe/free-turn-proxy/commit/1ec2b2610a40b29bcef52f3ebe71928d186897c9))
+* **netconn:** анти-DPI мульти-сплит ClientHello по SNI ([cc40510](https://github.com/samosvalishe/free-turn-proxy/commit/cc405100ab97f03b21521ea17b5daf78aef94116))
+* **vkauth:** флаг -browser и профиль Firefox ([69a68bb](https://github.com/samosvalishe/free-turn-proxy/commit/69a68bbc3189e296d274ea7dcee3629507189e03))
+* **wire:** профиль rtpopus2 и интерфейс Codec ([f8e840c](https://github.com/samosvalishe/free-turn-proxy/commit/f8e840ccdf9762b1582cbd2c3b33a5326738138a))
+
+
+### Bug Fixes
+
+* **vkauth:** группировка кэша по 1-based streamID ([745539d](https://github.com/samosvalishe/free-turn-proxy/commit/745539dc114c79a2a46c33fb776c5d16ae961d9b))
+* миграция на ru домен ([4084cce](https://github.com/samosvalishe/free-turn-proxy/commit/4084cce0911cf3a00a4bd03206d5c3e0721c16b6))
+
 ## [1.2.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.1.1...v1.2.0) (2026-06-11)
 
 

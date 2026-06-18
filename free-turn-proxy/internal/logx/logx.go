@@ -1,11 +1,11 @@
-// Package logx — минимальный уровневый логгер поверх stdlib log.
+// Package logx - минимальный уровневый логгер поверх stdlib log.
 // Вызывающий получает Logger и зовёт Debugf/Infof/Warnf/Errorf;
 // Debugf управляется debug-флагом, остальные уровни всегда пишут.
 package logx
 
 import "log"
 
-// Logger — интерфейс уровневого логирования.
+// Logger - интерфейс уровневого логирования.
 // Debugf гейтится debug-флагом конструктора; остальные уровни печатают всегда.
 type Logger interface {
 	Debugf(format string, v ...any)
@@ -22,7 +22,7 @@ type stdLogger struct {
 	debug bool
 }
 
-// New возвращает Logger поверх stdlib log. При debug=false Debugf — no-op.
+// New возвращает Logger поверх stdlib log. При debug=false Debugf - no-op.
 func New(debug bool) Logger {
 	return &stdLogger{debug: debug}
 }

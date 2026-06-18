@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 
 // Package rtpopus реализует AEAD-фрейминг с мимикрией под RTP/opus (один
-// из планируемых wire-профилей обфускации в internal/wire/). Цель — обход
+// из планируемых wire-профилей обфускации в internal/wire/). Цель - обход
 // VK TURN content-filter.
 //
 // Назначение: обфускация, а не безопасность. DTLS уже обеспечивает
 // конфиденциальность и целостность внутреннего канала. Этот слой существует,
-// чтобы трафик выглядел как SRTP — VK content-filter его не дропает;
+// чтобы трафик выглядел как SRTP - VK content-filter его не дропает;
 // сам по себе не является защитой от активного противника.
 //
 // Wire-формат:
@@ -25,7 +25,7 @@
 // совпадает с MSB SSRC (direction bit). counter стартует с random uint64.
 // AAD = первые 24 байта (RTP header || nonce).
 //
-// Wire-формат заморожен — требуется побитовая совместимость с задеплоенными пирами.
+// Wire-формат заморожен - требуется побитовая совместимость с задеплоенными пирами.
 package rtpopus
 
 import (
@@ -46,7 +46,7 @@ const (
 	nonceLen  = 12
 	tagLen    = 16
 	headerLen = rtpHdrLen + nonceLen // 24
-	// HeaderLen — offset, с которого начинается plaintext в wire-буфере.
+	// HeaderLen - offset, с которого начинается plaintext в wire-буфере.
 	// Экспонирован для in-place API (WrapInPlace/UnwrapInPlace): вызывающий
 	// читает payload сразу в buf[HeaderLen:], избегая копии.
 	HeaderLen  = headerLen
@@ -126,6 +126,12 @@ func NewConnFromState(state *State, isServer bool) (*Conn, error) {
 	return c, nil
 }
 
+// HeaderLen, Overhead, MaxWire - методы под интерфейс wire.Codec; значения
+// совпадают с пакетными HeaderLen/Overhead/MaxWire.
+func (*Conn) HeaderLen() int    { return headerLen }
+func (*Conn) Overhead() int     { return Overhead }
+func (*Conn) MaxWire(n int) int { return Overhead + n }
+
 // WrapInto кодирует payload в dst (минимум MaxWire(len(payload)) байт)
 // и возвращает число записанных wire-байт.
 func (c *Conn) WrapInto(dst, payload []byte) (int, error) {
@@ -138,7 +144,7 @@ func (c *Conn) WrapInto(dst, payload []byte) (int, error) {
 
 // WrapInPlace кодирует plaintext, который вызывающий уже разместил в
 // buf[HeaderLen:HeaderLen+plainLen], дописывая RTP-заголовок+nonce перед ним
-// и AEAD-tag после — без копии payload. buf должен вмещать MaxWire(plainLen).
+// и AEAD-tag после - без копии payload. buf должен вмещать MaxWire(plainLen).
 // Возвращает число записанных wire-байт.
 func (c *Conn) WrapInPlace(buf []byte, plainLen int) (int, error) {
 	wireLen := Overhead + plainLen
@@ -183,7 +189,7 @@ func (c *Conn) Unwrap(wire, dst []byte) (int, error) {
 }
 
 // UnwrapInPlace декодирует wire-пакет на месте и возвращает subslice plaintext
-// внутри wire (без копии в отдельный буфер). AEAD открывает in-place — wire
+// внутри wire (без копии в отдельный буфер). AEAD открывает in-place - wire
 // после вызова считается потреблённым, результат валиден до следующей записи в wire.
 func (c *Conn) UnwrapInPlace(wire []byte) ([]byte, error) {
 	if len(wire) < Overhead {

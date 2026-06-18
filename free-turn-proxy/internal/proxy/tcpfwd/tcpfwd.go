@@ -15,18 +15,19 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/stats"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcptun"
-	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
+	"github.com/samosvalishe/free-turn-proxy/internal/wire"
 	"github.com/xtaci/smux"
 )
 
 // GetCredsFunc реэкспортирован из common, чтобы вызывающие не выходили за пределы импортов пакета.
 type GetCredsFunc = common.GetCredsFunc
 
-// Params — конфигурация TURN/obf для пула.
+// Params - конфигурация TURN/obf для пула.
 type Params struct {
 	Host         string
 	Port         string
 	TransportUDP bool
+	Profile      string
 	ObfKey       []byte
 	GetCreds     GetCredsFunc
 	KCPProfile   kcptun.Profile
@@ -36,10 +37,10 @@ type Params struct {
 
 // BondHandler распределяет одно принятое TCP-соединение по всем активным сессиям пула.
 // Nil отключает bond-режим (будет round-robin).
-// Реализация — internal/proxy/bondclient.
+// Реализация - internal/proxy/bondclient.
 type BondHandler func(ctx context.Context, tcpConn net.Conn, connID uint64, lanes []*PooledSession)
 
-// Deps — зависимости хост-процесса для TCP-forward цикла.
+// Deps - зависимости хост-процесса для TCP-forward цикла.
 type Deps struct {
 	DTLSDialer  *dtlsdial.Dialer
 	Log         logx.Logger
@@ -53,19 +54,24 @@ func (d *Deps) log() logx.Logger {
 	return d.Log
 }
 
-// Run — точка входа TCP-forward режима. Запускает numSessions maintainer-горутин, ждёт
+// Run - точка входа TCP-forward режима. Запускает numSessions maintainer-горутин, ждёт
 // первого подключения, затем принимает локальные TCP-соединения и форвардит
 // каждое как smux-поток (round-robin) или bonded по всем активным сессиям.
 func Run(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenAddr string, numSessions int, useBond bool) error {
 	pool := &SessionPool{}
 
 	var wgMaint sync.WaitGroup
-	for id := range numSessions {
+	for i := range numSessions {
+		// streamID 1-based - единый базис с udprelay, чтобы vkauth.Store.CacheID
+		// группировал потоки одинаково в обоих режимах. Стаггер от нуля: первая
+		// сессия стартует без задержки.
+		id := i + 1
+		stagger := time.Duration(i) * 300 * time.Millisecond
 		wgMaint.Go(func() {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Duration(id) * 300 * time.Millisecond):
+			case <-time.After(stagger):
 			}
 			maintainSession(ctx, deps, params, peer, id, pool)
 		})
@@ -243,12 +249,12 @@ func createSmuxSession(ctx context.Context, deps *Deps, params *Params, peer *ne
 	deps.log().Debugf("[session %d] TURN server IP: %s", id, stream.ServerUDPAddr.IP)
 	deps.log().Debugf("relayed-address=%s", relayConn.LocalAddr().String())
 
-	obfConn, err := common.NewClientObf(params.ObfKey)
+	obfConn, err := common.NewClientObf(params.Profile, params.ObfKey)
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("obf init: %w", err)
 	}
-	dtlsPC := &rtpopus.RelayPacketConn{Relay: relayConn, Peer: peer, Conn: obfConn}
+	dtlsPC := &wire.RelayPacketConn{Relay: relayConn, Peer: peer, Codec: obfConn}
 	dtlsConn, err := deps.DTLSDialer.Dial(ctx, dtlsPC, peer)
 	if err != nil {
 		cleanup()

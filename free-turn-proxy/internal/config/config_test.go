@@ -12,7 +12,7 @@ import (
 func validClientArgs() []string {
 	return []string{
 		"-peer", "1.2.3.4:5000",
-		"-link", "https://vk.com/call/join/abcdef",
+		"-link", "https://vk.ru/call/join/abcdef",
 	}
 }
 
@@ -56,7 +56,7 @@ func TestParseClient_Defaults(t *testing.T) {
 func TestParseClient_VKLinkStrip(t *testing.T) {
 	args := []string{
 		"-peer", "1.2.3.4:5000",
-		"-link", "https://vk.com/call/join/CODE123?foo=bar",
+		"-link", "https://vk.ru/call/join/CODE123?foo=bar",
 	}
 	c, err := ParseClient(args, io.Discard)
 	if err != nil {
@@ -68,7 +68,7 @@ func TestParseClient_VKLinkStrip(t *testing.T) {
 }
 
 func TestParseClient_MissingPeer(t *testing.T) {
-	_, err := ParseClient([]string{"-link", "https://vk.com/call/join/X"}, io.Discard)
+	_, err := ParseClient([]string{"-link", "https://vk.ru/call/join/X"}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "peer") {
 		t.Errorf("expected peer error, got %v", err)
 	}

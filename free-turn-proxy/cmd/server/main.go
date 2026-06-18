@@ -21,6 +21,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/tcpfwdserver"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/udpserver"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
+	"github.com/samosvalishe/free-turn-proxy/internal/wire"
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
 )
 
@@ -39,7 +40,7 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
 		}
-		// логгер ещё не создан — единственный fatal до его инициализации.
+		// логгер ещё не создан - единственный fatal до его инициализации.
 		log.Fatalf("%v", err)
 	}
 	logger := logx.New(cfg.Log.Debug)
@@ -98,7 +99,7 @@ func main() {
 	var listener net.Listener
 	if cfg.Obf.Enabled() {
 		logger.Infof("OBF profile=%s: listener only accepts clients with matching -obf-profile and -obf-key", cfg.Obf.Profile)
-		obfListener, oerr := rtpopus.Listen(addr, cfg.Obf.Key)
+		obfListener, oerr := wire.Listen(string(cfg.Obf.Profile), addr, cfg.Obf.Key)
 		if oerr != nil {
 			logger.Errorf("obf listen: %v", oerr)
 			os.Exit(1)
@@ -179,7 +180,7 @@ func handleAccepted(ctx context.Context, logger logx.Logger, registry *bondserve
 	}
 	logger.Debugf("Handshake done")
 
-	// Client ID читается всегда (клиент всегда шлёт его первой app-record) —
+	// Client ID читается всегда (клиент всегда шлёт его первой app-record) -
 	// wire-контракт симметричен. -clients-file включает только enforce по allowlist.
 	clientID, err := clientsdb.ReadClientID(dtlsConn)
 	if err != nil {

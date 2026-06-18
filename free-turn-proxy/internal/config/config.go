@@ -52,13 +52,14 @@ type TURNOpts struct {
 type ObfProfile string
 
 const (
-	ObfProfileNone    ObfProfile = "none"    // обфускация отключена
-	ObfProfileRTPOpus ObfProfile = "rtpopus" // RTP/opus + ChaCha20-Poly1305 AEAD
+	ObfProfileNone     ObfProfile = "none"     // обфускация отключена
+	ObfProfileRTPOpus  ObfProfile = "rtpopus"  // RTP/opus + ChaCha20-Poly1305 AEAD
+	ObfProfileRTPOpus2 ObfProfile = "rtpopus2" // rtpopus + RTP header extension (мимикрия под современный WebRTC)
 )
 
 // ObfOpts - опции обфускации TURN-payload.
 type ObfOpts struct {
-	Profile ObfProfile // -obf-profile: none (default) | rtpopus
+	Profile ObfProfile // -obf-profile: none (default) | rtpopus | rtpopus2
 	Key     []byte     // -obf-key (декодированный): 32-байтовый общий ключ; nil если Profile=none
 	GenKey  bool       // -gen-obf-key: напечатать новый ключ и выйти
 }
@@ -74,11 +75,22 @@ type ProxyOpts struct {
 	Peer    string    // -peer: адрес серверного прокси, куда дозванивается клиент (только клиент)
 }
 
+// Browser выбирает браузерный профиль (UA + TLS JA3 + client hints) для
+// control-plane запросов VK-провайдера. firefox несёт меньше client hints
+// (sec-ch-ua* - Chromium-only), chrome даёт herd-cover.
+type Browser string
+
+const (
+	BrowserChrome  Browser = "chrome"
+	BrowserFirefox Browser = "firefox"
+)
+
 // VKOpts - опции VK-учёток и captcha (только клиент, провайдер "vk").
 type VKOpts struct {
-	Link           string // -link (нормализован до join-кода)
-	StreamsPerCred int    // -streams-per-cred
-	ManualCaptcha  bool   // -manual-captcha
+	Link           string  // -link (нормализован до join-кода)
+	StreamsPerCred int     // -streams-per-cred
+	ManualCaptcha  bool    // -manual-captcha
+	Browser        Browser // -browser: chrome | firefox
 }
 
 // ProviderOpts выбирает реализацию provider.Provider.
@@ -163,18 +175,19 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 	port := fs.String("port", "", "порт TURN-сервера; override creds провайдера")
 	listen := fs.String("listen", "127.0.0.1:9000", "локальный ip:port для WireGuard/Xray клиента")
 	provider := fs.String("provider", ProviderVK, "источник TURN-creds: vk")
-	link := fs.String("link", "", "ссылка VK Calls https://vk.com/call/join/...; обязательно для -provider vk")
+	link := fs.String("link", "", "ссылка VK Calls https://vk.ru/call/join/...; обязательно для -provider vk")
 	peer := fs.String("peer", "", "адрес сервера на VPS, host:port; обязательно")
 	n := fs.Int("n", 10, "число параллельных TURN-потоков")
 	transport := fs.String("transport", "tcp", "транспорт до TURN-реле: tcp | udp")
 	mode := fs.String("mode", "udp", "режим туннеля: udp (WireGuard) | tcp (Xray/sing-box)")
 	bond := fs.Bool("bond", false, "страйпинг TCP по smux-сессиям; только с -mode tcp")
-	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus; должен совпадать с сервером")
+	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus | rtpopus2; должен совпадать с сервером")
 	obfKey := fs.String("obf-key", "", "ключ для -obf-profile != none: 32 байта hex (64 символа)")
 	genObfKey := fs.Bool("gen-obf-key", false, "напечатать новый -obf-key и выйти")
 	streamsPerCred := fs.Int("streams-per-cred", defaultStreamsPerCache, "TURN-потоков на один кеш VK-creds; только -provider vk")
 	debug := fs.Bool("debug", false, "подробные debug-логи")
 	manualCaptcha := fs.Bool("manual-captcha", false, "ручная VK captcha в браузере вместо авто; только -provider vk")
+	browser := fs.String("browser", string(BrowserFirefox), "браузерный профиль VK-auth: chrome | firefox; только -provider vk")
 	dnsMode := fs.String("dns-mode", dnsModeAuto, "резолвер клиента: plain | doh | auto")
 	dnsServers := fs.String("dns-servers", "", "свои UDP/53 DNS через запятую: ip[:port][,ip[:port]...]")
 	clientID := fs.String("client-id", "", "уникальный ID клиента (автогенерация если не задан)")
@@ -206,6 +219,7 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 		VK: VKOpts{
 			StreamsPerCred: *streamsPerCred,
 			ManualCaptcha:  *manualCaptcha,
+			Browser:        Browser(*browser),
 		},
 		DNS: DNSOpts{
 			Mode: *dnsMode,
@@ -315,6 +329,11 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 		if c.VK.StreamsPerCred <= 0 {
 			return nil, fmt.Errorf("-streams-per-cred must be positive")
 		}
+		switch c.VK.Browser {
+		case BrowserChrome, BrowserFirefox:
+		default:
+			return nil, fmt.Errorf("invalid -browser value %q: must be %s | %s", c.VK.Browser, BrowserChrome, BrowserFirefox)
+		}
 		parts := strings.Split(*link, "join/")
 		link := parts[len(parts)-1]
 		if idx := strings.IndexAny(link, "/?#"); idx != -1 {
@@ -349,7 +368,7 @@ func ParseServer(args []string, errOut io.Writer) (*Server, error) {
 	listen := fs.String("listen", "0.0.0.0:56000", "локальный адрес прослушивания ip:port")
 	connect := fs.String("connect", "", "локальный бэкенд host:port; обязательно: WG 127.0.0.1:51820 | Xray 127.0.0.1:443")
 	mode := fs.String("mode", "udp", "режим туннеля: udp (WireGuard) | tcp (Xray/sing-box; bond авто)")
-	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus; должен совпадать с клиентом")
+	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus | rtpopus2; должен совпадать с клиентом")
 	obfKey := fs.String("obf-key", "", "ключ для -obf-profile != none: 32 байта hex (64 символа)")
 	genObfKey := fs.Bool("gen-obf-key", false, "напечатать новый -obf-key и выйти")
 	debug := fs.Bool("debug", false, "подробные debug-логи")
@@ -407,10 +426,10 @@ func ParseServer(args []string, errOut io.Writer) (*Server, error) {
 // validateObfProfile проверяет что -obf-profile содержит известное значение.
 func validateObfProfile(p ObfProfile) error {
 	switch p {
-	case ObfProfileNone, ObfProfileRTPOpus:
+	case ObfProfileNone, ObfProfileRTPOpus, ObfProfileRTPOpus2:
 		return nil
 	default:
-		return fmt.Errorf("invalid -obf-profile value %q: must be %s | %s", p, ObfProfileNone, ObfProfileRTPOpus)
+		return fmt.Errorf("invalid -obf-profile value %q: must be %s | %s | %s", p, ObfProfileNone, ObfProfileRTPOpus, ObfProfileRTPOpus2)
 	}
 }
 

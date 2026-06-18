@@ -13,7 +13,7 @@ import (
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// fetchCallToken — шаг 2 цепочки: вызывает calls.getAnonymousToken и ведёт
+// fetchCallToken - шаг 2 цепочки: вызывает calls.getAnonymousToken и ведёт
 // цикл retry captcha до получения call-токена или исчерпания всех режимов решения.
 func (c *Client) fetchCallToken(
 	ctx context.Context,
@@ -24,7 +24,7 @@ func (c *Client) fetchCallToken(
 	creds VKCredentials,
 ) (string, error) {
 	urlAddr := fmt.Sprintf("https://api.vk.ru/method/calls.getAnonymousToken?v=5.275&client_id=%s", creds.ClientID)
-	data := fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&name=%s&access_token=%s",
+	data := fmt.Sprintf("vk_join_link=https://vk.ru/call/join/%s&name=%s&access_token=%s",
 		link, escapedName, token1)
 
 	for attempt := 0; ; attempt++ {
@@ -104,7 +104,7 @@ func (c *Client) solveCaptcha(
 			break
 		}
 		c.log.Infof("[STREAM %d] [Captcha] Triggering manual captcha fallback", streamID)
-		// Ручной решалке выделяется свой 3-минутный бюджет — жёсткий parent-deadline
+		// Ручной решалке выделяется свой 3-минутный бюджет - жёсткий parent-deadline
 		// не обрезает время пользователя. Отмена parent (завершение приложения)
 		// всё равно propagate, горутина не переживает процесс.
 		manualCtx, manualCancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -171,12 +171,12 @@ func (c *Client) solveCaptcha(
 func buildCaptchaRetryData(link, escapedName, token1 string, captchaErr *captcha.Error, successToken, captchaKey string) string {
 	if captchaKey != "" {
 		return fmt.Sprintf(
-			"vk_join_link=https://vk.com/call/join/%s&name=%s&captcha_key=%s&captcha_sid=%s&access_token=%s",
+			"vk_join_link=https://vk.ru/call/join/%s&name=%s&captcha_key=%s&captcha_sid=%s&access_token=%s",
 			link, escapedName, neturl.QueryEscape(captchaKey), captchaErr.CaptchaSid, token1,
 		)
 	}
 	return fmt.Sprintf(
-		"vk_join_link=https://vk.com/call/join/%s&name=%s&captcha_key=&captcha_sid=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
+		"vk_join_link=https://vk.ru/call/join/%s&name=%s&captcha_key=&captcha_sid=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
 		link, escapedName, captchaErr.CaptchaSid, neturl.QueryEscape(successToken),
 		captchaErr.CaptchaTs, captchaErr.CaptchaAttempt, token1,
 	)
