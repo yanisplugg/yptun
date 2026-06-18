@@ -27,6 +27,12 @@ import java.util.concurrent.atomic.AtomicInteger
  * transparent byte pump — the SOCKS5 handshake (incl. auth) passes through to the room verbatim, which
  * is why the bridge, balancer and rooms all share one credential pair.
  *
+ * Resilience: each room is SUPERVISED — if its initial connect fails it keeps retrying in the background
+ * every [RETRY_FAILED_MS] until it comes up (or we stop); once up, the core's own self-heal keeps it
+ * alive. The balancer PREFERS rooms the core reports healthy ([Mobile.roomHealthy]) so a new connection
+ * isn't pinned onto a room that's mid-reconnect (the "frequent drop" cause), falling back to all known
+ * rooms only if none report healthy yet — so we never go fully offline.
+ *
  * Lifecycle: ALL coroutines run on a private [managerScope] and ALL live sockets are tracked, so [stop]
  * deterministically closes the listener, every in-flight forwarded connection AND every room — releasing
  * the bridge port immediately (otherwise the next connect, even a different vless engine, hits "SOCKS
@@ -47,6 +53,10 @@ class OlcrtcRoomManager(
     private companion object {
         // Larger than the 8 KiB default so the byte pump does fewer syscalls at high throughput.
         const val COPY_BUFFER = 64 * 1024
+
+        // A room whose initial connect failed is retried this often, in the background, until it comes up
+        // or the manager stops (per user: failed rooms must keep retrying ~every 60s).
+        const val RETRY_FAILED_MS = 60_000L
     }
 
     private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -62,6 +72,12 @@ class OlcrtcRoomManager(
     @Volatile
     private var stopped = false
     private val rr = AtomicInteger(0)
+
+    // Guards [ports] and [slotHandles]; [backendPorts] is the published @Volatile snapshot read on the
+    // hot path. slotHandles maps port → room handle so the balancer can ask the core if that room is healthy.
+    private val poolLock = Any()
+    private val ports = mutableListOf<Int>()
+    private val slotHandles = mutableMapOf<Int, Long>()
 
     val roomsUp: Int get() = handles.size
 
@@ -93,48 +109,88 @@ class OlcrtcRoomManager(
             log("multiroom: no room specs to start")
             return false
         }
-        // Start every room IN PARALLEL: a room that can't connect must NOT block or break the others —
-        // each blocks up to readyTimeoutMs, so sequential would stall the whole tunnel on one bad room.
-        val ports = Collections.synchronizedList(mutableListOf<Int>())
-        // Fires the instant ANY room is ready, so we can start the balancer without waiting for the rest.
+        // Fires the instant ANY room is ready, so we start the balancer without waiting for the rest.
         val firstReady = CountDownLatch(1)
+        // One SUPERVISOR per room (parallel, daemon): brings the room up and, if the initial connect
+        // FAILS, keeps retrying every RETRY_FAILED_MS in the background until it succeeds or we stop.
+        // Once up, the core's self-heal keeps the room alive and the supervisor exits.
         specs.forEachIndexed { i, r ->
-            val port = basePort + i
-            Thread {
-                try {
-                    val h = Mobile.startRoom(
-                        r.carrier, r.transport, r.room, r.clientId, r.keyHex,
-                        port.toLong(), user, pass, readyTimeoutMs.toLong(),
-                    )
-                    // Stopped while this room was still connecting → don't leave it dangling. stop() may
-                    // have already drained the Go registry (or skipped it, finding no handles yet), so a
-                    // late arrival must stop ITSELF or it leaks. The @Volatile `stopped` read is the gate.
-                    if (stopped) {
-                        runCatching { Mobile.stopRoom(h) }
-                        return@Thread
-                    }
-                    synchronized(handles) { handles.add(h) }
-                    synchronized(ports) {
-                        ports.add(port)
-                        backendPorts = ports.sorted() // publish: connectToLiveRoom re-reads this live
-                    }
-                    log("multiroom: room ${i + 1} (${r.carrier}/${r.room}) ready on 127.0.0.1:$port")
-                    firstReady.countDown()
-                } catch (e: Exception) {
-                    log("multiroom: room ${i + 1} (${r.carrier}/${r.room}) failed (skipped): ${e.message}")
-                }
-            }.apply { isDaemon = true }.start()
+            Thread { superviseRoom(i, r, basePort + i, user, pass, readyTimeoutMs, firstReady) }
+                .apply { isDaemon = true; name = "olcrtc-room-${i + 1}" }
+                .start()
         }
 
         // Wait only for the FIRST room. Each startRoom is bounded by readyTimeoutMs, so a small scheduling
-        // grace on top guarantees that, if this await times out, every room has resolved and none came up.
+        // grace guarantees that, if this times out, every room's first attempt has resolved and none came
+        // up — abort so the caller falls back to single-room (no point retrying with no session up at all).
         val firstUp = firstReady.await((readyTimeoutMs + 2_000).toLong(), TimeUnit.MILLISECONDS)
         if (!firstUp) {
-            log("multiroom: no rooms came up within ${readyTimeoutMs}ms")
+            log("multiroom: no rooms came up within ${readyTimeoutMs}ms — aborting")
+            stop()
             return false
         }
-        log("multiroom: first room up (${backendPorts.size} ready so far) — balancer up, rest connect in background")
+        log("multiroom: first room up (${backendPorts.size} so far) — balancer up; others connect/retry in background")
         return startBalancer(listenHost, listenPort)
+    }
+
+    /**
+     * Supervises ONE room on [port]: tries [Mobile.startRoom]; on success records its handle, joins the
+     * balancer pool and signals [firstReady] (the core self-heals it from here, so we return); on failure
+     * waits [RETRY_FAILED_MS] and retries until the room comes up or the manager stops.
+     */
+    private fun superviseRoom(
+        index: Int,
+        r: RoomSpec,
+        port: Int,
+        user: String,
+        pass: String,
+        readyTimeoutMs: Int,
+        firstReady: CountDownLatch,
+    ) {
+        while (!stopped) {
+            val handle = try {
+                Mobile.startRoom(
+                    r.carrier, r.transport, r.room, r.clientId, r.keyHex,
+                    port.toLong(), user, pass, readyTimeoutMs.toLong(),
+                )
+            } catch (e: Exception) {
+                if (stopped) return
+                log("multiroom: room ${index + 1} (${r.carrier}/${r.room}) connect failed, retry in ${RETRY_FAILED_MS / 1000}s: ${e.message}")
+                if (!sleepUnlessStopped(RETRY_FAILED_MS)) return
+                continue
+            }
+            // Stopped while connecting → don't leave it dangling (stop() may have already drained the
+            // registry, so a late arrival must stop ITSELF or it leaks).
+            if (stopped) {
+                runCatching { Mobile.stopRoom(handle) }
+                return
+            }
+            synchronized(handles) { handles.add(handle) }
+            synchronized(poolLock) {
+                slotHandles[port] = handle
+                if (!ports.contains(port)) ports.add(port)
+                backendPorts = ports.sorted() // publish for the hot path
+            }
+            log("multiroom: room ${index + 1} (${r.carrier}/${r.room}) up on 127.0.0.1:$port (self-healing)")
+            firstReady.countDown()
+            return // up — the core self-heals from here; nothing more for the supervisor to do
+        }
+    }
+
+    /** Sleeps [ms] in short slices, returning false as soon as [stopped] flips (so retries stop promptly). */
+    private fun sleepUnlessStopped(ms: Long): Boolean {
+        var left = ms
+        while (left > 0) {
+            if (stopped) return false
+            val slice = minOf(500L, left)
+            try {
+                Thread.sleep(slice)
+            } catch (_: InterruptedException) {
+                return !stopped
+            }
+            left -= slice
+        }
+        return !stopped
     }
 
     private fun startBalancer(host: String, port: Int): Boolean {
@@ -193,15 +249,25 @@ class OlcrtcRoomManager(
         }
     }
 
-    /** Round-robins across [backendPorts], returning the first room we can actually connect to. */
+    /**
+     * Picks a room to forward to, round-robin, PREFERRING rooms the core reports healthy (transport up,
+     * recent liveness pong) so a connection isn't pinned onto a room that's mid-reconnect. Falls back to
+     * all known rooms if none report healthy yet, so we never go fully offline. Returns the first room we
+     * can actually open a socket to.
+     */
     private fun connectToLiveRoom(host: String): Socket? {
-        val ports = backendPorts
-        if (ports.isEmpty()) return null
-        repeat(ports.size) {
-            val idx = (rr.getAndIncrement() % ports.size + ports.size) % ports.size
+        val all = backendPorts
+        if (all.isEmpty()) return null
+        val healthy = all.filter { p ->
+            val h = synchronized(poolLock) { slotHandles[p] }
+            h != null && runCatching { Mobile.roomHealthy(h) }.getOrDefault(true)
+        }
+        val candidates = if (healthy.isNotEmpty()) healthy else all
+        repeat(candidates.size) {
+            val idx = (rr.getAndIncrement() % candidates.size + candidates.size) % candidates.size
             val s = Socket()
             try {
-                s.connect(InetSocketAddress(host, ports[idx]), 4_000)
+                s.connect(InetSocketAddress(host, candidates[idx]), 4_000)
                 return s
             } catch (_: Exception) {
                 runCatching { s.close() }
@@ -213,7 +279,11 @@ class OlcrtcRoomManager(
     /** Stops the balancer, every in-flight connection and every room. Idempotent; releases the port. */
     fun stop() {
         stopped = true
-        backendPorts = emptyList()
+        synchronized(poolLock) {
+            backendPorts = emptyList()
+            ports.clear()
+            slotHandles.clear()
+        }
         runCatching { serverSocket?.close() }
         serverSocket = null
         // Close every tracked socket so blocking copy loops unblock immediately (coroutine cancel does

@@ -9,9 +9,11 @@ package mobile
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/client"
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/vp8channel"
 )
 
@@ -27,9 +29,10 @@ var (
 )
 
 type roomInst struct {
-	cancel context.CancelFunc
-	done   chan struct{}
-	errRun error
+	cancel  context.CancelFunc
+	done    chan struct{}
+	errRun  error
+	healthy atomic.Bool // true while the transport has a live, recent liveness pong
 }
 
 // StartRoom launches ONE independent olcRTC room instance and returns a handle for StopRoom. It blocks
@@ -80,6 +83,10 @@ func StartRoom(
 			BatchSize: cfg.vp8BatchSize,
 		},
 		Liveness: livenessConfig(cfg),
+		// Per-room health: the balancer routes around a room whose transport is
+		// mid-reconnect (no recent liveness pong) so new connections don't land on
+		// a dead link. MissedPongs==0 means a recent pong → healthy.
+		OnHealth: func(s control.Status) { inst.healthy.Store(s.MissedPongs == 0) },
 	}
 
 	go func() {
@@ -91,7 +98,14 @@ func StartRoom(
 		// readyOnce keeps the first-ready signal one-shot across reconnects.
 		var lastErr error
 		for ctx.Err() == nil {
-			lastErr = runClientWithReady(ctx, clientCfg, func() { readyOnce.Do(func() { close(readyCh) }) })
+			lastErr = runClientWithReady(ctx, clientCfg, func() {
+				inst.healthy.Store(true)
+				readyOnce.Do(func() { close(readyCh) })
+			})
+			// runClientWithReady returns only on a fatal drop (conference ended /
+			// reconnect exhausted); mark unhealthy so the balancer stops routing here
+			// until the next re-run brings the transport back up.
+			inst.healthy.Store(false)
 			if ctx.Err() != nil {
 				break
 			}
@@ -169,4 +183,15 @@ func RoomsRunning() int {
 	roomsMu.Lock()
 	defer roomsMu.Unlock()
 	return len(rooms)
+}
+
+// RoomHealthy reports whether the room for handle currently has a live, healthy
+// transport (recent liveness pong). It is false for unknown handles and for rooms
+// that are mid-reconnect, letting the balancer route new connections around them
+// instead of pinning a connection onto a dead link (the "frequent drop" cause).
+func RoomHealthy(handle int) bool {
+	roomsMu.Lock()
+	inst := rooms[handle]
+	roomsMu.Unlock()
+	return inst != nil && inst.healthy.Load()
 }
