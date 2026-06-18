@@ -618,10 +618,13 @@ private fun LazyListScope.vkTurnSection(
             SettingsDropdown(
                 label = LocalStrings.current.obfuscationProfile,
                 selectedValue = draft.obfProfile.ifBlank { "rtpopus" },
-                options = listOf("none", "rtpopus"),
+                // rtpopus2 (freeturn 1.3+): rtpopus + an RTP header extension that mimics modern WebRTC,
+                // for better shaping evasion. The profile MUST match the server (panel) — pick it only
+                // once the panel/VPS is also on a 1.3+ build that speaks rtpopus2, else the obf desyncs.
+                options = listOf("none", "rtpopus", "rtpopus2"),
                 enabled = enabled,
                 onValueSelected = { v -> onChange { it.copy(obfProfile = v) } },
-                valueLabel = { it }
+                valueLabel = { if (it == "rtpopus2") "rtpopus2 (WebRTC mimicry · 1.3+)" else it }
             )
             VkTurnField(
                 value = draft.obfKey,
