@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -412,25 +413,39 @@ private fun EngineSelector(
     ) {
         SectionTitle(title = LocalStrings.current.engineSection, subtitle = engineSubtitle(selected))
 
-        // Two rows of two (instead of all four on one line) so the engine names aren't cramped /
-        // ellipsised. Each chunk is its own SingleChoiceSegmentedButtonRow so the segmented styling
-        // (rounded outer ends per row) is preserved; the Column's spacing separates the two rows.
-        options.chunked(2).forEach { rowOptions ->
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                rowOptions.forEachIndexed { index, engine ->
-                    SegmentedButton(
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = rowOptions.size),
-                        selected = selected == engine,
-                        onClick = { onSelected(engine) },
-                        enabled = enabled,
-                        label = {
-                            Text(
-                                text = engineLabel(engine),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    )
+        // Four engines as ONE 2×2 block — two segmented rows with NO gap between them, so it reads as a
+        // single control. Only the block's OUTER corners are rounded (top row rounds the top, bottom row
+        // the bottom; inner edges square), so the rows visually merge into one rounded panel. Same
+        // SegmentedButton styling, just no longer cramped onto a single line.
+        val corner = 20.dp
+        val rows = options.chunked(2)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            rows.forEachIndexed { rowIndex, rowOptions ->
+                val topRow = rowIndex == 0
+                val bottomRow = rowIndex == rows.lastIndex
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    rowOptions.forEachIndexed { index, engine ->
+                        val leftCol = index == 0
+                        val rightCol = index == rowOptions.lastIndex
+                        SegmentedButton(
+                            shape = RoundedCornerShape(
+                                topStart = if (topRow && leftCol) corner else 0.dp,
+                                topEnd = if (topRow && rightCol) corner else 0.dp,
+                                bottomStart = if (bottomRow && leftCol) corner else 0.dp,
+                                bottomEnd = if (bottomRow && rightCol) corner else 0.dp,
+                            ),
+                            selected = selected == engine,
+                            onClick = { onSelected(engine) },
+                            enabled = enabled,
+                            label = {
+                                Text(
+                                    text = engineLabel(engine),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        )
+                    }
                 }
             }
         }
