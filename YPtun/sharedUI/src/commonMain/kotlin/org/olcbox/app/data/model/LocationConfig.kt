@@ -685,7 +685,11 @@ data class LocationEntry(
     @SerialName("vp8_batch")
     val legacyVp8Batch: Int? = null,
     @SerialName("vp8Batch")
-    val legacyVp8BatchCamel: Int? = null
+    val legacyVp8BatchCamel: Int? = null,
+    @SerialName("multi_room")
+    val multiRoomEnabled: Boolean = false,
+    @SerialName("extra_rooms")
+    val extraRooms: List<ExtraRoom> = emptyList()
 ) {
     val location: LocationConfig
         get() {
@@ -721,6 +725,8 @@ data class LocationEntry(
                 advanced = advanced,
                 fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
+                multiRoomEnabled = multiRoomEnabled,
+                extraRooms = extraRooms,
             ).normalized()
         }
 
@@ -748,6 +754,8 @@ data class LocationEntry(
             routingProfileId = config.routingProfileId.ifBlank { null },
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
+            multiRoomEnabled = config.multiRoomEnabled,
+            extraRooms = config.extraRooms,
             metadata = metadata
                 ?.normalized()
                 ?.takeUnless { it.isEmpty() }
@@ -781,6 +789,8 @@ data class LocationEntry(
                 routingProfileId = config.routingProfileId.ifBlank { null },
                 authProvider = config.bypassProvider,
                 transport = LocationTransportConfig.from(config),
+                multiRoomEnabled = config.multiRoomEnabled,
+                extraRooms = config.extraRooms,
                 metadata = metadata
             ).normalized()
         }
