@@ -270,14 +270,16 @@ object SingBoxConfig {
                 addJsonObject {
                     put("type", "direct")
                     put("tag", "direct")
-                    // HYBRID modes (prefer_ipv4/prefer_ipv6): dial the DIRECT/bypass path dual-stack with
-                    // the preferred family. A domain:ru → direct site is the user's own real RU IP — we
-                    // WANT it reachable on real IPv6 too (the geo bypass covers both families), not
-                    // downgraded to IPv4. That real IP is the bypass intent, not a tunnel leak; proxied
-                    // traffic still exits via the proxy's own IP. ipv4_only/ipv6_only pin a single family
-                    // globally (route reject) and are handled there, so only the prefer_* hybrids set this.
+                    // IPv6-leak guard for HYBRID modes (prefer_ipv4/prefer_ipv6): the direct/bypass path
+                    // (domain:ru → direct) would otherwise dial the user's REAL IPv6 for dual-stack sites,
+                    // exposing it on a leak check ("domain:ru goes direct only over IPv4, IPv6 leaks").
+                    // Force the direct outbound to IPv4 so bypass traffic NEVER egresses over real IPv6;
+                    // sing-box re-resolves the sniffed domain to A here, so even an IPv6-literal direct
+                    // connection is dialed as IPv4. Proxied traffic is untouched (still dual-stack via the
+                    // proxy's own IP — no user-IP leak there). ipv4_only/ipv6_only already pin a family
+                    // globally (route reject), so only the prefer_* hybrids need this.
                     if (effectiveStrategy == "prefer_ipv4" || effectiveStrategy == "prefer_ipv6") {
-                        put("domain_strategy", effectiveStrategy)
+                        put("domain_strategy", "ipv4_only")
                     }
                 }
             }

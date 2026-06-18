@@ -60,10 +60,10 @@ data class TrafficSettings(
 
     /** Xray DNS queryStrategy mapped from [domainStrategy]. */
     fun xrayQueryStrategy(): String = when (domainStrategy) {
-        // Only the HARD single-family modes pin the resolver. The prefer_* hybrids resolve BOTH families
-        // (UseIP) and let geo routing decide per destination: a .ru site goes DIRECT on its real IPv6,
-        // foreign traffic exits via the proxy. (ipv4_only stays the "no IPv6 anywhere" option.)
-        "ipv4_only" -> "UseIPv4"
+        // prefer_ipv4 is treated like ipv4_only on Xray (the user's intent on an IPv4-only ISP is "no
+        // tunnel IPv6"): resolve only A so the resolved v4 IP — not the bare domain — is what's sent to
+        // the EXIT proxy, otherwise the dual-stack server picks AAAA and 2ip shows the tunnel's IPv6.
+        "ipv4_only", "prefer_ipv4" -> "UseIPv4"
         "ipv6_only" -> "UseIPv6"
         else -> "UseIP"
     }

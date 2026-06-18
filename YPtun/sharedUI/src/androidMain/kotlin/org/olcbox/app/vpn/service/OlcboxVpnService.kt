@@ -179,13 +179,10 @@ class OlcboxVpnService : VpnService() {
     private var engineType: EngineType = EngineType.Stealth
     private var activeMtu: Int = TUN_MTU
     // Snapshotted from the (suspend) traffic settings in [startMobile] so the non-suspend
-    // [writeTun2socksConfig] can decide whether to drop the bridge's IPv6.
-    //  • "IPv4 only" (ipv4_only): ALWAYS drop — hard no-IPv6 for every engine.
-    //  • "IPv4 preferred" (prefer_ipv4): drop ONLY for the core-less engines (Stealth/VK-TURN), which do
-    //    no geo routing and would carry raw IPv6 to a possibly-v4-only upstream ("google.com closed").
-    //    For Standard/Chain (sing-box/Xray) KEEP IPv6 so the core can geo-route it: a .ru destination
-    //    goes DIRECT on real IPv6, foreign IPv6 exits via the proxy — that's the "prefer, don't kill" intent.
-    //  • prefer_ipv6 / ipv6_only: keep dual-stack. See [writeTun2socksConfig].
+    // [writeTun2socksConfig] can decide whether to drop the bridge's IPv6. True for the IPv4-leaning
+    // strategies — "IPv4 only" (ipv4_only) AND "IPv4 preferred" (prefer_ipv4): both want traffic on
+    // IPv4, so the bridge refuses IPv6 (RST → Happy-Eyeballs falls back to IPv4). prefer_ipv6/
+    // ipv6_only keep dual-stack. See [writeTun2socksConfig].
     private var activeDropBridgeIpv6: Boolean = false
     private var activeProxyCore: ProxyCore = ProxyCore.SingBox
 
@@ -755,16 +752,8 @@ class OlcboxVpnService : VpnService() {
         engineType = location.engine
         val trafficSettings = loadTrafficSettings()
         activeMtu = trafficSettings.mtu
-        // Core-less engines (olcRTC Stealth / VK-TURN) run no sing-box/Xray family enforcement, so under
-        // "IPv4 preferred" they'd shove raw IPv6 onto a maybe-v4-only upstream — keep dropping it there.
-        // sing-box/Xray engines geo-route IPv6 themselves (.ru direct on real v6, rest via proxy), so let
-        // it through. "IPv4 only" stays a hard drop for every engine.
-        val corelessEngine = location.engine == EngineType.Stealth || location.engine == EngineType.VkTurn
-        activeDropBridgeIpv6 = when (trafficSettings.normalized().domainStrategy) {
-            "ipv4_only" -> true
-            "prefer_ipv4" -> corelessEngine
-            else -> false
-        }
+        activeDropBridgeIpv6 = trafficSettings.normalized().domainStrategy
+            .let { it == "ipv4_only" || it == "prefer_ipv4" }
         showSpeedInNotif = loadAppBehavior().showSpeedInNotification
         return when (location.engine) {
             EngineType.Stealth -> startStealthCore(location, upstream, requestedGeneration, setErrorOnFailure)
@@ -1744,19 +1733,20 @@ class OlcboxVpnService : VpnService() {
     private fun writeTun2socksConfig(): File {
         val file = File(filesDir, TUN2SOCKS_CONFIG_FILE_NAME)
 
-        // [activeDropBridgeIpv6] (snapshotted in startMobile — loadTrafficSettings is suspend, this isn't)
-        // decides whether to drop the tun's IPv6 address so hev-socks5-tunnel REFUSES every IPv6 session
-        // (no `tunnel.ipv6` ⇒ ipv6_enabled=0 in the native bridge). The system TUN still routes ::/0 into
-        // the tunnel (see establishSystemVpnTunnel), so a refused IPv6 is blackholed — never leaked to the
-        // iface, in full OR split tunneling.
-        //   - "IPv4 only": dropped for EVERY engine (hard no-IPv6).
-        //   - "IPv4 preferred": dropped ONLY for core-less engines (olcRTC/VK-TURN), which can't geo-route
-        //     and would shove raw IPv6 onto a v4-only upstream → "google.com closed". For sing-box/Xray
-        //     engines IPv6 is KEPT so the core geo-routes it (.ru direct on real v6, foreign via proxy).
-        //   - prefer_ipv6 / ipv6_only: kept (cores handle the family). See [activeDropBridgeIpv6].
-        // Note the bridge's mapped-DNS only answers A, so domain traffic is v4 regardless; the IPv6 that
-        // now reaches the bridge (raw v6 literals / apps' own DoH) is exactly what the core should route.
-        val ipv6Line = if (activeDropBridgeIpv6) "# ipv6 disabled (IPv4 only / IPv4-preferred core-less)" else "ipv6: '$TUN_IPV6_ADDRESS'"
+        // IPv4-leaning strategy ("IPv4 only" OR "IPv4 preferred"): drop the tun's IPv6 address from the
+        // bridge config so hev-socks5-tunnel REFUSES every IPv6 session (no `tunnel.ipv6` ⇒
+        // ipv6_enabled=0 in the native bridge). This DROPS IPv6 for EVERY engine — including
+        // olcRTC(Stealth) and VK-TURN, which run no sing-box/Xray family enforcement and would otherwise
+        // carry IPv6 to an IPv4-only upstream → "google.com closed" (prefer_ipv4) or a server-side IPv6
+        // on a leak-check. The system TUN still routes ::/0 into the tunnel (see establishSystemVpnTunnel),
+        // so the refused IPv6 is blackholed — never leaked to the iface, in full OR split tunneling.
+        // Why prefer_ipv4 belongs here: the bridge's mapped-DNS only ever answers A (never AAAA), so the
+        // ONLY IPv6 reaching the bridge is from apps' own DoH/DoT (Chrome Secure DNS) or IPv6 literals —
+        // which an IPv4 tunnel can't serve. RST-ing it makes the app fall back to IPv4 (= "prefer IPv4").
+        // sing-box can still reach v6-only sites THROUGH the proxy (that path is app→fake-v4→domain→proxy,
+        // it never hits the bridge as raw v6). prefer_ipv6/ipv6_only keep dual-stack (cores handle family).
+        // [activeDropBridgeIpv6] is snapshotted in startMobile (loadTrafficSettings is suspend; this isn't).
+        val ipv6Line = if (activeDropBridgeIpv6) "# ipv6 disabled (IPv4 only/preferred)" else "ipv6: '$TUN_IPV6_ADDRESS'"
 
         file.writeText(
             """
