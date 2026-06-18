@@ -51,12 +51,14 @@ object XrayConfig {
      * stays consistent with the ipv4_only/ipv6_only enforcement.
      */
     private fun directDomainStrategy(traffic: TrafficSettings): String = when (traffic.domainStrategy) {
+        "ipv4_only" -> "UseIPv4"   // hard IPv4: the direct/freedom outbound resolves A only.
         "ipv6_only" -> "UseIPv6"
-        // ipv4_only AND the hybrid prefer_* strategies all force the DIRECT (freedom) outbound to IPv4.
-        // Hybrid would otherwise resolve direct/bypass destinations dual-stack (UseIP) and dial the
-        // user's REAL IPv6 for domain:ru → direct, leaking it. Pinning direct to IPv4 keeps bypass
-        // traffic off real IPv6; proxied traffic is unaffected (it exits via the proxy's own IP).
-        else -> "UseIPv4"
+        // prefer_ipv4 / prefer_ipv6 (hybrid): resolve the DIRECT outbound dual-stack so a domain:ru →
+        // direct site keeps its REAL IPv6 (the geo bypass covers both families via geoip.dat/geosite.dat)
+        // instead of being downgraded to IPv4. This is the freedom outbound — it egresses the user's own
+        // real RU IP, which is the whole point of the bypass, NOT a tunnel leak. Foreign traffic still
+        // exits through the proxy (tunnel) untouched.
+        else -> "UseIP"
     }
 
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
@@ -278,12 +280,12 @@ object XrayConfig {
             }
             // Domain-strategy enforcement: blackhole the opposite IP family so ipv4_only / ipv6_only
             // forces ALL traffic onto the chosen family (even DoH apps that resolve the other one).
-            // prefer_ipv4 is folded into the ipv4_only path here: on an IPv4-only ISP the user wants NO
-            // tunnel IPv6, and without this the EXIT proxy's dual-stack server picks AAAA for proxied
-            // domains → 2ip shows the tunnel's IPv6 even though the bridge already drops client-side v6.
-            // This is the SAME recipe as ipv4_only (which works), so it adds no new failure mode.
+            // ONLY the hard single-family modes block a family. prefer_ipv4 / prefer_ipv6 are SOFT: they
+            // keep IPv6 alive and let the geo routing rules (geoip.dat/geosite.dat) place each
+            // destination — a .ru site goes DIRECT on real IPv6, foreign traffic exits via the proxy.
+            // A hard ::/0 block here would kill that, so prefer_* deliberately emits no family block.
             val familyBlockRule = when (traffic.domainStrategy) {
-                "ipv4_only", "prefer_ipv4" -> buildJsonObject {
+                "ipv4_only" -> buildJsonObject {
                     put("type", "field"); putJsonArray("ip") { add("::/0") }; put("outboundTag", "block")
                 }
                 "ipv6_only" -> buildJsonObject {
