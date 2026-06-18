@@ -335,8 +335,12 @@ class OlcboxVpnService : VpnService() {
                     proc.inputStream.bufferedReader().use { reader ->
                         while (isActive) {
                             val line = reader.readLine() ?: break
-                            // Skip our own service tag — those lines are already added via addLog().
-                            if (!line.contains("OlcboxVpnService")) {
+                            // Skip our own service tag (already added via addLog) and high-frequency
+                            // Android UI/render spam that just floods the journal (the frameRateCategory
+                            // VRR logging on Android 15/16 was the worst offender — see LOGCAT_NOISE).
+                            if (!line.contains("OlcboxVpnService") &&
+                                LOGCAT_NOISE.none { line.contains(it, ignoreCase = true) }
+                            ) {
                                 OlcboxVpnState.appendRaw(line)
                             }
                         }
@@ -2989,6 +2993,20 @@ class OlcboxVpnService : VpnService() {
         private const val NOTIFICATION_CHANNEL_ID = "olcbox_vpn"
         private const val NOTIFICATION_ID = 100
         private const val TAG = "OlcboxVpnService"
+
+        // High-frequency Android UI/render/system spam that the whole-process logcat capture would
+        // otherwise pour into the in-app journal, drowning the VPN/core lines that actually matter.
+        // Matched case-insensitively as a substring of the raw logcat line (tag OR message).
+        private val LOGCAT_NOISE = listOf(
+            "frameRateCategory",   // Android 15/16 variable-refresh-rate: "frameRateCategory Request!"
+            "setFrameRate",
+            "BLASTBufferQueue",
+            "Choreographer",
+            "OpenGLRenderer",
+            "ViewRootImpl",
+            "ImeTracker",
+            "InsetsController",
+        )
 
         private fun addLog(msg: String) {
             OlcboxVpnState.addLog(msg)
