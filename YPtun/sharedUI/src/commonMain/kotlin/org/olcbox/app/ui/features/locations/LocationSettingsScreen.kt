@@ -6,6 +6,7 @@ import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -423,7 +424,12 @@ private fun EngineSelector(
             rows.forEachIndexed { rowIndex, rowOptions ->
                 val topRow = rowIndex == 0
                 val bottomRow = rowIndex == rows.lastIndex
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                // Pull every row after the first up by one border width so its top outline overlaps the
+                // previous row's bottom outline into a SINGLE divider line — no seam/gap, one solid block.
+                val rowModifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (topRow) Modifier else Modifier.offset(y = (-1).dp))
+                SingleChoiceSegmentedButtonRow(modifier = rowModifier) {
                     rowOptions.forEachIndexed { index, engine ->
                         val leftCol = index == 0
                         val rightCol = index == rowOptions.lastIndex
