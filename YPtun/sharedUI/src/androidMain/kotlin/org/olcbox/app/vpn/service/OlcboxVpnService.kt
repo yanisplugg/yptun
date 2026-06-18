@@ -176,6 +176,9 @@ class OlcboxVpnService : VpnService() {
     private var socksProxy: AuthenticatedSocksProxy? = null
     private var singBox: SingBoxEngine? = null
     private var xray: XrayEngine? = null
+    // Multi-room (Stealth/Chain): when a location uses it, the singleton Mobile.start* is replaced by N
+    // independent rooms fronted by a round-robin balancer (see OlcrtcRoomManager). Null = single-room.
+    private var olcrtcRoomManager: OlcrtcRoomManager? = null
     private var engineType: EngineType = EngineType.Stealth
     private var activeMtu: Int = TUN_MTU
     // Snapshotted from the (suspend) traffic settings in [startMobile] so the non-suspend
@@ -785,22 +788,51 @@ class OlcboxVpnService : VpnService() {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
             configureMobileTransport(config)
             applyTelemostCookies(config)
-            addLog(
-                "Starting olcRTC provider=${config.bypassProvider}, " +
-                    "transport=${config.transport}, room=${config.id}"
-            )
             lastMobileProvider = config.bypassProvider
-            Mobile.startWithTransport(
-                config.bypassProvider,
-                config.transport,
-                config.id,
-                deviceId,
-                config.key,
-                targetSocksPort.toLong(),
-                socksUsername,
-                socksPassword
-            )
-            Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+            if (config.usesMultiRoom()) {
+                // Multi-room: raise the main room + each extra as an INDEPENDENT olcRTC instance, fronted
+                // by a round-robin TCP balancer on the bridge port. Rooms live on loopback ports above the
+                // balancer; all share the bridge credentials (password-protected, no open proxy).
+                val specs = config.multiRoomSpecs().map {
+                    OlcrtcRoomManager.RoomSpec(
+                        carrier = it.provider.ifBlank { config.bypassProvider },
+                        transport = it.transport.ifBlank { config.transport },
+                        room = it.room,
+                        clientId = deviceId,
+                        keyHex = it.key,
+                    )
+                }
+                addLog("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + round-robin balancer")
+                val mgr = OlcrtcRoomManager(scope, ::addLog)
+                olcrtcRoomManager = mgr
+                val ok = withContext(Dispatchers.IO) {
+                    mgr.start(
+                        rooms = specs,
+                        listenHost = socksListenHost,
+                        listenPort = targetSocksPort,
+                        basePort = targetSocksPort + 101,
+                        user = socksUsername,
+                        pass = socksPassword,
+                    )
+                }
+                if (!ok) throw IllegalStateException("Multi-room: no rooms came up")
+            } else {
+                addLog(
+                    "Starting olcRTC provider=${config.bypassProvider}, " +
+                        "transport=${config.transport}, room=${config.id}"
+                )
+                Mobile.startWithTransport(
+                    config.bypassProvider,
+                    config.transport,
+                    config.id,
+                    deviceId,
+                    config.key,
+                    targetSocksPort.toLong(),
+                    socksUsername,
+                    socksPassword
+                )
+                Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+            }
             if (requestedGeneration != generation) {
                 addLog("olcRTC start superseded")
                 return false
@@ -1433,11 +1465,15 @@ class OlcboxVpnService : VpnService() {
     private fun proxyCoreRunning(): Boolean =
         if (activeProxyCore == ProxyCore.Xray) xray?.isRunning == true else singBox?.isRunning == true
 
+    /** olcRTC is alive in single-room (singleton) OR multi-room (>=1 independent room up) mode. */
+    private fun olcrtcRunning(): Boolean =
+        Mobile.isRunning() || (olcrtcRoomManager != null && Mobile.roomsRunning() > 0)
+
     /** True when the active engine's core(s) are alive. */
     private fun coreRunning(): Boolean = when (engineType) {
-        EngineType.Stealth -> Mobile.isRunning()
+        EngineType.Stealth -> olcrtcRunning()
         EngineType.Standard -> proxyCoreRunning()
-        EngineType.Chain -> Mobile.isRunning() && proxyCoreRunning()
+        EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
         EngineType.VkTurn -> Freeturn.isRunning() && proxyCoreRunning()
     }
 
@@ -2249,6 +2285,11 @@ class OlcboxVpnService : VpnService() {
 
     private suspend fun stopMobileAndWait() {
         val socksPort = socksListenPort
+        // Multi-room: tear down the balancer + every independent room before the singleton stop.
+        olcrtcRoomManager?.let {
+            runCatching { it.stop() }
+            olcrtcRoomManager = null
+        }
         stopMobile()
         waitForSocksPortReleased(socksPort)
     }

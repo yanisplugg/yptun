@@ -121,6 +121,15 @@ data class FakeDnsSpec(
     @SerialName("block_regex") val blockRegex: List<String> = emptyList(),
 )
 
+/** One additional olcRTC room for the multi-room (aggregation) feature. */
+@Serializable
+data class ExtraRoom(
+    @SerialName("provider") val provider: String = "",
+    @SerialName("transport") val transport: String = "",
+    @SerialName("room") val room: String = "",
+    @SerialName("key") val key: String = "",
+)
+
 @Serializable
 data class LocationConfig(
     val name: String = "",
@@ -175,7 +184,27 @@ data class LocationConfig(
      */
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
+    /**
+     * Multi-room (Stealth/Chain): when true and [extraRooms] is non-empty, the client raises the main
+     * room PLUS each extra room as an independent olcRTC instance and round-robins connections across
+     * them so bandwidth aggregates (up to [MAX_EXTRA_ROOMS]+1 rooms total).
+     */
+    @SerialName("multi_room")
+    val multiRoomEnabled: Boolean = false,
+    /** Additional olcRTC rooms raised alongside the main one when [multiRoomEnabled]. */
+    @SerialName("extra_rooms")
+    val extraRooms: List<ExtraRoom> = emptyList(),
 ) {
+    /** Effective list of rooms to raise for multi-room: the main room + the [extraRooms] (capped). */
+    fun multiRoomSpecs(): List<ExtraRoom> = buildList {
+        add(ExtraRoom(provider = bypassProvider, transport = transport, room = id, key = key))
+        extraRooms.forEach { add(it) }
+    }.filter { it.room.isNotBlank() && it.key.isNotBlank() }.take(MAX_EXTRA_ROOMS + 1)
+
+    /** True when multi-room is on AND there's at least one valid EXTRA room (so it's worth fanning out). */
+    fun usesMultiRoom(): Boolean =
+        multiRoomEnabled && extraRooms.any { it.room.isNotBlank() && it.key.isNotBlank() }
+
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
         val normalizedTransport = normalizeTransport(transport, provider)
@@ -303,6 +332,8 @@ data class LocationConfig(
 
         /** Local port the freeturn client raises; must match the Endpoint baked into the WG config. */
         const val DEFAULT_FREETURN_PORT = 9000
+        /** Max ADDITIONAL multi-room rooms (so up to MAX_EXTRA_ROOMS+1 = 5 rooms run at once). */
+        const val MAX_EXTRA_ROOMS = 4
 
         val supportedBypassProviders = listOf(
             PROVIDER_JAZZ,

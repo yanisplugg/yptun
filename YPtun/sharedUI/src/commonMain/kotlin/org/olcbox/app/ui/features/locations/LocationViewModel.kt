@@ -28,6 +28,7 @@ import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.ProxyCore
@@ -527,6 +528,33 @@ class LocationViewModel(
     fun onPasswordChanged(value: String) {
         editingConfig = editingConfig.copy(key = value)
         validateKey(value)
+    }
+
+    // --- Multi-room (Stealth/Chain aggregation) ---
+    fun onMultiRoomToggle(enabled: Boolean) {
+        editingConfig = editingConfig.copy(multiRoomEnabled = enabled)
+    }
+
+    fun onExtraRoomAdd() {
+        if (editingConfig.extraRooms.size >= LocationConfig.MAX_EXTRA_ROOMS) return
+        editingConfig = editingConfig.copy(
+            extraRooms = editingConfig.extraRooms +
+                ExtraRoom(provider = editingConfig.bypassProvider, transport = editingConfig.transport),
+        )
+    }
+
+    fun onExtraRoomChanged(index: Int, transform: (ExtraRoom) -> ExtraRoom) {
+        val list = editingConfig.extraRooms.toMutableList()
+        if (index in list.indices) {
+            list[index] = transform(list[index])
+            editingConfig = editingConfig.copy(extraRooms = list)
+        }
+    }
+
+    fun onExtraRoomRemoved(index: Int) {
+        editingConfig = editingConfig.copy(
+            extraRooms = editingConfig.extraRooms.filterIndexed { i, _ -> i != index },
+        )
     }
 
     fun onCoreChanged(core: ProxyCore) {

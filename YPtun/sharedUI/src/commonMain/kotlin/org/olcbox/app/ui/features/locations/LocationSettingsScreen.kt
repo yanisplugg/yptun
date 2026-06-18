@@ -82,6 +82,7 @@ import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
@@ -368,6 +369,19 @@ fun LocationSettingsScreen(
                 )
             }
 
+            item {
+                MultiRoomSection(
+                    enabled = config.multiRoomEnabled,
+                    rooms = config.extraRooms,
+                    mainProvider = config.bypassProvider,
+                    saving = isSaving,
+                    onToggle = viewModel::onMultiRoomToggle,
+                    onAdd = viewModel::onExtraRoomAdd,
+                    onChange = viewModel::onExtraRoomChanged,
+                    onRemove = viewModel::onExtraRoomRemoved
+                )
+            }
+
             }
 
             item {
@@ -375,6 +389,101 @@ fun LocationSettingsScreen(
                     homeViewModel = homeViewModel,
                     configGetter = { viewModel.editingConfig }
                 )
+            }
+        }
+    }
+}
+
+/** Multi-room (Stealth/Chain): toggle + up to [LocationConfig.MAX_EXTRA_ROOMS] extra rooms (provider/room/key). */
+@Composable
+private fun MultiRoomSection(
+    enabled: Boolean,
+    rooms: List<ExtraRoom>,
+    mainProvider: String,
+    saving: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onAdd: () -> Unit,
+    onChange: (Int, (ExtraRoom) -> ExtraRoom) -> Unit,
+    onRemove: (Int) -> Unit
+) {
+    val providers = listOf(
+        LocationConfig.PROVIDER_TELEMOST,
+        LocationConfig.PROVIDER_WB_STREAM,
+        LocationConfig.PROVIDER_JITSI
+    )
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        SectionTitle(
+            title = "Мультикомната",
+            subtitle = "До ${LocationConfig.MAX_EXTRA_ROOMS + 1} комнат одновременно — скорость складывается (балансировка по соединениям)"
+        )
+        VkTurnSwitchRow(
+            label = "Включить мультикомнату",
+            checked = enabled,
+            enabled = !saving,
+            onCheckedChange = onToggle
+        )
+        if (enabled) {
+            rooms.forEachIndexed { index, room ->
+                val prov = room.provider.ifBlank { mainProvider }
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Комната ${index + 2}",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { onRemove(index) }, enabled = !saving) {
+                            Icon(Icons.Outlined.Delete, contentDescription = "Удалить")
+                        }
+                    }
+                    SettingsDropdown(
+                        label = "Провайдер",
+                        selectedValue = prov,
+                        options = providers,
+                        enabled = !saving,
+                        onValueSelected = { v -> onChange(index) { it.copy(provider = v, transport = "") } },
+                        valueLabel = { it }
+                    )
+                    SettingsTextField(
+                        value = room.room,
+                        onValueChange = { v -> onChange(index) { it.copy(room = v) } },
+                        label = roomIdLabel(prov),
+                        placeholder = roomIdPlaceholder(prov),
+                        enabled = !saving,
+                        isError = false,
+                        supportingText = null,
+                        leadingIcon = Icons.Rounded.MeetingRoom,
+                        onClear = { onChange(index) { it.copy(room = "") } },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = roomKeyboardType(prov),
+                            imeAction = ImeAction.Next
+                        )
+                    )
+                    SettingsTextField(
+                        value = room.key,
+                        onValueChange = { v -> onChange(index) { it.copy(key = v) } },
+                        label = LocalStrings.current.encryptionKey,
+                        placeholder = "64 hex",
+                        enabled = !saving,
+                        isError = false,
+                        supportingText = null,
+                        leadingIcon = Icons.Rounded.Key,
+                        visualTransformation = PasswordVisualTransformation(),
+                        onClear = { onChange(index) { it.copy(key = "") } },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+                    )
+                }
+            }
+            if (rooms.size < LocationConfig.MAX_EXTRA_ROOMS) {
+                Button(onClick = onAdd, enabled = !saving) {
+                    Text("Добавить комнату")
+                }
             }
         }
     }
