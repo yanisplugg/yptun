@@ -2993,9 +2993,10 @@ class OlcboxVpnService : VpnService() {
         // proven BASE (≈ one call's worth) and add only a few streams per EXTRA call, capped LOW.
         private const val VKTURN_STREAMS_BASE = 10
         private const val VKTURN_STREAMS_PER_EXTRA_CALL = 3
-        // Low auto cap on the gently-scaled total: 1 call→10, 2→13, 3+→16. Keeps the reorder/CPU cost
-        // bounded (the regression came from letting this run to 20-64).
-        private const val VKTURN_STREAMS_AUTO_MAX = 16
+        // Low auto cap on the gently-scaled total: 1 call→10, 2+→12. Upstream docs (free-turn-proxy
+        // docs/modes.md) say 6-12 streams is the comfortable range and >15-20 RISKS A VK BAN, so 12 is
+        // the safe ceiling — letting this run to 20-64 was the regression (slower + ban risk).
+        private const val VKTURN_STREAMS_AUTO_MAX = 12
         // Hard ceiling that even an explicit power-user vk.streams can't exceed, so a huge pasted link
         // list / manual value can't spawn a runaway number of DTLS handshakes / TURN allocations.
         private const val VKTURN_STREAMS_HARD_MAX = 64
