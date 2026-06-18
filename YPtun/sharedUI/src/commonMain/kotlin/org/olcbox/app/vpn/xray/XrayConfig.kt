@@ -278,8 +278,12 @@ object XrayConfig {
             }
             // Domain-strategy enforcement: blackhole the opposite IP family so ipv4_only / ipv6_only
             // forces ALL traffic onto the chosen family (even DoH apps that resolve the other one).
+            // prefer_ipv4 is folded into the ipv4_only path here: on an IPv4-only ISP the user wants NO
+            // tunnel IPv6, and without this the EXIT proxy's dual-stack server picks AAAA for proxied
+            // domains → 2ip shows the tunnel's IPv6 even though the bridge already drops client-side v6.
+            // This is the SAME recipe as ipv4_only (which works), so it adds no new failure mode.
             val familyBlockRule = when (traffic.domainStrategy) {
-                "ipv4_only" -> buildJsonObject {
+                "ipv4_only", "prefer_ipv4" -> buildJsonObject {
                     put("type", "field"); putJsonArray("ip") { add("::/0") }; put("outboundTag", "block")
                 }
                 "ipv6_only" -> buildJsonObject {
