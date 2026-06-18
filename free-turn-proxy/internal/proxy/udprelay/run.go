@@ -75,8 +75,9 @@ func (d *Deps) log() logx.Logger {
 	return d.Log
 }
 
-// Run - точка входа UDP-режима. Биндит listenAddr, распределяет входящие пакеты
-// в общую очередь и запускает numStreams пар (DTLSLoop, TURNLoop).
+// Run - точка входа UDP-режима. Биндит listenAddr, раздаёт входящие пакеты по
+// стримам через chunk-affinity диспетчер (см. dispatcher) и запускает numStreams
+// пар (DTLSLoop, TURNLoop).
 // connectedStreams принадлежит вызывающему (provider может читать через свой
 // StreamsAlive-аналог) и инкрементируется/декрементируется в oneTURN.
 // Возвращается после выхода всех потоков (т.е. при отмене ctx).
@@ -114,10 +115,10 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	inboundChan := make(chan *Packet, inboundQueueCap)
+	disp := newDispatcher()
 	wg := sync.WaitGroup{}
 	wg.Go(func() {
-		runListener(runCtx, listenConn, &activeLocalPeer, inboundChan)
+		runListener(runCtx, listenConn, &activeLocalPeer, disp)
 	})
 	t := time.Tick(200 * time.Millisecond)
 
@@ -131,7 +132,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 	{
 		cchan := make(chan net.PacketConn)
 		wg.Go(func() {
-			DTLSLoop(runCtx, deps, params, peer, listenConn, inboundChan, cchan, okchan, 1)
+			DTLSLoop(runCtx, deps, params, peer, listenConn, disp, cchan, okchan, 1)
 		})
 		wg.Go(func() {
 			TURNLoop(runCtx, deps, params, peer, cchan, t, 1)
@@ -150,7 +151,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 		cchan := make(chan net.PacketConn)
 		streamID := i + 1
 		wg.Go(func() {
-			DTLSLoop(runCtx, deps, params, peer, listenConn, inboundChan, cchan, nil, streamID)
+			DTLSLoop(runCtx, deps, params, peer, listenConn, disp, cchan, nil, streamID)
 		})
 		wg.Go(func() {
 			TURNLoop(runCtx, deps, params, peer, cchan, t, streamID)

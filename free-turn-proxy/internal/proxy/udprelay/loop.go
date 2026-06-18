@@ -22,13 +22,13 @@ import (
 // если предыдущая ошибка - дедлайн). connchan получает свежую половину
 // AsyncPacketPipe на каждой попытке; okchan (non-nil только для потока 1)
 // сигнализирует о первом успешном handshake.
-func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, inboundChan <-chan *Packet, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) {
+func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, disp *dispatcher, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			err := oneDTLS(ctx, deps, params, peer, listenConn, inboundChan, connchan, okchan, streamID)
+			err := oneDTLS(ctx, deps, params, peer, listenConn, disp, connchan, okchan, streamID)
 			// При активном provider-backoff дедлайн handshake срабатывает раньше,
 			// чем auth-retry успевает отработать; делаем краткий backoff,
 			// чтобы не крутиться в tight spin до снятия блокировки.
@@ -114,7 +114,7 @@ func TURNLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr
 	}
 }
 
-func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, inboundChan <-chan *Packet, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) error {
+func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, disp *dispatcher, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) error {
 	select {
 	case <-time.After(time.Duration(randx.Intn(400)+100) * time.Millisecond):
 	case <-ctx.Done():
@@ -173,13 +173,21 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 		}
 	})
 
+	// Регистрируем стрим в диспетчере - только теперь он готов нести данные
+	// (DTLS установлен, client ID отправлен). Диспетчер начнёт слать сюда чанки
+	// пакетов. Отписка на выходе убирает слот из набора; недослитые пакеты в
+	// sendCh соберёт GC (канал не закрываем - иначе гонка send-on-closed).
+	slot := &streamSlot{id: streamID, sendCh: make(chan *Packet, streamSendBuf)}
+	disp.register(slot)
+	defer disp.unregister(slot)
+
 	wg.Go(func() {
 		defer dtlscancel()
 		for {
 			select {
 			case <-dtlsctx.Done():
 				return
-			case pkt := <-inboundChan:
+			case pkt := <-slot.sendCh:
 				_, werr := dtlsConn.Write(pkt.Data[:pkt.N])
 				packetPool.Put(pkt)
 				if werr != nil {
