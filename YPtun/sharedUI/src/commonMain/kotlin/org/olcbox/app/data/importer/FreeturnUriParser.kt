@@ -29,10 +29,14 @@ object FreeturnUriParser {
         val serverIp: String,
         /** Peer (VPS) port carried after `@`, for display/dedup. */
         val serverPort: Int,
-        /** Local port the freeturn client raises = the WireGuard Endpoint port. */
+        /** Local port the freeturn client raises (= WireGuard Endpoint port in udp mode; 0 in tcp). */
         val listenPort: Int,
-        /** A sing-box wireguard outbound (verbatim ProxyProfile.rawOutbound). */
+        /** Tunnel mode: "udp" (WireGuard) or "tcp" (Proxy/bonded). */
+        val mode: String,
+        /** sing-box wireguard outbound (verbatim ProxyProfile.rawOutbound) — udp mode only; "" otherwise. */
         val wgOutboundJson: String,
+        /** Exit proxy share link (vless/vmess/trojan/ss) decoded from `vless=` — tcp mode only; "" otherwise. */
+        val exitProxyLink: String,
         /** Optional human comment after `$`. */
         val comment: String,
     )
@@ -62,21 +66,33 @@ object FreeturnUriParser {
         if (peer.isBlank()) return null
         val (serverIp, serverPort) = UriCodec.splitHostPort(peer) ?: return null
 
-        // 4. remaining: <provider>?<transport><k=v&...> — we only need the wg= param.
+        // 4. remaining: <provider>?<transport><k=v&...>. udp embeds the WireGuard outbound as `wg=`,
+        //    tcp (Proxy/bonded) embeds the exit proxy share link as `vless=` (both base64url). The link
+        //    type is decided by which payload is present (mode= is the tiebreaker), so a tcp/bonded
+        //    link no longer fails to import just because it carries no WireGuard config.
         val params = extractAngleParams(s)
-        val wgConf = params["wg"]
-            ?.let { SubscriptionDecoder.decodeBase64Chunk(it) }
-            ?: return null
+        val cm = comment.let(UriCodec::percentDecode)
+        val wgB64 = params["wg"]
+        val exitB64 = params["vless"] ?: params["proxy"]
+        val mode = params["mode"]?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
 
+        // tcp / Proxy-bonded: needs the embedded exit proxy link. No WireGuard outbound.
+        if (exitB64 != null && (mode == "tcp" || wgB64 == null)) {
+            val exit = SubscriptionDecoder.decodeBase64Chunk(exitB64)?.trim().orEmpty()
+            if (exit.isBlank()) return null
+            return FreeturnLink(
+                uri = trimmed, serverIp = serverIp, serverPort = serverPort,
+                listenPort = 0, mode = "tcp", wgOutboundJson = "", exitProxyLink = exit, comment = cm,
+            )
+        }
+
+        // udp / WireGuard: decode the embedded wg-quick INI into a sing-box wireguard outbound.
+        val wgConf = wgB64?.let { SubscriptionDecoder.decodeBase64Chunk(it) } ?: return null
         val wg = parseWgConf(wgConf) ?: return null
-
         return FreeturnLink(
-            uri = trimmed,
-            serverIp = serverIp,
-            serverPort = serverPort,
-            listenPort = wg.endpointPort,
-            wgOutboundJson = wg.outboundJson,
-            comment = comment.let(UriCodec::percentDecode),
+            uri = trimmed, serverIp = serverIp, serverPort = serverPort,
+            listenPort = wg.endpointPort, mode = "udp",
+            wgOutboundJson = wg.outboundJson, exitProxyLink = "", comment = cm,
         )
     }
 

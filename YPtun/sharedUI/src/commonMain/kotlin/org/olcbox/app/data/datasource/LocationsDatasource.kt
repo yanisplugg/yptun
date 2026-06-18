@@ -1359,22 +1359,47 @@ class LocationsRepositoryImpl(
         val link = FreeturnUriParser.parse(line) ?: return null
 
         val name = link.comment.ifBlank { "VK-TURN ${link.serverIp}" }
-        val location = LocationConfig(
-            name = name,
-            engine = EngineType.VkTurn,
-            proxy = ProxyProfile(
-                tag = name,
-                type = "wireguard",
-                server = link.serverIp,
-                serverPort = link.serverPort,
-                rawOutbound = link.wgOutboundJson,
-            ),
-            vkturn = VkTurnConfig(
-                uri = link.uri,
-                vkLink = "",
-                listenPort = link.listenPort,
-            ),
-        ).normalized()
+        val location = if (link.mode == "tcp") {
+            // tcp / Proxy-bonded: the exit is a normal proxy dialled THROUGH the local freeturn tcp
+            // listener. Mirror VkTurnComposer.compose's PROXY branch — rewrite server→127.0.0.1:<listen>
+            // and pin the SNI to the real host (else TLS validates against 127.0.0.1 and resets).
+            val listenPort = LocationConfig.DEFAULT_FREETURN_PORT
+            val base = ShareLinkParser.parse(link.exitProxyLink) ?: ProxyProfile()
+            LocationConfig(
+                name = name,
+                engine = EngineType.VkTurn,
+                proxy = base.copy(
+                    tag = name,
+                    sni = base.sni.ifBlank { base.server },
+                    server = "127.0.0.1",
+                    serverPort = listenPort,
+                ),
+                vkturn = VkTurnConfig(
+                    uri = link.uri,
+                    vkLink = "",
+                    listenPort = listenPort,
+                    outbound = VkTurnConfig.OUTBOUND_PROXY,
+                    outboundProxyLink = link.exitProxyLink,
+                ),
+            ).normalized()
+        } else {
+            LocationConfig(
+                name = name,
+                engine = EngineType.VkTurn,
+                proxy = ProxyProfile(
+                    tag = name,
+                    type = "wireguard",
+                    server = link.serverIp,
+                    serverPort = link.serverPort,
+                    rawOutbound = link.wgOutboundJson,
+                ),
+                vkturn = VkTurnConfig(
+                    uri = link.uri,
+                    vkLink = "",
+                    listenPort = link.listenPort,
+                ),
+            ).normalized()
+        }
 
         val base = "${link.serverIp}_${link.serverPort}"
             .lowercase()
