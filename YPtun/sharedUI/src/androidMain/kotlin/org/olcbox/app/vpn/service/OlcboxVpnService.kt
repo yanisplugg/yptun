@@ -1174,17 +1174,22 @@ class OlcboxVpnService : VpnService() {
             // (WireGuard/AmneziaWG) tunnel makes the client fail to start. Strip it defensively.
             val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
                 else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
-            // Scale the parallel TURN stream count with the number of VK call links so throughput grows
-            // per call (~15 Mbit each) instead of a fixed pool being re-split across more calls (which is
-            // why adding links didn't speed anything up). splitLinks() in freeturn splits on
-            // newline/CR/tab/space/comma — count the same way. An explicit vk.streams acts as a floor so
-            // power users can still request a larger total; result is clamped to a sane maximum.
+            // Parallel TURN stream count, scaled GENTLY with the number of VK call links. The earlier
+            // aggressive scaling (links×10) made it SLOWER, not faster: a single WireGuard flow sprayed
+            // across 20-64 TURN paths of differing latency reorders past WG's replay window → drops →
+            // throughput collapse, plus the per-packet obf on dozens of streams saturates the phone's CPU.
+            // So keep a proven base (~one call's worth) and add only a FEW streams per EXTRA call, capped
+            // low, to draw from more calls without exploding the parallel-path count. splitLinks() in
+            // freeturn splits on newline/CR/tab/space/comma — count the same way. An explicit vk.streams
+            // still acts as a power-user floor (up to a hard safety ceiling).
             val linkCount = vk.vkLink
                 .split('\n', '\r', '\t', ' ', ',')
                 .count { it.isNotBlank() }
                 .coerceAtLeast(1)
-            val effectiveStreams = maxOf(vk.streams, linkCount * VKTURN_STREAMS_PER_CALL)
-                .coerceAtMost(VKTURN_STREAMS_MAX)
+            val autoStreams = (VKTURN_STREAMS_BASE + (linkCount - 1) * VKTURN_STREAMS_PER_EXTRA_CALL)
+                .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
+            val effectiveStreams = maxOf(vk.streams, autoStreams)
+                .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
             addLog("Starting VK-TURN freeturn listener on $listenAddr (links=$linkCount, streams=$effectiveStreams)")
             Freeturn.start(freeturnUri, listenAddr, vk.vkLink, effectiveStreams.toLong())
             coroutineContext.ensureActive()
@@ -2991,14 +2996,19 @@ class OlcboxVpnService : VpnService() {
         private const val SOCKS_RELEASE_POLL_MS = 100L
         private const val VKTURN_RELAY_READY_TIMEOUT_MS = 20_000L
         private const val VKTURN_RELAY_POLL_MS = 200L
-        // VK-TURN throughput scales with the number of call links: freeturn fans its parallel TURN
-        // streams across the calls (multiProvider), and each VK call tops out near ~15 Mbit. To make
-        // "more calls = more speed", give EACH call its own full set of streams instead of re-splitting
-        // a fixed pool thinner as calls are added (which gave no speed-up). ~10 streams ≈ one call's cap.
-        private const val VKTURN_STREAMS_PER_CALL = 10
-        // Safety cap on the auto-scaled total so a huge pasted link list can't spawn a runaway number of
-        // DTLS handshakes / TURN allocations. ~6 calls still scale linearly before this clamps.
-        private const val VKTURN_STREAMS_MAX = 64
+        // VK-TURN parallel TURN streams. freeturn fans these across the call links (multiProvider), so
+        // more streams = more parallel relay paths. But a single WireGuard flow degrades when sprayed
+        // across too many paths of differing latency (reorder past WG's replay window → drops) and each
+        // stream's per-packet obf burns phone CPU — so "more streams" backfires past a point. Keep a
+        // proven BASE (≈ one call's worth) and add only a few streams per EXTRA call, capped LOW.
+        private const val VKTURN_STREAMS_BASE = 10
+        private const val VKTURN_STREAMS_PER_EXTRA_CALL = 3
+        // Low auto cap on the gently-scaled total: 1 call→10, 2→13, 3+→16. Keeps the reorder/CPU cost
+        // bounded (the regression came from letting this run to 20-64).
+        private const val VKTURN_STREAMS_AUTO_MAX = 16
+        // Hard ceiling that even an explicit power-user vk.streams can't exceed, so a huge pasted link
+        // list / manual value can't spawn a runaway number of DTLS handshakes / TURN allocations.
+        private const val VKTURN_STREAMS_HARD_MAX = 64
         private const val SOCKET_CONNECT_TIMEOUT_MS = 150
         private const val WAKE_LOCK_REFRESH_INTERVAL_MS = 30_000L
         private const val WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L
