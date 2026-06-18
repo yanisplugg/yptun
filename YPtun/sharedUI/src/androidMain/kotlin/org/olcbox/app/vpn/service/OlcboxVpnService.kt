@@ -775,6 +775,60 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
+    /**
+     * Brings up the olcRTC SOCKS that fronts [port]: MULTI-ROOM (round-robin balancer over the main room
+     * + each extra) when [config] asks for it, otherwise the proven single-room singleton. Shared by
+     * Stealth (bridge port) and Chain (chain port). Blocks until ready; on a multi-room failure it cleans
+     * up and falls back to single-room so the user is never left offline. The caller must have already
+     * configured the transport/cookies/binding and is responsible for markRtcConnected + generation
+     * checks afterwards. Rooms live on consecutive loopback ports above [port] and share the bridge
+     * credentials (password-protected, loopback-only — no open proxy).
+     */
+    private suspend fun startOlcrtcSocks(config: LocationConfig, deviceId: String, port: Int) {
+        if (config.usesMultiRoom()) {
+            val specs = config.multiRoomSpecs().map {
+                OlcrtcRoomManager.RoomSpec(
+                    carrier = it.provider.ifBlank { config.bypassProvider },
+                    transport = it.transport.ifBlank { config.transport },
+                    room = it.room,
+                    clientId = deviceId,
+                    keyHex = it.key,
+                )
+            }
+            addLog("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + round-robin balancer on $port")
+            val mgr = OlcrtcRoomManager(::addLog)
+            olcrtcRoomManager = mgr
+            activeMultiRoomTotal = specs.size
+            val ok = withContext(Dispatchers.IO) {
+                mgr.start(
+                    rooms = specs,
+                    listenHost = socksListenHost,
+                    listenPort = port,
+                    basePort = port + 101,
+                    user = socksUsername,
+                    pass = socksPassword,
+                )
+            }
+            if (ok) return
+            // Don't leave the user offline if multi-room can't bring a room/balancer up — clean it up and
+            // fall back to the proven single-room path (the main room via the singleton).
+            addLog("Multi-room failed to start — falling back to single room")
+            olcrtcRoomManager?.let { runCatching { it.stop() } }
+            olcrtcRoomManager = null
+            activeMultiRoomTotal = 0
+        } else {
+            addLog(
+                "Starting olcRTC provider=${config.bypassProvider}, " +
+                    "transport=${config.transport}, room=${config.id}"
+            )
+        }
+        Mobile.startWithTransport(
+            config.bypassProvider, config.transport, config.id, deviceId, config.key,
+            port.toLong(), socksUsername, socksPassword,
+        )
+        Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+    }
+
     private suspend fun startStealthCore(
         location: LocationConfig,
         upstream: Network,
@@ -798,63 +852,7 @@ class OlcboxVpnService : VpnService() {
             configureMobileTransport(config)
             applyTelemostCookies(config)
             lastMobileProvider = config.bypassProvider
-            if (config.usesMultiRoom()) {
-                // Multi-room: raise the main room + each extra as an INDEPENDENT olcRTC instance, fronted
-                // by a round-robin TCP balancer on the bridge port. Rooms live on loopback ports above the
-                // balancer; all share the bridge credentials (password-protected, no open proxy).
-                val specs = config.multiRoomSpecs().map {
-                    OlcrtcRoomManager.RoomSpec(
-                        carrier = it.provider.ifBlank { config.bypassProvider },
-                        transport = it.transport.ifBlank { config.transport },
-                        room = it.room,
-                        clientId = deviceId,
-                        keyHex = it.key,
-                    )
-                }
-                addLog("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + round-robin balancer")
-                val mgr = OlcrtcRoomManager(::addLog)
-                olcrtcRoomManager = mgr
-                activeMultiRoomTotal = specs.size
-                val ok = withContext(Dispatchers.IO) {
-                    mgr.start(
-                        rooms = specs,
-                        listenHost = socksListenHost,
-                        listenPort = targetSocksPort,
-                        basePort = targetSocksPort + 101,
-                        user = socksUsername,
-                        pass = socksPassword,
-                    )
-                }
-                if (!ok) {
-                    // Don't leave the user offline if multi-room can't bring a room/balancer up — clean it
-                    // up and fall back to the proven single-room path (the main room via the singleton).
-                    addLog("Multi-room failed to start — falling back to single room")
-                    olcrtcRoomManager?.let { runCatching { it.stop() } }
-                    olcrtcRoomManager = null
-                    activeMultiRoomTotal = 0
-                    Mobile.startWithTransport(
-                        config.bypassProvider, config.transport, config.id, deviceId, config.key,
-                        targetSocksPort.toLong(), socksUsername, socksPassword,
-                    )
-                    Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
-                }
-            } else {
-                addLog(
-                    "Starting olcRTC provider=${config.bypassProvider}, " +
-                        "transport=${config.transport}, room=${config.id}"
-                )
-                Mobile.startWithTransport(
-                    config.bypassProvider,
-                    config.transport,
-                    config.id,
-                    deviceId,
-                    config.key,
-                    targetSocksPort.toLong(),
-                    socksUsername,
-                    socksPassword
-                )
-                Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
-            }
+            startOlcrtcSocks(config, deviceId, targetSocksPort)
             if (requestedGeneration != generation) {
                 addLog("olcRTC start superseded")
                 return false
@@ -938,17 +936,9 @@ class OlcboxVpnService : VpnService() {
                 applyTelemostCookies(config)
                 addLog("Starting olcRTC (chain) provider=${config.bypassProvider}, room=${config.id}")
                 lastMobileProvider = config.bypassProvider
-                Mobile.startWithTransport(
-                    config.bypassProvider,
-                    config.transport,
-                    config.id,
-                    deviceIdentityProvider.hwid(),
-                    config.key,
-                    chainPort.toLong(),
-                    socksUsername,
-                    socksPassword
-                )
-                Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+                // Same multi-room fan-out as Stealth, but fronting the CHAIN port that sing-box/Xray dials
+                // its VLESS outbound through — so the proxy is wrapped in an aggregated WebRTC tunnel.
+                startOlcrtcSocks(config, deviceIdentityProvider.hwid(), chainPort)
                 markRtcConnected()
                 coroutineContext.ensureActive()
                 if (requestedGeneration != generation) return false
