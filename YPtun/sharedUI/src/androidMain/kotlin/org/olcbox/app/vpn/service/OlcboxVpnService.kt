@@ -787,7 +787,7 @@ class OlcboxVpnService : VpnService() {
      * checks afterwards. Rooms live on consecutive loopback ports above [port] and share the bridge
      * credentials (password-protected, loopback-only — no open proxy).
      */
-    private suspend fun startOlcrtcSocks(config: LocationConfig, deviceId: String, port: Int) {
+    private suspend fun startOlcrtcSocks(config: LocationConfig, deviceId: String, port: Int, enableBond: Boolean = false) {
         if (config.usesMultiRoom()) {
             val specs = config.multiRoomSpecs().map {
                 OlcrtcRoomManager.RoomSpec(
@@ -798,7 +798,12 @@ class OlcboxVpnService : VpnService() {
                     keyHex = it.key,
                 )
             }
-            addLog("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + round-robin balancer on $port")
+            // Stage-2 bond is meaningful only for the Chain→VLESS single flow ([enableBond] from the Chain
+            // caller); Stealth keeps round-robin (parallel app flows already aggregate there).
+            val bond = enableBond && config.usesMultiRoomBond()
+            val bondPort = config.effectiveBondPort()
+            val mode = if (bond) "bond (port $bondPort)" else "round-robin"
+            addLog("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + $mode balancer on $port")
             val mgr = OlcrtcRoomManager(::addLog)
             olcrtcRoomManager = mgr
             activeMultiRoomTotal = specs.size
@@ -810,6 +815,9 @@ class OlcboxVpnService : VpnService() {
                     basePort = port + 101,
                     user = socksUsername,
                     pass = socksPassword,
+                    bond = bond,
+                    bondHost = "127.0.0.1",
+                    bondPort = bondPort,
                 )
             }
             if (ok) return
@@ -941,7 +949,9 @@ class OlcboxVpnService : VpnService() {
                 lastMobileProvider = config.bypassProvider
                 // Same multi-room fan-out as Stealth, but fronting the CHAIN port that sing-box/Xray dials
                 // its VLESS outbound through — so the proxy is wrapped in an aggregated WebRTC tunnel.
-                startOlcrtcSocks(config, deviceIdentityProvider.hwid(), chainPort)
+                // enableBond: Stage-2 — the single Chain→VLESS flow is striped across rooms and reassembled
+                // server-side (needs the bond reassembler on the olcRTC host) instead of round-robined.
+                startOlcrtcSocks(config, deviceIdentityProvider.hwid(), chainPort, enableBond = true)
                 markRtcConnected()
                 coroutineContext.ensureActive()
                 if (requestedGeneration != generation) return false

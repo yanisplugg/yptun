@@ -4,9 +4,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import mobile.Mobile
+import java.io.DataInputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -14,6 +18,7 @@ import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Multi-room olcRTC manager: raises up to N INDEPENDENT olcRTC room instances (different room/provider
@@ -73,6 +78,16 @@ class OlcrtcRoomManager(
     private var stopped = false
     private val rr = AtomicInteger(0)
 
+    // Stage-2 bond: when enabled, each accepted connection is STRIPED across all rooms (bonded into one
+    // ordered stream) instead of round-robined to a single room. The lanes dial the server bond
+    // reassembler [bondHost]:[bondPort] THROUGH each room's SOCKS (auth = [bondUser]/[bondPass]).
+    @Volatile private var bondEnabled = false
+    private var bondHost = "127.0.0.1"
+    private var bondPort = 0
+    private var bondUser = ""
+    private var bondPass = ""
+    private val bondConnSeq = AtomicLong(0)
+
     // Guards [ports] and [slotHandles]; [backendPorts] is the published @Volatile snapshot read on the
     // hot path. slotHandles maps port → room handle so the balancer can ask the core if that room is healthy.
     private val poolLock = Any()
@@ -103,12 +118,20 @@ class OlcrtcRoomManager(
         pass: String,
         maxRooms: Int = 5,
         readyTimeoutMs: Int = 20_000,
+        bond: Boolean = false,
+        bondHost: String = "127.0.0.1",
+        bondPort: Int = 0,
     ): Boolean {
         val specs = rooms.take(maxRooms)
         if (specs.isEmpty()) {
             log("multiroom: no room specs to start")
             return false
         }
+        this.bondEnabled = bond && bondPort in 1..65535
+        this.bondHost = bondHost
+        this.bondPort = bondPort
+        this.bondUser = user
+        this.bondPass = pass
         // Fires the instant ANY room is ready, so we start the balancer without waiting for the rest.
         val firstReady = CountDownLatch(1)
         // One SUPERVISOR per room (parallel, daemon): brings the room up and, if the initial connect
@@ -200,14 +223,15 @@ class OlcrtcRoomManager(
             ss.bind(InetSocketAddress(host, port))
             serverSocket = ss
             managerScope.launch {
-                log("multiroom: round-robin balancer on $host:$port over ${backendPorts.size} room(s)")
+                val mode = if (bondEnabled) "bond" else "round-robin"
+                log("multiroom: $mode balancer on $host:$port over ${backendPorts.size} room(s)")
                 while (isActive && !stopped) {
                     val downstream = try {
                         ss.accept()
                     } catch (_: Exception) {
                         break
                     }
-                    forward(downstream, host)
+                    if (bondEnabled) forwardBonded(downstream, host) else forward(downstream, host)
                 }
             }
             true
@@ -274,6 +298,150 @@ class OlcrtcRoomManager(
             }
         }
         return null
+    }
+
+    /**
+     * Stage-2 BOND forward: stripes ONE accepted connection across ALL live rooms (a lane per room) and
+     * reassembles the return path in order, so a single Chain→VLESS flow aggregates bandwidth across
+     * rooms. Each lane dials the server bond reassembler [bondHost]:[bondPort] THROUGH a room's SOCKS,
+     * announces itself with a bond Hello (shared connID, its lane index, the final lane count), then the
+     * stream is split/reordered by per-frame sequence numbers (see [OlcrtcBond]).
+     */
+    private fun forwardBonded(downstream: Socket, host: String) {
+        liveSockets.add(downstream)
+        managerScope.launch {
+            val ports = backendPorts
+            val lanes = mutableListOf<Socket>()
+            try {
+                if (ports.isEmpty()) {
+                    log("multiroom/bond: no live room to stripe across")
+                    return@launch
+                }
+                val connId = bondConnSeq.incrementAndGet()
+                // 1. Open a lane through EACH room to the server bond reassembler.
+                for (p in ports) {
+                    val s = Socket()
+                    try {
+                        s.connect(InetSocketAddress(host, p), 4_000)
+                        OlcrtcBond.socks5Connect(s, bondUser, bondPass, bondHost, bondPort)
+                        lanes.add(s)
+                        liveSockets.add(s)
+                    } catch (e: Exception) {
+                        runCatching { s.close() }
+                        log("multiroom/bond: lane via 127.0.0.1:$p failed: ${e.message}")
+                    }
+                }
+                if (lanes.isEmpty()) {
+                    log("multiroom/bond: no lanes came up for conn $connId")
+                    return@launch
+                }
+                // 2. Announce the bond on every lane with the FINAL lane count (the server waits for that
+                //    many lanes of this connID before reassembling).
+                val count = lanes.size
+                lanes.forEachIndexed { i, s -> OlcrtcBond.writeHello(s.getOutputStream(), connId, i, count) }
+                // 3. Stripe downstream → lanes and reorder lanes → downstream until either side ends.
+                runBondSession(downstream, lanes)
+            } catch (_: Exception) {
+                // drop the connection; the app retries
+            } finally {
+                lanes.forEach { liveSockets.remove(it); runCatching { it.close() } }
+                liveSockets.remove(downstream)
+                runCatching { downstream.close() }
+            }
+        }
+    }
+
+    /** Symmetric split/reassemble core: downstream→lanes (round-robin DATA + FIN) and lanes→downstream
+     *  (reorder by seq, close at the FIN seq). Mirrors bond.go bondPair. */
+    private suspend fun runBondSession(downstream: Socket, lanes: List<Socket>) = coroutineScope {
+        val recv = Channel<OlcrtcBond.Frame>(capacity = 1024)
+        val laneOuts = lanes.map { it.getOutputStream() }
+        val deadLanes = BooleanArray(lanes.size)
+
+        // One reader per lane → fan-in into [recv]; close [recv] once every lane reader has stopped.
+        val readers = lanes.mapIndexed { idx, s ->
+            launch {
+                val din = DataInputStream(s.getInputStream())
+                try {
+                    while (true) {
+                        val f = OlcrtcBond.readFrame(din) ?: break
+                        recv.send(f)
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    deadLanes[idx] = true
+                }
+            }
+        }
+        launch { readers.joinAll(); recv.close() }
+
+        // downstream → lanes: round-robin seq-tagged DATA frames; FIN(seq) to every live lane on EOF.
+        val stripe = launch {
+            val buf = ByteArray(OlcrtcBond.MAX_CHUNK)
+            val din = downstream.getInputStream()
+            var seq = 0L
+            var li = 0
+            try {
+                while (true) {
+                    val n = din.read(buf)
+                    if (n < 0) break
+                    if (n == 0) continue
+                    var wrote = false
+                    for (attempt in laneOuts.indices) {
+                        val idx = li % laneOuts.size
+                        li++
+                        if (deadLanes[idx]) continue
+                        try {
+                            OlcrtcBond.writeFrame(laneOuts[idx], OlcrtcBond.FRAME_DATA, seq, buf, n)
+                            wrote = true
+                            break
+                        } catch (_: Exception) {
+                            deadLanes[idx] = true
+                        }
+                    }
+                    if (!wrote) break // all lanes dead
+                    seq++
+                }
+            } catch (_: Exception) {
+            }
+            for (i in laneOuts.indices) {
+                if (!deadLanes[i]) runCatching { OlcrtcBond.writeFrame(laneOuts[i], OlcrtcBond.FRAME_FIN, seq, null, 0) }
+            }
+        }
+
+        // lanes → downstream: write in Seq order, closing the write side at the FIN seq.
+        val reorder = launch {
+            val pending = HashMap<Long, ByteArray>()
+            var expect = 0L
+            var finSeq: Long? = null
+            val dout = downstream.getOutputStream()
+            try {
+                for (f in recv) {
+                    when (f.type) {
+                        OlcrtcBond.FRAME_DATA -> pending[f.seq] = f.data
+                        OlcrtcBond.FRAME_FIN -> if (finSeq == null || f.seq < finSeq!!) finSeq = f.seq
+                    }
+                    var flushed = false
+                    while (true) {
+                        val d = pending.remove(expect) ?: break
+                        if (d.isNotEmpty()) { dout.write(d); flushed = true }
+                        expect++
+                    }
+                    if (flushed) dout.flush()
+                    finSeq?.let { if (expect >= it) return@launch }
+                }
+            } catch (_: Exception) {
+            } finally {
+                runCatching { downstream.shutdownOutput() }
+            }
+        }
+
+        stripe.join()
+        reorder.join()
+        // Unblock any lingering lane readers and release sockets.
+        runCatching { downstream.close() }
+        lanes.forEach { runCatching { it.close() } }
+        recv.close()
     }
 
     /** Stops the balancer, every in-flight connection and every room. Idempotent; releases the port. */

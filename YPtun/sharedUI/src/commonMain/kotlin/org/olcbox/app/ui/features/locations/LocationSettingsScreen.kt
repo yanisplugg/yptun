@@ -375,10 +375,15 @@ fun LocationSettingsScreen(
                     rooms = config.extraRooms,
                     mainProvider = config.bypassProvider,
                     saving = isSaving,
+                    isChain = config.engine == EngineType.Chain,
+                    bondEnabled = config.multiRoomBond,
+                    bondPort = config.bondPort.takeIf { it > 0 }?.toString() ?: "",
                     onToggle = viewModel::onMultiRoomToggle,
                     onAdd = viewModel::onExtraRoomAdd,
                     onChange = viewModel::onExtraRoomChanged,
-                    onRemove = viewModel::onExtraRoomRemoved
+                    onRemove = viewModel::onExtraRoomRemoved,
+                    onBondToggle = viewModel::onMultiRoomBondToggle,
+                    onBondPortChange = viewModel::onBondPortChanged
                 )
             }
 
@@ -401,10 +406,15 @@ private fun MultiRoomSection(
     rooms: List<ExtraRoom>,
     mainProvider: String,
     saving: Boolean,
+    isChain: Boolean,
+    bondEnabled: Boolean,
+    bondPort: String,
     onToggle: (Boolean) -> Unit,
     onAdd: () -> Unit,
     onChange: (Int, (ExtraRoom) -> ExtraRoom) -> Unit,
-    onRemove: (Int) -> Unit
+    onRemove: (Int) -> Unit,
+    onBondToggle: (Boolean) -> Unit,
+    onBondPortChange: (String) -> Unit
 ) {
     val providers = listOf(
         LocationConfig.PROVIDER_TELEMOST,
@@ -426,6 +436,26 @@ private fun MultiRoomSection(
             onCheckedChange = onToggle
         )
         if (enabled) {
+            // Stage-2 bond (Chain only): aggregate the SINGLE proxy flow across rooms instead of
+            // round-robining connections. Needs the bond reassembler running on the olcRTC server.
+            if (isChain) {
+                VkTurnSwitchRow(
+                    label = "Бондинг потока (Stage-2)",
+                    checked = bondEnabled,
+                    enabled = !saving,
+                    onCheckedChange = onBondToggle
+                )
+                if (bondEnabled) {
+                    VkTurnField(
+                        value = bondPort,
+                        onValueChange = { v -> onBondPortChange(v.filter(Char::isDigit)) },
+                        label = "Порт bond-сервера",
+                        placeholder = "${LocationConfig.DEFAULT_BOND_PORT} (по умолчанию) — на сервере olcRTC",
+                        enabled = !saving,
+                        keyboardType = KeyboardType.Number
+                    )
+                }
+            }
             rooms.forEachIndexed { index, room ->
                 val prov = room.provider.ifBlank { mainProvider }
                 Column(

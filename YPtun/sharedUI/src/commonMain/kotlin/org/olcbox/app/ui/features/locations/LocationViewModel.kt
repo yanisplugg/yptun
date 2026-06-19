@@ -535,6 +535,15 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(multiRoomEnabled = enabled)
     }
 
+    /** Stage-2 (Chain): bond the rooms into ONE reassembled stream instead of round-robin. */
+    fun onMultiRoomBondToggle(enabled: Boolean) {
+        editingConfig = editingConfig.copy(multiRoomBond = enabled)
+    }
+
+    fun onBondPortChanged(value: String) {
+        editingConfig = editingConfig.copy(bondPort = value.filter(Char::isDigit).toIntOrNull() ?: 0)
+    }
+
     fun onExtraRoomAdd() {
         if (editingConfig.extraRooms.size >= LocationConfig.MAX_EXTRA_ROOMS) return
         editingConfig = editingConfig.copy(

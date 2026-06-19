@@ -224,6 +224,18 @@ data class LocationConfig(
     /** Additional olcRTC rooms raised alongside the main one when [multiRoomEnabled]. */
     @SerialName("extra_rooms")
     val extraRooms: List<ExtraRoom> = emptyList(),
+    /**
+     * Stage-2 bonding (Chain only): when true, the Chain→VLESS flow is BONDED across the rooms (one
+     * stream striped over all room lanes and reassembled in order on the server) instead of round-robined
+     * per-connection. This lets a SINGLE flow aggregate bandwidth ("many→single→vless"). Requires the
+     * bond reassembler running on the olcRTC server at [bondPort]. Ignored for Stealth (per-connection
+     * round-robin already aggregates parallel app flows there).
+     */
+    @SerialName("multi_room_bond")
+    val multiRoomBond: Boolean = false,
+    /** Server-side bond reassembler port the rooms' SOCKS dials (127.0.0.1:bondPort); 0 → [DEFAULT_BOND_PORT]. */
+    @SerialName("bond_port")
+    val bondPort: Int = 0,
 ) {
     /** Effective list of rooms to raise for multi-room: the main room + the [extraRooms] (capped). */
     fun multiRoomSpecs(): List<ExtraRoom> = buildList {
@@ -234,6 +246,12 @@ data class LocationConfig(
     /** True when multi-room is on AND there's at least one valid EXTRA room (so it's worth fanning out). */
     fun usesMultiRoom(): Boolean =
         multiRoomEnabled && extraRooms.any { it.room.isNotBlank() && it.key.isNotBlank() }
+
+    /** True when the Chain flow should be BONDED across the rooms (Stage-2). Bond needs multiple rooms. */
+    fun usesMultiRoomBond(): Boolean = multiRoomBond && usesMultiRoom()
+
+    /** Effective server bond reassembler port. */
+    fun effectiveBondPort(): Int = bondPort.takeIf { it in 1..65535 } ?: DEFAULT_BOND_PORT
 
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
@@ -364,6 +382,9 @@ data class LocationConfig(
         const val DEFAULT_FREETURN_PORT = 9000
         /** Max ADDITIONAL multi-room rooms (so up to MAX_EXTRA_ROOMS+1 = 5 rooms run at once). */
         const val MAX_EXTRA_ROOMS = 4
+
+        /** Default server-side bond reassembler port (must match the bond-server on the olcRTC host). */
+        const val DEFAULT_BOND_PORT = 7700
 
         val supportedBypassProviders = listOf(
             PROVIDER_JAZZ,
@@ -721,7 +742,11 @@ data class LocationEntry(
     @SerialName("multi_room")
     val multiRoomEnabled: Boolean = false,
     @SerialName("extra_rooms")
-    val extraRooms: List<ExtraRoom> = emptyList()
+    val extraRooms: List<ExtraRoom> = emptyList(),
+    @SerialName("multi_room_bond")
+    val multiRoomBond: Boolean = false,
+    @SerialName("bond_port")
+    val bondPort: Int = 0
 ) {
     val location: LocationConfig
         get() {
@@ -759,6 +784,8 @@ data class LocationEntry(
                 routingProfileId = routingProfileId.orEmpty(),
                 multiRoomEnabled = multiRoomEnabled,
                 extraRooms = extraRooms,
+                multiRoomBond = multiRoomBond,
+                bondPort = bondPort,
             ).normalized()
         }
 
@@ -788,6 +815,8 @@ data class LocationEntry(
             transport = LocationTransportConfig.from(config),
             multiRoomEnabled = config.multiRoomEnabled,
             extraRooms = config.extraRooms,
+            multiRoomBond = config.multiRoomBond,
+            bondPort = config.bondPort,
             metadata = metadata
                 ?.normalized()
                 ?.takeUnless { it.isEmpty() }
@@ -823,6 +852,8 @@ data class LocationEntry(
                 transport = LocationTransportConfig.from(config),
                 multiRoomEnabled = config.multiRoomEnabled,
                 extraRooms = config.extraRooms,
+                multiRoomBond = config.multiRoomBond,
+                bondPort = config.bondPort,
                 metadata = metadata
             ).normalized()
         }
