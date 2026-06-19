@@ -71,6 +71,16 @@ data class VkTurnDraft(
     /** Proxy share link (vless/vmess/trojan/ss) used as the exit when outbound == proxy. */
     val outboundProxyLink: String = "",
     val proxyCore: ProxyCore = ProxyCore.Auto,
+    // VK-TURN transport core: "freeturn" (default) | "wdtt". WDTT fields are used only when core==wdtt.
+    val core: String = VkTurnConfig.CORE_FREETURN,
+    /** WDTT server "host:port" dialled over VK TURN (the wdtt-server / Peer). */
+    val wdttPeer: String = "",
+    /** WDTT connection password (the WRAP key is HKDF-derived from it). */
+    val wdttPassword: String = "",
+    /** WDTT TLS fingerprint for the VK auth flow (chrome/safari/ios/android/firefox). */
+    val wdttFingerprint: String = "chrome",
+    /** WDTT worker count; blank/0 → core default. */
+    val wdttWorkers: String = "",
 )
 
 /**
@@ -161,6 +171,11 @@ object VkTurnComposer {
             outbound = outbound,
             outboundProxyLink = if (outbound == VkTurnConfig.OUTBOUND_PROXY) draft.outboundProxyLink.trim() else "",
             proxyCore = draft.proxyCore,
+            core = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
+            wdttPeer = draft.wdttPeer.trim(),
+            wdttPassword = draft.wdttPassword.trim(),
+            wdttFingerprint = draft.wdttFingerprint.trim(),
+            wdttWorkers = draft.wdttWorkers.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
         )
         return vkturn to proxy
     }
@@ -183,6 +198,11 @@ object VkTurnComposer {
                 outbound = vkturn.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD },
                 outboundProxyLink = vkturn.outboundProxyLink,
                 proxyCore = vkturn.proxyCore,
+                core = vkturn.core.ifBlank { VkTurnConfig.CORE_FREETURN },
+                wdttPeer = vkturn.wdttPeer,
+                wdttPassword = vkturn.wdttPassword,
+                wdttFingerprint = vkturn.wdttFingerprint.ifBlank { "chrome" },
+                wdttWorkers = vkturn.wdttWorkers.takeIf { it > 0 }?.toString() ?: "",
             )
         }
 

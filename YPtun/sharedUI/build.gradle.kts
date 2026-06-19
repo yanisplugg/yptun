@@ -158,6 +158,8 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
     // (e.g. the freeturn wrapper / relay) re-trigger the gomobile bind.
     inputs.dir(coresRepoDir.resolve("../free-turn-proxy/freeturn"))
     inputs.dir(coresRepoDir.resolve("../free-turn-proxy/internal"))
+    // WDTT VK-TURN core (sibling replace module wg-turn-client); track its sources.
+    inputs.dir(coresRepoDir.resolve("../wdtt"))
     // AmneziaWG SOCKS bridge (sibling module) + its local amneziawg-go fork.
     inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
     // Hysteria2 SOCKS bridge (sibling module on apernet/hysteria).
@@ -187,6 +189,7 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         "github.com/openlibrecommunity/olcrtc/mobile",
         "github.com/sagernet/sing-box/experimental/libbox",
         "github.com/samosvalishe/free-turn-proxy/freeturn",
+        "wg-turn-client/wdttmobile",
         "github.com/olc/awgproxy/awg",
         "github.com/olc/hysteria2proxy/hy2",
         "kazcores/xraybridge"

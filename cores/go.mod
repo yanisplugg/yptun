@@ -9,6 +9,7 @@ require (
 	github.com/sagernet/sing-box v1.12.25
 	github.com/samosvalishe/free-turn-proxy v0.0.0
 	github.com/xtls/xray-core v1.260327.0
+	wg-turn-client v0.0.0
 )
 
 require (
@@ -230,3 +231,5 @@ replace github.com/olc/awgproxy => ../awgproxy
 replace github.com/olc/hysteria2proxy => ../hysteria2proxy
 
 replace github.com/amnezia-vpn/amneziawg-go => ../amneziawg-go
+
+replace wg-turn-client => ../wdtt

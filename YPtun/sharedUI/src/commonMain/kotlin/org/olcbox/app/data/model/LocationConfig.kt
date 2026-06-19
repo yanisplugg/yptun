@@ -55,7 +55,31 @@ data class VkTurnConfig(
      */
     @SerialName("proxy_core")
     val proxyCore: ProxyCore = ProxyCore.Auto,
+    /**
+     * Which VK-TURN transport CORE raises the local listener the WG outbound dials:
+     * - [CORE_FREETURN]: the free-turn-proxy client (driven by [uri], the freeturn:// link).
+     * - [CORE_WDTT]: the WDTT (wg-turn-client) core — chunk-affinity dispatch across VK call-links so a
+     *   single WG flow actually aggregates. Driven by [wdttPeer]/[wdttPassword]/[vkLink] (call links =
+     *   the VK hashes); the wg= keys still come from [LocationConfig.proxy] (or the server's GETCONF).
+     */
+    @SerialName("core")
+    val core: String = CORE_FREETURN,
+    /** WDTT server "host:port" the core dials over VK TURN (the wdtt-server / Peer). */
+    @SerialName("wdtt_peer")
+    val wdttPeer: String = "",
+    /** WDTT connection password — the WRAP key is HKDF-derived from it server-side and client-side. */
+    @SerialName("wdtt_password")
+    val wdttPassword: String = "",
+    /** WDTT TLS fingerprint for the VK auth flow: chrome/safari/ios/android/firefox (blank → chrome). */
+    @SerialName("wdtt_fingerprint")
+    val wdttFingerprint: String = "",
+    /** WDTT worker count; 0 → core default. Clamped to [9,108] and rounded to a multiple of 9 in-core. */
+    @SerialName("wdtt_workers")
+    val wdttWorkers: Int = 0,
 ) {
+    /** True when the WDTT transport core is selected (vs. the default freeturn core). */
+    fun usesWdtt(): Boolean = core.equals(CORE_WDTT, ignoreCase = true)
+
     fun isComplete(): Boolean =
         isStorable() && vkLink.isNotBlank()
 
@@ -80,15 +104,21 @@ data class VkTurnConfig(
         const val OUTBOUND_WIREGUARD = "wireguard"
         const val OUTBOUND_AMNEZIAWG = "amneziawg"
         const val OUTBOUND_PROXY = "proxy"
+
+        const val CORE_FREETURN = "freeturn"
+        const val CORE_WDTT = "wdtt"
     }
 
     /**
-     * True when the freeturn link + WG transport are present. The per-client [vkLink]
-     * is filled in by the user via the location settings after import, so a location
-     * is storable (and shown in the list) before [isComplete] is satisfied.
+     * True when the transport core's required artefacts + WG transport are present. The per-client
+     * [vkLink] is filled in by the user via the location settings after import, so a location is
+     * storable (and shown in the list) before [isComplete] is satisfied. For the WDTT core there is no
+     * freeturn:// link — the [wdttPeer] (wdtt-server addr) is the gating artefact instead.
      */
-    fun isStorable(): Boolean =
-        uri.startsWith("freeturn://") && listenPort in 1..65535
+    fun isStorable(): Boolean = listenPort in 1..65535 && when {
+        usesWdtt() -> wdttPeer.isNotBlank()
+        else -> uri.startsWith("freeturn://")
+    }
 }
 
 /**

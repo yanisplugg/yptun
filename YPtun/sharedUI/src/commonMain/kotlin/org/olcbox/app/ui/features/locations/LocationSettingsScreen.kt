@@ -672,7 +672,69 @@ private fun LazyListScope.vkTurnSection(
         )
     }
 
+    // VK-TURN transport core: freeturn (default) vs WDTT. WDTT aggregates a single WG flow across the
+    // VK call-links via chunk-affinity dispatch; it dials its own wdtt-server and reuses the WG exit below.
     item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "Транспортное ядро VK-TURN",
+                subtitle = "freeturn — стандартный клиент; WDTT — агрегация одного WG-потока по звонкам (chunk-dispatch)"
+            )
+            SettingsDropdown(
+                label = "Ядро",
+                selectedValue = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
+                options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT),
+                enabled = enabled,
+                onValueSelected = { v -> onChange { it.copy(core = v) } },
+                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "WDTT (агрегация по звонкам)" else "freeturn (стандарт)" }
+            )
+            if (draft.core == VkTurnConfig.CORE_WDTT) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    VkTurnField(
+                        value = draft.wdttPeer,
+                        onValueChange = { v -> onChange { it.copy(wdttPeer = v.trim()) } },
+                        label = "WDTT-сервер (host:port)",
+                        placeholder = "203.0.113.7:56000",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Uri,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                VkTurnField(
+                    value = draft.wdttPassword,
+                    onValueChange = { v -> onChange { it.copy(wdttPassword = v) } },
+                    label = "Пароль WDTT",
+                    placeholder = "ключ WRAP выводится из пароля",
+                    enabled = enabled
+                )
+                SettingsDropdown(
+                    label = "TLS-отпечаток (VK auth)",
+                    selectedValue = draft.wdttFingerprint.ifBlank { "chrome" },
+                    options = listOf("chrome", "firefox", "safari", "ios", "android"),
+                    enabled = enabled,
+                    onValueSelected = { v -> onChange { it.copy(wdttFingerprint = v) } },
+                    valueLabel = { it }
+                )
+                VkTurnField(
+                    value = draft.wdttWorkers,
+                    onValueChange = { v -> onChange { it.copy(wdttWorkers = v.filter(Char::isDigit)) } },
+                    label = "Воркеры WDTT (0 — по умолчанию)",
+                    placeholder = "0 — авто; кратно 9, максимум 108",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number
+                )
+            }
+        }
+    }
+
+    item {
+        val isWdtt = draft.core == VkTurnConfig.CORE_WDTT
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -681,37 +743,41 @@ private fun LazyListScope.vkTurnSection(
                 title = LocalStrings.current.freeturnTransportSection,
                 subtitle = LocalStrings.current.freeturnTransportSubtitle
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                VkTurnField(
-                    value = draft.peerHost,
-                    onValueChange = { v -> onChange { it.copy(peerHost = v) } },
-                    label = LocalStrings.current.serverHost,
-                    placeholder = "203.0.113.7",
+            // freeturn-specific peer/transport/obfuscation fields — hidden for the WDTT core, which uses
+            // its own wdtt-server + password block above.
+            if (!isWdtt) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    VkTurnField(
+                        value = draft.peerHost,
+                        onValueChange = { v -> onChange { it.copy(peerHost = v) } },
+                        label = LocalStrings.current.serverHost,
+                        placeholder = "203.0.113.7",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Uri,
+                        modifier = Modifier.weight(2f)
+                    )
+                    VkTurnField(
+                        value = draft.peerPort,
+                        onValueChange = { v -> onChange { it.copy(peerPort = v.filter(Char::isDigit)) } },
+                        label = LocalStrings.current.port,
+                        placeholder = "56000",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Number,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                SettingsDropdown(
+                    label = LocalStrings.current.transportToRelay,
+                    selectedValue = draft.transport.ifBlank { "tcp" },
+                    options = listOf("tcp", "udp"),
                     enabled = enabled,
-                    keyboardType = KeyboardType.Uri,
-                    modifier = Modifier.weight(2f)
-                )
-                VkTurnField(
-                    value = draft.peerPort,
-                    onValueChange = { v -> onChange { it.copy(peerPort = v.filter(Char::isDigit)) } },
-                    label = LocalStrings.current.port,
-                    placeholder = "56000",
-                    enabled = enabled,
-                    keyboardType = KeyboardType.Number,
-                    modifier = Modifier.weight(1f)
+                    onValueSelected = { v -> onChange { it.copy(transport = v) } },
+                    valueLabel = { it }
                 )
             }
-            SettingsDropdown(
-                label = LocalStrings.current.transportToRelay,
-                selectedValue = draft.transport.ifBlank { "tcp" },
-                options = listOf("tcp", "udp"),
-                enabled = enabled,
-                onValueSelected = { v -> onChange { it.copy(transport = v) } },
-                valueLabel = { it }
-            )
             // Exit outbound. WireGuard/AmneziaWG are UDP (freeturn udprelay); a proxy exit is TCP
             // (freeturn tcpfwd). The freeturn payload mode is derived from this choice in the
             // composer, so it is set here too to keep the stored draft consistent.
@@ -735,36 +801,40 @@ private fun LazyListScope.vkTurnSection(
                     }
                 }
             )
-            SettingsDropdown(
-                label = LocalStrings.current.obfuscationProfile,
-                selectedValue = draft.obfProfile.ifBlank { "rtpopus" },
-                // rtpopus2 (freeturn 1.3+): rtpopus + an RTP header extension that mimics modern WebRTC,
-                // for better shaping evasion. The profile MUST match the server (panel) — pick it only
-                // once the panel/VPS is also on a 1.3+ build that speaks rtpopus2, else the obf desyncs.
-                options = listOf("none", "rtpopus", "rtpopus2"),
-                enabled = enabled,
-                onValueSelected = { v -> onChange { it.copy(obfProfile = v) } },
-                valueLabel = { if (it == "rtpopus2") "rtpopus2 (WebRTC mimicry · 1.3+)" else it }
-            )
-            VkTurnField(
-                value = draft.obfKey,
-                onValueChange = { v -> onChange { it.copy(obfKey = v) } },
-                label = LocalStrings.current.obfuscationKey,
-                placeholder = "64 hex characters",
-                enabled = enabled
-            )
-            VkTurnField(
-                value = draft.streams,
-                onValueChange = { v -> onChange { it.copy(streams = v.filter(Char::isDigit)) } },
-                label = LocalStrings.current.streamsParallel,
-                placeholder = "10 (default) — more = faster, more VK churn",
-                enabled = enabled,
-                keyboardType = KeyboardType.Number
-            )
+            // Obfuscation + stream count are freeturn-only knobs; the WDTT core sets its own obf/WRAP
+            // from the password and scales via "workers" above.
+            if (!isWdtt) {
+                SettingsDropdown(
+                    label = LocalStrings.current.obfuscationProfile,
+                    selectedValue = draft.obfProfile.ifBlank { "rtpopus" },
+                    // rtpopus2 (freeturn 1.3+): rtpopus + an RTP header extension that mimics modern WebRTC,
+                    // for better shaping evasion. The profile MUST match the server (panel) — pick it only
+                    // once the panel/VPS is also on a 1.3+ build that speaks rtpopus2, else the obf desyncs.
+                    options = listOf("none", "rtpopus", "rtpopus2"),
+                    enabled = enabled,
+                    onValueSelected = { v -> onChange { it.copy(obfProfile = v) } },
+                    valueLabel = { if (it == "rtpopus2") "rtpopus2 (WebRTC mimicry · 1.3+)" else it }
+                )
+                VkTurnField(
+                    value = draft.obfKey,
+                    onValueChange = { v -> onChange { it.copy(obfKey = v) } },
+                    label = LocalStrings.current.obfuscationKey,
+                    placeholder = "64 hex characters",
+                    enabled = enabled
+                )
+                VkTurnField(
+                    value = draft.streams,
+                    onValueChange = { v -> onChange { it.copy(streams = v.filter(Char::isDigit)) } },
+                    label = LocalStrings.current.streamsParallel,
+                    placeholder = "10 (default) — more = faster, more VK churn",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number
+                )
+            }
             // Bonding (TCP striping) is only valid for the proxy/tcp exit — freeturn rejects it in
             // udp mode. For WireGuard/AmneziaWG (udp), aggregation comes from "streams" + multiple
             // VK call links, so the switch is hidden there to avoid a start failure.
-            if (draft.outbound == VkTurnConfig.OUTBOUND_PROXY) {
+            if (!isWdtt && draft.outbound == VkTurnConfig.OUTBOUND_PROXY) {
                 VkTurnSwitchRow(
                     label = LocalStrings.current.bondingMultipath,
                     checked = draft.bond,

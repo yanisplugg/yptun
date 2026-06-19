@@ -22,6 +22,7 @@ import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -47,6 +48,8 @@ import xraybridge.Xraybridge
 import xraybridge.Protector as XrayProtector
 import freeturn.Freeturn
 import freeturn.LogWriter as FreeturnLogWriter
+import wdttmobile.Wdttmobile
+import wdttmobile.ConfigSink as WdttConfigSink
 import mobile.LogWriter
 import mobile.Mobile
 import mobile.SocketProtector
@@ -1193,51 +1196,92 @@ class OlcboxVpnService : VpnService() {
                 throw IllegalStateException("SOCKS port $socksListenPort is still in use")
             }
 
-            // 1. freeturn client: local WireGuard entry listener tunnelling through VK.
-            Freeturn.setDebug(false)
-            Freeturn.setLogWriter(object : FreeturnLogWriter {
-                override fun writeLog(line: String) {
-                    val trimmed = line.trimEnd()
-                    addLog("vkturn: $trimmed")
-                    Log.v("vkturn", trimmed)
-                }
-            })
+            // 1. The transport core that raises the local listener the WG/proxy outbound dials.
             val listenAddr = "127.0.0.1:${vk.listenPort}"
-            // freeturn rejects `bond=1` unless mode==tcp; an old/imported URI carrying it in a udp
-            // (WireGuard/AmneziaWG) tunnel makes the client fail to start. Strip it defensively.
-            val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
-                else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
-            // Parallel TURN stream count, scaled GENTLY with the number of VK call links. The earlier
-            // aggressive scaling (links×10) made it SLOWER, not faster: a single WireGuard flow sprayed
-            // across 20-64 TURN paths of differing latency reorders past WG's replay window → drops →
-            // throughput collapse, plus the per-packet obf on dozens of streams saturates the phone's CPU.
-            // So keep a proven base (~one call's worth) and add only a FEW streams per EXTRA call, capped
-            // low, to draw from more calls without exploding the parallel-path count. splitLinks() in
-            // freeturn splits on newline/CR/tab/space/comma — count the same way. An explicit vk.streams
-            // still acts as a power-user floor (up to a hard safety ceiling).
-            val linkCount = vk.vkLink
-                .split('\n', '\r', '\t', ' ', ',')
-                .count { it.isNotBlank() }
-                .coerceAtLeast(1)
-            val autoStreams = (VKTURN_STREAMS_BASE + (linkCount - 1) * VKTURN_STREAMS_PER_EXTRA_CALL)
-                .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
-            val effectiveStreams = maxOf(vk.streams, autoStreams)
-                .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
-            addLog("Starting VK-TURN freeturn listener on $listenAddr (links=$linkCount, streams=$effectiveStreams)")
-            Freeturn.start(freeturnUri, listenAddr, vk.vkLink, effectiveStreams.toLong())
-            coroutineContext.ensureActive()
-            if (requestedGeneration != generation) return false
-
-            // Order the WireGuard bring-up behind the VK TURN relay: wait for the freeturn
-            // client to establish at least one TURN stream (DTLS handshake + TURN allocation)
-            // so the tunnel uplink is live before WireGuard starts handshaking. Otherwise the
-            // WireGuard outbound can exhaust its handshake attempts and report offline while the
-            // relay is still coming up (only masked on a fast same-LAN path). Best-effort: if the
-            // relay does not report ready in time we proceed anyway and let WireGuard retry.
-            if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
-                addLog("VK-TURN relay up (${Freeturn.connectedStreams()} stream(s)); starting WireGuard")
+            if (vk.usesWdtt()) {
+                // WDTT core (wg-turn-client): same local UDP listener as freeturn, but a single WG flow
+                // is aggregated across the VK call-links via chunk-affinity dispatch. The WG keys come
+                // from the stored exit profile below; the wdtt-server's GETCONF (if it serves one) is
+                // surfaced via the sink — used here only as a readiness signal, logged for diagnostics.
+                val configSignal = CompletableDeferred<String>()
+                addLog(
+                    "Starting VK-TURN WDTT core on $listenAddr (peer=${vk.wdttPeer}, " +
+                        "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"})"
+                )
+                Wdttmobile.start(
+                    vk.wdttPeer,
+                    vk.vkLink,
+                    vk.wdttPassword,
+                    listenAddr,
+                    vk.wdttWorkers.toLong(),
+                    deviceIdentityProvider.hwid(),
+                    vk.wdttFingerprint.ifBlank { "chrome" },
+                    "",
+                    object : WdttConfigSink {
+                        override fun onConfig(wgConf: String) {
+                            addLog("vkturn(wdtt): server WG config received (${wgConf.length} chars)")
+                            if (!configSignal.isCompleted) configSignal.complete(wgConf)
+                        }
+                    },
+                )
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) return false
+                // Readiness: WDTT's first worker fetches GETCONF only after a VK TURN session is up, so
+                // the sink firing == relay ready. Best-effort: a server without GETCONF never fires it,
+                // so once the core is running we proceed anyway and let WireGuard retry the handshake.
+                val wgConf = withTimeoutOrNull(VKTURN_RELAY_READY_TIMEOUT_MS) { configSignal.await() }
+                when {
+                    wgConf != null -> addLog("VK-TURN WDTT relay up; starting WireGuard")
+                    Wdttmobile.isRunning() ->
+                        addLog("VK-TURN WDTT not confirmed (no GETCONF); starting WireGuard anyway (will retry)")
+                    else -> throw IllegalStateException("WDTT core failed to start")
+                }
             } else {
-                addLog("VK-TURN relay not ready yet; starting WireGuard anyway (will retry)")
+                // freeturn client: local WireGuard entry listener tunnelling through VK.
+                Freeturn.setDebug(false)
+                Freeturn.setLogWriter(object : FreeturnLogWriter {
+                    override fun writeLog(line: String) {
+                        val trimmed = line.trimEnd()
+                        addLog("vkturn: $trimmed")
+                        Log.v("vkturn", trimmed)
+                    }
+                })
+                // freeturn rejects `bond=1` unless mode==tcp; an old/imported URI carrying it in a udp
+                // (WireGuard/AmneziaWG) tunnel makes the client fail to start. Strip it defensively.
+                val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
+                    else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+                // Parallel TURN stream count, scaled GENTLY with the number of VK call links. The earlier
+                // aggressive scaling (links×10) made it SLOWER, not faster: a single WireGuard flow sprayed
+                // across 20-64 TURN paths of differing latency reorders past WG's replay window → drops →
+                // throughput collapse, plus the per-packet obf on dozens of streams saturates the phone's CPU.
+                // So keep a proven base (~one call's worth) and add only a FEW streams per EXTRA call, capped
+                // low, to draw from more calls without exploding the parallel-path count. splitLinks() in
+                // freeturn splits on newline/CR/tab/space/comma — count the same way. An explicit vk.streams
+                // still acts as a power-user floor (up to a hard safety ceiling).
+                val linkCount = vk.vkLink
+                    .split('\n', '\r', '\t', ' ', ',')
+                    .count { it.isNotBlank() }
+                    .coerceAtLeast(1)
+                val autoStreams = (VKTURN_STREAMS_BASE + (linkCount - 1) * VKTURN_STREAMS_PER_EXTRA_CALL)
+                    .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
+                val effectiveStreams = maxOf(vk.streams, autoStreams)
+                    .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
+                addLog("Starting VK-TURN freeturn listener on $listenAddr (links=$linkCount, streams=$effectiveStreams)")
+                Freeturn.start(freeturnUri, listenAddr, vk.vkLink, effectiveStreams.toLong())
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) return false
+
+                // Order the WireGuard bring-up behind the VK TURN relay: wait for the freeturn
+                // client to establish at least one TURN stream (DTLS handshake + TURN allocation)
+                // so the tunnel uplink is live before WireGuard starts handshaking. Otherwise the
+                // WireGuard outbound can exhaust its handshake attempts and report offline while the
+                // relay is still coming up (only masked on a fast same-LAN path). Best-effort: if the
+                // relay does not report ready in time we proceed anyway and let WireGuard retry.
+                if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
+                    addLog("VK-TURN relay up (${Freeturn.connectedStreams()} stream(s)); starting WireGuard")
+                } else {
+                    addLog("VK-TURN relay not ready yet; starting WireGuard anyway (will retry)")
+                }
             }
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) return false
@@ -1486,7 +1530,8 @@ class OlcboxVpnService : VpnService() {
         EngineType.Stealth -> olcrtcRunning()
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
-        EngineType.VkTurn -> Freeturn.isRunning() && proxyCoreRunning()
+        // VK-TURN runs either the freeturn OR the WDTT transport core (mutually exclusive per location).
+        EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -2058,6 +2103,7 @@ class OlcboxVpnService : VpnService() {
         runCatching { singBox?.stop() }
         runCatching { xray?.stop() }
         runCatching { Freeturn.stop() }
+        runCatching { Wdttmobile.stop() }
         runCatching { Awg.stop() }
         runCatching { Hy2.stop() }
         val provider = lastMobileProvider

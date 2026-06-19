@@ -13,4 +13,5 @@ import (
 	_ "github.com/openlibrecommunity/olcrtc/mobile"
 	_ "github.com/sagernet/sing-box/experimental/libbox"
 	_ "github.com/samosvalishe/free-turn-proxy/freeturn"
+	_ "wg-turn-client/wdttmobile"
 )
