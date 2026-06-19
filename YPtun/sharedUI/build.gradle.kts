@@ -301,6 +301,9 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.kstore.file)
             implementation(libs.zxing.core)
+            // SSH client for the one-tap WDTT-server VPS installer (WdttServerInstaller).
+            // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
+            implementation("com.github.mwiede:jsch:0.2.21")
             implementation(coresAndroidAarDependency)
         }
 

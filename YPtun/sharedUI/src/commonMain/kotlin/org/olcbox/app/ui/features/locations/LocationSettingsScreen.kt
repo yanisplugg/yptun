@@ -63,19 +63,27 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.font.FontFamily
+import org.olcbox.app.vpn.wdtt.WdttInstallOptions
+import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -1105,91 +1113,167 @@ private fun LazyListScope.vkTurnSection(
 }
 
 /**
- * "Auto-install on VPS" helper for the WDTT server. Collects the VPS IP / login / password and copies a
- * ready-to-run install one-liner (it SSHes into the VPS, builds the wdtt-server and runs it as a systemd
- * service with the WDTT password/port from the draft) to the clipboard, so the user pastes it in a
- * terminal. NOTE: the wdtt-server repo URL must be filled in (marked in the script).
+ * One-tap WDTT server installer. Collects SSH access to the VPS and, on confirm, connects over SSH,
+ * uploads the bundled wdtt-server binary matching the VPS architecture and runs it as a systemd
+ * service ([rememberWdttServerInstaller]). Progress is streamed live into a log area. The WDTT
+ * listener port + connection password come from the location draft (the password MUST match what
+ * the location uses — the WRAP key derives from it on both sides).
  */
 @Composable
 private fun WdttInstallDialog(
     draft: VkTurnDraft,
     onDismiss: () -> Unit
 ) {
+    val installer = rememberWdttServerInstaller()
+    val scope = rememberCoroutineScope()
     var ip by remember { mutableStateOf(draft.wdttPeer) }
+    var sshPort by remember { mutableStateOf("22") }
     var login by remember { mutableStateOf("root") }
     var password by remember { mutableStateOf("") }
-    val clipboard = LocalClipboardManager.current
-    val port = draft.wdttPort.ifBlank { "56000" }
-    val wdttPass = draft.wdttPassword.ifBlank { "<пароль-WDTT>" }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<String>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+
+    val port = draft.wdttPort.ifBlank { "56000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 56000
+    val wdttPass = draft.wdttPassword
+    val succeeded = result?.isSuccess == true
+
+    // Keep the log view pinned to the newest line as it streams in.
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!running) onDismiss() },
         title = { Text("Автоустановка WDTT на VPS") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Заполни доступ к VPS — будет сформирована команда установки wdtt-сервера " +
-                        "(копируется в буфер; вставь её в терминал). Репозиторий wdtt-сервера нужно " +
-                        "указать в команде (помечено).",
+                    "Подключусь к VPS по SSH, загружу и запущу wdtt-сервер на порту $port. " +
+                        "Пароль WDTT берётся из настроек локации.",
                     style = MaterialTheme.typography.bodySmall
                 )
+                if (wdttPass.isBlank()) {
+                    Text(
+                        "Сначала укажи «Пароль WDTT» в настройках локации.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 OutlinedTextField(
                     value = ip,
                     onValueChange = { ip = it.trim() },
-                    label = { Text("IP сервера") },
+                    label = { Text("IP/хост VPS") },
                     singleLine = true,
+                    enabled = !running,
                     modifier = Modifier.fillMaxWidth()
                 )
-                OutlinedTextField(
-                    value = login,
-                    onValueChange = { login = it.trim() },
-                    label = { Text("Логин (SSH)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("Пароль (SSH)") },
+                    label = { Text("Пароль SSH") },
                     singleLine = true,
+                    enabled = !running,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (log.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 160.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(8.dp)
+                            .verticalScroll(logScroll)
+                    ) {
+                        log.forEach { line ->
+                            Text(
+                                line,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = LocalContentColor.current
+                            )
+                        }
+                    }
+                }
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull().orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val script = buildWdttInstallCommand(ip.ifBlank { "<IP>" }, login.ifBlank { "root" }, port, wdttPass)
-                clipboard.setText(AnnotatedString(script))
-                onDismiss()
-            }) { Text("Скопировать команду") }
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() && password.isNotBlank() && wdttPass.isNotBlank(),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        scope.launch {
+                            val res = installer.install(
+                                WdttInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = password,
+                                    wdttPort = port,
+                                    wdttPassword = wdttPass,
+                                )
+                            ) { line -> log.add(line) }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
     )
 }
-
-/** Builds the SSH one-liner that builds + runs the wdtt-server on the VPS. REPO must be set by the user. */
-private fun buildWdttInstallCommand(ip: String, login: String, port: String, wdttPass: String): String =
-    """
-    ssh $login@$ip 'bash -s' <<'EOF'
-    set -e
-    command -v go >/dev/null 2>&1 || { apt-get update && apt-get install -y golang-go git; }
-    REPO="<UKAZHI_REPO_WDTT_SERVER>"   # <-- укажи репозиторий wdtt-сервера
-    rm -rf /opt/wdtt-src && git clone --depth 1 "${'$'}REPO" /opt/wdtt-src
-    cd /opt/wdtt-src && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/wdtt-server ./cmd/server
-    cat >/etc/systemd/system/wdtt-server.service <<UNIT
-    [Unit]
-    After=network.target
-    [Service]
-    ExecStart=/usr/local/bin/wdtt-server -listen 0.0.0.0:$port -password '$wdttPass'
-    Restart=always
-    [Install]
-    WantedBy=multi-user.target
-    UNIT
-    systemctl daemon-reload && systemctl enable --now wdtt-server
-    echo "wdtt-server installed on :$port"
-    EOF
-    """.trimIndent()
 
 /**
  * VK call links: one primary field plus a toggle revealing up to 4 more (5 total). The links are
