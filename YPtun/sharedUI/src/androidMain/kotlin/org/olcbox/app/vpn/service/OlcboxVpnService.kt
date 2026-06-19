@@ -1322,10 +1322,18 @@ class OlcboxVpnService : VpnService() {
             val profilesState = loadRoutingProfilesState()
             val routingProfile: RoutingProfile? = null
 
-            // Chained proxy on top of WireGuard (parsed once; reused by both cores).
+            // Chained proxy on top of WireGuard (parsed once; reused by both cores). Applies to plain
+            // WireGuard AND to WDTT (which also exits via WireGuard) — a vless/trojan/ss link dialled
+            // THROUGH the WG-over-VK tunnel so the public exit is the proxy, not the VK/WDTT server.
             val chainProxy = if (outboundType == VkTurnConfig.OUTBOUND_WIREGUARD) {
-                vk.chainProxyLink.takeIf { it.isNotBlank() }
-                    ?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+                val raw = vk.chainProxyLink.takeIf { it.isNotBlank() }
+                val parsed = raw?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+                // A link is present but didn't parse → we'd silently exit via plain WG (looks like the
+                // proxy is "ignored"). Make that loud so it's diagnosable instead of a silent bypass.
+                if (raw != null && parsed == null) {
+                    addLog("VK-TURN: proxy link present but could not be parsed — exiting via plain WireGuard (no proxy)")
+                }
+                parsed
             } else null
 
             // The proxy whose core choice matters: the PROXY exit, or the WG chain proxy. AmneziaWG /
@@ -1437,10 +1445,8 @@ class OlcboxVpnService : VpnService() {
                     )
                 }
 
-                else -> { // WireGuard, optionally with a proxy chained on top
-                    val chainProxy = vk.chainProxyLink.takeIf { it.isNotBlank() }
-                        ?.let { ShareLinkParser.parse(it) }
-                        ?.takeIf { it.isComplete() }
+                else -> { // WireGuard (incl. WDTT), optionally with a proxy chained on top
+                    // Reuse the proxy parsed above (single source of truth for both cores).
                     if (chainProxy != null) {
                         addLog("VK-TURN chaining proxy ${chainProxy.displayName()} over WireGuard")
                         SingBoxConfig.build(
@@ -1544,6 +1550,12 @@ class OlcboxVpnService : VpnService() {
             }
         }
         val localAddr = if (addr.isNotEmpty()) "\"$addr\"" else ""
+        // Clamp the WireGuard MTU to a value that survives the VK TURN + DTLS + RTP-obf path. The
+        // wdtt-server hands out MTU=1280, but through that wrapping the real path MTU is well under
+        // 1500 and 1280 black-holes large packets (uploads / TLS handshakes stall) — the same lesson
+        // the freeturn WG default (1200) encodes. With a proxy chained ON TOP, its header eats more
+        // headroom still, so cap at 1200 (honour a smaller server value if it sends one).
+        val effMtu = (if (mtu > 0) mtu else 1200).coerceAtMost(1200)
         val json = buildString {
             append("{")
             append("\"type\":\"wireguard\",")
@@ -1551,8 +1563,8 @@ class OlcboxVpnService : VpnService() {
             append("\"server_port\":$listenPort,")
             append("\"local_address\":[$localAddr],")
             append("\"private_key\":\"$priv\",")
-            append("\"peer_public_key\":\"$pub\"")
-            if (mtu > 0) append(",\"mtu\":$mtu")
+            append("\"peer_public_key\":\"$pub\",")
+            append("\"mtu\":$effMtu")
             append("}")
         }
         return ProxyProfile(
