@@ -1182,12 +1182,17 @@ class OlcboxVpnService : VpnService() {
     ): Boolean {
         val config = location.normalized()
         val vk = config.vkturn
-        val profile = config.proxy
-        val outboundType = vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
-            ?: VkTurnConfig.OUTBOUND_WIREGUARD
-        val outboundConfigured = when (outboundType) {
-            VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
-            VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
+        // [profile] is the exit outbound. For WDTT it is SYNTHESIZED at runtime from the wdtt-server's
+        // WireGuard config (GETCONF/OnConfig) — the user enters only the server IP[:port], no WG keys.
+        var profile = config.proxy
+        val usesWdtt = vk?.usesWdtt() == true
+        // WDTT always exits via WireGuard (server-provided); the freeturn outbound choice is irrelevant.
+        val outboundType = if (usesWdtt) VkTurnConfig.OUTBOUND_WIREGUARD
+            else vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD } ?: VkTurnConfig.OUTBOUND_WIREGUARD
+        val outboundConfigured = when {
+            usesWdtt -> vk?.wdttPeer?.isNotBlank() == true // WG config comes from the server
+            outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
+            outboundType == VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
                 profile.server.isNotBlank() && profile.serverPort in 1..65535
             else -> !profile?.rawOutbound.isNullOrBlank()
         }
@@ -1209,17 +1214,17 @@ class OlcboxVpnService : VpnService() {
             // 1. The transport core that raises the local listener the WG/proxy outbound dials.
             val listenAddr = "127.0.0.1:${vk.listenPort}"
             if (vk.usesWdtt()) {
-                // WDTT core (wg-turn-client): same local UDP listener as freeturn, but a single WG flow
-                // is aggregated across the VK call-links via chunk-affinity dispatch. The WG keys come
-                // from the stored exit profile below; the wdtt-server's GETCONF (if it serves one) is
-                // surfaced via the sink — used here only as a readiness signal, logged for diagnostics.
+                // WDTT core (wg-turn-client): connects purely by the wdtt-server IP[:port] and FETCHES its
+                // WireGuard config from the server (GETCONF/OnConfig) — the user enters no WG keys. We bring
+                // WireGuard up from that returned config (Endpoint overridden to the local WDTT listener).
+                val peerAddr = vk.wdttPeerAddr()
                 val configSignal = CompletableDeferred<String>()
                 addLog(
-                    "Starting VK-TURN WDTT core on $listenAddr (peer=${vk.wdttPeer}, " +
+                    "Starting VK-TURN WDTT core on $listenAddr (peer=$peerAddr, " +
                         "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"})"
                 )
                 Wdttmobile.start(
-                    vk.wdttPeer,
+                    peerAddr,
                     vk.vkLink,
                     vk.wdttPassword,
                     listenAddr,
@@ -1236,15 +1241,19 @@ class OlcboxVpnService : VpnService() {
                 )
                 coroutineContext.ensureActive()
                 if (requestedGeneration != generation) return false
-                // Readiness: WDTT's first worker fetches GETCONF only after a VK TURN session is up, so
-                // the sink firing == relay ready. Best-effort: a server without GETCONF never fires it,
-                // so once the core is running we proceed anyway and let WireGuard retry the handshake.
+                // The WireGuard config arrives via OnConfig once the first worker has a VK TURN session up,
+                // so waiting on it doubles as the relay-ready gate. Build the WG outbound from it.
                 val wgConf = withTimeoutOrNull(VKTURN_RELAY_READY_TIMEOUT_MS) { configSignal.await() }
                 when {
-                    wgConf != null -> addLog("VK-TURN WDTT relay up; starting WireGuard")
-                    Wdttmobile.isRunning() ->
-                        addLog("VK-TURN WDTT not confirmed (no GETCONF); starting WireGuard anyway (will retry)")
-                    else -> throw IllegalStateException("WDTT core failed to start")
+                    wgConf != null && wgConf.isNotBlank() -> {
+                        profile = buildWdttWgProfile(wgConf, vk.listenPort)
+                        addLog("VK-TURN WDTT relay up; WireGuard config from server applied")
+                    }
+                    profile?.rawOutbound?.isNotBlank() == true ->
+                        addLog("VK-TURN WDTT: no GETCONF — falling back to the stored WireGuard config")
+                    else -> throw IllegalStateException(
+                        "WDTT: no WireGuard config from server (GETCONF) and none stored"
+                    )
                 }
             } else {
                 // freeturn client: local WireGuard entry listener tunnelling through VK.
@@ -1508,6 +1517,51 @@ class OlcboxVpnService : VpnService() {
         } finally {
             unbindProcessFromNetwork()
         }
+    }
+
+    /**
+     * Builds a sing-box WireGuard outbound [ProxyProfile] from a wg-quick config string the wdtt-server
+     * returns (GETCONF). The peer Endpoint is overridden to the local WDTT listener (127.0.0.1:listenPort)
+     * — WG dials the WDTT core, which tunnels to the real WG server over VK.
+     */
+    private fun buildWdttWgProfile(wgConf: String, listenPort: Int): ProxyProfile {
+        var priv = ""
+        var pub = ""
+        var addr = ""
+        var mtu = 0
+        for (raw in wgConf.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("[") || line.startsWith("#")) continue
+            val eq = line.indexOf('=')
+            if (eq <= 0) continue
+            val k = line.substring(0, eq).trim().lowercase()
+            val v = line.substring(eq + 1).trim()
+            when (k) {
+                "privatekey" -> priv = v
+                "publickey" -> pub = v
+                "address" -> if (addr.isEmpty()) addr = v.substringBefore(',').trim()
+                "mtu" -> mtu = v.toIntOrNull() ?: 0
+            }
+        }
+        val localAddr = if (addr.isNotEmpty()) "\"$addr\"" else ""
+        val json = buildString {
+            append("{")
+            append("\"type\":\"wireguard\",")
+            append("\"server\":\"127.0.0.1\",")
+            append("\"server_port\":$listenPort,")
+            append("\"local_address\":[$localAddr],")
+            append("\"private_key\":\"$priv\",")
+            append("\"peer_public_key\":\"$pub\"")
+            if (mtu > 0) append(",\"mtu\":$mtu")
+            append("}")
+        }
+        return ProxyProfile(
+            tag = "WDTT",
+            type = "wireguard",
+            server = "127.0.0.1",
+            serverPort = listenPort,
+            rawOutbound = json,
+        )
     }
 
     private fun singBoxEngine(): SingBoxEngine {

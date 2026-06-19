@@ -73,8 +73,10 @@ data class VkTurnDraft(
     val proxyCore: ProxyCore = ProxyCore.Auto,
     // VK-TURN transport core: "freeturn" (default) | "wdtt". WDTT fields are used only when core==wdtt.
     val core: String = VkTurnConfig.CORE_FREETURN,
-    /** WDTT server "host:port" dialled over VK TURN (the wdtt-server / Peer). */
+    /** WDTT server IP/host dialled over VK TURN (the wdtt-server / Peer). Port = [wdttPort]. */
     val wdttPeer: String = "",
+    /** WDTT server port; blank/0 → 56000. */
+    val wdttPort: String = "",
     /** WDTT connection password (the WRAP key is HKDF-derived from it). */
     val wdttPassword: String = "",
     /** WDTT TLS fingerprint for the VK auth flow (chrome/safari/ios/android/firefox). */
@@ -173,6 +175,7 @@ object VkTurnComposer {
             proxyCore = draft.proxyCore,
             core = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
             wdttPeer = draft.wdttPeer.trim(),
+            wdttPort = draft.wdttPort.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 0,
             wdttPassword = draft.wdttPassword.trim(),
             wdttFingerprint = draft.wdttFingerprint.trim(),
             wdttWorkers = draft.wdttWorkers.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
@@ -200,6 +203,7 @@ object VkTurnComposer {
                 proxyCore = vkturn.proxyCore,
                 core = vkturn.core.ifBlank { VkTurnConfig.CORE_FREETURN },
                 wdttPeer = vkturn.wdttPeer,
+                wdttPort = vkturn.wdttPort.takeIf { it > 0 }?.toString() ?: "",
                 wdttPassword = vkturn.wdttPassword,
                 wdttFingerprint = vkturn.wdttFingerprint.ifBlank { "chrome" },
                 wdttWorkers = vkturn.wdttWorkers.takeIf { it > 0 }?.toString() ?: "",

@@ -64,9 +64,12 @@ data class VkTurnConfig(
      */
     @SerialName("core")
     val core: String = CORE_FREETURN,
-    /** WDTT server "host:port" the core dials over VK TURN (the wdtt-server / Peer). */
+    /** WDTT server IP (or host) the core dials over VK TURN (the wdtt-server / Peer). Port = [wdttPort]. */
     @SerialName("wdtt_peer")
     val wdttPeer: String = "",
+    /** WDTT server port; 0 → [DEFAULT_WDTT_PORT] (56000). Ignored if [wdttPeer] already carries ":port". */
+    @SerialName("wdtt_port")
+    val wdttPort: Int = 0,
     /** WDTT connection password — the WRAP key is HKDF-derived from it server-side and client-side. */
     @SerialName("wdtt_password")
     val wdttPassword: String = "",
@@ -79,6 +82,16 @@ data class VkTurnConfig(
 ) {
     /** True when the WDTT transport core is selected (vs. the default freeturn core). */
     fun usesWdtt(): Boolean = core.equals(CORE_WDTT, ignoreCase = true)
+
+    /** The wdtt-server "host:port": uses [wdttPeer] verbatim if it already has a port, else appends
+     *  [wdttPort] (or [DEFAULT_WDTT_PORT]). */
+    fun wdttPeerAddr(): String {
+        val host = wdttPeer.trim()
+        if (host.isEmpty()) return ""
+        if (host.substringAfterLast(':', "").toIntOrNull() != null && host.contains(':')) return host
+        val port = wdttPort.takeIf { it in 1..65535 } ?: DEFAULT_WDTT_PORT
+        return "$host:$port"
+    }
 
     fun isComplete(): Boolean =
         isStorable() && vkLink.isNotBlank()
@@ -107,6 +120,9 @@ data class VkTurnConfig(
 
         const val CORE_FREETURN = "freeturn"
         const val CORE_WDTT = "wdtt"
+
+        /** Default WDTT server port (matches the wdtt-server default). */
+        const val DEFAULT_WDTT_PORT = 56000
     }
 
     /**
@@ -309,7 +325,14 @@ data class LocationConfig(
      * rejected the proxy/AmneziaWG exits (rawOutbound is only set for plain WireGuard) — that made a
      * "Proxy (tcp) + bonding" VK-TURN location fail isStorable and VANISH on save.
      */
-    private fun vkTurnExitPresent(): Boolean = when (vkturn?.outbound) {
+    private fun vkTurnExitPresent(): Boolean = when {
+        // WDTT connects purely by the wdtt-server IP[:port]; the WireGuard config is fetched FROM the
+        // server at runtime (GETCONF/OnConfig), so no stored exit artifact is required here.
+        vkturn?.usesWdtt() == true -> true
+        else -> vkTurnExitPresentFreeturn()
+    }
+
+    private fun vkTurnExitPresentFreeturn(): Boolean = when (vkturn?.outbound) {
         // TCP proxy exit (vless/vmess/trojan/ss) dialled through the freeturn tcp listener — a normal
         // ProxyProfile (server/uuid/…), NOT a rawOutbound blob.
         VkTurnConfig.OUTBOUND_PROXY -> proxy?.isComplete() == true

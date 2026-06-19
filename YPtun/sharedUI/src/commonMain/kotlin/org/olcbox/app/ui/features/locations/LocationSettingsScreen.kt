@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.rounded.Check
@@ -50,7 +51,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -69,7 +73,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -144,6 +150,14 @@ fun LocationSettingsScreen(
     )
     val density = LocalDensity.current
     val isKeyboardVisible = WindowInsets.ime.getBottom(density) > 0
+
+    var showWdttInstall by remember { mutableStateOf(false) }
+    if (showWdttInstall) {
+        WdttInstallDialog(
+            draft = viewModel.editingVkTurn,
+            onDismiss = { showWdttInstall = false }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -288,7 +302,8 @@ fun LocationSettingsScreen(
                 vkTurnSection(
                     draft = viewModel.editingVkTurn,
                     enabled = !isSaving,
-                    onChange = viewModel::updateVkTurnDraft
+                    onChange = viewModel::updateVkTurnDraft,
+                    onWdttAutoInstall = { showWdttInstall = true }
                 )
             }
 
@@ -692,7 +707,8 @@ private fun ProxyField(
 private fun LazyListScope.vkTurnSection(
     draft: VkTurnDraft,
     enabled: Boolean,
-    onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit
+    onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit,
+    onWdttAutoInstall: () -> Unit
 ) {
     item {
         VkTurnLinksField(
@@ -729,10 +745,19 @@ private fun LazyListScope.vkTurnSection(
                     VkTurnField(
                         value = draft.wdttPeer,
                         onValueChange = { v -> onChange { it.copy(wdttPeer = v.trim()) } },
-                        label = "WDTT-сервер (host:port)",
-                        placeholder = "203.0.113.7:56000",
+                        label = "IP сервера WDTT",
+                        placeholder = "203.0.113.7",
                         enabled = enabled,
                         keyboardType = KeyboardType.Uri,
+                        modifier = Modifier.weight(2f)
+                    )
+                    VkTurnField(
+                        value = draft.wdttPort,
+                        onValueChange = { v -> onChange { it.copy(wdttPort = v.filter(Char::isDigit)) } },
+                        label = "Порт",
+                        placeholder = "56000",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Number,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -743,6 +768,16 @@ private fun LazyListScope.vkTurnSection(
                     placeholder = "ключ WRAP выводится из пароля",
                     enabled = enabled
                 )
+                // Auto-install the wdtt-server on a VPS (opens an SSH connect dialog: IP / login / password).
+                OutlinedButton(
+                    onClick = onWdttAutoInstall,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Автоустановка на VPS")
+                }
                 SettingsDropdown(
                     label = "TLS-отпечаток (VK auth)",
                     selectedValue = draft.wdttFingerprint.ifBlank { "chrome" },
@@ -763,8 +798,10 @@ private fun LazyListScope.vkTurnSection(
         }
     }
 
-    item {
-        val isWdtt = draft.core == VkTurnConfig.CORE_WDTT
+    // freeturn-only transport/exit section — entirely hidden for the WDTT core (it connects purely by the
+    // wdtt-server IP[:port] above and fetches its WireGuard config from the server).
+    if (draft.core != VkTurnConfig.CORE_WDTT) item {
+        val isWdtt = false
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -875,7 +912,8 @@ private fun LazyListScope.vkTurnSection(
         }
     }
 
-    if (draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
+    // WireGuard/AmneziaWG key block — hidden for the WDTT core (keys come from the server, not the user).
+    if (draft.core != VkTurnConfig.CORE_WDTT && draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
         val isAwg = draft.outbound == VkTurnConfig.OUTBOUND_AMNEZIAWG
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -1065,6 +1103,93 @@ private fun LazyListScope.vkTurnSection(
         }
     }
 }
+
+/**
+ * "Auto-install on VPS" helper for the WDTT server. Collects the VPS IP / login / password and copies a
+ * ready-to-run install one-liner (it SSHes into the VPS, builds the wdtt-server and runs it as a systemd
+ * service with the WDTT password/port from the draft) to the clipboard, so the user pastes it in a
+ * terminal. NOTE: the wdtt-server repo URL must be filled in (marked in the script).
+ */
+@Composable
+private fun WdttInstallDialog(
+    draft: VkTurnDraft,
+    onDismiss: () -> Unit
+) {
+    var ip by remember { mutableStateOf(draft.wdttPeer) }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    val clipboard = LocalClipboardManager.current
+    val port = draft.wdttPort.ifBlank { "56000" }
+    val wdttPass = draft.wdttPassword.ifBlank { "<пароль-WDTT>" }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Автоустановка WDTT на VPS") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Заполни доступ к VPS — будет сформирована команда установки wdtt-сервера " +
+                        "(копируется в буфер; вставь её в терминал). Репозиторий wdtt-сервера нужно " +
+                        "указать в команде (помечено).",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP сервера") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = login,
+                    onValueChange = { login = it.trim() },
+                    label = { Text("Логин (SSH)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Пароль (SSH)") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val script = buildWdttInstallCommand(ip.ifBlank { "<IP>" }, login.ifBlank { "root" }, port, wdttPass)
+                clipboard.setText(AnnotatedString(script))
+                onDismiss()
+            }) { Text("Скопировать команду") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
+}
+
+/** Builds the SSH one-liner that builds + runs the wdtt-server on the VPS. REPO must be set by the user. */
+private fun buildWdttInstallCommand(ip: String, login: String, port: String, wdttPass: String): String =
+    """
+    ssh $login@$ip 'bash -s' <<'EOF'
+    set -e
+    command -v go >/dev/null 2>&1 || { apt-get update && apt-get install -y golang-go git; }
+    REPO="<UKAZHI_REPO_WDTT_SERVER>"   # <-- укажи репозиторий wdtt-сервера
+    rm -rf /opt/wdtt-src && git clone --depth 1 "${'$'}REPO" /opt/wdtt-src
+    cd /opt/wdtt-src && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/wdtt-server ./cmd/server
+    cat >/etc/systemd/system/wdtt-server.service <<UNIT
+    [Unit]
+    After=network.target
+    [Service]
+    ExecStart=/usr/local/bin/wdtt-server -listen 0.0.0.0:$port -password '$wdttPass'
+    Restart=always
+    [Install]
+    WantedBy=multi-user.target
+    UNIT
+    systemctl daemon-reload && systemctl enable --now wdtt-server
+    echo "wdtt-server installed on :$port"
+    EOF
+    """.trimIndent()
 
 /**
  * VK call links: one primary field plus a toggle revealing up to 4 more (5 total). The links are
