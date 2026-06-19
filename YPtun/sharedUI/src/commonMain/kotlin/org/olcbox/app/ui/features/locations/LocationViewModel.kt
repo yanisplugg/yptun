@@ -34,6 +34,7 @@ import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
+import org.olcbox.app.data.model.DnsttConfig
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.ShareLinkComposer
@@ -143,6 +144,10 @@ class LocationViewModel(
     var editingVkTurn by mutableStateOf(VkTurnDraft())
         private set
 
+    /** Editable dnstt (DNS tunnel) fields for the [EngineType.Dnstt] engine. */
+    var editingDnstt by mutableStateOf(DnsttConfig())
+        private set
+
     var proxyError by mutableStateOf<String?>(null)
         private set
 
@@ -183,6 +188,10 @@ class LocationViewModel(
             peerOk && exitOk
         }
 
+    /** dnstt needs a tunnel domain, server public key and a DNS resolver. */
+    private val dnsttFieldsValid: Boolean
+        get() = editingDnstt.isComplete()
+
     val isFormValid: Boolean
         get() = nameError == null && editingName.isNotBlank() && when (editingConfig.engine) {
             EngineType.Stealth -> olcrtcFieldsValid
@@ -191,6 +200,7 @@ class LocationViewModel(
             EngineType.Standard -> editingConfig.proxy?.isComplete() == true
             EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
             EngineType.VkTurn -> vkTurnFieldsValid
+            EngineType.Dnstt -> dnsttFieldsValid
         }
 
     init {
@@ -504,6 +514,7 @@ class LocationViewModel(
         } else {
             VkTurnDraft()
         }
+        editingDnstt = editingConfig.dnstt ?: DnsttConfig()
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
             LocationConfig.DEFAULT_BYPASS_PROVIDER
@@ -615,6 +626,13 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(vkturn = vkturn, proxy = proxy)
     }
 
+    /** Applies an edit to the dnstt (DNS tunnel) config and keeps [editingConfig] in sync. */
+    fun updateDnstt(transform: (DnsttConfig) -> DnsttConfig) {
+        val updated = transform(editingDnstt)
+        editingDnstt = updated
+        editingConfig = editingConfig.copy(dnstt = updated)
+    }
+
     fun onEngineChanged(engine: EngineType) {
         val previous = editingConfig.engine
         editingConfig = editingConfig.copy(engine = engine)
@@ -634,6 +652,12 @@ class LocationViewModel(
             editingProxy2Link = ""
             proxyError = null
             proxy2Error = null
+        }
+        if (engine == EngineType.Dnstt) {
+            // Materialize the dnstt config from the current draft so the picked engine is consistent.
+            editingConfig = editingConfig.copy(dnstt = editingDnstt)
+        } else if (previous == EngineType.Dnstt) {
+            editingConfig = editingConfig.copy(dnstt = null)
         }
     }
 
@@ -887,8 +911,9 @@ class LocationViewModel(
         val pings = currentPingsSnapshot()
         return locations
             .filter { it.subscriptionUrl.isNullOrBlank() }
-            // VK-TURN can't be pinged (its result is always null) — NEVER treat it as unreachable / delete it.
-            .filter { it.config?.engine != EngineType.VkTurn }
+            // VK-TURN / dnstt can't be pinged off-tunnel (their result is null until connected) —
+            // NEVER treat them as unreachable / delete them.
+            .filter { it.config?.engine != EngineType.VkTurn && it.config?.engine != EngineType.Dnstt }
             .map { it.storageId }
             .filter { pings.containsKey(it) && pings[it] == null }
     }

@@ -50,6 +50,9 @@ import freeturn.Freeturn
 import freeturn.LogWriter as FreeturnLogWriter
 import wdttmobile.Wdttmobile
 import wdttmobile.ConfigSink as WdttConfigSink
+import dnsttmobile.Dnsttmobile
+import dnsttmobile.DnsttClient
+import dnsttmobile.SocketProtector as DnsttSocketProtector
 import mobile.LogWriter
 import mobile.Mobile
 import mobile.SocketProtector
@@ -161,6 +164,8 @@ class OlcboxVpnService : VpnService() {
     private var lastJitsiStopCompletedAtMs = 0L
 
     private var vpnInterface: ParcelFileDescriptor? = null
+    /** Active dnstt (DNS tunnel) client for [EngineType.Dnstt]; null when another engine is running. */
+    private var dnsttClient: DnsttClient? = null
     private var tun2socksThread: Thread? = null
     @Volatile
     private var tun2socksStarted = false
@@ -775,6 +780,7 @@ class OlcboxVpnService : VpnService() {
             EngineType.Standard,
             EngineType.Chain -> startSingBoxCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.VkTurn -> startVkTurnCore(location, upstream, requestedGeneration, setErrorOnFailure)
+            EngineType.Dnstt -> startDnsttCore(location, upstream, requestedGeneration, setErrorOnFailure)
         }
     }
 
@@ -902,6 +908,80 @@ class OlcboxVpnService : VpnService() {
             if (!keepProcessBound || !Mobile.isRunning()) {
                 unbindProcessFromNetwork()
             }
+        }
+    }
+
+    /**
+     * dnstt (DNS tunnel): the dnstt client raises a transparent TCP forwarder on [socksListenPort];
+     * the dnstt-server relays each connection to its upstream SOCKS5, so the local port behaves as
+     * that SOCKS5 and the TUN bridge consumes it directly. dnstt carries only TCP (KCP + Noise over
+     * DNS TXT), and the forwarder can't terminate SOCKS auth, so the bridge runs no-auth (creds
+     * cleared). The dnstt UDP socket is protected so DNS queries egress the real network rather than
+     * looping back into the TUN.
+     */
+    private suspend fun startDnsttCore(
+        location: LocationConfig,
+        upstream: Network,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean
+    ): Boolean {
+        val config = location.normalized()
+        val dnstt = config.dnstt
+        if (dnstt == null || !dnstt.isComplete()) {
+            if (setErrorOnFailure) {
+                setStatus(VpnStatus.Error("DNSTT not configured"))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            return false
+        }
+        return try {
+            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+            if (isLocalSocksPortOpen(socksListenPort)) {
+                throw IllegalStateException("SOCKS port $socksListenPort is still in use")
+            }
+            // The dnstt forwarder is transparent — it can't terminate a local SOCKS handshake, the
+            // upstream SOCKS5 on the dnstt-server is reached end-to-end. Run the bridge no-auth.
+            socksUsername = ""
+            socksPassword = ""
+            val listenAddr = "$socksListenHost:$socksListenPort"
+            addLog("Starting DNSTT on $listenAddr (domain=${dnstt.domain}, resolver=${dnstt.resolver})")
+            val client = Dnsttmobile.newClient(dnstt.resolver, dnstt.domain, dnstt.pubKey, listenAddr)
+            client.setProtectSocket(object : DnsttSocketProtector {
+                override fun protect(fd: Long): Boolean = this@OlcboxVpnService.protect(fd.toInt())
+            })
+            client.setShareProxy(false)
+            client.start()
+            dnsttClient = client
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("DNSTT start superseded")
+                return false
+            }
+            if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                throw IllegalStateException("DNSTT SOCKS port $socksListenPort did not open")
+            }
+            addLog("DNSTT ready on $listenAddr")
+            publishActiveSocks()
+            true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                addLog("DNSTT start canceled")
+                stopMobileAndWait()
+            }
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Transport failed"
+            addLog(if (staleRequest) "DNSTT start canceled: $message" else "DNSTT start failed: $message")
+            stopMobileAndWait()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            false
+        } finally {
+            unbindProcessFromNetwork()
         }
     }
 
@@ -1608,6 +1688,8 @@ class OlcboxVpnService : VpnService() {
         EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
         // VK-TURN runs either the freeturn OR the WDTT transport core (mutually exclusive per location).
         EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
+        // dnstt raises its own local SOCKS listener; no separate proxy core.
+        EngineType.Dnstt -> dnsttClient?.isRunning == true
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -1929,7 +2011,7 @@ class OlcboxVpnService : VpnService() {
             socks5:
               address: ${socksConnectHost()}
               port: $socksListenPort
-              udp: '${if (engineType == EngineType.Stealth) "tcp" else "udp"}'
+              udp: '${if (engineType == EngineType.Stealth || engineType == EngineType.Dnstt) "tcp" else "udp"}'
               pipeline: false
               username: '$socksUsername'
               password: '$socksPassword'
@@ -2180,6 +2262,8 @@ class OlcboxVpnService : VpnService() {
         runCatching { xray?.stop() }
         runCatching { Freeturn.stop() }
         runCatching { Wdttmobile.stop() }
+        runCatching { dnsttClient?.stop() }
+        dnsttClient = null
         runCatching { Awg.stop() }
         runCatching { Hy2.stop() }
         val provider = lastMobileProvider

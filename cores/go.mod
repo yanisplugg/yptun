@@ -10,6 +10,7 @@ require (
 	github.com/samosvalishe/free-turn-proxy v0.0.0
 	github.com/xtls/xray-core v1.260327.0
 	wg-turn-client v0.0.0
+	www.bamsoftware.com/git/dnstt.git v0.0.0
 )
 
 require (
@@ -51,6 +52,7 @@ require (
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
 	github.com/dennwc/iters v1.2.2 // indirect
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e // indirect
+	github.com/flynn/noise v1.0.0 // indirect
 	github.com/frostbyte73/core v0.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
@@ -233,3 +235,5 @@ replace github.com/olc/hysteria2proxy => ../hysteria2proxy
 replace github.com/amnezia-vpn/amneziawg-go => ../amneziawg-go
 
 replace wg-turn-client => ../wdtt
+
+replace www.bamsoftware.com/git/dnstt.git => ../dnstt

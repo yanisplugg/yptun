@@ -167,6 +167,39 @@ data class FakeDnsSpec(
     @SerialName("block_regex") val blockRegex: List<String> = emptyList(),
 )
 
+/**
+ * dnstt (DNS tunnel) transport parameters for [EngineType.Dnstt]. The dnstt client raises a local
+ * listener that transparently forwards each TCP connection through DNS TXT queries to the
+ * dnstt-server, which relays to its upstream (typically a SOCKS5) — so the local port behaves as
+ * that SOCKS5 and the TUN bridge consumes it directly. KCP transport + Noise_NK encryption.
+ */
+@Serializable
+data class DnsttConfig(
+    /** Tunnel domain delegated to the dnstt-server, e.g. `t.example.com`. */
+    @SerialName("domain")
+    val domain: String = "",
+    /** Server Noise public key in hex (required — the Noise_NK responder key). */
+    @SerialName("pubkey")
+    val pubKey: String = "",
+    /**
+     * UDP DNS resolver that reaches the tunnel domain's authoritative server, e.g. `1.1.1.1:53`,
+     * `8.8.8.8`, or a local/ISP resolver. Port defaults to 53 if omitted. The mobile dnstt client
+     * speaks plain UDP DNS (no DoH/DoT), so this must be a UDP resolver address.
+     */
+    @SerialName("resolver")
+    val resolver: String = "",
+) {
+    /** True when the dnstt tunnel has everything it needs to connect. */
+    fun isComplete(): Boolean =
+        domain.isNotBlank() && pubKey.isNotBlank() && resolver.isNotBlank()
+
+    fun normalized(): DnsttConfig = DnsttConfig(
+        domain = domain.trim(),
+        pubKey = pubKey.trim(),
+        resolver = resolver.trim(),
+    )
+}
+
 /** One additional olcRTC room for the multi-room (aggregation) feature. */
 @Serializable
 data class ExtraRoom(
@@ -215,6 +248,8 @@ data class LocationConfig(
      * inside the link lives in [proxy].rawOutbound. Null for other engines.
      */
     val vkturn: VkTurnConfig? = null,
+    /** dnstt (DNS tunnel) transport for the [EngineType.Dnstt] engine. Null for other engines. */
+    val dnstt: DnsttConfig? = null,
     /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
     val advanced: AdvancedCoreConfig? = null,
     /**
@@ -285,6 +320,7 @@ data class LocationConfig(
             proxy2 = proxy2,
             core = core,
             vkturn = vkturn,
+            dnstt = dnstt?.normalized(),
             routingProfileId = routingProfileId.trim(),
             fakeDns = fakeDns,
         )
@@ -352,6 +388,8 @@ data class LocationConfig(
         EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
         // VK-TURN needs the freeturn link, the per-client VK call link and the chosen exit artifact.
         EngineType.VkTurn -> vkturn?.isComplete() == true && vkTurnExitPresent()
+        // dnstt needs the tunnel domain, server public key and a DNS resolver.
+        EngineType.Dnstt -> dnstt?.isComplete() == true
     }
 
     /**
@@ -721,6 +759,7 @@ data class LocationEntry(
     val proxyEnabled: Boolean = true,
     val core: ProxyCore? = null,
     val vkturn: VkTurnConfig? = null,
+    val dnstt: DnsttConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
@@ -802,6 +841,7 @@ data class LocationEntry(
                 proxyEnabled = proxyEnabled,
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
+                dnstt = dnstt,
                 advanced = advanced,
                 fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
@@ -831,6 +871,7 @@ data class LocationEntry(
             proxyEnabled = config.proxyEnabled,
             core = config.core,
             vkturn = config.vkturn,
+            dnstt = config.dnstt,
             advanced = config.advanced,
             fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
@@ -868,6 +909,7 @@ data class LocationEntry(
                 proxyEnabled = config.proxyEnabled,
                 core = config.core,
                 vkturn = config.vkturn,
+                dnstt = config.dnstt,
                 advanced = config.advanced,
                 fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },

@@ -564,6 +564,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Obfuscated transports whose real endpoint is blocked/hidden (VK-TURN, AmneziaWG):
             // the only meaningful probe is end-to-end through the live tunnel.
             locationConfig.engine == EngineType.VkTurn -> tunnelPing()
+            // dnstt has no TCP endpoint (its "server" is a DNS resolver), so it only measures
+            // end-to-end through the live tunnel once connected.
+            locationConfig.engine == EngineType.Dnstt -> tunnelPing()
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
                 // Connected → measure through the live tunnel; otherwise a standalone WG-handshake
                 // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).

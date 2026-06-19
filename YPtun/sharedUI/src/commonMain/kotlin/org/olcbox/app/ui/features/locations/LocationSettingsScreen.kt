@@ -95,6 +95,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
+import org.olcbox.app.data.model.DnsttConfig
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
@@ -312,6 +313,14 @@ fun LocationSettingsScreen(
                     enabled = !isSaving,
                     onChange = viewModel::updateVkTurnDraft,
                     onWdttAutoInstall = { showWdttInstall = true }
+                )
+            }
+
+            if (config.engine == EngineType.Dnstt) {
+                dnsttSection(
+                    config = viewModel.editingDnstt,
+                    enabled = !isSaving,
+                    onChange = viewModel::updateDnstt
                 )
             }
 
@@ -585,7 +594,8 @@ private fun EngineSelector(
         EngineType.Stealth,
         EngineType.Standard,
         EngineType.Chain,
-        EngineType.VkTurn
+        EngineType.VkTurn,
+        EngineType.Dnstt
     )
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -705,6 +715,53 @@ private fun ProxyField(
             minLines = 2,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+/**
+ * dnstt (DNS tunnel) editor: tunnel domain, the server's Noise public key and a UDP DNS resolver.
+ * The dnstt client raises a local listener that transparently forwards each TCP connection through
+ * DNS TXT queries to the dnstt-server, which relays to its upstream SOCKS5 — so the local port
+ * behaves as that SOCKS5 and the TUN bridge consumes it directly.
+ */
+private fun LazyListScope.dnsttSection(
+    config: DnsttConfig,
+    enabled: Boolean,
+    onChange: ((DnsttConfig) -> DnsttConfig) -> Unit
+) {
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "DNSTT — туннель через DNS",
+                subtitle = "Домен и публичный ключ от твоего dnstt-сервера; резолвер — любой UDP-DNS, который его дотягивает"
+            )
+            VkTurnField(
+                value = config.domain,
+                onValueChange = { v -> onChange { it.copy(domain = v.trim()) } },
+                label = "Домен туннеля",
+                placeholder = "t.example.com",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+            VkTurnField(
+                value = config.pubKey,
+                onValueChange = { v -> onChange { it.copy(pubKey = v.trim()) } },
+                label = "Публичный ключ сервера (hex)",
+                placeholder = "Noise public key, 64 hex-символа",
+                enabled = enabled
+            )
+            VkTurnField(
+                value = config.resolver,
+                onValueChange = { v -> onChange { it.copy(resolver = v.trim()) } },
+                label = "DNS-резолвер (UDP)",
+                placeholder = "1.1.1.1:53",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+        }
     }
 }
 
@@ -1518,6 +1575,7 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.Standard -> "Standard"
     EngineType.Chain -> "Chain"
     EngineType.VkTurn -> "VK-TURN"
+    EngineType.Dnstt -> "DNSTT"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {
@@ -1525,6 +1583,7 @@ private fun engineSubtitle(engine: EngineType): String = when (engine) {
     EngineType.Standard -> "sing-box proxy (VLESS, VMess, Trojan, SS…)"
     EngineType.Chain -> "Proxy wrapped inside the olcRTC tunnel"
     EngineType.VkTurn -> "WireGuard over a VK TURN tunnel (free-turn-proxy)"
+    EngineType.Dnstt -> "Туннель через DNS (dnstt: KCP + Noise)"
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {
