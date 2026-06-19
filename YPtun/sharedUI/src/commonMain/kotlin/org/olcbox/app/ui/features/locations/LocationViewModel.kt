@@ -163,6 +163,13 @@ class LocationViewModel(
      */
     private val vkTurnFieldsValid: Boolean
         get() = with(editingVkTurn) {
+            // WDTT core connects PURELY by the wdtt-server IP[:port] (+ a local listener); there is no
+            // freeturn peer and no user-entered WireGuard keys (the WG config is fetched from the server
+            // at runtime), so it gates on the wdtt-server address instead.
+            if (core.equals(VkTurnConfig.CORE_WDTT, ignoreCase = true)) {
+                return@with wdttPeer.isNotBlank() &&
+                    (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
+            }
             val peerOk = peerHost.isNotBlank() &&
                 (peerPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
                 (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
