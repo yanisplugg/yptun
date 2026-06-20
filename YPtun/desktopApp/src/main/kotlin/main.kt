@@ -176,7 +176,6 @@ fun main(args: Array<String>) = application {
     var sharePayload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var desktopNotice by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val trayState = rememberTrayState()
     val trayHomeState by dependencies.homeViewModel.state.collectAsState()
 
     suspend fun saveUpdateSettings(settings: AppUpdateSettings) {
@@ -285,39 +284,48 @@ fun main(args: Array<String>) = application {
         trayLoading -> if (trayRussian) "○ Подключение…" else "○ Connecting…"
         else -> if (trayRussian) "○ Отключено" else "○ Disconnected"
     }
-    Tray(
-        state = trayState,
-        icon = painterResource("LinuxIcon.png"),
-        tooltip = trayStatusText.removePrefix("● ").removePrefix("○ "),
-        // Left-click opens the custom Compose menu (Steam-style); right-click keeps a native fallback.
-        onAction = { trayMenuVisible = true },
-        menu = {
-            // Native AWT tray menus can't be styled, so convey state through a disabled status line.
-            Item(trayStatusText, enabled = false, onClick = {})
-            Separator()
-            Item(if (trayRussian) "Открыть" else "Open", onClick = { isWindowVisible = true })
-            Item(
-                when {
-                    trayConnected || trayLoading -> if (trayRussian) "Отключиться" else "Disconnect"
-                    else -> if (trayRussian) "Подключиться" else "Connect"
-                },
-                enabled = trayConnected || trayLoading || trayHomeState.canStartVpn,
-                onClick = { dependencies.homeViewModel.ToggleVpn() }
-            )
-            Item(if (trayRussian) "Настройки" else "Settings", onClick = {
-                isWindowVisible = true
-                showDesktopSettings = true
-            })
-            Separator()
-            Item(if (trayRussian) "Выход" else "Quit", onClick = {
-                dependencies.close()
-                exitApplication()
-            })
+    // Raw AWT tray icon so we can open OUR custom menu on RIGHT-click (Compose's Tray only exposes a
+    // left-click action + a native right-click menu). Left-click shows/focuses the main window.
+    val trayAnchor = remember { java.awt.Point(0, 0) }
+    val awtTrayIcon = remember { mutableStateOf<java.awt.TrayIcon?>(null) }
+    DisposableEffect(Unit) {
+        val systemTray = runCatching { java.awt.SystemTray.getSystemTray() }.getOrNull()
+        var icon: java.awt.TrayIcon? = null
+        if (systemTray != null) {
+            val img = runCatching {
+                java.awt.Toolkit.getDefaultToolkit()
+                    .getImage(DesktopAppDependencies::class.java.getResource("/LinuxIcon.png"))
+            }.getOrNull()
+            if (img != null) {
+                icon = java.awt.TrayIcon(img, "YPtun").apply {
+                    isImageAutoSize = true
+                    addMouseListener(object : java.awt.event.MouseAdapter() {
+                        override fun mouseReleased(e: java.awt.event.MouseEvent) {
+                            if (e.isPopupTrigger || e.button == java.awt.event.MouseEvent.BUTTON3) {
+                                trayAnchor.setLocation(e.x, e.y)
+                                trayMenuVisible = true
+                            } else if (e.button == java.awt.event.MouseEvent.BUTTON1) {
+                                isWindowVisible = true
+                            }
+                        }
+                    })
+                }
+                runCatching { systemTray.add(icon) }
+                awtTrayIcon.value = icon
+            }
         }
-    )
+        onDispose {
+            icon?.let { ic -> runCatching { systemTray?.remove(ic) } }
+            awtTrayIcon.value = null
+        }
+    }
+    // Keep the tray tooltip in sync with connection status.
+    LaunchedEffect(trayStatusText) {
+        awtTrayIcon.value?.toolTip = trayStatusText.removePrefix("● ").removePrefix("○ ")
+    }
 
-    // Custom Steam-style tray menu: an undecorated, transparent, always-on-top Compose window pinned
-    // to the bottom-right work area, themed like the app. Dismisses on focus loss or item click.
+    // Custom Steam-style tray menu: an undecorated, transparent, always-on-top Compose window anchored
+    // at the cursor (clamped to the work area), themed like the app. Dismisses on focus loss or click.
     if (trayMenuVisible) {
         val trayDynamicTheme by dependencies.settings.dynamicTheme.collectAsState()
         Window(
@@ -333,10 +341,12 @@ fun main(args: Array<String>) = application {
             LaunchedEffect(Unit) {
                 runCatching {
                     val area = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
-                    window.setLocation(
-                        area.x + area.width - window.width - 8,
-                        area.y + area.height - window.height - 8
-                    )
+                    // Anchor the menu's bottom-right near the click, clamped onto the work area.
+                    val x = (trayAnchor.x - window.width)
+                        .coerceIn(area.x, area.x + area.width - window.width)
+                    val y = (trayAnchor.y - window.height - 4)
+                        .coerceIn(area.y, area.y + area.height - window.height)
+                    window.setLocation(x, y)
                     window.isAlwaysOnTop = true
                     window.toFront()
                     window.requestFocus()
