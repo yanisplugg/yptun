@@ -3452,13 +3452,13 @@ private fun ApplicationBehaviorContent(
 
         RoutingToggleRow(
             title = "Уведомлять об окончании подписки",
-            subtitle = "Локальное уведомление за несколько дней до конца подписки (по данным панели, как в Happ). По умолчанию выключено.",
+            subtitle = "Локальное уведомление за несколько дней до конца подписки.",
             checked = settings.notifySubscriptionExpiry
         ) { onChanged(settings.copy(notifySubscriptionExpiry = it)) }
 
         RoutingToggleRow(
             title = "Автоустановка на VPS",
-            subtitle = "Показывать кнопки развёртывания WDTT/DNSTT-сервера на VPS по SSH в настройках локации. По умолчанию выключено.",
+            subtitle = "Выполняет развёртывание движка на VPS.",
             checked = settings.allowVpsAutoInstall
         ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
 
