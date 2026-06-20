@@ -1,13 +1,27 @@
 package org.olcbox.app.vpn.desktop
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
 
 internal interface DesktopProxyController {
-    suspend fun enable(pacUrl: String)
+    /**
+     * Route the OS through our local proxy. [httpProxyHostPort] is a `host:port` for a direct HTTP
+     * proxy (Windows); [pacUrl] is a PAC file URL (macOS). Each platform uses whichever it supports.
+     */
+    suspend fun enable(httpProxyHostPort: String, pacUrl: String)
+
+    /** Put the OS proxy settings back exactly as they were before [enable]. Safe to call twice. */
     suspend fun restore()
+
+    /**
+     * Clear any *stale* proxy this app left behind after a crash/kill (system proxy still pointing at
+     * our now-dead local port). Called on startup so a previous unclean exit can't keep the machine
+     * offline. No-op if the current proxy isn't ours.
+     */
+    suspend fun clearStaleProxy()
 
     companion object {
         fun current(): DesktopProxyController {
@@ -22,11 +36,12 @@ internal interface DesktopProxyController {
 }
 
 internal class UnsupportedProxyController : DesktopProxyController {
-    override suspend fun enable(pacUrl: String) {
+    override suspend fun enable(httpProxyHostPort: String, pacUrl: String) {
         error("System proxy mode supports macOS and Windows")
     }
 
     override suspend fun restore() = Unit
+    override suspend fun clearStaleProxy() = Unit
 }
 
 internal data class MacOsAutoProxyState(
@@ -38,11 +53,11 @@ internal data class MacOsAutoProxyState(
 internal class MacOsProxyController : DesktopProxyController {
     private var backup: List<MacOsAutoProxyState>? = null
 
-    override suspend fun enable(pacUrl: String) {
+    override suspend fun enable(httpProxyHostPort: String, pacUrl: String) {
         val services = enabledNetworkServices()
-        backup = services.map { service ->
-            readAutoProxyState(service)
-        }
+        // Don't capture our own PAC as the "original" if enable() runs twice.
+        val captured = services.map { readAutoProxyState(it) }
+        if (captured.none { it.url == pacUrl }) backup = captured
         enableCommands(services, pacUrl).forEach { runCommand(it) }
     }
 
@@ -52,6 +67,16 @@ internal class MacOsProxyController : DesktopProxyController {
             runCatching { runCommand(command) }
         }
         backup = null
+    }
+
+    override suspend fun clearStaleProxy() {
+        val services = runCatching { enabledNetworkServices() }.getOrDefault(emptyList())
+        services.forEach { service ->
+            val state = runCatching { readAutoProxyState(service) }.getOrNull() ?: return@forEach
+            if (state.enabled && state.url?.contains("127.0.0.1") == true) {
+                runCatching { runCommand(listOf("networksetup", "-setautoproxystate", service, "off")) }
+            }
+        }
     }
 
     private suspend fun enabledNetworkServices(): List<String> {
@@ -107,24 +132,74 @@ internal data class WindowsProxyState(
     val proxyServer: String?,
     val proxyOverride: String?,
     val autoConfigUrl: String?
-)
+) {
+    /** True when these settings already point at one of OUR local proxies (loopback). */
+    fun looksLikeOurs(): Boolean {
+        val s = proxyServer?.contains("127.0.0.1") == true || proxyServer?.contains("localhost") == true
+        val a = autoConfigUrl?.contains("127.0.0.1") == true || autoConfigUrl?.contains("localhost") == true
+        return s || a
+    }
+}
 
 internal class WindowsProxyController : DesktopProxyController {
-    private var backup: WindowsProxyState? = null
+    @Volatile private var backup: WindowsProxyState? = null
+    @Volatile private var active = false
+    private var shutdownHook: Thread? = null
 
-    override suspend fun enable(pacUrl: String) {
-        backup = readState()
-        enableCommands(pacUrl).forEach { runCommand(it) }
+    override suspend fun enable(httpProxyHostPort: String, pacUrl: String) {
+        val current = readState()
+        // Never capture our own proxy as the thing to restore to — otherwise disabling would
+        // "restore" the machine to a dead loopback proxy and kill all internet. If the current state
+        // is already ours (re-enable / leftover), keep the previous clean backup or fall back to a
+        // disabled state.
+        if (!current.looksLikeOurs()) {
+            backup = current
+        } else if (backup == null) {
+            backup = DISABLED_STATE
+        }
+        active = true
+        ensureShutdownHook()
+        // Direct HTTP proxy is what WinINET honours reliably (PAC + SOCKS5 is flaky on Windows).
+        enableHttpCommands(httpProxyHostPort).forEach { runCommand(it) }
         refreshProxySettings()
     }
 
     override suspend fun restore() {
-        val state = backup ?: return
+        val state = backup
+        active = false
+        if (state == null) return
         restoreCommands(state).forEach { command ->
             runCatching { runCommand(command) }
         }
         refreshProxySettings()
         backup = null
+        removeShutdownHook()
+    }
+
+    override suspend fun clearStaleProxy() {
+        val current = runCatching { readState() }.getOrNull() ?: return
+        if (current.looksLikeOurs()) {
+            // A previous run left a loopback proxy set but nothing is serving it now → disable it so
+            // the machine has working internet again.
+            restoreCommands(DISABLED_STATE).forEach { runCatching { runCommand(it) } }
+            refreshProxySettings()
+        }
+    }
+
+    private fun ensureShutdownHook() {
+        if (shutdownHook != null) return
+        val hook = Thread {
+            // Last-resort cleanup on JVM exit / Ctrl-C / window close so a crash never bricks the net.
+            if (active) runCatching { runBlocking { restore() } }
+        }
+        shutdownHook = hook
+        runCatching { Runtime.getRuntime().addShutdownHook(hook) }
+    }
+
+    private fun removeShutdownHook() {
+        val hook = shutdownHook ?: return
+        runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
+        shutdownHook = null
     }
 
     private suspend fun readState(): WindowsProxyState {
@@ -157,10 +232,22 @@ internal class WindowsProxyController : DesktopProxyController {
     companion object {
         private const val REGISTRY_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
 
-        fun enableCommands(pacUrl: String): List<List<String>> {
+        // Represents "no proxy configured" — restoring to this leaves a clean, online machine.
+        private val DISABLED_STATE = WindowsProxyState(
+            proxyEnable = "0x0",
+            proxyServer = null,
+            proxyOverride = null,
+            autoConfigUrl = null
+        )
+
+        fun enableHttpCommands(hostPort: String): List<List<String>> {
             return listOf(
-                setDwordCommand("ProxyEnable", "0"),
-                setStringCommand("AutoConfigURL", pacUrl)
+                // Clear any PAC so it can't race with the fixed proxy.
+                listOf("reg", "delete", REGISTRY_KEY, "/v", "AutoConfigURL", "/f"),
+                setStringCommand("ProxyServer", hostPort),
+                // Let loopback/intranet bypass the proxy so localhost tooling keeps working.
+                setStringCommand("ProxyOverride", "<local>;localhost;127.*;10.*;172.16.*;192.168.*"),
+                setDwordCommand("ProxyEnable", "1")
             )
         }
 

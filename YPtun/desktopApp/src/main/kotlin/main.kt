@@ -256,25 +256,40 @@ fun main(args: Array<String>) = application {
         }
     }
 
+    val trayRussian = org.olcbox.app.ui.i18n.LocalizationState.effective ==
+        org.olcbox.app.ui.i18n.AppLanguage.Russian
+    val trayConnected = trayHomeState.isVpnConnected
+    val trayLoading = trayHomeState.isVpnLoading
+    val trayLocationName = trayHomeState.selectedLocation?.locationName?.takeIf { it.isNotBlank() }
+    val trayStatusText = when {
+        trayConnected -> (if (trayRussian) "● Подключено" else "● Connected") +
+            (trayLocationName?.let { " · $it" } ?: "")
+        trayLoading -> if (trayRussian) "○ Подключение…" else "○ Connecting…"
+        else -> if (trayRussian) "○ Отключено" else "○ Disconnected"
+    }
     Tray(
         state = trayState,
         icon = painterResource("LinuxIcon.png"),
-        tooltip = "YPtun",
+        tooltip = trayStatusText.removePrefix("● ").removePrefix("○ "),
         menu = {
-            Item("Open", onClick = { isWindowVisible = true })
+            // Native AWT tray menus can't be styled, so convey state through a disabled status line.
+            Item(trayStatusText, enabled = false, onClick = {})
+            Separator()
+            Item(if (trayRussian) "Открыть" else "Open", onClick = { isWindowVisible = true })
             Item(
-                if (trayHomeState.isVpnConnected || trayHomeState.isVpnLoading) "Stop" else "Start",
-                enabled = trayHomeState.isVpnConnected || trayHomeState.isVpnLoading || trayHomeState.canStartVpn,
-                onClick = {
-                    dependencies.homeViewModel.ToggleVpn()
-                }
+                when {
+                    trayConnected || trayLoading -> if (trayRussian) "Отключиться" else "Disconnect"
+                    else -> if (trayRussian) "Подключиться" else "Connect"
+                },
+                enabled = trayConnected || trayLoading || trayHomeState.canStartVpn,
+                onClick = { dependencies.homeViewModel.ToggleVpn() }
             )
-            Item("Settings", onClick = {
+            Item(if (trayRussian) "Настройки" else "Settings", onClick = {
                 isWindowVisible = true
                 showDesktopSettings = true
             })
             Separator()
-            Item("Quit", onClick = {
+            Item(if (trayRussian) "Выход" else "Quit", onClick = {
                 dependencies.close()
                 exitApplication()
             })

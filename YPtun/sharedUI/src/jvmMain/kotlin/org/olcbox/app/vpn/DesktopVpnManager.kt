@@ -54,6 +54,12 @@ class DesktopVpnManager private constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
 
+    init {
+        // If a previous run crashed while system-proxy mode was active, the OS proxy may still point
+        // at our now-dead local port (no internet). Clear that leftover on launch.
+        scope.launch { runCatching { proxyController.clearStaleProxy() } }
+    }
+
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     override val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
@@ -62,6 +68,9 @@ class DesktopVpnManager private constructor(
 
     private val _isConnected = MutableStateFlow(false)
     override val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+    private val _connectedSinceEpochMs = MutableStateFlow(0L)
+    override val connectedSinceEpochMs: StateFlow<Long> = _connectedSinceEpochMs.asStateFlow()
 
     private val _socksProxySettings = MutableStateFlow(DesktopSocksProxySettings())
     val socksProxySettings: StateFlow<DesktopSocksProxySettings> = _socksProxySettings.asStateFlow()
@@ -639,13 +648,18 @@ class DesktopVpnManager private constructor(
         socksSettings: DesktopSocksProxySettings,
         requestGeneration: Long
     ) {
+        // PAC is only used by macOS; Windows points its system HTTP proxy straight at the sing-box
+        // "mixed" inbound (host:port), which WinINET honours reliably (PAC+SOCKS5 is flaky there).
         pacServer.start(
             socksHost = socksSettings.host,
             socksPort = socksSettings.port,
             socksUsername = socksSettings.username,
             socksPassword = socksSettings.password
         )
-        proxyController.enable(pacServer.url)
+        proxyController.enable(
+            httpProxyHostPort = "${socksSettings.host}:${socksSettings.port}",
+            pacUrl = pacServer.url
+        )
 
         if (requestGeneration != generation) {
             throw CancellationException("Desktop start superseded")
@@ -960,7 +974,16 @@ class DesktopVpnManager private constructor(
 
     private fun setStatus(status: VpnStatus) {
         _status.value = status
-        _isConnected.value = status is VpnStatus.Connected
+        val connected = status is VpnStatus.Connected
+        _isConnected.value = connected
+        // Drive the home-screen uptime timer: stamp the real connection start once, clear on any
+        // non-connected state. Keep an existing stamp across redundant Connected updates so the timer
+        // doesn't reset mid-session.
+        _connectedSinceEpochMs.value = when {
+            connected && _connectedSinceEpochMs.value == 0L -> System.currentTimeMillis()
+            connected -> _connectedSinceEpochMs.value
+            else -> 0L
+        }
     }
 
     private fun addLog(message: String) {

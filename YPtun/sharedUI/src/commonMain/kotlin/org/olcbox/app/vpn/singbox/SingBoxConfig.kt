@@ -159,6 +159,8 @@ object SingBoxConfig {
         // through the proxy entirely — the UDP-over-vless DNS path stalled 5-6s on desktop, which is
         // why only Telegram (connects by IP, no DNS) worked.
         forceFakeDns: Boolean = false,
+        // Desktop: use a "mixed" inbound (SOCKS + HTTP) so the OS system-proxy (HTTP) can use it.
+        mixedInbound: Boolean = false,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
@@ -270,7 +272,9 @@ object SingBoxConfig {
                     }
                 }
                 addJsonObject {
-                    put("type", "socks")
+                    // "mixed" speaks BOTH SOCKS and HTTP on one port (desktop proxy mode points the
+                    // Windows system HTTP-proxy at it; SOCKS5 clients like tun2socks/hev still work).
+                    put("type", if (mixedInbound) "mixed" else "socks")
                     put("tag", SOCKS_IN_TAG)
                     put("listen", listenHost)
                     put("listen_port", listenPort)

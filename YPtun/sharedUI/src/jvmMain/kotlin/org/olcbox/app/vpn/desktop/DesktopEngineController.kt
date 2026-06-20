@@ -197,7 +197,9 @@ internal class DesktopEngineController(
 
         val chained = config.engine == EngineType.Chain
         val chainPort = chainOlcrtcPort(listenPort)
-        val secondProfile = config.proxy2?.takeIf { it.isComplete() }
+        // Cascade exit: dial the 2nd-hop server by IP too (same bootstrap-DNS stall fix as the main
+        // hop), or the cascade fails to connect on desktop.
+        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { dialByServerIp(it) }
 
         require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
@@ -357,6 +359,8 @@ internal class DesktopEngineController(
                 // the address, so there's no user IPv6 leak. Keep family enforcement only for the local
                 // UDP tunnels that genuinely carry every family themselves.
                 forceFamilyResolve = false,
+                // SOCKS+HTTP inbound so desktop proxy mode can point the Windows system HTTP-proxy at it.
+                mixedInbound = true,
                 logFilePath = DesktopPaths.appDataDir().resolve("singbox.log").toString(),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}" +
