@@ -32,7 +32,10 @@
         android:usesCleartextTraffic="true">
 
         <!-- Use our bundled EmojiCompat (init in App.onCreate) instead of the default
-             downloadable-font initializer, so flag emojis render offline/everywhere. -->
+             downloadable-font initializer, so flag emojis render offline/everywhere.
+             Also disable WorkManager's automatic startup initializer: it runs as a
+             ContentProvider BEFORE Application.onCreate (uncatchable), so instead the app
+             initializes WorkManager on-demand via Configuration.Provider, guarded in onCreate. -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
@@ -40,6 +43,9 @@
             tools:node="merge">
             <meta-data
                 android:name="androidx.emoji2.text.EmojiCompatInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
                 tools:node="remove" />
         </provider>
 

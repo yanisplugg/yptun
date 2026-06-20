@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.emoji2.bundled.BundledEmojiCompatConfig
 import androidx.emoji2.text.EmojiCompat
+import androidx.work.Configuration
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -11,11 +12,16 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
-class App : Application() {
+class App : Application(), Configuration.Provider {
     companion object {
         lateinit var appContext: Context
         private const val PROVIDER_REPORT_WORK = "provider-usage-report"
     }
+
+    // On-demand WorkManager configuration (its automatic startup initializer is removed in the
+    // manifest). Used the first time WorkManager.getInstance() is called, from onCreate below.
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().build()
 
     override fun onCreate() {
         super.onCreate()
