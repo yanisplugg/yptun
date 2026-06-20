@@ -1397,15 +1397,7 @@ class OlcboxVpnService : VpnService() {
             val traffic = loadTrafficSettings()
             // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
             val ipv4Traffic = traffic.copy(domainStrategy = "ipv4_only")
-            // VK-TURN's WireGuard/AmneziaWG/WDTT exits stay EXCLUDED from routing profiles (like olcRTC):
-            // they tunnel everything through the WG-over-VK path. The proxy EXIT (outbound=Proxy) is the
-            // exception — there the core listens on a local SOCKS and a routing profile can split traffic
-            // (proxy bucket over VK, direct bucket straight out), so we resolve and apply it there.
             val profilesState = loadRoutingProfilesState()
-            val routingProfile: RoutingProfile? =
-                if (outboundType == VkTurnConfig.OUTBOUND_PROXY)
-                    profilesState.resolve(config.routingProfileId)
-                else null
 
             // Chained proxy on top of WireGuard (parsed once; reused by both cores). Applies to plain
             // WireGuard AND to WDTT (which also exits via WireGuard) — a vless/trojan/ss link dialled
@@ -1420,6 +1412,16 @@ class OlcboxVpnService : VpnService() {
                 }
                 parsed
             } else null
+
+            // Routing profiles apply ONLY where there's a real proxy exit to split traffic on: the
+            // proxy EXIT (outbound=Proxy) OR a chain/second proxy over WireGuard. Then the core listens
+            // on a local SOCKS and the profile can split (proxy bucket over VK, direct bucket straight
+            // out). Plain WireGuard / AmneziaWG / WDTT (no proxy) stay EXCLUDED (like olcRTC): they
+            // tunnel everything through the WG-over-VK path with nothing to route against.
+            val routingProfile: RoutingProfile? =
+                if (outboundType == VkTurnConfig.OUTBOUND_PROXY || chainProxy != null)
+                    profilesState.resolve(config.routingProfileId)
+                else null
 
             // The proxy whose core choice matters: the PROXY exit, or the WG chain proxy. AmneziaWG /
             // plain WireGuard have no typed proxy → always sing-box.

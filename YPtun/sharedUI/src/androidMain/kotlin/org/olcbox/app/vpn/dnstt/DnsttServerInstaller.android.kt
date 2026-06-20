@@ -208,9 +208,20 @@ private fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "'
  * gate password auth through PAM/keyboard-interactive fail with "Auth fail" even for a correct password.
  */
 private class SshPasswordUserInfo(private val password: String) : UserInfo, UIKeyboardInteractive {
+    // Each auth method is answered EXACTLY ONCE. JSch loops a method as long as the prompt callback
+    // keeps returning an answer; always answering would retry until the server's MaxAuthTries trips
+    // ("Too many authentication failures"). One password attempt + one keyboard-interactive attempt
+    // is enough and bounded.
+    private var passwordOffered = false
+    private var kbdOffered = false
+
     override fun getPassphrase(): String? = null
     override fun getPassword(): String = password
-    override fun promptPassword(message: String?): Boolean = true
+    override fun promptPassword(message: String?): Boolean {
+        if (passwordOffered) return false
+        passwordOffered = true
+        return true
+    }
     override fun promptPassphrase(message: String?): Boolean = false
     override fun promptYesNo(message: String?): Boolean = true // accept host key / generic confirms
     override fun showMessage(message: String?) {}
@@ -220,5 +231,11 @@ private class SshPasswordUserInfo(private val password: String) : UserInfo, UIKe
         instruction: String?,
         prompt: Array<out String>?,
         echo: BooleanArray?
-    ): Array<String>? = if (prompt == null) null else Array(prompt.size) { password }
+    ): Array<String>? {
+        // Info/banner rounds carry no prompts — return an empty answer without consuming the attempt.
+        if (prompt.isNullOrEmpty()) return emptyArray()
+        if (kbdOffered) return null // already tried once; don't loop into "Too many auth failures"
+        kbdOffered = true
+        return Array(prompt.size) { password }
+    }
 }
