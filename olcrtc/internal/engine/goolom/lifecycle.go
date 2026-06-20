@@ -3,6 +3,7 @@ package goolom
 import (
 	"context"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,6 +11,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/protect"
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -75,29 +77,17 @@ func (s *Session) waitForMediaReady(ctx context.Context, timeout time.Duration) 
 }
 
 func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
-	settingEngine := webrtc.SettingEngine{}
-	if protect.Protector != nil {
-		settingEngine.SetICEProxyDialer(protect.NewProxyDialer())
+	api, err := newWebRTCAPI()
+	if err != nil {
+		return err
 	}
-	settingEngine.LoggerFactory = logger.NewPionLoggerFactory()
-	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
 
-	var err error
 	s.pcSub, err = api.NewPeerConnection(config)
 	if err != nil {
 		return fmt.Errorf("new sub pc: %w", err)
 	}
 	s.pcSub.OnConnectionStateChange(s.onSubscriberConnectionStateChange)
-	s.pcSub.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		if track.Kind() != webrtc.RTPCodecTypeVideo {
-			return
-		}
-		logger.Infof("goolom remote video track: codec=%s stream=%s track=%s",
-			track.Codec().MimeType, track.StreamID(), track.ID())
-		if cb := s.videoTrackHandler(); cb != nil {
-			cb(track, receiver)
-		}
-	})
+	s.pcSub.OnTrack(s.onSubscriberTrack)
 
 	s.pcPub, err = api.NewPeerConnection(config)
 	if err != nil {
@@ -109,6 +99,70 @@ func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
 		return err
 	}
 	return nil
+}
+
+// newWebRTCAPI builds a pion API with IPv4-only ICE and the default media
+// engine + interceptors.
+func newWebRTCAPI() (*webrtc.API, error) {
+	settingEngine := webrtc.SettingEngine{}
+	if protect.Protector != nil {
+		settingEngine.SetICEProxyDialer(protect.NewProxyDialer())
+	}
+	settingEngine.LoggerFactory = logger.NewPionLoggerFactory()
+
+	// Restrict ICE to UDP/IPv4. On hosts with many veth/docker interfaces the
+	// agent otherwise enumerates dozens of link-local IPv6 candidates that can
+	// never reach the SFU ("sendto: network is unreachable"). The flood of dead
+	// pairs starves ICE consent-freshness checks on the working pair, so the
+	// SFU stops receiving consent and tears down media after ~30-40 s. Limiting
+	// to IPv4 keeps the candidate set small and consent alive for the session.
+	settingEngine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	settingEngine.SetIPFilter(func(ip net.IP) bool {
+		return ip.To4() != nil
+	})
+
+	// Register the default media engine + interceptors. Without the default
+	// interceptors pion never emits RTCP Receiver Reports (or NACK/TWCC) for
+	// the inbound tracks, so the SFU sees a silent subscriber and stops
+	// forwarding VP8 after ~40 s. Registering them keeps the subscriber path
+	// alive for the lifetime of the PC.
+	mediaEngine := &webrtc.MediaEngine{}
+	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
+		return nil, fmt.Errorf("register default codecs: %w", err)
+	}
+	interceptorRegistry := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
+		return nil, fmt.Errorf("register default interceptors: %w", err)
+	}
+	return webrtc.NewAPI(
+		webrtc.WithSettingEngine(settingEngine),
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(interceptorRegistry),
+	), nil
+}
+
+// onSubscriberTrack handles a remote track arriving on the subscriber PC.
+func (s *Session) onSubscriberTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+	if track.Kind() != webrtc.RTPCodecTypeVideo {
+		return
+	}
+	logger.Infof("goolom remote video track: codec=%s stream=%s track=%s",
+		track.Codec().MimeType, track.StreamID(), track.ID())
+	if cb := s.videoTrackHandler(); cb != nil {
+		cb(track, receiver)
+	}
+	// Drain inbound RTCP on the receiver so the configured interceptors
+	// (Receiver Report / NACK / TWCC) keep running. Without an active reader
+	// the interceptor chain stalls and the SFU eventually stops forwarding
+	// the track.
+	go func() {
+		rtcpBuf := make([]byte, 1500)
+		for {
+			if _, _, err := receiver.Read(rtcpBuf); err != nil {
+				return
+			}
+		}
+	}()
 }
 
 func (s *Session) dialWebSocket() error {
@@ -179,6 +233,12 @@ func (s *Session) onPublisherConnectionStateChange(state webrtc.PeerConnectionSt
 		webrtc.PeerConnectionStateFailed,
 		webrtc.PeerConnectionStateClosed:
 		s.publisherReady.Store(false)
+		// Publisher failure triggers a full reconnect so the data VP8 track
+		// (carried by the publisher PC) is restored. The subscriber PC will
+		// also be re-established as part of the full reconnect.
+		logger.Warnf("goolom publisher PC %s - triggering reconnect", state)
+		s.queueReconnect()
+		return
 	case webrtc.PeerConnectionStateUnknown,
 		webrtc.PeerConnectionStateNew,
 		webrtc.PeerConnectionStateConnecting:
@@ -297,6 +357,7 @@ func (s *Session) retryReconnect(ctx context.Context, backoff time.Duration) boo
 }
 
 func (s *Session) reconnect(ctx context.Context) error {
+	logger.Warnf("goolom: full reconnect triggered")
 	s.reconnecting.Store(true)
 	defer s.reconnecting.Store(false)
 

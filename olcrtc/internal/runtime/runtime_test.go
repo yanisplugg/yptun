@@ -41,7 +41,7 @@ func TestSmuxConfigDefault(t *testing.T) {
 		t.Fatalf("SmuxConfig(0) buffers = %+v", cfg)
 	}
 	if cfg.KeepAliveDisabled || cfg.KeepAliveInterval != 10*time.Second ||
-		cfg.KeepAliveTimeout != 30*time.Second {
+		cfg.KeepAliveTimeout != 120*time.Second {
 		t.Fatalf("SmuxConfig(0) keepalive = %+v", cfg)
 	}
 }

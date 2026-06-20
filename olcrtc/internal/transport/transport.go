@@ -46,6 +46,23 @@ type Transport interface {
 	Reconnect(reason string)
 }
 
+// ControlPlane is implemented by transports that can route control-plane
+// traffic independently of the bulk data plane. When a transport implements
+// this interface, callers should use ControlSend/ControlOnData for the first
+// smux stream (the olcrtc control/handshake stream) so that it does not
+// compete with bulk data in the same KCP send buffer.
+type ControlPlane interface {
+	// ControlSend sends a raw encrypted frame on the control-plane channel.
+	ControlSend(data []byte) error
+	// SetControlOnData registers the callback invoked for every frame
+	// received on the control-plane channel.
+	SetControlOnData(cb func([]byte))
+	// ControlCanSend reports whether the control-plane is ready to send.
+	// Unlike CanSend, this should return true as soon as the subscriber PC
+	// is connected — it does NOT require the publisher PC to be ready.
+	ControlCanSend() bool
+}
+
 // PeerTransport is implemented by transports whose carrier can identify and
 // address individual remote endpoints.
 type PeerTransport interface {

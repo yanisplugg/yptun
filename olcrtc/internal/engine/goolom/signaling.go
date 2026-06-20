@@ -69,7 +69,6 @@ func (s *Session) handleSignaling(ctx context.Context) {
 			}
 			return
 		}
-
 		s.updateWSDeadline()
 
 		uid, _ := msg[keyUID].(string)
@@ -125,6 +124,12 @@ func (s *Session) updateWSDeadline() {
 
 func (s *Session) handleCommonMessages(msg map[string]any, uid string) {
 	if _, ok := msg["updateDescription"]; ok {
+		s.sendAck(uid)
+	}
+	if _, ok := msg["upsertDescription"]; ok {
+		s.sendAck(uid)
+	}
+	if _, ok := msg["removeDescription"]; ok {
 		s.sendAck(uid)
 	}
 	if _, ok := msg["slotsConfig"]; ok {

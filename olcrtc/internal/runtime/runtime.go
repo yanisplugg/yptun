@@ -76,8 +76,36 @@ func SmuxConfig(maxWirePayload int) *smux.Config {
 	}
 	cfg.MaxReceiveBuffer = smuxMaxReceiveBuffer
 	cfg.MaxStreamBuffer = smuxMaxStreamBuffer
+	// Keep-alive interval is deliberately generous: the underlying KCP
+	// transport can go silent for up to ~25s during a goolom publisher-PC
+	// reconnect (SFU renegotiation). A tight timeout would tear down the
+	// smux session while the carrier is rebuildingitself, forcing an
+	// unnecessary second reconnect. 120s gives plenty of headroom while
+	// still catching truly dead links.
 	cfg.KeepAliveInterval = 10 * time.Second
-	cfg.KeepAliveTimeout = 30 * time.Second
+	cfg.KeepAliveTimeout = 120 * time.Second
+	return cfg
+}
+
+// ControlSmuxConfig returns a lean smux config for the isolated control-plane
+// session. The control session carries only tiny ping/pong frames so we use
+// small stream buffers and disable smux keepalives (the olcrtc control.Run
+// ping loop handles liveness itself).
+func ControlSmuxConfig(maxWirePayload int) *smux.Config {
+	cfg := smux.DefaultConfig()
+	cfg.Version = 2
+	cfg.MaxFrameSize = smuxMaxFrameSize
+	if maxWirePayload >= MinSmuxWirePayload {
+		maxFrameSize := maxWirePayload - SmuxWireOverhead
+		if maxFrameSize < cfg.MaxFrameSize {
+			cfg.MaxFrameSize = maxFrameSize
+		}
+	}
+	// Tiny buffers: control frames are at most a few hundred bytes.
+	cfg.MaxReceiveBuffer = 256 * 1024
+	cfg.MaxStreamBuffer = 32 * 1024
+	// Disable smux keepalive - control.Run runs its own ping/pong loop.
+	cfg.KeepAliveDisabled = true
 	return cfg
 }
 

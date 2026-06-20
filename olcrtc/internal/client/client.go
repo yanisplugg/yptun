@@ -54,6 +54,11 @@ type Client struct {
 	ln          transport.Transport
 	cipher      *crypto.Cipher
 	conn        *muxconn.Conn
+	// controlConn is a separate muxconn wired to the transport's control-plane
+	// channel (transport.ControlPlane). When non-nil, the smux control session
+	// runs over it instead of the bulk data conn, eliminating head-of-line
+	// blocking of control ping/pong behind large data transfers.
+	controlConn *muxconn.Conn
 	session     *smux.Session
 	controlStrm *smux.Stream
 	controlStop context.CancelFunc
@@ -66,6 +71,10 @@ type Client struct {
 	dnsServer   string
 	socksUser   string
 	socksPass   string
+	// sessionReady is closed (and replaced) each time a session becomes fully
+	// established (sessionID != ""). Tunnel handlers wait on it so they do
+	// not open smux streams before the server has accepted the handshake.
+	sessionReady chan struct{}
 }
 
 // HealthFunc is called when the client control health snapshot changes.
@@ -127,13 +136,14 @@ func RunWithReady(ctx context.Context, cfg Config, onReady func()) error {
 	}
 
 	c := &Client{
-		cipher:    cipher,
-		deviceID:  deviceID,
-		claims:    cfg.Claims,
-		dnsServer: cfg.DNSServer,
-		socksUser: cfg.SOCKSUser,
-		socksPass: cfg.SOCKSPass,
-		health:    runtime.NewHealthTracker(cfg.OnHealth),
+		cipher:       cipher,
+		deviceID:     deviceID,
+		claims:       cfg.Claims,
+		dnsServer:    cfg.DNSServer,
+		socksUser:    cfg.SOCKSUser,
+		socksPass:    cfg.SOCKSPass,
+		health:       runtime.NewHealthTracker(cfg.OnHealth),
+		sessionReady: make(chan struct{}),
 	}
 
 	// shutdown is registered BEFORE bringUpLink so we always close any
@@ -215,15 +225,39 @@ func (c *Client) bringUpLink(
 	}
 
 	c.conn = muxconn.New(ln, c.cipher)
+	c.controlConn = muxconn.NewControl(ln, c.cipher)
+
 	sess, err := smux.Client(c.conn, smuxConfig(linkMaxPayload(ln)))
 	if err != nil {
 		return fmt.Errorf("smux client: %w", err)
 	}
 
-	control, sid, err := openControlStream(ctx, sess, c.deviceID, c.claims)
+	// If the transport has an isolated control plane, open the handshake/
+	// control smux session over it instead of the bulk data session.
+	var controlSess *smux.Session
+	if c.controlConn != nil {
+		var cerr error
+		controlSess, cerr = smux.Client(c.controlConn, controlSmuxConfig(linkMaxPayload(ln)))
+		if cerr != nil {
+			_ = sess.Close()
+			_ = c.conn.Close()
+			_ = c.controlConn.Close()
+			return fmt.Errorf("control smux client: %w", cerr)
+		}
+	} else {
+		controlSess = sess
+	}
+
+	control, sid, err := openControlStream(ctx, controlSess, c.deviceID, c.claims)
 	if err != nil {
 		_ = sess.Close()
+		if controlSess != sess {
+			_ = controlSess.Close()
+		}
 		_ = c.conn.Close()
+		if c.controlConn != nil {
+			_ = c.controlConn.Close()
+		}
 		return fmt.Errorf("handshake: %w", err)
 	}
 	logger.Infof("session %s opened (device=%s)", sid, c.deviceID)
@@ -233,6 +267,7 @@ func (c *Client) bringUpLink(
 	c.controlStrm = control
 	c.sessionID = sid
 	c.sessMu.Unlock()
+	c.signalSessionReady()
 	c.recordSession(sid)
 	c.startControlLoop(ctx, cfg, cancel, control)
 
@@ -323,6 +358,14 @@ func smuxConfig(maxWirePayload int) *smux.Config {
 	return runtime.SmuxConfig(maxWirePayload)
 }
 
+// controlSmuxConfig returns a lean smux config for the isolated control-plane
+// session. The control session carries only ping/pong frames, so we use
+// small buffers and disable smux keepalives (our own control.Run ping loop
+// handles liveness).
+func controlSmuxConfig(maxWirePayload int) *smux.Config {
+	return runtime.ControlSmuxConfig(maxWirePayload)
+}
+
 func linkMaxPayload(tr transport.Transport) int {
 	return runtime.MaxPayload(tr)
 }
@@ -335,7 +378,7 @@ func (c *Client) handleReconnect(ctx context.Context, cfg Config, cancel context
 	logger.Infof("client reconnect reason=%s - tearing down smux session", reason)
 	c.resetLinkPeer()
 
-	// Close the old muxconn immediately so any in-flight Push from data
+	// Close the old muxconns immediately so any in-flight Push from data
 	// arriving on the new bridge is discarded. Without this, the server
 	// side that reconnected faster can push frames into our old muxconn,
 	// corrupting the dying smux session.
@@ -343,18 +386,23 @@ func (c *Client) handleReconnect(ctx context.Context, cfg Config, cancel context
 	if c.conn != nil {
 		_ = c.conn.Close()
 	}
+	if c.controlConn != nil {
+		_ = c.controlConn.Close()
+	}
 	c.sessMu.RUnlock()
 
-	// Install a fresh muxconn immediately so onData never hits nil while
-	// the old session is being torn down. tryReopenSession will swap it
-	// again with its own conn on each attempt.
+	// Install fresh muxconns immediately so onData never hits nil while
+	// the old session is being torn down. tryReopenSession will swap them
+	// again with its own conns on each attempt.
 	newConn := muxconn.New(c.ln, c.cipher)
+	newControlConn := muxconn.NewControl(c.ln, c.cipher)
 
 	c.sessMu.Lock()
 	oldControl := c.controlStrm
 	oldControlStop := c.controlStop
 	oldSess := c.session
 	c.conn = newConn
+	c.controlConn = newControlConn
 	c.session = nil
 	c.controlStrm = nil
 	c.controlStop = nil
@@ -444,12 +492,29 @@ func (c *Client) tryReopenSession(
 ) bool {
 	conn := muxconn.New(c.ln, c.cipher)
 
+	// If the transport has an isolated control plane, build a second muxconn
+	// wired to it. The smux control stream will run over controlConn so that
+	// bulk data writes on conn can never head-of-line block control ping/pong.
+	controlConn := muxconn.NewControl(c.ln, c.cipher)
+
 	c.sessMu.Lock()
-	old := c.conn
+	oldConn := c.conn
+	oldCtrl := c.controlConn
 	c.conn = conn
+	c.controlConn = controlConn
 	c.sessMu.Unlock()
-	if old != nil {
-		_ = old.Close()
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	if oldCtrl != nil {
+		_ = oldCtrl.Close()
+	}
+
+	// When we have a dedicated control conn, open the handshake/control smux
+	// session over it. Otherwise fall back to the data conn (legacy transports).
+	controlSmuxConn := conn
+	if controlConn != nil {
+		controlSmuxConn = controlConn
 	}
 
 	sess, err := smux.Client(conn, smuxConfig(linkMaxPayload(c.ln)))
@@ -457,20 +522,39 @@ func (c *Client) tryReopenSession(
 		logger.Warnf("smux re-init failed (attempt %d): %v", attempt, err)
 		return false
 	}
-	control, sid, err := openControlStreamTimeout(ctx, sess, c.deviceID, c.claims, 2*time.Second)
+
+	var controlSess *smux.Session
+	if controlConn != nil {
+		// Separate smux session for the control stream only. We use a minimal
+		// config: small buffers, no keepalive (liveness is our own ping/pong).
+		controlSess, err = smux.Client(controlSmuxConn, controlSmuxConfig(linkMaxPayload(c.ln)))
+		if err != nil {
+			logger.Warnf("control smux re-init failed (attempt %d): %v", attempt, err)
+			_ = sess.Close()
+			return false
+		}
+	} else {
+		controlSess = sess
+	}
+
+	ctrlStream, sid, err := openControlStreamTimeout(ctx, controlSess, c.deviceID, c.claims, handshake.DefaultTimeout)
 	if err != nil {
 		logger.Warnf("handshake on reconnect failed (attempt %d): %v", attempt, err)
 		_ = sess.Close()
+		if controlSess != sess {
+			_ = controlSess.Close()
+		}
 		return false
 	}
 	logger.Infof("session %s reopened (device=%s)", sid, c.deviceID)
 	c.sessMu.Lock()
 	c.session = sess
-	c.controlStrm = control
+	c.controlStrm = ctrlStream
 	c.sessionID = sid
 	c.sessMu.Unlock()
+	c.signalSessionReady()
 	c.recordSession(sid)
-	c.startControlLoop(ctx, cfg, cancel, control)
+	c.startControlLoop(ctx, cfg, cancel, ctrlStream)
 	return true
 }
 
@@ -539,16 +623,37 @@ func (c *Client) recordMissed(missed int)        { c.health.RecordMissed(missed)
 func (c *Client) recordUnhealthy(missed int)     { c.health.RecordUnhealthy(missed) }
 func (c *Client) recordReconnect()               { c.health.RecordReconnect() }
 
+// signalSessionReady closes the current sessionReady channel (waking any
+// waiters) and replaces it with a fresh one for the next reconnect cycle.
+func (c *Client) signalSessionReady() {
+	c.sessMu.Lock()
+	old := c.sessionReady
+	c.sessionReady = make(chan struct{})
+	c.sessMu.Unlock()
+	close(old)
+}
+
+// waitSessionReady blocks until the session is fully established (sessionID !=
+// "") or ctx is cancelled. Returns the ready channel to select on.
+func (c *Client) readyChannel() chan struct{} {
+	c.sessMu.RLock()
+	ch := c.sessionReady
+	c.sessMu.RUnlock()
+	return ch
+}
+
 func (c *Client) shutdown() {
 	c.sessMu.Lock()
 	control := c.controlStrm
 	controlStop := c.controlStop
 	sess := c.session
 	conn := c.conn
+	ctrlConn := c.controlConn
 	c.controlStrm = nil
 	c.controlStop = nil
 	c.session = nil
 	c.conn = nil
+	c.controlConn = nil
 	c.sessMu.Unlock()
 
 	notifyControlClose(control)
@@ -560,6 +665,9 @@ func (c *Client) shutdown() {
 	}
 	if conn != nil {
 		_ = conn.Close()
+	}
+	if ctrlConn != nil {
+		_ = ctrlConn.Close()
 	}
 	if c.ln != nil {
 		_ = c.ln.Close()
@@ -614,7 +722,7 @@ func (c *Client) acceptLoop(ctx context.Context, ln net.Listener) {
 	}
 }
 
-func (c *Client) handleSocks5(_ context.Context, conn net.Conn) {
+func (c *Client) handleSocks5(ctx context.Context, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	if err := c.socks5Handshake(conn); err != nil {
@@ -626,15 +734,33 @@ func (c *Client) handleSocks5(_ context.Context, conn net.Conn) {
 		return
 	}
 
-	c.sessMu.RLock()
-	sess := c.session
-	c.sessMu.RUnlock()
-	if sess == nil || sess.IsClosed() {
-		_, _ = conn.Write(replyHostUnreachable())
-		return
+	// Wait until the session handshake is fully complete (sessionID != "").
+	// Without this gate, tunnel streams opened during server-side reinstall
+	// land on a dying smux session and get "closed pipe".
+	const sessionReadyTimeout = 60 * time.Second
+	readyCtx, cancel := context.WithTimeout(ctx, sessionReadyTimeout)
+	defer cancel()
+	for {
+		c.sessMu.RLock()
+		sess := c.session
+		sid := c.sessionID
+		c.sessMu.RUnlock()
+		if sess != nil && !sess.IsClosed() && sid != "" {
+			c.tunnel(conn, sess, targetAddr, targetPort)
+			return
+		}
+		// sess is nil (no session yet) or closed (reconnect in progress) —
+		// in both cases wait for readyChannel rather than failing immediately.
+		// A closed session means handleReconnect is running; a fresh session
+		// will be installed shortly by tryReopenSession.
+		select {
+		case <-readyCtx.Done():
+			_, _ = conn.Write(replyHostUnreachable())
+			return
+		case <-c.readyChannel():
+			// session became ready; re-check
+		}
 	}
-
-	c.tunnel(conn, sess, targetAddr, targetPort)
 }
 
 func (c *Client) tunnel(conn net.Conn, sess *smux.Session, targetAddr string, targetPort int) {
@@ -682,7 +808,11 @@ func (c *Client) sendConnectRequest(stream *smux.Stream, targetAddr string, targ
 	_ = stream.SetWriteDeadline(time.Time{})
 
 	ack := make([]byte, 1)
-	_ = stream.SetReadDeadline(time.Now().Add(15 * time.Second))
+	// In peer-routing mode the SFU may take up to ~30s to complete
+	// renegotiation and start forwarding data frames from the client to the
+	// server. Use a generous deadline so we do not give up before the server
+	// peer session is established.
+	_ = stream.SetReadDeadline(time.Now().Add(90 * time.Second))
 	if _, err := io.ReadFull(stream, ack); err != nil || ack[0] != 0x00 {
 		return fmt.Errorf("sid=%d: %w (read_err=%w ack=%v)", stream.ID(), ErrRemoteNotReady, err, ack)
 	}

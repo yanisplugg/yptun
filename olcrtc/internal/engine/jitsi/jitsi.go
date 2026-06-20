@@ -1829,6 +1829,9 @@ func (s *Session) CanSend() bool {
 	return s.bridgeReady.Load()
 }
 
+// SubscriberCanSend reports whether the subscriber path is ready to send.
+func (s *Session) SubscriberCanSend() bool { return s.CanSend() }
+
 // GetSendQueue exposes the outbound queue for upstream metrics.
 func (s *Session) GetSendQueue() chan []byte { return s.sendQueue }
 

@@ -137,7 +137,7 @@ func runLocalSoakOnce(t *testing.T, transportName string) {
 	rt := startLocalSoakTunnel(t, transportName)
 	echoAddr := startEchoServer(t)
 
-	conn, err := connectViaSOCKSWithin(rt.socksAddr, echoAddr, setupBudget)
+	conn, err := connectViaSOCKSWithin(context.Background(), rt.socksAddr, echoAddr, setupBudget)
 	if err != nil {
 		t.Fatalf("connect via SOCKS: %v", err)
 	}

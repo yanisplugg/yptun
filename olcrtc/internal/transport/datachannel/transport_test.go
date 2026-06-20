@@ -44,6 +44,7 @@ func (s *stubSession) SetShouldReconnect(fn func() bool)                       {
 func (s *stubSession) SetEndedCallback(cb func(string))                        { s.endedCB = cb }
 func (s *stubSession) WatchConnection(context.Context)                         { s.watched = true }
 func (s *stubSession) CanSend() bool                                           { return s.canSend }
+func (s *stubSession) SubscriberCanSend() bool                                 { return s.canSend }
 func (s *stubSession) GetSendQueue() chan []byte                               { return nil }
 func (s *stubSession) GetBufferedAmount() uint64                               { return 0 }
 func (s *stubSession) Reconnect(string)                                        {}
