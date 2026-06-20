@@ -9,6 +9,14 @@
 -keep class xraybridge.** { *; }
 -keep class mobile.** { *; }
 
+# --- JSch (mwiede fork) — VPS SSH installer (WDTT / DNSTT auto-install) ---
+# JSch instantiates its cipher/kex/MAC/random implementations by fully-qualified class name pulled
+# from an internal config map (reflection via Class.forName). R8 sees no static references to those
+# classes and strips them, so connecting throws ClassNotFoundException (e.g.
+# com.jcraft.jsch.jce.Random). Keep the whole package (and its optional agentproxy/jgss helpers).
+-keep class com.jcraft.jsch.** { *; }
+-dontwarn com.jcraft.jsch.**
+
 # --- kotlinx.serialization ---
 # Standard R8/ProGuard rules so @Serializable models keep their generated serializers.
 -keepattributes *Annotation*, InnerClasses

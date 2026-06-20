@@ -1397,10 +1397,15 @@ class OlcboxVpnService : VpnService() {
             val traffic = loadTrafficSettings()
             // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
             val ipv4Traffic = traffic.copy(domainStrategy = "ipv4_only")
-            // VK-TURN is intentionally EXCLUDED from routing profiles (like olcRTC): it tunnels
-            // everything through the WG-over-VK path, so no per-app routing is applied here.
+            // VK-TURN's WireGuard/AmneziaWG/WDTT exits stay EXCLUDED from routing profiles (like olcRTC):
+            // they tunnel everything through the WG-over-VK path. The proxy EXIT (outbound=Proxy) is the
+            // exception — there the core listens on a local SOCKS and a routing profile can split traffic
+            // (proxy bucket over VK, direct bucket straight out), so we resolve and apply it there.
             val profilesState = loadRoutingProfilesState()
-            val routingProfile: RoutingProfile? = null
+            val routingProfile: RoutingProfile? =
+                if (outboundType == VkTurnConfig.OUTBOUND_PROXY)
+                    profilesState.resolve(config.routingProfileId)
+                else null
 
             // Chained proxy on top of WireGuard (parsed once; reused by both cores). Applies to plain
             // WireGuard AND to WDTT (which also exits via WireGuard) — a vless/trojan/ss link dialled
