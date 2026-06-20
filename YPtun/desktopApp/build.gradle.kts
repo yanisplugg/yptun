@@ -27,6 +27,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.jna)
+    implementation(libs.jna.platform) // Win32 RegisterHotKey for the global hotkey
     implementation(libs.zxing.core)
     // Material icons used by the custom tray menu (sharedUI keeps them internal).
     implementation(compose.materialIconsExtended)

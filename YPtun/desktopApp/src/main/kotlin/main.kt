@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Settings
@@ -68,6 +69,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import org.olcbox.app.desktop.GlobalHotkey
+import org.olcbox.app.desktop.HotkeyBinding
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -170,6 +186,20 @@ fun main(args: Array<String>) = application {
     var showDesktopSettings by remember { mutableStateOf(false) }
     var isWindowVisible by remember { mutableStateOf(true) }
     var trayMenuVisible by remember { mutableStateOf(false) }
+    var hotkeyBinding by remember { mutableStateOf(loadHotkeyBinding()) }
+    var hotkeyDialogVisible by remember { mutableStateOf(false) }
+    var showMyIpDialog by remember { mutableStateOf(false) }
+    var ipProvider by remember { mutableStateOf(loadIpProvider()) }
+
+    // Global hotkey: start the Win32 listener once; it toggles the VPN from anywhere. No default —
+    // only active when the user has bound a combination (persisted in java prefs).
+    DisposableEffect(Unit) {
+        if (GlobalHotkey.isSupported) {
+            GlobalHotkey.start(hotkeyBinding) { dependencies.homeViewModel.ToggleVpn() }
+        }
+        onDispose { GlobalHotkey.stop() }
+    }
+    LaunchedEffect(hotkeyBinding) { GlobalHotkey.setBinding(hotkeyBinding) }
     var updateMessage by remember { mutableStateOf<String?>(null) }
     var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
     var updateProgress by remember { mutableStateOf<Float?>(null) }
@@ -381,16 +411,8 @@ fun main(args: Array<String>) = application {
                     canToggle = trayConnected || trayLoading || trayHomeState.canStartVpn,
                     onOpen = { trayMenuVisible = false; isWindowVisible = true },
                     onToggle = { trayMenuVisible = false; dependencies.homeViewModel.ToggleVpn() },
-                    onMyIp = {
-                        trayMenuVisible = false
-                        scope.launch {
-                            val ip = dependencies.vpnManager.checkExitIp()
-                            val msg = ip ?: (if (trayRussian) "Не удалось определить IP" else "Could not determine IP")
-                            awtTrayIcon.value?.displayMessage(
-                                "YPtun", msg, java.awt.TrayIcon.MessageType.INFO
-                            )
-                        }
-                    },
+                    onMyIp = { trayMenuVisible = false; showMyIpDialog = true },
+                    onHotkey = { trayMenuVisible = false; hotkeyDialogVisible = true },
                     onSettings = {
                         trayMenuVisible = false
                         isWindowVisible = true
@@ -404,6 +426,34 @@ fun main(args: Array<String>) = application {
                 )
             }
         }
+    }
+
+    if (hotkeyDialogVisible) {
+        val hkDynamic by dependencies.settings.dynamicTheme.collectAsState()
+        HotkeyCaptureDialog(
+            russian = trayRussian,
+            current = hotkeyBinding,
+            useDynamicColor = hkDynamic,
+            onSave = {
+                hotkeyBinding = it
+                saveHotkeyBinding(it)
+                hotkeyDialogVisible = false
+            },
+            onDismiss = { hotkeyDialogVisible = false },
+        )
+    }
+
+    if (showMyIpDialog) {
+        val ipDynamic by dependencies.settings.dynamicTheme.collectAsState()
+        MyIpDialog(
+            russian = trayRussian,
+            connected = trayConnected,
+            initialProvider = ipProvider,
+            useDynamicColor = ipDynamic,
+            fetchIp = { provider -> dependencies.vpnManager.checkExitIp(provider) },
+            onProviderPersist = { ipProvider = it; saveIpProvider(it) },
+            onDismiss = { showMyIpDialog = false },
+        )
     }
 
     val windowState = rememberWindowState(width = 430.dp, height = 780.dp)
@@ -977,6 +1027,7 @@ private fun TrayMenu(
     onOpen: () -> Unit,
     onToggle: () -> Unit,
     onMyIp: () -> Unit,
+    onHotkey: () -> Unit,
     onSettings: () -> Unit,
     onQuit: () -> Unit,
 ) {
@@ -1039,9 +1090,12 @@ private fun TrayMenu(
                 tint = if (connected || loading) scheme.primary else scheme.onSurface,
                 onClick = onToggle,
             )
-            if (connected) {
-                TrayMenuItem(Icons.Outlined.Public, if (russian) "Мой IP" else "My IP", onClick = onMyIp)
-            }
+            TrayMenuItem(Icons.Outlined.Public, if (russian) "Мой IP" else "My IP", onClick = onMyIp)
+            TrayMenuItem(
+                Icons.Outlined.Keyboard,
+                if (russian) "Горячая клавиша" else "Global hotkey",
+                onClick = onHotkey,
+            )
             TrayMenuItem(Icons.Outlined.Settings, if (russian) "Настройки" else "Settings", onClick = onSettings)
             HorizontalDivider(color = scheme.outlineVariant, modifier = Modifier.padding(horizontal = 6.dp))
             TrayMenuItem(
@@ -1117,4 +1171,250 @@ private fun composeTrayImage(
     g.fillOval(x, y, d, d)
     g.dispose()
     return out
+}
+
+// ---------------------------------------------------------------------------------------
+// Global hotkey: persistence (java.util.prefs), key mapping, and an in-app capture dialog.
+
+private fun hotkeyPrefs() = java.util.prefs.Preferences.userRoot().node("org/olcbox/yptun")
+
+private fun loadHotkeyBinding(): HotkeyBinding? {
+    val p = hotkeyPrefs()
+    val vk = p.getInt("hotkey_vk", 0)
+    if (vk == 0) return null
+    val mod = p.getInt("hotkey_mod", 0)
+    val label = p.get("hotkey_label", "")
+    return HotkeyBinding(mod, vk, label)
+}
+
+private fun saveHotkeyBinding(binding: HotkeyBinding?) {
+    val p = hotkeyPrefs()
+    if (binding == null) {
+        p.remove("hotkey_vk"); p.remove("hotkey_mod"); p.remove("hotkey_label")
+    } else {
+        p.putInt("hotkey_vk", binding.vk)
+        p.putInt("hotkey_mod", binding.modifiers)
+        p.put("hotkey_label", binding.label)
+    }
+    runCatching { p.flush() }
+}
+
+/** Build a HotkeyBinding from a Compose key event, or null for modifier-only / no-modifier presses. */
+private fun hotkeyFromKeyEvent(e: androidx.compose.ui.input.key.KeyEvent): HotkeyBinding? {
+    val vk = e.key.nativeKeyCode
+    // Ignore pure modifier keys (Ctrl/Alt/Shift/Win) pressed alone.
+    val modKeys = setOf(
+        java.awt.event.KeyEvent.VK_CONTROL, java.awt.event.KeyEvent.VK_ALT,
+        java.awt.event.KeyEvent.VK_SHIFT, java.awt.event.KeyEvent.VK_META,
+        java.awt.event.KeyEvent.VK_WINDOWS,
+    )
+    if (vk in modKeys || vk == 0) return null
+    var mod = 0
+    if (e.isCtrlPressed) mod = mod or HotkeyBinding.MOD_CONTROL
+    if (e.isAltPressed) mod = mod or HotkeyBinding.MOD_ALT
+    if (e.isShiftPressed) mod = mod or HotkeyBinding.MOD_SHIFT
+    if (e.isMetaPressed) mod = mod or HotkeyBinding.MOD_WIN
+    if (mod == 0) return null // require at least one modifier so it's a sane global hotkey
+    val parts = buildList {
+        if (e.isCtrlPressed) add("Ctrl")
+        if (e.isAltPressed) add("Alt")
+        if (e.isShiftPressed) add("Shift")
+        if (e.isMetaPressed) add("Win")
+        add(java.awt.event.KeyEvent.getKeyText(vk))
+    }
+    return HotkeyBinding(mod, vk, parts.joinToString("+"))
+}
+
+@Composable
+private fun HotkeyCaptureDialog(
+    russian: Boolean,
+    current: HotkeyBinding?,
+    useDynamicColor: Boolean,
+    onSave: (HotkeyBinding?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.ui.window.DialogWindow(
+        onCloseRequest = onDismiss,
+        state = androidx.compose.ui.window.rememberDialogState(size = DpSize(400.dp, 230.dp)),
+        title = if (russian) "Горячая клавиша" else "Global hotkey",
+    ) {
+        AppTheme(useDynamicColor = useDynamicColor) {
+            var captured by remember { mutableStateOf(current) }
+            val focus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+            Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp)
+                        .focusRequester(focus)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown) {
+                                hotkeyFromKeyEvent(e)?.let { captured = it; return@onPreviewKeyEvent true }
+                            }
+                            false
+                        },
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        if (russian) "Нажмите комбинацию (например, Ctrl+Alt+V) — она переключает VPN из любого приложения."
+                        else "Press a combination (e.g. Ctrl+Alt+V) — it toggles the VPN from anywhere.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp,
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            captured?.label ?: (if (russian) "Не задано" else "Not set"),
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        TextButton(onClick = { captured = null }) {
+                            Text(if (russian) "Очистить" else "Clear")
+                        }
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = onDismiss) {
+                            Text(if (russian) "Отмена" else "Cancel")
+                        }
+                        Button(onClick = { onSave(captured) }) {
+                            Text(if (russian) "Сохранить" else "Save")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// 2ip IP viewer: provider choice (2ip.ru / 2ip.io) + a dialog that shows the current IP in any state.
+
+private fun loadIpProvider(): String =
+    hotkeyPrefs().get("ip_provider", "2ip.ru")
+
+private fun saveIpProvider(provider: String) {
+    hotkeyPrefs().put("ip_provider", provider)
+    runCatching { hotkeyPrefs().flush() }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MyIpDialog(
+    russian: Boolean,
+    connected: Boolean,
+    initialProvider: String,
+    useDynamicColor: Boolean,
+    fetchIp: suspend (String) -> String?,
+    onProviderPersist: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.ui.window.DialogWindow(
+        onCloseRequest = onDismiss,
+        state = androidx.compose.ui.window.rememberDialogState(size = DpSize(420.dp, 290.dp)),
+        title = if (russian) "Мой IP" else "My IP",
+    ) {
+        AppTheme(useDynamicColor = useDynamicColor) {
+            val scheme = MaterialTheme.colorScheme
+            var provider by remember { mutableStateOf(initialProvider) }
+            var ip by remember { mutableStateOf<String?>(null) }
+            var loading by remember { mutableStateOf(true) }
+            val scope = rememberCoroutineScope()
+
+            fun refresh() {
+                loading = true
+                ip = null
+                scope.launch {
+                    ip = fetchIp(provider)
+                    loading = false
+                }
+            }
+            LaunchedEffect(provider) { refresh() }
+
+            Surface(color = scheme.surface, modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    // Provider choice.
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        listOf("2ip.ru", "2ip.io").forEachIndexed { i, p ->
+                            SegmentedButton(
+                                selected = provider == p,
+                                onClick = {
+                                    if (provider != p) {
+                                        provider = p
+                                        onProviderPersist(p)
+                                    }
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(i, 2),
+                            ) { Text(p) }
+                        }
+                    }
+                    // The IP.
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = scheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                text = when {
+                                    loading -> if (russian) "Загрузка…" else "Loading…"
+                                    ip != null -> ip!!
+                                    else -> if (russian) "Не удалось получить" else "Failed"
+                                },
+                                color = scheme.onSurface,
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = if (connected) {
+                                    if (russian) "Через VPN" else "Through VPN"
+                                } else {
+                                    if (russian) "Без VPN (реальный IP)" else "No VPN (real IP)"
+                                },
+                                color = if (connected) Color(0xFF34C759) else scheme.onSurfaceVariant,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        TextButton(onClick = {
+                            runCatching {
+                                java.awt.Desktop.getDesktop()
+                                    .browse(java.net.URI("https://$provider/"))
+                            }
+                        }) { Text(if (russian) "Открыть в браузере" else "Open in browser") }
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { refresh() }) {
+                            Text(if (russian) "Обновить" else "Refresh")
+                        }
+                        Button(onClick = onDismiss) {
+                            Text(if (russian) "Закрыть" else "Close")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

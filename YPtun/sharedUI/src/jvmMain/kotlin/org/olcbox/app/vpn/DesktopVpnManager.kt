@@ -979,33 +979,51 @@ class DesktopVpnManager private constructor(
     }
 
     /**
-     * Fetch the current exit IP + country as seen from the internet (through the tunnel). In TUN mode
-     * our own HTTP request is captured by the system TUN; in proxy mode we dial through the local
-     * SOCKS. Returns e.g. "203.0.113.7 · Netherlands", or null if not connected / lookup failed.
+     * Fetch the current public IP as seen from the internet via 2ip ("2ip.ru" or "2ip.io"). Works
+     * BOTH connected (the request rides the tunnel — TUN captures it, or proxy mode dials the local
+     * SOCKS) and disconnected (shows the real ISP IP). Falls back to a plain echo if 2ip's HTML can't
+     * be parsed. Returns the IPv4 string, or null on failure.
      */
-    suspend fun checkExitIp(): String? = withContext(Dispatchers.IO) {
-        if (!isConnected.value) return@withContext null
-        runCatching {
-            val url = java.net.URL("http://ip-api.com/json/?fields=query,country")
-            val conn = if (connectionModeProvider() == AndroidConnectionMode.Proxy) {
-                val s = _socksProxySettings.value.normalized()
-                url.openConnection(
-                    java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress(s.host, s.port))
-                )
-            } else {
-                url.openConnection()
-            }
+    suspend fun checkExitIp(provider: String = "2ip.ru"): String? = withContext(Dispatchers.IO) {
+        val host = if (provider.contains("2ip.io")) "2ip.io" else "2ip.ru"
+        // Only proxy mode needs an explicit SOCKS dial; TUN/disconnected use the default route.
+        val proxy = if (isConnected.value && connectionModeProvider() == AndroidConnectionMode.Proxy) {
+            val s = _socksProxySettings.value.normalized()
+            java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress(s.host, s.port))
+        } else null
+
+        fun fetch(spec: String): String? = runCatching {
+            val url = java.net.URL(spec)
+            val conn = if (proxy != null) url.openConnection(proxy) else url.openConnection()
             conn.connectTimeout = 8000
             conn.readTimeout = 8000
-            val body = conn.getInputStream().bufferedReader().use { it.readText() }
-            val ip = Regex("\"query\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
-            val country = Regex("\"country\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
-            when {
-                ip == null -> null
-                !country.isNullOrBlank() -> "$ip · $country"
-                else -> ip
-            }
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (YPtun)")
+            conn.getInputStream().bufferedReader().use { it.readText() }
         }.getOrNull()
+
+        // 2ip embeds the visitor IP in its page — take the first PUBLIC IPv4 we find.
+        val page = fetch("https://$host/")
+        val fromPage = page?.let { body ->
+            Regex("""\b(\d{1,3}(?:\.\d{1,3}){3})\b""").findAll(body)
+                .map { it.groupValues[1] }
+                .firstOrNull { isPublicIpv4(it) }
+        }
+        fromPage ?: fetch("https://api.ipify.org")?.trim()?.takeIf { isPublicIpv4(it) }
+    }
+
+    private fun isPublicIpv4(ip: String): Boolean {
+        val o = ip.split(".").mapNotNull { it.toIntOrNull() }
+        if (o.size != 4 || o.any { it !in 0..255 }) return false
+        return when {
+            o[0] == 10 -> false
+            o[0] == 127 -> false
+            o[0] == 0 -> false
+            o[0] == 169 && o[1] == 254 -> false
+            o[0] == 172 && o[1] in 16..31 -> false
+            o[0] == 192 && o[1] == 168 -> false
+            o[0] == 100 && o[1] in 64..127 -> false
+            else -> true
+        }
     }
 
     private fun setStatus(status: VpnStatus) {

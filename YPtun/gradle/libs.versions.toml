@@ -61,6 +61,7 @@ kstore-file = { module = "io.github.xxfast:kstore-file", version.ref = "kstore" 
 materialKolor = { module = "com.materialkolor:material-kolor", version.ref = "materialKolor" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 
 [plugins]
 
