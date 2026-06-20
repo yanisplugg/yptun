@@ -140,4 +140,6 @@ dependencies {
     // Bundled emoji font so flag emojis render on all devices (many OEM fonts lack flags).
     implementation("androidx.emoji2:emoji2:1.5.0")
     implementation("androidx.emoji2:emoji2-bundled:1.5.0")
+    // Background daily provider-usage report (Happ providerid).
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }

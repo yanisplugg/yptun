@@ -56,6 +56,15 @@ interface LocationsDataSource {
     suspend fun saveDeviceIdentity(value: String) = Unit
 
     /**
+     * Persisted state for the Happ-style provider-usage report — an opaque JSON string mapping each
+     * `providerid` to the epoch-day it was last reported, so the daily report fires at most once per
+     * calendar day per id across restarts (and is shared with the background worker). Default no-op
+     * (no persistence) on platforms without a store; only Android needs real persistence here.
+     */
+    suspend fun loadProviderReportState(): String? = null
+    suspend fun saveProviderReportState(value: String) = Unit
+
+    /**
      * A platform-stable device id (e.g. Android ANDROID_ID) used to seed the HWID so it
      * survives reinstalls / data-clears. Null when the platform offers no stable id.
      */
@@ -142,9 +151,6 @@ class LocationsRepositoryImpl(
     private val mutationMutex = Mutex()
     private val _changes = MutableStateFlow(0L)
     override val changes: StateFlow<Long> = _changes.asStateFlow()
-
-    /** providerId → epoch-day of its last successful provider-usage report (once-per-day de-dupe). */
-    private val providerReportDay = mutableMapOf<String, Long>()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -461,15 +467,54 @@ class LocationsRepositoryImpl(
         if (ids.isEmpty()) return
 
         val today = nowEpochMs() / 86_400_000L
+        // Persisted providerId → last-reported epoch-day, so we fire at most once per calendar day per
+        // id across restarts and shared with the background worker.
+        val state = loadProviderReportDays().toMutableMap()
+        // Identity + device descriptors, exactly like the subscription fetch sends to the panel.
+        val hwid = runCatching { deviceIdentityProvider.hwid() }.getOrNull().orEmpty()
+        val appVersion = CurrentAppInfo.value.version
+
+        var changed = false
         ids.forEach { id ->
-            if (providerReportDay[id] == today) return@forEach // already reported today
+            if (state[id] == today) return@forEach // already reported today
             val ok = runCatching {
                 val response = httpClient.get(PROVIDER_CHECK_URL + id.encodeURLParameter()) {
-                    headers { append(HttpHeaders.UserAgent, subscriptionUserAgent()) }
+                    headers {
+                        append(HttpHeaders.UserAgent, subscriptionUserAgent())
+                        if (hwid.isNotBlank()) append("x-hwid", hwid)
+                        append("x-device-os", DeviceInfo.os)
+                        append("x-ver-os", DeviceInfo.osVersion)
+                        append("x-device-model", DeviceInfo.model)
+                        append("x-app-version", appVersion)
+                    }
                 }
                 response.status.value in 200..299
             }.getOrDefault(false)
-            if (ok) providerReportDay[id] = today
+            if (ok) {
+                state[id] = today
+                changed = true
+            }
+        }
+        // Drop entries for provider ids that no longer exist so the state can't grow unbounded.
+        val pruned = state.filterKeys { it in ids }
+        if (changed || pruned.size != state.size) saveProviderReportDays(pruned)
+    }
+
+    /** Reads the persisted providerId → epoch-day report map (tolerates missing/corrupt state). */
+    private suspend fun loadProviderReportDays(): Map<String, Long> {
+        val raw = runCatching { dataSource.loadProviderReportState() }.getOrNull() ?: return emptyMap()
+        return runCatching {
+            json.parseToJsonElement(raw).jsonObject.mapNotNull { (k, v) ->
+                v.jsonPrimitive.contentOrNull?.toLongOrNull()?.let { k to it }
+            }.toMap()
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Persists the providerId → epoch-day report map. */
+    private suspend fun saveProviderReportDays(map: Map<String, Long>) {
+        runCatching {
+            val obj = JsonObject(map.mapValues { JsonPrimitive(it.value) })
+            dataSource.saveProviderReportState(json.encodeToString(JsonObject.serializer(), obj))
         }
     }
 

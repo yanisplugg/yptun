@@ -18,6 +18,7 @@ import java.io.File
 
 private val KEY_LEGACY_SELECTED_LOCATION_ID = stringPreferencesKey("selected_hysteria_id")
 private val KEY_DEVICE_IDENTITY = stringPreferencesKey("olcbox_device_identity")
+private val KEY_PROVIDER_REPORT_STATE = stringPreferencesKey("olcbox_provider_report_state")
 
 class LocationsDataSourceImpl(
     private val context: Context
@@ -86,6 +87,16 @@ class LocationsDataSourceImpl(
     override suspend fun saveDeviceIdentity(value: String) {
         context.vpnPrefDataStore.edit {
             it[KEY_DEVICE_IDENTITY] = value
+        }
+    }
+
+    override suspend fun loadProviderReportState(): String? {
+        return context.vpnPrefDataStore.data.first()[KEY_PROVIDER_REPORT_STATE]?.ifBlank { null }
+    }
+
+    override suspend fun saveProviderReportState(value: String) {
+        context.vpnPrefDataStore.edit {
+            it[KEY_PROVIDER_REPORT_STATE] = value
         }
     }
 
