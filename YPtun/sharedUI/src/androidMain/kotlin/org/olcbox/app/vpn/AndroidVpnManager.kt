@@ -99,6 +99,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val trafficSettings: StateFlow<TrafficSettings> = _trafficSettings.asStateFlow()
     private val _appBehavior = MutableStateFlow(AppBehaviorSettings())
     val appBehavior: StateFlow<AppBehaviorSettings> = _appBehavior.asStateFlow()
+
+    /** De-dupe guard for subscription-expiry notifications (keyed by name + days-left), per process. */
+    private val notifiedExpiry = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val _language = MutableStateFlow(AppLanguage.System)
     val language: StateFlow<AppLanguage> = _language.asStateFlow()
 
@@ -295,6 +298,64 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override fun routingProfileChoices(): List<RoutingProfile> = _routingProfiles.value.profiles
+
+    /**
+     * Posts a local notification for each subscription nearing expiry (Happ-style, driven by the
+     * panel's expiry header). Gated on the user's toggle and POST_NOTIFICATIONS. De-duped in-memory by
+     * name + days-left, so the hourly re-check doesn't repeat, but each new day (3→2→1→0) fires once.
+     */
+    override fun notifyExpiringSubscriptions(subscriptions: List<ExpiringSubscriptionInfo>) {
+        if (!_appBehavior.value.notifySubscriptionExpiry) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                appContext, android.Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        val dayMs = 24L * 60L * 60L * 1_000L
+        val thresholdDays = AppBehaviorSettings.SUBSCRIPTION_EXPIRY_NOTIFY_DAYS
+        val manager = androidx.core.app.NotificationManagerCompat.from(appContext)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                SUB_EXPIRY_CHANNEL_ID,
+                "Окончание подписки",
+                android.app.NotificationManager.IMPORTANCE_DEFAULT
+            )
+            manager.createNotificationChannel(channel)
+        }
+        // Status-bar icon resolved by name (it lives in androidApp's resources, not sharedUI's R),
+        // with a system fallback — same approach as the foreground-service notification.
+        val icon = appContext.resources
+            .getIdentifier("ic_stat_yptun", "drawable", appContext.packageName)
+            .takeIf { it != 0 } ?: android.R.drawable.ic_lock_idle_alarm
+
+        subscriptions.forEach { sub ->
+            val remainingMs = sub.expiresAtEpochMs - now
+            if (remainingMs <= 0L || remainingMs > thresholdDays * dayMs) return@forEach
+            val daysLeft = ((remainingMs + dayMs - 1) / dayMs).toInt() // ceil → 3,2,1; 0 = today
+            if (!notifiedExpiry.add(sub.name + "|" + daysLeft)) return@forEach
+
+            val text = if (daysLeft <= 0) {
+                "«${sub.name}»: подписка заканчивается сегодня"
+            } else {
+                "«${sub.name}»: до конца подписки $daysLeft дн."
+            }
+            val notification = androidx.core.app.NotificationCompat.Builder(appContext, SUB_EXPIRY_CHANNEL_ID)
+                .setSmallIcon(icon)
+                .setContentTitle("Подписка скоро закончится")
+                .setContentText(text)
+                .setAutoCancel(true)
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            runCatching {
+                manager.notify(SUB_EXPIRY_NOTIFICATION_BASE_ID + (sub.name.hashCode() and 0xFFFF), notification)
+            }
+        }
+    }
 
     /** As [importRoutingProfileLink] but returns the new profile id (or null when not a routing profile). */
     fun importRoutingProfileId(link: String): String? {
@@ -908,6 +969,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         const val TUNNEL_PROBE_PORT = 443
         // The probe traverses VK relay + WireGuard, so allow more time than a direct TCP ping.
         const val TUNNEL_PING_TIMEOUT_MS = 6_000
+        const val SUB_EXPIRY_CHANNEL_ID = "olcbox_sub_expiry"
+        const val SUB_EXPIRY_NOTIFICATION_BASE_ID = 47_000
         val random = SecureRandom()
     }
 }

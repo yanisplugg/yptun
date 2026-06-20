@@ -45,4 +45,18 @@ interface VpnManager {
 
     /** Current routing profiles, for the per-location selector. Empty on platforms without support. */
     fun routingProfileChoices(): List<RoutingProfile> = emptyList()
+
+    /**
+     * Notify the user about subscriptions nearing expiry (driven by the panel's expiry header, like
+     * Happ). Called after each subscription refresh with EVERY subscription's expiry; the platform
+     * decides whether to post (gated on [org.olcbox.app.data.model.AppBehaviorSettings.notifySubscriptionExpiry],
+     * a day threshold and de-duplication). Default no-op for platforms without local notifications.
+     */
+    fun notifyExpiringSubscriptions(subscriptions: List<ExpiringSubscriptionInfo>) {}
 }
+
+/** A subscription's display name + its expiry (wall-clock epoch-ms), for expiry notifications. */
+data class ExpiringSubscriptionInfo(
+    val name: String,
+    val expiresAtEpochMs: Long
+)

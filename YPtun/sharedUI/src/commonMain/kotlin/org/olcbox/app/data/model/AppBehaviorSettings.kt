@@ -126,6 +126,13 @@ data class AppBehaviorSettings(
      */
     val showSubscriptionExpiry: Boolean = false,
     /**
+     * Post a local notification when a subscription is about to expire (within
+     * [SUBSCRIPTION_EXPIRY_NOTIFY_DAYS] days). Driven by the panel's expiry header
+     * (`subscription-userinfo` `expire=` / Remnawave `user.expiresAt`), like Happ. Off by default —
+     * needs the user's opt-in and the POST_NOTIFICATIONS permission.
+     */
+    val notifySubscriptionExpiry: Boolean = false,
+    /**
      * Show a "live/total" badge in each subscription header — how many of its servers responded to
      * the last ping pass out of the total. Off by default.
      */
@@ -185,6 +192,9 @@ data class AppBehaviorSettings(
 
         /** The previous default; auto-migrated to [DEFAULT_PING_URL] so existing users get the fix. */
         const val LEGACY_PING_URL = "https://google.com"
+
+        /** How many days before expiry the subscription-expiry notification starts firing. */
+        const val SUBSCRIPTION_EXPIRY_NOTIFY_DAYS = 3
 
         /** Parallel ping streams: how many locations are probed at once. */
         const val DEFAULT_PING_PARALLELISM = 5
