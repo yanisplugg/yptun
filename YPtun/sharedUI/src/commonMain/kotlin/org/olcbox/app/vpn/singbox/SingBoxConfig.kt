@@ -256,13 +256,17 @@ object SingBoxConfig {
                         put("type", "tun")
                         put("tag", TUN_IN_TAG)
                         putJsonArray("address") {
-                            add("172.19.0.1/30")
+                            add("172.19.0.1/28")
                             add("fdfe:dcba:9876::1/126")
                         }
-                        put("mtu", 1500)
+                        // Match Hiddify's proven Windows defaults. The "mixed" stack uses the OS native
+                        // TCP stack (gVisor only for UDP) — pure gVisor TCP in userspace was dropping
+                        // part of the download direction (TLS ServerHello never arrived → Firefox
+                        // PR_END_OF_FILE_ERROR on many sites). MTU 9000 cuts per-packet overhead app↔tun.
+                        put("mtu", 9000)
                         put("auto_route", true)
                         put("strict_route", false)
-                        put("stack", "gvisor")
+                        put("stack", "mixed")
                     }
                 }
                 addJsonObject {
