@@ -8,6 +8,8 @@ import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
+import com.jcraft.jsch.UIKeyboardInteractive
+import com.jcraft.jsch.UserInfo
 import java.io.ByteArrayOutputStream
 import java.util.Properties
 import java.util.zip.GZIPInputStream
@@ -49,6 +51,11 @@ internal class AndroidDnsttServerInstaller(private val context: Context) : Dnstt
                 put("StrictHostKeyChecking", "no")
                 put("PreferredAuthentications", "password,keyboard-interactive")
             })
+            // Many servers (PAM / OpenSSH with KbdInteractiveAuthentication) accept the password ONLY
+            // via keyboard-interactive, not the plain "password" method — JSch then reports "Auth fail
+            // for methods publickey,password" despite a correct password. A UserInfo that answers the
+            // interactive prompt with the same password covers both methods.
+            session.userInfo = SshPasswordUserInfo(options.sshPassword)
             onLog("Подключение к ${options.host}:${options.sshPort}…")
             session.connect(CONNECT_TIMEOUT_MS)
             try {
@@ -194,3 +201,24 @@ internal fun buildInstallScript(options: DnsttInstallOptions): String {
 
 /** Wraps [this] in single quotes for safe shell interpolation, escaping any embedded single quote. */
 private fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "'"
+
+/**
+ * JSch auth helper: supplies [password] for BOTH the "password" method and the keyboard-interactive
+ * prompt, and auto-accepts the unknown host key. Without the keyboard-interactive answer, servers that
+ * gate password auth through PAM/keyboard-interactive fail with "Auth fail" even for a correct password.
+ */
+private class SshPasswordUserInfo(private val password: String) : UserInfo, UIKeyboardInteractive {
+    override fun getPassphrase(): String? = null
+    override fun getPassword(): String = password
+    override fun promptPassword(message: String?): Boolean = true
+    override fun promptPassphrase(message: String?): Boolean = false
+    override fun promptYesNo(message: String?): Boolean = true // accept host key / generic confirms
+    override fun showMessage(message: String?) {}
+    override fun promptKeyboardInteractive(
+        destination: String?,
+        name: String?,
+        instruction: String?,
+        prompt: Array<out String>?,
+        echo: BooleanArray?
+    ): Array<String>? = if (prompt == null) null else Array(prompt.size) { password }
+}
