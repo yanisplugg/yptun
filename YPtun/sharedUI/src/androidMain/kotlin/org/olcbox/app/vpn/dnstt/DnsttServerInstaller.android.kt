@@ -56,8 +56,8 @@ internal class AndroidDnsttServerInstaller(private val context: Context) : Dnstt
             // for methods publickey,password" despite a correct password. A UserInfo that answers the
             // interactive prompt with the same password covers both methods.
             session.userInfo = SshPasswordUserInfo(options.sshPassword)
-            onLog("Подключение к ${options.host}:${options.sshPort}…")
-            session.connect(CONNECT_TIMEOUT_MS)
+            onLog("Подключение к ${options.host}:${options.sshPort} (пользователь '${options.login.ifBlank { "root" }}', пароль ${options.sshPassword.length} симв.)…")
+            connectOrExplain(session, options.login.ifBlank { "root" })
             try {
                 onLog("SSH соединение установлено")
 
@@ -109,6 +109,29 @@ internal class AndroidDnsttServerInstaller(private val context: Context) : Dnstt
             }
         } finally {
             sftp.disconnect()
+        }
+    }
+
+    /**
+     * Connects the session; on an auth failure rethrows with an actionable hint. "Auth fail for
+     * methods publickey,password" with a correct password almost always means the SERVER blocks
+     * password login for this user — typically `PermitRootLogin prohibit-password` (the OpenSSH
+     * default for root) or `PasswordAuthentication no`. The client cannot override that, so we tell
+     * the user exactly what to change instead of surfacing the raw library error.
+     */
+    private fun connectOrExplain(session: Session, login: String) {
+        try {
+            session.connect(CONNECT_TIMEOUT_MS)
+        } catch (e: Exception) {
+            val msg = e.message.orEmpty()
+            if (msg.contains("Auth fail", ignoreCase = true) || msg.contains("Auth cancel", ignoreCase = true)) {
+                throw RuntimeException(
+                    "Сервер отклонил вход для '$login'. Пароль дошёл, но SSH не принимает вход по паролю. " +
+                        "На VPS в /etc/ssh/sshd_config поставь:  PermitRootLogin yes  и  PasswordAuthentication yes,  " +
+                        "затем  systemctl restart ssh  (или sshd). Либо войди под обычным пользователем, которому разрешён вход по паролю."
+                )
+            }
+            throw e
         }
     }
 
