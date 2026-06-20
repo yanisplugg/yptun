@@ -77,6 +77,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontFamily
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
 import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
+import org.olcbox.app.vpn.dnstt.DnsttInstallOptions
+import org.olcbox.app.vpn.dnstt.rememberDnsttServerInstaller
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -146,6 +148,7 @@ fun LocationSettingsTopBar(
 fun LocationSettingsScreen(
     viewModel: LocationViewModel,
     homeViewModel: HomeScreenViewModel,
+    allowVpsAutoInstall: Boolean = false,
     onShareLocationRequested: (LocationConfig) -> Unit = {},
     onBack: () -> Unit
 ) {
@@ -164,7 +167,17 @@ fun LocationSettingsScreen(
     if (showWdttInstall) {
         WdttInstallDialog(
             draft = viewModel.editingVkTurn,
+            onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
             onDismiss = { showWdttInstall = false }
+        )
+    }
+
+    var showDnsttInstall by remember { mutableStateOf(false) }
+    if (showDnsttInstall) {
+        DnsttInstallDialog(
+            config = viewModel.editingDnstt,
+            onApplyConfig = { update -> viewModel.updateDnstt(update) },
+            onDismiss = { showDnsttInstall = false }
         )
     }
 
@@ -311,6 +324,7 @@ fun LocationSettingsScreen(
                 vkTurnSection(
                     draft = viewModel.editingVkTurn,
                     enabled = !isSaving,
+                    showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateVkTurnDraft,
                     onWdttAutoInstall = { showWdttInstall = true }
                 )
@@ -320,7 +334,9 @@ fun LocationSettingsScreen(
                 dnsttSection(
                     config = viewModel.editingDnstt,
                     enabled = !isSaving,
-                    onChange = viewModel::updateDnstt
+                    showAutoInstall = allowVpsAutoInstall,
+                    onChange = viewModel::updateDnstt,
+                    onDnsttAutoInstall = { showDnsttInstall = true }
                 )
             }
 
@@ -727,7 +743,9 @@ private fun ProxyField(
 private fun LazyListScope.dnsttSection(
     config: DnsttConfig,
     enabled: Boolean,
-    onChange: ((DnsttConfig) -> DnsttConfig) -> Unit
+    showAutoInstall: Boolean,
+    onChange: ((DnsttConfig) -> DnsttConfig) -> Unit,
+    onDnsttAutoInstall: () -> Unit
 ) {
     item {
         Column(
@@ -761,6 +779,19 @@ private fun LazyListScope.dnsttSection(
                 enabled = enabled,
                 keyboardType = KeyboardType.Uri
             )
+            // Auto-install the dnstt-server on a VPS (direct mode: resolver→VPS:port). Hidden unless
+            // the user enabled "Автоустановка на VPS" in app settings (off by default).
+            if (showAutoInstall) {
+                OutlinedButton(
+                    onClick = onDnsttAutoInstall,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Автоустановка на VPS")
+                }
+            }
         }
     }
 }
@@ -772,6 +803,7 @@ private fun LazyListScope.dnsttSection(
 private fun LazyListScope.vkTurnSection(
     draft: VkTurnDraft,
     enabled: Boolean,
+    showAutoInstall: Boolean,
     onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit,
     onWdttAutoInstall: () -> Unit
 ) {
@@ -833,15 +865,18 @@ private fun LazyListScope.vkTurnSection(
                     placeholder = "ключ WRAP выводится из пароля",
                     enabled = enabled
                 )
-                // Auto-install the wdtt-server on a VPS (opens an SSH connect dialog: IP / login / password).
-                OutlinedButton(
-                    onClick = onWdttAutoInstall,
-                    enabled = enabled,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Автоустановка на VPS")
+                // Auto-install the wdtt-server on a VPS (opens an SSH connect dialog). Hidden unless the
+                // user enabled "Автоустановка на VPS" in app settings (off by default — SSH deploy is advanced).
+                if (showAutoInstall) {
+                    OutlinedButton(
+                        onClick = onWdttAutoInstall,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Автоустановка на VPS")
+                    }
                 }
                 SettingsDropdown(
                     label = "TLS-отпечаток (VK auth)",
@@ -1179,6 +1214,7 @@ private fun LazyListScope.vkTurnSection(
 @Composable
 private fun WdttInstallDialog(
     draft: VkTurnDraft,
+    onApplyDraft: (((VkTurnDraft) -> VkTurnDraft)) -> Unit,
     onDismiss: () -> Unit
 ) {
     val installer = rememberWdttServerInstaller()
@@ -1187,13 +1223,18 @@ private fun WdttInstallDialog(
     var sshPort by remember { mutableStateOf("22") }
     var login by remember { mutableStateOf("root") }
     var password by remember { mutableStateOf("") }
+    // WDTT server params are editable here (prefilled from the location draft). On success they're
+    // written back into the draft so the location and the server stay in sync — the WRAP key derives
+    // from the password on both sides, so a mismatch silently fails to connect.
+    var wdttPortText by remember { mutableStateOf(draft.wdttPort.ifBlank { "56000" }) }
+    var wdttPass by remember { mutableStateOf(draft.wdttPassword) }
+    var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Result<String>?>(null) }
     val log = remember { mutableStateListOf<String>() }
     val logScroll = rememberScrollState()
 
-    val port = draft.wdttPort.ifBlank { "56000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 56000
-    val wdttPass = draft.wdttPassword
+    val port = wdttPortText.ifBlank { "56000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 56000
     val succeeded = result?.isSuccess == true
 
     // Keep the log view pinned to the newest line as it streams in.
@@ -1205,19 +1246,15 @@ private fun WdttInstallDialog(
         onDismissRequest = { if (!running) onDismiss() },
         title = { Text("Автоустановка WDTT на VPS") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 Text(
                     "Подключусь к VPS по SSH, загружу и запущу wdtt-сервер на порту $port. " +
-                        "Пароль WDTT берётся из настроек локации.",
+                        "Порт, пароль и DNS можно изменить ниже — они сохранятся в настройки локации.",
                     style = MaterialTheme.typography.bodySmall
                 )
-                if (wdttPass.isBlank()) {
-                    Text(
-                        "Сначала укажи «Пароль WDTT» в настройках локации.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
                 OutlinedTextField(
                     value = ip,
                     onValueChange = { ip = it.trim() },
@@ -1254,6 +1291,41 @@ private fun WdttInstallDialog(
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
+                HorizontalDivider()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = wdttPass,
+                        onValueChange = { wdttPass = it },
+                        label = { Text("Пароль WDTT") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(2f)
+                    )
+                    OutlinedTextField(
+                        value = wdttPortText,
+                        onValueChange = { v -> wdttPortText = v.filter(Char::isDigit) },
+                        label = { Text("Порт WDTT") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                OutlinedTextField(
+                    value = dns,
+                    onValueChange = { dns = it.trim() },
+                    label = { Text("DNS для клиента") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (wdttPass.isBlank()) {
+                    Text(
+                        "Укажи «Пароль WDTT» — он должен совпадать с паролем локации.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 if (log.isNotEmpty()) {
                     Column(
                         modifier = Modifier
@@ -1300,6 +1372,16 @@ private fun WdttInstallDialog(
                         running = true
                         result = null
                         log.clear()
+                        // Persist the edited server params back into the location draft so the client
+                        // connects with the exact port/password/DNS the server was just launched with.
+                        onApplyDraft { d ->
+                            d.copy(
+                                wdttPeer = ip.trim(),
+                                wdttPort = port.toString(),
+                                wdttPassword = wdttPass,
+                                wgDns = dns.ifBlank { "1.1.1.1" }
+                            )
+                        }
                         scope.launch {
                             val res = installer.install(
                                 WdttInstallOptions(
@@ -1309,6 +1391,7 @@ private fun WdttInstallDialog(
                                     sshPassword = password,
                                     wdttPort = port,
                                     wdttPassword = wdttPass,
+                                    dns = dns.ifBlank { "1.1.1.1" },
                                 )
                             ) { line -> log.add(line) }
                             result = res
@@ -1330,6 +1413,206 @@ private fun WdttInstallDialog(
             }
         }
     )
+}
+
+/**
+ * One-tap dnstt-server installer. Collects SSH access to the VPS plus the dnstt UDP port + tunnel
+ * domain, and on confirm connects over SSH, uploads the bundled dnstt-server binary, generates a
+ * persistent Noise keypair and runs it (with its built-in SOCKS5 exit) as a systemd service
+ * ([rememberDnsttServerInstaller]). Progress streams live into a log area. On success the returned
+ * public key + domain + resolver (`host:port`, direct mode) are written straight into the location.
+ */
+@Composable
+private fun DnsttInstallDialog(
+    config: DnsttConfig,
+    onApplyConfig: (((DnsttConfig) -> DnsttConfig)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberDnsttServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf(deriveHost(config.resolver)) }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var udpPortText by remember { mutableStateOf(DnsttInstallOptions.DEFAULT_UDP_PORT.toString()) }
+    var domain by remember { mutableStateOf(config.domain.ifBlank { DnsttInstallOptions.DEFAULT_DOMAIN }) }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.dnstt.DnsttInstallResult>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+
+    val udpPort = udpPortText.ifBlank { "5300" }.toIntOrNull()?.takeIf { it in 1..65535 }
+        ?: DnsttInstallOptions.DEFAULT_UDP_PORT
+    val succeeded = result?.isSuccess == true
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Автоустановка DNSTT на VPS") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH, загружу dnstt-сервер, сгенерирую ключ и запущу его на UDP-порту $udpPort " +
+                        "со встроенным SOCKS5-выходом. Публичный ключ, домен и резолвер ($ip:$udpPort) подставятся в локацию.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Пароль SSH") },
+                    singleLine = true,
+                    enabled = !running,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                HorizontalDivider()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = domain,
+                        onValueChange = { domain = it.trim() },
+                        label = { Text("Домен туннеля") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(2f)
+                    )
+                    OutlinedTextField(
+                        value = udpPortText,
+                        onValueChange = { v -> udpPortText = v.filter(Char::isDigit) },
+                        label = { Text("UDP-порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (log.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 160.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(8.dp)
+                            .verticalScroll(logScroll)
+                    ) {
+                        log.forEach { line ->
+                            Text(
+                                line,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = LocalContentColor.current
+                            )
+                        }
+                    }
+                }
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull()?.message.orEmpty() + "\nКлюч и резолвер подставлены в локацию.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() && password.isNotBlank() && domain.isNotBlank(),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        scope.launch {
+                            val res = installer.install(
+                                DnsttInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = password,
+                                    udpPort = udpPort,
+                                    domain = domain.trim(),
+                                )
+                            ) { line -> log.add(line) }
+                            // On success, write the server's public key + domain + resolver into the
+                            // location so the dnstt client connects to the freshly installed server.
+                            res.getOrNull()?.let { ok ->
+                                onApplyConfig { c ->
+                                    c.copy(
+                                        domain = domain.trim(),
+                                        pubKey = ok.publicKey,
+                                        resolver = "${ip.trim()}:$udpPort"
+                                    )
+                                }
+                            }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
+    )
+}
+
+/** Extracts the host portion of a `host:port` resolver string (or returns it unchanged). */
+private fun deriveHost(resolver: String): String {
+    val trimmed = resolver.trim()
+    if (trimmed.isBlank()) return ""
+    val idx = trimmed.lastIndexOf(':')
+    return if (idx > 0) trimmed.substring(0, idx) else trimmed
 }
 
 /**

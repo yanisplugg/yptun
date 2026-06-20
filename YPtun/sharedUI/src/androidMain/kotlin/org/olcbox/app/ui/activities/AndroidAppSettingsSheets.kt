@@ -3422,6 +3422,12 @@ private fun ApplicationBehaviorContent(
             checked = settings.showSubscriptionExpiry
         ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
 
+        RoutingToggleRow(
+            title = "Автоустановка на VPS",
+            subtitle = "Показывать кнопки развёртывания WDTT/DNSTT-сервера на VPS по SSH в настройках локации. По умолчанию выключено.",
+            checked = settings.allowVpsAutoInstall
+        ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
+
         // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
         // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
         // The selector code is preserved (unused) in [SubscriptionUserAgentSelector] below and can be

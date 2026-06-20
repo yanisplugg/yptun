@@ -463,6 +463,7 @@ fun AndroidMainScreen(
         showSplitTunnelingButton = false,
         canScanQr = true,
         confirmBeforeDelete = appBehavior.confirmBeforeDelete,
+        allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
         pingParallelism = appBehavior.effectivePingParallelism(),
         updateAvailable = updateAvailable != null,
         onUpdateClick = { updateAvailable?.let { updateOffer = it } },
