@@ -260,7 +260,7 @@ fun main(args: Array<String>) = application {
         org.olcbox.app.ui.i18n.AppLanguage.Russian
     val trayConnected = trayHomeState.isVpnConnected
     val trayLoading = trayHomeState.isVpnLoading
-    val trayLocationName = trayHomeState.selectedLocation?.locationName?.takeIf { it.isNotBlank() }
+    val trayLocationName = trayHomeState.selectedLocation?.fullName?.takeIf { it.isNotBlank() }
     val trayStatusText = when {
         trayConnected -> (if (trayRussian) "● Подключено" else "● Connected") +
             (trayLocationName?.let { " · $it" } ?: "")
