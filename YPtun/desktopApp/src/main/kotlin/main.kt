@@ -9,6 +9,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -28,9 +30,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
@@ -56,6 +65,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Tray
@@ -155,6 +168,7 @@ fun main(args: Array<String>) = application {
     var currentScreen by remember { mutableStateOf<AppScreen>(AppScreen.Home) }
     var showDesktopSettings by remember { mutableStateOf(false) }
     var isWindowVisible by remember { mutableStateOf(true) }
+    var trayMenuVisible by remember { mutableStateOf(false) }
     var updateMessage by remember { mutableStateOf<String?>(null) }
     var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
     var updateProgress by remember { mutableStateOf<Float?>(null) }
@@ -275,6 +289,8 @@ fun main(args: Array<String>) = application {
         state = trayState,
         icon = painterResource("LinuxIcon.png"),
         tooltip = trayStatusText.removePrefix("● ").removePrefix("○ "),
+        // Left-click opens the custom Compose menu (Steam-style); right-click keeps a native fallback.
+        onAction = { trayMenuVisible = true },
         menu = {
             // Native AWT tray menus can't be styled, so convey state through a disabled status line.
             Item(trayStatusText, enabled = false, onClick = {})
@@ -299,6 +315,66 @@ fun main(args: Array<String>) = application {
             })
         }
     )
+
+    // Custom Steam-style tray menu: an undecorated, transparent, always-on-top Compose window pinned
+    // to the bottom-right work area, themed like the app. Dismisses on focus loss or item click.
+    if (trayMenuVisible) {
+        val trayDynamicTheme by dependencies.settings.dynamicTheme.collectAsState()
+        Window(
+            onCloseRequest = { trayMenuVisible = false },
+            visible = true,
+            undecorated = true,
+            transparent = true,
+            resizable = false,
+            alwaysOnTop = true,
+            focusable = true,
+            state = rememberWindowState(size = DpSize(260.dp, 296.dp)),
+        ) {
+            LaunchedEffect(Unit) {
+                runCatching {
+                    val area = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
+                    window.setLocation(
+                        area.x + area.width - window.width - 8,
+                        area.y + area.height - window.height - 8
+                    )
+                    window.isAlwaysOnTop = true
+                    window.toFront()
+                    window.requestFocus()
+                }
+            }
+            DisposableEffect(Unit) {
+                val listener = object : java.awt.event.WindowFocusListener {
+                    override fun windowGainedFocus(e: java.awt.event.WindowEvent?) {}
+                    override fun windowLostFocus(e: java.awt.event.WindowEvent?) {
+                        trayMenuVisible = false
+                    }
+                }
+                window.addWindowFocusListener(listener)
+                onDispose { window.removeWindowFocusListener(listener) }
+            }
+            AppTheme(useDynamicColor = trayDynamicTheme) {
+                TrayMenu(
+                    russian = trayRussian,
+                    connected = trayConnected,
+                    loading = trayLoading,
+                    locationName = trayLocationName,
+                    canToggle = trayConnected || trayLoading || trayHomeState.canStartVpn,
+                    onOpen = { trayMenuVisible = false; isWindowVisible = true },
+                    onToggle = { trayMenuVisible = false; dependencies.homeViewModel.ToggleVpn() },
+                    onSettings = {
+                        trayMenuVisible = false
+                        isWindowVisible = true
+                        showDesktopSettings = true
+                    },
+                    onQuit = {
+                        trayMenuVisible = false
+                        dependencies.close()
+                        exitApplication()
+                    },
+                )
+            }
+        }
+    }
 
     val windowState = rememberWindowState(width = 430.dp, height = 780.dp)
 
@@ -856,4 +932,119 @@ private fun chooseSaveFile(owner: Frame, defaultName: String): File? {
     val directory = dialog.directory ?: return File(fileName)
 
     return File(directory, fileName)
+}
+
+// ---------------------------------------------------------------------------------------
+// Custom Steam-style system-tray menu (rendered in our own undecorated Compose window).
+
+@Composable
+private fun TrayMenu(
+    russian: Boolean,
+    connected: Boolean,
+    loading: Boolean,
+    locationName: String?,
+    canToggle: Boolean,
+    onOpen: () -> Unit,
+    onToggle: () -> Unit,
+    onSettings: () -> Unit,
+    onQuit: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(8.dp)
+            .shadow(16.dp, RoundedCornerShape(14.dp), clip = false),
+        shape = RoundedCornerShape(14.dp),
+        color = scheme.surface,
+        border = BorderStroke(1.dp, scheme.outlineVariant),
+    ) {
+        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+            // Status header.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val dot = when {
+                    connected -> Color(0xFF34C759)
+                    loading -> scheme.primary
+                    else -> scheme.outline
+                }
+                Box(Modifier.size(9.dp).clip(CircleShape).background(dot))
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = when {
+                            connected -> if (russian) "Подключено" else "Connected"
+                            loading -> if (russian) "Подключение…" else "Connecting…"
+                            else -> if (russian) "Отключено" else "Disconnected"
+                        },
+                        color = scheme.onSurface,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (!locationName.isNullOrBlank()) {
+                        Text(
+                            text = locationName,
+                            color = scheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            HorizontalDivider(color = scheme.outlineVariant, modifier = Modifier.padding(horizontal = 6.dp))
+            TrayMenuItem(Icons.Outlined.Home, if (russian) "Открыть" else "Open", onClick = onOpen)
+            TrayMenuItem(
+                Icons.Outlined.PowerSettingsNew,
+                when {
+                    connected || loading -> if (russian) "Отключиться" else "Disconnect"
+                    else -> if (russian) "Подключиться" else "Connect"
+                },
+                enabled = canToggle,
+                tint = if (connected || loading) scheme.primary else scheme.onSurface,
+                onClick = onToggle,
+            )
+            TrayMenuItem(Icons.Outlined.Settings, if (russian) "Настройки" else "Settings", onClick = onSettings)
+            HorizontalDivider(color = scheme.outlineVariant, modifier = Modifier.padding(horizontal = 6.dp))
+            TrayMenuItem(
+                Icons.Outlined.Close,
+                if (russian) "Выход" else "Quit",
+                tint = scheme.error,
+                onClick = onQuit,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrayMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val rowTint = if (enabled) tint else scheme.onSurfaceVariant.copy(alpha = 0.4f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (hovered && enabled) scheme.primary.copy(alpha = 0.14f) else Color.Transparent)
+            .hoverable(interaction, enabled = enabled)
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = rowTint, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(label, color = rowTint, fontSize = 13.sp)
+    }
 }

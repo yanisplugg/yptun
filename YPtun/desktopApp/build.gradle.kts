@@ -28,6 +28,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.jna)
     implementation(libs.zxing.core)
+    // Material icons used by the custom tray menu (sharedUI keeps them internal).
+    implementation(compose.materialIconsExtended)
 }
 
 abstract class DownloadFileTask : DefaultTask() {
