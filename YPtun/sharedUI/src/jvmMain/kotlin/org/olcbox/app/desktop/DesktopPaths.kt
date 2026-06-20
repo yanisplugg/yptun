@@ -28,14 +28,23 @@ internal object DesktopPaths {
 
     fun appDataDir(): Path {
         val home = Path(System.getProperty("user.home"))
-        val dir = when (os) {
-            DesktopOs.MacOS -> home.resolve("Library").resolve("Application Support").resolve("Olcbox")
+        val base = when (os) {
+            DesktopOs.MacOS -> home.resolve("Library").resolve("Application Support")
             DesktopOs.Windows -> {
                 val appData = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
-                (appData?.let { Path(it) } ?: home.resolve("AppData").resolve("Roaming")).resolve("Olcbox")
+                appData?.let { Path(it) } ?: home.resolve("AppData").resolve("Roaming")
             }
             DesktopOs.Linux,
-            DesktopOs.Other -> home.resolve(".olcbox")
+            DesktopOs.Other -> home
+        }
+        val hidden = os == DesktopOs.Linux || os == DesktopOs.Other
+        val dir = base.resolve(if (hidden) ".yptun" else "YPtun")
+        // One-time migration from the pre-rebrand "Olcbox" data dir (locations, settings, identity).
+        if (!Files.exists(dir)) {
+            val legacy = base.resolve(if (hidden) ".olcbox" else "Olcbox")
+            if (Files.exists(legacy)) {
+                runCatching { Files.move(legacy, dir) }
+            }
         }
         Files.createDirectories(dir)
         return dir

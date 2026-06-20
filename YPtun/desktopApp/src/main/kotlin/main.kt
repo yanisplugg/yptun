@@ -84,6 +84,9 @@ import org.olcbox.app.data.importer.JvmConfigImporter
 import org.olcbox.app.data.share.ConfigShareService
 import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.ui.OlcboxAppContent
+import org.olcbox.app.ui.activities.AppSettingsSheet
+import org.olcbox.app.vpn.AndroidSocksProxySettings
+import org.olcbox.app.vpn.AndroidSplitTunnelSettings
 import org.olcbox.app.ui.components.ApplicationSocksProxySettings
 import org.olcbox.app.ui.components.ApplicationSettingsSheet
 import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
@@ -117,7 +120,11 @@ private class DesktopAppDependencies {
     val updateInstaller = JvmUpdateInstaller()
     val socksProxySettingsStore = JvmDesktopSocksProxySettingsStore()
 
-    val vpnManager = DesktopVpnManager(locationsRepository)
+    val settings = org.olcbox.app.vpn.desktop.DesktopSettingsController()
+
+    val vpnManager = DesktopVpnManager(locationsRepository).also { manager ->
+        manager.connectionModeProvider = { settings.connectionMode.value }
+    }
 
     val homeViewModel = HomeScreenViewModel(
         vpnManager = vpnManager,
@@ -186,7 +193,7 @@ fun main(args: Array<String>) = application {
                             updateMessage = "${info.channel.name} update found: ${info.version}"
                         } else {
                             updateOffer = null
-                            updateMessage = "Olcbox is up to date"
+                            updateMessage = "YPtun is up to date"
                         }
                     } else {
                         updateOffer = null
@@ -252,7 +259,7 @@ fun main(args: Array<String>) = application {
     Tray(
         state = trayState,
         icon = painterResource("LinuxIcon.png"),
-        tooltip = "Olcbox",
+        tooltip = "YPtun",
         menu = {
             Item("Open", onClick = { isWindowVisible = true })
             Item(
@@ -274,10 +281,13 @@ fun main(args: Array<String>) = application {
         }
     )
 
+    val windowState = rememberWindowState(width = 430.dp, height = 780.dp)
+
     Window(
-        title = "olcbox",
+        title = "YPtun",
+        icon = painterResource("LinuxIcon.png"),
         visible = isWindowVisible,
-        state = rememberWindowState(width = 430.dp, height = 780.dp),
+        state = windowState,
         onCloseRequest = {
             isWindowVisible = false
         },
@@ -290,10 +300,15 @@ fun main(args: Array<String>) = application {
             }
         }
 
-        AppTheme {
+        val dynamicTheme by dependencies.settings.dynamicTheme.collectAsState()
+
+        AppTheme(useDynamicColor = dynamicTheme) {
             val logs by dependencies.homeViewModel.logs.collectAsState()
             val homeState by dependencies.homeViewModel.state.collectAsState()
             val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
+            val mainConnectionMode by dependencies.settings.connectionMode.collectAsState()
+            // Happ-style wide layout: with enough window width the locations move to a left pane.
+            val isWideWindow = windowState.size.width >= 700.dp
 
             fun reloadLocationsAfterImport(onComplete: () -> Unit = {}) {
                 dependencies.locationViewModel.loadLocations {
@@ -350,23 +365,72 @@ fun main(args: Array<String>) = application {
                     showSplitTunnelingButton = false,
                     canScanQr = false,
                     onAppSettingsClick = { showDesktopSettings = true },
-                    onSplitTunnelingClick = {}
+                    onSplitTunnelingClick = {},
+                    wideLayout = isWideWindow,
+                    extraConnectContent = {
+                        DesktopModeSwitch(
+                            mode = mainConnectionMode,
+                            onModeSelected = { mode ->
+                                dependencies.settings.selectConnectionMode(mode)
+                                if (homeState.isVpnConnected || homeState.isVpnLoading) {
+                                    dependencies.homeViewModel.restartVpnIfRunning()
+                                }
+                            }
+                        )
+                    }
                 )
 
                 if (showDesktopSettings) {
-                    ApplicationSettingsSheet(
+                    // The full Android settings UI, ported to the JVM: routing rules + Happ
+                    // routing profiles, traffic, theme colors, language, ping, experimental, etc.
+                    val routing by dependencies.settings.routing.collectAsState()
+                    val routingProfilesState by dependencies.settings.routingProfiles.collectAsState()
+                    val trafficSettings by dependencies.settings.traffic.collectAsState()
+                    val appBehavior by dependencies.settings.appBehavior.collectAsState()
+                    val geoUpdateStatus by dependencies.settings.geoUpdateStatus.collectAsState()
+                    val language by dependencies.settings.language.collectAsState()
+                    val connectionMode by dependencies.settings.connectionMode.collectAsState()
+                    val splitTunnelSettings by dependencies.settings.splitTunnel.collectAsState()
+                    val installedApps = remember(showDesktopSettings) { dependencies.settings.installedApps() }
+                    var hwid by remember { mutableStateOf("") }
+                    LaunchedEffect(Unit) {
+                        hwid = runCatching { dependencies.locationsRepository.getDeviceIdentity() }.getOrDefault("")
+                    }
+
+                    AppSettingsSheet(
+                        selectedMode = connectionMode,
+                        proxySettings = AndroidSocksProxySettings(
+                            host = socksProxySettings.host,
+                            port = socksProxySettings.port,
+                            username = socksProxySettings.username,
+                            password = socksProxySettings.password
+                        ),
+                        splitTunnelSettings = splitTunnelSettings,
+                        installedApps = installedApps,
+                        logs = logs,
+                        dynamicThemeEnabled = dynamicTheme,
+                        hwid = hwid,
+                        routing = routing,
+                        onRoutingChanged = dependencies.settings::setRouting,
+                        routingProfilesState = routingProfilesState,
+                        geoUpdateStatus = geoUpdateStatus,
+                        onRoutingProfileSaved = { dependencies.settings.saveRoutingProfile(it) },
+                        onRoutingProfileDeleted = dependencies.settings::deleteRoutingProfile,
+                        onGlobalRoutingProfileChanged = dependencies.settings::setGlobalRoutingProfile,
+                        onRoutingProfileLinkImported = dependencies.settings::importRoutingProfileLink,
+                        onGeoSourcesChanged = dependencies.settings::setGeoSources,
+                        onUpdateGeoNow = dependencies.settings::updateGeoAssetsNow,
+                        trafficSettings = trafficSettings,
+                        onTrafficChanged = dependencies.settings::setTrafficSettings,
+                        appBehavior = appBehavior,
+                        onAppBehaviorChanged = dependencies.settings::setAppBehavior,
+                        language = language,
+                        onLanguageChanged = dependencies.settings::setLanguage,
                         updateSettings = updateSettings,
                         updateStatusText = updateMessage,
                         updateDownloadProgress = updateProgress,
-                        updateOffer = updateOffer,
                         subscriptions = desktopSubscriptionItems(dependencies.locationViewModel.locations.toList()),
-                        logs = logs,
-                        connectionSummary = "SOCKS5 ${socksProxySettings.host}:${socksProxySettings.port}",
-                        connectionDetails = listOf(
-                            "PAC URL" to "http://127.0.0.1:10809/proxy.pac",
-                            "PAC Target" to "SOCKS5 ${socksProxySettings.host}:${socksProxySettings.port}"
-                        ),
-                        socksProxySettings = socksProxySettings.toApplicationSocksProxySettings(),
+                        enabled = !homeState.isVpnLoading,
                         isConnectionActive = homeState.isVpnConnected,
                         onDismiss = { showDesktopSettings = false },
                         onCopyConfigClick = {
@@ -397,8 +461,6 @@ fun main(args: Array<String>) = application {
                             }
                         },
                         onCheckUpdatesClick = { checkUpdate(manual = true) },
-                        onDownloadUpdateClick = { info -> downloadUpdate(info) },
-                        onLaterUpdateClick = { info -> postponeUpdate(info) },
                         onSubscriptionShareClick = { url ->
                             sharePayload = "Subscription QR" to ConfigShareService.subscriptionQrText(url)
                         },
@@ -414,33 +476,56 @@ fun main(args: Array<String>) = application {
                                 }
                             }
                         },
-                        onSocksProxySettingsSaved = { username, password, port ->
-                            val settings = socksProxySettings.copy(
+                        onDynamicThemeChanged = dependencies.settings::setDynamicTheme,
+                        onAccentColorSelected = dependencies.settings::setAccentColor,
+                        onTextColorSelected = dependencies.settings::setTextColor,
+                        onBackgroundColorSelected = dependencies.settings::setBackgroundColor,
+                        onModeSelected = { mode ->
+                            dependencies.settings.selectConnectionMode(mode)
+                            if (homeState.isVpnConnected) {
+                                dependencies.homeViewModel.restartVpnIfRunning()
+                            }
+                        },
+                        onProxySettingsSaved = { host, username, password, port ->
+                            val newSettings = socksProxySettings.copy(
+                                host = host,
                                 port = port,
                                 username = username,
                                 password = password
                             ).normalized()
-                            dependencies.vpnManager.updateSocksProxySettings(settings)
+                            dependencies.vpnManager.updateSocksProxySettings(newSettings)
                             scope.launch {
-                                dependencies.socksProxySettingsStore.save(settings)
+                                dependencies.socksProxySettingsStore.save(newSettings)
                             }
                             desktopNotice = "SOCKS proxy saved"
                             if (homeState.isVpnConnected) {
                                 dependencies.homeViewModel.restartVpnIfRunning()
                             }
                         },
-                        onSocksProxyPasswordRegenerated = {
-                            val settings = socksProxySettings.copy(
+                        onProxyPasswordRegenerated = {
+                            val newSettings = socksProxySettings.copy(
                                 password = generateDesktopProxyPassword()
                             ).normalized()
-                            dependencies.vpnManager.updateSocksProxySettings(settings)
+                            dependencies.vpnManager.updateSocksProxySettings(newSettings)
                             scope.launch {
-                                dependencies.socksProxySettingsStore.save(settings)
+                                dependencies.socksProxySettingsStore.save(newSettings)
                             }
                             desktopNotice = "Password regenerated"
                             if (homeState.isVpnConnected) {
                                 dependencies.homeViewModel.restartVpnIfRunning()
                             }
+                        },
+                        onSplitTunnelModeSelected = { mode ->
+                            dependencies.settings.selectSplitTunnelMode(mode)
+                            if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                        },
+                        onSplitTunnelAppToggled = { list, processName ->
+                            dependencies.settings.toggleSplitTunnelApp(list, processName)
+                            if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                        },
+                        onSplitTunnelAppsSelected = { list, processes ->
+                            dependencies.settings.setSplitTunnelApps(list, processes)
+                            if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
                         }
                     )
                 }
@@ -477,6 +562,49 @@ fun main(args: Array<String>) = application {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The desktop "Режим: Прокси | Туннель" switch shown right on the home screen (under the start
+ * button). Proxy = PAC system proxy (no admin needed); Tunnel = TUN via wintun (asks for admin).
+ * Switching while connected restarts the tunnel in the new mode.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DesktopModeSwitch(
+    mode: org.olcbox.app.vpn.AndroidConnectionMode,
+    onModeSelected: (org.olcbox.app.vpn.AndroidConnectionMode) -> Unit
+) {
+    val isRussian = org.olcbox.app.ui.i18n.LocalizationState.effective == org.olcbox.app.ui.i18n.AppLanguage.Russian
+    val proxyLabel = if (isRussian) "ПРОКСИ" else "PROXY"
+    val tunLabel = if (isRussian) "ТУННЕЛЬ" else "TUNNEL"
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = if (isRussian) "Режим" else "Mode",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(12.dp))
+        SingleChoiceSegmentedButtonRow {
+            SegmentedButton(
+                selected = mode == org.olcbox.app.vpn.AndroidConnectionMode.Proxy,
+                onClick = { onModeSelected(org.olcbox.app.vpn.AndroidConnectionMode.Proxy) },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                label = { Text(proxyLabel, fontSize = 12.sp) }
+            )
+            SegmentedButton(
+                selected = mode == org.olcbox.app.vpn.AndroidConnectionMode.Tun,
+                onClick = { onModeSelected(org.olcbox.app.vpn.AndroidConnectionMode.Tun) },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                label = { Text(tunLabel, fontSize = 12.sp) }
+            )
         }
     }
 }
@@ -694,14 +822,14 @@ private fun desktopSubscriptionItems(items: List<LocationItem>): List<Subscripti
 }
 
 private fun chooseConfigFile(owner: Frame): File? {
-    val dialog = FileDialog(owner, "Import Olcbox Config", FileDialog.LOAD)
+    val dialog = FileDialog(owner, "Import YPtun Config", FileDialog.LOAD)
     dialog.isVisible = true
 
     return dialog.files.firstOrNull()
 }
 
 private fun chooseSaveFile(owner: Frame, defaultName: String): File? {
-    val dialog = FileDialog(owner, "Save Olcbox Logs", FileDialog.SAVE)
+    val dialog = FileDialog(owner, "Save YPtun Logs", FileDialog.SAVE)
     dialog.file = defaultName
     dialog.isVisible = true
 

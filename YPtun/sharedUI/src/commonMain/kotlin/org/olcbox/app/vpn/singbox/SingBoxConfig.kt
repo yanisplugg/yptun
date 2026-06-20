@@ -37,6 +37,12 @@ object SingBoxConfig {
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
     private const val SOCKS_IN_TAG = "socks-in"
+    private const val TUN_IN_TAG = "tun-in"
+
+    // Desktop per-process split tunneling modes (mirror AndroidSplitTunnelMode values).
+    const val SPLIT_TUNNEL_ALL = "all_apps"
+    const val SPLIT_TUNNEL_PROXY = "proxy_selected"
+    const val SPLIT_TUNNEL_BYPASS = "bypass_selected"
 
     /**
      * Well-known DNS-over-HTTPS/TLS endpoints that browsers & apps dial directly (often over IPv6),
@@ -119,6 +125,16 @@ object SingBoxConfig {
         // blackhole domains become `domain_regex → reject` route rules — so FakeDNS works on sing-box
         // too, not only xray-core. Overrides the (now per-config) [TrafficSettings.fakeDnsEnabled].
         fakeDnsSpec: FakeDnsSpec? = null,
+        // Desktop only: sing-box owns the system TUN itself (wintun on Windows) with auto_route,
+        // instead of an external tun2socks. Required for per-process split tunneling — only the
+        // TUN owner can attribute connections to processes. Needs admin/root.
+        tunMode: Boolean = false,
+        // Per-process split tunneling (desktop analog of Android's per-app VPN): exe names matched
+        // with sing-box `process_name` rules. Only effective with [tunMode].
+        // "proxy_selected" → ONLY listed processes go through the proxy (everything else direct);
+        // "bypass_selected" → listed processes go direct (everything else through the proxy).
+        splitTunnelMode: String = SPLIT_TUNNEL_ALL,
+        splitTunnelProcesses: List<String> = emptyList(),
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
@@ -195,6 +211,22 @@ object SingBoxConfig {
             }
 
             putJsonArray("inbounds") {
+                if (tunMode) {
+                    // sing-box-owned TUN: creates the adapter (wintun) and installs the default
+                    // routes itself; auto_detect_interface keeps its own upstream off the tunnel.
+                    addJsonObject {
+                        put("type", "tun")
+                        put("tag", TUN_IN_TAG)
+                        putJsonArray("address") {
+                            add("172.19.0.1/30")
+                            add("fdfe:dcba:9876::1/126")
+                        }
+                        put("mtu", 1500)
+                        put("auto_route", true)
+                        put("strict_route", false)
+                        put("stack", "gvisor")
+                    }
+                }
                 addJsonObject {
                     put("type", "socks")
                     put("tag", SOCKS_IN_TAG)
@@ -296,6 +328,29 @@ object SingBoxConfig {
                     // Sniff destination domain so domain rules match (advanced or expert can disable it).
                     if (advanced?.sniff != false && (!sbExpert || routingProfile!!.singboxSniff)) {
                         addJsonObject { put("action", "sniff") }
+                    }
+                    if (tunMode) {
+                        // System DNS queries arriving via the TUN are answered by sing-box itself.
+                        addJsonObject {
+                            putJsonArray("protocol") { add("dns") }
+                            put("action", "hijack-dns")
+                        }
+                    }
+                    // Per-process split tunneling (desktop): FIRST so a per-app decision wins over
+                    // every later domain/geo rule.
+                    val splitProcesses = splitTunnelProcesses.filter { it.isNotBlank() }
+                    if (tunMode && splitProcesses.isNotEmpty()) {
+                        when (splitTunnelMode) {
+                            SPLIT_TUNNEL_BYPASS -> addJsonObject {
+                                putJsonArray("process_name") { splitProcesses.forEach { add(it) } }
+                                put("outbound", "direct")
+                            }
+                            SPLIT_TUNNEL_PROXY -> addJsonObject {
+                                putJsonArray("process_name") { splitProcesses.forEach { add(it) } }
+                                put("invert", true)
+                                put("outbound", "direct")
+                            }
+                        }
                     }
                     // Block QUIC (HTTP/3) so clients fall back to TCP/HTTP2 through the proxy. A
                     // TCP-only transport (xhttp / reality / ws) can't carry UDP, so QUIC just dies

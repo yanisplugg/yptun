@@ -114,7 +114,7 @@ val olcrtcRepoDir = olcrtcRepo.map { rootProject.file(it) }
 val generatedNativeResources = layout.buildDirectory.dir("generated/desktopNativeResources")
 val hevSocks5TunnelSourceDir = rootProject.layout.projectDirectory.dir("androidApp/src/main/jni/hev-socks5-tunnel")
 val currentBuildOs = OperatingSystem.current()
-val desktopPackageName = "Olcbox"
+val desktopPackageName = "YPtun"
 val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("1.0.0").get()
 val tun2SocksVersion = "2.6.0"
 val wintunVersion = "0.14.1"
@@ -334,6 +334,58 @@ if (currentBuildOs.isLinux) {
     hostDesktopNativeAssetTasks.add(buildHevSocks5TunnelLinux)
 }
 
+// yptuncore: every proxy core (sing-box, xray, AmneziaWG, Hysteria2, VK-TURN, olcrtc) compiled
+// into ONE c-shared library from cores/cmd/yptuncore, consumed from jvmMain via JNA. Mirrors the
+// Android gomobile AAR (one shared Go runtime). Same build tags as the Android libbox build.
+val ypTunCoreBuildTags = "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api"
+val coresRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("cores")
+
+fun registerYpTunCoreBuildTask(
+    taskName: String,
+    goos: String,
+    goarch: String,
+    outputName: String
+) = tasks.register<Exec>(taskName) {
+    val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
+
+    inputs.dir(coresRepoDir.resolve("cmd"))
+    inputs.file(coresRepoDir.resolve("go.mod"))
+    inputs.property("tags", ypTunCoreBuildTags)
+    outputs.file(outputFile)
+    workingDir = coresRepoDir
+    environment("GOOS", goos)
+    environment("GOARCH", goarch)
+    environment("CGO_ENABLED", "1")
+    commandLine(
+        "go",
+        "build",
+        "-buildmode=c-shared",
+        "-trimpath",
+        "-tags",
+        ypTunCoreBuildTags,
+        "-ldflags",
+        "-s -w",
+        "-o",
+        outputFile.get().asFile.absolutePath,
+        "./cmd/yptuncore"
+    )
+
+    doFirst {
+        outputFile.get().asFile.parentFile.mkdirs()
+    }
+}
+
+if (currentBuildOs.isWindows) {
+    val buildYpTunCoreWindowsAmd64 = registerYpTunCoreBuildTask(
+        taskName = "buildYpTunCoreWindowsAmd64",
+        goos = "windows",
+        goarch = "amd64",
+        outputName = "yptuncore-windows-amd64.dll"
+    )
+    desktopNativeAssetTasks.add(buildYpTunCoreWindowsAmd64)
+    hostDesktopNativeAssetTasks.add(buildYpTunCoreWindowsAmd64)
+}
+
 if (currentBuildOs.isWindows) {
     val tun2SocksWindowsOutput = generatedNativeResources.map {
         it.file("native/tun2socks-windows-amd64.exe")
@@ -383,6 +435,7 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/olcrtc-windows-amd64.dll")
             add("native/tun2socks-windows-amd64.exe")
             add("native/wintun.dll")
+            add("native/yptuncore-windows-amd64.dll")
         }
         currentBuildOs.isLinux -> {
             add("native/olcrtc-linux-$hostDesktopArch")
@@ -470,7 +523,7 @@ compose.desktop {
             }
             windows {
                 iconFile.set(project.file("appIcons/WindowsIcon.ico"))
-                menuGroup = "Olcbox"
+                menuGroup = "YPtun"
                 shortcut = true
                 dirChooser = true
                 upgradeUuid = "6f0aaf78-dbed-4745-9d95-9e63f10a30de"

@@ -113,7 +113,12 @@ fun HomeScreen(
     onAddToFolder: (id: String, memberKeys: List<String>) -> Unit = { _, _ -> },
     onRemoveFromFolder: (memberKeys: List<String>) -> Unit = {},
     onToggleFolderPinned: (String) -> Unit = {},
-    onToggleFolderCollapsed: (String) -> Unit = {}
+    onToggleFolderCollapsed: (String) -> Unit = {},
+    // Desktop wide-window layout: the locations list moves into a LEFT pane while the connect
+    // controls (timer/start button) stay on the right, like Happ/Hiddify desktop.
+    wideLayout: Boolean = false,
+    // Extra content under the start button (e.g. the desktop proxy/tunnel mode switch).
+    extraConnectContent: (@Composable () -> Unit)? = null
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
@@ -256,15 +261,10 @@ fun HomeScreen(
             }
         }
     ) { innerPadding ->
-        LazyColumn(
-            state = scrollState,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        // The connect controls (timer + start button + optional extras) and the locations list are
+        // built as LazyListScope blocks so the narrow (single-column, Android-like) and wide
+        // (two-pane desktop) layouts share the exact same content.
+        fun androidx.compose.foundation.lazy.LazyListScope.connectItems() {
             item(key = "connection-timer") {
                 ConnectionTimer(
                     isConnected = state.isVpnConnected,
@@ -290,6 +290,12 @@ fun HomeScreen(
                 )
             }
 
+            extraConnectContent?.let { extra ->
+                item(key = "extra-connect-content") { extra() }
+            }
+        }
+
+        fun androidx.compose.foundation.lazy.LazyListScope.locationItems() {
             if (hasSubscriptions) {
                 item(key = "subscriptions-refresh") {
                     SubscriptionsRefreshRow(text = s.refreshSubscriptions, onClick = { refreshSubscriptions() })
@@ -402,6 +408,46 @@ fun HomeScreen(
 
             item(key = "bottom-spacer") {
                 Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+
+        if (wideLayout) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                LazyColumn(
+                    state = scrollState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    locationItems()
+                }
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    connectItems()
+                }
+            }
+        } else {
+            LazyColumn(
+                state = scrollState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                connectItems()
+                locationItems()
             }
         }
 

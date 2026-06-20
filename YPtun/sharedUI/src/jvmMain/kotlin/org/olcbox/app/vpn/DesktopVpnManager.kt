@@ -17,11 +17,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
+import org.olcbox.app.vpn.desktop.DesktopEngineController
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopProxyController
 import org.olcbox.app.vpn.desktop.LinuxPrivilege
@@ -73,6 +76,20 @@ class DesktopVpnManager private constructor(
     private val linuxTunController = LinuxTunController(::addLog)
     private val windowsTunController = WindowsTunController(::addLog)
 
+    // In-process engines (sing-box / xray / AmneziaWG / Hysteria2 / VK-TURN / chained olcRTC),
+    // the desktop port of the Android engine orchestration. Stealth keeps the olcrtc subprocess.
+    private val engineController = DesktopEngineController(::addLog)
+    private var engineLocation: LocationConfig? = null
+
+    /**
+     * The user's connection mode (TUN vs system proxy), supplied by the UI layer
+     * (DesktopSettingsController). Defaults to TUN, the historical desktop behavior.
+     */
+    var connectionModeProvider: () -> AndroidConnectionMode = { AndroidConnectionMode.Tun }
+
+    /** The mode actually used by the current/last connection — drives the matching cleanup. */
+    private var activeDesktopMode: DesktopMode? = null
+
     override fun needsPermission(): Boolean = false
 
     override fun startVpn() {
@@ -109,11 +126,274 @@ class DesktopVpnManager private constructor(
         }
     }
 
-    override suspend fun ping(locationConfig: LocationConfig): Long? {
-        return OlcRtcConnectionChecker.ping(
-            locationConfig = locationConfig,
-            deviceId = locationsRepository.getDeviceIdentity()
-        )
+    override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
+
+    /**
+     * Desktop port of AndroidVpnManager.pingInternal: the user-selected ping method (Settings →
+     * «Пинг») overrides the per-engine default probe. TCP/ICMP probe the location's own server;
+     * the URL is used only by the via-proxy GET/HEAD probes (throwaway xray/awg instances inside
+     * yptuncore — works while disconnected, like v2rayNG/Happ).
+     */
+    private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
+        val config = locationConfig.normalized()
+        val behavior = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior()
+        val profile = config.proxy
+        val hasProxy = profile != null
+        when (behavior.pingMode) {
+            org.olcbox.app.data.model.AppBehaviorSettings.PING_TCP ->
+                if (hasProxy) return tcpPing(profile?.server, profile?.serverPort)
+            org.olcbox.app.data.model.AppBehaviorSettings.PING_ICMP ->
+                if (hasProxy) return icmpPing(profile?.server)
+            org.olcbox.app.data.model.AppBehaviorSettings.PING_PROXY_GET ->
+                if (hasProxy) return proxyUrlTest(config, behavior.effectivePingUrl(), "GET")
+            org.olcbox.app.data.model.AppBehaviorSettings.PING_PROXY_HEAD ->
+                if (hasProxy) return proxyUrlTest(config, behavior.effectivePingUrl(), "HEAD")
+            else -> { /* PING_AUTO → engine-specific default below */ }
+        }
+        val proxyType = profile?.type
+        return when {
+            // Obfuscated transports whose real endpoint is blocked/hidden: probe through the live
+            // tunnel when connected; otherwise the best standalone probe available.
+            config.engine == EngineType.VkTurn -> tunnelPing()
+            proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
+                if (isConnected.value) tunnelPing()
+                else awgProbePing(profile?.awgConfig.orEmpty())
+            proxyType == ProxyProfile.TYPE_HYSTERIA2 ->
+                if (isConnected.value) tunnelPing()
+                else icmpPing(profile?.server.orEmpty())
+            config.engine == EngineType.Standard || config.engine == EngineType.Chain ->
+                tcpPing(profile?.server, profile?.serverPort)
+            else -> OlcRtcConnectionChecker.ping(
+                locationConfig = locationConfig,
+                deviceId = locationsRepository.getDeviceIdentity()
+            )
+        }
+    }
+
+    /** TCP-connect latency to host:port in ms, best of a few attempts, or null if unreachable. */
+    private suspend fun tcpPing(host: String?, port: Int?): Long? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        if (host.isNullOrBlank() || port == null || port !in 1..65535) return@withContext null
+        var best: Long? = null
+        repeat(TCP_PING_ATTEMPTS) {
+            val elapsed = runCatching {
+                Socket().use { socket ->
+                    val start = System.nanoTime()
+                    socket.connect(InetSocketAddress(host, port), TCP_PING_TIMEOUT_MS)
+                    (System.nanoTime() - start) / 1_000_000L
+                }
+            }.getOrNull()
+            if (elapsed != null && (best == null || elapsed < best!!)) best = elapsed
+        }
+        best
+    }
+
+    /**
+     * ICMP latency to [host]. Java's isReachable needs raw-socket privileges on Windows, so when it
+     * fails we shell out to the system `ping` and parse the reported time.
+     */
+    private suspend fun icmpPing(host: String?): Long? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        if (host.isNullOrBlank()) return@withContext null
+        var best: Long? = null
+        repeat(TCP_PING_ATTEMPTS) {
+            val ms = runCatching {
+                val addr = java.net.InetAddress.getByName(host)
+                val start = System.nanoTime()
+                if (addr.isReachable(TCP_PING_TIMEOUT_MS)) (System.nanoTime() - start) / 1_000_000L else null
+            }.getOrNull() ?: systemPing(host)
+            if (ms != null && (best == null || ms < best!!)) best = ms
+        }
+        best
+    }
+
+    /** One `ping` invocation via the OS binary; returns the echoed time in ms or null. */
+    private fun systemPing(host: String): Long? = runCatching {
+        val isWindows = System.getProperty("os.name").orEmpty().lowercase().contains("win")
+        val command = if (isWindows) {
+            listOf("ping", "-n", "1", "-w", TCP_PING_TIMEOUT_MS.toString(), host)
+        } else {
+            listOf("ping", "-c", "1", "-W", (TCP_PING_TIMEOUT_MS / 1000).coerceAtLeast(1).toString(), host)
+        }
+        val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        if (!process.waitFor(TCP_PING_TIMEOUT_MS + 2_000L, TimeUnit.MILLISECONDS)) {
+            process.destroyForcibly()
+            return@runCatching null
+        }
+        if (process.exitValue() != 0) return@runCatching null
+        // "time=23ms" / "время=23мс" / "time<1ms" — grab the first number before ms/мс.
+        Regex("[=<]\\s*(\\d+)\\s*(?:ms|мс)", RegexOption.IGNORE_CASE)
+            .find(output)?.groupValues?.get(1)?.toLongOrNull()
+    }.getOrNull()
+
+    /** Pre-connection AmneziaWG latency: a throwaway WG handshake probe inside yptuncore. */
+    private suspend fun awgProbePing(awgConfig: String): Long? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        if (awgConfig.isBlank()) return@withContext null
+        val ms = runCatching { org.olcbox.app.vpn.desktop.YpTunCore.awgProbe(awgConfig) }.getOrDefault(-1L)
+        if (ms >= 0) ms else null
+    }
+
+    /**
+     * End-to-end latency through the live tunnel: a SOCKS5 CONNECT to 1.1.1.1:443 via the running
+     * core's local SOCKS. Returns null when no core is up.
+     */
+    private suspend fun tunnelPing(): Long? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        if (!isConnected.value) return@withContext null
+        val socks = _socksProxySettings.value.normalized()
+        var best: Long? = null
+        repeat(TCP_PING_ATTEMPTS) {
+            val ms = runCatching {
+                socks5ConnectRtt(
+                    socks.host, socks.port, socks.username, socks.password,
+                    TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, TUNNEL_PING_TIMEOUT_MS
+                )
+            }.getOrNull()
+            if (ms != null && (best == null || ms < best!!)) best = ms
+        }
+        best
+    }
+
+    /** Hand-rolled SOCKS5 CONNECT to an IPv4 target through proxyHost:proxyPort; returns RTT ms. */
+    private fun socks5ConnectRtt(
+        proxyHost: String, proxyPort: Int, username: String, password: String,
+        targetHost: String, targetPort: Int, timeoutMs: Int
+    ): Long? {
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(proxyHost, proxyPort), timeoutMs)
+            socket.soTimeout = timeoutMs
+            val out = socket.getOutputStream()
+            val inp = socket.getInputStream()
+            val start = System.nanoTime()
+
+            val useAuth = username.isNotBlank()
+            out.write(if (useAuth) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
+            out.flush()
+            val sel = readExactly(inp, 2)
+            if (sel[0].toInt() and 0xFF != 0x05) return null
+            when (sel[1].toInt() and 0xFF) {
+                0x00 -> {}
+                0x02 -> {
+                    val u = username.encodeToByteArray(); val p = password.encodeToByteArray()
+                    val a = ByteArray(3 + u.size + p.size)
+                    a[0] = 0x01; a[1] = u.size.toByte(); u.copyInto(a, 2)
+                    a[2 + u.size] = p.size.toByte(); p.copyInto(a, 3 + u.size)
+                    out.write(a); out.flush()
+                    if (readExactly(inp, 2)[1].toInt() and 0xFF != 0x00) return null
+                }
+                else -> return null
+            }
+
+            val ip = targetHost.split('.').map { it.toInt() }
+            val req = byteArrayOf(
+                0x05, 0x01, 0x00, 0x01,
+                ip[0].toByte(), ip[1].toByte(), ip[2].toByte(), ip[3].toByte(),
+                ((targetPort shr 8) and 0xFF).toByte(), (targetPort and 0xFF).toByte()
+            )
+            out.write(req); out.flush()
+
+            val head = readExactly(inp, 4)
+            if (head[1].toInt() and 0xFF != 0x00) return null
+            val addrLen = when (head[3].toInt() and 0xFF) {
+                0x01 -> 4; 0x04 -> 16; 0x03 -> readExactly(inp, 1)[0].toInt() and 0xFF
+                else -> return null
+            }
+            readExactly(inp, addrLen + 2)
+            return (System.nanoTime() - start) / 1_000_000L
+        }
+    }
+
+    private fun readExactly(inp: java.io.InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n); var off = 0
+        while (off < n) {
+            val r = inp.read(buf, off, n - off)
+            if (r < 0) throw java.io.EOFException("short read")
+            off += r
+        }
+        return buf
+    }
+
+    /**
+     * Per-server proxy URL test (à la v2rayNG / Happ): a throwaway xray instance inside yptuncore
+     * fetches [url] through the location's proxy. AmneziaWG goes through a throwaway awg tunnel;
+     * Hysteria2 isn't xray-serviceable (use Auto/ICMP). Works while disconnected.
+     */
+    private suspend fun proxyUrlTest(location: LocationConfig, url: String, method: String): Long? =
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            val profile = location.proxy ?: run {
+                addLog("Proxy $method ping: location has no proxy")
+                return@withContext null
+            }
+            if (profile.type == ProxyProfile.TYPE_AMNEZIAWG) {
+                val awgConfig = profile.awgConfig.orEmpty()
+                if (awgConfig.isBlank()) return@withContext null
+                val ms = runCatching {
+                    org.olcbox.app.vpn.desktop.YpTunCore.awgMeasureDelay(awgConfig, url, method, TUNNEL_PING_TIMEOUT_MS)
+                }.getOrDefault(-1L)
+                return@withContext if (ms >= 0) ms else null
+            }
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2) {
+                addLog("Proxy $method ping: Hysteria2 not supported (use Auto/ICMP)")
+                return@withContext null
+            }
+            if (profile.server.isBlank()) return@withContext null
+            val listenPort = (20_000..60_000).random()
+            val configJson = runCatching {
+                org.olcbox.app.vpn.xray.XrayConfig.build(
+                    profile = profile,
+                    listenPort = listenPort,
+                    listenHost = "127.0.0.1",
+                    logLevel = "none",
+                    blockQuic = false,
+                )
+            }.getOrElse {
+                addLog("Proxy $method ping: failed to build test config: ${it.message}")
+                return@withContext null
+            }
+            val ms = runCatching {
+                org.olcbox.app.vpn.desktop.YpTunCore.xrayMeasureDelay(configJson, url, method, TUNNEL_PING_TIMEOUT_MS)
+            }.getOrElse {
+                addLog("Proxy $method ping error for ${profile.server}: ${it.message}")
+                -1L
+            }
+            if (ms >= 0) ms else null
+        }
+
+    /**
+     * IPv4 addresses of the engines' upstream servers for [location] — routed around the Windows
+     * TUN so the engines' own traffic doesn't loop through the tunnel they provide.
+     */
+    private fun resolveBypassServerIps(location: LocationConfig): List<String> {
+        val config = location.normalized()
+        val hosts = buildList {
+            config.proxy?.let { profile ->
+                if (profile.server.isNotBlank() && profile.server != "127.0.0.1") add(profile.server)
+                awgEndpointHost(profile)?.let { add(it) }
+            }
+            config.proxy2?.let { if (it.server.isNotBlank()) add(it.server) }
+            config.vkturn?.let { vk ->
+                runCatching { java.net.URI(vk.uri).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
+            }
+        }
+        return hosts.distinct().flatMap { host ->
+            runCatching {
+                java.net.InetAddress.getAllByName(host)
+                    .filterIsInstance<java.net.Inet4Address>()
+                    .map { it.hostAddress }
+            }.getOrElse {
+                addLog("Could not resolve $host for TUN bypass route: ${it.message}")
+                emptyList()
+            }
+        }.distinct().filter { it != "127.0.0.1" }
+    }
+
+    /** The `Endpoint = host:port` of an AmneziaWG INI config, if any. */
+    private fun awgEndpointHost(profile: ProxyProfile): String? {
+        if (profile.awgConfig.isBlank()) return null
+        val line = profile.awgConfig.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("Endpoint", ignoreCase = true) && "=" in it }
+            ?: return null
+        val value = line.substringAfter("=").trim()
+        return value.substringBeforeLast(":").trim('[', ']').takeIf { it.isNotBlank() }
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
@@ -174,6 +454,7 @@ class DesktopVpnManager private constructor(
                 stopDesktopMode(finalStatus = true)
             }
 
+            engineController.close()
             scope.cancel()
         }
     }
@@ -193,29 +474,64 @@ class DesktopVpnManager private constructor(
         try {
             val ready = CompletableDeferred<Unit>()
             val startupFailure = CompletableDeferred<String>()
-            val desktopMode = DesktopMode.current()
+            val desktopMode = if (connectionModeProvider() == AndroidConnectionMode.Proxy) {
+                DesktopMode.SystemProxy
+            } else {
+                DesktopMode.current()
+            }
+            activeDesktopMode = desktopMode
             val socksSettings = _socksProxySettings.value.normalized()
 
             if (desktopMode == DesktopMode.WindowsTun) {
                 windowsTunController.ensureAdministratorOrRequestRestart()
             }
 
-            process = startOlcRtcProcessWithFallback(
-                location = location,
-                socksSettings = socksSettings,
-                ready = ready,
-                startupFailure = startupFailure,
-                logOutput = true,
-                privileged = desktopMode == DesktopMode.LinuxTun
-            )
+            // Non-Stealth engines (sing-box/xray/AmneziaWG/Hysteria2/VK-TURN/Chain) run in-process
+            // via the yptuncore library — the desktop port of the Android engine stack. Stealth
+            // keeps the proven olcrtc subprocess (incl. the privileged Linux TUN path).
+            val useEngineController = location.engine != EngineType.Stealth && engineController.isSupported
 
-            waitForOlcRtcReady(
-                process = process ?: error("olcRTC process is missing"),
-                ready = ready,
-                startupFailure = startupFailure,
-                socksPort = socksSettings.port,
-                requestGeneration = requestGeneration
-            )
+            if (useEngineController) {
+                engineLocation = location
+                // Per-process split tunneling needs sing-box to own the TUN (only the TUN owner
+                // can attribute connections to processes — tun2socks can't).
+                val split = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadSplitTunnel()
+                val splitActive = split.mode != "all_apps" &&
+                    (split.proxyProcesses.isNotEmpty() || split.bypassProcesses.isNotEmpty())
+                val wantsInCoreTun = desktopMode == DesktopMode.WindowsTun && splitActive
+                engineController.start(
+                    location = location,
+                    listenHost = socksSettings.host,
+                    listenPort = socksSettings.port,
+                    socksUsername = socksSettings.username,
+                    socksPassword = socksSettings.password,
+                    deviceId = locationsRepository.getDeviceIdentity(),
+                    tunViaSingBox = wantsInCoreTun,
+                    splitTunnelMode = split.mode,
+                    splitTunnelProcesses = when (split.mode) {
+                        "proxy_selected" -> split.proxyProcesses.toList()
+                        "bypass_selected" -> split.bypassProcesses.toList()
+                        else -> emptyList()
+                    },
+                )
+            } else {
+                process = startOlcRtcProcessWithFallback(
+                    location = location,
+                    socksSettings = socksSettings,
+                    ready = ready,
+                    startupFailure = startupFailure,
+                    logOutput = true,
+                    privileged = desktopMode == DesktopMode.LinuxTun
+                )
+
+                waitForOlcRtcReady(
+                    process = process ?: error("olcRTC process is missing"),
+                    ready = ready,
+                    startupFailure = startupFailure,
+                    socksPort = socksSettings.port,
+                    requestGeneration = requestGeneration
+                )
+            }
 
             if (requestGeneration != generation) {
                 throw CancellationException("Desktop start superseded")
@@ -223,7 +539,17 @@ class DesktopVpnManager private constructor(
 
             when (desktopMode) {
                 DesktopMode.LinuxTun -> startLinuxTun(socksSettings.port, requestGeneration)
-                DesktopMode.WindowsTun -> startWindowsTun(socksSettings.port, requestGeneration)
+                DesktopMode.WindowsTun -> if (engineController.tunHandledInCore) {
+                    // sing-box raised the wintun adapter itself (per-process split tunneling);
+                    // no external tun2socks needed.
+                    addLog("Windows TUN owned by sing-box (per-process split tunneling active)")
+                } else {
+                    startWindowsTun(
+                        socksPort = socksSettings.port,
+                        requestGeneration = requestGeneration,
+                        bypassServerIps = if (useEngineController) resolveBypassServerIps(location) else emptyList()
+                    )
+                }
                 DesktopMode.SystemProxy -> startSystemProxy(socksSettings, requestGeneration)
             }
 
@@ -242,8 +568,8 @@ class DesktopVpnManager private constructor(
                 addLog("Desktop start failed: ${e.message}")
             }
 
-            when (DesktopPaths.os) {
-                DesktopOs.Linux -> {
+            when (activeDesktopMode ?: DesktopMode.current()) {
+                DesktopMode.LinuxTun -> {
                     runCatching {
                         linuxTunController.stop(tunProcess)
                     }.onFailure {
@@ -251,7 +577,7 @@ class DesktopVpnManager private constructor(
                     }
                     tunProcess = null
                 }
-                DesktopOs.Windows -> {
+                DesktopMode.WindowsTun -> {
                     runCatching {
                         windowsTunController.stop(tunProcess)
                     }.onFailure {
@@ -259,8 +585,7 @@ class DesktopVpnManager private constructor(
                     }
                     tunProcess = null
                 }
-                DesktopOs.MacOS,
-                DesktopOs.Other -> {
+                DesktopMode.SystemProxy -> {
                     runCatching {
                         proxyController.restore()
                     }.onFailure {
@@ -270,6 +595,8 @@ class DesktopVpnManager private constructor(
             }
 
             pacServer.stop()
+            runCatching { engineController.stopAll() }
+            engineLocation = null
             stopProcess(process)
             process = null
             deleteOlcRtcConfig()
@@ -291,9 +618,13 @@ class DesktopVpnManager private constructor(
         startTunLogReader(tunProcess ?: error("hev-socks5-tunnel process is missing"))
     }
 
-    private suspend fun startWindowsTun(socksPort: Int, requestGeneration: Long) {
+    private suspend fun startWindowsTun(
+        socksPort: Int,
+        requestGeneration: Long,
+        bypassServerIps: List<String> = emptyList()
+    ) {
         val tun2SocksBinary = DesktopNativeAssets.resolveWindowsTun2SocksBinary()
-        tunProcess = windowsTunController.start(tun2SocksBinary, socksPort)
+        tunProcess = windowsTunController.start(tun2SocksBinary, socksPort, bypassServerIps)
 
         if (requestGeneration != generation) {
             throw CancellationException("Desktop start superseded")
@@ -377,8 +708,8 @@ class DesktopVpnManager private constructor(
 
         setStatus(VpnStatus.Stopping)
 
-        when (DesktopPaths.os) {
-            DesktopOs.Linux -> {
+        when (activeDesktopMode ?: DesktopMode.current()) {
+            DesktopMode.LinuxTun -> {
                 runCatching {
                     linuxTunController.stop(tunProcess)
                 }.onFailure {
@@ -386,7 +717,7 @@ class DesktopVpnManager private constructor(
                 }
                 tunProcess = null
             }
-            DesktopOs.Windows -> {
+            DesktopMode.WindowsTun -> {
                 runCatching {
                     windowsTunController.stop(tunProcess)
                 }.onFailure {
@@ -394,8 +725,7 @@ class DesktopVpnManager private constructor(
                 }
                 tunProcess = null
             }
-            DesktopOs.MacOS,
-            DesktopOs.Other -> {
+            DesktopMode.SystemProxy -> {
                 runCatching {
                     proxyController.restore()
                 }.onFailure {
@@ -405,6 +735,10 @@ class DesktopVpnManager private constructor(
         }
 
         pacServer.stop()
+
+        // Stop the in-process engines (no-op when the olcrtc subprocess path was used).
+        runCatching { engineController.stopAll() }
+        engineLocation = null
 
         stopProcess(process)
         process = null
@@ -642,6 +976,13 @@ class DesktopVpnManager private constructor(
         const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
+
+        // Ping probes (same values as AndroidVpnManager).
+        const val TCP_PING_ATTEMPTS = 2
+        const val TCP_PING_TIMEOUT_MS = 3_000
+        const val TUNNEL_PROBE_HOST = "1.1.1.1"
+        const val TUNNEL_PROBE_PORT = 443
+        const val TUNNEL_PING_TIMEOUT_MS = 6_000
 
         internal fun isFatalOlcRtcStartupLine(line: String): Boolean {
             val text = line.lowercase()

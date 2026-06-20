@@ -61,7 +61,10 @@ fun OlcboxAppContent(
     onAddToFolder: (id: String, memberKeys: List<String>) -> Unit = { _, _ -> },
     onRemoveFromFolder: (memberKeys: List<String>) -> Unit = {},
     onToggleFolderPinned: (String) -> Unit = {},
-    onToggleFolderCollapsed: (String) -> Unit = {}
+    onToggleFolderCollapsed: (String) -> Unit = {},
+    // Desktop wide-window layout (locations list in a left pane) + the desktop mode switch slot.
+    wideLayout: Boolean = false,
+    extraConnectContent: (@Composable () -> Unit)? = null
 ) {
     val homeScrollState = rememberLazyListState()
 
@@ -144,7 +147,9 @@ fun OlcboxAppContent(
                     onAddToFolder = onAddToFolder,
                     onRemoveFromFolder = onRemoveFromFolder,
                     onToggleFolderPinned = onToggleFolderPinned,
-                    onToggleFolderCollapsed = onToggleFolderCollapsed
+                    onToggleFolderCollapsed = onToggleFolderCollapsed,
+                    wideLayout = wideLayout,
+                    extraConnectContent = extraConnectContent
                 )
             }
 

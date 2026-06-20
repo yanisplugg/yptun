@@ -144,7 +144,7 @@ fun LocationRow(
             .padding(horizontal = 20.dp, vertical = 8.dp)
     ) {
         if (emoji.isNotEmpty()) {
-            Text(text = emoji, fontSize = 20.sp)
+            Text(text = emoji, fontSize = 20.sp, fontFamily = org.olcbox.app.ui.theme.emojiFontFamily())
             Spacer(modifier = Modifier.width(8.dp))
         }
 

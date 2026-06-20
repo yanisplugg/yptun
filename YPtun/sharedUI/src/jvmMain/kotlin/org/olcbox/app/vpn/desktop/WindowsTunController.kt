@@ -11,10 +11,16 @@ internal class WindowsTunController(
     private val addLog: (String) -> Unit
 ) {
     private var routesInstalled = false
+    private var bypassIps: List<String> = emptyList()
 
     suspend fun start(
         tun2SocksBinary: Path,
-        socksPort: Int = PacServer.LOCAL_SOCKS_PORT
+        socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
+        // Proxy/relay server IPs that must NOT be routed into the TUN (the engines' own upstream
+        // traffic): they get host routes via the physical default gateway, the same trick Android
+        // does with VpnService.protect. Without this every non-interface-binding engine (xray,
+        // AmneziaWG, Hysteria2, freeturn) would loop its upstream through its own tunnel.
+        bypassServerIps: List<String> = emptyList()
     ): Process {
         ensureAdministratorOrRequestRestart()
 
@@ -25,6 +31,11 @@ internal class WindowsTunController(
 
         try {
             waitForAdapter(process)
+            bypassIps = bypassServerIps.distinct()
+            if (bypassIps.isNotEmpty()) {
+                installBypassRoutes(bypassIps)
+                addLog("Installed ${bypassIps.size} bypass route(s) for proxy server(s)")
+            }
             installRoutes()
             routesInstalled = true
             addLog("Windows TUN connected on $TUN_NAME")
@@ -43,6 +54,11 @@ internal class WindowsTunController(
             runCatching { removeRoutes() }
                 .onFailure { addLog("Windows TUN route cleanup failed: ${it.message}") }
             routesInstalled = false
+        }
+        if (bypassIps.isNotEmpty()) {
+            runCatching { removeBypassRoutes(bypassIps) }
+                .onFailure { addLog("Windows TUN bypass route cleanup failed: ${it.message}") }
+            bypassIps = emptyList()
         }
 
         stopProcess(process)
@@ -70,7 +86,7 @@ internal class WindowsTunController(
     private suspend fun requestAdministratorRestart() {
         val processInfo = ProcessHandle.current().info()
         val currentCommand = processInfo.command().orElse(null)
-            ?: error("Olcbox cannot resolve its Windows launcher for administrator restart")
+            ?: error("YPtun cannot resolve its Windows launcher for administrator restart")
         val currentArguments = processInfo.arguments().orElse(emptyArray()).toList()
         val restartArguments = if (ELEVATED_START_ARGUMENT in currentArguments) {
             currentArguments
@@ -143,6 +159,41 @@ internal class WindowsTunController(
         )
     }
 
+    /** Host routes for the engines' upstream servers via the physical default gateway. */
+    private suspend fun installBypassRoutes(ips: List<String>) {
+        val routeCommands = ips.joinToString("\n") { ip ->
+            """
+            Get-NetRoute -DestinationPrefix '$ip/32' -ErrorAction SilentlyContinue |
+              Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
+            New-NetRoute -InterfaceIndex ${'$'}physIfIndex -DestinationPrefix '$ip/32' -NextHop ${'$'}gateway -RouteMetric 1 | Out-Null
+            """.trimIndent()
+        }
+        runPowerShell(
+            """
+            ${'$'}ErrorActionPreference = 'Stop'
+            ${'$'}default = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
+              Where-Object { ${'$'}_.InterfaceAlias -ne '$TUN_NAME' -and ${'$'}_.NextHop -ne '0.0.0.0' } |
+              Sort-Object RouteMetric, InterfaceMetric |
+              Select-Object -First 1
+            if (${'$'}null -eq ${'$'}default) { throw 'No physical default gateway found' }
+            ${'$'}gateway = ${'$'}default.NextHop
+            ${'$'}physIfIndex = ${'$'}default.InterfaceIndex
+            $routeCommands
+            """.trimIndent()
+        )
+    }
+
+    private suspend fun removeBypassRoutes(ips: List<String>) {
+        runPowerShell(
+            ips.joinToString("\n") { ip ->
+                """
+                Get-NetRoute -DestinationPrefix '$ip/32' -ErrorAction SilentlyContinue |
+                  Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
+                """.trimIndent()
+            }
+        )
+    }
+
     private suspend fun removeRoutes() {
         runPowerShell(
             """
@@ -192,7 +243,7 @@ internal class WindowsTunController(
     }
 
     internal companion object {
-        const val TUN_NAME = "Olcbox"
+        const val TUN_NAME = "YPtun"
         const val TUN_MTU = 1500
         const val TUN_IPV4_ADDRESS = "10.0.88.88"
         const val TUN_IPV4_PREFIX_LENGTH = 24
