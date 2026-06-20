@@ -260,7 +260,11 @@ fun main(args: Array<String>) = application {
         org.olcbox.app.ui.i18n.AppLanguage.Russian
     val trayConnected = trayHomeState.isVpnConnected
     val trayLoading = trayHomeState.isVpnLoading
-    val trayLocationName = trayHomeState.selectedLocation?.fullName?.takeIf { it.isNotBlank() }
+    // AWT tray menus can't render flag/emoji glyphs (they show as □□□), so keep only readable text.
+    val trayLocationName = trayHomeState.selectedLocation?.fullName
+        ?.filter { it.isLetterOrDigit() || it == ' ' || it in "-_.·()[]/" }
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
     val trayStatusText = when {
         trayConnected -> (if (trayRussian) "● Подключено" else "● Connected") +
             (trayLocationName?.let { " · $it" } ?: "")

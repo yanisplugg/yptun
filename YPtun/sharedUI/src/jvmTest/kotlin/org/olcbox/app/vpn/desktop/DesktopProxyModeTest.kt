@@ -65,7 +65,11 @@ class DesktopProxyModeTest {
             val args = command.args(Path.of("/tmp/client.yaml"))
             val yaml = command.yaml()
 
-            assertEquals(listOf("/tmp/olcrtc", "/tmp/client.yaml"), args)
+            // Path.toString() is OS-dependent (backslashes on Windows) — compare the same way.
+            assertEquals(
+                listOf(Path.of("/tmp/olcrtc").toString(), Path.of("/tmp/client.yaml").toString()),
+                args
+            )
             assertContains(yaml, "mode: cnc")
             assertContains(yaml, "provider: '${OlcRtcCommand.desktopProviderArg(provider)}'")
             assertContains(yaml, "transport: '$expectedTransport'")
@@ -96,7 +100,7 @@ class DesktopProxyModeTest {
 
         assertContains(command, "transport: '${LocationConfig.TRANSPORT_DATACHANNEL}'")
         assertTrue("vp8:" !in command)
-        assertContains(command, "data: '/tmp/olcbox-data'")
+        assertContains(command, "data: '${Path.of("/tmp/olcbox-data")}'")
     }
 
     @Test
@@ -195,12 +199,20 @@ class DesktopProxyModeTest {
     }
 
     @Test
-    fun windowsProxyCommandsBackupShapeIsRestorable() {
-        val enable = WindowsProxyController.enableCommands("http://127.0.0.1:10809/proxy.pac")
-        assertEquals("reg", enable.first().first())
-        assertContains(enable.flatten(), "AutoConfigURL")
-        assertContains(enable.flatten(), "http://127.0.0.1:10809/proxy.pac")
+    fun windowsProxyHttpEnableSetsFixedProxyAndClearsPac() {
+        val enable = WindowsProxyController.enableHttpCommands("127.0.0.1:10808")
+        val flat = enable.flatten()
+        // Reliable WinINET path: fixed ProxyServer + ProxyEnable=1, and any stale PAC cleared.
+        assertContains(flat, "ProxyServer")
+        assertContains(flat, "127.0.0.1:10808")
+        assertContains(flat, "ProxyEnable")
+        assertContains(flat, "AutoConfigURL")
+        assertContains(flat, "delete") // the PAC clear
+        assertTrue(enable.any { it.contains("ProxyOverride") })
+    }
 
+    @Test
+    fun windowsProxyRestoreReproducesOriginalRegistry() {
         val restore = WindowsProxyController.restoreCommands(
             WindowsProxyState(
                 proxyEnable = "0x1",
@@ -209,12 +221,28 @@ class DesktopProxyModeTest {
                 autoConfigUrl = null
             )
         )
+        val flat = restore.flatten()
+        assertContains(flat, "ProxyEnable")
+        assertContains(flat, "ProxyServer")
+        assertContains(flat, "ProxyOverride")
+        assertContains(flat, "AutoConfigURL")
+        assertContains(flat, "delete") // null autoConfigUrl => delete that value
+    }
 
-        assertContains(restore.flatten(), "ProxyEnable")
-        assertContains(restore.flatten(), "ProxyServer")
-        assertContains(restore.flatten(), "ProxyOverride")
-        assertContains(restore.flatten(), "AutoConfigURL")
-        assertContains(restore.flatten(), "delete")
+    @Test
+    fun windowsProxyStateRecognisesOurOwnLoopbackProxy() {
+        // Guards the anti-poisoning backup: a loopback proxy is "ours", so it must never be saved as
+        // the value to restore to (that would strand the machine offline on disable).
+        assertTrue(
+            WindowsProxyState("0x1", "127.0.0.1:10808", "<local>", null).looksLikeOurs()
+        )
+        assertTrue(
+            WindowsProxyState("0x1", null, null, "http://127.0.0.1:9/proxy.pac").looksLikeOurs()
+        )
+        assertTrue(
+            !WindowsProxyState("0x1", "corp-proxy.example:3128", "<local>", null).looksLikeOurs()
+        )
+        assertTrue(!WindowsProxyState("0x0", null, null, null).looksLikeOurs())
     }
 
     @Test
@@ -248,9 +276,9 @@ class DesktopProxyModeTest {
             socksPort = 10812
         )
 
-        assertContains(command, "C:/Olcbox/bin/tun2socks-windows-amd64.exe")
+        assertContains(command, Path.of("C:/Olcbox/bin/tun2socks-windows-amd64.exe").toString())
         assertContains(command, "--device")
-        assertContains(command, "Olcbox")
+        assertContains(command, WindowsTunController.TUN_NAME)
         assertContains(command, "--proxy")
         assertContains(command, "socks5://127.0.0.1:10812")
         assertContains(command, "--mtu")

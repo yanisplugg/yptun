@@ -160,7 +160,9 @@ internal class WindowsProxyController : DesktopProxyController {
         active = true
         ensureShutdownHook()
         // Direct HTTP proxy is what WinINET honours reliably (PAC + SOCKS5 is flaky on Windows).
-        enableHttpCommands(httpProxyHostPort).forEach { runCommand(it) }
+        // Best-effort per command: e.g. `reg delete AutoConfigURL` exits non-zero when the value is
+        // absent — that must NOT abort enabling the proxy.
+        enableHttpCommands(httpProxyHostPort).forEach { runCatching { runCommand(it) } }
         refreshProxySettings()
     }
 
