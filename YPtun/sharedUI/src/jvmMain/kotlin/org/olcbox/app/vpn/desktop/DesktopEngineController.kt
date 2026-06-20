@@ -8,6 +8,7 @@ import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.xray.XrayConfig
 import kotlinx.serialization.json.buildJsonObject
@@ -92,6 +93,10 @@ internal class DesktopEngineController(
             EngineType.Standard,
             EngineType.Chain -> startSingBoxOrXray(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.VkTurn -> startVkTurn(config, listenHost, listenPort, socksUsername, socksPassword)
+            // dnstt (DNS tunnel) is an Android-only gomobile module (dnsttmobile); it is not yet
+            // built into the desktop yptuncore C ABI. Surface a clear error instead of a crash.
+            EngineType.Dnstt -> throw UnsupportedOperationException(
+                "DNSTT engine is not yet supported on Windows desktop")
         }
         if (requestedTun && !tunHandledInCore) {
             log("Per-process split tunneling unavailable (core is ${activeProxyCore}); falling back to tun2socks for all apps")
@@ -107,6 +112,7 @@ internal class DesktopEngineController(
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> YpTunCore.rtcRunning() && proxyCoreRunning()
         EngineType.VkTurn -> YpTunCore.ftRunning() && proxyCoreRunning()
+        EngineType.Dnstt -> false // not yet supported on desktop
     }
 
     private fun proxyCoreRunning(): Boolean =
@@ -148,6 +154,31 @@ internal class DesktopEngineController(
             LocationConfig.normalizeProvider(config.bypassProvider) == LocationConfig.PROVIDER_TELEMOST
         runCatching { YpTunCore.rtcSetTelemostCookies(if (use) behavior.telemostCookies.trim() else "") }
         if (use) log("Applied Telemost cookies")
+    }
+
+    /**
+     * Replace the proxy server domain with a host-resolved IPv4 (keeping the original host as TLS
+     * SNI), so the core dials by IP and never re-resolves the server name per-connection through the
+     * in-config bootstrap DNS (which stalled on desktop). No-op if the server is blank, already an IP,
+     * a local address, or resolution fails (then the core resolves it as before).
+     */
+    private fun dialByServerIp(profile: ProxyProfile): ProxyProfile {
+        val host = profile.server
+        if (host.isBlank() || host == "127.0.0.1") return profile
+        val looksLikeIp = host.count { it == '.' } == 3 && host.all { it.isDigit() || it == '.' } ||
+            host.contains(':')
+        if (looksLikeIp) return profile
+        val ip = runCatching {
+            java.net.InetAddress.getAllByName(host)
+                .filterIsInstance<java.net.Inet4Address>()
+                .firstOrNull()?.hostAddress
+        }.getOrNull()
+        if (ip.isNullOrBlank()) {
+            log("Could not host-resolve $host; letting the core resolve it")
+            return profile
+        }
+        log("Dialing proxy server by IP $ip (SNI=${profile.sni.ifBlank { host }})")
+        return profile.copy(server = ip, sni = profile.sni.ifBlank { host })
     }
 
     // ---------------------------------------------------------------------------------------
@@ -192,7 +223,12 @@ internal class DesktopEngineController(
         val effectiveProfile = when {
             isAwg -> prepareAmneziaWgProxy(profile, listenPort)
             isHy2 -> prepareHysteria2Proxy(profile, listenPort)
-            else -> profile
+            // Dial the proxy server by its host-resolved IP (keeping the original host as TLS SNI) so
+            // sing-box never re-resolves the server domain per-connection through the bootstrap DNS.
+            // That bootstrap (AliDNS 223.5.5.5) is slow/unreachable from RU on desktop → "lookup
+            // <server>: context deadline exceeded" killed every connection while only IP-based apps
+            // (Telegram) survived. The host OS resolver does this once, reliably.
+            else -> dialByServerIp(profile)
         }
         val isLocalUdpTunnel = isAwg || isHy2
 
@@ -307,6 +343,21 @@ internal class DesktopEngineController(
                 tunMode = requestedTun,
                 splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                 splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                // Desktop always fronts sing-box with a TUN (in-core or external tun2socks); the OS
+                // funnels all DNS into it, so sing-box must hijack & resolve DNS itself (see param doc).
+                hijackDns = true,
+                // Plain UDP remote DNS (like the working Android path): with packet_encoding=xudp the
+                // vless tunnel carries UDP, so DNS is fast stateless packets instead of one long-lived
+                // DoH/TCP connection that periodically froze for 5-6s and blocked all resolution.
+                remoteDnsOverHttps = false,
+                // Let the exit server resolve destination domains instead of forcing a client-side
+                // re-resolve per connection (which made every web connection wait on the single, flaky
+                // DoH-over-proxy channel → 30s stalls). No routing profile here = no geoip rules need a
+                // local IP, so domains pass straight through the vless tunnel. The server (IPv4) picks
+                // the address, so there's no user IPv6 leak. Keep family enforcement only for the local
+                // UDP tunnels that genuinely carry every family themselves.
+                forceFamilyResolve = false,
+                logFilePath = DesktopPaths.appDataDir().resolve("singbox.log").toString(),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}" +
                 if (requestedTun) " (in-core TUN + per-process rules)" else "")

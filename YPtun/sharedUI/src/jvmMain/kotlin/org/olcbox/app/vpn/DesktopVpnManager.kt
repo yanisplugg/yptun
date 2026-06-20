@@ -493,12 +493,14 @@ class DesktopVpnManager private constructor(
 
             if (useEngineController) {
                 engineLocation = location
-                // Per-process split tunneling needs sing-box to own the TUN (only the TUN owner
-                // can attribute connections to processes — tun2socks can't).
+                // Windows: let sing-box own the wintun adapter itself (auto_route + auto_detect_interface
+                // + native hijack-dns), the Hiddify/sing-box-official architecture — instead of the
+                // external xjasonlyu/tun2socks bridge, whose SOCKS-UDP path stalled DNS through this
+                // server. sing-box reads wintun directly and excludes its own upstream from the tunnel,
+                // so there's no proxy-UDP dependency and no manual bypass route. Per-process split
+                // tunneling rides the same in-core TUN for free (only the TUN owner can attribute apps).
                 val split = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadSplitTunnel()
-                val splitActive = split.mode != "all_apps" &&
-                    (split.proxyProcesses.isNotEmpty() || split.bypassProcesses.isNotEmpty())
-                val wantsInCoreTun = desktopMode == DesktopMode.WindowsTun && splitActive
+                val wantsInCoreTun = desktopMode == DesktopMode.WindowsTun
                 engineController.start(
                     location = location,
                     listenHost = socksSettings.host,

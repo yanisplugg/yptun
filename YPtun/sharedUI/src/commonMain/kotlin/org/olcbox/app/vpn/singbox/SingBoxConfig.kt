@@ -135,28 +135,66 @@ object SingBoxConfig {
         // "bypass_selected" → listed processes go direct (everything else through the proxy).
         splitTunnelMode: String = SPLIT_TUNNEL_ALL,
         splitTunnelProcesses: List<String> = emptyList(),
+        // Desktop tun2socks path: sing-box runs as a plain SOCKS server (no [tunMode]) behind an
+        // external tun2socks. The OS routes ALL DNS into the TUN, so the app's UDP DNS queries arrive
+        // at the SOCKS inbound. Without hijack-dns they'd be relayed as raw UDP/53 to the proxy and
+        // die on TCP-only transports → total DNS outage. Hijacking makes sing-box answer them with its
+        // own DNS servers (resolved over the proxy), exactly like the in-core TUN does. Harmless when
+        // [tunMode] already enables hijack.
+        hijackDns: Boolean = false,
+        // Optional file for sing-box's own debug logs. The core is a c-shared lib inside the JVM, so
+        // its default stderr output is lost; pointing log.output at a file lets the desktop surface
+        // real route/DNS diagnostics. Null keeps the default (stderr).
+        logFilePath: String? = null,
+        // Resolve the remote DNS over DoH (DNS-over-HTTPS) instead of plain UDP. Many proxy servers
+        // (vless with vision/reality or HTTP-based transports) carry TCP fine but drop or stall UDP,
+        // so a UDP DNS query through the proxy times out → "strategy rejected" → nothing resolves.
+        // DoH rides the proven TCP path AND multiplexes over HTTP/2, so the dozens of concurrent
+        // lookups a page triggers don't head-of-line-block behind one another (plain DoT serialized
+        // them → 5-16s stalls). The app's own UDP (QUIC) is already blocked, so DNS is the only thing
+        // that needed UDP here.
+        remoteDnsOverHttps: Boolean = false,
+        // Force FakeDNS on (desktop): hand the app an instant synthetic IP and let the exit server
+        // resolve the real domain from the sniffed SNI. Eliminates the per-domain DNS round-trip
+        // through the proxy entirely — the UDP-over-vless DNS path stalled 5-6s on desktop, which is
+        // why only Telegram (connects by IP, no DNS) worked.
+        forceFakeDns: Boolean = false,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
         val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
         // FakeDNS is on when either the (legacy global) traffic toggle is set OR this location carries a
         // translated spec. The pool ranges come from the spec when present, else the defaults.
-        val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null
+        val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null || forceFakeDns
         val fake4Range = fakeDnsSpec?.inet4Range?.takeIf { it.isNotBlank() } ?: "198.18.0.0/15"
         val fake6Range = fakeDnsSpec?.inet6Range?.takeIf { it.isNotBlank() } ?: "fc00::/18"
         val config = buildJsonObject {
             putJsonObject("log") {
                 put("level", logLevel)
                 put("timestamp", true)
+                if (!logFilePath.isNullOrBlank()) put("output", logFilePath)
             }
 
             putJsonObject("dns") {
                 putJsonArray("servers") {
-                    // App traffic resolves through the proxy (no DNS leak).
+                    // App traffic resolves through the proxy (no DNS leak). On desktop, ride DoH (TCP +
+                    // HTTP/2 multiplexing) so resolution survives proxy servers that don't carry UDP and
+                    // doesn't serialize concurrent lookups (see [remoteDnsOverHttps]).
+                    val remoteDnsAddress =
+                        if (remoteDnsOverHttps && !traffic.remoteDns.contains("://")) "https://${traffic.remoteDns}/dns-query"
+                        else traffic.remoteDns
+                    // Under a strict family (ipv4_only/ipv6_only) pin the server strategy so it never
+                    // fires the opposite-family query at all. Without this every connection wastes an
+                    // extra AAAA round-trip that's then "strategy rejected" — doubling DNS load over the
+                    // single DoT channel and slowing page loads. FakeDNS keeps both families (it fakes
+                    // AAAA deliberately), so skip the pin then.
+                    val familyStrategy = effectiveStrategy
+                        .takeIf { !fakeEnabled && (it == "ipv4_only" || it == "ipv6_only") }
                     addJsonObject {
                         put("tag", "remote")
-                        put("address", traffic.remoteDns)
+                        put("address", remoteDnsAddress)
                         put("detour", PROXY_TAG)
+                        if (familyStrategy != null) put("strategy", familyStrategy)
                     }
                     // Bootstrap: resolve the proxy server's own domain directly.
                     addJsonObject {
@@ -329,7 +367,7 @@ object SingBoxConfig {
                     if (advanced?.sniff != false && (!sbExpert || routingProfile!!.singboxSniff)) {
                         addJsonObject { put("action", "sniff") }
                     }
-                    if (tunMode) {
+                    if (tunMode || hijackDns) {
                         // System DNS queries arriving via the TUN are answered by sing-box itself.
                         addJsonObject {
                             putJsonArray("protocol") { add("dns") }
@@ -605,9 +643,11 @@ object SingBoxConfig {
                     put("uuid", profile.uuid)
                     if (profile.flow.isNotBlank()) {
                         put("flow", profile.flow)
-                    } else {
-                        put("packet_encoding", "xudp")
                     }
+                    // xudp coexists with vision flow and is what makes UDP (DNS/QUIC) actually ride the
+                    // vless tunnel. Omitting it (the old "flow XOR xudp") left UDP DNS over the proxy
+                    // stalling on desktop. xray-based vision servers speak xudp, so set it always.
+                    put("packet_encoding", "xudp")
                 }
 
                 ProxyProfile.TYPE_VMESS -> {
