@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
@@ -288,14 +289,16 @@ fun main(args: Array<String>) = application {
     // left-click action + a native right-click menu). Left-click shows/focuses the main window.
     val trayAnchor = remember { java.awt.Point(0, 0) }
     val awtTrayIcon = remember { mutableStateOf<java.awt.TrayIcon?>(null) }
+    val trayBaseImage = remember { loadTrayBaseImage() }
     DisposableEffect(Unit) {
         val systemTray = runCatching { java.awt.SystemTray.getSystemTray() }.getOrNull()
         var icon: java.awt.TrayIcon? = null
         if (systemTray != null) {
-            val img = runCatching {
-                java.awt.Toolkit.getDefaultToolkit()
-                    .getImage(DesktopAppDependencies::class.java.getResource("/LinuxIcon.png"))
-            }.getOrNull()
+            val img = composeTrayImage(trayBaseImage, java.awt.Color(0x8E, 0x8E, 0x93))
+                ?: runCatching {
+                    java.awt.Toolkit.getDefaultToolkit()
+                        .getImage(DesktopAppDependencies::class.java.getResource("/LinuxIcon.png"))
+                }.getOrNull()
             if (img != null) {
                 icon = java.awt.TrayIcon(img, "YPtun").apply {
                     isImageAutoSize = true
@@ -319,9 +322,16 @@ fun main(args: Array<String>) = application {
             awtTrayIcon.value = null
         }
     }
-    // Keep the tray tooltip in sync with connection status.
-    LaunchedEffect(trayStatusText) {
-        awtTrayIcon.value?.toolTip = trayStatusText.removePrefix("● ").removePrefix("○ ")
+    // Keep the tray tooltip + status-dot color in sync with the connection state.
+    LaunchedEffect(trayStatusText, trayConnected, trayLoading) {
+        val ic = awtTrayIcon.value ?: return@LaunchedEffect
+        ic.toolTip = trayStatusText.removePrefix("● ").removePrefix("○ ")
+        val badge = when {
+            trayConnected -> java.awt.Color(0x34, 0xC7, 0x59) // green
+            trayLoading -> java.awt.Color(0xFF, 0x9F, 0x0A)   // amber
+            else -> java.awt.Color(0x8E, 0x8E, 0x93)          // grey
+        }
+        composeTrayImage(trayBaseImage, badge)?.let { ic.image = it }
     }
 
     // Custom Steam-style tray menu: an undecorated, transparent, always-on-top Compose window anchored
@@ -371,6 +381,16 @@ fun main(args: Array<String>) = application {
                     canToggle = trayConnected || trayLoading || trayHomeState.canStartVpn,
                     onOpen = { trayMenuVisible = false; isWindowVisible = true },
                     onToggle = { trayMenuVisible = false; dependencies.homeViewModel.ToggleVpn() },
+                    onMyIp = {
+                        trayMenuVisible = false
+                        scope.launch {
+                            val ip = dependencies.vpnManager.checkExitIp()
+                            val msg = ip ?: (if (trayRussian) "Не удалось определить IP" else "Could not determine IP")
+                            awtTrayIcon.value?.displayMessage(
+                                "YPtun", msg, java.awt.TrayIcon.MessageType.INFO
+                            )
+                        }
+                    },
                     onSettings = {
                         trayMenuVisible = false
                         isWindowVisible = true
@@ -956,6 +976,7 @@ private fun TrayMenu(
     canToggle: Boolean,
     onOpen: () -> Unit,
     onToggle: () -> Unit,
+    onMyIp: () -> Unit,
     onSettings: () -> Unit,
     onQuit: () -> Unit,
 ) {
@@ -1018,6 +1039,9 @@ private fun TrayMenu(
                 tint = if (connected || loading) scheme.primary else scheme.onSurface,
                 onClick = onToggle,
             )
+            if (connected) {
+                TrayMenuItem(Icons.Outlined.Public, if (russian) "Мой IP" else "My IP", onClick = onMyIp)
+            }
             TrayMenuItem(Icons.Outlined.Settings, if (russian) "Настройки" else "Settings", onClick = onSettings)
             HorizontalDivider(color = scheme.outlineVariant, modifier = Modifier.padding(horizontal = 6.dp))
             TrayMenuItem(
@@ -1057,4 +1081,40 @@ private fun TrayMenuItem(
         Spacer(Modifier.width(12.dp))
         Text(label, color = rowTint, fontSize = 13.sp)
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Tray icon helpers: a status-colored dot badge composited onto the brand icon.
+
+private fun loadTrayBaseImage(): java.awt.image.BufferedImage? = runCatching {
+    javax.imageio.ImageIO.read(DesktopAppDependencies::class.java.getResource("/LinuxIcon.png"))
+}.getOrNull()
+
+private fun composeTrayImage(
+    base: java.awt.image.BufferedImage?,
+    badge: java.awt.Color,
+): java.awt.Image? {
+    if (base == null) return null
+    val size = 32
+    val out = java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+    val g = out.createGraphics()
+    g.setRenderingHint(
+        java.awt.RenderingHints.KEY_ANTIALIASING,
+        java.awt.RenderingHints.VALUE_ANTIALIAS_ON,
+    )
+    g.setRenderingHint(
+        java.awt.RenderingHints.KEY_INTERPOLATION,
+        java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR,
+    )
+    g.drawImage(base, 0, 0, size, size, null)
+    // Status dot in the bottom-right with a dark ring so it reads on any wallpaper.
+    val d = 13
+    val x = size - d - 1
+    val y = size - d - 1
+    g.color = java.awt.Color(0, 0, 0, 180)
+    g.fillOval(x - 1, y - 1, d + 2, d + 2)
+    g.color = badge
+    g.fillOval(x, y, d, d)
+    g.dispose()
+    return out
 }

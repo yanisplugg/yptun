@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyProfile
@@ -78,6 +79,7 @@ class DesktopVpnManager private constructor(
     private var operationJob: Job? = null
     private var logJob: Job? = null
     private var tunLogJob: Job? = null
+    private var watchdogJob: Job? = null
     private var process: Process? = null
     private var tunProcess: Process? = null
     private var olcRtcConfigPath: Path? = null
@@ -565,6 +567,7 @@ class DesktopVpnManager private constructor(
             }
 
             setStatus(VpnStatus.Connected)
+            startWatchdog(requestGeneration)
             addLog(
                 when (desktopMode) {
                     DesktopMode.LinuxTun -> "Desktop Linux TUN connected"
@@ -765,6 +768,9 @@ class DesktopVpnManager private constructor(
 
         tunLogJob?.cancel()
         tunLogJob = null
+
+        watchdogJob?.cancel()
+        watchdogJob = null
 
         if (finalStatus) {
             setStatus(VpnStatus.Disconnected)
@@ -972,6 +978,36 @@ class DesktopVpnManager private constructor(
         }
     }
 
+    /**
+     * Fetch the current exit IP + country as seen from the internet (through the tunnel). In TUN mode
+     * our own HTTP request is captured by the system TUN; in proxy mode we dial through the local
+     * SOCKS. Returns e.g. "203.0.113.7 · Netherlands", or null if not connected / lookup failed.
+     */
+    suspend fun checkExitIp(): String? = withContext(Dispatchers.IO) {
+        if (!isConnected.value) return@withContext null
+        runCatching {
+            val url = java.net.URL("http://ip-api.com/json/?fields=query,country")
+            val conn = if (connectionModeProvider() == AndroidConnectionMode.Proxy) {
+                val s = _socksProxySettings.value.normalized()
+                url.openConnection(
+                    java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress(s.host, s.port))
+                )
+            } else {
+                url.openConnection()
+            }
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            val body = conn.getInputStream().bufferedReader().use { it.readText() }
+            val ip = Regex("\"query\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+            val country = Regex("\"country\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+            when {
+                ip == null -> null
+                !country.isNullOrBlank() -> "$ip · $country"
+                else -> ip
+            }
+        }.getOrNull()
+    }
+
     private fun setStatus(status: VpnStatus) {
         _status.value = status
         val connected = status is VpnStatus.Connected
@@ -986,6 +1022,35 @@ class DesktopVpnManager private constructor(
         }
     }
 
+    /**
+     * Auto-reconnect watchdog: while connected, polls that the active engine is still alive and, if it
+     * died unexpectedly (server dropped, core crashed), restarts the connection. A manual stop bumps
+     * [generation] and cancels this job, so it never fights an intentional disconnect.
+     */
+    private fun startWatchdog(generationAtConnect: Long) {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            delay(WATCHDOG_GRACE_MS)
+            while (isActive && generationAtConnect == generation) {
+                delay(WATCHDOG_INTERVAL_MS)
+                if (generationAtConnect != generation) break
+                if (_status.value !is VpnStatus.Connected) continue
+                val alive = runCatching { isActiveEngineAlive() }.getOrDefault(true)
+                if (!alive) {
+                    addLog("Watchdog: tunnel stopped unexpectedly — reconnecting…")
+                    startVpn() // bumps generation → ends this watchdog; reconnect starts a fresh one
+                    break
+                }
+            }
+        }
+    }
+
+    private fun isActiveEngineAlive(): Boolean {
+        val loc = engineLocation
+        return if (loc != null) engineController.coreRunning(loc.engine)
+        else process?.isAlive == true
+    }
+
     private fun addLog(message: String) {
         _logs.update {
             (it + message).takeLast(MAX_LOG_ENTRIES)
@@ -994,6 +1059,8 @@ class DesktopVpnManager private constructor(
 
     private companion object {
         const val MAX_LOG_ENTRIES = 5_000
+        const val WATCHDOG_GRACE_MS = 8_000L
+        const val WATCHDOG_INTERVAL_MS = 5_000L
         const val OLC_READY_TIMEOUT_MS = 25_000L
         const val OLC_STARTUP_STABILITY_MS = 1_500L
         const val READY_POLL_INTERVAL_MS = 200L
