@@ -162,7 +162,10 @@ fun AndroidMainScreen(
                     ?: items.first().fullName,
                 updateIntervalHours = metadata?.updateIntervalHours,
                 lastRefreshAtEpochMs = metadata?.lastRefreshAtEpochMs,
-                locationCount = items.size
+                locationCount = items.size,
+                supportUrl = metadata?.supportUrl,
+                webPageUrl = metadata?.webPageUrl,
+                announce = metadata?.announce
             )
         }
 

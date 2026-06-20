@@ -1624,12 +1624,40 @@ private fun SubscriptionShareRow(
                 overflow = TextOverflow.Ellipsis
             )
 
+            // Panel announcement (Remnawave/Happ `announce` header), shown verbatim to the user.
+            item.announce?.takeIf { it.isNotBlank() }?.let { announce ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Text(
+                        text = announce,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            val subUriHandler = LocalUriHandler.current
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onShareClick) {
                     Text(LocalStrings.current.qrShare)
                 }
                 TextButton(onClick = onRefreshClick) {
                     Text(LocalStrings.current.refresh)
+                }
+                // Panel-advertised links (Remnawave/Happ `profile-web-page-url` / `support-url` headers).
+                item.webPageUrl?.takeIf { it.isNotBlank() }?.let { web ->
+                    TextButton(onClick = { runCatching { subUriHandler.openUri(web) } }) {
+                        Text(LocalStrings.current.subscriptionWebPage)
+                    }
+                }
+                item.supportUrl?.takeIf { it.isNotBlank() }?.let { support ->
+                    TextButton(onClick = { runCatching { subUriHandler.openUri(support) } }) {
+                        Text(LocalStrings.current.subscriptionSupport)
+                    }
                 }
             }
         }

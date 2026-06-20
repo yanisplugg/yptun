@@ -659,7 +659,25 @@ data class SubscriptionMetadata(
      * subscriptions keep auto-updating.
      */
     @SerialName("auto_update_enabled")
-    val autoUpdateEnabled: Boolean = true
+    val autoUpdateEnabled: Boolean = true,
+    /**
+     * Support link the panel advertises (Remnawave `support-url` header). Shown as a "support"
+     * action on the subscription so the user can reach the panel operator. Null when absent.
+     */
+    @SerialName("support_url")
+    val supportUrl: String? = null,
+    /**
+     * The panel's subscription web page (Remnawave `profile-web-page-url` header) — the human page
+     * where the user manages the subscription / sees plans. Opened in a browser. Null when absent.
+     */
+    @SerialName("web_page_url")
+    val webPageUrl: String? = null,
+    /**
+     * Announcement / notice the panel broadcasts (Remnawave `announce` header, may be `base64:`).
+     * Shown to the user on the subscription. Null when absent.
+     */
+    @SerialName("announce")
+    val announce: String? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -673,7 +691,10 @@ data class SubscriptionMetadata(
             updateIntervalHours = updateIntervalHours?.coerceIn(MIN_UPDATE_INTERVAL_HOURS, MAX_UPDATE_INTERVAL_HOURS),
             lastRefreshAtEpochMs = lastRefreshAtEpochMs?.takeIf { it > 0 },
             expiresAtEpochMs = expiresAtEpochMs?.takeIf { it > 0 },
-            lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 }
+            lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 },
+            supportUrl = supportUrl.cleanMetadataValue(),
+            webPageUrl = webPageUrl.cleanMetadataValue(),
+            announce = announce.cleanMetadataValue()
         )
     }
 
@@ -689,7 +710,10 @@ data class SubscriptionMetadata(
                 lastRefreshAtEpochMs == null &&
                 expiresAtEpochMs == null &&
                 lastAttemptAtEpochMs == null &&
-                autoUpdateEnabled
+                autoUpdateEnabled &&
+                supportUrl.isNullOrBlank() &&
+                webPageUrl.isNullOrBlank() &&
+                announce.isNullOrBlank()
     }
 
     companion object {

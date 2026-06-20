@@ -89,7 +89,13 @@ class LocationsRepositoryImpl(
         /** Best-effort JSON from the Remnawave `<url>/info` endpoint (carries user.expiresAt etc.). */
         val infoJson: String? = null,
         /** Best-effort rich Xray JSON (Happ-UA fetch) used only to extract the FakeDNS spec. */
-        val fakednsJson: String? = null
+        val fakednsJson: String? = null,
+        /** Remnawave `support-url` header (panel support link). */
+        val supportUrl: String? = null,
+        /** Remnawave `profile-web-page-url` header (subscription management page). */
+        val webPageUrl: String? = null,
+        /** Remnawave `announce` header (panel announcement; may be base64). */
+        val announce: String? = null
     )
 
     private data class DownloadedSubscription(
@@ -98,7 +104,10 @@ class LocationsRepositoryImpl(
         val profileTitle: String? = null,
         val userInfo: String? = null,
         val infoJson: String? = null,
-        val fakednsJson: String? = null
+        val fakednsJson: String? = null,
+        val supportUrl: String? = null,
+        val webPageUrl: String? = null,
+        val announce: String? = null
     )
 
     private data class ParsedImport(
@@ -627,7 +636,13 @@ class LocationsRepositoryImpl(
                 // The panel JSON body (Remnawave `user{}`) carries the expiry + human traffic counters;
                 // the response headers carry the profile title (name) and may also carry traffic/expiry.
                 primary = subscriptionMetadataFromBody(source.infoJson ?: source.content),
-                secondary = subscriptionMetadataFromHeaders(source.profileTitle, source.userInfo)
+                secondary = subscriptionMetadataFromHeaders(
+                    profileTitle = source.profileTitle,
+                    userInfo = source.userInfo,
+                    supportUrl = source.supportUrl,
+                    webPageUrl = source.webPageUrl,
+                    announce = source.announce
+                )
             // Persist the auto-refresh interval (profile-update-interval header) onto the metadata at
             // import time too, so it's shown and used even before the first scheduled refresh.
             ).withSubscriptionInterval(initialSubscriptionInterval)
@@ -692,7 +707,10 @@ class LocationsRepositoryImpl(
                     profileTitle = downloaded.profileTitle,
                     userInfo = downloaded.userInfo,
                     infoJson = downloaded.infoJson,
-                    fakednsJson = downloaded.fakednsJson
+                    fakednsJson = downloaded.fakednsJson,
+                    supportUrl = downloaded.supportUrl,
+                    webPageUrl = downloaded.webPageUrl,
+                    announce = downloaded.announce
                 )
             }
     }
@@ -803,7 +821,12 @@ class LocationsRepositoryImpl(
                     profileTitle = response.headers["profile-title"]?.let { decodeProfileTitle(it) },
                     userInfo = response.headers["subscription-userinfo"]?.trim(),
                     infoJson = infoJson,
-                    fakednsJson = fakednsJson
+                    fakednsJson = fakednsJson,
+                    // Remnawave also advertises a support link, a subscription web page and an
+                    // announcement via headers (the last is often base64-wrapped like profile-title).
+                    supportUrl = response.headers["support-url"]?.let { decodeMaybeBase64Header(it) },
+                    webPageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) },
+                    announce = response.headers["announce"]?.let { decodeMaybeBase64Header(it) }
                 )
             }
         } finally {
@@ -1226,7 +1249,10 @@ class LocationsRepositoryImpl(
      */
     private fun subscriptionMetadataFromHeaders(
         profileTitle: String?,
-        userInfo: String?
+        userInfo: String?,
+        supportUrl: String? = null,
+        webPageUrl: String? = null,
+        announce: String? = null
     ): SubscriptionMetadata? {
         val name = profileTitle?.trim()?.takeIf { it.isNotBlank() }
 
@@ -1251,12 +1277,23 @@ class LocationsRepositoryImpl(
             expiresAtEpochMs = fields["expire"]?.toLongOrNull()?.takeIf { it > 0L }?.let { it * 1_000L }
         }
 
-        if (name == null && used == null && available == null && expiresAtEpochMs == null) return null
+        val support = supportUrl?.trim()?.takeIf { it.isNotBlank() }
+        val webPage = webPageUrl?.trim()?.takeIf { it.isNotBlank() }
+        val announcement = announce?.trim()?.takeIf { it.isNotBlank() }
+
+        if (name == null && used == null && available == null && expiresAtEpochMs == null &&
+            support == null && webPage == null && announcement == null
+        ) {
+            return null
+        }
         return SubscriptionMetadata(
             name = name,
             used = used,
             available = available,
-            expiresAtEpochMs = expiresAtEpochMs
+            expiresAtEpochMs = expiresAtEpochMs,
+            supportUrl = support,
+            webPageUrl = webPage,
+            announce = announcement
         ).normalized()
     }
 
@@ -1311,16 +1348,26 @@ class LocationsRepositoryImpl(
             updateIntervalHours = primary.updateIntervalHours ?: secondary.updateIntervalHours,
             lastRefreshAtEpochMs = primary.lastRefreshAtEpochMs ?: secondary.lastRefreshAtEpochMs,
             expiresAtEpochMs = primary.expiresAtEpochMs ?: secondary.expiresAtEpochMs,
-            lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs
+            lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs,
+            supportUrl = primary.supportUrl ?: secondary.supportUrl,
+            webPageUrl = primary.webPageUrl ?: secondary.webPageUrl,
+            announce = primary.announce ?: secondary.announce
         ).normalized().takeUnless { it.isEmpty() }
     }
 
     /** Decodes a `profile-title` header, which Remnawave sends as `base64:<payload>`. */
-    private fun decodeProfileTitle(raw: String): String? {
+    private fun decodeProfileTitle(raw: String): String? = decodeMaybeBase64Header(raw)
+
+    /**
+     * Decodes a header value that Remnawave may send either plain or `base64:`-prefixed (used for
+     * `profile-title`, `announce`, and occasionally the URLs). Falls back to the raw value if it isn't
+     * actually base64. Returns null for blank input.
+     */
+    private fun decodeMaybeBase64Header(raw: String): String? {
         val value = raw.trim()
         if (value.isEmpty()) return null
-        val payload = value.removePrefix("base64:").trim()
         val decoded = if (value.startsWith("base64:")) {
+            val payload = value.removePrefix("base64:").trim()
             SubscriptionDecoder.decodeBase64Chunk(payload) ?: payload
         } else {
             value

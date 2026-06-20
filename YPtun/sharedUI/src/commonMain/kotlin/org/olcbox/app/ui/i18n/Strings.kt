@@ -419,6 +419,9 @@ interface Strings {
     // Subscriptions sharing extra
     val qrShare: String
     val refresh: String
+    // Panel-advertised links (Remnawave/Happ profile-web-page-url / support-url headers)
+    val subscriptionWebPage: String
+    val subscriptionSupport: String
 
     // Experimental section
     val experimental: String
@@ -966,6 +969,8 @@ object RuStrings : Strings {
     override val customColorRgb = "Произвольный цвет (RGB)"
     override val qrShare = "QR / поделиться"
     override val refresh = "Обновить"
+    override val subscriptionWebPage = "Страница"
+    override val subscriptionSupport = "Поддержка"
     override val experimental = "Экспериментальные"
     override val experimentalSubtitle = "Cookies Telemost и прочее"
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
@@ -1495,6 +1500,8 @@ object EnStrings : Strings {
     override val customColorRgb = "Custom color (RGB)"
     override val qrShare = "QR / share"
     override val refresh = "Refresh"
+    override val subscriptionWebPage = "Web page"
+    override val subscriptionSupport = "Support"
     override val experimental = "Experimental"
     override val experimentalSubtitle = "Telemost cookies and more"
     override val experimentalUnlocked = "Experimental settings unlocked"
@@ -2024,6 +2031,8 @@ object FaStrings : Strings {
     override val customColorRgb = "رنگ سفارشی (RGB)"
     override val qrShare = "QR / هم‌رسانی"
     override val refresh = "بازآوری"
+    override val subscriptionWebPage = "صفحه"
+    override val subscriptionSupport = "پشتیبانی"
     override val hideTunTitle = "پنهان‌کردن رابط tun0 (روت)"
     override val hideTunSubtitle = "یک ماژول Zygisk نصب می‌کند که رابط VPN را از سایر برنامه‌ها پنهان می‌کند. نیازمند روت (Magisk) و ری‌استارت."
     override val hideTunDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) استفاده می‌کند. سازندهٔ نرم‌افزار مسئولیتی در قبال آسیب، از دست رفتن داده یا خرابی دستگاه ناشی از استفاده از روت ندارد."
