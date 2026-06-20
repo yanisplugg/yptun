@@ -6,6 +6,7 @@ import io.ktor.client.request.headers
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
+import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,7 +96,9 @@ class LocationsRepositoryImpl(
         /** Remnawave `profile-web-page-url` header (subscription management page). */
         val webPageUrl: String? = null,
         /** Remnawave `announce` header (panel announcement; may be base64). */
-        val announce: String? = null
+        val announce: String? = null,
+        /** Happ/Remnawave `providerid` header (provider tracking id). */
+        val providerId: String? = null
     )
 
     private data class DownloadedSubscription(
@@ -107,7 +110,8 @@ class LocationsRepositoryImpl(
         val fakednsJson: String? = null,
         val supportUrl: String? = null,
         val webPageUrl: String? = null,
-        val announce: String? = null
+        val announce: String? = null,
+        val providerId: String? = null
     )
 
     private data class ParsedImport(
@@ -138,6 +142,9 @@ class LocationsRepositoryImpl(
     private val mutationMutex = Mutex()
     private val _changes = MutableStateFlow(0L)
     override val changes: StateFlow<Long> = _changes.asStateFlow()
+
+    /** providerId → epoch-day of its last successful provider-usage report (once-per-day de-dupe). */
+    private val providerReportDay = mutableMapOf<String, Long>()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -445,6 +452,27 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun reportProviderUsage() {
+        val ids = runCatching {
+            getBundle().locations
+                .mapNotNull { it.metadata?.subscription?.providerId?.trim()?.takeIf { id -> id.isNotBlank() } }
+                .distinct()
+        }.getOrDefault(emptyList())
+        if (ids.isEmpty()) return
+
+        val today = nowEpochMs() / 86_400_000L
+        ids.forEach { id ->
+            if (providerReportDay[id] == today) return@forEach // already reported today
+            val ok = runCatching {
+                val response = httpClient.get(PROVIDER_CHECK_URL + id.encodeURLParameter()) {
+                    headers { append(HttpHeaders.UserAgent, subscriptionUserAgent()) }
+                }
+                response.status.value in 200..299
+            }.getOrDefault(false)
+            if (ok) providerReportDay[id] = today
+        }
+    }
+
     override suspend fun setSubscriptionUpdateInterval(subscriptionUrl: String, hours: Int) {
         val normalizedUrl = subscriptionUrl.trim()
         if (normalizedUrl.isBlank()) return
@@ -641,7 +669,8 @@ class LocationsRepositoryImpl(
                     userInfo = source.userInfo,
                     supportUrl = source.supportUrl,
                     webPageUrl = source.webPageUrl,
-                    announce = source.announce
+                    announce = source.announce,
+                    providerId = source.providerId
                 )
             // Persist the auto-refresh interval (profile-update-interval header) onto the metadata at
             // import time too, so it's shown and used even before the first scheduled refresh.
@@ -710,7 +739,8 @@ class LocationsRepositoryImpl(
                     fakednsJson = downloaded.fakednsJson,
                     supportUrl = downloaded.supportUrl,
                     webPageUrl = downloaded.webPageUrl,
-                    announce = downloaded.announce
+                    announce = downloaded.announce,
+                    providerId = downloaded.providerId
                 )
             }
     }
@@ -826,7 +856,10 @@ class LocationsRepositoryImpl(
                     // announcement via headers (the last is often base64-wrapped like profile-title).
                     supportUrl = response.headers["support-url"]?.let { decodeMaybeBase64Header(it) },
                     webPageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) },
-                    announce = response.headers["announce"]?.let { decodeMaybeBase64Header(it) }
+                    announce = response.headers["announce"]?.let { decodeMaybeBase64Header(it) },
+                    // Happ/Remnawave provider tracking id (lowercase `providerid`; lookup is
+                    // case-insensitive). Plain string — not base64.
+                    providerId = response.headers["providerid"]?.trim()?.takeIf { it.isNotBlank() }
                 )
             }
         } finally {
@@ -1252,7 +1285,8 @@ class LocationsRepositoryImpl(
         userInfo: String?,
         supportUrl: String? = null,
         webPageUrl: String? = null,
-        announce: String? = null
+        announce: String? = null,
+        providerId: String? = null
     ): SubscriptionMetadata? {
         val name = profileTitle?.trim()?.takeIf { it.isNotBlank() }
 
@@ -1280,9 +1314,10 @@ class LocationsRepositoryImpl(
         val support = supportUrl?.trim()?.takeIf { it.isNotBlank() }
         val webPage = webPageUrl?.trim()?.takeIf { it.isNotBlank() }
         val announcement = announce?.trim()?.takeIf { it.isNotBlank() }
+        val provider = providerId?.trim()?.takeIf { it.isNotBlank() }
 
         if (name == null && used == null && available == null && expiresAtEpochMs == null &&
-            support == null && webPage == null && announcement == null
+            support == null && webPage == null && announcement == null && provider == null
         ) {
             return null
         }
@@ -1293,7 +1328,8 @@ class LocationsRepositoryImpl(
             expiresAtEpochMs = expiresAtEpochMs,
             supportUrl = support,
             webPageUrl = webPage,
-            announce = announcement
+            announce = announcement,
+            providerId = provider
         ).normalized()
     }
 
@@ -1351,7 +1387,8 @@ class LocationsRepositoryImpl(
             lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs,
             supportUrl = primary.supportUrl ?: secondary.supportUrl,
             webPageUrl = primary.webPageUrl ?: secondary.webPageUrl,
-            announce = primary.announce ?: secondary.announce
+            announce = primary.announce ?: secondary.announce,
+            providerId = primary.providerId ?: secondary.providerId
         ).normalized().takeUnless { it.isEmpty() }
     }
 
@@ -2113,5 +2150,7 @@ class LocationsRepositoryImpl(
     private companion object {
         const val OLCRTC_URI_PREFIX = "olcrtc://"
         const val UTF8_BOM = "\uFEFF"
+        /** Happ provider-tracking check endpoint; the provider id is appended as the `id` query param. */
+        const val PROVIDER_CHECK_URL = "https://check.happ-proxy.com/provider?id="
     }
 }

@@ -438,11 +438,20 @@ class HomeScreenViewModel(
             // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.
             refreshDueSubscriptionsIfNeeded(retryFailed = true)
             notifyExpiringSubscriptions()
+            reportProviderUsage()
             while (true) {
                 delay(SUBSCRIPTION_AUTO_REFRESH_POLL_MS)
                 refreshDueSubscriptionsIfNeeded()
                 notifyExpiringSubscriptions()
+                reportProviderUsage()
             }
+        }
+    }
+
+    /** Daily Happ-style provider-usage report for subscriptions carrying a `providerid` (best-effort). */
+    private suspend fun reportProviderUsage() {
+        runCatching {
+            withContext(Dispatchers.IO) { locationsRepository.reportProviderUsage() }
         }
     }
 

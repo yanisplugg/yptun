@@ -677,7 +677,14 @@ data class SubscriptionMetadata(
      * Shown to the user on the subscription. Null when absent.
      */
     @SerialName("announce")
-    val announce: String? = null
+    val announce: String? = null,
+    /**
+     * Provider ID (Happ/Remnawave `providerid` response header) — a tracking identifier the panel
+     * attaches to the subscription. Stored and reported daily to the Happ provider-check endpoint, the
+     * same behaviour as Happ. Null when the panel doesn't set it.
+     */
+    @SerialName("provider_id")
+    val providerId: String? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -694,7 +701,8 @@ data class SubscriptionMetadata(
             lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 },
             supportUrl = supportUrl.cleanMetadataValue(),
             webPageUrl = webPageUrl.cleanMetadataValue(),
-            announce = announce.cleanMetadataValue()
+            announce = announce.cleanMetadataValue(),
+            providerId = providerId.cleanMetadataValue()
         )
     }
 
@@ -713,7 +721,8 @@ data class SubscriptionMetadata(
                 autoUpdateEnabled &&
                 supportUrl.isNullOrBlank() &&
                 webPageUrl.isNullOrBlank() &&
-                announce.isNullOrBlank()
+                announce.isNullOrBlank() &&
+                providerId.isNullOrBlank()
     }
 
     companion object {
