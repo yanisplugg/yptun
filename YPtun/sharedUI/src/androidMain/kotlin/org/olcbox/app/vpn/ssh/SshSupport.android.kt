@@ -180,7 +180,11 @@ internal fun sshUploadInChunks(
     val q = remotePath.shellSingleQuote()
     sshOneShot(target, ": > $q", onLog) // truncate/create
     val b64 = android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP)
-    val chunk = 150_000 // multiple of 4; ~150 KB command, under OpenSSH's 256 KB packet cap
+    // The whole command is one argv element to the server's `sh -c`, and Linux caps a single argument
+    // at MAX_ARG_STRLEN = 128 KB (131072). Keep the chunk comfortably under that (the command also
+    // carries the `printf '%s' '…' | base64 -d >> …` wrapper). Multiple of 4 so each chunk decodes
+    // cleanly and the per-chunk decodes concatenate to the exact original.
+    val chunk = 100_000
     val total = (b64.length + chunk - 1) / chunk
     var index = 0
     var sent = 0
