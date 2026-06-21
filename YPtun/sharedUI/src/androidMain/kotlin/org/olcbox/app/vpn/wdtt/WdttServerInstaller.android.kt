@@ -6,10 +6,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.olcbox.app.vpn.ssh.base64Heredoc
 import org.olcbox.app.vpn.ssh.openSshSession
 import org.olcbox.app.vpn.ssh.shellSingleQuote
 import org.olcbox.app.vpn.ssh.sshExec
-import org.olcbox.app.vpn.ssh.sshUploadFile
+import org.olcbox.app.vpn.ssh.sshRunScript
 
 @Composable
 actual fun rememberWdttServerInstaller(): WdttServerInstaller {
@@ -36,40 +37,41 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
             require(options.sshPassword.isNotBlank()) { "Не указан пароль SSH" }
             require(options.wdttPassword.isNotBlank()) { "Не указан пароль WDTT" }
 
-            val session = openSshSession(
-                host = options.host,
-                port = options.sshPort,
-                login = options.login,
-                rawPassword = options.sshPassword,
-                onLog = onLog
-            )
-            try {
-                onLog("SSH соединение установлено")
-
-                val machine = sshExec(session, "uname -m").trim()
-                val goArch = when {
+            // Connection 1 — detect the architecture (this server resets the link when a 2nd channel
+            // is opened, so each phase gets its own fresh connection, one channel each).
+            onLog("Определяю архитектуру VPS…")
+            val archSession = openSshSession(options.host, options.sshPort, options.login, options.sshPassword, onLog)
+            val goArch = try {
+                val machine = sshExec(archSession, "uname -m").trim()
+                onLog("Архитектура VPS: $machine")
+                when {
                     machine.contains("aarch64") || machine.contains("arm64") -> "arm64"
                     machine.contains("x86_64") || machine.contains("amd64") -> "amd64"
                     else -> error("Неподдерживаемая архитектура VPS: '$machine' (нужен x86_64 или aarch64)")
                 }
-                onLog("Архитектура VPS: $machine → $goArch")
-
-                val assetPath = "wdtt/wdtt-server-linux-$goArch.gz"
-                onLog("Загрузка сервера ($assetPath)…")
-                // Append the gzip asset to /tmp in small base64 chunks (no SFTP, no stdin streaming).
-                val gz = context.assets.open(assetPath).use { it.readBytes() }
-                sshUploadFile(session, gz, REMOTE_GZ, onLog)
-                onLog("Бинарник загружен в $REMOTE_GZ")
-
-                onLog("Установка и запуск службы…")
-                // Run the whole install script as one command (no `bash -s` stdin pipe / uploaded file).
-                val output = sshExec(session, buildInstallScript(options))
-                output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach(onLog)
-
-                "wdtt-server установлен и запущен на ${options.host}:${options.wdttPort}"
             } finally {
-                session.disconnect()
+                archSession.disconnect()
             }
+
+            val gz = context.assets.open("wdtt/wdtt-server-linux-$goArch.gz").use { it.readBytes() }
+            onLog("Установка сервера (${gz.size / 1024} КБ) одним сеансом…")
+            // Connection 2 — one channel: deliver the binary (base64 heredoc) AND run the install
+            // script, all in a single `sh -s` stream.
+            val script = buildString {
+                append("set -e\n")
+                append("command -v base64 >/dev/null 2>&1 || { echo 'no base64 on VPS'; exit 1; }\n")
+                append(base64Heredoc(gz, REMOTE_GZ))
+                append(buildInstallScript(options))
+            }
+            val runSession = openSshSession(options.host, options.sshPort, options.login, options.sshPassword, onLog)
+            val output = try {
+                sshRunScript(runSession, script, onLog)
+            } finally {
+                runSession.disconnect()
+            }
+            output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach(onLog)
+
+            "wdtt-server установлен и запущен на ${options.host}:${options.wdttPort}"
         }
     }
 
