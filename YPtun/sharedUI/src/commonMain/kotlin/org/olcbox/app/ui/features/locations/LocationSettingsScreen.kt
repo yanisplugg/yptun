@@ -63,8 +63,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
@@ -85,7 +87,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -1204,6 +1208,51 @@ private fun LazyListScope.vkTurnSection(
 }
 
 /**
+ * Live install-log area shared by the WDTT and DNSTT installer dialogs. The lines are both
+ * hand-selectable (wrapped in a [SelectionContainer]) and copyable in one tap via the "Копировать"
+ * button — so the user can paste the full SSH log when reporting an install problem.
+ */
+@Composable
+private fun InstallLogView(log: List<String>, logScroll: ScrollState) {
+    if (log.isEmpty()) return
+    val clipboard = LocalClipboardManager.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "Лог установки",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        TextButton(onClick = { clipboard.setText(AnnotatedString(log.joinToString("\n"))) }) {
+            Text("Копировать")
+        }
+    }
+    SelectionContainer {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 160.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(8.dp)
+                .verticalScroll(logScroll)
+        ) {
+            log.forEach { line ->
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = LocalContentColor.current
+                )
+            }
+        }
+    }
+}
+
+/**
  * One-tap WDTT server installer. Collects SSH access to the VPS and, on confirm, connects over SSH,
  * uploads the bundled wdtt-server binary matching the VPS architecture and runs it as a systemd
  * service ([rememberWdttServerInstaller]). Progress is streamed live into a log area. The WDTT
@@ -1325,26 +1374,7 @@ private fun WdttInstallDialog(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-                if (log.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 160.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(8.dp)
-                            .verticalScroll(logScroll)
-                    ) {
-                        log.forEach { line ->
-                            Text(
-                                line,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = LocalContentColor.current
-                            )
-                        }
-                    }
-                }
+                InstallLogView(log, logScroll)
                 result?.exceptionOrNull()?.let { err ->
                     Text(
                         err.message ?: "Ошибка установки",
@@ -1393,6 +1423,8 @@ private fun WdttInstallDialog(
                                     dns = dns.ifBlank { "1.1.1.1" },
                                 )
                             ) { line -> log.add(line) }
+                            // Fold the final error into the log too, so the copied log includes it.
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
                             result = res
                             running = false
                         }
@@ -1517,26 +1549,7 @@ private fun DnsttInstallDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
-                if (log.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 160.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(8.dp)
-                            .verticalScroll(logScroll)
-                    ) {
-                        log.forEach { line ->
-                            Text(
-                                line,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = LocalContentColor.current
-                            )
-                        }
-                    }
-                }
+                InstallLogView(log, logScroll)
                 result?.exceptionOrNull()?.let { err ->
                     Text(
                         err.message ?: "Ошибка установки",
@@ -1585,6 +1598,8 @@ private fun DnsttInstallDialog(
                                     )
                                 }
                             }
+                            // Fold the final error into the log too, so the copied log includes it.
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
                             result = res
                             running = false
                         }
