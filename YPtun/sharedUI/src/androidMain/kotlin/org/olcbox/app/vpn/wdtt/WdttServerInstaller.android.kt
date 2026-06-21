@@ -11,8 +11,8 @@ import com.jcraft.jsch.Session
 import com.jcraft.jsch.UIKeyboardInteractive
 import com.jcraft.jsch.UserInfo
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.Properties
-import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -69,12 +69,12 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
 
                 val assetPath = "wdtt/wdtt-server-linux-$goArch.gz"
                 onLog("Загрузка сервера ($assetPath)…")
-                uploadAsset(session, assetPath, REMOTE_GZ)
+                upload(session, assetPath, REMOTE_GZ, onLog)
                 onLog("Бинарник загружен в $REMOTE_GZ")
 
                 onLog("Установка и запуск службы…")
                 val script = buildInstallScript(options)
-                val output = exec(session, "bash -s", stdin = script)
+                val output = exec(session, "bash -s", stdin = script.byteInputStream())
                 output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach(onLog)
 
                 "wdtt-server установлен и запущен на ${options.host}:${options.wdttPort}"
@@ -84,18 +84,36 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
         }
     }
 
-    /** Streams a gzip-compressed asset to [remotePath] over SFTP, decompressing on the fly. */
-    private fun uploadAsset(session: Session, assetPath: String, remotePath: String) {
-        val sftp = session.openChannel("sftp") as ChannelSftp
-        sftp.connect(CONNECT_TIMEOUT_MS)
-        try {
-            GZIPInputStream(context.assets.open(assetPath)).use { input ->
-                sftp.put(input, remotePath, ChannelSftp.OVERWRITE)
-            }
-        } finally {
-            sftp.disconnect()
+    /**
+     * Uploads the bundled gzip asset to [remotePath] **as-is** (still compressed) — the remote
+     * install script gunzips it. Tries SFTP first; if the server has no SFTP subsystem (minimal
+     * images often ship without it) falls back to streaming the bytes through `cat > remotePath`
+     * on a plain exec channel (8-bit clean, no PTY), the same trick the reference deployer uses.
+     */
+    private fun upload(session: Session, assetPath: String, remotePath: String, onLog: (String) -> Unit) {
+        if (uploadViaSftp(session, assetPath, remotePath, onLog)) return
+        context.assets.open(assetPath).use { input ->
+            exec(session, "cat > ${remotePath.shellSingleQuote()}", stdin = input)
         }
     }
+
+    /** SFTP upload of the raw asset bytes. Returns false (with a log note) if SFTP is unavailable. */
+    private fun uploadViaSftp(session: Session, assetPath: String, remotePath: String, onLog: (String) -> Unit): Boolean =
+        try {
+            val sftp = session.openChannel("sftp") as ChannelSftp
+            sftp.connect(CONNECT_TIMEOUT_MS)
+            try {
+                context.assets.open(assetPath).use { input ->
+                    sftp.put(input, remotePath, ChannelSftp.OVERWRITE)
+                }
+            } finally {
+                sftp.disconnect()
+            }
+            true
+        } catch (e: Exception) {
+            onLog("SFTP недоступен (${e.message}); загружаю через exec…")
+            false
+        }
 
     /**
      * Connects the session; on an auth failure rethrows with an actionable hint. "Auth fail for
@@ -110,10 +128,14 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
         } catch (e: Exception) {
             val msg = e.message.orEmpty()
             if (msg.contains("Auth fail", ignoreCase = true) || msg.contains("Auth cancel", ignoreCase = true)) {
+                // JSch's message names the methods the server actually offered, e.g.
+                // "Auth fail for methods 'publickey,keyboard-interactive'" — surface it verbatim so the
+                // real cause is visible instead of a blanket "enable PasswordAuthentication". Only if the
+                // server offers NEITHER password NOR keyboard-interactive does it truly block password login.
                 throw RuntimeException(
-                    "Сервер отклонил вход для '$login'. Пароль дошёл, но SSH не принимает вход по паролю. " +
-                        "На VPS в /etc/ssh/sshd_config поставь:  PermitRootLogin yes  и  PasswordAuthentication yes,  " +
-                        "затем  systemctl restart ssh  (или sshd). Либо войди под обычным пользователем, которому разрешён вход по паролю."
+                    "Не удалось войти под '$login' ($msg). Если сервер вообще не принимает пароль — на VPS в " +
+                        "/etc/ssh/sshd_config поставь PermitRootLogin yes, PasswordAuthentication yes и " +
+                        "KbdInteractiveAuthentication yes, затем systemctl restart ssh."
                 )
             }
             throw e
@@ -124,12 +146,12 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
      * Runs [command] (optionally feeding [stdin] to it), merges stdout+stderr and returns the
      * combined output. Throws if the remote command exits non-zero, with the output as the message.
      */
-    private fun exec(session: Session, command: String, stdin: String? = null): String {
+    private fun exec(session: Session, command: String, stdin: InputStream? = null): String {
         val channel = session.openChannel("exec") as ChannelExec
         val merged = ByteArrayOutputStream()
         channel.setCommand(command)
         channel.setErrStream(merged) // fold stderr into the same buffer
-        if (stdin != null) channel.setInputStream(stdin.byteInputStream())
+        if (stdin != null) channel.setInputStream(stdin)
         val out = channel.inputStream
         channel.connect(CONNECT_TIMEOUT_MS)
         try {
@@ -209,12 +231,15 @@ private fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "'
  * gate password auth through PAM/keyboard-interactive fail with "Auth fail" even for a correct password.
  */
 private class SshPasswordUserInfo(private val password: String) : UserInfo, UIKeyboardInteractive {
-    // Each auth method is answered EXACTLY ONCE. JSch loops a method as long as the prompt callback
-    // keeps returning an answer; always answering would retry until the server's MaxAuthTries trips
-    // ("Too many authentication failures"). One password attempt + one keyboard-interactive attempt
-    // is enough and bounded.
+    // The "password" method is offered once (JSch also uses Session.setPassword for the first attempt).
     private var passwordOffered = false
-    private var kbdOffered = false
+    // Count of ANSWERED keyboard-interactive prompt rounds. Many VPSes accept the password ONLY via
+    // keyboard-interactive (password-over-PAM; the plain "password" method isn't offered), and some PAM
+    // stacks span SEVERAL rounds even for a correct password. Answering only the first round and then
+    // cancelling — the previous behaviour — rejected those and surfaced a FALSE "Auth fail". So we answer
+    // every round, bounded below the default MaxAuthTries (6) so a WRONG password still fails cleanly
+    // instead of "Too many authentication failures".
+    private var kbdRounds = 0
 
     override fun getPassphrase(): String? = null
     override fun getPassword(): String = password
@@ -233,10 +258,15 @@ private class SshPasswordUserInfo(private val password: String) : UserInfo, UIKe
         prompt: Array<out String>?,
         echo: BooleanArray?
     ): Array<String>? {
-        // Info/banner rounds carry no prompts — return an empty answer without consuming the attempt.
+        // Info/banner rounds carry no prompts — acknowledge without consuming a round.
         if (prompt.isNullOrEmpty()) return emptyArray()
-        if (kbdOffered) return null // already tried once; don't loop into "Too many auth failures"
-        kbdOffered = true
+        if (kbdRounds >= MAX_KBD_ROUNDS) return null
+        kbdRounds++
+        // Answer every prompt with the password (OpenSSH/paramiko behaviour for password-over-PAM).
         return Array(prompt.size) { password }
+    }
+
+    private companion object {
+        const val MAX_KBD_ROUNDS = 4
     }
 }
