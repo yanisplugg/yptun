@@ -6,15 +6,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.ChannelSftp
-import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
-import com.jcraft.jsch.UIKeyboardInteractive
-import com.jcraft.jsch.UserInfo
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.util.Properties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.olcbox.app.vpn.ssh.openSshSession
 
 @Composable
 actual fun rememberWdttServerInstaller(): WdttServerInstaller {
@@ -40,22 +37,13 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
             require(options.sshPassword.isNotBlank()) { "Не указан пароль SSH" }
             require(options.wdttPassword.isNotBlank()) { "Не указан пароль WDTT" }
 
-            val jsch = JSch()
-            val session = jsch.getSession(options.login.ifBlank { "root" }, options.host, options.sshPort)
-            session.setPassword(options.sshPassword)
-            // VPSes rarely have a known host key on first contact; accept it (password auth still
-            // protects the channel). Matches the reference deployer's behaviour.
-            session.setConfig(Properties().apply {
-                put("StrictHostKeyChecking", "no")
-                put("PreferredAuthentications", "password,keyboard-interactive")
-            })
-            // Many servers (PAM / OpenSSH with KbdInteractiveAuthentication) accept the password ONLY
-            // via keyboard-interactive, not the plain "password" method — JSch then reports "Auth fail
-            // for methods publickey,password" despite a correct password. A UserInfo that answers the
-            // interactive prompt with the same password covers both methods.
-            session.userInfo = SshPasswordUserInfo(options.sshPassword)
-            onLog("Подключение к ${options.host}:${options.sshPort} (пользователь '${options.login.ifBlank { "root" }}', пароль ${options.sshPassword.length} симв.)…")
-            connectOrExplain(session, options.login.ifBlank { "root" })
+            val session = openSshSession(
+                host = options.host,
+                port = options.sshPort,
+                login = options.login,
+                rawPassword = options.sshPassword,
+                onLog = onLog
+            )
             try {
                 onLog("SSH соединение установлено")
 
@@ -114,33 +102,6 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
             onLog("SFTP недоступен (${e.message}); загружаю через exec…")
             false
         }
-
-    /**
-     * Connects the session; on an auth failure rethrows with an actionable hint. "Auth fail for
-     * methods publickey,password" with a correct password almost always means the SERVER blocks
-     * password login for this user — typically `PermitRootLogin prohibit-password` (the OpenSSH
-     * default for root) or `PasswordAuthentication no`. The client cannot override that, so we tell
-     * the user exactly what to change instead of surfacing the raw library error.
-     */
-    private fun connectOrExplain(session: Session, login: String) {
-        try {
-            session.connect(CONNECT_TIMEOUT_MS)
-        } catch (e: Exception) {
-            val msg = e.message.orEmpty()
-            if (msg.contains("Auth fail", ignoreCase = true) || msg.contains("Auth cancel", ignoreCase = true)) {
-                // JSch's message names the methods the server actually offered, e.g.
-                // "Auth fail for methods 'publickey,keyboard-interactive'" — surface it verbatim so the
-                // real cause is visible instead of a blanket "enable PasswordAuthentication". Only if the
-                // server offers NEITHER password NOR keyboard-interactive does it truly block password login.
-                throw RuntimeException(
-                    "Не удалось войти под '$login' ($msg). Если сервер вообще не принимает пароль — на VPS в " +
-                        "/etc/ssh/sshd_config поставь PermitRootLogin yes, PasswordAuthentication yes и " +
-                        "KbdInteractiveAuthentication yes, затем systemctl restart ssh."
-                )
-            }
-            throw e
-        }
-    }
 
     /**
      * Runs [command] (optionally feeding [stdin] to it), merges stdout+stderr and returns the
@@ -224,49 +185,3 @@ internal fun buildInstallScript(options: WdttInstallOptions): String {
 
 /** Wraps [this] in single quotes for safe shell interpolation, escaping any embedded single quote. */
 private fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "'"
-
-/**
- * JSch auth helper: supplies [password] for BOTH the "password" method and the keyboard-interactive
- * prompt, and auto-accepts the unknown host key. Without the keyboard-interactive answer, servers that
- * gate password auth through PAM/keyboard-interactive fail with "Auth fail" even for a correct password.
- */
-private class SshPasswordUserInfo(private val password: String) : UserInfo, UIKeyboardInteractive {
-    // The "password" method is offered once (JSch also uses Session.setPassword for the first attempt).
-    private var passwordOffered = false
-    // Count of ANSWERED keyboard-interactive prompt rounds. Many VPSes accept the password ONLY via
-    // keyboard-interactive (password-over-PAM; the plain "password" method isn't offered), and some PAM
-    // stacks span SEVERAL rounds even for a correct password. Answering only the first round and then
-    // cancelling — the previous behaviour — rejected those and surfaced a FALSE "Auth fail". So we answer
-    // every round, bounded below the default MaxAuthTries (6) so a WRONG password still fails cleanly
-    // instead of "Too many authentication failures".
-    private var kbdRounds = 0
-
-    override fun getPassphrase(): String? = null
-    override fun getPassword(): String = password
-    override fun promptPassword(message: String?): Boolean {
-        if (passwordOffered) return false
-        passwordOffered = true
-        return true
-    }
-    override fun promptPassphrase(message: String?): Boolean = false
-    override fun promptYesNo(message: String?): Boolean = true // accept host key / generic confirms
-    override fun showMessage(message: String?) {}
-    override fun promptKeyboardInteractive(
-        destination: String?,
-        name: String?,
-        instruction: String?,
-        prompt: Array<out String>?,
-        echo: BooleanArray?
-    ): Array<String>? {
-        // Info/banner rounds carry no prompts — acknowledge without consuming a round.
-        if (prompt.isNullOrEmpty()) return emptyArray()
-        if (kbdRounds >= MAX_KBD_ROUNDS) return null
-        kbdRounds++
-        // Answer every prompt with the password (OpenSSH/paramiko behaviour for password-over-PAM).
-        return Array(prompt.size) { password }
-    }
-
-    private companion object {
-        const val MAX_KBD_ROUNDS = 4
-    }
-}
