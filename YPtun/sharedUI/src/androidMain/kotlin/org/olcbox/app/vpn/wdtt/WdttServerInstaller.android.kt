@@ -9,7 +9,7 @@ import kotlinx.coroutines.withContext
 import org.olcbox.app.vpn.ssh.openSshSession
 import org.olcbox.app.vpn.ssh.shellSingleQuote
 import org.olcbox.app.vpn.ssh.sshExec
-import org.olcbox.app.vpn.ssh.sshExecWithInput
+import org.olcbox.app.vpn.ssh.sshUploadFile
 
 @Composable
 actual fun rememberWdttServerInstaller(): WdttServerInstaller {
@@ -56,10 +56,9 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
 
                 val assetPath = "wdtt/wdtt-server-linux-$goArch.gz"
                 onLog("Загрузка сервера ($assetPath)…")
-                // Stream the gzip asset straight to /tmp over a plain exec channel (no SFTP).
-                context.assets.open(assetPath).use { input ->
-                    sshExecWithInput(session, "cat > ${REMOTE_GZ.shellSingleQuote()}", input)
-                }
+                // Append the gzip asset to /tmp in small base64 chunks (no SFTP, no stdin streaming).
+                val gz = context.assets.open(assetPath).use { it.readBytes() }
+                sshUploadFile(session, gz, REMOTE_GZ, onLog)
                 onLog("Бинарник загружен в $REMOTE_GZ")
 
                 onLog("Установка и запуск службы…")

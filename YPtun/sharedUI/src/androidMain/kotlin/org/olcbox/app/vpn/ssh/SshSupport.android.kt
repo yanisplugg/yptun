@@ -7,7 +7,6 @@ import com.jcraft.jsch.Session
 import com.jcraft.jsch.UIKeyboardInteractive
 import com.jcraft.jsch.UserInfo
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.util.Properties
 
 internal const val SSH_CONNECT_TIMEOUT_MS = 25_000
@@ -97,19 +96,7 @@ internal fun openSshSession(
  * including a whole multi-line install script as the command — so nothing relies on a separate
  * uploaded file or an SFTP subsystem.
  */
-internal fun sshExec(session: Session, command: String): String = runSshExec(session, command, null)
-
-/**
- * Streams [data] into [command]'s stdin, then returns its merged output. Unlike JSch's
- * `setInputStream` pump (which on minimal images would drop the connection mid-transfer), we write the
- * channel's stdin ourselves and CLOSE it to send channel-EOF — exactly what `ssh host 'cat > f' < data`
- * and paramiko's `shutdown_write()` do. This is the reliable way to land a binary on a VPS that has no
- * SFTP subsystem. [command] should be a stdin-consuming, no-stdout command (e.g. `cat > file`).
- */
-internal fun sshExecWithInput(session: Session, command: String, data: InputStream): String =
-    runSshExec(session, command, data)
-
-private fun runSshExec(session: Session, command: String, stdin: InputStream?): String {
+internal fun sshExec(session: Session, command: String): String {
     val channel = session.openChannel("exec") as ChannelExec
     val merged = ByteArrayOutputStream()
     channel.setCommand(command)
@@ -117,15 +104,6 @@ private fun runSshExec(session: Session, command: String, stdin: InputStream?): 
     val out = channel.inputStream
     channel.connect(SSH_CONNECT_TIMEOUT_MS)
     try {
-        if (stdin != null) {
-            // Write the whole payload, flush, then close the stream so the remote command sees EOF and
-            // exits. The stdin-consuming commands we use (cat/gunzip → file) produce no stdout, so
-            // writing fully before draining cannot deadlock.
-            channel.outputStream.use { remote ->
-                stdin.copyTo(remote, bufferSize = 32 * 1024)
-                remote.flush()
-            }
-        }
         val buf = ByteArray(8192)
         while (true) {
             while (out.available() > 0) {
@@ -148,6 +126,39 @@ private fun runSshExec(session: Session, command: String, stdin: InputStream?): 
         throw RuntimeException("Команда завершилась с кодом $code:\n${text.trim()}")
     }
     return text
+}
+
+/**
+ * Lands [data] at [remotePath] on the server WITHOUT SFTP and WITHOUT streaming a large payload
+ * through a channel's stdin (that pump dropped the connection mid-transfer on the user's VPS — both
+ * JSch's setInputStream and our own EOF pump). Instead the bytes are base64-encoded and appended in
+ * small slices, each via its own plain `printf '…' | base64 -d >> file` command — i.e. ordinary
+ * console commands, nothing exotic. base64 is split on 4-char boundaries so the concatenation of the
+ * per-slice decodes equals the original. Progress is reported through [onLog].
+ */
+internal fun sshUploadFile(
+    session: Session,
+    data: ByteArray,
+    remotePath: String,
+    onLog: (String) -> Unit,
+) {
+    val q = remotePath.shellSingleQuote()
+    // Fail early with a clear message if the server lacks base64 (almost none do).
+    sshExec(session, "command -v base64 >/dev/null 2>&1 || { echo 'на VPS нет утилиты base64' >&2; exit 1; }")
+    sshExec(session, ": > $q") // truncate/create the target
+    val b64 = android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP)
+    val chunk = 60_000 // multiple of 4; ~60 KB per command — safe under ARG_MAX even on busybox
+    val total = (b64.length + chunk - 1) / chunk
+    var index = 0
+    var sent = 0
+    while (index < b64.length) {
+        val end = minOf(index + chunk, b64.length)
+        val part = b64.substring(index, end)
+        sshExec(session, "printf '%s' '$part' | base64 -d >> $q")
+        index = end
+        sent++
+        if (sent == 1 || sent % 10 == 0 || end == b64.length) onLog("…загружено $sent/$total частей")
+    }
 }
 
 /** Wraps [this] in single quotes for safe shell interpolation, escaping any embedded single quote. */
