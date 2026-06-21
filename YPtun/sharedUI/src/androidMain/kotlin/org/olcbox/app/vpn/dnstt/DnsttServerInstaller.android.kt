@@ -6,11 +6,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.olcbox.app.vpn.ssh.base64Heredoc
-import org.olcbox.app.vpn.ssh.openSshSession
+import org.olcbox.app.vpn.ssh.SshTarget
 import org.olcbox.app.vpn.ssh.shellSingleQuote
-import org.olcbox.app.vpn.ssh.sshExec
-import org.olcbox.app.vpn.ssh.sshRunScript
+import org.olcbox.app.vpn.ssh.sshOneShot
+import org.olcbox.app.vpn.ssh.sshUploadInChunks
 
 @Composable
 actual fun rememberDnsttServerInstaller(): DnsttServerInstaller {
@@ -39,38 +38,25 @@ internal class AndroidDnsttServerInstaller(private val context: Context) : Dnstt
             require(options.sshPassword.isNotBlank()) { "Не указан пароль SSH" }
             require(options.domain.isNotBlank()) { "Не указан домен туннеля" }
 
-            // Connection 1 — detect the architecture (this server resets the link when a 2nd channel
-            // is opened, so each phase gets its own fresh connection, one channel each).
+            // This VPS resets the link the moment a 2nd channel is opened on a connection, so EVERY
+            // step is its own fresh connection running one small command (the only thing that worked).
+            val target = SshTarget(options.host, options.sshPort, options.login, options.sshPassword)
+
             onLog("Определяю архитектуру VPS…")
-            val archSession = openSshSession(options.host, options.sshPort, options.login, options.sshPassword, onLog)
-            val goArch = try {
-                val machine = sshExec(archSession, "uname -m").trim()
-                onLog("Архитектура VPS: $machine")
-                when {
-                    machine.contains("aarch64") || machine.contains("arm64") -> "arm64"
-                    machine.contains("x86_64") || machine.contains("amd64") -> "amd64"
-                    else -> error("Неподдерживаемая архитектура VPS: '$machine' (нужен x86_64 или aarch64)")
-                }
-            } finally {
-                archSession.disconnect()
+            val machine = sshOneShot(target, "uname -m", onLog, logProgress = true).trim()
+            val goArch = when {
+                machine.contains("aarch64") || machine.contains("arm64") -> "arm64"
+                machine.contains("x86_64") || machine.contains("amd64") -> "amd64"
+                else -> error("Неподдерживаемая архитектура VPS: '$machine' (нужен x86_64 или aarch64)")
             }
+            onLog("Архитектура VPS: $machine → $goArch")
 
             val gz = context.assets.open("dnstt/dnstt-server-linux-$goArch.gz").use { it.readBytes() }
-            onLog("Установка сервера (${gz.size / 1024} КБ) одним сеансом…")
-            // Connection 2 — one channel: deliver the binary (base64 heredoc) AND run the install
-            // script (which also generates the keypair), all in a single `sh -s` stream.
-            val script = buildString {
-                append("set -e\n")
-                append("command -v base64 >/dev/null 2>&1 || { echo 'no base64 on VPS'; exit 1; }\n")
-                append(base64Heredoc(gz, REMOTE_GZ))
-                append(buildInstallScript(options))
-            }
-            val runSession = openSshSession(options.host, options.sshPort, options.login, options.sshPassword, onLog)
-            val output = try {
-                sshRunScript(runSession, script, onLog)
-            } finally {
-                runSession.disconnect()
-            }
+            onLog("Загрузка сервера (${gz.size / 1024} КБ, по частям)…")
+            sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
+            onLog("Бинарник загружен, ставлю службу и генерирую ключ…")
+
+            val output = sshOneShot(target, buildInstallScript(options), onLog)
 
             var pubKey = ""
             output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach { line ->
