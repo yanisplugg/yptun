@@ -60,6 +60,19 @@ class LocationsDataSourceImpl(
         updateActiveLocationConfig(normalized)
     }
 
+    /**
+     * Cheap change token for the repository's bundle cache: mtime ⊕ size of the file
+     * [loadLocationBundle] reads (main bundle, else the legacy file). Every save rewrites the main
+     * file and bumps its mtime/size, so a stale cache — including the VPN service's separate
+     * repository instance — is detected on the next read and reloaded. Null until a bundle exists.
+     */
+    override suspend fun bundleVersionToken(): Long? = withContext(Dispatchers.IO) {
+        val file = File(context.filesDir, LOCATIONS_BUNDLE_FILE_NAME).takeIf { it.exists() }
+            ?: File(context.filesDir, LEGACY_LOCATIONS_BUNDLE_FILE_NAME).takeIf { it.exists() }
+            ?: return@withContext null
+        file.lastModified() * 1_000_003L xor file.length()
+    }
+
     override suspend fun loadLegacyLocations(): List<Pair<String, String>> = withContext(Dispatchers.IO) {
         val settings = context.filesDir.listFiles { file ->
             file.name.startsWith("hysteria_settings_") && file.name.endsWith(".json")

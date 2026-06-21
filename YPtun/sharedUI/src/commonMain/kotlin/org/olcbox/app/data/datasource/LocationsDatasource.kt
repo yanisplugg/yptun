@@ -69,6 +69,15 @@ interface LocationsDataSource {
      * survives reinstalls / data-clears. Null when the platform offers no stable id.
      */
     suspend fun platformStableId(): String? = null
+
+    /**
+     * A cheap change token for the persisted bundle (e.g. file mtime + size), used by the repository
+     * to cache the decoded bundle and skip the re-read/decode when nothing changed. The token MUST
+     * change whenever the bundle is rewritten by ANY repository instance (the VPN service holds its
+     * own instance), so a stale cache can never be served. Default `null` = no token available, which
+     * disables the cache (always reload) — only Android, where the lag matters, overrides this.
+     */
+    suspend fun bundleVersionToken(): Long? = null
 }
 
 internal expect fun createProxyHttpClient(
@@ -149,6 +158,16 @@ class LocationsRepositoryImpl(
     }
 
     private val mutationMutex = Mutex()
+    // In-memory cache of the decoded bundle. Every getBundle() otherwise re-reads the file and
+    // JSON-decodes + normalizes the whole bundle; app startup alone fires many reads (active config,
+    // the full location list, subscription backfill, expiry-notify, provider-report), so with hundreds
+    // of configs that repeated decode is what makes the list appear with a lag. The bundle is read ONLY
+    // via getBundleUnlocked and written ONLY via saveBundleUnlocked, both always under [mutationMutex]
+    // (which also gives the memory visibility), and the cache is keyed on [LocationsDataSource.bundleVersionToken]
+    // so a write from ANY instance (the VPN service keeps its own repository) invalidates it — the
+    // service can never connect with a stale config. A null token disables the cache (always reload).
+    private var cachedBundle: LocationBundleV4? = null
+    private var cachedToken: Long? = null
     private val _changes = MutableStateFlow(0L)
     override val changes: StateFlow<Long> = _changes.asStateFlow()
 
@@ -167,14 +186,32 @@ class LocationsRepositoryImpl(
     }
 
     private suspend fun getBundleUnlocked(): LocationBundleV4 {
+        val token = dataSource.bundleVersionToken()
+        cachedBundle?.let { cached ->
+            if (token != null && token == cachedToken) return cached
+        }
+
         val stored = dataSource.loadLocationBundle()?.normalized()
-        if (stored != null && stored.locations.isNotEmpty()) return stored
+        if (stored != null && stored.locations.isNotEmpty()) {
+            cacheBundle(stored, token)
+            return stored
+        }
 
         val legacy = migrateLegacyBundle()
         if (legacy.locations.isNotEmpty()) {
             dataSource.saveLocationBundle(legacy)
+            // The write changed the file; re-read the token so the cache matches the on-disk state.
+            cacheBundle(legacy, dataSource.bundleVersionToken())
+        } else {
+            cacheBundle(legacy, token)
         }
         return legacy
+    }
+
+    /** Stores [bundle] as the in-memory cache under its [token] (null token = effectively uncached). */
+    private fun cacheBundle(bundle: LocationBundleV4, token: Long?) {
+        cachedBundle = bundle
+        cachedToken = token
     }
 
     override suspend fun saveBundle(bundle: LocationBundleV4) {
@@ -184,7 +221,10 @@ class LocationsRepositoryImpl(
     }
 
     private suspend fun saveBundleUnlocked(bundle: LocationBundleV4) {
-        dataSource.saveLocationBundle(bundle.normalized())
+        val normalized = bundle.normalized()
+        dataSource.saveLocationBundle(normalized)
+        // Cache the just-written bundle under the post-write token so the next read serves it directly.
+        cacheBundle(normalized, dataSource.bundleVersionToken())
         _changes.value = _changes.value + 1
     }
 
