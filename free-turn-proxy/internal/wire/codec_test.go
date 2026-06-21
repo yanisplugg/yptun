@@ -20,8 +20,8 @@ func TestNewClientCodec(t *testing.T) {
 		}
 	}
 
-	// rtpopus / rtpopus2 -> валидный codec с осмысленными размерами.
-	for _, p := range []string{ProfileRTPOpus, ProfileRTPOpus2} {
+	// rtpopus / rtpopus2 / rtpopus3 -> валидный codec с осмысленными размерами.
+	for _, p := range []string{ProfileRTPOpus, ProfileRTPOpus2, ProfileRTPOpus3} {
 		c, err := NewClientCodec(p, key)
 		if err != nil || c == nil {
 			t.Fatalf("NewClientCodec(%q) = (%v, %v), want non-nil codec", p, c, err)

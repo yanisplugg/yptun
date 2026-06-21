@@ -40,7 +40,7 @@ func (c *Client) getTokenChain(ctx context.Context, link string, streamID int, c
 	// Шаг 1a: прогрев getCallPreview (не критично).
 	previewData := fmt.Sprintf("vk_join_link=https://vk.ru/call/join/%s&fields=photo_200&access_token=%s", link, token1)
 	if _, prevErr := c.doRequest(ctx, httpClient, profile, previewData,
-		"https://api.vk.ru/method/calls.getCallPreview?v=5.275&client_id="+creds.ClientID); prevErr != nil {
+		"https://api.vk.ru/method/calls.getCallPreview?v="+APIVersion+"&client_id="+creds.ClientID); prevErr != nil {
 		c.log.Warnf("[STREAM %d] [VK Auth] getCallPreview failed: %v", streamID, prevErr)
 	}
 

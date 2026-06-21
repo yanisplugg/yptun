@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.4.1](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.0...v1.4.1) (2026-06-19)
+
+
+### Bug Fixes
+
+* оставлены только VK app_id с доступом к calls.getAnonymousToken ([ebb1f6b](https://github.com/samosvalishe/free-turn-proxy/commit/ebb1f6bf0702217aca2ae54ab8d2115d93f85a95))
+
+
+### Refactoring
+
+* единая константа версии VK API для calls.* ([b76e212](https://github.com/samosvalishe/free-turn-proxy/commit/b76e21266d3a8bb457ad40263da2404089a2b7d6))
+
+## [1.4.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.3.2...v1.4.0) (2026-06-19)
+
+
+### Features
+
+* мультиплексирование звонков ([#21](https://github.com/samosvalishe/free-turn-proxy/issues/21)) ([1c58325](https://github.com/samosvalishe/free-turn-proxy/commit/1c583258627f5b847fee62d403a50270ac9e1509))
+
+
+### Bug Fixes
+
+* -obf-timing допустим только с -mode udp и включённой обфускацией ([e50febc](https://github.com/samosvalishe/free-turn-proxy/commit/e50febc834544fcb47eb44cf7edc0f7930199066))
+* потокобезопасность send-состояния obf-кодеков rtpopus3 и shape ([9564f34](https://github.com/samosvalishe/free-turn-proxy/commit/9564f3475f5d5926ec75bcb9fd840613a52e404d))
+* устранены блокеры линтера в obf/multi ([bafdcdd](https://github.com/samosvalishe/free-turn-proxy/commit/bafdcdd027c29ee52f605af2d6d83acf9827855d))
+
 ## [1.3.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.3.1...v1.3.2) (2026-06-17)
 
 

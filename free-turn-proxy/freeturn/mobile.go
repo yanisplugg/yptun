@@ -78,7 +78,7 @@ func SetLogWriter(w LogWriter) {
 
 // freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
 // Bump it whenever the vendored core is updated; surfaced in the app's settings.
-const freeturnVersion = "1.3.2"
+const freeturnVersion = "1.4.1"
 
 // Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
 func Version() string { return freeturnVersion }
@@ -256,7 +256,7 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 	switch cfg.Provider.Name {
 	case config.ProviderVK:
 		if len(links) == 0 {
-			links = []string{cfg.VK.Link}
+			links = cfg.VK.Links
 		}
 		provs := make([]provider.Provider, 0, len(links))
 		for _, link := range links {

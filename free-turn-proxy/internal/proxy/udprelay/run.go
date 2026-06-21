@@ -39,6 +39,7 @@ type Params struct {
 	TransportUDP bool
 	Profile      string
 	ObfKey       []byte
+	ObfTiming    time.Duration
 	GetCreds     GetCredsFunc
 	ClientID     string
 }
