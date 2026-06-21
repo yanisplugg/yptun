@@ -1,10 +1,13 @@
 package org.olcbox.app.vpn.ssh
 
+import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Logger
 import com.jcraft.jsch.Session
 import com.jcraft.jsch.UIKeyboardInteractive
 import com.jcraft.jsch.UserInfo
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.Properties
 
 internal const val SSH_CONNECT_TIMEOUT_MS = 25_000
@@ -87,6 +90,68 @@ internal fun openSshSession(
     }
     return session
 }
+
+/**
+ * Runs [command] on a fresh exec channel, merges stdout+stderr and returns the combined text. Throws
+ * if the remote command exits non-zero (with the output as the message). Use this for everything —
+ * including a whole multi-line install script as the command — so nothing relies on a separate
+ * uploaded file or an SFTP subsystem.
+ */
+internal fun sshExec(session: Session, command: String): String = runSshExec(session, command, null)
+
+/**
+ * Streams [data] into [command]'s stdin, then returns its merged output. Unlike JSch's
+ * `setInputStream` pump (which on minimal images would drop the connection mid-transfer), we write the
+ * channel's stdin ourselves and CLOSE it to send channel-EOF — exactly what `ssh host 'cat > f' < data`
+ * and paramiko's `shutdown_write()` do. This is the reliable way to land a binary on a VPS that has no
+ * SFTP subsystem. [command] should be a stdin-consuming, no-stdout command (e.g. `cat > file`).
+ */
+internal fun sshExecWithInput(session: Session, command: String, data: InputStream): String =
+    runSshExec(session, command, data)
+
+private fun runSshExec(session: Session, command: String, stdin: InputStream?): String {
+    val channel = session.openChannel("exec") as ChannelExec
+    val merged = ByteArrayOutputStream()
+    channel.setCommand(command)
+    channel.setErrStream(merged) // fold stderr into the same buffer
+    val out = channel.inputStream
+    channel.connect(SSH_CONNECT_TIMEOUT_MS)
+    try {
+        if (stdin != null) {
+            // Write the whole payload, flush, then close the stream so the remote command sees EOF and
+            // exits. The stdin-consuming commands we use (cat/gunzip → file) produce no stdout, so
+            // writing fully before draining cannot deadlock.
+            channel.outputStream.use { remote ->
+                stdin.copyTo(remote, bufferSize = 32 * 1024)
+                remote.flush()
+            }
+        }
+        val buf = ByteArray(8192)
+        while (true) {
+            while (out.available() > 0) {
+                val n = out.read(buf)
+                if (n < 0) break
+                merged.write(buf, 0, n)
+            }
+            if (channel.isClosed) {
+                if (out.available() > 0) continue
+                break
+            }
+            Thread.sleep(50)
+        }
+    } finally {
+        channel.disconnect()
+    }
+    val text = merged.toString(Charsets.UTF_8.name())
+    val code = channel.exitStatus
+    if (code != 0) {
+        throw RuntimeException("Команда завершилась с кодом $code:\n${text.trim()}")
+    }
+    return text
+}
+
+/** Wraps [this] in single quotes for safe shell interpolation, escaping any embedded single quote. */
+internal fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "'"
 
 /**
  * JSch auth helper: supplies [password] for BOTH the "password" method and the keyboard-interactive

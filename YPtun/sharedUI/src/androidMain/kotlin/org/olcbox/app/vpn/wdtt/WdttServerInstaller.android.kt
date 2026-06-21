@@ -4,14 +4,12 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
-import com.jcraft.jsch.ChannelExec
-import com.jcraft.jsch.ChannelSftp
-import com.jcraft.jsch.Session
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.olcbox.app.vpn.ssh.openSshSession
+import org.olcbox.app.vpn.ssh.shellSingleQuote
+import org.olcbox.app.vpn.ssh.sshExec
+import org.olcbox.app.vpn.ssh.sshExecWithInput
 
 @Composable
 actual fun rememberWdttServerInstaller(): WdttServerInstaller {
@@ -21,10 +19,11 @@ actual fun rememberWdttServerInstaller(): WdttServerInstaller {
 
 /**
  * SSH-based wdtt-server installer. Connects with password auth, detects the VPS architecture
- * (`uname -m`), uploads the matching bundled server binary (gzip asset) to /tmp, then runs a small
- * install script that places it in /usr/local/bin and starts it as a systemd service. The server
- * binary sets up IP forwarding, NAT and the userspace WireGuard tunnel by itself, so the script is
- * deliberately minimal. The binaries live in assets/wdtt/ (see build-wdtt-server.ps1).
+ * (`uname -m`), streams the matching bundled server binary (gzip asset) into /tmp via a plain exec
+ * channel (no SFTP — minimal VPS images often lack the subsystem), then runs the install script as a
+ * single shell command that places it in /usr/local/bin and starts it as a systemd service. The
+ * server binary sets up IP forwarding, NAT and the userspace WireGuard tunnel by itself, so the
+ * script is deliberately minimal. The binaries live in assets/wdtt/ (see build-wdtt-server.ps1).
  */
 internal class AndroidWdttServerInstaller(private val context: Context) : WdttServerInstaller {
 
@@ -47,7 +46,7 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
             try {
                 onLog("SSH соединение установлено")
 
-                val machine = exec(session, "uname -m").trim()
+                val machine = sshExec(session, "uname -m").trim()
                 val goArch = when {
                     machine.contains("aarch64") || machine.contains("arm64") -> "arm64"
                     machine.contains("x86_64") || machine.contains("amd64") -> "amd64"
@@ -57,12 +56,15 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
 
                 val assetPath = "wdtt/wdtt-server-linux-$goArch.gz"
                 onLog("Загрузка сервера ($assetPath)…")
-                upload(session, assetPath, REMOTE_GZ, onLog)
+                // Stream the gzip asset straight to /tmp over a plain exec channel (no SFTP).
+                context.assets.open(assetPath).use { input ->
+                    sshExecWithInput(session, "cat > ${REMOTE_GZ.shellSingleQuote()}", input)
+                }
                 onLog("Бинарник загружен в $REMOTE_GZ")
 
                 onLog("Установка и запуск службы…")
-                val script = buildInstallScript(options)
-                val output = exec(session, "bash -s", stdin = script.byteInputStream())
+                // Run the whole install script as one command (no `bash -s` stdin pipe / uploaded file).
+                val output = sshExec(session, buildInstallScript(options))
                 output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach(onLog)
 
                 "wdtt-server установлен и запущен на ${options.host}:${options.wdttPort}"
@@ -72,76 +74,7 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
         }
     }
 
-    /**
-     * Uploads the bundled gzip asset to [remotePath] **as-is** (still compressed) — the remote
-     * install script gunzips it. Tries SFTP first; if the server has no SFTP subsystem (minimal
-     * images often ship without it) falls back to streaming the bytes through `cat > remotePath`
-     * on a plain exec channel (8-bit clean, no PTY), the same trick the reference deployer uses.
-     */
-    private fun upload(session: Session, assetPath: String, remotePath: String, onLog: (String) -> Unit) {
-        if (uploadViaSftp(session, assetPath, remotePath, onLog)) return
-        context.assets.open(assetPath).use { input ->
-            exec(session, "cat > ${remotePath.shellSingleQuote()}", stdin = input)
-        }
-    }
-
-    /** SFTP upload of the raw asset bytes. Returns false (with a log note) if SFTP is unavailable. */
-    private fun uploadViaSftp(session: Session, assetPath: String, remotePath: String, onLog: (String) -> Unit): Boolean =
-        try {
-            val sftp = session.openChannel("sftp") as ChannelSftp
-            sftp.connect(CONNECT_TIMEOUT_MS)
-            try {
-                context.assets.open(assetPath).use { input ->
-                    sftp.put(input, remotePath, ChannelSftp.OVERWRITE)
-                }
-            } finally {
-                sftp.disconnect()
-            }
-            true
-        } catch (e: Exception) {
-            onLog("SFTP недоступен (${e.message}); загружаю через exec…")
-            false
-        }
-
-    /**
-     * Runs [command] (optionally feeding [stdin] to it), merges stdout+stderr and returns the
-     * combined output. Throws if the remote command exits non-zero, with the output as the message.
-     */
-    private fun exec(session: Session, command: String, stdin: InputStream? = null): String {
-        val channel = session.openChannel("exec") as ChannelExec
-        val merged = ByteArrayOutputStream()
-        channel.setCommand(command)
-        channel.setErrStream(merged) // fold stderr into the same buffer
-        if (stdin != null) channel.setInputStream(stdin)
-        val out = channel.inputStream
-        channel.connect(CONNECT_TIMEOUT_MS)
-        try {
-            val buf = ByteArray(8192)
-            while (true) {
-                while (out.available() > 0) {
-                    val n = out.read(buf)
-                    if (n < 0) break
-                    merged.write(buf, 0, n)
-                }
-                if (channel.isClosed) {
-                    if (out.available() > 0) continue
-                    break
-                }
-                Thread.sleep(50)
-            }
-        } finally {
-            channel.disconnect()
-        }
-        val text = merged.toString(Charsets.UTF_8.name())
-        val code = channel.exitStatus
-        if (code != 0) {
-            throw RuntimeException("Команда завершилась с кодом $code:\n${text.trim()}")
-        }
-        return text
-    }
-
     private companion object {
-        const val CONNECT_TIMEOUT_MS = 25_000
         const val REMOTE_GZ = "/tmp/wdtt-server.gz"
     }
 }
@@ -182,6 +115,3 @@ internal fun buildInstallScript(options: WdttInstallOptions): String {
         systemctl is-active wdtt-server && echo "Служба wdtt-server активна на порту $port"
     """.trimIndent()
 }
-
-/** Wraps [this] in single quotes for safe shell interpolation, escaping any embedded single quote. */
-private fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "'"
