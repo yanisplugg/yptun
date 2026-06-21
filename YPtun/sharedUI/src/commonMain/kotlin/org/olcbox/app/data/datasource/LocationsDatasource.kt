@@ -385,6 +385,12 @@ class LocationsRepositoryImpl(
                 .groupBy { subscriptionSignature(it.location) }
                 .mapValues { (_, entries) -> entries.toMutableList() }
 
+            // Was the previously-selected server one of THIS subscription's entries? If so we must
+            // decide its fate after the refresh: keep it if it still exists (reused by signature),
+            // otherwise fall back to this subscription's first server.
+            val activeInThisGroup = activeBefore != null && previousEntries.any { it.storageId == activeBefore }
+            var activeReusedHere = false
+
             val reassigned = refreshed.mapIndexed { index, entry ->
                 val signature = subscriptionSignature(entry.location)
                 val reusedPool = reusedBySignature[signature]
@@ -393,8 +399,11 @@ class LocationsRepositoryImpl(
                     base = "imported_${entry.location.storageSlug().ifBlank { "location_${index + 1}" }}",
                     used = usedStorageIds
                 )
-                if (activeBefore == reusedEntry?.storageId) {
+                // The selected server survived the refresh (same signature → same storageId reused):
+                // keep it selected. Guard against null==null matching when nothing was selected.
+                if (activeBefore != null && reusedEntry?.storageId == activeBefore) {
                     activeAfter = storageId
+                    activeReusedHere = true
                 }
                 entry.copy(
                     storageId = storageId,
@@ -408,10 +417,10 @@ class LocationsRepositoryImpl(
                 ).normalized()
             }
 
-            if (activeBefore != null &&
-                activeAfter == activeBefore &&
-                previousEntries.any { it.storageId == activeBefore }
-            ) {
+            // Only reset the selection when the selected server actually vanished from this
+            // subscription (removed upstream / signature changed). If it was reused, leave it alone —
+            // otherwise every on-launch refresh would snap the user back to the first server.
+            if (activeInThisGroup && !activeReusedHere) {
                 activeAfter = reassigned.firstOrNull()?.storageId
             }
             refreshedLocations += reassigned

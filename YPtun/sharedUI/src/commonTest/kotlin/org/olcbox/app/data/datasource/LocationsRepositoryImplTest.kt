@@ -639,6 +639,52 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
+    fun refreshKeepsSelectedServerWhenItStillExists() = runTest {
+        val url = "https://example.test/multi"
+        val source = FakeLocationsDataSource(
+            stored = LocationBundleV4(
+                activeLocationId = "srv-b",
+                locations = listOf(
+                    LocationEntry.from(
+                        "srv-a",
+                        LocationConfig(
+                            "A", "room-a", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM,
+                            transport = LocationConfig.TRANSPORT_VP8CHANNEL
+                        ),
+                        subscriptionUrl = url
+                    ),
+                    LocationEntry.from(
+                        "srv-b",
+                        LocationConfig(
+                            "B", "room-b", "b".repeat(64), LocationConfig.PROVIDER_WB_STREAM,
+                            transport = LocationConfig.TRANSPORT_VP8CHANNEL
+                        ),
+                        subscriptionUrl = url
+                    )
+                )
+            )
+        )
+        // The refresh returns the SAME two servers, so both are reused (signatures match) and keep
+        // their storage ids. The previously-selected server (srv-b) must stay selected instead of
+        // snapping back to the first one — the on-launch-refresh "forgets my server" bug.
+        val payload = "olcrtc://wbstream?vp8channel@room-a#${"a".repeat(64)}${'$'}A\n" +
+            "olcrtc://wbstream?vp8channel@room-b#${"b".repeat(64)}${'$'}B"
+        val engine = MockEngine { respond(payload) }
+
+        val updated = LocationsRepositoryImpl(
+            dataSource = source,
+            httpClient = HttpClient(engine),
+            deviceIdentityProvider = StaticIdentityProvider("hwid-test")
+        ).refreshSubscription(url)
+
+        val bundle = source.stored
+        assertEquals(1, updated)
+        assertNotNull(bundle)
+        assertEquals(setOf("srv-a", "srv-b"), bundle.locations.map { it.storageId }.toSet())
+        assertEquals("srv-b", bundle.activeLocationId)
+    }
+
+    @Test
     fun configShareRoundTripsTransportOptions() = runTest {
         val source = FakeLocationsDataSource()
         val config = LocationConfig(
