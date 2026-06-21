@@ -7,6 +7,7 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.olcbox.app.vpn.ssh.SshTarget
+import org.olcbox.app.vpn.ssh.loadServerBinaryGz
 import org.olcbox.app.vpn.ssh.shellSingleQuote
 import org.olcbox.app.vpn.ssh.sshOneShot
 import org.olcbox.app.vpn.ssh.sshUploadInChunks
@@ -49,7 +50,7 @@ internal class AndroidWdttServerInstaller(private val context: Context) : WdttSe
             }
             onLog("Архитектура VPS: $machine → $goArch")
 
-            val gz = context.assets.open("wdtt/wdtt-server-linux-$goArch.gz").use { it.readBytes() }
+            val gz = loadServerBinaryGz(context, "wdtt/wdtt-server-linux-$goArch")
             onLog("Загрузка сервера (${gz.size / 1024} КБ, по частям)…")
             sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
             onLog("Бинарник загружен, ставлю службу…")

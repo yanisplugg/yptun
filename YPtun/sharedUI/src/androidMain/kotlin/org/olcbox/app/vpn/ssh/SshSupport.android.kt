@@ -1,5 +1,6 @@
 package org.olcbox.app.vpn.ssh
 
+import android.content.Context
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Logger
@@ -8,6 +9,7 @@ import com.jcraft.jsch.UIKeyboardInteractive
 import com.jcraft.jsch.UserInfo
 import java.io.ByteArrayOutputStream
 import java.util.Properties
+import java.util.zip.GZIPOutputStream
 
 internal const val SSH_CONNECT_TIMEOUT_MS = 25_000
 
@@ -191,6 +193,32 @@ internal fun sshUploadInChunks(
         onLog("…загружено $sent/$total (${(end.toLong() * 100 / b64.length)}%)")
     }
 }
+
+/**
+ * Loads a bundled gzip'd server binary as GZIP bytes ready to upload. The build ships it as
+ * "<basePath>.gz", but Android's asset packaging DECOMPRESSES .gz assets and stores the raw file
+ * under "<basePath>" (no extension) — so opening "<basePath>.gz" at runtime throws FileNotFound. We
+ * therefore try the plain name first, then ".gz". If what we read is the raw (decompressed) binary we
+ * re-gzip it in-app so the upload stays small and the server-side `gunzip` still works; if it's
+ * already gzip we pass it through. Throws if neither asset exists.
+ */
+internal fun loadServerBinaryGz(context: Context, basePath: String): ByteArray {
+    val raw = context.openAssetBytesOrNull(basePath)
+        ?: context.openAssetBytesOrNull("$basePath.gz")
+        ?: error("В APK нет бинарника сервера ($basePath[.gz])")
+    val isGzip = raw.size >= 2 && raw[0] == 0x1f.toByte() && raw[1] == 0x8b.toByte()
+    if (isGzip) return raw
+    val out = ByteArrayOutputStream()
+    GZIPOutputStream(out).use { it.write(raw) }
+    return out.toByteArray()
+}
+
+private fun Context.openAssetBytesOrNull(path: String): ByteArray? =
+    try {
+        assets.open(path).use { it.readBytes() }
+    } catch (_: Exception) {
+        null
+    }
 
 /** Wraps [this] in single quotes for safe shell interpolation, escaping any embedded single quote. */
 internal fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "'"
