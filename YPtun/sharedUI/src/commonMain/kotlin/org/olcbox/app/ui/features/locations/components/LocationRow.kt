@@ -287,6 +287,11 @@ private fun locationSubtitle(location: LocationItem): String {
             config.proxy?.server
         )
 
+        EngineType.Dnstt -> listOfNotNull(
+            "DNSTT",
+            config.dnstt?.domain?.takeIf { it.isNotBlank() }
+        )
+
         else -> listOf(
             config?.providerName()
                 ?: LocationConfig.providerDisplayName(LocationConfig.DEFAULT_BYPASS_PROVIDER),

@@ -798,6 +798,49 @@ private fun LazyListScope.dnsttSection(
             }
         }
     }
+
+    // Optional proxy chained ON TOP of the dnstt tunnel: traffic → dnstt → proxy → internet (the
+    // proxy server is dialled THROUGH the dnstt SOCKS), so the public exit is the proxy. Same idea as
+    // "proxy over VK-TURN".
+    item {
+        var proxyOn by remember(config.proxyLink.isNotBlank()) {
+            mutableStateOf(config.proxyLink.isNotBlank())
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "Прокси поверх DNSTT",
+                subtitle = "VLESS/Trojan/SS, который дозванивается ЧЕРЕЗ dnstt-туннель — выходной IP будет прокси, а не dnstt-сервер"
+            )
+            VkTurnSwitchRow(
+                label = "Прокси поверх DNSTT",
+                checked = proxyOn,
+                enabled = enabled,
+                onCheckedChange = { on ->
+                    proxyOn = on
+                    if (!on) onChange { it.copy(proxyLink = "") }
+                }
+            )
+            if (proxyOn) {
+                OutlinedTextField(
+                    value = config.proxyLink,
+                    onValueChange = { v -> onChange { it.copy(proxyLink = v) } },
+                    label = { Text(LocalStrings.current.proxyLink) },
+                    placeholder = { Text("vless://… / trojan://… / ss://…") },
+                    enabled = enabled,
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                CoreSelector(
+                    selected = config.proxyCore,
+                    enabled = enabled,
+                    onSelected = { v -> onChange { it.copy(proxyCore = v) } }
+                )
+            }
+        }
+    }
 }
 
 /**

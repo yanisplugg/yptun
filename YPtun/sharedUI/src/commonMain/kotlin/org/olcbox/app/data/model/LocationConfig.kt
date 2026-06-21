@@ -188,15 +188,43 @@ data class DnsttConfig(
      */
     @SerialName("resolver")
     val resolver: String = "",
+    /**
+     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the dnstt tunnel: the proxy
+     * server is dialed THROUGH the dnstt local SOCKS, so the public exit is the proxy, not the
+     * dnstt-server. Blank = exit straight via the dnstt-server's own SOCKS5.
+     */
+    @SerialName("proxy_link")
+    val proxyLink: String = "",
+    /**
+     * Which core runs the over-dnstt proxy (same choice as the Standard engine). [ProxyCore.Auto]
+     * picks Xray for raw-Xray/xhttp transports, otherwise sing-box.
+     */
+    @SerialName("proxy_core")
+    val proxyCore: ProxyCore = ProxyCore.Auto,
 ) {
     /** True when the dnstt tunnel has everything it needs to connect. */
     fun isComplete(): Boolean =
         domain.isNotBlank() && pubKey.isNotBlank() && resolver.isNotBlank()
 
+    /** True when a proxy is chained on top of the dnstt tunnel. */
+    fun hasProxy(): Boolean = proxyLink.isNotBlank()
+
+    /** Resolves [proxyCore]==Auto to a concrete backend for the over-dnstt [profile]. Mirrors
+     *  [VkTurnConfig.resolvedProxyCore]. */
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
+        proxyCore != ProxyCore.Auto -> proxyCore
+        !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
+        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        globalCore != ProxyCore.Auto -> globalCore
+        else -> ProxyCore.SingBox
+    }
+
     fun normalized(): DnsttConfig = DnsttConfig(
         domain = domain.trim(),
         pubKey = pubKey.trim(),
         resolver = resolver.trim(),
+        proxyLink = proxyLink.trim(),
+        proxyCore = proxyCore,
     )
 }
 

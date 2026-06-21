@@ -166,6 +166,8 @@ class OlcboxVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     /** Active dnstt (DNS tunnel) client for [EngineType.Dnstt]; null when another engine is running. */
     private var dnsttClient: DnsttClient? = null
+    /** True when the active dnstt engine also fronts a proxy core (proxy-over-dnstt). */
+    private var dnsttProxyActive: Boolean = false
     private var tun2socksThread: Thread? = null
     @Volatile
     private var tun2socksStarted = false
@@ -934,19 +936,37 @@ class OlcboxVpnService : VpnService() {
             }
             return false
         }
+        // Optional proxy chained ON TOP of the dnstt tunnel: the proxy server is dialled THROUGH the
+        // dnstt local SOCKS, so the public exit is the proxy, not the dnstt-server. When present, dnstt
+        // moves to an internal port and a proxy core (Xray/sing-box) fronts the bridge on socksListenPort.
+        val proxy = dnstt.proxyLink.takeIf { it.isNotBlank() }
+            ?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+        if (dnstt.proxyLink.isNotBlank() && proxy == null) {
+            addLog("DNSTT: proxy link present but could not be parsed — exiting via dnstt SOCKS directly (no proxy)")
+        }
+        val useProxy = proxy != null
+        dnsttProxyActive = useProxy
+        // With a proxy, dnstt listens on the internal chain port and the proxy dials through it.
+        val dnsttPort = if (useProxy) chainOlcrtcPort else socksListenPort
         return try {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
             waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
             if (isLocalSocksPortOpen(socksListenPort)) {
                 throw IllegalStateException("SOCKS port $socksListenPort is still in use")
             }
+            if (useProxy) {
+                waitForSocksPortReleased(dnsttPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+                if (isLocalSocksPortOpen(dnsttPort)) {
+                    throw IllegalStateException("DNSTT internal port $dnsttPort is still in use")
+                }
+            }
             // The dnstt forwarder is transparent — it can't terminate a local SOCKS handshake, the
             // upstream SOCKS5 on the dnstt-server is reached end-to-end. Run the bridge no-auth.
             socksUsername = ""
             socksPassword = ""
-            val listenAddr = "$socksListenHost:$socksListenPort"
-            addLog("Starting DNSTT on $listenAddr (domain=${dnstt.domain}, resolver=${dnstt.resolver})")
-            val client = Dnsttmobile.newClient(dnstt.resolver, dnstt.domain, dnstt.pubKey, listenAddr)
+            val dnsttAddr = "$socksListenHost:$dnsttPort"
+            addLog("Starting DNSTT on $dnsttAddr (domain=${dnstt.domain}, resolver=${dnstt.resolver})")
+            val client = Dnsttmobile.newClient(dnstt.resolver, dnstt.domain, dnstt.pubKey, dnsttAddr)
             client.setProtectSocket(object : DnsttSocketProtector {
                 override fun protect(fd: Long): Boolean = this@OlcboxVpnService.protect(fd.toInt())
             })
@@ -958,10 +978,75 @@ class OlcboxVpnService : VpnService() {
                 addLog("DNSTT start superseded")
                 return false
             }
-            if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
-                throw IllegalStateException("DNSTT SOCKS port $socksListenPort did not open")
+            if (!awaitSocksPortOpen(dnsttPort, MOBILE_READY_TIMEOUT_MS)) {
+                throw IllegalStateException("DNSTT SOCKS port $dnsttPort did not open")
             }
-            addLog("DNSTT ready on $listenAddr")
+            addLog("DNSTT ready on $dnsttAddr")
+
+            if (!useProxy) {
+                publishActiveSocks()
+                return true
+            }
+
+            // Front the dnstt tunnel with the proxy core: TUN → core (socksListenPort) → proxy →
+            // dnstt SOCKS (dnsttPort) → dnstt-server → internet. Reuses the olcRTC-chain dialer wiring
+            // (the proxy dials its server through the local dnstt SOCKS). dnstt is TCP-only → block QUIC.
+            val traffic = loadTrafficSettings()
+            val profilesState = loadRoutingProfilesState()
+            val routingProfile = profilesState.resolve(config.routingProfileId)
+            val globalCore = loadAppBehavior().globalProxyCore
+            val profileWantsXray = routingProfile != null &&
+                (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
+                proxy!!.type in XRAY_SUPPORTED_TYPES
+            val useXray = dnstt.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
+            addLog("DNSTT chaining proxy ${proxy!!.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+            if (useXray) {
+                val assetPath = ensureGeoAssetPath(routingProfile)
+                val xrayJson = XrayConfig.build(
+                    profile = proxy,
+                    listenPort = socksListenPort,
+                    listenHost = socksListenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    olcrtcChainPort = dnsttPort,
+                    logLevel = "debug",
+                    traffic = traffic,
+                    routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                    blockQuic = true,
+                )
+                activeProxyCore = ProxyCore.Xray
+                addLog("Starting Xray (DNSTT proxy) via $socksListenHost:$socksListenPort")
+                xrayEngine().start(xrayJson, assetPath)
+            } else {
+                val json = SingBoxConfig.build(
+                    profile = proxy,
+                    listenPort = socksListenPort,
+                    listenHost = socksListenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    olcrtcChainPort = dnsttPort,
+                    autoDetectInterface = true,
+                    routing = loadRouting(),
+                    traffic = traffic,
+                    routingProfile = routingProfile,
+                    singboxGeositeBase = profilesState.singboxGeositeBase,
+                    singboxGeoipBase = profilesState.singboxGeoipBase,
+                    logLevel = "debug",
+                    blockQuic = true,
+                )
+                activeProxyCore = ProxyCore.SingBox
+                addLog("Starting sing-box (DNSTT proxy) via $socksListenHost:$socksListenPort")
+                singBoxEngine().start(json)
+            }
+            if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                throw IllegalStateException("DNSTT proxy SOCKS port $socksListenPort did not open")
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("DNSTT proxy start superseded")
+                return false
+            }
+            addLog("DNSTT proxy ready on $socksListenHost:$socksListenPort")
             publishActiveSocks()
             true
         } catch (e: CancellationException) {
@@ -1695,8 +1780,8 @@ class OlcboxVpnService : VpnService() {
         EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
         // VK-TURN runs either the freeturn OR the WDTT transport core (mutually exclusive per location).
         EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
-        // dnstt raises its own local SOCKS listener; no separate proxy core.
-        EngineType.Dnstt -> dnsttClient?.isRunning == true
+        // dnstt raises its own local SOCKS listener; with a proxy-over-dnstt a proxy core fronts it.
+        EngineType.Dnstt -> dnsttClient?.isRunning == true && (!dnsttProxyActive || proxyCoreRunning())
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -2271,6 +2356,7 @@ class OlcboxVpnService : VpnService() {
         runCatching { Wdttmobile.stop() }
         runCatching { dnsttClient?.stop() }
         dnsttClient = null
+        dnsttProxyActive = false
         runCatching { Awg.stop() }
         runCatching { Hy2.stop() }
         val provider = lastMobileProvider
