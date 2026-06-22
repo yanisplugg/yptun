@@ -54,6 +54,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -124,6 +125,17 @@ fun LazyListScope.locationSelectorContent(
                     onAddSubscriptionClick = onAddSubscriptionClick,
                     onAddLocationClick = onAddLocationClick
                 )
+            }
+        } else {
+            // Initial async decode of the saved configs can take a moment when there are many of
+            // them; show a spinner so the list area doesn't sit blank (looking frozen) until it loads.
+            item(key = "locations-loading") {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
             }
         }
         return
