@@ -90,12 +90,18 @@ internal class AndroidFreeturnServerInstaller(private val context: Context) : Fr
 }
 
 /**
- * The remote install script (ONE shell command). Installs the binary, ensures wireguard-tools, brings
- * up a persistent WireGuard exit `ftwg` (10.7.1.0/24, ListenPort 51821) with NAT/forwarding via
- * wg-quick, generates the server+client WireGuard keypair and an obf key, then writes + starts the
- * freeturn-server systemd unit (`-connect 127.0.0.1:51821 -mode udp`). It echoes a `RESULT::` line
- * carrying the keys so the app can build the client freeturn:// link. One freeturn server per VPS:
- * a reinstall replaces the single `ftwg` interface and the service.
+ * The remote install script (ONE shell command). It is **idempotent and port-scoped**: the systemd
+ * unit (`freeturn-server-<port>`) and the WireGuard exit (`ftwg<port>`, in its own `10.7.N.0/24` with
+ * a per-port ListenPort) are keyed on the freeturn port. If that exact service is already installed on
+ * this port it is fully torn down (service + wg interface + config + any stray process on the UDP
+ * port) and reinstalled from scratch with the new keys/params — so re-running the installer always
+ * yields a clean server, and different ports can coexist on one VPS (for same-VPS multi-server).
+ *
+ * Steps: install the binary, ensure wireguard-tools, tear down any prior install on this port (and a
+ * legacy single `freeturn-server`/`ftwg` install if it was bound to this port), bring up the per-port
+ * WireGuard exit with NAT/forwarding via wg-quick, generate the server+client keypair + obf key, then
+ * write + start the freeturn-server unit (`-connect 127.0.0.1:<wgport> -mode udp`). It echoes a
+ * `RESULT::` line carrying the keys + the client WG address so the app can build the freeturn:// link.
  *
  * Only the numeric port and the (validated) obf-profile are interpolated from Kotlin; everything else
  * is generated server-side, so no untrusted value reaches the shell.
@@ -113,37 +119,62 @@ internal fun buildInstallScript(options: FreeturnInstallOptions): String {
         mkdir -p /etc/wireguard
         wan=${'$'}(ip route show default 2>/dev/null | awk '/default/ {print ${'$'}5; exit}')
         [ -n "${'$'}wan" ] || wan=eth0
-        systemctl stop wg-quick@ftwg 2>/dev/null || true
-        wg-quick down ftwg 2>/dev/null || true
+        port=$port
+        svc=freeturn-server-${'$'}port
+        iface=ftwg${'$'}port
+        # Per-port private subnet + wg ListenPort so multiple freeturn servers can coexist on one VPS.
+        net=${'$'}(( port % 250 + 1 ))
+        wgport=${'$'}(( 51820 + net ))
+        # --- Idempotent teardown: if THIS service is already installed on THIS port, remove it and
+        #     reinstall from scratch with the new parameters (requirement: reinstall, don't stack). ---
+        if systemctl list-unit-files 2>/dev/null | grep -q "^${'$'}svc.service" || [ -f /etc/systemd/system/${'$'}svc.service ]; then
+          echo "Обнаружена служба ${'$'}svc — удаляю и переустанавливаю с новыми параметрами"
+        fi
+        systemctl disable --now ${'$'}svc 2>/dev/null || true
+        rm -f /etc/systemd/system/${'$'}svc.service
+        systemctl stop wg-quick@${'$'}iface 2>/dev/null || true
+        wg-quick down ${'$'}iface 2>/dev/null || true
+        rm -f /etc/wireguard/${'$'}iface.conf
+        # Legacy single-server install (old script used the fixed names freeturn-server/ftwg) — tear it
+        # down too, but ONLY if it was bound to THIS port, so a different-port legacy server survives.
+        if [ -f /etc/systemd/system/freeturn-server.service ] && grep -q "0.0.0.0:${'$'}port " /etc/systemd/system/freeturn-server.service; then
+          systemctl disable --now freeturn-server 2>/dev/null || true
+          rm -f /etc/systemd/system/freeturn-server.service
+          systemctl stop wg-quick@ftwg 2>/dev/null || true; wg-quick down ftwg 2>/dev/null || true
+          rm -f /etc/wireguard/ftwg.conf
+        fi
+        # Free the UDP port in case a stray process still holds it.
+        command -v fuser >/dev/null 2>&1 && fuser -k ${'$'}port/udp 2>/dev/null || true
+        systemctl daemon-reload
         spriv=${'$'}(wg genkey); spub=${'$'}(printf '%s' "${'$'}spriv" | wg pubkey)
         cpriv=${'$'}(wg genkey); cpub=${'$'}(printf '%s' "${'$'}cpriv" | wg pubkey)
         umask 077
-        cat > /etc/wireguard/ftwg.conf <<EOF
+        cat > /etc/wireguard/${'$'}iface.conf <<EOF
         [Interface]
-        Address = 10.7.1.1/24
-        ListenPort = 51821
+        Address = 10.7.${'$'}net.1/24
+        ListenPort = ${'$'}wgport
         PrivateKey = ${'$'}spriv
         PostUp = sysctl -w net.ipv4.ip_forward=1
-        PostUp = iptables -t nat -A POSTROUTING -s 10.7.1.0/24 -o ${'$'}wan -j MASQUERADE
-        PostUp = iptables -A FORWARD -i ftwg -j ACCEPT
-        PostUp = iptables -A FORWARD -o ftwg -j ACCEPT
-        PostDown = iptables -t nat -D POSTROUTING -s 10.7.1.0/24 -o ${'$'}wan -j MASQUERADE
-        PostDown = iptables -D FORWARD -i ftwg -j ACCEPT
-        PostDown = iptables -D FORWARD -o ftwg -j ACCEPT
+        PostUp = iptables -t nat -A POSTROUTING -s 10.7.${'$'}net.0/24 -o ${'$'}wan -j MASQUERADE
+        PostUp = iptables -A FORWARD -i ${'$'}iface -j ACCEPT
+        PostUp = iptables -A FORWARD -o ${'$'}iface -j ACCEPT
+        PostDown = iptables -t nat -D POSTROUTING -s 10.7.${'$'}net.0/24 -o ${'$'}wan -j MASQUERADE
+        PostDown = iptables -D FORWARD -i ${'$'}iface -j ACCEPT
+        PostDown = iptables -D FORWARD -o ${'$'}iface -j ACCEPT
 
         [Peer]
         PublicKey = ${'$'}cpub
-        AllowedIPs = 10.7.1.2/32
+        AllowedIPs = 10.7.${'$'}net.2/32
         EOF
-        systemctl enable --now wg-quick@ftwg
+        systemctl enable --now wg-quick@${'$'}iface
         key=${'$'}(/usr/local/bin/freeturn-server -gen-obf-key | tr -d '\r\n ')
-        cat > /etc/systemd/system/freeturn-server.service <<UNIT
+        cat > /etc/systemd/system/${'$'}svc.service <<UNIT
         [Unit]
-        Description=Free Turn Proxy Server
-        After=network-online.target wg-quick@ftwg.service
+        Description=Free Turn Proxy Server (port $port)
+        After=network-online.target wg-quick@${'$'}iface.service
         Wants=network-online.target
         [Service]
-        ExecStart=/usr/local/bin/freeturn-server -listen 0.0.0.0:$port -connect 127.0.0.1:51821 -mode udp -obf-profile $prof -obf-key ${'$'}key
+        ExecStart=/usr/local/bin/freeturn-server -listen 0.0.0.0:$port -connect 127.0.0.1:${'$'}wgport -mode udp -obf-profile $prof -obf-key ${'$'}key
         Restart=always
         RestartSec=3
         LimitNOFILE=1048576
@@ -153,9 +184,9 @@ internal fun buildInstallScript(options: FreeturnInstallOptions): String {
         if command -v ufw >/dev/null 2>&1; then ufw allow $port/udp || true; fi
         if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --add-port=$port/udp --permanent && firewall-cmd --reload || true; fi
         systemctl daemon-reload
-        systemctl enable --now freeturn-server
+        systemctl enable --now ${'$'}svc
         sleep 1
-        systemctl is-active freeturn-server >/dev/null && echo "Служба freeturn-server активна на порту $port (wg ftwg, NAT->${'$'}wan)"
-        echo "RESULT::${'$'}key|${'$'}spub|${'$'}cpriv|10.7.1.2/32"
+        systemctl is-active ${'$'}svc >/dev/null && echo "Служба ${'$'}svc активна на порту $port (wg ${'$'}iface 10.7.${'$'}net.0/24:${'$'}wgport, NAT->${'$'}wan)"
+        echo "RESULT::${'$'}key|${'$'}spub|${'$'}cpriv|10.7.${'$'}net.2/32"
     """.trimIndent()
 }
