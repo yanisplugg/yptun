@@ -458,9 +458,12 @@ object SingBoxConfig {
                             put("action", "reject")
                         }
                     }
-                    // The selected routing profile's own buckets (ordered by its routeOrder).
+                    // The selected routing profile's own buckets (ordered by its routeOrder). In the
+                    // hybrid IPv6 modes, also reject IPv6 to the direct bucket so geosite:ru/domain:ru
+                    // sites never egress over the user's real IPv6 (proxied traffic keeps dual-stack).
                     if (routingProfile != null) {
-                        SingBoxRouting.rules(routingProfile).forEach { add(it) }
+                        val hideDirectV6 = effectiveStrategy == "prefer_ipv4" || effectiveStrategy == "prefer_ipv6"
+                        SingBoxRouting.rules(routingProfile, hideDirectIpv6 = hideDirectV6).forEach { add(it) }
                     }
                     // Direct conveniences last (a profile proxy rule above still wins on first match).
                     if (routing.directDomains.isNotEmpty()) {
