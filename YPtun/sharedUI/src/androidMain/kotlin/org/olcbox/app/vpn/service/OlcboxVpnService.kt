@@ -1310,6 +1310,7 @@ class OlcboxVpnService : VpnService() {
                         },
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                         secondProfile = secondProfile,
+                        bypassLan = loadRouting().bypassLan,
                     )
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -1609,6 +1610,7 @@ class OlcboxVpnService : VpnService() {
                     socksPassword = socksPassword,
                     logLevel = "debug",
                     traffic = ipv4Traffic,
+                    bypassLan = routing.bypassLan,
                 )
                 activeProxyCore = ProxyCore.Xray
                 activeFreeturnServers = balancedProfiles.size
@@ -1683,6 +1685,7 @@ class OlcboxVpnService : VpnService() {
                         traffic = ipv4Traffic,
                         routingProfile = xrayProfile,
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                        bypassLan = routing.bypassLan,
                     )
                 } else {
                     addLog("VK-TURN chaining proxy ${chainProxy!!.displayName()} over WireGuard (Xray)")
