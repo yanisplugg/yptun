@@ -18,6 +18,16 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/shape"
 )
 
+// recoverRelay contains a panic in a spawned relay goroutine. The UDP relay races many goroutines
+// against context-cancel on disconnect (closing DTLS/TURN conns, obf codec, packet copy loops); an
+// unrecovered panic in ANY of them aborts the whole process and crashes the Android app right after
+// the user stops VK-TURN. Catch it, log it, and let the goroutine exit cleanly instead.
+func recoverRelay(deps *Deps, streamID int) {
+	if r := recover(); r != nil {
+		deps.log().Errorf("[STREAM %d] recovered relay goroutine panic: %v", streamID, r)
+	}
+}
+
 // DTLSLoop поддерживает единственное DTLS-подключение для streamID, перезапуская
 // его при сбое с backoff 10-30s (пропускается при активном provider-backoff,
 // если предыдущая ошибка - дедлайн). connchan получает свежую половину
@@ -131,6 +141,7 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	// TURNLoop может перезапускать oneTURN несколько раз в рамках одного DTLS
 	// соединения, каждый раз перечитывая conn2; публикуем до завершения DTLS.
 	go func() {
+		defer recoverRelay(deps, streamID)
 		for {
 			select {
 			case <-dtlsctx.Done():
@@ -160,6 +171,7 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 
 	if okchan != nil {
 		go func() {
+			defer recoverRelay(deps, streamID)
 			select {
 			case okchan <- struct{}{}:
 			case <-dtlsctx.Done():
@@ -183,6 +195,7 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	defer disp.unregister(slot)
 
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		defer dtlscancel()
 		for {
 			select {
@@ -200,6 +213,7 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	})
 
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		defer dtlscancel()
 		buf := make([]byte, 1600)
 		for {
@@ -227,7 +241,14 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 
 func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, conn2 net.PacketConn, streamID int, c chan<- error) {
 	var err error
-	defer func() { c <- err }()
+	defer func() {
+		// Contain a panic on the TURN/obf path (esp. during cancel) so it can't crash the process;
+		// the buffered c still gets an error so TURNLoop treats this as a failed stream.
+		if r := recover(); r != nil {
+			err = fmt.Errorf("oneTURN panic recovered: %v", r)
+		}
+		c <- err
+	}()
 	select {
 	case <-time.After(time.Duration(randx.Intn(400)+100) * time.Millisecond):
 	case <-ctx.Done():
@@ -287,6 +308,7 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	// PermDead закрывается при блэкхоле data-path (см. turndial/permwatch.go) -
 	// отменяем turnctx, TURNLoop делает свежий allocate.
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		select {
 		case <-turnctx.Done():
 		case <-stream.PermDead:
@@ -296,6 +318,7 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	})
 
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		defer turncancel()
 		// При obf читаем payload сразу в buf[HeaderLen:], чтобы WrapInPlace
 		// дописал заголовок+tag без копии payload.
@@ -346,6 +369,7 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	})
 
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		defer turncancel()
 		readBufLen := maxPayload
 		if obfConn != nil {

@@ -249,6 +249,11 @@ func buildClientConfig(uri, listenAddr, vkLink string, nStreams int) (*config.Cl
 
 // Stop cancels all running relays and waits (bounded) for them to unwind.
 func Stop() {
+	defer func() { _ = recover() }()
+	// Route any logging emitted by unwinding relay goroutines to Discard (pure Go) BEFORE we cancel:
+	// once the app is tearing VK-TURN down, a late WriteLog into the now-detaching Android/JNI log
+	// bridge could crash the process. The next Start re-registers the writer via SetLogWriter.
+	log.SetOutput(io.Discard)
 	mu.Lock()
 	cs, ds := cancels, dones
 	cancels, dones, relayStreams = nil, nil, nil
