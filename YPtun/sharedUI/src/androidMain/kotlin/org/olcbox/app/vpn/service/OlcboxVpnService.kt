@@ -1645,11 +1645,20 @@ class OlcboxVpnService : VpnService() {
             // THROUGH the WG-over-VK tunnel so the public exit is the proxy, not the VK/WDTT server.
             val chainProxy = if (outboundType == VkTurnConfig.OUTBOUND_WIREGUARD) {
                 val raw = vk.chainProxyLink.takeIf { it.isNotBlank() }
-                val parsed = raw?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+                // Accept a normal share link (vless/vmess/trojan/ss) OR a yptun://inbound link (a whole
+                // shared LocationConfig) — pulling its EXIT proxy (proxy2 ?: proxy). Previously only
+                // ShareLinkParser was tried, so a yptun:// chain proxy returned null and we silently
+                // exited via plain WireGuard ("2 прокси у VK-TURN мимо летит"). Mirrors the dnstt path
+                // and the Standard "additional proxy" field (proxyFromAnyLink).
+                val parsed = raw?.let { link ->
+                    (ShareLinkParser.parse(link)
+                        ?: YptunInboundCodec.parse(link)?.let { it.proxy2 ?: it.proxy })
+                        ?.takeIf { it.isComplete() }
+                }
                 // A link is present but didn't parse → we'd silently exit via plain WG (looks like the
                 // proxy is "ignored"). Make that loud so it's diagnosable instead of a silent bypass.
                 if (raw != null && parsed == null) {
-                    addLog("VK-TURN: proxy link present but could not be parsed — exiting via plain WireGuard (no proxy)")
+                    addLog("VK-TURN: ссылка прокси задана, но не распозналась — выход через чистый WireGuard (без прокси). Нужна vless/vmess/trojan/ss или yptun://inbound.")
                 }
                 parsed
             } else null
