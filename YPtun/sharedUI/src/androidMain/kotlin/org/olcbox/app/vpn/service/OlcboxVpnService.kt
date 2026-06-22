@@ -967,10 +967,6 @@ class OlcboxVpnService : VpnService() {
                     throw IllegalStateException("DNSTT internal port $dnsttPort is still in use")
                 }
             }
-            // The dnstt forwarder is transparent — it can't terminate a local SOCKS handshake, the
-            // upstream SOCKS5 on the dnstt-server is reached end-to-end. Run the bridge no-auth.
-            socksUsername = ""
-            socksPassword = ""
             val dnsttAddr = "$socksListenHost:$dnsttPort"
             addLog("Starting DNSTT on $dnsttAddr (domain=${dnstt.domain}, resolver=${dnstt.resolver})")
             val client = Dnsttmobile.newClient(dnstt.resolver, dnstt.domain, dnstt.pubKey, dnsttAddr)
@@ -991,9 +987,18 @@ class OlcboxVpnService : VpnService() {
             addLog("DNSTT ready on $dnsttAddr")
 
             if (!useProxy) {
+                // No proxy core in front: the hev bridge talks straight to the dnstt forwarder, which
+                // pipes to the dnstt-server's own SOCKS5 end-to-end. That transparent path can't terminate
+                // a SOCKS auth handshake, so the bridge must run no-auth.
+                socksUsername = ""
+                socksPassword = ""
                 publishActiveSocks()
                 return true
             }
+            // Proxy case: the bridge now talks to the Xray/sing-box SOCKS inbound (not the forwarder), so
+            // KEEP the per-session credentials — both the bridge and that inbound use them and must match,
+            // else the core rejects every connection ("proxy/socks: no matching auth method"). The
+            // core→dnstt detour is no-auth (olcrtcChainUser left blank), matching the transparent forwarder.
 
             // Front the dnstt tunnel with the proxy core: TUN → core (socksListenPort) → proxy →
             // dnstt SOCKS (dnsttPort) → dnstt-server → internet. Reuses the olcRTC-chain dialer wiring
