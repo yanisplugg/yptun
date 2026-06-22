@@ -1266,6 +1266,17 @@ class OlcboxVpnService : VpnService() {
                 activeProxyCore = ProxyCore.Xray
                 addLog("Second (cascade) proxy uses xhttp → forcing Xray core")
             }
+            // Cascade diagnostics — make the "second proxy is ignored / exits via the 1st" symptom
+            // visible instead of silent: say whether the cascade is active, dropped as incomplete, or
+            // unusable because the main is a verbatim Xray config (prepareRaw can't chain a 2nd hop).
+            when {
+                secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() ->
+                    addLog("ВНИМАНИЕ: основной прокси — полный кастомный Xray-конфиг; второй (каскадный) прокси НЕ может быть прицеплен поверх него и игнорируется (выход остаётся через 1-й). Нужен обычный vless/vmess/trojan/ss как основной.")
+                secondProfile != null ->
+                    addLog("Каскад: выход через 2-й прокси '${secondProfile.displayName()}' поверх основного '${effectiveProfile.displayName()}'")
+                config.proxy2 != null ->
+                    addLog("Каскад: 2-й прокси ЗАДАН, но ссылка неполная/не распозналась — он отброшен, выход через 1-й прокси")
+            }
             if (activeProxyCore == ProxyCore.Xray) {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""

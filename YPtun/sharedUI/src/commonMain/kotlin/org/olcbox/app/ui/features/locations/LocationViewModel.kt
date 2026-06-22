@@ -718,7 +718,9 @@ class LocationViewModel(
     private fun proxyFromAnyLink(trimmed: String): ProxyProfile? {
         ShareLinkParser.parse(trimmed)?.let { return it }
         rawOutboundProfile(trimmed)?.let { return it }
-        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy ?: config.proxy2 }
+        // When the pasted yptun://inbound is itself a 2-hop cascade, chain through its EXIT (proxy2)
+        // so my hop's public IP matches the shared location's exit; fall back to its main proxy.
+        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy2 ?: config.proxy }
         return null
     }
 
