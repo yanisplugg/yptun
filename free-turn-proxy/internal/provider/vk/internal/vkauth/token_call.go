@@ -169,6 +169,16 @@ func (c *Client) solveCaptcha(
 
 // buildCaptchaRetryData формирует тело POST для следующей попытки captcha.
 func buildCaptchaRetryData(link, escapedName, token1 string, captchaErr *captcha.Error, successToken, captchaKey string) string {
+	if captchaErr.CaptchaSid == "" {
+		// 1.4.3: VK sometimes omits captcha_sid on the smart-captcha (script) path. Retrying with an
+		// empty/invalid sid just re-triggers the challenge, so send the retry without captcha params
+		// (success_token alone) and let the server accept the solved challenge.
+		return fmt.Sprintf(
+			"vk_join_link=https://vk.ru/call/join/%s&name=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
+			link, escapedName, neturl.QueryEscape(successToken),
+			captchaErr.CaptchaTs, captchaErr.CaptchaAttempt, token1,
+		)
+	}
 	if captchaKey != "" {
 		return fmt.Sprintf(
 			"vk_join_link=https://vk.ru/call/join/%s&name=%s&captcha_key=%s&captcha_sid=%s&access_token=%s",
