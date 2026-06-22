@@ -1028,6 +1028,11 @@ class OlcboxVpnService : VpnService() {
                     // not proxySettings — otherwise a vless reality/xtls-vision exit loses its transport and
                     // the server resets it ("если vless то connection reset").
                     chainViaDialerProxy = true,
+                    // THE reset cause: Xray's default 4s handshake budget is far too short for the multi-hop
+                    // handshake over the DNS tunnel (SOCKS5→VPS, VPS→proxy server, then vless/TLS), so Xray
+                    // killed every connection mid-handshake. The no-proxy path survives because the hev
+                    // bridge waits 10s. Give the chained handshake 30s.
+                    handshakeTimeoutSec = 30,
                 )
                 activeProxyCore = ProxyCore.Xray
                 addLog("Starting Xray (DNSTT proxy) via $socksListenHost:$socksListenPort")
@@ -2149,7 +2154,7 @@ class OlcboxVpnService : VpnService() {
               task-stack-size: 24576
               tcp-buffer-size: 4096
               max-session-count: 1200
-              connect-timeout: 10000
+              connect-timeout: ${if (engineType == EngineType.Dnstt) 30000 else 10000}
               tcp-read-write-timeout: 300000
               udp-read-write-timeout: 60000
               log-file: stderr

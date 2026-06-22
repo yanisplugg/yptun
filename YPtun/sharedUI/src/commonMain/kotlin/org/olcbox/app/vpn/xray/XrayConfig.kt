@@ -132,9 +132,31 @@ object XrayConfig {
         // the main (tag [PROXY_BASE_TAG]); the main dials through olcRTC/WG. So: client → [olcRTC/WG] →
         // main → second → internet. Null = the main proxy is the single exit (PROXY_TAG), as before.
         secondProfile: ProxyProfile? = null,
+        // Outbound handshake budget (seconds). Xray's default is only 4s — far too short when the proxy
+        // is chained over an ultra-slow tunnel (dnstt: SOCKS5 greeting+CONNECT to the VPS, then the VPS's
+        // dial to the proxy server, then the vless/TLS handshake, all round-tripping over DNS TXT). Xray
+        // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
+        handshakeTimeoutSec: Int? = null,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
+
+            // Stretch the handshake (and idle) budget for slow chained tunnels so Xray doesn't kill a
+            // still-completing handshake. Only emitted when a caller asks for it (e.g. dnstt).
+            if (handshakeTimeoutSec != null) {
+                putJsonObject("policy") {
+                    putJsonObject("levels") {
+                        putJsonObject("0") {
+                            put("handshake", handshakeTimeoutSec)
+                            put("connIdle", 600)
+                            // Generous half-close drain (defaults are 2s/5s) so a peer that finished one
+                            // direction isn't cut while the other still trickles over the slow tunnel.
+                            put("uplinkOnly", 30)
+                            put("downlinkOnly", 30)
+                        }
+                    }
+                }
+            }
 
             putJsonObject("dns") {
                 val profileHosts = routingProfile?.dnsHosts ?: emptyMap()
