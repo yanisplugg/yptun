@@ -175,6 +175,7 @@ interface Strings {
     val routingTitle: String
     val bypassLan: String
     val bypassLanSubtitle: String
+    val showSystemApps: String
     val bypassRussia: String
     val bypassRussiaSubtitle: String
     val blockAds: String
@@ -751,6 +752,7 @@ object RuStrings : Strings {
     override val routingTitle = "Маршрутизация и правила"
     override val bypassLan = "Обход LAN"
     override val bypassLanSubtitle = "Локальные/приватные адреса идут напрямую"
+    override val showSystemApps = "Системные приложения"
     override val bypassRussia = "Обход России"
     override val bypassRussiaSubtitle = "RU-сайты и IP идут напрямую (geoip + geosite)"
     override val blockAds = "Блокировка рекламы"
@@ -1282,6 +1284,7 @@ object EnStrings : Strings {
     override val routingTitle = "Routing & rules"
     override val bypassLan = "Bypass LAN"
     override val bypassLanSubtitle = "Local/private addresses go direct"
+    override val showSystemApps = "System apps"
     override val bypassRussia = "Bypass Russia"
     override val bypassRussiaSubtitle = "RU sites & IPs go direct (geoip + geosite)"
     override val blockAds = "Block ads"
@@ -1813,6 +1816,7 @@ object FaStrings : Strings {
     override val routingTitle = "مسیریابی و قواعد"
     override val bypassLan = "دور زدن LAN"
     override val bypassLanSubtitle = "نشانی‌های محلی/خصوصی مستقیم می‌روند"
+    override val showSystemApps = "برنامه‌های سیستمی"
     override val bypassRussia = "دور زدن روسیه"
     override val bypassRussiaSubtitle = "سایت‌ها و IPهای روسیه مستقیم می‌روند (geoip + geosite)"
     override val blockAds = "مسدودسازی تبلیغات"

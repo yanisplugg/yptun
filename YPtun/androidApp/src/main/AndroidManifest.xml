@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Split tunneling needs to enumerate ALL installed apps (incl. system/background packages with
+         no launcher icon) so they can be included in / excluded from the tunnel. Distributed outside
+         Google Play, so the QUERY_ALL_PACKAGES policy restriction doesn't apply. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <uses-feature
         android:name="android.hardware.camera"

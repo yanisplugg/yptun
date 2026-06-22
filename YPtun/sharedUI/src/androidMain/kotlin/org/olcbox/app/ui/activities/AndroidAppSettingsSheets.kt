@@ -1116,6 +1116,10 @@ private fun SplitTunnelingAppListContent(
     onRussianBypassPresetEnabledChanged: (Boolean) -> Unit
 ) {
     var query by remember(list) { mutableStateOf("") }
+    // System/background apps (no launcher icon) are hidden by default so the list stays familiar;
+    // this reveals them so they can be included/excluded too. Already-selected ones stay visible.
+    var showSystemApps by remember { mutableStateOf(false) }
+    val hasSystemApps = remember(installedApps) { installedApps.any { it.isSystem } }
 
     // Не просто scrollToItem(0): keyed LazyColumn может успеть сохранить старый visible key
     // и слегка увести список к элементу, который переехал. Для bulk/search-сценариев
@@ -1168,11 +1172,16 @@ private fun SplitTunnelingAppListContent(
             )
         }
     }
-    val filteredApps = remember(appListEntries, normalizedQuery, sortSelectedPackages, sortAutoBypassPackages) {
+    val filteredApps = remember(appListEntries, normalizedQuery, sortSelectedPackages, sortAutoBypassPackages, showSystemApps, selectedPackages) {
+        val visible = appListEntries.filter { entry ->
+            // Hide system apps unless the toggle is on — but never hide one that's already selected,
+            // so the user can always see and remove their own choices.
+            showSystemApps || !entry.app.isSystem || entry.app.packageName in selectedPackages
+        }
         val apps = if (normalizedQuery.isBlank()) {
-            appListEntries
+            visible
         } else {
-            appListEntries.filter { entry ->
+            visible.filter { entry ->
                 entry.labelSortKey.contains(normalizedQuery) ||
                         entry.packageSortKey.contains(normalizedQuery)
             }
@@ -1242,6 +1251,35 @@ private fun SplitTunnelingAppListContent(
             label = { Text(LocalStrings.current.searchApps) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search)
         )
+
+        if (hasSystemApps) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = enabled) {
+                        showSystemApps = !showSystemApps
+                        resetListScrollToTop()
+                    }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = LocalStrings.current.showSystemApps,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = showSystemApps,
+                    onCheckedChange = {
+                        showSystemApps = it
+                        resetListScrollToTop()
+                    },
+                    enabled = enabled
+                )
+            }
+        }
 
         if (list == AndroidSplitTunnelList.Bypass) {
             Spacer(Modifier.height(10.dp))

@@ -900,16 +900,49 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             packageManager.queryIntentActivities(launcherIntent, 0)
         }
 
-        resolveInfos
+        val launcherApps = resolveInfos
             .mapNotNull { it.activityInfo?.applicationInfo }
             .filter { it.packageName != appContext.packageName }
             .distinctBy { it.packageName }
             .map { appInfo ->
                 AndroidInstalledApp(
                     packageName = appInfo.packageName,
-                    label = appInfo.loadLabel(packageManager).toString()
+                    label = appInfo.loadLabel(packageManager).toString(),
+                    isSystem = false
                 )
             }
+
+        // ALSO list system / background packages that hold the INTERNET permission but have no launcher
+        // icon (system services, GMS, carrier apps, WebView, etc.), so they can be excluded from /
+        // included in the tunnel too. Marked isSystem=true; the UI hides them behind an off-by-default
+        // toggle so the default list is unchanged. Best-effort: any failure just yields no extra apps.
+        val launcherPackages = launcherApps.mapTo(mutableSetOf()) { it.packageName }
+        val systemApps = runCatching {
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getInstalledPackages(
+                    PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getInstalledPackages(PackageManager.GET_PERMISSIONS)
+            }
+            flags.asSequence()
+                .filter { it.packageName != appContext.packageName && it.packageName !in launcherPackages }
+                // Only apps that can actually use the network are meaningful to route/bypass.
+                .filter { it.requestedPermissions?.contains(android.Manifest.permission.INTERNET) == true }
+                .mapNotNull { pkg ->
+                    val info = pkg.applicationInfo ?: return@mapNotNull null
+                    AndroidInstalledApp(
+                        packageName = pkg.packageName,
+                        label = info.loadLabel(packageManager).toString(),
+                        isSystem = true
+                    )
+                }
+                .toList()
+        }.getOrElse { emptyList() }
+
+        (launcherApps + systemApps)
+            .distinctBy { it.packageName }
             .sortedWith(compareBy<AndroidInstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
     }
 
