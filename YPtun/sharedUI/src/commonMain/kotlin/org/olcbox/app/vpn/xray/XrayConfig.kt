@@ -121,6 +121,12 @@ object XrayConfig {
         // there: the bridge already drops client IPv6 for ipv4 modes, so the family stays pinned without
         // forcing per-connection resolution over the tunnel.
         forceFamilyResolve: Boolean = true,
+        // Chain the main proxy through its detour with sockopt.dialerProxy (socket-level) instead of
+        // proxySettings (proxy-level). proxySettings re-wraps the outbound and DROPS its own transport —
+        // a vless+reality / xtls-vision exit then sends a malformed handshake and the server resets the
+        // connection ("vless → connection reset" over dnstt). dialerProxy keeps the full vless/TLS/flow
+        // intact and only routes the underlying socket through the detour. Set for the dnstt chain.
+        chainViaDialerProxy: Boolean = false,
         // Optional SECOND proxy chained ON TOP of [profile] (the main). When present, traffic exits via
         // this proxy (tag [PROXY_TAG], emitted first so it's Xray's default outbound) which dials THROUGH
         // the main (tag [PROXY_BASE_TAG]); the main dials through olcRTC/WG. So: client → [olcRTC/WG] →
@@ -226,6 +232,7 @@ object XrayConfig {
                             traffic = traffic,
                             detourTagOverride = baseDetour,
                             tag = PROXY_TAG,
+                            chainViaDialerProxy = chainViaDialerProxy,
                         )
                     )
                 }
@@ -567,6 +574,9 @@ object XrayConfig {
         // Outbound tag to emit. [PROXY_TAG] for the exit (default), [PROXY_BASE_TAG] for the main hop
         // when a second/cascade proxy exits in front of it.
         tag: String = PROXY_TAG,
+        // Force socket-level (dialerProxy) chaining over the detour even for non-xhttp transports — keeps
+        // a vless reality/vision exit intact over the dnstt chain (see [build]'s chainViaDialerProxy).
+        chainViaDialerProxy: Boolean = false,
     ) = buildJsonObject {
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", tag)
@@ -654,7 +664,7 @@ object XrayConfig {
         // dialerProxy whenever the profile carries an xhttp transport over a detour, in addition to the
         // cascade-exit case. Non-xhttp profiles over WG/olcRTC keep proxySettings (unchanged, works).
         val needsDialerProxy = detourTag != null &&
-            (detourTag == PROXY_BASE_TAG || profile.network == ProxyProfile.NETWORK_XHTTP)
+            (detourTag == PROXY_BASE_TAG || profile.network == ProxyProfile.NETWORK_XHTTP || chainViaDialerProxy)
         val dialerProxyTag = if (needsDialerProxy) detourTag else null
         if (!isLocalSocks) {
             put("streamSettings", buildStreamSettings(

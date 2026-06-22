@@ -210,13 +210,15 @@ data class DnsttConfig(
     fun hasProxy(): Boolean = proxyLink.isNotBlank()
 
     /** Resolves [proxyCore]==Auto to a concrete backend for the over-dnstt [profile]. Mirrors
-     *  [VkTurnConfig.resolvedProxyCore]. */
+     *  [VkTurnConfig.resolvedProxyCore], but defaults to Xray: chaining the exit over the dnstt SOCKS
+     *  needs socket-level dialerProxy chaining (Xray) to keep a vless reality/xtls-vision transport
+     *  intact — proxySettings/other paths reset it. An explicit per-location or global core still wins. */
     fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
         proxyCore != ProxyCore.Auto -> proxyCore
         !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
         profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
         globalCore != ProxyCore.Auto -> globalCore
-        else -> ProxyCore.SingBox
+        else -> ProxyCore.Xray
     }
 
     fun normalized(): DnsttConfig = DnsttConfig(

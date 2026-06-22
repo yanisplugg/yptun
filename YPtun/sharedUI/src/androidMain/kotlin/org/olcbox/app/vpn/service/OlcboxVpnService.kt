@@ -68,6 +68,7 @@ import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.data.importer.ShareLinkParser
+import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
 import org.olcbox.app.vpn.xray.XrayConfig
@@ -939,8 +940,14 @@ class OlcboxVpnService : VpnService() {
         // Optional proxy chained ON TOP of the dnstt tunnel: the proxy server is dialled THROUGH the
         // dnstt local SOCKS, so the public exit is the proxy, not the dnstt-server. When present, dnstt
         // moves to an internal port and a proxy core (Xray/sing-box) fronts the bridge on socksListenPort.
-        val proxy = dnstt.proxyLink.takeIf { it.isNotBlank() }
-            ?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+        // Accept a normal share link (vless/vmess/trojan/ss) OR a yptun://inbound link (a whole shared
+        // LocationConfig) — pulling its main/second proxy out — so the same paste that works for the
+        // Standard "additional proxy" field works here too.
+        val proxy = dnstt.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link)
+                ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?.takeIf { it.isComplete() }
+        }
         if (dnstt.proxyLink.isNotBlank() && proxy == null) {
             addLog("DNSTT: proxy link present but could not be parsed — exiting via dnstt SOCKS directly (no proxy)")
         }
@@ -1017,6 +1024,10 @@ class OlcboxVpnService : VpnService() {
                     // tunnel — it stalls all traffic. The bridge's v6 drop keeps ipv4 pinned. See the
                     // matching forceFamilyResolve/allowLocalResolve opt-out on the sing-box path below.
                     forceFamilyResolve = false,
+                    // Chain the vless/trojan exit through the dnstt SOCKS at the SOCKET level (dialerProxy),
+                    // not proxySettings — otherwise a vless reality/xtls-vision exit loses its transport and
+                    // the server resets it ("если vless то connection reset").
+                    chainViaDialerProxy = true,
                 )
                 activeProxyCore = ProxyCore.Xray
                 addLog("Starting Xray (DNSTT proxy) via $socksListenHost:$socksListenPort")
