@@ -114,6 +114,13 @@ object XrayConfig {
         // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
         // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
         blockQuic: Boolean = true,
+        // Family enforcement (the opposite-family blackhole + IPIfNonMatch routing-resolve that ipv4_only/
+        // prefer_ipv4/ipv6_only turn on). IPIfNonMatch makes Xray resolve EVERY domain for routing, and
+        // those DNS lookups egress via the proxy — i.e. through the tunnel. On a very slow tunnel (dnstt:
+        // DNS TXT) that adds a tunnel round-trip to every connection and stalls all traffic. Pass false
+        // there: the bridge already drops client IPv6 for ipv4 modes, so the family stays pinned without
+        // forcing per-connection resolution over the tunnel.
+        forceFamilyResolve: Boolean = true,
         // Optional SECOND proxy chained ON TOP of [profile] (the main). When present, traffic exits via
         // this proxy (tag [PROXY_TAG], emitted first so it's Xray's default outbound) which dials THROUGH
         // the main (tag [PROXY_BASE_TAG]); the main dials through olcRTC/WG. So: client → [olcRTC/WG] →
@@ -282,11 +289,12 @@ object XrayConfig {
             // tunnel IPv6, and without this the EXIT proxy's dual-stack server picks AAAA for proxied
             // domains → 2ip shows the tunnel's IPv6 even though the bridge already drops client-side v6.
             // This is the SAME recipe as ipv4_only (which works), so it adds no new failure mode.
-            val familyBlockRule = when (traffic.domainStrategy) {
-                "ipv4_only", "prefer_ipv4" -> buildJsonObject {
+            val familyBlockRule = when {
+                !forceFamilyResolve -> null
+                traffic.domainStrategy == "ipv4_only" || traffic.domainStrategy == "prefer_ipv4" -> buildJsonObject {
                     put("type", "field"); putJsonArray("ip") { add("::/0") }; put("outboundTag", "block")
                 }
-                "ipv6_only" -> buildJsonObject {
+                traffic.domainStrategy == "ipv6_only" -> buildJsonObject {
                     put("type", "field"); putJsonArray("ip") { add("0.0.0.0/0") }; put("outboundTag", "block")
                 }
                 else -> null

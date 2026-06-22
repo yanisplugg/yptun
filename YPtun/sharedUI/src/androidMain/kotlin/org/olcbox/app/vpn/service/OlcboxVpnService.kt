@@ -1013,6 +1013,10 @@ class OlcboxVpnService : VpnService() {
                     traffic = traffic,
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     blockQuic = true,
+                    // Don't force per-connection domain resolution (IPIfNonMatch) over the slow dnstt
+                    // tunnel — it stalls all traffic. The bridge's v6 drop keeps ipv4 pinned. See the
+                    // matching forceFamilyResolve/allowLocalResolve opt-out on the sing-box path below.
+                    forceFamilyResolve = false,
                 )
                 activeProxyCore = ProxyCore.Xray
                 addLog("Starting Xray (DNSTT proxy) via $socksListenHost:$socksListenPort")
@@ -1033,6 +1037,21 @@ class OlcboxVpnService : VpnService() {
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     logLevel = "debug",
                     blockQuic = true,
+                    // dnstt is the slowest tunnel we have (DNS TXT, tiny MTU). With forceFamilyResolve on
+                    // (the default), a strict ipv4_only/ipv6_only strategy makes sing-box add a per-connection
+                    // `resolve` action that resolves EVERY destination via the `remote` DNS server — whose
+                    // detour is PROXY_TAG, i.e. a DNS query THROUGH the vless proxy THROUGH the dnstt tunnel.
+                    // Every connection then blocks on a DNS round-trip over the DNS tunnel and stalls out
+                    // ("traffic doesn't flow"). Opt out exactly like the AmneziaWG/VK-TURN constrained
+                    // tunnels: domains pass straight to the proxy (resolved server-side on the VPS), and the
+                    // ipv4 family is still enforced by the bridge's IPv6 drop — so no per-hop DNS over dnstt
+                    // and no v6 leak.
+                    forceFamilyResolve = false,
+                    // Same reason for the geo/bypass-RU `resolve` action: resolving destinations through
+                    // the proxy over the DNS tunnel adds a fatal round-trip per connection. Skip it — over
+                    // dnstt all traffic rides the tunnel anyway (direct is censored), so IP-based RU-direct
+                    // is moot; domain/geosite rules still work.
+                    allowLocalResolve = false,
                 )
                 activeProxyCore = ProxyCore.SingBox
                 addLog("Starting sing-box (DNSTT proxy) via $socksListenHost:$socksListenPort")

@@ -101,6 +101,13 @@ object SingBoxConfig {
         // ("err connection closed"). Domains then pass through to the tunnel to resolve, as they did
         // before the routing rework. IP-based rules (geoip/ip_cidr) still trigger a resolve regardless.
         forceFamilyResolve: Boolean = true,
+        // Whether the sniffed-domain `resolve` action may run. It resolves app destinations via the
+        // `remote` DNS server, whose detour is the proxy — i.e. a DNS lookup THROUGH the tunnel. On a
+        // very slow tunnel (dnstt: DNS TXT, tiny MTU) that adds a tunnel round-trip to EVERY connection
+        // and stalls browsing, so the dnstt-proxy path passes false: domains then go straight to the
+        // proxy (resolved server-side). Costs only IP-based geo rules (geoip:ru → direct); domain/geosite
+        // rules still match without a local IP, and the family is still pinned by the bridge's v6 drop.
+        allowLocalResolve: Boolean = true,
         // Sniff the SNI/Host and OVERRIDE the connection destination with it before routing, then
         // resolve it to [dnsStrategyOverride]/[TrafficSettings.domainStrategy]. This is what lets a
         // v4-only full tunnel (AmneziaWG) stay IPv4-only WITHOUT rejecting traffic: an app's own-DoH
@@ -372,8 +379,9 @@ object SingBoxConfig {
                     // v2rayNG-style manual rules that use IP/geoip selectors also need the sniffed
                     // domain resolved first, or `geoip:ru → direct` silently skips domain connections.
                     val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
-                    if (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
-                        manualRulesUseIp || (sbExpert && routingProfile!!.singboxResolve)
+                    if (allowLocalResolve &&
+                        (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
+                            manualRulesUseIp || (sbExpert && routingProfile!!.singboxResolve))
                     ) {
                         addJsonObject {
                             put("action", "resolve")
