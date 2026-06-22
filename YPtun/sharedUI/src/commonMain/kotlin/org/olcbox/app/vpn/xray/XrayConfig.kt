@@ -615,13 +615,22 @@ object XrayConfig {
                     addJsonObject {
                         put("tag", WG_BALANCER_TAG)
                         putJsonArray("selector") { add(WG_BAL_PREFIX) }
-                        // `random` needs no observatory and distributes per-connection, so each new
-                        // connection may pick a different server — bandwidth adds up across servers.
-                        putJsonObject("strategy") { put("type", "random") }
+                        // roundRobin spreads connections EVENLY across the servers (random can clump a
+                        // few-stream speedtest onto one server → "looks like only one works"). Needs no
+                        // observatory. Each new connection takes the next server, so a multi-stream test
+                        // aggregates the servers' bandwidth.
+                        putJsonObject("strategy") { put("type", "roundRobin") }
                     }
                 }
                 putJsonArray("rules") {
                     if (traffic.fakeDnsEnabled) dnsHijackRules().forEach { add(it) }
+                    // Hard IPv4-only: blackhole any IPv6 destination so the VK tunnel never carries v6
+                    // (no tunnel-IPv6 leak on RU/direct sites). The WG tunnel is v4-only anyway.
+                    addJsonObject {
+                        put("type", "field")
+                        putJsonArray("ip") { add("::/0") }
+                        put("outboundTag", "block")
+                    }
                     // Everything else exits via the balanced WireGuard set.
                     addJsonObject {
                         put("type", "field")
@@ -691,7 +700,12 @@ object XrayConfig {
                     addJsonObject {
                         put("publicKey", peerPub)
                         put("endpoint", "$server:$port")
-                        putJsonArray("allowedIPs") { add("0.0.0.0/0"); add("::/0") }
+                        // IPv4 ONLY: the WG-over-VK tunnel is v4-only (client address is v4, the VPS
+                        // NATs v4 only). Advertising ::/0 here let Xray route IPv6 INTO the tunnel, so a
+                        // RU/"direct" site reached through VK-TURN egressed via the VPS's IPv6 — the
+                        // "tunnel IPv6 leaks on RU sites under prefer_ipv4" report. Drop ::/0 so v6 is
+                        // never carried; ForceIPv4 above already resolves destinations to A.
+                        putJsonArray("allowedIPs") { add("0.0.0.0/0") }
                         // Keep the tunnel alive through the TURN relay / NAT (matches wg-quick clients).
                         put("keepAlive", keepalive)
                     }
