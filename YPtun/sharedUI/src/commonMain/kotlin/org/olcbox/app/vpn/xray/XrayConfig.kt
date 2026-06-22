@@ -127,6 +127,12 @@ object XrayConfig {
         // connection ("vless → connection reset" over dnstt). dialerProxy keeps the full vless/TLS/flow
         // intact and only routes the underlying socket through the detour. Set for the dnstt chain.
         chainViaDialerProxy: Boolean = false,
+        // For VK-TURN / dnstt: the base tunnel (WireGuard / dnstt SOCKS) is the MANDATORY transport, so a
+        // routing rule's `direct` bucket must NOT leak to the real network — it should still exit through
+        // the base tunnel (at the VK / dnstt-server). When true, the `direct` outbound dials through the
+        // base detour instead of dialing the destination on the real interface. So routing only chooses
+        // base-tunnel-exit (direct) vs second-proxy-exit (proxy); nothing ever bypasses the tunnel.
+        directViaBase: Boolean = false,
         // Optional SECOND proxy chained ON TOP of [profile] (the main). When present, traffic exits via
         // this proxy (tag [PROXY_TAG], emitted first so it's Xray's default outbound) which dials THROUGH
         // the main (tag [PROXY_BASE_TAG]); the main dials through olcRTC/WG. So: client → [olcRTC/WG] →
@@ -220,6 +226,14 @@ object XrayConfig {
             val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
             // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
             val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
+            // The base tunnel's exit tag (WG for VK-TURN, dnstt SOCKS for dnstt). Used to keep `direct`
+            // traffic on the tunnel when [directViaBase].
+            val baseExitTag = when {
+                wgBaseOutbound != null -> WG_BASE_TAG
+                olcrtcChainPort != null -> OLCRTC_TAG
+                else -> null
+            }
+            val directDialsBase = directViaBase && baseExitTag != null
             val second = secondProfile?.takeIf { it.isComplete() }
             putJsonArray("outbounds") {
                 if (second != null) {
@@ -265,6 +279,13 @@ object XrayConfig {
                     putJsonObject("settings") {
                         // Resolve direct destinations via xray's own DNS, not Go's (broken on Android).
                         put("domainStrategy", directDomainStrategy(traffic))
+                    }
+                    // VK-TURN / dnstt: send `direct` traffic THROUGH the base tunnel (the dnstt-server /
+                    // VK exit) instead of the real interface, so routing never bypasses the tunnel.
+                    if (directDialsBase) {
+                        putJsonObject("streamSettings") {
+                            putJsonObject("sockopt") { put("dialerProxy", baseExitTag) }
+                        }
                     }
                 }
                 // Always present: needed by the RU blocklist, profile block buckets AND the QUIC

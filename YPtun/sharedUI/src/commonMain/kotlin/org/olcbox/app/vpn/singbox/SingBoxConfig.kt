@@ -108,6 +108,12 @@ object SingBoxConfig {
         // proxy (resolved server-side). Costs only IP-based geo rules (geoip:ru → direct); domain/geosite
         // rules still match without a local IP, and the family is still pinned by the bridge's v6 drop.
         allowLocalResolve: Boolean = true,
+        // VK-TURN / dnstt: the base tunnel (WireGuard / dnstt SOCKS) is the MANDATORY transport, so a
+        // routing rule's `direct` bucket must NOT leak to the real network — it should still exit through
+        // the base tunnel. When true, the `direct` outbound dials through the base detour (WG / olcRTC),
+        // so routing only chooses base-tunnel-exit (direct) vs second-proxy-exit (proxy); the tunnel is
+        // never bypassed.
+        directViaBase: Boolean = false,
         // Sniff the SNI/Host and OVERRIDE the connection destination with it before routing, then
         // resolve it to [dnsStrategyOverride]/[TrafficSettings.domainStrategy]. This is what lets a
         // v4-only full tunnel (AmneziaWG) stay IPv4-only WITHOUT rejecting traffic: an app's own-DoH
@@ -229,6 +235,14 @@ object SingBoxConfig {
                 val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
                 val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
+                // Base tunnel exit tag (WG for VK-TURN, dnstt SOCKS for dnstt) — keeps `direct` traffic on
+                // the tunnel when [directViaBase].
+                val baseExitTag = when {
+                    wgBaseOutbound != null -> WG_BASE_TAG
+                    olcrtcChainPort != null -> OLCRTC_TAG
+                    else -> null
+                }
+                val directDialsBase = directViaBase && baseExitTag != null
                 val second = secondProfile?.takeIf { it.isComplete() }
                 if (second != null) {
                     // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG), which dials THROUGH the
@@ -277,6 +291,9 @@ object SingBoxConfig {
                 addJsonObject {
                     put("type", "direct")
                     put("tag", "direct")
+                    // VK-TURN / dnstt: route `direct` traffic THROUGH the base tunnel (dnstt-server / VK
+                    // exit) instead of the real interface, so routing never bypasses the tunnel.
+                    if (directDialsBase) put("detour", baseExitTag)
                     // IPv6-leak guard for HYBRID modes (prefer_ipv4/prefer_ipv6): the direct/bypass path
                     // (domain:ru → direct) would otherwise dial the user's REAL IPv6 for dual-stack sites,
                     // exposing it on a leak check ("domain:ru goes direct only over IPv4, IPv6 leaks").

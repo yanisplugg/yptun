@@ -1038,6 +1038,10 @@ class OlcboxVpnService : VpnService() {
                     // killed every connection mid-handshake. The no-proxy path survives because the hev
                     // bridge waits 10s. Give the chained handshake 30s.
                     handshakeTimeoutSec = 30,
+                    // Routing must NOT bypass the dnstt tunnel: a `direct` rule (e.g. Россия напрямую)
+                    // exits via the dnstt-server, not the real network. Routing only picks base-exit
+                    // (direct) vs second-proxy-exit (proxy); the tunnel itself is never routed around.
+                    directViaBase = true,
                 )
                 activeProxyCore = ProxyCore.Xray
                 addLog("Starting Xray (DNSTT proxy) via $socksListenHost:$socksListenPort")
@@ -1073,6 +1077,9 @@ class OlcboxVpnService : VpnService() {
                     // dnstt all traffic rides the tunnel anyway (direct is censored), so IP-based RU-direct
                     // is moot; domain/geosite rules still work.
                     allowLocalResolve = false,
+                    // `direct` traffic exits via the dnstt-server (base tunnel), never the real network —
+                    // routing only governs the second proxy, the tunnel itself is never bypassed.
+                    directViaBase = true,
                 )
                 activeProxyCore = ProxyCore.SingBox
                 addLog("Starting sing-box (DNSTT proxy) via $socksListenHost:$socksListenPort")
@@ -1594,6 +1601,9 @@ class OlcboxVpnService : VpnService() {
                         traffic = ipv4Traffic,
                         routingProfile = xrayProfile,
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                        // Routing must NOT bypass the VK tunnel: a `direct` rule exits via the WG-over-VK
+                        // base, not the real network. Routing only picks VK-exit (direct) vs chain-proxy.
+                        directViaBase = true,
                     )
                 }
                 activeProxyCore = ProxyCore.Xray
@@ -1677,6 +1687,9 @@ class OlcboxVpnService : VpnService() {
                             logLevel = "debug",
                             dnsStrategyOverride = "ipv4_only",
                             blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                            // `direct` traffic exits via the WG-over-VK base, never the real network —
+                            // routing only governs the chain proxy; the VK tunnel is never bypassed.
+                            directViaBase = true,
                         )
                     } else {
                         SingBoxConfig.build(
