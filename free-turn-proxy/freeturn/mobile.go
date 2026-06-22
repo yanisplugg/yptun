@@ -94,7 +94,7 @@ func SetLogWriter(w LogWriter) {
 
 // freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
 // Bump it whenever the vendored core is updated; surfaced in the app's settings.
-const freeturnVersion = "1.4.1"
+const freeturnVersion = "1.4.3"
 
 // Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
 func Version() string { return freeturnVersion }
@@ -199,6 +199,16 @@ func StartMulti(specsJson string) error {
 		newStreams = append(newStreams, st)
 		go func(rctx context.Context, c *config.Client, lks []string, d chan struct{}, counter *atomic.Int32) {
 			defer close(d)
+			// A panic inside a relay goroutine (provider/DTLS/TURN paths, VK API surprises) would
+			// otherwise abort the WHOLE process and crash the Android app. Contain it here: log it,
+			// zero this relay's stream counter (so ActiveRelays drops it), and let the other relays
+			// keep serving — "even if one server dies, the connection still works".
+			defer func() {
+				if r := recover(); r != nil {
+					counter.Store(0)
+					log.Printf("[freeturn] relay panic recovered (listen=%s): %v", c.Proxy.Listen, r)
+				}
+			}()
 			if rerr := run(rctx, c, lks, counter); rerr != nil && !errors.Is(rerr, context.Canceled) {
 				log.Printf("[freeturn] relay stopped: %v", rerr)
 			}
