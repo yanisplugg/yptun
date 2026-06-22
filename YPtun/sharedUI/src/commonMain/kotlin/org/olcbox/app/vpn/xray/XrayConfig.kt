@@ -540,6 +540,100 @@ object XrayConfig {
         return json.encodeToString(newRoot)
     }
 
+    private const val WG_BAL_PREFIX = "wg-bal-"
+    private const val WG_BALANCER_TAG = "vk-bal"
+
+    /**
+     * Builds an Xray config whose exit is a LOAD-BALANCED set of WireGuard outbounds — one per VK-TURN
+     * freeturn server, each dialing its own local freeturn listener ([wgProfiles]; rawOutbound carries
+     * server=127.0.0.1:localPort + keys). Xray's `balancers` spreads connections across them (strategy
+     * `random` → per-connection, so several servers' bandwidth aggregates). There is NO proxy hop here:
+     * the WireGuard tunnels ARE the exits, so this is a separate builder from [build] (which is
+     * proxy-centric) and leaves the Standard cascade path completely untouched. The WG tunnels are
+     * IPv4-only, so traffic resolves A-only and QUIC is carried natively (never blocked).
+     */
+    fun buildWireguardBalancer(
+        wgProfiles: List<ProxyProfile>,
+        listenPort: Int,
+        listenHost: String = "127.0.0.1",
+        socksUsername: String = "",
+        socksPassword: String = "",
+        logLevel: String = "debug",
+        traffic: TrafficSettings = TrafficSettings(),
+    ): String {
+        val bases = wgProfiles.mapIndexedNotNull { i, p -> buildWireguardBaseOutbound(p, "$WG_BAL_PREFIX$i") }
+        val config = buildJsonObject {
+            putJsonObject("log") { put("loglevel", logLevel) }
+            putJsonObject("dns") {
+                putJsonArray("servers") {
+                    if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
+                    add(traffic.remoteDns)
+                    add(traffic.directDns)
+                }
+                put("queryStrategy", traffic.xrayQueryStrategy())
+            }
+            if (traffic.fakeDnsEnabled) putJsonArray("fakedns") { add(fakeDnsPool()) }
+            putJsonArray("inbounds") {
+                addJsonObject {
+                    put("tag", "socks-in")
+                    put("listen", listenHost)
+                    put("port", listenPort)
+                    put("protocol", "socks")
+                    putJsonObject("settings") {
+                        put("udp", true)
+                        if (socksUsername.isNotBlank()) {
+                            put("auth", "password")
+                            putJsonArray("accounts") {
+                                addJsonObject { put("user", socksUsername); put("pass", socksPassword) }
+                            }
+                        } else {
+                            put("auth", "noauth")
+                        }
+                    }
+                    putJsonObject("sniffing") {
+                        put("enabled", true)
+                        putJsonArray("destOverride") {
+                            add("http"); add("tls"); add("quic")
+                            if (traffic.fakeDnsEnabled) add("fakedns")
+                        }
+                    }
+                }
+            }
+            putJsonArray("outbounds") {
+                bases.forEach { add(it) }
+                addJsonObject {
+                    put("tag", "direct")
+                    put("protocol", "freedom")
+                    putJsonObject("settings") { put("domainStrategy", directDomainStrategy(traffic)) }
+                }
+                addJsonObject { put("tag", "block"); put("protocol", "blackhole") }
+                if (traffic.fakeDnsEnabled) add(dnsOutOutbound())
+            }
+            putJsonObject("routing") {
+                put("domainStrategy", "AsIs")
+                putJsonArray("balancers") {
+                    addJsonObject {
+                        put("tag", WG_BALANCER_TAG)
+                        putJsonArray("selector") { add(WG_BAL_PREFIX) }
+                        // `random` needs no observatory and distributes per-connection, so each new
+                        // connection may pick a different server — bandwidth adds up across servers.
+                        putJsonObject("strategy") { put("type", "random") }
+                    }
+                }
+                putJsonArray("rules") {
+                    if (traffic.fakeDnsEnabled) dnsHijackRules().forEach { add(it) }
+                    // Everything else exits via the balanced WireGuard set.
+                    addJsonObject {
+                        put("type", "field")
+                        put("network", "tcp,udp")
+                        put("balancerTag", WG_BALANCER_TAG)
+                    }
+                }
+            }
+        }
+        return json.encodeToString(config)
+    }
+
     /**
      * Converts the sing-box WireGuard outbound stored in [profile].rawOutbound into an Xray
      * `wireguard` outbound (tag [WG_BASE_TAG]) so a chained proxy can dial through the VK tunnel.
@@ -571,7 +665,7 @@ object XrayConfig {
             }
         }
 
-    private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {
+    private fun buildWireguardBaseOutbound(profile: ProxyProfile, tag: String = WG_BASE_TAG): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
         val o = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
         val secret = o["private_key"]?.jsonPrimitive?.contentOrNull ?: return null
@@ -585,7 +679,7 @@ object XrayConfig {
             ?: o["persistent_keepalive"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
             ?: 25
         return buildJsonObject {
-            put("tag", WG_BASE_TAG)
+            put("tag", tag)
             put("protocol", "wireguard")
             putJsonObject("settings") {
                 put("secretKey", secret)

@@ -68,6 +68,7 @@ import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.data.importer.ShareLinkParser
+import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
@@ -103,6 +104,9 @@ import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.data.model.VkTurnConfig
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.DataInputStream
@@ -140,6 +144,10 @@ class OlcboxVpnService : VpnService() {
     // the number of rooms configured for the current connection (0 = not multi-room).
     @Volatile private var showRoomsInNotif = false
     @Volatile private var activeMultiRoomTotal = 0
+    // Number of freeturn servers in the current VK-TURN connection when multiple are load-balanced
+    // (0 = single server / not freeturn). Drives the "connected/total servers" notification, gated on
+    // the same [showRoomsInNotif] toggle as olcRTC rooms.
+    @Volatile private var activeFreeturnServers = 0
 
     private var startupJob: Job? = null
     private var watchdogJob: Job? = null
@@ -1425,6 +1433,28 @@ class OlcboxVpnService : VpnService() {
 
             // 1. The transport core that raises the local listener the WG/proxy outbound dials.
             val listenAddr = "127.0.0.1:${vk.listenPort}"
+
+            // Multi-server freeturn: front several freeturn servers AT ONCE and load-balance traffic
+            // across them per connection (Xray balancer over N WireGuard outbounds) so their bandwidth
+            // aggregates. Only for the freeturn core with a plain WireGuard exit and no chain proxy;
+            // a single server (or any other shape) keeps the exact original single-server path.
+            val freeturnServers = if (!vk.usesWdtt() &&
+                outboundType == VkTurnConfig.OUTBOUND_WIREGUARD &&
+                vk.chainProxyLink.isBlank()
+            ) vk.allFreeturnUris().take(1 + VKTURN_MAX_EXTRA_FREETURN) else emptyList()
+            // One WireGuard ProxyProfile per server, each dialing its OWN local freeturn listener:
+            // the primary uses [profile] (listener vk.listenPort); extras get vk.listenPort+i and their
+            // WG keys are pulled from each link's embedded wg=. Empty unless we actually go multi.
+            val freeturnWgProfiles: List<ProxyProfile> = if (freeturnServers.size > 1 && profile != null) buildList {
+                add(profile!!)
+                freeturnServers.drop(1).forEachIndexed { idx, u ->
+                    VkTurnComposer.freeturnUriToWgProfile(u, vk.listenPort + idx + 1, "VK-TURN ${idx + 2}")
+                        ?.let { add(it) }
+                }
+            } else emptyList()
+            // Need at least 2 working WG outbounds (else there's nothing to balance) to engage multi.
+            val multiFreeturn = freeturnWgProfiles.count { !it.rawOutbound.isNullOrBlank() } > 1
+
             if (vk.usesWdtt()) {
                 // WDTT core (wg-turn-client): connects purely by the wdtt-server IP[:port] and FETCHES its
                 // WireGuard config from the server (GETCONF/OnConfig) — the user enters no WG keys. We bring
@@ -1497,8 +1527,42 @@ class OlcboxVpnService : VpnService() {
                     .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
                 val effectiveStreams = maxOf(vk.streams, autoStreams)
                     .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
-                addLog("Starting VK-TURN freeturn listener on $listenAddr (links=$linkCount, streams=$effectiveStreams)")
-                Freeturn.start(freeturnUri, listenAddr, vk.vkLink, effectiveStreams.toLong())
+                if (multiFreeturn) {
+                    // One relay per server, each on its own local listener (vk.listenPort + index). The
+                    // VK call links are PARTITIONED across the servers (round-robin) — NOT shared in full
+                    // to every relay — so each VPS handles a distinct share of the calls instead of all
+                    // N relays hammering the same calls (which only multiplied phone CPU/obf and split
+                    // each call N ways → no speed gain). Per-server streams scale with that server's own
+                    // share of links. freeturn's StartMulti runs them together; Stop() cancels all.
+                    val allLinks = vk.vkLink.split('\n', '\r', '\t', ' ', ',').filter { it.isNotBlank() }
+                    val n = freeturnServers.size
+                    val specsJson = Json.encodeToString(buildJsonArray {
+                        freeturnServers.forEachIndexed { idx, u ->
+                            val sUri = u.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+                            // This server's share of the call links; if fewer links than servers, wrap
+                            // so every relay still gets at least one call.
+                            val myLinks = allLinks.filterIndexed { li, _ -> li % n == idx }
+                                .ifEmpty { listOfNotNull(allLinks.getOrNull(if (allLinks.isEmpty()) -1 else idx % allLinks.size)) }
+                            val myCount = myLinks.size.coerceAtLeast(1)
+                            val myStreams = (VKTURN_STREAMS_BASE + (myCount - 1) * VKTURN_STREAMS_PER_EXTRA_CALL)
+                                .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
+                                .let { maxOf(vk.streams.takeIf { s -> s > 0 } ?: 0, it) }
+                                .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
+                            addJsonObject {
+                                put("uri", sUri)
+                                put("listenAddr", "127.0.0.1:${vk.listenPort + idx}")
+                                put("vkLink", myLinks.joinToString("\n"))
+                                put("streams", myStreams)
+                            }
+                        }
+                    })
+                    addLog("Starting VK-TURN freeturn ×$n servers (balanced, ${allLinks.size} VK link(s) split across them, base ${vk.listenPort})")
+                    if (allLinks.size < n) addLog("VK-TURN: fewer VK links (${allLinks.size}) than servers ($n) — add more VK call links for real speed scaling")
+                    Freeturn.startMulti(specsJson)
+                } else {
+                    addLog("Starting VK-TURN freeturn listener on $listenAddr (links=$linkCount, streams=$effectiveStreams)")
+                    Freeturn.start(freeturnUri, listenAddr, vk.vkLink, effectiveStreams.toLong())
+                }
                 coroutineContext.ensureActive()
                 if (requestedGeneration != generation) return false
 
@@ -1530,6 +1594,38 @@ class OlcboxVpnService : VpnService() {
             // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
             val ipv4Traffic = traffic.copy(domainStrategy = "ipv4_only")
             val profilesState = loadRoutingProfilesState()
+
+            // Multi-server freeturn: build ONE Xray config that load-balances across the per-server
+            // WireGuard outbounds (each dialing its own local relay listener). Per-connection `random`
+            // balancing spreads traffic so the servers' bandwidth aggregates. No proxy/chain here, so
+            // the Standard cascade path is untouched.
+            if (multiFreeturn) {
+                val balancedProfiles = freeturnWgProfiles.filter { !it.rawOutbound.isNullOrBlank() }
+                val xrayJson = XrayConfig.buildWireguardBalancer(
+                    wgProfiles = balancedProfiles,
+                    listenPort = socksListenPort,
+                    listenHost = socksListenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    logLevel = "debug",
+                    traffic = ipv4Traffic,
+                )
+                activeProxyCore = ProxyCore.Xray
+                activeFreeturnServers = balancedProfiles.size
+                addLog("Starting Xray (VK-TURN freeturn ×${balancedProfiles.size}, load-balanced) via $listenAddr")
+                xrayEngine().start(xrayJson, "")
+                if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                    throw IllegalStateException("Xray SOCKS port $socksListenPort did not open")
+                }
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) {
+                    addLog("VK-TURN multi-freeturn Xray start superseded")
+                    return false
+                }
+                addLog("Xray ready on $socksListenHost:$socksListenPort (${balancedProfiles.size} servers)")
+                publishActiveSocks()
+                return true
+            }
 
             // Chained proxy on top of WireGuard (parsed once; reused by both cores). Applies to plain
             // WireGuard AND to WDTT (which also exits via WireGuard) — a vless/trojan/ss link dialled
@@ -2661,6 +2757,7 @@ class OlcboxVpnService : VpnService() {
             olcrtcRoomManager = null
         }
         activeMultiRoomTotal = 0
+        activeFreeturnServers = 0
         stopMobile()
         waitForSocksPortReleased(socksPort)
     }
@@ -3189,6 +3286,12 @@ class OlcboxVpnService : VpnService() {
             val up = runCatching { Mobile.roomsRunning() }.getOrDefault(0)
             return "$base · $up/$activeMultiRoomTotal комнат"
         }
+        // VK-TURN multi-server freeturn: show connected/total servers (same toggle as rooms). The
+        // count of relays with a live TURN stream is the "connected" number.
+        if (showRoomsInNotif && engineType == EngineType.VkTurn && activeFreeturnServers > 1) {
+            val up = runCatching { Freeturn.activeRelays() }.getOrDefault(0)
+            return "$base · $up/$activeFreeturnServers серверов"
+        }
         return base
     }
 
@@ -3406,6 +3509,8 @@ class OlcboxVpnService : VpnService() {
         private const val SOCKS_RELEASE_POLL_MS = 100L
         private const val VKTURN_RELAY_READY_TIMEOUT_MS = 20_000L
         private const val VKTURN_RELAY_POLL_MS = 200L
+        // Max EXTRA freeturn servers run alongside the primary for load-balancing (6 total).
+        private const val VKTURN_MAX_EXTRA_FREETURN = 5
         // VK-TURN parallel TURN streams. freeturn fans these across the call links (multiProvider), so
         // more streams = more parallel relay paths. But a single WireGuard flow degrades when sprayed
         // across too many paths of differing latency (reorder past WG's replay window → drops) and each

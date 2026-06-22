@@ -79,6 +79,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontFamily
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
 import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
+import org.olcbox.app.vpn.freeturn.FreeturnInstallOptions
+import org.olcbox.app.vpn.freeturn.rememberFreeturnServerInstaller
 import org.olcbox.app.vpn.dnstt.DnsttInstallOptions
 import org.olcbox.app.vpn.dnstt.rememberDnsttServerInstaller
 import kotlinx.coroutines.launch
@@ -173,6 +175,15 @@ fun LocationSettingsScreen(
             draft = viewModel.editingVkTurn,
             onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
             onDismiss = { showWdttInstall = false }
+        )
+    }
+
+    var showFreeturnInstall by remember { mutableStateOf(false) }
+    if (showFreeturnInstall) {
+        FreeturnInstallDialog(
+            draft = viewModel.editingVkTurn,
+            onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
+            onDismiss = { showFreeturnInstall = false }
         )
     }
 
@@ -330,7 +341,8 @@ fun LocationSettingsScreen(
                     enabled = !isSaving,
                     showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateVkTurnDraft,
-                    onWdttAutoInstall = { showWdttInstall = true }
+                    onWdttAutoInstall = { showWdttInstall = true },
+                    onFreeturnAutoInstall = { showFreeturnInstall = true }
                 )
             }
 
@@ -852,7 +864,8 @@ private fun LazyListScope.vkTurnSection(
     enabled: Boolean,
     showAutoInstall: Boolean,
     onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit,
-    onWdttAutoInstall: () -> Unit
+    onWdttAutoInstall: () -> Unit,
+    onFreeturnAutoInstall: () -> Unit
 ) {
     item {
         VkTurnLinksField(
@@ -983,6 +996,19 @@ private fun LazyListScope.vkTurnSection(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                // Auto-install the free-turn-proxy server (+ WireGuard) on a VPS and fill the peer/keys
+                // from the result. Gated on the same "Автоустановка на VPS" app setting as WDTT.
+                if (showAutoInstall) {
+                    OutlinedButton(
+                        onClick = onFreeturnAutoInstall,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Установить freeturn на VPS")
+                    }
+                }
                 SettingsDropdown(
                     label = LocalStrings.current.transportToRelay,
                     selectedValue = draft.transport.ifBlank { "tcp" },
@@ -1043,6 +1069,39 @@ private fun LazyListScope.vkTurnSection(
                     enabled = enabled,
                     keyboardType = KeyboardType.Number
                 )
+                // Multi-server: a toggle enables running extra freeturn:// servers (one per line, up to
+                // 5) ALONGSIDE the primary, load-balanced per connection. WireGuard exit only. The VK
+                // call links are PARTITIONED across servers, so for a real speed gain add MORE VK call
+                // links above (each server takes a share); one shared call can't be split for more speed.
+                if (draft.outbound == VkTurnConfig.OUTBOUND_WIREGUARD) {
+                    VkTurnSwitchRow(
+                        label = "Несколько серверов (ускорение)",
+                        checked = draft.freeturnMultiServer,
+                        enabled = enabled,
+                        onCheckedChange = { v -> onChange { it.copy(freeturnMultiServer = v) } }
+                    )
+                    if (draft.freeturnMultiServer) {
+                        val extraLines = draft.extraFreeturnUris.split('\n')
+                            .map { it.trim() }.filter { it.startsWith("freeturn://", ignoreCase = true) }
+                        val overCap = extraLines.size > 5
+                        OutlinedTextField(
+                            value = draft.extraFreeturnUris,
+                            onValueChange = { v -> onChange { it.copy(extraFreeturnUris = v) } },
+                            label = { Text("Доп. серверы freeturn (до 5, по одной ссылке в строке)") },
+                            placeholder = { Text("freeturn://…") },
+                            enabled = enabled,
+                            minLines = 2,
+                            maxLines = 6,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            if (overCap) "Слишком много серверов — будут использованы первые 5 доп. (всего 6)."
+                            else "Всего серверов: ${extraLines.size + 1}. Для прироста скорости добавь больше VK-ссылок выше — они делятся между серверами.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (overCap) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
             // Bonding (TCP striping) is only valid for the proxy/tcp exit — freeturn rejects it in
             // udp mode. For WireGuard/AmneziaWG (udp), aggregation comes from "streams" + multiple
@@ -1469,6 +1528,202 @@ private fun WdttInstallDialog(
                             // Fold the final error into the log too, so the copied log includes it.
                             res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
                             result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
+    )
+}
+
+/**
+ * One-tap free-turn-proxy server installer. Collects SSH access to the VPS + the public freeturn
+ * port, and on confirm connects over SSH, uploads the bundled freeturn-server binary, provisions a
+ * persistent WireGuard exit and runs the server as a systemd service ([rememberFreeturnServerInstaller]).
+ * Progress streams live into a log area. On success the returned obf key + WireGuard keys are written
+ * straight into the location draft (peer/keys), so the freeturn:// link is rebuilt by the composer.
+ */
+@Composable
+private fun FreeturnInstallDialog(
+    draft: VkTurnDraft,
+    onApplyDraft: (((VkTurnDraft) -> VkTurnDraft)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberFreeturnServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf(draft.peerHost) }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    // freeturn public listener port (the freeturn:// peer port); prefilled from the draft or 56000.
+    var ftPortText by remember { mutableStateOf(draft.peerPort.ifBlank { "56000" }) }
+    var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<String>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+
+    val port = ftPortText.ifBlank { "56000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 56000
+    // Obfuscation profile the server is launched with — must match what the client uses. Editable;
+    // prefilled from the location draft (default rtpopus). rtpopus2/3 need a freeturn 1.3+/1.4+ server,
+    // which the bundled binary is, so all are installable.
+    var obfProfile by remember { mutableStateOf(draft.obfProfile.ifBlank { "rtpopus" }) }
+    val succeeded = result?.isSuccess == true
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Установка freeturn на VPS") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH, подниму WireGuard и запущу free-turn-proxy сервер на " +
+                        "порту $port (obf $obfProfile). Ключи и obf-key подставятся в локацию.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Пароль SSH") },
+                    singleLine = true,
+                    enabled = !running,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                HorizontalDivider()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = ftPortText,
+                        onValueChange = { v -> ftPortText = v.filter(Char::isDigit) },
+                        label = { Text("Порт freeturn") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = dns,
+                        onValueChange = { dns = it.trim() },
+                        label = { Text("DNS клиента") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                // Обфускация: профиль, с которым стартует сервер (rtpopus / rtpopus2 / rtpopus3).
+                // Должен совпадать с клиентом — на успехе он подставляется в локацию.
+                SettingsDropdown(
+                    label = LocalStrings.current.obfuscationProfile,
+                    selectedValue = obfProfile,
+                    options = listOf("rtpopus", "rtpopus2", "rtpopus3"),
+                    enabled = !running,
+                    onValueSelected = { obfProfile = it },
+                    valueLabel = { it }
+                )
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull().orEmpty() + "\nКлючи подставлены в локацию.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() && password.isNotBlank(),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        scope.launch {
+                            val res = installer.install(
+                                FreeturnInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = password,
+                                    freeturnPort = port,
+                                    obfProfile = obfProfile,
+                                    dns = dns.ifBlank { "1.1.1.1" },
+                                )
+                            ) { line -> log.add(line) }
+                            // On success, write the obf key + WireGuard keys into the draft; the composer
+                            // rebuilds the freeturn:// link + the WG outbound from these fields.
+                            res.getOrNull()?.let { ok ->
+                                onApplyDraft { d ->
+                                    d.copy(
+                                        outbound = VkTurnConfig.OUTBOUND_WIREGUARD,
+                                        mode = "udp",
+                                        obfProfile = obfProfile,
+                                        obfKey = ok.obfKey,
+                                        peerHost = ip.trim(),
+                                        peerPort = ok.freeturnPort.toString(),
+                                        wgPrivateKey = ok.clientWgPrivateKey,
+                                        wgPeerPublicKey = ok.serverWgPublicKey,
+                                        wgAddress = ok.clientWgAddress,
+                                        wgDns = dns.ifBlank { "1.1.1.1" },
+                                    )
+                                }
+                            }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = res.map { it.status }
                             running = false
                         }
                     }

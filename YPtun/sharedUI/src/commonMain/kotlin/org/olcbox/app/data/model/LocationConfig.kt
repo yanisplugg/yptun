@@ -79,7 +79,33 @@ data class VkTurnConfig(
     /** WDTT worker count; 0 → core default. Clamped to [9,108] and rounded to a multiple of 9 in-core. */
     @SerialName("wdtt_workers")
     val wdttWorkers: Int = 0,
+    /**
+     * Master switch for multi-server freeturn. When off, only the primary [uri] is used (today's exact
+     * single-server behaviour) even if [extraFreeturnUris] is non-empty. When on, the extra servers
+     * run alongside the primary and traffic is load-balanced across them.
+     */
+    @SerialName("freeturn_multi_server")
+    val freeturnMultiServer: Boolean = false,
+    /**
+     * Additional freeturn:// servers (beyond the primary [uri]) to run AT THE SAME TIME for
+     * per-connection load-balancing — the servers' bandwidth aggregates. Each link is a full
+     * freeturn:// (carries its own peer/obf/embedded wg=). The location's VK call links are PARTITIONED
+     * across the servers (so each VPS handles a share, not all of them). Up to 5 extra (6 total). Only
+     * honoured for the freeturn core with a WireGuard exit (not WDTT / AmneziaWG / proxy exits).
+     */
+    @SerialName("extra_freeturn_uris")
+    val extraFreeturnUris: List<String> = emptyList(),
 ) {
+    /**
+     * All freeturn servers to front at once: the primary [uri] first, then the valid [extraFreeturnUris]
+     * — but ONLY when [freeturnMultiServer] is on. Off ⇒ just the primary, so the single-server path
+     * stays byte-identical.
+     */
+    fun allFreeturnUris(): List<String> {
+        val primary = listOf(uri)
+        val all = if (freeturnMultiServer) primary + extraFreeturnUris else primary
+        return all.map { it.trim() }.filter { it.startsWith("freeturn://", ignoreCase = true) }
+    }
     /** True when the WDTT transport core is selected (vs. the default freeturn core). */
     fun usesWdtt(): Boolean = core.equals(CORE_WDTT, ignoreCase = true)
 

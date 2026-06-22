@@ -3439,8 +3439,8 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
         RoutingToggleRow(
-            title = "Комнаты в уведомлении",
-            subtitle = "Показывать «подключено/всего» комнат — только olcRTC и только при мультикомнате",
+            title = "Комнаты / серверы в уведомлении",
+            subtitle = "Показывать «подключено/всего» комнат (olcRTC мультикомната) или серверов (VK-TURN мультисервер freeturn)",
             checked = settings.showRoomsInNotification
         ) { onChanged(settings.copy(showRoomsInNotification = it)) }
 
