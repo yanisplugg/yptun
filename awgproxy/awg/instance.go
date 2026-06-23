@@ -39,6 +39,25 @@ type Instance struct {
 
 	splitMu       sync.Mutex
 	splitPrefixes []netip.Prefix
+
+	authMu   sync.Mutex
+	authUser string
+	authPass string
+}
+
+// SetAuth enables SOCKS5 username/password authentication on this instance (empty user = no auth).
+// Call before Start. Used so the Telegram-over-WARP proxy isn't an open local proxy any app could use.
+func (i *Instance) SetAuth(user, pass string) {
+	i.authMu.Lock()
+	i.authUser = user
+	i.authPass = pass
+	i.authMu.Unlock()
+}
+
+func (i *Instance) authCreds() (string, string) {
+	i.authMu.Lock()
+	defer i.authMu.Unlock()
+	return i.authUser, i.authPass
 }
 
 // NewInstance creates an idle AmneziaWG proxy instance (logs discarded until SetLogWriter).
@@ -124,8 +143,31 @@ func (i *Instance) handleSocks(client net.Conn, tnet *netstack.Net) {
 	if _, err := io.ReadFull(client, methods); err != nil {
 		return
 	}
-	if _, err := client.Write([]byte{0x05, 0x00}); err != nil {
-		return
+
+	user, pass := i.authCreds()
+	if user != "" {
+		// Require username/password (RFC 1929). Offered only when creds are set.
+		offered := false
+		for _, m := range methods {
+			if m == 0x02 {
+				offered = true
+				break
+			}
+		}
+		if !offered {
+			_, _ = client.Write([]byte{0x05, 0xFF}) // no acceptable methods
+			return
+		}
+		if _, err := client.Write([]byte{0x05, 0x02}); err != nil {
+			return
+		}
+		if !readUserPassAuth(client, user, pass) {
+			return
+		}
+	} else {
+		if _, err := client.Write([]byte{0x05, 0x00}); err != nil {
+			return
+		}
 	}
 
 	head := make([]byte, 4)
@@ -317,7 +359,7 @@ func (i *Instance) Start(iniConfig, listenAddr string) error {
 	logger.Verbosef = func(format string, args ...any) { log.New(i.logSink, "", 0).Printf(format, args...) }
 	logger.Errorf = func(format string, args ...any) { log.New(i.logSink, "", 0).Printf(format, args...) }
 
-	bind := conn.NewDefaultBind()
+	bind := bindFor(cfg)
 	d := device.NewDevice(tunDev, bind, logger)
 	if err := d.IpcSet(uapi); err != nil {
 		d.Close()
@@ -356,4 +398,34 @@ func (i *Instance) Stop() {
 		i.dev = nil
 	}
 	i.running.Store(false)
+}
+
+// readUserPassAuth performs the SOCKS5 username/password sub-negotiation (RFC 1929) and reports
+// whether the supplied credentials match.
+func readUserPassAuth(client net.Conn, user, pass string) bool {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(client, header); err != nil || header[0] != 0x01 {
+		return false
+	}
+	ubuf := make([]byte, int(header[1]))
+	if _, err := io.ReadFull(client, ubuf); err != nil {
+		return false
+	}
+	plenBuf := make([]byte, 1)
+	if _, err := io.ReadFull(client, plenBuf); err != nil {
+		return false
+	}
+	pbuf := make([]byte, int(plenBuf[0]))
+	if _, err := io.ReadFull(client, pbuf); err != nil {
+		return false
+	}
+	ok := string(ubuf) == user && string(pbuf) == pass
+	status := byte(0x00)
+	if !ok {
+		status = 0x01
+	}
+	if _, err := client.Write([]byte{0x01, status}); err != nil {
+		return false
+	}
+	return ok
 }
