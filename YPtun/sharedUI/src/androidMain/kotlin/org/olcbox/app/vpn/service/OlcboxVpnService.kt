@@ -76,6 +76,7 @@ import org.olcbox.app.vpn.xray.XrayConfig
 import org.olcbox.app.vpn.xray.XrayEngine
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
+import org.olcbox.app.vpn.proxy.HttpProxyBridge
 import org.olcbox.app.vpn.telegram.VpnSocketProtectBridge
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
 import org.olcbox.app.vpn.UpstreamCandidate
@@ -198,6 +199,7 @@ class OlcboxVpnService : VpnService() {
     private var splitTunnelProxyApps = emptySet<String>()
     private var splitTunnelBypassApps = emptySet<String>()
     private var socksProxy: AuthenticatedSocksProxy? = null
+    private var httpProxyBridge: HttpProxyBridge? = null
     private var singBox: SingBoxEngine? = null
     private var xray: XrayEngine? = null
     // Multi-room (Stealth/Chain): when a location uses it, the singleton Mobile.start* is replaced by N
@@ -587,6 +589,10 @@ class OlcboxVpnService : VpnService() {
             AndroidConnectionMode.Proxy -> {
                 socksUsername = ""
                 socksPassword = ""
+                // Bind the exposed SOCKS on all interfaces so it's reachable from loopback (on-device
+                // Chrome via the Wi-Fi proxy) AND the LAN (a PC pointing at the phone's IP) — like Happ's
+                // local-proxy mode. The HttpProxyBridge binds the same host. (TUN keeps its 127.0.0.1.)
+                socksListenHost = AndroidSocksProxySettings.ALL_INTERFACES
             }
         }
         splitTunnelMode = options.splitTunnelMode
@@ -763,8 +769,12 @@ class OlcboxVpnService : VpnService() {
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
             updateNotification(connectedNotificationText())
-            addLog("Proxy mode connected on SOCKS $socksListenHost:$socksListenPort")
-            addLog("SOCKS auth disabled — any client may connect (no username/password)")
+            startHttpProxyBridge()
+            val shown = deviceLanIp() ?: "127.0.0.1"
+            addLog("Proxy ready (no VPN tunnel) — point apps here:")
+            addLog("  • SOCKS5: $shown:$socksListenPort")
+            addLog("  • HTTP:   $shown:$httpProxyPort")
+            addLog("SOCKS/HTTP auth disabled — any client may connect (no username/password)")
             launchProxySelfCheck()
             startWatchdog()
             return
@@ -2531,6 +2541,7 @@ class OlcboxVpnService : VpnService() {
 
         val cleanupGeneration = ++generation
         setStatus(VpnStatus.Stopping)
+        stopHttpProxyBridge()
         startupJob?.cancel()
         watchdogJob?.cancel()
         speedJob?.cancel()
@@ -2633,7 +2644,8 @@ class OlcboxVpnService : VpnService() {
     /** Publishes the live SOCKS endpoint + per-session creds so the in-process ping can use them. */
     private fun publishActiveSocks() {
         OlcboxVpnState.activeSocks = OlcboxVpnState.SocksEndpoint(
-            host = socksListenHost,
+            // connectHost maps a 0.0.0.0 listen (Proxy mode) back to 127.0.0.1 so the in-process ping dials a real address.
+            host = socksConnectHost(),
             port = socksListenPort,
             username = socksUsername,
             password = socksPassword,
@@ -2915,6 +2927,43 @@ class OlcboxVpnService : VpnService() {
             delay(SOCKS_RELEASE_POLL_MS)
         }
         addLog("SOCKS port $port is still busy after stop")
+    }
+
+    // HTTP-proxy port for Proxy mode (Happ-style "HTTP Port" next to the "SOCKS5 Port"). Offset by +4 to
+    // clear the internal helper ports (+1 chain, +2 awg base, +3 hy2). Browsers point their HTTP proxy here.
+    private val httpProxyPort: Int get() = socksListenPort + 4
+
+    /**
+     * Proxy mode only: raise the engine-agnostic HTTP→SOCKS bridge so browsers (which speak an HTTP proxy,
+     * not SOCKS) can use the local proxy. Forwards to the core's own SOCKS5. Never started in TUN mode.
+     */
+    private fun startHttpProxyBridge() {
+        stopHttpProxyBridge()
+        val bridge = HttpProxyBridge(
+            listenHost = socksListenHost,
+            listenPort = httpProxyPort,
+            socksHost = socksConnectHost(),
+            socksPort = socksListenPort,
+            log = { addLog(it) },
+        )
+        httpProxyBridge = if (bridge.start()) bridge else null
+    }
+
+    private fun stopHttpProxyBridge() {
+        httpProxyBridge?.let { runCatching { it.stop() } }
+        httpProxyBridge = null
+    }
+
+    /** The phone's current LAN IPv4 (e.g. 192.168.x.x) for display, or null if none found. */
+    private fun deviceLanIp(): String? {
+        return runCatching {
+            java.net.NetworkInterface.getNetworkInterfaces().asSequence()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { it.inetAddresses.asSequence() }
+                .firstOrNull { addr ->
+                    addr is java.net.Inet4Address && !addr.isLoopbackAddress && addr.isSiteLocalAddress
+                }?.hostAddress
+        }.getOrNull()
     }
 
     /**

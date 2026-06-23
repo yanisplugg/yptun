@@ -209,11 +209,10 @@ object SingBoxConfig {
 
             putJsonArray("inbounds") {
                 addJsonObject {
-                    // "mixed" = SOCKS4/4a/5 AND HTTP(S) CONNECT on the SAME port. Browsers (Chrome,
-                    // system/Wi-Fi proxy, desktop-over-LAN) configure an HTTP proxy, NOT SOCKS — a
-                    // socks-only listener is silently bypassed and leaks the real IP. mixed is a strict
-                    // superset, so the TUN→SOCKS bridge (tun2socks, SOCKS5) keeps working unchanged.
-                    put("type", "mixed")
+                    // SOCKS only. HTTP-proxy support for browsers in Proxy mode is provided uniformly by
+                    // the engine-agnostic HttpProxyBridge (started only in Proxy mode), so TUN mode keeps a
+                    // purely internal SOCKS bridge with NO HTTP listener.
+                    put("type", "socks")
                     put("tag", SOCKS_IN_TAG)
                     put("listen", listenHost)
                     put("listen_port", listenPort)
