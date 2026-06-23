@@ -22,6 +22,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/config"
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
+	"github.com/samosvalishe/free-turn-proxy/internal/provider/multi"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/bondclient"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/tcpfwd"
@@ -129,6 +130,10 @@ func main() {
 		return c.User, c.Pass, c.ServerAddrs, nil
 	}
 
+	// Несколько -links расширяют пул: каждый звонок даёт cfg.TURN.N стримов,
+	// все объединяются в общий пул (больше параллельных TURN-аллокаций).
+	totalStreams := cfg.TURN.N * max(len(cfg.VK.Links), 1)
+
 	if cfg.Proxy.Mode != config.ProxyModeUDP {
 		tcpDtlsDialer := &dtlsdial.Dialer{
 			HandshakeTimeout: 30 * time.Second,
@@ -144,13 +149,14 @@ func main() {
 			Host:         cfg.TURN.Host,
 			Port:         cfg.TURN.Port,
 			TransportUDP: cfg.TURN.TransportUDP,
+			Profile:      string(cfg.Obf.Profile),
 			ObfKey:       cfg.Obf.Key,
 			GetCreds:     tcpfwd.GetCredsFunc(getCreds),
 			KCPProfile:   cfg.KCP.Profile,
 			KCPFEC:       cfg.KCP.FEC,
 			ClientID:     cfg.ClientID,
 		}
-		if err := tcpfwd.Run(ctx, tcpDeps, tcpParams, peer, cfg.Proxy.Listen, cfg.TURN.N, cfg.Proxy.Mode == config.ProxyModeTCPFwdBond); err != nil {
+		if err := tcpfwd.Run(ctx, tcpDeps, tcpParams, peer, cfg.Proxy.Listen, totalStreams, cfg.Proxy.Mode == config.ProxyModeTCPFwdBond); err != nil {
 			logger.Errorf("tcpfwd: %v", err)
 			os.Exit(1)
 		}
@@ -165,11 +171,13 @@ func main() {
 		Host:         cfg.TURN.Host,
 		Port:         cfg.TURN.Port,
 		TransportUDP: cfg.TURN.TransportUDP,
+		Profile:      string(cfg.Obf.Profile),
 		ObfKey:       cfg.Obf.Key,
+		ObfTiming:    cfg.Obf.Timing,
 		GetCreds:     udprelay.GetCredsFunc(getCreds),
 		ClientID:     cfg.ClientID,
 	}
-	if err := udprelay.Run(ctx, udpDtlsDialer, prov, logger, &connectedStreams, udpParams, peer, cfg.Proxy.Listen, cfg.TURN.N); err != nil {
+	if err := udprelay.Run(ctx, udpDtlsDialer, prov, logger, &connectedStreams, udpParams, peer, cfg.Proxy.Listen, totalStreams); err != nil {
 		if errors.Is(err, udprelay.ErrFatal) {
 			logger.Errorf("udprelay: fatal: %v", err)
 		} else {
@@ -179,20 +187,39 @@ func main() {
 	}
 }
 
-// buildProvider выбирает реализацию provider.Provider по cfg.Provider.Name.
-// Валидация имени уже выполнена в config.ParseClient.
+// buildProvider строит provider.Provider по cfg.Provider.Name. Одна -links даёт
+// обычный vk.Provider; несколько - multi.Provider (один vk.Provider на ссылку).
 func buildProvider(cfg *config.Client, dialer net.Dialer, connected *atomic.Int32, logger logx.Logger) (provider.Provider, error) {
 	switch cfg.Provider.Name {
 	case config.ProviderVK:
-		return vk.New(vk.Config{
-			Link:            cfg.VK.Link,
-			Dialer:          dialer,
-			ManualOnly:      cfg.VK.ManualCaptcha,
-			StreamsPerCache: cfg.VK.StreamsPerCred,
-			StreamsAlive:    connected.Load,
-			Log:             logger,
-			Debug:           cfg.Log.Debug,
-		}, vk.DefaultManualSolver)
+		if len(cfg.VK.Links) == 0 {
+			return nil, fmt.Errorf("vk: no links configured")
+		}
+		newVK := func(link string) (provider.Provider, error) {
+			return vk.New(vk.Config{
+				Link:            link,
+				Dialer:          dialer,
+				ManualOnly:      cfg.VK.ManualCaptcha,
+				Browser:         string(cfg.VK.Browser),
+				StreamsPerCache: cfg.VK.StreamsPerCred,
+				StreamsAlive:    connected.Load,
+				Log:             logger,
+				Debug:           cfg.Log.Debug,
+			}, vk.DefaultManualSolver)
+		}
+		if len(cfg.VK.Links) == 1 {
+			return newVK(cfg.VK.Links[0])
+		}
+		providers := make([]provider.Provider, 0, len(cfg.VK.Links))
+		for i, link := range cfg.VK.Links {
+			p, err := newVK(link)
+			if err != nil {
+				return nil, fmt.Errorf("vk provider [%d]: %w", i, err)
+			}
+			providers = append(providers, p)
+		}
+		logger.Infof("multi-provider: %d VK links, %d total streams", len(providers), cfg.TURN.N*len(providers))
+		return multi.New(providers), nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q", cfg.Provider.Name)
 	}
@@ -232,7 +259,7 @@ func resolveClientID(cliID string) string {
 	b, _ := json.MarshalIndent(lc, "", "  ")
 
 	// Запись: первый доступный для записи путь. На Android каталог рядом с
-	// бинарём (/data/app/.../lib/arm64) read-only — падаем на UserConfigDir,
+	// бинарём (/data/app/.../lib/arm64) read-only - падаем на UserConfigDir,
 	// затем TempDir. Иначе ID не сохраняется и ротируется на каждый запуск,
 	// ломая allowlist (-clients-file) и статистику.
 	for _, path := range paths {

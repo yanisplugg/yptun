@@ -78,6 +78,9 @@ type Session interface {
 	SetEndedCallback(cb func(string))
 	WatchConnection(ctx context.Context)
 	CanSend() bool
+	// SubscriberCanSend reports whether the subscriber PC is connected.
+	// Unlike CanSend, it does not require the publisher PC to be ready.
+	SubscriberCanSend() bool
 	GetSendQueue() chan []byte
 	GetBufferedAmount() uint64
 	Capabilities() Capabilities

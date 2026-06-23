@@ -24,7 +24,7 @@ func AppDialer(mode string) net.Dialer {
 }
 
 // InstallGlobalResolver выставляет net.DefaultResolver на тот же DNS-транспорт,
-// что и AppDialer — чтобы сторонние библиотеки, собирающие свой http.Client
+// что и AppDialer - чтобы сторонние библиотеки, собирающие свой http.Client
 // без нашего Dialer, тоже шли через DoH / auto-fallback, а не OS resolver.
 func InstallGlobalResolver(mode string) {
 	d := AppDialer(mode)

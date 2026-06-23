@@ -25,14 +25,14 @@ const (
 	LaneAttachTimeout = 300 * time.Millisecond
 )
 
-// Hello — per-lane handshake header, отправляемый сразу после открытия smux-потока.
+// Hello - per-lane handshake header, отправляемый сразу после открытия smux-потока.
 type Hello struct {
 	ConnID    uint64
 	LaneIndex uint16
 	LaneCount uint16
 }
 
-// Frame — одна bonded data или FIN единица, идентифицированная Seq внутри ConnID.
+// Frame - одна bonded data или FIN единица, идентифицированная Seq внутри ConnID.
 type Frame struct {
 	Type byte
 	Seq  uint64

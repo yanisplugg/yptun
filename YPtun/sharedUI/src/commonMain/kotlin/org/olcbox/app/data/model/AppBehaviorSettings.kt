@@ -45,8 +45,16 @@ data class AppBehaviorSettings(
     val confirmBeforeDelete: Boolean = true,
     /** Show live download/upload speed in the foreground notification. */
     val showSpeedInNotification: Boolean = false,
+    /** Show "connected/total rooms" in the notification (olcRTC multi-room only). */
+    val showRoomsInNotification: Boolean = false,
     /** Hidden "Experimental" section unlocked by tapping the connection timer 5×. */
     val experimentalUnlocked: Boolean = false,
+    /**
+     * Show the one-tap "Автоустановка на VPS" buttons (WDTT / DNSTT server deploy over SSH) in the
+     * location editor. OFF by default — pushing a binary to a remote server over SSH is an advanced,
+     * potentially destructive action, so it stays hidden until the user opts in here.
+     */
+    val allowVpsAutoInstall: Boolean = false,
     /** Yandex auth cookie header for Telemost (e.g. "Session_id=…; yandexuid=…"). */
     val telemostCookies: String = "",
     /** Whether the stored Telemost cookies are applied on connect. */
@@ -118,6 +126,13 @@ data class AppBehaviorSettings(
      */
     val showSubscriptionExpiry: Boolean = false,
     /**
+     * Post a local notification when a subscription is about to expire (within
+     * [SUBSCRIPTION_EXPIRY_NOTIFY_DAYS] days). Driven by the panel's expiry header
+     * (`subscription-userinfo` `expire=` / Remnawave `user.expiresAt`), like Happ. Off by default —
+     * needs the user's opt-in and the POST_NOTIFICATIONS permission.
+     */
+    val notifySubscriptionExpiry: Boolean = false,
+    /**
      * Show a "live/total" badge in each subscription header — how many of its servers responded to
      * the last ping pass out of the total. Off by default.
      */
@@ -141,6 +156,14 @@ data class AppBehaviorSettings(
      * (default) keeps the original behaviour: sing-box unless the transport forces Xray.
      */
     val globalProxyCore: ProxyCore = ProxyCore.Auto,
+    /**
+     * Energy-saver mode: trims the always-on background work the VPN does while connected to cut
+     * battery use — the in-app logcat journal capture is skipped, and the health watchdog polls far
+     * less often ([ENERGY_SAVER_WATCHDOG_INTERVAL_MS] instead of the default). The trade-off is slower
+     * automatic recovery after a network drop and an empty diagnostics journal; live calls / throughput
+     * are unaffected. Off by default. Applied on the next connect.
+     */
+    val energySaver: Boolean = false,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"
@@ -178,10 +201,20 @@ data class AppBehaviorSettings(
         /** The previous default; auto-migrated to [DEFAULT_PING_URL] so existing users get the fix. */
         const val LEGACY_PING_URL = "https://google.com"
 
+        /** How many days before expiry the subscription-expiry notification starts firing. */
+        const val SUBSCRIPTION_EXPIRY_NOTIFY_DAYS = 3
+
         /** Parallel ping streams: how many locations are probed at once. */
         const val DEFAULT_PING_PARALLELISM = 5
         const val MIN_PING_PARALLELISM = 1
         const val MAX_PING_PARALLELISM = 20
+
+        /**
+         * Health-watchdog poll interval used while [energySaver] is on (vs. the default 15s). Network
+         * switches are handled by the event-driven NetworkCallback, so this only delays detection of a
+         * silently-dead core / stalled traffic — a 60s backstop is a good power/recovery trade-off.
+         */
+        const val ENERGY_SAVER_WATCHDOG_INTERVAL_MS = 60_000L
     }
 
     /**

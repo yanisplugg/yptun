@@ -130,7 +130,7 @@ sudo ufw allow 56000/udp
 | `CONNECT_ADDR` | **обязательна** | IP и порт вашего VPN (бэкенда) |
 | `LISTEN_ADDR` | `0.0.0.0:56000` | Внешний адрес прослушивания |
 | `MODE` | `udp` | Режим туннеля: `udp` \| `tcp` |
-| `OBF_PROFILE` | `none` | Маскировка: `none` \| `rtpopus` |
+| `OBF_PROFILE` | `none` | Маскировка: `none` \| `rtpopus` \| `rtpopus2` |
 | `OBF_KEY` | пусто | Ключ маскировки |
 | `CLIENTS_FILE`| пусто | Путь к JSON-файлу авторизации |
 | `DEBUG` | `false` | Включить debug-логи |

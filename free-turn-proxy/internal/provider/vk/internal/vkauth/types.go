@@ -7,13 +7,13 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
 )
 
-// VKCredentials — пара app_id/app_secret для получения анонимных токенов.
+// VKCredentials - пара app_id/app_secret для получения анонимных токенов.
 type VKCredentials struct {
 	ClientID     string
 	ClientSecret string
 }
 
-// TurnCredentials — разрешённые TURN-реквизиты для группы потоков.
+// TurnCredentials - разрешённые TURN-реквизиты для группы потоков.
 type TurnCredentials struct {
 	Username    string
 	Password    string
@@ -22,19 +22,24 @@ type TurnCredentials struct {
 	Link        string
 }
 
-// DefaultCredentials — публичные app_id/secret VK SDK, извлечённые из
-// официальных VK-клиентов (web/mobile/video). Это НЕ приватные креды
-// пользователя — VK раздаёт их в JS-бандле страницы калла. Клиент перебирает
-// по порядку при ошибках авторизации.
+// DefaultCredentials - публичные app_id/secret официальных VK-клиентов. Это НЕ
+// приватные креды пользователя - VK раздаёт их в JS-бандле страницы калла.
+// Клиент перебирает по порядку при ошибках авторизации. В списке только app_id
+// с доступом к calls.getAnonymousToken (проверено живым звонком); приложения
+// без calls-scope ("Unknown method passed") исключены.
 //
 //nolint:gosec // public VK SDK app credentials, not user secrets
 var DefaultCredentials = []VKCredentials{
 	{ClientID: "6287487", ClientSecret: "QbYic1K3lEV5kTGiqlq2"},  // VK_WEB_APP_ID
 	{ClientID: "7879029", ClientSecret: "aR5NKGmm03GYrCiNKsaw"},  // VK_MVK_APP_ID
-	{ClientID: "52461373", ClientSecret: "o557NLIkAErNhakXrQ7A"}, // VK_WEB_VKVIDEO_APP_ID
-	{ClientID: "52649896", ClientSecret: "WStp4ihWG4l3nmXZgIbC"}, // VK_MVK_VKVIDEO_APP_ID
-	{ClientID: "51781872", ClientSecret: "IjjCNl4L4Tf5QZEXIHKK"}, // VK_ID_AUTH_APP
+	{ClientID: "2274003", ClientSecret: "hHbZxrka2uZ6jB1inYsH"},  // VK_ANDROID_APP
+	{ClientID: "51453752", ClientSecret: "4UyuCUsdK8pVCNoeQuGi"}, // VK_MESSENGER_DESKTOP
+	{ClientID: "3140623", ClientSecret: "VeWdmVclDCtn6ihuP1nt"},  // VK_IPHONE_APP
 }
+
+// APIVersion - версия VK API во всех calls.* запросах. Держать единой и близкой
+// к версии живого web-клиента звонка (рассинхрон = fingerprint-аномалия).
+const APIVersion = "5.282"
 
 const (
 	CredentialLifetime = 10 * time.Minute
@@ -48,7 +53,7 @@ const (
 // Sentinel-ошибки auth-потока. Строковые формы стабильны (используются в логах).
 //
 // ErrCaptchaWaitRequired и ErrFatalCaptchaNoStreams также матчатся через
-// provider.ErrBackoffActive / provider.ErrFatalNoStreams — pipeline проверяет
+// provider.ErrBackoffActive / provider.ErrFatalNoStreams - pipeline проверяет
 // generic-sentinels, vkauth-внутренний код может проверять и старые.
 var (
 	ErrCaptchaWaitRequired   = errors.Join(provider.ErrBackoffActive, errors.New("CAPTCHA_WAIT_REQUIRED"))

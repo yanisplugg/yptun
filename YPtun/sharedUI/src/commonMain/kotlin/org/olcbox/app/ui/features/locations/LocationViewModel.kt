@@ -28,11 +28,14 @@ import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
+import org.olcbox.app.data.model.DnsttConfig
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.ShareLinkComposer
@@ -142,6 +145,10 @@ class LocationViewModel(
     var editingVkTurn by mutableStateOf(VkTurnDraft())
         private set
 
+    /** Editable dnstt (DNS tunnel) fields for the [EngineType.Dnstt] engine. */
+    var editingDnstt by mutableStateOf(DnsttConfig())
+        private set
+
     var proxyError by mutableStateOf<String?>(null)
         private set
 
@@ -162,6 +169,13 @@ class LocationViewModel(
      */
     private val vkTurnFieldsValid: Boolean
         get() = with(editingVkTurn) {
+            // WDTT core connects PURELY by the wdtt-server IP[:port] (+ a local listener); there is no
+            // freeturn peer and no user-entered WireGuard keys (the WG config is fetched from the server
+            // at runtime), so it gates on the wdtt-server address instead.
+            if (core.equals(VkTurnConfig.CORE_WDTT, ignoreCase = true)) {
+                return@with wdttPeer.isNotBlank() &&
+                    (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
+            }
             val peerOk = peerHost.isNotBlank() &&
                 (peerPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
                 (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
@@ -175,6 +189,10 @@ class LocationViewModel(
             peerOk && exitOk
         }
 
+    /** dnstt needs a tunnel domain, server public key and a DNS resolver. */
+    private val dnsttFieldsValid: Boolean
+        get() = editingDnstt.isComplete()
+
     val isFormValid: Boolean
         get() = nameError == null && editingName.isNotBlank() && when (editingConfig.engine) {
             EngineType.Stealth -> olcrtcFieldsValid
@@ -183,10 +201,11 @@ class LocationViewModel(
             EngineType.Standard -> editingConfig.proxy?.isComplete() == true
             EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
             EngineType.VkTurn -> vkTurnFieldsValid
+            EngineType.Dnstt -> dnsttFieldsValid
         }
 
     init {
-        loadLocations()
+        seedFromViewIndexThenLoad()
         viewModelScope.launch {
             locationsRepository.changes
                 .drop(1)
@@ -195,6 +214,46 @@ class LocationViewModel(
                 }
         }
     }
+
+    /**
+     * Paints the list INSTANTLY on a cold start: first reads the tiny [LocationViewIndex] (names +
+     * metadata only — decodes in a few ms) and shows it, then kicks off the authoritative full decode
+     * which swaps in the real configs (needed for pinging/connecting). The index items carry a
+     * display-only [LocationConfig] (no proxy/key), so they render the row label/engine but are not
+     * "complete" — pings stay idle for them until the full load replaces them a moment later.
+     *
+     * The seed is skipped if the full load has already populated the list (e.g. no index yet), so the
+     * authoritative data is never overwritten by a stale index.
+     */
+    private fun seedFromViewIndexThenLoad() {
+        viewModelScope.launch {
+            val index = withContext(Dispatchers.IO) {
+                runCatching { locationsRepository.getViewIndex() }.getOrNull()
+            }
+            if (index != null && !hasLoadedLocations && locations.isEmpty()) {
+                locations.clear()
+                locations.addAll(index.items.map { it.toDisplayLocationItem() })
+                selectedLocationId = index.activeLocationId
+                    ?: index.items.firstOrNull()?.storageId
+                hasLoadedLocations = true
+            }
+            loadLocations()
+        }
+    }
+
+    /** Builds a display-only [LocationItem] from a view-index entry (no connection payload). */
+    private fun LocationViewIndex.Item.toDisplayLocationItem(): LocationItem = LocationItem(
+        storageId = storageId,
+        fullName = name,
+        config = LocationConfig(
+            name = name,
+            engine = engine,
+            bypassProvider = authProvider,
+            transport = transport
+        ),
+        subscriptionUrl = subscriptionUrl,
+        metadata = metadata
+    )
 
     fun loadLocations(onComplete: () -> Unit = {}) {
         val requestId = ++loadLocationsRequest
@@ -496,6 +555,7 @@ class LocationViewModel(
         } else {
             VkTurnDraft()
         }
+        editingDnstt = editingConfig.dnstt ?: DnsttConfig()
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
             LocationConfig.DEFAULT_BYPASS_PROVIDER
@@ -527,6 +587,42 @@ class LocationViewModel(
     fun onPasswordChanged(value: String) {
         editingConfig = editingConfig.copy(key = value)
         validateKey(value)
+    }
+
+    // --- Multi-room (Stealth/Chain aggregation) ---
+    fun onMultiRoomToggle(enabled: Boolean) {
+        editingConfig = editingConfig.copy(multiRoomEnabled = enabled)
+    }
+
+    /** Stage-2 (Chain): bond the rooms into ONE reassembled stream instead of round-robin. */
+    fun onMultiRoomBondToggle(enabled: Boolean) {
+        editingConfig = editingConfig.copy(multiRoomBond = enabled)
+    }
+
+    fun onBondPortChanged(value: String) {
+        editingConfig = editingConfig.copy(bondPort = value.filter(Char::isDigit).toIntOrNull() ?: 0)
+    }
+
+    fun onExtraRoomAdd() {
+        if (editingConfig.extraRooms.size >= LocationConfig.MAX_EXTRA_ROOMS) return
+        editingConfig = editingConfig.copy(
+            extraRooms = editingConfig.extraRooms +
+                ExtraRoom(provider = editingConfig.bypassProvider, transport = editingConfig.transport),
+        )
+    }
+
+    fun onExtraRoomChanged(index: Int, transform: (ExtraRoom) -> ExtraRoom) {
+        val list = editingConfig.extraRooms.toMutableList()
+        if (index in list.indices) {
+            list[index] = transform(list[index])
+            editingConfig = editingConfig.copy(extraRooms = list)
+        }
+    }
+
+    fun onExtraRoomRemoved(index: Int) {
+        editingConfig = editingConfig.copy(
+            extraRooms = editingConfig.extraRooms.filterIndexed { i, _ -> i != index },
+        )
     }
 
     fun onCoreChanged(core: ProxyCore) {
@@ -571,6 +667,13 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(vkturn = vkturn, proxy = proxy)
     }
 
+    /** Applies an edit to the dnstt (DNS tunnel) config and keeps [editingConfig] in sync. */
+    fun updateDnstt(transform: (DnsttConfig) -> DnsttConfig) {
+        val updated = transform(editingDnstt)
+        editingDnstt = updated
+        editingConfig = editingConfig.copy(dnstt = updated)
+    }
+
     fun onEngineChanged(engine: EngineType) {
         val previous = editingConfig.engine
         editingConfig = editingConfig.copy(engine = engine)
@@ -590,6 +693,12 @@ class LocationViewModel(
             editingProxy2Link = ""
             proxyError = null
             proxy2Error = null
+        }
+        if (engine == EngineType.Dnstt) {
+            // Materialize the dnstt config from the current draft so the picked engine is consistent.
+            editingConfig = editingConfig.copy(dnstt = editingDnstt)
+        } else if (previous == EngineType.Dnstt) {
+            editingConfig = editingConfig.copy(dnstt = null)
         }
     }
 
@@ -623,7 +732,18 @@ class LocationViewModel(
         }
         val profile = proxyFromAnyLink(trimmed)
         if (profile != null && profile.isComplete()) {
-            editingConfig = editingConfig.copy(proxy2 = profile)
+            // For Standard/Chain the MAIN proxy editor is hidden (it normally comes from an import), so
+            // this "additional proxy" is the ONLY visible proxy field. If there's no valid main proxy
+            // yet, the user clearly means THIS to be their proxy → assign it as the main (otherwise the
+            // location can't save: Chain/Standard isFormValid requires a complete main proxy). When a
+            // main proxy already exists, it's a genuine SECOND/cascade hop (proxy2).
+            val isChainOrStd = editingConfig.engine == EngineType.Standard || editingConfig.engine == EngineType.Chain
+            if (isChainOrStd && editingConfig.proxy?.isComplete() != true) {
+                editingConfig = editingConfig.copy(proxy = profile)
+                editingProxyLink = trimmed
+            } else {
+                editingConfig = editingConfig.copy(proxy2 = profile)
+            }
             proxy2Error = null
         } else {
             editingConfig = editingConfig.copy(proxy2 = null)
@@ -639,7 +759,9 @@ class LocationViewModel(
     private fun proxyFromAnyLink(trimmed: String): ProxyProfile? {
         ShareLinkParser.parse(trimmed)?.let { return it }
         rawOutboundProfile(trimmed)?.let { return it }
-        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy ?: config.proxy2 }
+        // When the pasted yptun://inbound is itself a 2-hop cascade, chain through its EXIT (proxy2)
+        // so my hop's public IP matches the shared location's exit; fall back to its main proxy.
+        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy2 ?: config.proxy }
         return null
     }
 
@@ -832,8 +954,9 @@ class LocationViewModel(
         val pings = currentPingsSnapshot()
         return locations
             .filter { it.subscriptionUrl.isNullOrBlank() }
-            // VK-TURN can't be pinged (its result is always null) — NEVER treat it as unreachable / delete it.
-            .filter { it.config?.engine != EngineType.VkTurn }
+            // VK-TURN / dnstt can't be pinged off-tunnel (their result is null until connected) —
+            // NEVER treat them as unreachable / delete them.
+            .filter { it.config?.engine != EngineType.VkTurn && it.config?.engine != EngineType.Dnstt }
             .map { it.storageId }
             .filter { pings.containsKey(it) && pings[it] == null }
     }

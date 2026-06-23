@@ -37,7 +37,7 @@ func parseLines(s string) []string {
 }
 
 // feminizeSurname переводит мужскую фамилию в женскую форму.
-// Работает по рунам — кириллица многобайтовая в UTF-8.
+// Работает по рунам - кириллица многобайтовая в UTF-8.
 // Фамилии с не-русскими суффиксами возвращаются без изменений
 // (иностранные / мемные).
 func feminizeSurname(surname string) string {
@@ -55,7 +55,7 @@ func feminizeSurname(surname string) string {
 	return surname
 }
 
-// SurnameProbability — вероятность того, что Generate вернёт имя с фамилией.
+// SurnameProbability - вероятность того, что Generate вернёт имя с фамилией.
 const SurnameProbability = 0.7
 
 // Generate возвращает случайное "Имя" или "Имя Фамилия".

@@ -13,6 +13,10 @@ import kotlinx.serialization.Serializable
  * - [VkTurn] runs the free-turn-proxy client (a local WireGuard entry listener
  *   tunnelling through VK TURN) and sing-box with a WireGuard outbound pointed
  *   at that local listener — the panel's VK-TURN inbound consumed on the client.
+ * - [Dnstt] runs the dnstt client (David Fifield's DNS tunnel: KCP + Noise over DNS
+ *   TXT queries). It raises a local listener that transparently forwards each TCP
+ *   connection through the DNS tunnel to the dnstt-server's upstream (a SOCKS5),
+ *   so the local port behaves as the SOCKS5 the TUN bridge consumes directly.
  */
 @Serializable
 enum class EngineType {
@@ -26,13 +30,17 @@ enum class EngineType {
     Chain,
 
     @SerialName("vkturn")
-    VkTurn;
+    VkTurn,
+
+    @SerialName("dnstt")
+    Dnstt;
 
     companion object {
         fun fromValue(value: String?): EngineType = when (value?.trim()?.lowercase()) {
             "standard", "singbox", "sing-box", "vless" -> Standard
             "chain", "stealth_chain", "stealth+vless" -> Chain
             "vkturn", "vk-turn", "freeturn" -> VkTurn
+            "dnstt", "dns-tt", "dnstunnel" -> Dnstt
             else -> Stealth
         }
     }

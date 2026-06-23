@@ -1,4 +1,4 @@
-// Package vk — провайдер TURN-реквизитов через VK Calls API.
+// Package vk - провайдер TURN-реквизитов через VK Calls API.
 //
 // Фасад над internal/provider/vk/internal/vkauth: добавляет фиксированный link (адрес
 // VK callroom) и адаптирует сигнатуру GetCredentials к provider.Provider.
@@ -14,14 +14,15 @@ import (
 
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
+	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/browserprofile"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/captcha"
 	manualcaptcha "github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/captcha/manual"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/vkauth"
 )
 
-// Config — параметры VK-провайдера.
+// Config - параметры VK-провайдера.
 type Config struct {
-	// Link — VK callroom join-код (нормализованный, без префикса URL).
+	// Link - VK callroom join-код (нормализованный, без префикса URL).
 	// Обязателен.
 	Link string
 
@@ -31,24 +32,28 @@ type Config struct {
 	// ManualOnly форсирует ручной путь captcha с первой попытки.
 	ManualOnly bool
 
-	// StreamsPerCache — делитель streamID → cacheID. <=0 → дефолт (10).
+	// Browser - браузерный профиль control-plane: "chrome" | "firefox".
+	// Пустое -> firefox (дефолт продукта).
+	Browser string
+
+	// StreamsPerCache - делитель streamID -> cacheID. <=0 -> дефолт (10).
 	StreamsPerCache int
 
 	// StreamsAlive возвращает число подключённых потоков; vkauth использует
 	// для решения, является ли исчерпанная captcha фатальной или throttle.
 	StreamsAlive func() int32
 
-	// Credentials — VK app_id/secret пары; nil → vkauth.DefaultCredentials.
+	// Credentials - VK app_id/secret пары; nil -> vkauth.DefaultCredentials.
 	Credentials []vkauth.VKCredentials
 
-	// Log — уровневый логгер. nil → no-op.
+	// Log - уровневый логгер. nil -> no-op.
 	Log logx.Logger
 
 	// Debug включает debug-вывод в manual-captcha (HTTP-сервер).
 	Debug bool
 }
 
-// ManualSolverFunc — кастомный решатель captcha. Если nil, vkauth не пытается
+// ManualSolverFunc - кастомный решатель captcha. Если nil, vkauth не пытается
 // решать ручную captcha (поток падает на ErrFatalNoStreams при auto-fail).
 type ManualSolverFunc = vkauth.ManualSolveFunc
 
@@ -58,13 +63,13 @@ type Provider struct {
 	auth *vkauth.Client
 }
 
-// New создаёт VK-провайдер. solver — функция ручного решения captcha
-// (опциональная); если nil — manual captcha путь отключён.
+// New создаёт VK-провайдер. solver - функция ручного решения captcha
+// (опциональная); если nil - manual captcha путь отключён.
 func New(cfg Config, solver ManualSolverFunc) (*Provider, error) {
 	if cfg.Link == "" {
 		return nil, fmt.Errorf("vk: empty Link")
 	}
-	// captcha-пакеты — internal/ для provider/vk, поэтому подключаем
+	// captcha-пакеты - internal/ для provider/vk, поэтому подключаем
 	// логгер здесь, а не в cmd/client.
 	captcha.SetLogger(cfg.Log)
 	manualcaptcha.SetLogger(cfg.Log)
@@ -73,6 +78,7 @@ func New(cfg Config, solver ManualSolverFunc) (*Provider, error) {
 		Credentials:     cfg.Credentials,
 		Dialer:          cfg.Dialer,
 		ManualOnly:      cfg.ManualOnly,
+		Browser:         browserprofile.KindFromString(cfg.Browser),
 		StreamsPerCache: cfg.StreamsPerCache,
 		StreamsAlive:    cfg.StreamsAlive,
 		ManualSolver:    solver,
@@ -105,7 +111,7 @@ func (p *Provider) BackoffUntilUnix() int64 { return p.auth.BackoffUntilUnix() }
 // Name реализует provider.Provider.
 func (*Provider) Name() string { return "vk" }
 
-// DefaultManualSolver — стандартный manual-captcha solver, использует
+// DefaultManualSolver - стандартный manual-captcha solver, использует
 // internal/provider/vk/internal/captcha/manual (HTTP-сервер 127.0.0.1:8765 + браузер).
 func DefaultManualSolver(ctx context.Context, e *captcha.Error, d net.Dialer) (string, string, error) {
 	if e.RedirectURI != "" {

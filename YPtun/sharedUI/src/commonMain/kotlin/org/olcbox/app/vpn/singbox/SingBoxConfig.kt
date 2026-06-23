@@ -101,6 +101,19 @@ object SingBoxConfig {
         // ("err connection closed"). Domains then pass through to the tunnel to resolve, as they did
         // before the routing rework. IP-based rules (geoip/ip_cidr) still trigger a resolve regardless.
         forceFamilyResolve: Boolean = true,
+        // Whether the sniffed-domain `resolve` action may run. It resolves app destinations via the
+        // `remote` DNS server, whose detour is the proxy — i.e. a DNS lookup THROUGH the tunnel. On a
+        // very slow tunnel (dnstt: DNS TXT, tiny MTU) that adds a tunnel round-trip to EVERY connection
+        // and stalls browsing, so the dnstt-proxy path passes false: domains then go straight to the
+        // proxy (resolved server-side). Costs only IP-based geo rules (geoip:ru → direct); domain/geosite
+        // rules still match without a local IP, and the family is still pinned by the bridge's v6 drop.
+        allowLocalResolve: Boolean = true,
+        // VK-TURN / dnstt: the base tunnel (WireGuard / dnstt SOCKS) is the MANDATORY transport, so a
+        // routing rule's `direct` bucket must NOT leak to the real network — it should still exit through
+        // the base tunnel. When true, the `direct` outbound dials through the base detour (WG / olcRTC),
+        // so routing only chooses base-tunnel-exit (direct) vs second-proxy-exit (proxy); the tunnel is
+        // never bypassed.
+        directViaBase: Boolean = false,
         // Sniff the SNI/Host and OVERRIDE the connection destination with it before routing, then
         // resolve it to [dnsStrategyOverride]/[TrafficSettings.domainStrategy]. This is what lets a
         // v4-only full tunnel (AmneziaWG) stay IPv4-only WITHOUT rejecting traffic: an app's own-DoH
@@ -222,6 +235,14 @@ object SingBoxConfig {
                 val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
                 val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
+                // Base tunnel exit tag (WG for VK-TURN, dnstt SOCKS for dnstt) — keeps `direct` traffic on
+                // the tunnel when [directViaBase].
+                val baseExitTag = when {
+                    wgBaseOutbound != null -> WG_BASE_TAG
+                    olcrtcChainPort != null -> OLCRTC_TAG
+                    else -> null
+                }
+                val directDialsBase = directViaBase && baseExitTag != null
                 val second = secondProfile?.takeIf { it.isComplete() }
                 if (second != null) {
                     // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG), which dials THROUGH the
@@ -270,6 +291,9 @@ object SingBoxConfig {
                 addJsonObject {
                     put("type", "direct")
                     put("tag", "direct")
+                    // VK-TURN / dnstt: route `direct` traffic THROUGH the base tunnel (dnstt-server / VK
+                    // exit) instead of the real interface, so routing never bypasses the tunnel.
+                    if (directDialsBase) put("detour", baseExitTag)
                     // IPv6-leak guard for HYBRID modes (prefer_ipv4/prefer_ipv6): the direct/bypass path
                     // (domain:ru → direct) would otherwise dial the user's REAL IPv6 for dual-stack sites,
                     // exposing it on a leak check ("domain:ru goes direct only over IPv4, IPv6 leaks").
@@ -372,8 +396,9 @@ object SingBoxConfig {
                     // v2rayNG-style manual rules that use IP/geoip selectors also need the sniffed
                     // domain resolved first, or `geoip:ru → direct` silently skips domain connections.
                     val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
-                    if (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
-                        manualRulesUseIp || (sbExpert && routingProfile!!.singboxResolve)
+                    if (allowLocalResolve &&
+                        (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
+                            manualRulesUseIp || (sbExpert && routingProfile!!.singboxResolve))
                     ) {
                         addJsonObject {
                             put("action", "resolve")
@@ -433,9 +458,12 @@ object SingBoxConfig {
                             put("action", "reject")
                         }
                     }
-                    // The selected routing profile's own buckets (ordered by its routeOrder).
+                    // The selected routing profile's own buckets (ordered by its routeOrder). In the
+                    // hybrid IPv6 modes, also reject IPv6 to the direct bucket so geosite:ru/domain:ru
+                    // sites never egress over the user's real IPv6 (proxied traffic keeps dual-stack).
                     if (routingProfile != null) {
-                        SingBoxRouting.rules(routingProfile).forEach { add(it) }
+                        val hideDirectV6 = effectiveStrategy == "prefer_ipv4" || effectiveStrategy == "prefer_ipv6"
+                        SingBoxRouting.rules(routingProfile, hideDirectIpv6 = hideDirectV6).forEach { add(it) }
                     }
                     // Direct conveniences last (a profile proxy rule above still wins on first match).
                     if (routing.directDomains.isNotEmpty()) {

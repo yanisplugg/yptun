@@ -1116,6 +1116,10 @@ private fun SplitTunnelingAppListContent(
     onRussianBypassPresetEnabledChanged: (Boolean) -> Unit
 ) {
     var query by remember(list) { mutableStateOf("") }
+    // System/background apps (no launcher icon) are hidden by default so the list stays familiar;
+    // this reveals them so they can be included/excluded too. Already-selected ones stay visible.
+    var showSystemApps by remember { mutableStateOf(false) }
+    val hasSystemApps = remember(installedApps) { installedApps.any { it.isSystem } }
 
     // Не просто scrollToItem(0): keyed LazyColumn может успеть сохранить старый visible key
     // и слегка увести список к элементу, который переехал. Для bulk/search-сценариев
@@ -1168,11 +1172,16 @@ private fun SplitTunnelingAppListContent(
             )
         }
     }
-    val filteredApps = remember(appListEntries, normalizedQuery, sortSelectedPackages, sortAutoBypassPackages) {
+    val filteredApps = remember(appListEntries, normalizedQuery, sortSelectedPackages, sortAutoBypassPackages, showSystemApps, selectedPackages) {
+        val visible = appListEntries.filter { entry ->
+            // Hide system apps unless the toggle is on — but never hide one that's already selected,
+            // so the user can always see and remove their own choices.
+            showSystemApps || !entry.app.isSystem || entry.app.packageName in selectedPackages
+        }
         val apps = if (normalizedQuery.isBlank()) {
-            appListEntries
+            visible
         } else {
-            appListEntries.filter { entry ->
+            visible.filter { entry ->
                 entry.labelSortKey.contains(normalizedQuery) ||
                         entry.packageSortKey.contains(normalizedQuery)
             }
@@ -1242,6 +1251,35 @@ private fun SplitTunnelingAppListContent(
             label = { Text(LocalStrings.current.searchApps) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search)
         )
+
+        if (hasSystemApps) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = enabled) {
+                        showSystemApps = !showSystemApps
+                        resetListScrollToTop()
+                    }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = LocalStrings.current.showSystemApps,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = showSystemApps,
+                    onCheckedChange = {
+                        showSystemApps = it
+                        resetListScrollToTop()
+                    },
+                    enabled = enabled
+                )
+            }
+        }
 
         if (list == AndroidSplitTunnelList.Bypass) {
             Spacer(Modifier.height(10.dp))
@@ -1624,12 +1662,40 @@ private fun SubscriptionShareRow(
                 overflow = TextOverflow.Ellipsis
             )
 
+            // Panel announcement (Remnawave/Happ `announce` header), shown verbatim to the user.
+            item.announce?.takeIf { it.isNotBlank() }?.let { announce ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Text(
+                        text = announce,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            val subUriHandler = LocalUriHandler.current
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onShareClick) {
                     Text(LocalStrings.current.qrShare)
                 }
                 TextButton(onClick = onRefreshClick) {
                     Text(LocalStrings.current.refresh)
+                }
+                // Panel-advertised links (Remnawave/Happ `profile-web-page-url` / `support-url` headers).
+                item.webPageUrl?.takeIf { it.isNotBlank() }?.let { web ->
+                    TextButton(onClick = { runCatching { subUriHandler.openUri(web) } }) {
+                        Text(LocalStrings.current.subscriptionWebPage)
+                    }
+                }
+                item.supportUrl?.takeIf { it.isNotBlank() }?.let { support ->
+                    TextButton(onClick = { runCatching { subUriHandler.openUri(support) } }) {
+                        Text(LocalStrings.current.subscriptionSupport)
+                    }
                 }
             }
         }
@@ -3399,6 +3465,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
 
         RoutingToggleRow(
+            title = s.energySaverTitle,
+            subtitle = s.energySaverSubtitle,
+            checked = settings.energySaver
+        ) { onChanged(settings.copy(energySaver = it)) }
+
+        RoutingToggleRow(
             title = s.confirmDeleteTitle,
             subtitle = s.confirmDeleteSubtitle,
             checked = settings.confirmBeforeDelete
@@ -3411,10 +3483,28 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
         RoutingToggleRow(
+            title = "Комнаты / серверы в уведомлении",
+            subtitle = "Показывать «подключено/всего» комнат (olcRTC мультикомната) или серверов (VK-TURN мультисервер freeturn)",
+            checked = settings.showRoomsInNotification
+        ) { onChanged(settings.copy(showRoomsInNotification = it)) }
+
+        RoutingToggleRow(
             title = s.showSubscriptionExpiryTitle,
             subtitle = s.showSubscriptionExpirySubtitle,
             checked = settings.showSubscriptionExpiry
         ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
+
+        RoutingToggleRow(
+            title = "Уведомлять об окончании подписки",
+            subtitle = "Локальное уведомление за несколько дней до конца подписки.",
+            checked = settings.notifySubscriptionExpiry
+        ) { onChanged(settings.copy(notifySubscriptionExpiry = it)) }
+
+        RoutingToggleRow(
+            title = "Автоустановка на VPS",
+            subtitle = "Выполняет развёртывание движка на VPS.",
+            checked = settings.allowVpsAutoInstall
+        ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
 
         // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
         // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.

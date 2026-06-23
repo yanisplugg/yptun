@@ -60,7 +60,10 @@ data class TrafficSettings(
 
     /** Xray DNS queryStrategy mapped from [domainStrategy]. */
     fun xrayQueryStrategy(): String = when (domainStrategy) {
-        "ipv4_only" -> "UseIPv4"
+        // prefer_ipv4 is treated like ipv4_only on Xray (the user's intent on an IPv4-only ISP is "no
+        // tunnel IPv6"): resolve only A so the resolved v4 IP — not the bare domain — is what's sent to
+        // the EXIT proxy, otherwise the dual-stack server picks AAAA and 2ip shows the tunnel's IPv6.
+        "ipv4_only", "prefer_ipv4" -> "UseIPv4"
         "ipv6_only" -> "UseIPv6"
         else -> "UseIP"
     }

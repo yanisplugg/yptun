@@ -11,7 +11,7 @@ import (
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// fetchOkRuSession — шаг 3 цепочки: получает анонимный ok.ru session_key
+// fetchOkRuSession - шаг 3 цепочки: получает анонимный ok.ru session_key
 // через auth.anonymLogin.
 func (c *Client) fetchOkRuSession(ctx context.Context, httpClient tlsclient.HttpClient, profile browserprofile.Profile) (string, error) {
 	sessionData := fmt.Sprintf(`{"version":2,"device_id":"%s","client_version":1.1,"client_type":"SDK_JS"}`, uuid.New())

@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Split tunneling needs to enumerate ALL installed apps (incl. system/background packages with
+         no launcher icon) so they can be included in / excluded from the tunnel. Distributed outside
+         Google Play, so the QUERY_ALL_PACKAGES policy restriction doesn't apply. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -32,7 +36,10 @@
         android:usesCleartextTraffic="true">
 
         <!-- Use our bundled EmojiCompat (init in App.onCreate) instead of the default
-             downloadable-font initializer, so flag emojis render offline/everywhere. -->
+             downloadable-font initializer, so flag emojis render offline/everywhere.
+             Also disable WorkManager's automatic startup initializer: it runs as a
+             ContentProvider BEFORE Application.onCreate (uncatchable), so instead the app
+             initializes WorkManager on-demand via Configuration.Provider, guarded in onCreate. -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
@@ -40,6 +47,9 @@
             tools:node="merge">
             <meta-data
                 android:name="androidx.emoji2.text.EmojiCompatInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
                 tools:node="remove" />
         </provider>
 

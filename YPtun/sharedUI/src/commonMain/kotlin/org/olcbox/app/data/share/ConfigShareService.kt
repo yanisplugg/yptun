@@ -72,7 +72,10 @@ object ConfigShareService {
                         ?: first.location.displayName(),
                     updateIntervalHours = metadata?.updateIntervalHours,
                     lastRefreshAtEpochMs = metadata?.lastRefreshAtEpochMs,
-                    locationCount = subscriptionEntries.size
+                    locationCount = subscriptionEntries.size,
+                    supportUrl = metadata?.supportUrl,
+                    webPageUrl = metadata?.webPageUrl,
+                    announce = metadata?.announce
                 )
             }
     }
@@ -83,5 +86,11 @@ data class SubscriptionShareItem(
     val name: String,
     val updateIntervalHours: Int?,
     val lastRefreshAtEpochMs: Long?,
-    val locationCount: Int
+    val locationCount: Int,
+    /** Remnawave/Happ `support-url` header — panel support link, if advertised. */
+    val supportUrl: String? = null,
+    /** Remnawave/Happ `profile-web-page-url` header — subscription management page, if advertised. */
+    val webPageUrl: String? = null,
+    /** Remnawave/Happ `announce` header — panel announcement to show the user, if any. */
+    val announce: String? = null
 )

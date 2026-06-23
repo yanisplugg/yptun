@@ -13,7 +13,7 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// PooledSession — одна TURN+DTLS+KCP+smux сессия в пуле с lifetime-счётчиками.
+// PooledSession - одна TURN+DTLS+KCP+smux сессия в пуле с lifetime-счётчиками.
 // Поля экспортированы для учёта per-lane трафика в bondclient;
 // атомики изменять только через их методы.
 type PooledSession struct {
@@ -26,7 +26,7 @@ type PooledSession struct {
 	FromSession atomic.Uint64
 }
 
-// SessionPool — конкурентно-безопасный round-robin пул активных smux-сессий.
+// SessionPool - конкурентно-безопасный round-robin пул активных smux-сессий.
 type SessionPool struct {
 	mu          sync.RWMutex
 	sessions    []*PooledSession

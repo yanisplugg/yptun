@@ -6,6 +6,7 @@ import io.ktor.client.request.headers
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
+import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,6 +39,7 @@ import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
@@ -49,16 +51,42 @@ import org.olcbox.app.util.IsoTime
 interface LocationsDataSource {
     suspend fun loadLocationBundle(): LocationBundleV4?
     suspend fun saveLocationBundle(bundle: LocationBundleV4)
+
+    /**
+     * Loads the lightweight [LocationViewIndex] persisted alongside the bundle (names + metadata only,
+     * no heavy connection payloads), used to paint the location list INSTANTLY on a cold start before
+     * the full bundle decode finishes. Default `null` = no fast index on this platform (falls back to
+     * the full decode); only Android, where the cold-start lag is felt, persists and returns it.
+     */
+    suspend fun loadLocationViewIndex(): LocationViewIndex? = null
     suspend fun loadLegacyLocations(): List<Pair<String, String>>
     suspend fun loadLegacyActiveLocationId(): String?
     suspend fun loadDeviceIdentity(): String? = null
     suspend fun saveDeviceIdentity(value: String) = Unit
 
     /**
+     * Persisted state for the Happ-style provider-usage report — an opaque JSON string mapping each
+     * `providerid` to the epoch-day it was last reported, so the daily report fires at most once per
+     * calendar day per id across restarts (and is shared with the background worker). Default no-op
+     * (no persistence) on platforms without a store; only Android needs real persistence here.
+     */
+    suspend fun loadProviderReportState(): String? = null
+    suspend fun saveProviderReportState(value: String) = Unit
+
+    /**
      * A platform-stable device id (e.g. Android ANDROID_ID) used to seed the HWID so it
      * survives reinstalls / data-clears. Null when the platform offers no stable id.
      */
     suspend fun platformStableId(): String? = null
+
+    /**
+     * A cheap change token for the persisted bundle (e.g. file mtime + size), used by the repository
+     * to cache the decoded bundle and skip the re-read/decode when nothing changed. The token MUST
+     * change whenever the bundle is rewritten by ANY repository instance (the VPN service holds its
+     * own instance), so a stale cache can never be served. Default `null` = no token available, which
+     * disables the cache (always reload) — only Android, where the lag matters, overrides this.
+     */
+    suspend fun bundleVersionToken(): Long? = null
 }
 
 internal expect fun createProxyHttpClient(
@@ -89,7 +117,15 @@ class LocationsRepositoryImpl(
         /** Best-effort JSON from the Remnawave `<url>/info` endpoint (carries user.expiresAt etc.). */
         val infoJson: String? = null,
         /** Best-effort rich Xray JSON (Happ-UA fetch) used only to extract the FakeDNS spec. */
-        val fakednsJson: String? = null
+        val fakednsJson: String? = null,
+        /** Remnawave `support-url` header (panel support link). */
+        val supportUrl: String? = null,
+        /** Remnawave `profile-web-page-url` header (subscription management page). */
+        val webPageUrl: String? = null,
+        /** Remnawave `announce` header (panel announcement; may be base64). */
+        val announce: String? = null,
+        /** Happ/Remnawave `providerid` header (provider tracking id). */
+        val providerId: String? = null
     )
 
     private data class DownloadedSubscription(
@@ -98,7 +134,11 @@ class LocationsRepositoryImpl(
         val profileTitle: String? = null,
         val userInfo: String? = null,
         val infoJson: String? = null,
-        val fakednsJson: String? = null
+        val fakednsJson: String? = null,
+        val supportUrl: String? = null,
+        val webPageUrl: String? = null,
+        val announce: String? = null,
+        val providerId: String? = null
     )
 
     private data class ParsedImport(
@@ -127,6 +167,16 @@ class LocationsRepositoryImpl(
     }
 
     private val mutationMutex = Mutex()
+    // In-memory cache of the decoded bundle. Every getBundle() otherwise re-reads the file and
+    // JSON-decodes + normalizes the whole bundle; app startup alone fires many reads (active config,
+    // the full location list, subscription backfill, expiry-notify, provider-report), so with hundreds
+    // of configs that repeated decode is what makes the list appear with a lag. The bundle is read ONLY
+    // via getBundleUnlocked and written ONLY via saveBundleUnlocked, both always under [mutationMutex]
+    // (which also gives the memory visibility), and the cache is keyed on [LocationsDataSource.bundleVersionToken]
+    // so a write from ANY instance (the VPN service keeps its own repository) invalidates it — the
+    // service can never connect with a stale config. A null token disables the cache (always reload).
+    private var cachedBundle: LocationBundleV4? = null
+    private var cachedToken: Long? = null
     private val _changes = MutableStateFlow(0L)
     override val changes: StateFlow<Long> = _changes.asStateFlow()
 
@@ -144,15 +194,43 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun getViewIndex(): LocationViewIndex? {
+        // Lock-free on purpose: this reads a SEPARATE, tiny file (no touch to the cached bundle) and is
+        // only ever used to paint the list fast on launch — it must not wait behind a long mutation.
+        return runCatching { dataSource.loadLocationViewIndex() }.getOrNull()
+    }
+
     private suspend fun getBundleUnlocked(): LocationBundleV4 {
+        val token = dataSource.bundleVersionToken()
+        cachedBundle?.let { cached ->
+            if (token != null && token == cachedToken) return cached
+        }
+
+        // Normalization happens HERE (the repository is the single read funnel), so the platform
+        // datasources do raw IO + decode only and we never pay a double normalize+filter+dedup pass over
+        // the whole bundle. normalized() is idempotent and every write is already normalized, so this is
+        // behaviour-safe; it also keeps the in-memory token cache keyed to the canonical form.
         val stored = dataSource.loadLocationBundle()?.normalized()
-        if (stored != null && stored.locations.isNotEmpty()) return stored
+        if (stored != null && stored.locations.isNotEmpty()) {
+            cacheBundle(stored, token)
+            return stored
+        }
 
         val legacy = migrateLegacyBundle()
         if (legacy.locations.isNotEmpty()) {
             dataSource.saveLocationBundle(legacy)
+            // The write changed the file; re-read the token so the cache matches the on-disk state.
+            cacheBundle(legacy, dataSource.bundleVersionToken())
+        } else {
+            cacheBundle(legacy, token)
         }
         return legacy
+    }
+
+    /** Stores [bundle] as the in-memory cache under its [token] (null token = effectively uncached). */
+    private fun cacheBundle(bundle: LocationBundleV4, token: Long?) {
+        cachedBundle = bundle
+        cachedToken = token
     }
 
     override suspend fun saveBundle(bundle: LocationBundleV4) {
@@ -162,7 +240,10 @@ class LocationsRepositoryImpl(
     }
 
     private suspend fun saveBundleUnlocked(bundle: LocationBundleV4) {
-        dataSource.saveLocationBundle(bundle.normalized())
+        val normalized = bundle.normalized()
+        dataSource.saveLocationBundle(normalized)
+        // Cache the just-written bundle under the post-write token so the next read serves it directly.
+        cacheBundle(normalized, dataSource.bundleVersionToken())
         _changes.value = _changes.value + 1
     }
 
@@ -323,6 +404,12 @@ class LocationsRepositoryImpl(
                 .groupBy { subscriptionSignature(it.location) }
                 .mapValues { (_, entries) -> entries.toMutableList() }
 
+            // Was the previously-selected server one of THIS subscription's entries? If so we must
+            // decide its fate after the refresh: keep it if it still exists (reused by signature),
+            // otherwise fall back to this subscription's first server.
+            val activeInThisGroup = activeBefore != null && previousEntries.any { it.storageId == activeBefore }
+            var activeReusedHere = false
+
             val reassigned = refreshed.mapIndexed { index, entry ->
                 val signature = subscriptionSignature(entry.location)
                 val reusedPool = reusedBySignature[signature]
@@ -331,8 +418,11 @@ class LocationsRepositoryImpl(
                     base = "imported_${entry.location.storageSlug().ifBlank { "location_${index + 1}" }}",
                     used = usedStorageIds
                 )
-                if (activeBefore == reusedEntry?.storageId) {
+                // The selected server survived the refresh (same signature → same storageId reused):
+                // keep it selected. Guard against null==null matching when nothing was selected.
+                if (activeBefore != null && reusedEntry?.storageId == activeBefore) {
                     activeAfter = storageId
+                    activeReusedHere = true
                 }
                 entry.copy(
                     storageId = storageId,
@@ -346,10 +436,10 @@ class LocationsRepositoryImpl(
                 ).normalized()
             }
 
-            if (activeBefore != null &&
-                activeAfter == activeBefore &&
-                previousEntries.any { it.storageId == activeBefore }
-            ) {
+            // Only reset the selection when the selected server actually vanished from this
+            // subscription (removed upstream / signature changed). If it was reused, leave it alone —
+            // otherwise every on-launch refresh would snap the user back to the first server.
+            if (activeInThisGroup && !activeReusedHere) {
                 activeAfter = reassigned.firstOrNull()?.storageId
             }
             refreshedLocations += reassigned
@@ -433,6 +523,66 @@ class LocationsRepositoryImpl(
                     subscriptionProxy = subscriptionProxy
                 )
             }
+        }
+    }
+
+    override suspend fun reportProviderUsage() {
+        val ids = runCatching {
+            getBundle().locations
+                .mapNotNull { it.metadata?.subscription?.providerId?.trim()?.takeIf { id -> id.isNotBlank() } }
+                .distinct()
+        }.getOrDefault(emptyList())
+        if (ids.isEmpty()) return
+
+        val today = nowEpochMs() / 86_400_000L
+        // Persisted providerId → last-reported epoch-day, so we fire at most once per calendar day per
+        // id across restarts and shared with the background worker.
+        val state = loadProviderReportDays().toMutableMap()
+        // Identity + device descriptors, exactly like the subscription fetch sends to the panel.
+        val hwid = runCatching { deviceIdentityProvider.hwid() }.getOrNull().orEmpty()
+        val appVersion = CurrentAppInfo.value.version
+
+        var changed = false
+        ids.forEach { id ->
+            if (state[id] == today) return@forEach // already reported today
+            val ok = runCatching {
+                val response = httpClient.get(PROVIDER_CHECK_URL + id.encodeURLParameter()) {
+                    headers {
+                        append(HttpHeaders.UserAgent, subscriptionUserAgent())
+                        if (hwid.isNotBlank()) append("x-hwid", hwid)
+                        append("x-device-os", DeviceInfo.os)
+                        append("x-ver-os", DeviceInfo.osVersion)
+                        append("x-device-model", DeviceInfo.model)
+                        append("x-app-version", appVersion)
+                    }
+                }
+                response.status.value in 200..299
+            }.getOrDefault(false)
+            if (ok) {
+                state[id] = today
+                changed = true
+            }
+        }
+        // Drop entries for provider ids that no longer exist so the state can't grow unbounded.
+        val pruned = state.filterKeys { it in ids }
+        if (changed || pruned.size != state.size) saveProviderReportDays(pruned)
+    }
+
+    /** Reads the persisted providerId → epoch-day report map (tolerates missing/corrupt state). */
+    private suspend fun loadProviderReportDays(): Map<String, Long> {
+        val raw = runCatching { dataSource.loadProviderReportState() }.getOrNull() ?: return emptyMap()
+        return runCatching {
+            json.parseToJsonElement(raw).jsonObject.mapNotNull { (k, v) ->
+                v.jsonPrimitive.contentOrNull?.toLongOrNull()?.let { k to it }
+            }.toMap()
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Persists the providerId → epoch-day report map. */
+    private suspend fun saveProviderReportDays(map: Map<String, Long>) {
+        runCatching {
+            val obj = JsonObject(map.mapValues { JsonPrimitive(it.value) })
+            dataSource.saveProviderReportState(json.encodeToString(JsonObject.serializer(), obj))
         }
     }
 
@@ -627,7 +777,14 @@ class LocationsRepositoryImpl(
                 // The panel JSON body (Remnawave `user{}`) carries the expiry + human traffic counters;
                 // the response headers carry the profile title (name) and may also carry traffic/expiry.
                 primary = subscriptionMetadataFromBody(source.infoJson ?: source.content),
-                secondary = subscriptionMetadataFromHeaders(source.profileTitle, source.userInfo)
+                secondary = subscriptionMetadataFromHeaders(
+                    profileTitle = source.profileTitle,
+                    userInfo = source.userInfo,
+                    supportUrl = source.supportUrl,
+                    webPageUrl = source.webPageUrl,
+                    announce = source.announce,
+                    providerId = source.providerId
+                )
             // Persist the auto-refresh interval (profile-update-interval header) onto the metadata at
             // import time too, so it's shown and used even before the first scheduled refresh.
             ).withSubscriptionInterval(initialSubscriptionInterval)
@@ -692,7 +849,11 @@ class LocationsRepositoryImpl(
                     profileTitle = downloaded.profileTitle,
                     userInfo = downloaded.userInfo,
                     infoJson = downloaded.infoJson,
-                    fakednsJson = downloaded.fakednsJson
+                    fakednsJson = downloaded.fakednsJson,
+                    supportUrl = downloaded.supportUrl,
+                    webPageUrl = downloaded.webPageUrl,
+                    announce = downloaded.announce,
+                    providerId = downloaded.providerId
                 )
             }
     }
@@ -803,7 +964,15 @@ class LocationsRepositoryImpl(
                     profileTitle = response.headers["profile-title"]?.let { decodeProfileTitle(it) },
                     userInfo = response.headers["subscription-userinfo"]?.trim(),
                     infoJson = infoJson,
-                    fakednsJson = fakednsJson
+                    fakednsJson = fakednsJson,
+                    // Remnawave also advertises a support link, a subscription web page and an
+                    // announcement via headers (the last is often base64-wrapped like profile-title).
+                    supportUrl = response.headers["support-url"]?.let { decodeMaybeBase64Header(it) },
+                    webPageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) },
+                    announce = response.headers["announce"]?.let { decodeMaybeBase64Header(it) },
+                    // Happ/Remnawave provider tracking id (lowercase `providerid`; lookup is
+                    // case-insensitive). Plain string — not base64.
+                    providerId = response.headers["providerid"]?.trim()?.takeIf { it.isNotBlank() }
                 )
             }
         } finally {
@@ -1226,7 +1395,11 @@ class LocationsRepositoryImpl(
      */
     private fun subscriptionMetadataFromHeaders(
         profileTitle: String?,
-        userInfo: String?
+        userInfo: String?,
+        supportUrl: String? = null,
+        webPageUrl: String? = null,
+        announce: String? = null,
+        providerId: String? = null
     ): SubscriptionMetadata? {
         val name = profileTitle?.trim()?.takeIf { it.isNotBlank() }
 
@@ -1251,12 +1424,25 @@ class LocationsRepositoryImpl(
             expiresAtEpochMs = fields["expire"]?.toLongOrNull()?.takeIf { it > 0L }?.let { it * 1_000L }
         }
 
-        if (name == null && used == null && available == null && expiresAtEpochMs == null) return null
+        val support = supportUrl?.trim()?.takeIf { it.isNotBlank() }
+        val webPage = webPageUrl?.trim()?.takeIf { it.isNotBlank() }
+        val announcement = announce?.trim()?.takeIf { it.isNotBlank() }
+        val provider = providerId?.trim()?.takeIf { it.isNotBlank() }
+
+        if (name == null && used == null && available == null && expiresAtEpochMs == null &&
+            support == null && webPage == null && announcement == null && provider == null
+        ) {
+            return null
+        }
         return SubscriptionMetadata(
             name = name,
             used = used,
             available = available,
-            expiresAtEpochMs = expiresAtEpochMs
+            expiresAtEpochMs = expiresAtEpochMs,
+            supportUrl = support,
+            webPageUrl = webPage,
+            announce = announcement,
+            providerId = provider
         ).normalized()
     }
 
@@ -1311,16 +1497,27 @@ class LocationsRepositoryImpl(
             updateIntervalHours = primary.updateIntervalHours ?: secondary.updateIntervalHours,
             lastRefreshAtEpochMs = primary.lastRefreshAtEpochMs ?: secondary.lastRefreshAtEpochMs,
             expiresAtEpochMs = primary.expiresAtEpochMs ?: secondary.expiresAtEpochMs,
-            lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs
+            lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs,
+            supportUrl = primary.supportUrl ?: secondary.supportUrl,
+            webPageUrl = primary.webPageUrl ?: secondary.webPageUrl,
+            announce = primary.announce ?: secondary.announce,
+            providerId = primary.providerId ?: secondary.providerId
         ).normalized().takeUnless { it.isEmpty() }
     }
 
     /** Decodes a `profile-title` header, which Remnawave sends as `base64:<payload>`. */
-    private fun decodeProfileTitle(raw: String): String? {
+    private fun decodeProfileTitle(raw: String): String? = decodeMaybeBase64Header(raw)
+
+    /**
+     * Decodes a header value that Remnawave may send either plain or `base64:`-prefixed (used for
+     * `profile-title`, `announce`, and occasionally the URLs). Falls back to the raw value if it isn't
+     * actually base64. Returns null for blank input.
+     */
+    private fun decodeMaybeBase64Header(raw: String): String? {
         val value = raw.trim()
         if (value.isEmpty()) return null
-        val payload = value.removePrefix("base64:").trim()
         val decoded = if (value.startsWith("base64:")) {
+            val payload = value.removePrefix("base64:").trim()
             SubscriptionDecoder.decodeBase64Chunk(payload) ?: payload
         } else {
             value
@@ -1359,22 +1556,47 @@ class LocationsRepositoryImpl(
         val link = FreeturnUriParser.parse(line) ?: return null
 
         val name = link.comment.ifBlank { "VK-TURN ${link.serverIp}" }
-        val location = LocationConfig(
-            name = name,
-            engine = EngineType.VkTurn,
-            proxy = ProxyProfile(
-                tag = name,
-                type = "wireguard",
-                server = link.serverIp,
-                serverPort = link.serverPort,
-                rawOutbound = link.wgOutboundJson,
-            ),
-            vkturn = VkTurnConfig(
-                uri = link.uri,
-                vkLink = "",
-                listenPort = link.listenPort,
-            ),
-        ).normalized()
+        val location = if (link.mode == "tcp") {
+            // tcp / Proxy-bonded: the exit is a normal proxy dialled THROUGH the local freeturn tcp
+            // listener. Mirror VkTurnComposer.compose's PROXY branch — rewrite server→127.0.0.1:<listen>
+            // and pin the SNI to the real host (else TLS validates against 127.0.0.1 and resets).
+            val listenPort = LocationConfig.DEFAULT_FREETURN_PORT
+            val base = ShareLinkParser.parse(link.exitProxyLink) ?: ProxyProfile()
+            LocationConfig(
+                name = name,
+                engine = EngineType.VkTurn,
+                proxy = base.copy(
+                    tag = name,
+                    sni = base.sni.ifBlank { base.server },
+                    server = "127.0.0.1",
+                    serverPort = listenPort,
+                ),
+                vkturn = VkTurnConfig(
+                    uri = link.uri,
+                    vkLink = "",
+                    listenPort = listenPort,
+                    outbound = VkTurnConfig.OUTBOUND_PROXY,
+                    outboundProxyLink = link.exitProxyLink,
+                ),
+            ).normalized()
+        } else {
+            LocationConfig(
+                name = name,
+                engine = EngineType.VkTurn,
+                proxy = ProxyProfile(
+                    tag = name,
+                    type = "wireguard",
+                    server = link.serverIp,
+                    serverPort = link.serverPort,
+                    rawOutbound = link.wgOutboundJson,
+                ),
+                vkturn = VkTurnConfig(
+                    uri = link.uri,
+                    vkLink = "",
+                    listenPort = link.listenPort,
+                ),
+            ).normalized()
+        }
 
         val base = "${link.serverIp}_${link.serverPort}"
             .lowercase()
@@ -2041,5 +2263,7 @@ class LocationsRepositoryImpl(
     private companion object {
         const val OLCRTC_URI_PREFIX = "olcrtc://"
         const val UTF8_BOM = "\uFEFF"
+        /** Happ provider-tracking check endpoint; the provider id is appended as the `id` query param. */
+        const val PROVIDER_CHECK_URL = "https://check.happ-proxy.com/provider?id="
     }
 }

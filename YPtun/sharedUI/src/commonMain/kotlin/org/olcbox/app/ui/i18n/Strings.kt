@@ -145,6 +145,8 @@ interface Strings {
     // Application behavior
     val autoConnectTitle: String
     val autoConnectSubtitle: String
+    val energySaverTitle: String
+    val energySaverSubtitle: String
     val confirmDeleteTitle: String
     val confirmDeleteSubtitle: String
     val language: String
@@ -175,6 +177,7 @@ interface Strings {
     val routingTitle: String
     val bypassLan: String
     val bypassLanSubtitle: String
+    val showSystemApps: String
     val bypassRussia: String
     val bypassRussiaSubtitle: String
     val blockAds: String
@@ -419,6 +422,9 @@ interface Strings {
     // Subscriptions sharing extra
     val qrShare: String
     val refresh: String
+    // Panel-advertised links (Remnawave/Happ profile-web-page-url / support-url headers)
+    val subscriptionWebPage: String
+    val subscriptionSupport: String
 
     // Experimental section
     val experimental: String
@@ -722,6 +728,8 @@ object RuStrings : Strings {
     override val howToConnect = "Как подключиться?"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
+    override val energySaverTitle = "Режим энергоэффективности"
+    override val energySaverSubtitle = "Меньше расход батареи: реже проверки соединения, без журнала. Может замедлить авто-восстановление; применяется при следующем подключении"
     override val confirmDeleteTitle = "Подтверждение удаления"
     override val confirmDeleteSubtitle = "Запрашивать подтверждение перед удалением подписок и конфигураций"
     override val language = "Язык"
@@ -748,6 +756,7 @@ object RuStrings : Strings {
     override val routingTitle = "Маршрутизация и правила"
     override val bypassLan = "Обход LAN"
     override val bypassLanSubtitle = "Локальные/приватные адреса идут напрямую"
+    override val showSystemApps = "Системные приложения"
     override val bypassRussia = "Обход России"
     override val bypassRussiaSubtitle = "RU-сайты и IP идут напрямую (geoip + geosite)"
     override val blockAds = "Блокировка рекламы"
@@ -966,6 +975,8 @@ object RuStrings : Strings {
     override val customColorRgb = "Произвольный цвет (RGB)"
     override val qrShare = "QR / поделиться"
     override val refresh = "Обновить"
+    override val subscriptionWebPage = "Страница"
+    override val subscriptionSupport = "Поддержка"
     override val experimental = "Экспериментальные"
     override val experimentalSubtitle = "Cookies Telemost и прочее"
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
@@ -1251,6 +1262,8 @@ object EnStrings : Strings {
     override val howToConnect = "How to connect?"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
+    override val energySaverTitle = "Energy-saver mode"
+    override val energySaverSubtitle = "Lower battery use: less frequent health checks, no journal. May slow auto-recovery; applied on next connect"
     override val confirmDeleteTitle = "Delete confirmation"
     override val confirmDeleteSubtitle = "Ask before deleting subscriptions and configs"
     override val language = "Language"
@@ -1277,6 +1290,7 @@ object EnStrings : Strings {
     override val routingTitle = "Routing & rules"
     override val bypassLan = "Bypass LAN"
     override val bypassLanSubtitle = "Local/private addresses go direct"
+    override val showSystemApps = "System apps"
     override val bypassRussia = "Bypass Russia"
     override val bypassRussiaSubtitle = "RU sites & IPs go direct (geoip + geosite)"
     override val blockAds = "Block ads"
@@ -1495,6 +1509,8 @@ object EnStrings : Strings {
     override val customColorRgb = "Custom color (RGB)"
     override val qrShare = "QR / share"
     override val refresh = "Refresh"
+    override val subscriptionWebPage = "Web page"
+    override val subscriptionSupport = "Support"
     override val experimental = "Experimental"
     override val experimentalSubtitle = "Telemost cookies and more"
     override val experimentalUnlocked = "Experimental settings unlocked"
@@ -1780,6 +1796,8 @@ object FaStrings : Strings {
     override val howToConnect = "چگونه متصل شویم؟"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
+    override val energySaverTitle = "حالت صرفه‌جویی در انرژی"
+    override val energySaverSubtitle = "مصرف باتری کمتر: بررسی‌های کمتر اتصال، بدون گزارش. ممکن است بازیابی خودکار را کند کند؛ در اتصال بعدی اعمال می‌شود"
     override val confirmDeleteTitle = "تأیید حذف"
     override val confirmDeleteSubtitle = "پیش از حذف اشتراک‌ها و پیکربندی‌ها پرسیده شود"
     override val language = "زبان"
@@ -1806,6 +1824,7 @@ object FaStrings : Strings {
     override val routingTitle = "مسیریابی و قواعد"
     override val bypassLan = "دور زدن LAN"
     override val bypassLanSubtitle = "نشانی‌های محلی/خصوصی مستقیم می‌روند"
+    override val showSystemApps = "برنامه‌های سیستمی"
     override val bypassRussia = "دور زدن روسیه"
     override val bypassRussiaSubtitle = "سایت‌ها و IPهای روسیه مستقیم می‌روند (geoip + geosite)"
     override val blockAds = "مسدودسازی تبلیغات"
@@ -2024,6 +2043,8 @@ object FaStrings : Strings {
     override val customColorRgb = "رنگ سفارشی (RGB)"
     override val qrShare = "QR / هم‌رسانی"
     override val refresh = "بازآوری"
+    override val subscriptionWebPage = "صفحه"
+    override val subscriptionSupport = "پشتیبانی"
     override val hideTunTitle = "پنهان‌کردن رابط tun0 (روت)"
     override val hideTunSubtitle = "یک ماژول Zygisk نصب می‌کند که رابط VPN را از سایر برنامه‌ها پنهان می‌کند. نیازمند روت (Magisk) و ری‌استارت."
     override val hideTunDisclaimer = "هشدار: این قابلیت از دسترسی روت (su) استفاده می‌کند. سازندهٔ نرم‌افزار مسئولیتی در قبال آسیب، از دست رفتن داده یا خرابی دستگاه ناشی از استفاده از روت ندارد."

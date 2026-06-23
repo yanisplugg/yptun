@@ -21,6 +21,7 @@ import (
 
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
 	"github.com/openlibrecommunity/olcrtc/internal/client"
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/server"
@@ -351,9 +352,8 @@ func (s *memoryStream) SetEndedCallback(cb func(string)) {
 func (s *memoryStream) WatchConnection(ctx context.Context) {
 	<-ctx.Done()
 }
-func (s *memoryStream) CanSend() bool {
-	return s.isConnected()
-}
+func (s *memoryStream) CanSend() bool           { return s.isConnected() }
+func (s *memoryStream) SubscriberCanSend() bool { return s.isConnected() }
 func (s *memoryStream) GetSendQueue() chan []byte { return nil }
 func (s *memoryStream) GetBufferedAmount() uint64 { return 0 }
 func (s *memoryStream) Reconnect(string)          {}
@@ -684,6 +684,8 @@ func realE2ECaseExpectation(carrierName, transportName string) realE2EExpectatio
 		}
 		return realE2EExpectPass
 	case "jitsi":
+		// Jitsi supports all transports for tunnel traffic.
+		// videochannel and seichannel now stable after RTP keepalive fixes.
 		return realE2EExpectPass
 	default:
 		return realE2EExpectPass
@@ -1091,6 +1093,7 @@ func startRealTunnel(
 			KeyHex:           testKeyHex,
 			DNSServer:        localDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
+			Liveness:         control.Config{Interval: 10 * time.Second, Timeout: 60 * time.Second, Failures: 10},
 		})
 	}()
 
@@ -1120,6 +1123,7 @@ func startRealTunnel(
 			LocalAddr:        socksAddr,
 			DNSServer:        localDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
+			Liveness:         control.Config{Interval: 10 * time.Second, Timeout: 60 * time.Second, Failures: 10},
 		}, func() { close(ready) })
 	}()
 
@@ -1150,7 +1154,7 @@ func startRealTunnel(
 		cancel:    cancel,
 		serverErr: serverErr,
 		clientErr: clientErr,
-		stopWait:  20 * time.Second,
+		stopWait:  60 * time.Second,
 	}, nil
 }
 
@@ -1409,7 +1413,7 @@ func runRealE2ECase(t *testing.T, carrierName, transportName, roomURL, echoAddr 
 		}
 	}()
 
-	conn, err := connectViaSOCKSWithin(rt.socksAddr, echoAddr, *realE2ETimeout)
+	conn, err := connectViaSOCKSWithin(ctx, rt.socksAddr, echoAddr, *realE2ETimeout)
 	if err != nil {
 		return err
 	}
@@ -1662,19 +1666,21 @@ func eventuallyConnectViaSOCKS(t *testing.T, socksAddr, targetAddr string) net.C
 func eventuallyConnectViaSOCKSWithin(t *testing.T, socksAddr, targetAddr string, timeout time.Duration) net.Conn {
 	t.Helper()
 
-	conn, err := connectViaSOCKSWithin(socksAddr, targetAddr, timeout)
+	conn, err := connectViaSOCKSWithin(context.Background(), socksAddr, targetAddr, timeout)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return conn
 }
 
-func connectViaSOCKSWithin(socksAddr, targetAddr string, timeout time.Duration) (net.Conn, error) {
+func connectViaSOCKSWithin(
+	ctx context.Context, socksAddr, targetAddr string, timeout time.Duration,
+) (net.Conn, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	attempt := 0
 	for time.Now().Before(deadline) {
-		conn, err := tryConnectViaSOCKS(socksAddr, targetAddr)
+		conn, err := tryConnectViaSOCKS(ctx, socksAddr, targetAddr)
 		if err == nil {
 			return conn, nil
 		}
@@ -1689,9 +1695,9 @@ func connectViaSOCKSWithin(socksAddr, targetAddr string, timeout time.Duration) 
 	return nil, fmt.Errorf("connect via SOCKS failed after %s: %w", timeout, lastErr)
 }
 
-func tryConnectViaSOCKS(socksAddr, targetAddr string) (net.Conn, error) {
+func tryConnectViaSOCKS(ctx context.Context, socksAddr, targetAddr string) (net.Conn, error) {
 	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
-	conn, err := dialer.DialContext(context.Background(), "tcp4", socksAddr)
+	conn, err := dialer.DialContext(ctx, "tcp4", socksAddr)
 	if err != nil {
 		return nil, fmt.Errorf("dial socks: %w", err)
 	}

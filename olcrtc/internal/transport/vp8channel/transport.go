@@ -37,10 +37,15 @@ const (
 	// to a couple of send windows so KCP's flush never blocks (a blocked
 	// WriteTo would stall KCP's update loop and delay ACKs); the paced writer
 	// keeps it drained so this depth is headroom, not standing latency.
-	outboundQueueSize    = 1536
-	inboundQueueSize     = 4096
-	canSendHighWatermark = 90 // percent
-	keepaliveIdlePeriod  = 100 * time.Millisecond
+	outboundQueueSize        = 1536
+	// controlOutboundQueueSize is the queue for the control-plane KCP.
+	// Control messages are tiny (ping/pong JSON frames), so a small queue
+	// suffices. We keep it separate from bulk data to guarantee forward
+	// progress even when the data outbound queue is saturated.
+	controlOutboundQueueSize = 2048 // sized for ~20s publisher reconnect window at 20ms tick
+	inboundQueueSize         = 4096
+	canSendHighWatermark     = 90 // percent
+	keepaliveIdlePeriod      = 100 * time.Millisecond
 )
 
 var (
@@ -71,12 +76,20 @@ const (
 	epochOff    = 24
 	crcOff      = 28
 	epochHdrLen = 32
+	// controlEpochFlag marks an epoch as belonging to the control-plane
+	// KCP session. The high bit of the epoch uint32 is reserved for this
+	// purpose; data-plane epochs are generated with the high bit clear.
+	controlEpochFlag uint32 = 0x80000000
 )
 
 var kcpBatchMagic = [4]byte{'O', 'L', 'K', 'B'} //nolint:gochecknoglobals // wire marker
 
 // videoSession is the subset of engine.Session + engine.VideoTrackCapable
-// the vp8channel transport relies on.
+// the vp8channel transport relies on. It necessarily mirrors the engine's
+// lifecycle + video contract, so the method count exceeds the default bloat
+// threshold by design.
+//
+//nolint:interfacebloat // mirrors the engine.Session + video contract
 type videoSession interface {
 	Connect(ctx context.Context) error
 	Close() error
@@ -85,6 +98,11 @@ type videoSession interface {
 	SetEndedCallback(cb func(string))
 	WatchConnection(ctx context.Context)
 	CanSend() bool
+	// SubscriberCanSend returns true when the subscriber PC is connected,
+	// even if the publisher PC has not yet completed negotiation. Used by
+	// the control-plane path so that handshake welcome is never blocked
+	// behind publisher negotiation.
+	SubscriberCanSend() bool
 	Reconnect(reason string)
 	AddTrack(track webrtc.TrackLocal) error
 	SetTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver))
@@ -95,13 +113,21 @@ type streamTransport struct {
 	track         *webrtc.TrackLocalStaticSample
 	onData        func([]byte)
 	onPeerData    func(peerID string, data []byte)
+	// onControlData is called with every reassembled message from the
+	// control-plane KCP session.
+	onControlData func([]byte)
 	outbound      chan []byte
+	// controlOutbound is the dedicated outbound queue for the control KCP.
+	// Frames here are drained with priority before bulk data frames so that
+	// handshake / liveness messages never wait behind large data writes.
+	controlOutbound chan []byte
 	closeCh       chan struct{}
 	writerDone    chan struct{}
 	closed        atomic.Bool
 	writerUp      atomic.Bool
 	writerOnce    sync.Once
 	kcpOnce       sync.Once
+	controlKCPOnce sync.Once
 	frameInterval time.Duration
 	batchSize     int
 	perTickBytes  int
@@ -116,6 +142,10 @@ type streamTransport struct {
 
 	kcp           *kcpRuntime
 	kcpMu         sync.RWMutex
+	// controlKCP is the isolated KCP session for the control plane.
+	controlKCP    *kcpRuntime
+	controlKCPMu  sync.RWMutex
+	controlOnDataMu sync.RWMutex // guards onControlData reads/writes
 	reconnectMu   sync.Mutex
 	reconnectFn   func()
 	peerConfirmed atomic.Bool
@@ -207,20 +237,21 @@ func newStreamTransport(
 	}
 
 	tr := &streamTransport{
-		stream:        stream,
-		track:         track,
-		onData:        cfg.OnData,
-		onPeerData:    cfg.OnPeerData,
-		outbound:      make(chan []byte, outboundQueueSize),
-		closeCh:       make(chan struct{}),
-		writerDone:    make(chan struct{}),
-		frameInterval: time.Second / time.Duration(fps),
-		batchSize:     batchSize,
-		perTickBytes:  perTickBytes,
-		bindingToken:  bindingToken(cfg.RoomURL),
-		localEpoch:    randomEpoch(),
-		peers:         make(map[uint32]*kcpRuntime),
-		peerOut:       make(map[uint32]chan []byte),
+		stream:            stream,
+		track:             track,
+		onData:            cfg.OnData,
+		onPeerData:        cfg.OnPeerData,
+		outbound:          make(chan []byte, outboundQueueSize),
+		controlOutbound:   make(chan []byte, controlOutboundQueueSize),
+		closeCh:           make(chan struct{}),
+		writerDone:        make(chan struct{}),
+		frameInterval:     time.Second / time.Duration(fps),
+		batchSize:         batchSize,
+		perTickBytes:      perTickBytes,
+		bindingToken:      bindingToken(cfg.RoomURL),
+		localEpoch:        randomEpoch(),
+		peers:             make(map[uint32]*kcpRuntime),
+		peerOut:           make(map[uint32]chan []byte),
 	}
 
 	// In single-peer mode, confirm the peer epoch on first successful KCP
@@ -250,7 +281,7 @@ func (p *streamTransport) Connect(ctx context.Context) error {
 		return fmt.Errorf("connect stream: %w", err)
 	}
 
-	// Start KCP eagerly so Send/CanSend work immediately after Connect.
+	// Start data KCP eagerly so Send/CanSend work immediately after Connect.
 	// Without this, the handshake round-trip that runs right after Connect
 	// would deadlock: muxconn.Write spins on CanSend (which checks kcp!=nil)
 	// and KCP was only started lazily on the first incoming peer frame.
@@ -264,6 +295,32 @@ func (p *streamTransport) Connect(ctx context.Context) error {
 		p.kcp = rt
 		p.kcpMu.Unlock()
 		logger.Infof("vp8channel: KCP started localEpoch=0x%08x", p.localEpochValue())
+	})
+
+	// Start control KCP on its own isolated session. Control messages are tiny
+	// (ping/pong JSON) and must never be blocked behind bulk data segments.
+	// We pass a wrapper callback that always reads the current onControlData
+	// field under the mutex, so SetControlOnData can update it without
+	// restarting the KCP session.
+	p.controlKCPOnce.Do(func() {
+		controlCb := func(data []byte) {
+			p.controlOnDataMu.RLock()
+			cb := p.onControlData
+			p.controlOnDataMu.RUnlock()
+			if cb != nil {
+				cb(data)
+			}
+		}
+		chdr := p.controlEpochHeader()
+		rt, err := startKCP(p.controlOutbound, controlCb, chdr)
+		if err != nil {
+			logger.Infof("vp8channel: startControlKCP failed: %v", err)
+			return
+		}
+		p.controlKCPMu.Lock()
+		p.controlKCP = rt
+		p.controlKCPMu.Unlock()
+		logger.Infof("vp8channel: control KCP started epoch=0x%08x", p.controlEpochValue())
 	})
 
 	p.writerOnce.Do(func() {
@@ -281,6 +338,20 @@ func (p *streamTransport) epochHeader() [epochHdrLen]byte {
 	epoch := p.localEpoch
 	p.epochMu.RUnlock()
 	return buildEpochHeader(p.bindingToken, epoch)
+}
+
+// controlEpochValue returns the current control-plane epoch (data epoch | controlEpochFlag).
+func (p *streamTransport) controlEpochValue() uint32 {
+	p.epochMu.RLock()
+	defer p.epochMu.RUnlock()
+	return p.localEpoch | controlEpochFlag
+}
+
+// controlEpochHeader builds the epoch header for the control-plane track.
+// The control epoch has the high bit set so the receiver can distinguish
+// control frames from bulk data frames arriving on the same RTP stream.
+func (p *streamTransport) controlEpochHeader() [epochHdrLen]byte {
+	return buildEpochHeader(p.bindingToken, p.controlEpochValue())
 }
 
 func buildEpochHeader(token, epoch uint32) [epochHdrLen]byte {
@@ -344,9 +415,15 @@ func randomEpoch() uint32 {
 	if _, err := rand.Read(b[:]); err != nil {
 		// rand.Read on Linux essentially never fails; fall back to a
 		// time-derived value rather than panic.
-		return uint32(time.Now().UnixNano()) //nolint:gosec // G115: bounded conversion verified by surrounding logic
+		//nolint:gosec // G115: bounded conversion verified by surrounding logic
+		e := uint32(time.Now().UnixNano()) & ^controlEpochFlag
+		if e == 0 {
+			e = 1
+		}
+		return e
 	}
-	e := binary.BigEndian.Uint32(b[:])
+	// Mask off the high bit: data epochs must not collide with control epochs.
+	e := binary.BigEndian.Uint32(b[:]) & ^controlEpochFlag
 	if e == 0 {
 		e = 1
 	}
@@ -402,6 +479,13 @@ func (p *streamTransport) Close() error {
 			rt.close()
 		}
 
+		p.controlKCPMu.RLock()
+		crt := p.controlKCP
+		p.controlKCPMu.RUnlock()
+		if crt != nil {
+			crt.close()
+		}
+
 		p.peersMu.Lock()
 		for _, prt := range p.peers {
 			prt.close()
@@ -430,6 +514,16 @@ func (p *streamTransport) drainOutbound() {
 	}
 }
 
+func (p *streamTransport) drainControlOutbound() {
+	for {
+		select {
+		case <-p.controlOutbound:
+		default:
+			return
+		}
+	}
+}
+
 // ResetPeer drops queued KCP traffic and starts a fresh KCP state machine while
 // keeping the carrier connection alive. The client/server liveness layer calls
 // this before rebuilding smux so replacement handshakes are not parsed behind
@@ -437,7 +531,11 @@ func (p *streamTransport) drainOutbound() {
 func (p *streamTransport) ResetPeer() {
 	p.peerConfirmed.Store(false)
 	p.peerEpoch.Store(0)
+	// Preserve control epoch across reset to avoid breaking ping/pong routing.
+	// Control frames use a separate epoch path and must stay stable.
+	controlHdr := p.controlEpochHeader()
 	p.restartKCP(p.rotateEpochHeader())
+	p.restartControlKCPWithHeader(controlHdr)
 }
 
 // Reconnect forwards to the underlying engine session.
@@ -450,7 +548,17 @@ func (p *streamTransport) SetReconnectCallback(cb func()) {
 	p.reconnectFn = cb
 	p.reconnectMu.Unlock()
 	p.stream.SetReconnectCallback(func() {
-		p.resetKCP()
+		// Reset the data KCP with a new epoch. The control KCP is restarted
+		// with the SAME epoch (no rotation): this drains accumulated KCP
+		// retransmit frames that piled up while WriteSample was failing, so
+		// pong/ping delivery resumes quickly after the new publisher PC is
+		// ready. Keeping the control epoch stable means the peer does not
+		// need a new handshake and liveness does not time out.
+		p.peerConfirmed.Store(false)
+		p.peerEpoch.Store(0)
+		controlHdr := p.controlEpochHeader() // snapshot BEFORE data epoch rotation
+		p.restartKCP(p.rotateEpochHeader())
+		p.restartControlKCPWithHeader(controlHdr)
 		if cb != nil {
 			cb()
 		}
@@ -480,6 +588,22 @@ func (p *streamTransport) CanSend() bool {
 		len(p.outbound) < cap(p.outbound)*canSendHighWatermark/100
 }
 
+// ControlCanSend reports whether the control-plane is ready to send.
+// Unlike CanSend, it does not require the publisher PC to be ready —
+// control frames (handshake welcome, ping/pong) must go through even
+// before the publisher negotiation completes.
+func (p *streamTransport) ControlCanSend() bool {
+	if p.closed.Load() {
+		return false
+	}
+	p.controlKCPMu.RLock()
+	hasKCP := p.controlKCP != nil
+	p.controlKCPMu.RUnlock()
+	// Only require subscriber to be ready — the control path does not need
+	// the publisher PC; writerLoop handles WriteSample retries.
+	return hasKCP && p.stream.SubscriberCanSend()
+}
+
 // Features advertises reliable+ordered semantics now that KCP guarantees
 // in-order delivery with retransmits. The upper layer (mux/curl tunnel)
 // can rely on these properties end-to-end.
@@ -492,39 +616,107 @@ func (p *streamTransport) Features() transport.Features {
 	}
 }
 
+// writerState holds the per-loop bookkeeping for writerLoop, extracted so the
+// loop body stays within cognitive-complexity limits.
+type writerState struct {
+	p                   *streamTransport
+	keepaliveEvery      int
+	idleTicks           int
+	forceKeepaliveEvery int
+	ticksSinceKeepalive int
+	// pendingControl holds a control frame that failed WriteSample and must be
+	// retried on the next tick before consuming more frames.
+	pendingControl []byte
+}
+
+func (w *writerState) writeSample(data []byte) bool {
+	return w.p.track.WriteSample(media.Sample{
+		Data:     data,
+		Duration: w.p.frameInterval,
+	}) == nil
+}
+
+// forceKeepalive emits a clean, fully-decodable VP8 keepalive keyframe at a
+// steady cadence even while bulk data is flowing. During a sustained bulk
+// transfer every emitted "frame" is the epoch header plus opaque KCP bytes,
+// which never forms a decodable VP8 keyframe. The SFU asks for a keyframe (PLI)
+// and, receiving none within its decode-timeout (~40 s), stops forwarding the
+// track to subscribers. The periodic bare keyframe keeps the SFU's decoder
+// satisfied.
+func (w *writerState) forceKeepalive() {
+	w.ticksSinceKeepalive++
+	if w.ticksSinceKeepalive >= w.forceKeepaliveEvery {
+		w.ticksSinceKeepalive = 0
+		hdr := w.p.epochHeader()
+		_ = w.writeSample(hdr[:])
+	}
+}
+
+// drainControl flushes all queued control frames. Returns false when a frame
+// failed to send (stored in pendingControl for retry next tick).
+func (w *writerState) drainControl() bool {
+	if w.pendingControl != nil {
+		if !w.writeSample(w.pendingControl) {
+			return false
+		}
+		w.pendingControl = nil
+	}
+	for {
+		select {
+		case frame := <-w.p.controlOutbound:
+			w.idleTicks = 0
+			if !w.writeSample(frame) {
+				w.pendingControl = frame
+				return false
+			}
+		default:
+			return true
+		}
+	}
+}
+
+// drainData sends one batched data frame, or a keepalive when idle.
+func (w *writerState) drainData() {
+	select {
+	case frame := <-w.p.outbound:
+		sample := w.p.batchSample(frame, w.p.perTickBytes)
+		w.idleTicks = 0
+		_ = w.writeSample(sample)
+	default:
+		w.idleTicks++
+		if w.idleTicks >= w.keepaliveEvery {
+			w.idleTicks = 0
+			hdr := w.p.epochHeader()
+			_ = w.writeSample(hdr[:])
+		}
+	}
+}
+
 func (p *streamTransport) writerLoop() {
 	defer close(p.writerDone)
 
 	ticker := time.NewTicker(p.frameInterval)
 	defer ticker.Stop()
 
-	keepaliveEvery := max(int(keepaliveIdlePeriod/p.frameInterval), 1)
-	idleTicks := 0
+	w := &writerState{
+		p:                   p,
+		keepaliveEvery:      max(int(keepaliveIdlePeriod/p.frameInterval), 1),
+		forceKeepaliveEvery: max(int((2*time.Second)/p.frameInterval), 1),
+	}
 
 	for {
 		select {
 		case <-p.closeCh:
 			return
 		case <-ticker.C:
-			var sample []byte
-			select {
-			case frame := <-p.outbound:
-				sample = p.batchSample(frame, p.perTickBytes)
-				idleTicks = 0
-			default:
-				idleTicks++
-				if idleTicks < keepaliveEvery {
-					continue
-				}
-				idleTicks = 0
-				hdr := p.epochHeader()
-				sample = hdr[:]
+			// Priority 0: keep a decodable keyframe flowing for the SFU.
+			w.forceKeepalive()
+			// Priority 1+2: drain all control frames before any bulk data.
+			if !w.drainControl() {
+				continue // a control frame is still failing; retry next tick
 			}
-
-			_ = p.track.WriteSample(media.Sample{
-				Data:     sample,
-				Duration: p.frameInterval,
-			})
+			// Priority 3: drain a batched data frame (or send keepalive).
+			w.drainData()
 		}
 	}
 }
@@ -570,12 +762,6 @@ func appendBatchPacket(dst, packet []byte) []byte {
 	return append(dst, packet...)
 }
 
-func (p *streamTransport) resetKCP() {
-	p.peerConfirmed.Store(false)
-	p.peerEpoch.Store(0)
-	p.restartKCP(p.rotateEpochHeader())
-}
-
 func (p *streamTransport) restartKCP(epochHdr [epochHdrLen]byte) {
 	p.drainOutbound()
 	p.kcpMu.Lock()
@@ -592,6 +778,61 @@ func (p *streamTransport) restartKCP(epochHdr [epochHdrLen]byte) {
 	p.kcpMu.Lock()
 	p.kcp = rt
 	p.kcpMu.Unlock()
+}
+
+func (p *streamTransport) restartControlKCP() {
+	p.drainControlOutbound()
+	p.controlKCPMu.Lock()
+	old := p.controlKCP
+	p.controlKCP = nil
+	p.controlKCPMu.Unlock()
+	if old != nil {
+		old.close()
+	}
+	controlCb := func(data []byte) {
+		p.controlOnDataMu.RLock()
+		cb := p.onControlData
+		p.controlOnDataMu.RUnlock()
+		if cb != nil {
+			cb(data)
+		}
+	}
+	chdr := p.controlEpochHeader()
+	rt, err := startKCP(p.controlOutbound, controlCb, chdr)
+	if err != nil {
+		return
+	}
+	p.controlKCPMu.Lock()
+	p.controlKCP = rt
+	p.controlKCPMu.Unlock()
+}
+
+// restartControlKCPWithHeader restarts the control KCP with a specific epoch header,
+// used to preserve the control epoch across carrier reconnects.
+func (p *streamTransport) restartControlKCPWithHeader(hdr [epochHdrLen]byte) {
+	p.drainControlOutbound()
+	p.controlKCPMu.Lock()
+	old := p.controlKCP
+	p.controlKCP = nil
+	p.controlKCPMu.Unlock()
+	if old != nil {
+		old.close()
+	}
+	controlCb := func(data []byte) {
+		p.controlOnDataMu.RLock()
+		cb := p.onControlData
+		p.controlOnDataMu.RUnlock()
+		if cb != nil {
+			cb(data)
+		}
+	}
+	rt, err := startKCP(p.controlOutbound, controlCb, hdr)
+	if err != nil {
+		return
+	}
+	p.controlKCPMu.Lock()
+	p.controlKCP = rt
+	p.controlKCPMu.Unlock()
 }
 
 func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
@@ -672,12 +913,16 @@ func (s *vp8FrameState) processRTPPacket(pkt *rtp.Packet) []byte {
 func (p *streamTransport) readVP8Track(track *webrtc.TrackRemote) {
 	var state vp8FrameState
 	buf := make([]byte, rtpBufSize)
+	var rtpCount, frameCount int
 
 	for {
 		n, _, err := track.Read(buf)
 		if err != nil {
+			logger.Infof("vp8channel: readVP8Track closed track=%s rtp=%d frames=%d err=%v",
+				track.ID(), rtpCount, frameCount, err)
 			return
 		}
+		rtpCount++
 
 		pkt := &rtp.Packet{}
 		if pkt.Unmarshal(buf[:n]) != nil {
@@ -688,6 +933,7 @@ func (p *streamTransport) readVP8Track(track *webrtc.TrackRemote) {
 		if frame == nil {
 			continue
 		}
+		frameCount++
 
 		p.handleIncomingFrame(frame)
 	}
@@ -703,13 +949,23 @@ func (p *streamTransport) handleFirstPeer(peerEpoch uint32) {
 func (p *streamTransport) handleIncomingFrame(frame []byte) {
 	frameToken, peerEpoch, ok := parseEpochHeader(frame)
 	if !ok {
+		logger.Debugf("vp8channel: incoming frame bad header len=%d", len(frame))
 		return
 	}
 	if frameToken != p.bindingToken {
+		logger.Debugf("vp8channel: incoming frame token mismatch got=0x%08x want=0x%08x", frameToken, p.bindingToken)
 		return
 	}
 	kcpPayload := frame[epochHdrLen:]
 	if peerEpoch == p.localEpochValue() {
+		return // own loopback
+	}
+
+	// Control-plane frames have the high bit set in the epoch field.
+	// Route them to the isolated control KCP and never mix them with
+	// bulk data traffic.
+	if peerEpoch&controlEpochFlag != 0 {
+		p.handleControlFrame(peerEpoch, kcpPayload)
 		return
 	}
 
@@ -734,6 +990,24 @@ func (p *streamTransport) handleIncomingFrame(frame []byte) {
 	p.kcpMu.RUnlock()
 	if rt != nil {
 		deliverKCPPayload(rt, kcpPayload)
+	}
+}
+
+// handleControlFrame routes a control-plane VP8 frame to the isolated control
+// KCP runtime. Loopback echoes of our own outbound frames and bare keepalives
+// are discarded.
+func (p *streamTransport) handleControlFrame(peerEpoch uint32, kcpPayload []byte) {
+	if peerEpoch == p.controlEpochValue() {
+		return // discard loopback: the SFU echoes our own outbound frames back
+	}
+	if len(kcpPayload) == 0 {
+		return // control keepalive, nothing to deliver
+	}
+	p.controlKCPMu.RLock()
+	crt := p.controlKCP
+	p.controlKCPMu.RUnlock()
+	if crt != nil {
+		crt.deliver(kcpPayload)
 	}
 }
 
@@ -849,6 +1123,31 @@ func splitKCPPayload(payload []byte, deliver func([]byte)) {
 		deliver(rest[:size])
 		rest = rest[size:]
 	}
+}
+
+// ControlSend implements transport.ControlPlane.
+// It sends data through the isolated control-plane KCP session.
+func (p *streamTransport) ControlSend(data []byte) error {
+	if p.closed.Load() {
+		return ErrTransportClosed
+	}
+	p.controlKCPMu.RLock()
+	rt := p.controlKCP
+	p.controlKCPMu.RUnlock()
+	if rt == nil {
+		return ErrTransportClosed
+	}
+	return rt.send(data)
+}
+
+// SetControlOnData implements transport.ControlPlane.
+// The callback is stored and forwarded to the control KCP read loop.
+// Can be called before or after Connect; the running KCP read loop picks
+// it up immediately via the closure registered in controlKCPOnce.
+func (p *streamTransport) SetControlOnData(cb func([]byte)) {
+	p.controlOnDataMu.Lock()
+	p.onControlData = cb
+	p.controlOnDataMu.Unlock()
 }
 
 /*

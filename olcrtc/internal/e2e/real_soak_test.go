@@ -125,7 +125,7 @@ func runRealSoakOnce(t *testing.T, carrierName, transportName, roomURL, echoAddr
 	}
 	_ = rt
 
-	conn, err := connectViaSOCKSWithin(rt.socksAddr, echoAddr, setupBudget)
+	conn, err := connectViaSOCKSWithin(ctx, rt.socksAddr, echoAddr, setupBudget)
 	if err != nil {
 		t.Fatalf("connect via SOCKS: %v", err)
 	}

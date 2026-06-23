@@ -39,7 +39,7 @@ type permWatchLogger struct {
 	fired bool
 }
 
-// Маркеры — литералы в format pion, матчим format до подстановки args.
+// Маркеры - литералы в format pion, матчим format до подстановки args.
 func (l *permWatchLogger) note(msg string) {
 	switch {
 	case strings.Contains(msg, permFailMarker):

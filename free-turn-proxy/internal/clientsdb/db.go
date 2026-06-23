@@ -143,7 +143,7 @@ func (db *DB) save() error {
 	}
 
 	tmpFile := db.path + ".tmp"
-	err = os.WriteFile(tmpFile, b, 0o600) // содержит Client ID (auth-токены) — не world-readable
+	err = os.WriteFile(tmpFile, b, 0o600) // содержит Client ID (auth-токены) - не world-readable
 	if err == nil {
 		err = os.Rename(tmpFile, db.path)
 	}

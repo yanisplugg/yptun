@@ -40,6 +40,12 @@
 #include "hev-socks5-tunnel.h"
 
 static int run;
+/* IPv6 forwarding switch, derived from config (tunnel.ipv6 present?) in gateway_init().
+ * When 0 ("IPv4 only"), IPv6 sessions are refused at the bridge so no IPv6 ever reaches an
+ * upstream core. sing-box/Xray drop IPv6 themselves, but olcRTC/VK-TURN would otherwise carry
+ * it (→ IPv6 leak on a leak-check under "IPv4 only"). The TUN still captures ::/0, so dropping
+ * here is a true blackhole — nothing escapes to the physical interface. Defaults to 1 (dual). */
+static int ipv6_enabled = 1;
 static int tun_fd = -1;
 static int tun_fd_local;
 static int session_count;
@@ -173,6 +179,12 @@ tcp_accept_handler (void *arg, struct tcp_pcb *pcb, err_t err)
     if (!run)
         return ERR_RST;
 
+    /* "IPv4 only": refuse IPv6 destinations (RST → app falls back to IPv4 via Happy-Eyeballs).
+     * Drops the v6 connection before any core sees it, so olcRTC/VK-TURN can't leak real/server
+     * IPv6 on a leak-check. The destination the app dialed is pcb->local_ip (PRETEND_TCP). */
+    if (!ipv6_enabled && pcb->local_ip.type == IPADDR_TYPE_V6)
+        return ERR_RST;
+
     tcp = hev_socks5_session_tcp_new (pcb, &mutex);
     if (!tcp)
         return ERR_MEM;
@@ -234,6 +246,12 @@ udp_recv_handler (void *arg, struct udp_pcb *pcb, struct pbuf *p,
     HevTask *task;
 
     if (!run) {
+        udp_remove (pcb);
+        return;
+    }
+
+    /* "IPv4 only": drop IPv6 UDP destinations too (see tcp_accept_handler). */
+    if (!ipv6_enabled && pcb->local_ip.type == IPADDR_TYPE_V6) {
         udp_remove (pcb);
         return;
     }
@@ -444,6 +462,9 @@ gateway_init (void)
 {
     ip4_addr_t addr4, mask, gw;
     ip6_addr_t addr6;
+
+    /* No tunnel.ipv6 in config ⇒ "IPv4 only": refuse IPv6 sessions in the accept handlers. */
+    ipv6_enabled = (hev_config_get_tunnel_ipv6_address () != NULL);
 
     netif_add_noaddr (&netif, NULL, netif_init_handler, ip_input);
 

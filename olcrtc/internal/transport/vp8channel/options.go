@@ -10,10 +10,10 @@ const (
 	defaultFPS       = 30
 	defaultBatchSize = 64
 	// defaultMaxBytesPerSec paces the wire byte-rate just under the Telemost
-	// SFU's measured per-slot policer knee (~1.4 MiB/s). Above it the SFU
-	// drops bursts wholesale, collapsing goodput and starving keepalives;
-	// staying under keeps loss near zero. See TestRealRawVP8Throughput.
-	defaultMaxBytesPerSec = 1_200_000
+	// SFU's measured per-slot policer knee. The original 1.2 MiB/s caused the
+	// SFU to throttle subscriber forwarding after ~42s; 400 KB/s stays well
+	// within the SFU's comfort zone while still giving useful throughput.
+	defaultMaxBytesPerSec = 400_000
 )
 
 // Options tunes the vp8channel transport. Zero values fall back to documented defaults.

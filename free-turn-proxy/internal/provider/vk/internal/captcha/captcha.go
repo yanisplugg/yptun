@@ -25,7 +25,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 )
 
-// Log — пакетный логгер. По умолчанию no-op; main устанавливает его через
+// Log - пакетный логгер. По умолчанию no-op; main устанавливает его через
 // SetLogger, чтобы captcha-вывод подчинялся глобальному -debug. Solve также
 // принимает logger параметром для DI.
 var Log logx.Logger = logx.Nop()
@@ -35,7 +35,7 @@ func SetLogger(l logx.Logger) { Log = logx.OrNop(l) }
 
 const (
 	captchaAPIVersion    = "5.131"
-	captchaScriptVersion = "1.1.1355"
+	captchaScriptVersion = "1.1.1359"
 	captchaDeviceInfo    = `{"screenWidth":1920,"screenHeight":1080,"screenAvailWidth":1920,"screenAvailHeight":1080,"innerWidth":1920,"innerHeight":951,"devicePixelRatio":1,"language":"en-US","languages":["en-US","en"],"webdriver":false,"hardwareConcurrency":8,"notificationsPermission":"denied"}`
 )
 
@@ -125,7 +125,7 @@ func (s *captchaSession) logger() logx.Logger {
 }
 
 // Solve запускает авторешение captcha против VK captchaNotRobot API
-// и возвращает success-токен при успехе. log может быть nil — тогда
+// и возвращает success-токен при успехе. log может быть nil - тогда
 // используется пакетный Log.
 func Solve(
 	ctx context.Context,
@@ -262,7 +262,7 @@ func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) {
 func captchaBaseValues(sessionToken string) [][2]string {
 	return [][2]string{
 		{"session_token", sessionToken},
-		{"domain", "vk.com"},
+		{"domain", "vk.ru"},
 		{"adFp", ""},
 		{"access_token", ""},
 	}
@@ -298,7 +298,7 @@ func (s *captchaSession) fetchDebugInfo(scriptURL string) (string, error) {
 	}
 	body, err := s.doRaw(fhttp.MethodGet, scriptURL, nil, map[string]string{
 		"Accept":  "text/javascript,*/*",
-		"Referer": "https://id.vk.com/",
+		"Referer": "https://id.vk.ru/",
 	})
 	if err != nil {
 		return "", err
@@ -354,8 +354,8 @@ func parseCaptchaPage(html string) (*captchaPage, error) {
 func (s *captchaSession) captchaRequest(method string, form [][2]string) (map[string]any, error) {
 	endpoint := "https://api.vk.ru/method/" + method + "?v=" + captchaAPIVersion
 	body, err := s.doRaw(fhttp.MethodPost, endpoint, form, map[string]string{
-		"Origin":   "https://id.vk.com",
-		"Referer":  "https://id.vk.com/",
+		"Origin":   "https://id.vk.ru",
+		"Referer":  "https://id.vk.ru/",
 		"Priority": "u=1, i",
 	})
 	if err != nil {
@@ -378,7 +378,7 @@ func (s *captchaSession) performCaptchaCheck(
 ) (*captchaCheck, error) {
 	values := [][2]string{
 		{"session_token", sessionToken},
-		{"domain", "vk.com"},
+		{"domain", "vk.ru"},
 		{"adFp", ""},
 		{"accelerometer", "[]"},
 		{"gyroscope", "[]"},
@@ -437,7 +437,7 @@ func (s *captchaSession) solveCheckboxCaptcha(
 	}
 	if _, err := s.captchaRequest("captchaNotRobot.componentDone", [][2]string{
 		{"session_token", sessionToken},
-		{"domain", "vk.com"},
+		{"domain", "vk.ru"},
 		{"adFp", ""},
 		{"browser_fp", browserFP},
 		{"device", deviceJSON},
@@ -479,7 +479,7 @@ func solveCaptchaPoW(ctx context.Context, input string, difficulty int) string {
 		return ""
 	}
 	target := strings.Repeat("0", difficulty)
-	// ctx-check каждые 1024 итерации — задержка отмены в пределах нескольких мс
+	// ctx-check каждые 1024 итерации - задержка отмены в пределах нескольких мс
 	// даже на слабом ARM (было 4096).
 	buf := make([]byte, 0, len(input)+20)
 	buf = append(buf, input...)
@@ -520,8 +520,8 @@ func (s *captchaSession) doRaw(
 	req.Header.Set("Sec-Fetch-Site", "same-site")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
-	req.Header.Set("Origin", "https://vk.com")
-	req.Header.Set("Referer", "https://vk.com/")
+	req.Header.Set("Origin", "https://vk.ru")
+	req.Header.Set("Referer", "https://vk.ru/")
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}

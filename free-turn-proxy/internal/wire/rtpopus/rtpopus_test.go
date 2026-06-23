@@ -59,7 +59,7 @@ func TestConnRoundTrip(t *testing.T) {
 		t.Fatalf("client Unwrap: %v", err)
 	}
 	if !bytes.Equal(dst[:m2], payload) {
-		t.Fatalf("server→client round trip mismatch")
+		t.Fatalf("server->client round trip mismatch")
 	}
 }
 
@@ -97,10 +97,10 @@ func TestInPlaceRoundTrip(t *testing.T) {
 		t.Fatalf("Unwrap: %v", err)
 	}
 	if !bytes.Equal(dst[:m], payload) {
-		t.Fatalf("WrapInPlace→Unwrap mismatch: got %q want %q", dst[:m], payload)
+		t.Fatalf("WrapInPlace->Unwrap mismatch: got %q want %q", dst[:m], payload)
 	}
 
-	// Сервер: WrapInto → клиент UnwrapInPlace (subslice внутрь wire, без копии).
+	// Сервер: WrapInto -> клиент UnwrapInPlace (subslice внутрь wire, без копии).
 	wire := make([]byte, MaxWire(len(payload)))
 	wn, err := server.WrapInto(wire, payload)
 	if err != nil {
@@ -140,7 +140,7 @@ func TestRTPHeaderProgression(t *testing.T) {
 	seq1 := binary.BigEndian.Uint16(wire1[2:4])
 	seq2 := binary.BigEndian.Uint16(wire2[2:4])
 	if seq2 != seq1+1 {
-		t.Fatalf("seq did not increment: %d → %d", seq1, seq2)
+		t.Fatalf("seq did not increment: %d -> %d", seq1, seq2)
 	}
 
 	ts1 := binary.BigEndian.Uint32(wire1[4:8])

@@ -246,12 +246,20 @@ func (s *Session) SetReconnectCallback(cb func(*webrtc.DataChannel)) { s.onRecon
 // SetShouldReconnect sets the policy for reconnection.
 func (s *Session) SetShouldReconnect(fn func() bool) { s.shouldReconnect = fn }
 
+// SubscriberCanSend reports whether the subscriber PC is connected.
+// Unlike CanSend, it does not require publisherReady, so it returns true
+// as soon as SFU data can arrive — before the publisher PC negotiates.
+func (s *Session) SubscriberCanSend() bool {
+	return !s.closed.Load() && s.subscriberReady.Load()
+}
+
 // CanSend checks if data can be sent.
 func (s *Session) CanSend() bool {
 	if s.onData == nil {
-		if s.hasLocalVideoTracks() {
-			return !s.closed.Load() && s.subscriberReady.Load() && s.publisherReady.Load()
-		}
+		// publisherReady is intentionally not checked: KCP buffers outbound
+		// data and retransmits if WriteSample fails while the publisher PC is
+		// still connecting. Blocking on publisherReady causes handshake welcome
+		// and tunnel stream acks to time out before the publisher PC is up.
 		return !s.closed.Load() && s.subscriberReady.Load()
 	}
 	if s.dc == nil || s.dc.ReadyState() != webrtc.DataChannelStateOpen {
@@ -299,11 +307,30 @@ func (s *Session) attachPendingVideoTracks() error {
 	defer s.videoTrackMu.RUnlock()
 
 	for _, track := range s.videoTracks {
-		if _, err := s.pcPub.AddTrack(track); err != nil {
+		sender, err := s.pcPub.AddTrack(track)
+		if err != nil {
 			return fmt.Errorf("add video track: %w", err)
 		}
+		s.drainPublisherRTCP(sender)
 	}
 	return nil
+}
+
+// drainPublisherRTCP reads (and discards) RTCP feedback the SFU sends for our
+// published track. The read is required so the interceptor chain keeps
+// processing incoming RTCP; without an active reader it stalls.
+func (s *Session) drainPublisherRTCP(sender *webrtc.RTPSender) {
+	if sender == nil {
+		return
+	}
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			if _, _, err := sender.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
 }
 
 func closeSignal(ch chan struct{}) {

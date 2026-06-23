@@ -114,14 +114,60 @@ object XrayConfig {
         // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
         // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
         blockQuic: Boolean = true,
+        // Family enforcement (the opposite-family blackhole + IPIfNonMatch routing-resolve that ipv4_only/
+        // prefer_ipv4/ipv6_only turn on). IPIfNonMatch makes Xray resolve EVERY domain for routing, and
+        // those DNS lookups egress via the proxy — i.e. through the tunnel. On a very slow tunnel (dnstt:
+        // DNS TXT) that adds a tunnel round-trip to every connection and stalls all traffic. Pass false
+        // there: the bridge already drops client IPv6 for ipv4 modes, so the family stays pinned without
+        // forcing per-connection resolution over the tunnel.
+        forceFamilyResolve: Boolean = true,
+        // Chain the main proxy through its detour with sockopt.dialerProxy (socket-level) instead of
+        // proxySettings (proxy-level). proxySettings re-wraps the outbound and DROPS its own transport —
+        // a vless+reality / xtls-vision exit then sends a malformed handshake and the server resets the
+        // connection ("vless → connection reset" over dnstt). dialerProxy keeps the full vless/TLS/flow
+        // intact and only routes the underlying socket through the detour. Set for the dnstt chain.
+        chainViaDialerProxy: Boolean = false,
+        // For VK-TURN / dnstt: the base tunnel (WireGuard / dnstt SOCKS) is the MANDATORY transport, so a
+        // routing rule's `direct` bucket must NOT leak to the real network — it should still exit through
+        // the base tunnel (at the VK / dnstt-server). When true, the `direct` outbound dials through the
+        // base detour instead of dialing the destination on the real interface. So routing only chooses
+        // base-tunnel-exit (direct) vs second-proxy-exit (proxy); nothing ever bypasses the tunnel.
+        directViaBase: Boolean = false,
+        // Send LAN/private ranges straight out (not through the proxy) so local-network devices stay
+        // reachable — the global "Обход LAN" toggle. Only applied when the `direct` outbound is the
+        // REAL network ([directViaBase] == false); for VK-TURN/dnstt base-detour exits LAN must keep
+        // tunnelling, so this is ignored there (the toggle still governs the sing-box path the same way).
+        bypassLan: Boolean = true,
         // Optional SECOND proxy chained ON TOP of [profile] (the main). When present, traffic exits via
         // this proxy (tag [PROXY_TAG], emitted first so it's Xray's default outbound) which dials THROUGH
         // the main (tag [PROXY_BASE_TAG]); the main dials through olcRTC/WG. So: client → [olcRTC/WG] →
         // main → second → internet. Null = the main proxy is the single exit (PROXY_TAG), as before.
         secondProfile: ProxyProfile? = null,
+        // Outbound handshake budget (seconds). Xray's default is only 4s — far too short when the proxy
+        // is chained over an ultra-slow tunnel (dnstt: SOCKS5 greeting+CONNECT to the VPS, then the VPS's
+        // dial to the proxy server, then the vless/TLS handshake, all round-tripping over DNS TXT). Xray
+        // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
+        handshakeTimeoutSec: Int? = null,
     ): String {
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
+
+            // Stretch the handshake (and idle) budget for slow chained tunnels so Xray doesn't kill a
+            // still-completing handshake. Only emitted when a caller asks for it (e.g. dnstt).
+            if (handshakeTimeoutSec != null) {
+                putJsonObject("policy") {
+                    putJsonObject("levels") {
+                        putJsonObject("0") {
+                            put("handshake", handshakeTimeoutSec)
+                            put("connIdle", 600)
+                            // Generous half-close drain (defaults are 2s/5s) so a peer that finished one
+                            // direction isn't cut while the other still trickles over the slow tunnel.
+                            put("uplinkOnly", 30)
+                            put("downlinkOnly", 30)
+                        }
+                    }
+                }
+            }
 
             putJsonObject("dns") {
                 val profileHosts = routingProfile?.dnsHosts ?: emptyMap()
@@ -185,6 +231,14 @@ object XrayConfig {
             val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
             // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
             val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
+            // The base tunnel's exit tag (WG for VK-TURN, dnstt SOCKS for dnstt). Used to keep `direct`
+            // traffic on the tunnel when [directViaBase].
+            val baseExitTag = when {
+                wgBaseOutbound != null -> WG_BASE_TAG
+                olcrtcChainPort != null -> OLCRTC_TAG
+                else -> null
+            }
+            val directDialsBase = directViaBase && baseExitTag != null
             val second = secondProfile?.takeIf { it.isComplete() }
             putJsonArray("outbounds") {
                 if (second != null) {
@@ -219,6 +273,7 @@ object XrayConfig {
                             traffic = traffic,
                             detourTagOverride = baseDetour,
                             tag = PROXY_TAG,
+                            chainViaDialerProxy = chainViaDialerProxy,
                         )
                     )
                 }
@@ -229,6 +284,13 @@ object XrayConfig {
                     putJsonObject("settings") {
                         // Resolve direct destinations via xray's own DNS, not Go's (broken on Android).
                         put("domainStrategy", directDomainStrategy(traffic))
+                    }
+                    // VK-TURN / dnstt: send `direct` traffic THROUGH the base tunnel (the dnstt-server /
+                    // VK exit) instead of the real interface, so routing never bypasses the tunnel.
+                    if (directDialsBase) {
+                        putJsonObject("streamSettings") {
+                            putJsonObject("sockopt") { put("dialerProxy", baseExitTag) }
+                        }
                     }
                 }
                 // Always present: needed by the RU blocklist, profile block buckets AND the QUIC
@@ -278,11 +340,16 @@ object XrayConfig {
             }
             // Domain-strategy enforcement: blackhole the opposite IP family so ipv4_only / ipv6_only
             // forces ALL traffic onto the chosen family (even DoH apps that resolve the other one).
-            val familyBlockRule = when (traffic.domainStrategy) {
-                "ipv4_only" -> buildJsonObject {
+            // prefer_ipv4 is folded into the ipv4_only path here: on an IPv4-only ISP the user wants NO
+            // tunnel IPv6, and without this the EXIT proxy's dual-stack server picks AAAA for proxied
+            // domains → 2ip shows the tunnel's IPv6 even though the bridge already drops client-side v6.
+            // This is the SAME recipe as ipv4_only (which works), so it adds no new failure mode.
+            val familyBlockRule = when {
+                !forceFamilyResolve -> null
+                traffic.domainStrategy == "ipv4_only" || traffic.domainStrategy == "prefer_ipv4" -> buildJsonObject {
                     put("type", "field"); putJsonArray("ip") { add("::/0") }; put("outboundTag", "block")
                 }
-                "ipv6_only" -> buildJsonObject {
+                traffic.domainStrategy == "ipv6_only" -> buildJsonObject {
                     put("type", "field"); putJsonArray("ip") { add("0.0.0.0/0") }; put("outboundTag", "block")
                 }
                 else -> null
@@ -292,6 +359,16 @@ object XrayConfig {
             // catches raw IP literals, and the remote proxy is then free to pick AAAA → IPv6 leak on
             // 2ip.io). IPIfNonMatch + queryStrategy=UseIPv4 makes Xray resolve to the chosen family.
             val forceFamily = familyBlockRule != null
+            // LAN/private → real direct (only when `direct` is the real network, never on a base-detour
+            // tunnel exit). Matched before the proxy buckets so local addresses never enter the tunnel.
+            val lanBypassRule = if (bypassLan && !directViaBase) buildJsonObject {
+                put("type", "field")
+                putJsonArray("ip") {
+                    add("10.0.0.0/8"); add("172.16.0.0/12"); add("192.168.0.0/16")
+                    add("127.0.0.0/8"); add("169.254.0.0/16")
+                }
+                put("outboundTag", "direct")
+            } else null
             putJsonObject("routing") {
                 if (routingProfile != null) {
                     // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
@@ -302,6 +379,7 @@ object XrayConfig {
                     putJsonArray("rules") {
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
                         dnsOutRules.forEach { add(it) }
+                        lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (traffic.blockRuDomains) add(blockZeroRule)
@@ -311,6 +389,7 @@ object XrayConfig {
                     put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
                         dnsOutRules.forEach { add(it) }
+                        lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (traffic.blockRuDomains) add(blockZeroRule)
@@ -478,6 +557,152 @@ object XrayConfig {
         return json.encodeToString(newRoot)
     }
 
+    private const val WG_BAL_PREFIX = "wg-bal-"
+    private const val WG_BALANCER_TAG = "vk-bal"
+
+    /**
+     * Builds an Xray config whose exit is a LOAD-BALANCED set of WireGuard outbounds — one per VK-TURN
+     * freeturn server, each dialing its own local freeturn listener ([wgProfiles]; rawOutbound carries
+     * server=127.0.0.1:localPort + keys). Xray's `balancers` spreads connections across them (strategy
+     * `random` → per-connection, so several servers' bandwidth aggregates). There is NO proxy hop here:
+     * the WireGuard tunnels ARE the exits, so this is a separate builder from [build] (which is
+     * proxy-centric) and leaves the Standard cascade path completely untouched. The WG tunnels are
+     * IPv4-only, so traffic resolves A-only and QUIC is carried natively (never blocked).
+     */
+    fun buildWireguardBalancer(
+        wgProfiles: List<ProxyProfile>,
+        listenPort: Int,
+        listenHost: String = "127.0.0.1",
+        socksUsername: String = "",
+        socksPassword: String = "",
+        logLevel: String = "debug",
+        traffic: TrafficSettings = TrafficSettings(),
+        bypassLan: Boolean = true,
+    ): String {
+        val bases = wgProfiles.mapIndexedNotNull { i, p -> buildWireguardBaseOutbound(p, "$WG_BAL_PREFIX$i") }
+        val serverCount = bases.size
+        val config = buildJsonObject {
+            putJsonObject("log") { put("loglevel", logLevel) }
+            putJsonObject("dns") {
+                putJsonArray("servers") {
+                    if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
+                    add(traffic.remoteDns)
+                    add(traffic.directDns)
+                }
+                put("queryStrategy", traffic.xrayQueryStrategy())
+            }
+            if (traffic.fakeDnsEnabled) putJsonArray("fakedns") { add(fakeDnsPool()) }
+            putJsonArray("inbounds") {
+                addJsonObject {
+                    put("tag", "socks-in")
+                    put("listen", listenHost)
+                    put("port", listenPort)
+                    put("protocol", "socks")
+                    putJsonObject("settings") {
+                        put("udp", true)
+                        if (socksUsername.isNotBlank()) {
+                            put("auth", "password")
+                            putJsonArray("accounts") {
+                                addJsonObject { put("user", socksUsername); put("pass", socksPassword) }
+                            }
+                        } else {
+                            put("auth", "noauth")
+                        }
+                    }
+                    putJsonObject("sniffing") {
+                        put("enabled", true)
+                        putJsonArray("destOverride") {
+                            add("http"); add("tls"); add("quic")
+                            if (traffic.fakeDnsEnabled) add("fakedns")
+                        }
+                    }
+                }
+            }
+            putJsonArray("outbounds") {
+                bases.forEach { add(it) }
+                addJsonObject {
+                    put("tag", "direct")
+                    put("protocol", "freedom")
+                    putJsonObject("settings") { put("domainStrategy", directDomainStrategy(traffic)) }
+                }
+                addJsonObject { put("tag", "block"); put("protocol", "blackhole") }
+                if (traffic.fakeDnsEnabled) add(dnsOutOutbound())
+            }
+            // Health-probe each WG-over-VK outbound so a DEAD freeturn server (VPS down, relay never
+            // came up) is detected and dropped from the balancer instead of black-holing the
+            // connections round-robined onto it — i.e. "even if the 2nd server doesn't connect, the
+            // tunnel still works off the live one(s)". The probe egresses through each wg-bal-* outbound
+            // (→ its local freeturn relay → VK → VPS → internet), so it measures the real end-to-end path.
+            if (serverCount > 1) {
+                putJsonObject("burstObservatory") {
+                    putJsonArray("subjectSelector") { add(WG_BAL_PREFIX) }
+                    putJsonObject("pingConfig") {
+                        put("destination", "http://connectivitycheck.gstatic.com/generate_204")
+                        put("interval", "10s")
+                        put("sampling", 2)
+                        put("timeout", "8s")
+                    }
+                }
+            }
+            putJsonObject("routing") {
+                put("domainStrategy", "AsIs")
+                putJsonArray("balancers") {
+                    addJsonObject {
+                        put("tag", WG_BALANCER_TAG)
+                        putJsonArray("selector") { add(WG_BAL_PREFIX) }
+                        // leastLoad with expected=N keeps ALL healthy servers in rotation (so their
+                        // bandwidth still aggregates like round-robin) while the burstObservatory health
+                        // data lets it EXCLUDE servers that don't answer — a dead 2nd server is skipped,
+                        // not black-holed. fallbackTag guarantees an exit during the cold-start window
+                        // before the first probe lands (and if every server is briefly unhealthy), so
+                        // traffic is never dropped. Single server → no balancer (caller gate), so this
+                        // only ever runs with ≥2 outbounds.
+                        put("fallbackTag", "$WG_BAL_PREFIX${'0'}")
+                        putJsonObject("strategy") {
+                            put("type", "leastLoad")
+                            putJsonObject("settings") {
+                                put("expected", serverCount)
+                                // Generous RTT ceiling: a server under this through VK qualifies; it only
+                                // filters out the truly dead/unreachable ones.
+                                putJsonArray("baselines") { add("3000ms") }
+                            }
+                        }
+                    }
+                }
+                putJsonArray("rules") {
+                    if (traffic.fakeDnsEnabled) dnsHijackRules().forEach { add(it) }
+                    // Bypass LAN/private ranges straight out (not into the VK tunnel) so local-network
+                    // devices stay reachable while connected. Explicit RFC1918 + loopback + link-local
+                    // CIDRs (no geoip.dat dependency). Honors the global "Обход LAN" toggle.
+                    if (bypassLan) {
+                        addJsonObject {
+                            put("type", "field")
+                            putJsonArray("ip") {
+                                add("10.0.0.0/8"); add("172.16.0.0/12"); add("192.168.0.0/16")
+                                add("127.0.0.0/8"); add("169.254.0.0/16")
+                            }
+                            put("outboundTag", "direct")
+                        }
+                    }
+                    // Hard IPv4-only: blackhole any IPv6 destination so the VK tunnel never carries v6
+                    // (no tunnel-IPv6 leak on RU/direct sites). The WG tunnel is v4-only anyway.
+                    addJsonObject {
+                        put("type", "field")
+                        putJsonArray("ip") { add("::/0") }
+                        put("outboundTag", "block")
+                    }
+                    // Everything else exits via the balanced WireGuard set.
+                    addJsonObject {
+                        put("type", "field")
+                        put("network", "tcp,udp")
+                        put("balancerTag", WG_BALANCER_TAG)
+                    }
+                }
+            }
+        }
+        return json.encodeToString(config)
+    }
+
     /**
      * Converts the sing-box WireGuard outbound stored in [profile].rawOutbound into an Xray
      * `wireguard` outbound (tag [WG_BASE_TAG]) so a chained proxy can dial through the VK tunnel.
@@ -509,7 +734,7 @@ object XrayConfig {
             }
         }
 
-    private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {
+    private fun buildWireguardBaseOutbound(profile: ProxyProfile, tag: String = WG_BASE_TAG): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
         val o = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
         val secret = o["private_key"]?.jsonPrimitive?.contentOrNull ?: return null
@@ -523,7 +748,7 @@ object XrayConfig {
             ?: o["persistent_keepalive"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
             ?: 25
         return buildJsonObject {
-            put("tag", WG_BASE_TAG)
+            put("tag", tag)
             put("protocol", "wireguard")
             putJsonObject("settings") {
                 put("secretKey", secret)
@@ -535,7 +760,12 @@ object XrayConfig {
                     addJsonObject {
                         put("publicKey", peerPub)
                         put("endpoint", "$server:$port")
-                        putJsonArray("allowedIPs") { add("0.0.0.0/0"); add("::/0") }
+                        // IPv4 ONLY: the WG-over-VK tunnel is v4-only (client address is v4, the VPS
+                        // NATs v4 only). Advertising ::/0 here let Xray route IPv6 INTO the tunnel, so a
+                        // RU/"direct" site reached through VK-TURN egressed via the VPS's IPv6 — the
+                        // "tunnel IPv6 leaks on RU sites under prefer_ipv4" report. Drop ::/0 so v6 is
+                        // never carried; ForceIPv4 above already resolves destinations to A.
+                        putJsonArray("allowedIPs") { add("0.0.0.0/0") }
                         // Keep the tunnel alive through the TURN relay / NAT (matches wg-quick clients).
                         put("keepAlive", keepalive)
                     }
@@ -555,6 +785,9 @@ object XrayConfig {
         // Outbound tag to emit. [PROXY_TAG] for the exit (default), [PROXY_BASE_TAG] for the main hop
         // when a second/cascade proxy exits in front of it.
         tag: String = PROXY_TAG,
+        // Force socket-level (dialerProxy) chaining over the detour even for non-xhttp transports — keeps
+        // a vless reality/vision exit intact over the dnstt chain (see [build]'s chainViaDialerProxy).
+        chainViaDialerProxy: Boolean = false,
     ) = buildJsonObject {
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", tag)
@@ -642,7 +875,7 @@ object XrayConfig {
         // dialerProxy whenever the profile carries an xhttp transport over a detour, in addition to the
         // cascade-exit case. Non-xhttp profiles over WG/olcRTC keep proxySettings (unchanged, works).
         val needsDialerProxy = detourTag != null &&
-            (detourTag == PROXY_BASE_TAG || profile.network == ProxyProfile.NETWORK_XHTTP)
+            (detourTag == PROXY_BASE_TAG || profile.network == ProxyProfile.NETWORK_XHTTP || chainViaDialerProxy)
         val dialerProxyTag = if (needsDialerProxy) detourTag else null
         if (!isLocalSocks) {
             put("streamSettings", buildStreamSettings(

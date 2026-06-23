@@ -15,21 +15,31 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/common"
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 	"github.com/samosvalishe/free-turn-proxy/internal/stats"
-	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
+	"github.com/samosvalishe/free-turn-proxy/internal/wire/shape"
 )
+
+// recoverRelay contains a panic in a spawned relay goroutine. The UDP relay races many goroutines
+// against context-cancel on disconnect (closing DTLS/TURN conns, obf codec, packet copy loops); an
+// unrecovered panic in ANY of them aborts the whole process and crashes the Android app right after
+// the user stops VK-TURN. Catch it, log it, and let the goroutine exit cleanly instead.
+func recoverRelay(deps *Deps, streamID int) {
+	if r := recover(); r != nil {
+		deps.log().Errorf("[STREAM %d] recovered relay goroutine panic: %v", streamID, r)
+	}
+}
 
 // DTLSLoop поддерживает единственное DTLS-подключение для streamID, перезапуская
 // его при сбое с backoff 10-30s (пропускается при активном provider-backoff,
-// если предыдущая ошибка — дедлайн). connchan получает свежую половину
+// если предыдущая ошибка - дедлайн). connchan получает свежую половину
 // AsyncPacketPipe на каждой попытке; okchan (non-nil только для потока 1)
 // сигнализирует о первом успешном handshake.
-func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, inboundChan <-chan *Packet, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) {
+func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, disp *dispatcher, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			err := oneDTLS(ctx, deps, params, peer, listenConn, inboundChan, connchan, okchan, streamID)
+			err := oneDTLS(ctx, deps, params, peer, listenConn, disp, connchan, okchan, streamID)
 			// При активном provider-backoff дедлайн handshake срабатывает раньше,
 			// чем auth-retry успевает отработать; делаем краткий backoff,
 			// чтобы не крутиться в tight spin до снятия блокировки.
@@ -115,7 +125,7 @@ func TURNLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr
 	}
 }
 
-func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, inboundChan <-chan *Packet, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) error {
+func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, disp *dispatcher, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) error {
 	select {
 	case <-time.After(time.Duration(randx.Intn(400)+100) * time.Millisecond):
 	case <-ctx.Done():
@@ -131,6 +141,7 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	// TURNLoop может перезапускать oneTURN несколько раз в рамках одного DTLS
 	// соединения, каждый раз перечитывая conn2; публикуем до завершения DTLS.
 	go func() {
+		defer recoverRelay(deps, streamID)
 		for {
 			select {
 			case <-dtlsctx.Done():
@@ -160,6 +171,7 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 
 	if okchan != nil {
 		go func() {
+			defer recoverRelay(deps, streamID)
 			select {
 			case okchan <- struct{}{}:
 			case <-dtlsctx.Done():
@@ -174,13 +186,22 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 		}
 	})
 
+	// Регистрируем стрим в диспетчере - только теперь он готов нести данные
+	// (DTLS установлен, client ID отправлен). Диспетчер начнёт слать сюда чанки
+	// пакетов. Отписка на выходе убирает слот из набора; недослитые пакеты в
+	// sendCh соберёт GC (канал не закрываем - иначе гонка send-on-closed).
+	slot := &streamSlot{id: streamID, sendCh: make(chan *Packet, streamSendBuf)}
+	disp.register(slot)
+	defer disp.unregister(slot)
+
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		defer dtlscancel()
 		for {
 			select {
 			case <-dtlsctx.Done():
 				return
-			case pkt := <-inboundChan:
+			case pkt := <-slot.sendCh:
 				_, werr := dtlsConn.Write(pkt.Data[:pkt.N])
 				packetPool.Put(pkt)
 				if werr != nil {
@@ -192,6 +213,7 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	})
 
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		defer dtlscancel()
 		buf := make([]byte, 1600)
 		for {
@@ -219,7 +241,14 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 
 func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, conn2 net.PacketConn, streamID int, c chan<- error) {
 	var err error
-	defer func() { c <- err }()
+	defer func() {
+		// Contain a panic on the TURN/obf path (esp. during cancel) so it can't crash the process;
+		// the buffered c still gets an error so TURNLoop treats this as a failed stream.
+		if r := recover(); r != nil {
+			err = fmt.Errorf("oneTURN panic recovered: %v", r)
+		}
+		c <- err
+	}()
 	select {
 	case <-time.After(time.Duration(randx.Intn(400)+100) * time.Millisecond):
 	case <-ctx.Done():
@@ -237,7 +266,12 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	relayConn := stream.Relay
 	deps.log().Debugf("[STREAM %d] TURN server IP: %s", streamID, stream.ServerUDPAddr.IP)
 
-	// Инкремент до ResetErrors — конкурентные наблюдатели HandleAuthError видят
+	if params.ObfTiming > 0 {
+		relayConn = shape.WrapPacketConn(relayConn, params.ObfTiming)
+		deps.log().Debugf("[STREAM %d] obf-timing=%s", streamID, params.ObfTiming)
+	}
+
+	// Инкремент до ResetErrors - конкурентные наблюдатели HandleAuthError видят
 	// поток подключённым до сброса счётчика ошибок.
 	deps.ConnectedStreams.Add(1)
 	deps.Auth.ResetErrors(streamID)
@@ -262,7 +296,7 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 		}
 	})
 	var internalPipeAddr atomic.Value
-	obfConn, obfErr := common.NewClientObf(params.ObfKey)
+	obfConn, obfErr := common.NewClientObf(params.Profile, params.ObfKey)
 	if obfErr != nil {
 		deps.log().Errorf("[STREAM %d] OBF init failed: %v", streamID, obfErr)
 		turncancel()
@@ -271,25 +305,27 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 
 	const maxPayload = 1600
 
-	// PermDead закрывается при блэкхоле data-path (см. turndial/permwatch.go) —
+	// PermDead закрывается при блэкхоле data-path (см. turndial/permwatch.go) -
 	// отменяем turnctx, TURNLoop делает свежий allocate.
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		select {
 		case <-turnctx.Done():
 		case <-stream.PermDead:
-			deps.log().Warnf("[STREAM %d] TURN channel-bind умер — рецикл allocation", streamID)
+			deps.log().Warnf("[STREAM %d] TURN channel-bind умер - рецикл allocation", streamID)
 			turncancel()
 		}
 	})
 
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		defer turncancel()
 		// При obf читаем payload сразу в buf[HeaderLen:], чтобы WrapInPlace
 		// дописал заголовок+tag без копии payload.
 		var buf, readSlot []byte
 		if obfConn != nil {
-			buf = make([]byte, rtpopus.MaxWire(maxPayload))
-			readSlot = buf[rtpopus.HeaderLen : rtpopus.HeaderLen+maxPayload]
+			buf = make([]byte, obfConn.MaxWire(maxPayload))
+			readSlot = buf[obfConn.HeaderLen() : obfConn.HeaderLen()+maxPayload]
 		} else {
 			buf = make([]byte, maxPayload)
 			readSlot = buf
@@ -333,10 +369,11 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	})
 
 	wg.Go(func() {
+		defer recoverRelay(deps, streamID)
 		defer turncancel()
 		readBufLen := maxPayload
 		if obfConn != nil {
-			readBufLen = rtpopus.MaxWire(maxPayload)
+			readBufLen = obfConn.MaxWire(maxPayload)
 		}
 		buf := make([]byte, readBufLen)
 		for {

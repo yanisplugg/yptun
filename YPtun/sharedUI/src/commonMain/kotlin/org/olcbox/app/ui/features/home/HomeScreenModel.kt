@@ -17,6 +17,7 @@ import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ui.features.locations.LocationItem
+import org.olcbox.app.vpn.ExpiringSubscriptionInfo
 import org.olcbox.app.vpn.VpnManager
 import org.olcbox.app.vpn.VpnStatus
 
@@ -436,11 +437,46 @@ class HomeScreenViewModel(
             // Once per launch: retry overdue subscriptions even if they failed last time (keyed off the
             // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.
             refreshDueSubscriptionsIfNeeded(retryFailed = true)
+            notifyExpiringSubscriptions()
+            reportProviderUsage()
             while (true) {
                 delay(SUBSCRIPTION_AUTO_REFRESH_POLL_MS)
                 refreshDueSubscriptionsIfNeeded()
+                notifyExpiringSubscriptions()
+                reportProviderUsage()
             }
         }
+    }
+
+    /** Daily Happ-style provider-usage report for subscriptions carrying a `providerid` (best-effort). */
+    private suspend fun reportProviderUsage() {
+        runCatching {
+            withContext(Dispatchers.IO) { locationsRepository.reportProviderUsage() }
+        }
+    }
+
+    /**
+     * Hand every subscription's expiry to the platform so it can warn the user before it runs out
+     * (Happ-style, driven by the panel's expiry header). The platform applies the user's toggle, the
+     * day threshold and de-duplication — here we only collect one (name → expiry) per subscription.
+     */
+    private suspend fun notifyExpiringSubscriptions() {
+        val subs = runCatching {
+            withContext(Dispatchers.IO) {
+                locationsRepository.getBundle().locations
+                    .filter { !it.subscriptionUrl.isNullOrBlank() }
+                    .groupBy { it.subscriptionUrl!!.trim() }
+                    .mapNotNull { (url, entries) ->
+                        val meta = entries.firstNotNullOfOrNull { it.metadata?.subscription }
+                        val expiresAt = meta?.expiresAtEpochMs ?: return@mapNotNull null
+                        val name = meta.name?.takeIf { it.isNotBlank() }
+                            ?: entries.firstOrNull { it.name.isNotBlank() }?.name
+                            ?: url
+                        ExpiringSubscriptionInfo(name = name, expiresAtEpochMs = expiresAt)
+                    }
+            }
+        }.getOrDefault(emptyList())
+        if (subs.isNotEmpty()) vpnManager.notifyExpiringSubscriptions(subs)
     }
 
     /**

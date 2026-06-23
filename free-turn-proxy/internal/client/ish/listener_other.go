@@ -1,9 +1,9 @@
 //go:build !(linux && 386)
 
-// Package ish — TCP listener shim для iSH (https://ish.app), Linux user-mode
+// Package ish - TCP listener shim для iSH (https://ish.app), Linux user-mode
 // эмулятор на iOS. iSH таргетит linux/386 и не имеет современного accept4 /
 // epoll-poller Go, поэтому там нужен sandbox-aware accept loop. На любом
-// другом GOOS/GOARCH WrapListener — no-op passthrough.
+// другом GOOS/GOARCH WrapListener - no-op passthrough.
 package ish
 
 import "net"

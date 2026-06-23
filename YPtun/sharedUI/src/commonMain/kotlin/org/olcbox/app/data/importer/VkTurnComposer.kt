@@ -71,6 +71,25 @@ data class VkTurnDraft(
     /** Proxy share link (vless/vmess/trojan/ss) used as the exit when outbound == proxy. */
     val outboundProxyLink: String = "",
     val proxyCore: ProxyCore = ProxyCore.Auto,
+    // VK-TURN transport core: "freeturn" (default) | "wdtt". WDTT fields are used only when core==wdtt.
+    val core: String = VkTurnConfig.CORE_FREETURN,
+    /** WDTT server IP/host dialled over VK TURN (the wdtt-server / Peer). Port = [wdttPort]. */
+    val wdttPeer: String = "",
+    /** WDTT server port; blank/0 → 56000. */
+    val wdttPort: String = "",
+    /** WDTT connection password (the WRAP key is HKDF-derived from it). */
+    val wdttPassword: String = "",
+    /** WDTT TLS fingerprint for the VK auth flow (chrome/safari/ios/android/firefox). */
+    val wdttFingerprint: String = "chrome",
+    /** WDTT worker count; blank/0 → core default. */
+    val wdttWorkers: String = "",
+    /** Master switch for multi-server freeturn (the [extraFreeturnUris] are only used when on). */
+    val freeturnMultiServer: Boolean = false,
+    /**
+     * Extra freeturn:// servers (one per line) run alongside the primary peer for per-connection
+     * load-balancing (more servers = more total speed). Blank = single server. freeturn core only.
+     */
+    val extraFreeturnUris: String = "",
 )
 
 /**
@@ -161,8 +180,34 @@ object VkTurnComposer {
             outbound = outbound,
             outboundProxyLink = if (outbound == VkTurnConfig.OUTBOUND_PROXY) draft.outboundProxyLink.trim() else "",
             proxyCore = draft.proxyCore,
+            core = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
+            wdttPeer = draft.wdttPeer.trim(),
+            wdttPort = draft.wdttPort.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 0,
+            wdttPassword = draft.wdttPassword.trim(),
+            wdttFingerprint = draft.wdttFingerprint.trim(),
+            wdttWorkers = draft.wdttWorkers.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
+            freeturnMultiServer = draft.freeturnMultiServer,
+            extraFreeturnUris = draft.extraFreeturnUris
+                .split('\n')
+                .map { it.trim() }
+                .filter { it.startsWith("freeturn://", ignoreCase = true) },
         )
         return vkturn to proxy
+    }
+
+    /**
+     * Derives the sing-box-format WireGuard [ProxyProfile] for an EXTRA freeturn:// server, dialing a
+     * given local listener [localPort]. The server's WG keys come from the link's embedded `wg=`; the
+     * Endpoint is rewritten to 127.0.0.1:[localPort] (the per-server freeturn listener). Used by the
+     * multi-server load-balancer to build one Xray WireGuard outbound per server. Returns null if the
+     * link carries no usable WireGuard config.
+     */
+    fun freeturnUriToWgProfile(uri: String, localPort: Int, name: String): ProxyProfile? {
+        if (!uri.trim().startsWith(FreeturnUriParser.SCHEME, ignoreCase = true)) return null
+        val draft = decompose(VkTurnConfig(uri = uri.trim(), outbound = VkTurnConfig.OUTBOUND_WIREGUARD), null)
+            .copy(listenPort = localPort.toString(), outbound = VkTurnConfig.OUTBOUND_WIREGUARD)
+        if (draft.wgPrivateKey.isBlank() || draft.wgPeerPublicKey.isBlank()) return null
+        return compose(draft, name).second
     }
 
     /** Reconstructs an editable [VkTurnDraft] from a stored [vkturn] config + WG [proxy]. */
@@ -183,6 +228,14 @@ object VkTurnComposer {
                 outbound = vkturn.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD },
                 outboundProxyLink = vkturn.outboundProxyLink,
                 proxyCore = vkturn.proxyCore,
+                core = vkturn.core.ifBlank { VkTurnConfig.CORE_FREETURN },
+                wdttPeer = vkturn.wdttPeer,
+                wdttPort = vkturn.wdttPort.takeIf { it > 0 }?.toString() ?: "",
+                wdttPassword = vkturn.wdttPassword,
+                wdttFingerprint = vkturn.wdttFingerprint.ifBlank { "chrome" },
+                wdttWorkers = vkturn.wdttWorkers.takeIf { it > 0 }?.toString() ?: "",
+                freeturnMultiServer = vkturn.freeturnMultiServer,
+                extraFreeturnUris = vkturn.extraFreeturnUris.joinToString("\n"),
             )
         }
 
@@ -320,7 +373,13 @@ object VkTurnComposer {
         return result
     }
 
-    /** Pulls DNS/keepalive (and any keys not already set) out of a wg-quick INI block. */
+    /**
+     * Pulls DNS/keepalive/AllowedIPs AND the WireGuard keys/address/mtu out of a wg-quick INI block.
+     * The keys matter when the INI is the only source (e.g. an EXTRA freeturn:// server parsed via
+     * [freeturnUriToWgProfile], which has no stored proxy to read them from). For the normal WG/AWG
+     * decompose paths the stored proxy.rawOutbound is read AFTER this and stays authoritative, so
+     * extracting the same keys here is harmless.
+     */
     private fun applyWgConf(draft: VkTurnDraft, conf: String): VkTurnDraft {
         var result = draft
         for (rawLine in conf.lineSequence()) {
@@ -334,6 +393,11 @@ object VkTurnComposer {
                 "dns" -> result = result.copy(wgDns = value)
                 "persistentkeepalive" -> result = result.copy(wgKeepalive = value)
                 "allowedips" -> result = result.copy(wgAllowedIps = value)
+                // [Interface] PrivateKey, [Peer] PublicKey (the peer's), [Interface] Address/MTU.
+                "privatekey" -> result = result.copy(wgPrivateKey = value)
+                "publickey" -> result = result.copy(wgPeerPublicKey = value)
+                "address" -> result = result.copy(wgAddress = value.substringBefore(',').trim())
+                "mtu" -> result = result.copy(wgMtu = value)
             }
         }
         return result

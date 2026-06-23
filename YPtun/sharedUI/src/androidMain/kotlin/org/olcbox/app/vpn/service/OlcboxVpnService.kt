@@ -22,6 +22,7 @@ import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -47,6 +48,11 @@ import xraybridge.Xraybridge
 import xraybridge.Protector as XrayProtector
 import freeturn.Freeturn
 import freeturn.LogWriter as FreeturnLogWriter
+import wdttmobile.Wdttmobile
+import wdttmobile.ConfigSink as WdttConfigSink
+import dnsttmobile.Dnsttmobile
+import dnsttmobile.DnsttClient
+import dnsttmobile.SocketProtector as DnsttSocketProtector
 import mobile.LogWriter
 import mobile.Mobile
 import mobile.SocketProtector
@@ -62,6 +68,8 @@ import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.data.importer.ShareLinkParser
+import org.olcbox.app.data.importer.VkTurnComposer
+import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
 import org.olcbox.app.vpn.xray.XrayConfig
@@ -96,6 +104,9 @@ import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.data.model.VkTurnConfig
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.DataInputStream
@@ -129,6 +140,14 @@ class OlcboxVpnService : VpnService() {
     /** Display name of the currently-connecting/connected location, shown in the notification. */
     @Volatile private var connectedLocationName = ""
     @Volatile private var showSpeedInNotif = false
+    // "connected/total rooms" in the notification (olcRTC multi-room only). [activeMultiRoomTotal] is
+    // the number of rooms configured for the current connection (0 = not multi-room).
+    @Volatile private var showRoomsInNotif = false
+    @Volatile private var activeMultiRoomTotal = 0
+    // Number of freeturn servers in the current VK-TURN connection when multiple are load-balanced
+    // (0 = single server / not freeturn). Drives the "connected/total servers" notification, gated on
+    // the same [showRoomsInNotif] toggle as olcRTC rooms.
+    @Volatile private var activeFreeturnServers = 0
 
     private var startupJob: Job? = null
     private var watchdogJob: Job? = null
@@ -154,6 +173,10 @@ class OlcboxVpnService : VpnService() {
     private var lastJitsiStopCompletedAtMs = 0L
 
     private var vpnInterface: ParcelFileDescriptor? = null
+    /** Active dnstt (DNS tunnel) client for [EngineType.Dnstt]; null when another engine is running. */
+    private var dnsttClient: DnsttClient? = null
+    /** True when the active dnstt engine also fronts a proxy core (proxy-over-dnstt). */
+    private var dnsttProxyActive: Boolean = false
     private var tun2socksThread: Thread? = null
     @Volatile
     private var tun2socksStarted = false
@@ -176,8 +199,26 @@ class OlcboxVpnService : VpnService() {
     private var socksProxy: AuthenticatedSocksProxy? = null
     private var singBox: SingBoxEngine? = null
     private var xray: XrayEngine? = null
+    // Multi-room (Stealth/Chain): when a location uses it, the singleton Mobile.start* is replaced by N
+    // independent rooms fronted by a round-robin balancer (see OlcrtcRoomManager). Null = single-room.
+    private var olcrtcRoomManager: OlcrtcRoomManager? = null
     private var engineType: EngineType = EngineType.Stealth
     private var activeMtu: Int = TUN_MTU
+    // Snapshotted from the (suspend) traffic settings in [startMobile] so the non-suspend
+    // [writeTun2socksConfig] can decide whether to drop the bridge's IPv6. True for the IPv4-leaning
+    // strategies — "IPv4 only" (ipv4_only) AND "IPv4 preferred" (prefer_ipv4): both want traffic on
+    // IPv4, so the bridge refuses IPv6 (RST → Happy-Eyeballs falls back to IPv4). prefer_ipv6/
+    // ipv6_only keep dual-stack. See [writeTun2socksConfig].
+    private var activeDropBridgeIpv6: Boolean = false
+    // Snapshotted from the (suspend) routing settings in [startMobile] so the non-suspend
+    // [establishSystemVpnTunnel] can decide whether to carve the private/LAN ranges OUT of the TUN
+    // routes. Carving them out makes "Обход LAN" work for EVERY engine — including olcRTC(Stealth),
+    // VK-TURN and dnstt, whose cores tunnel everything and have no routing-engine "direct" bucket. LAN
+    // packets then never enter the tunnel and reach the local network on the real interface directly.
+    private var activeBypassLan: Boolean = false
+    // Energy-saver mode snapshot: trims background work while connected (no logcat journal capture, a
+    // much slower health watchdog). Read in [startMobile]; logcat is gated in [startLogcatCapture].
+    @Volatile private var activeEnergySaver: Boolean = false
     private var activeProxyCore: ProxyCore = ProxyCore.SingBox
 
     private data class StartOptions(
@@ -319,6 +360,13 @@ class OlcboxVpnService : VpnService() {
     private fun startLogcatCapture() {
         if (logcatStarted.getAndSet(true)) return
         scope.launch(Dispatchers.IO) {
+            // Energy-saver: skip the continuous logcat tail entirely (a persistent reader process +
+            // per-line wakeups is one of the few always-on CPU costs we can drop). The journal stays
+            // empty until the user turns energy-saver off and reconnects.
+            if (runCatching { loadAppBehavior().energySaver }.getOrDefault(false)) {
+                addLog("Energy saver on: in-app logcat journal disabled")
+                return@launch
+            }
             while (isActive) {
                 try {
                     val pid = android.os.Process.myPid()
@@ -329,8 +377,12 @@ class OlcboxVpnService : VpnService() {
                     proc.inputStream.bufferedReader().use { reader ->
                         while (isActive) {
                             val line = reader.readLine() ?: break
-                            // Skip our own service tag — those lines are already added via addLog().
-                            if (!line.contains("OlcboxVpnService")) {
+                            // Skip our own service tag (already added via addLog) and high-frequency
+                            // Android UI/render spam that just floods the journal (the frameRateCategory
+                            // VRR logging on Android 15/16 was the worst offender — see LOGCAT_NOISE).
+                            if (!line.contains("OlcboxVpnService") &&
+                                LOGCAT_NOISE.none { line.contains(it, ignoreCase = true) }
+                            ) {
                                 OlcboxVpnState.appendRaw(line)
                             }
                         }
@@ -355,15 +407,20 @@ class OlcboxVpnService : VpnService() {
         scope.launch {
             applicationContext.vpnPrefDataStore.data
                 .map { prefs ->
-                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map false
+                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map false to false
                     runCatching {
-                        Json.decodeFromString(AppBehaviorSettings.serializer(), raw).showSpeedInNotification
-                    }.getOrDefault(false)
+                        val s = Json.decodeFromString(AppBehaviorSettings.serializer(), raw)
+                        s.showSpeedInNotification to s.showRoomsInNotification
+                    }.getOrDefault(false to false)
                 }
                 .distinctUntilChanged()
-                .collect { enabled ->
-                    showSpeedInNotif = enabled
-                    if (!enabled && OlcboxVpnState.status.value is VpnStatus.Connected) {
+                .collect { (speed, rooms) ->
+                    showSpeedInNotif = speed
+                    showRoomsInNotif = rooms
+                    if (OlcboxVpnState.status.value is VpnStatus.Connected) {
+                        // Start/stop the 2s speed loop to match the new flags (it self-cancels when both
+                        // are off), then repost the notification so the speed line appears/clears now.
+                        startSpeedUpdater()
                         updateNotification(connectedNotificationText())
                     }
                 }
@@ -740,14 +797,85 @@ class OlcboxVpnService : VpnService() {
         setErrorOnFailure: Boolean
     ): Boolean {
         engineType = location.engine
-        activeMtu = loadTrafficSettings().mtu
-        showSpeedInNotif = loadAppBehavior().showSpeedInNotification
+        val trafficSettings = loadTrafficSettings()
+        activeMtu = trafficSettings.mtu
+        activeDropBridgeIpv6 = trafficSettings.normalized().domainStrategy
+            .let { it == "ipv4_only" || it == "prefer_ipv4" }
+        activeBypassLan = runCatching { loadRouting().bypassLan }.getOrDefault(true)
+        loadAppBehavior().let {
+            showSpeedInNotif = it.showSpeedInNotification
+            showRoomsInNotif = it.showRoomsInNotification
+            activeEnergySaver = it.energySaver
+        }
         return when (location.engine) {
             EngineType.Stealth -> startStealthCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.Standard,
             EngineType.Chain -> startSingBoxCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.VkTurn -> startVkTurnCore(location, upstream, requestedGeneration, setErrorOnFailure)
+            EngineType.Dnstt -> startDnsttCore(location, upstream, requestedGeneration, setErrorOnFailure)
         }
+    }
+
+    /**
+     * Brings up the olcRTC SOCKS that fronts [port]: MULTI-ROOM (round-robin balancer over the main room
+     * + each extra) when [config] asks for it, otherwise the proven single-room singleton. Shared by
+     * Stealth (bridge port) and Chain (chain port). Blocks until ready; on a multi-room failure it cleans
+     * up and falls back to single-room so the user is never left offline. The caller must have already
+     * configured the transport/cookies/binding and is responsible for markRtcConnected + generation
+     * checks afterwards. Rooms live on consecutive loopback ports above [port] and share the bridge
+     * credentials (password-protected, loopback-only — no open proxy).
+     */
+    private suspend fun startOlcrtcSocks(config: LocationConfig, deviceId: String, port: Int, enableBond: Boolean = false) {
+        if (config.usesMultiRoom()) {
+            val specs = config.multiRoomSpecs().map {
+                OlcrtcRoomManager.RoomSpec(
+                    carrier = it.provider.ifBlank { config.bypassProvider },
+                    transport = it.transport.ifBlank { config.transport },
+                    room = it.room,
+                    clientId = deviceId,
+                    keyHex = it.key,
+                )
+            }
+            // Stage-2 bond is meaningful only for the Chain→VLESS single flow ([enableBond] from the Chain
+            // caller); Stealth keeps round-robin (parallel app flows already aggregate there).
+            val bond = enableBond && config.usesMultiRoomBond()
+            val bondPort = config.effectiveBondPort()
+            val mode = if (bond) "bond (port $bondPort)" else "round-robin"
+            addLog("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + $mode balancer on $port")
+            val mgr = OlcrtcRoomManager(::addLog)
+            olcrtcRoomManager = mgr
+            activeMultiRoomTotal = specs.size
+            val ok = withContext(Dispatchers.IO) {
+                mgr.start(
+                    rooms = specs,
+                    listenHost = socksListenHost,
+                    listenPort = port,
+                    basePort = port + 101,
+                    user = socksUsername,
+                    pass = socksPassword,
+                    bond = bond,
+                    bondHost = "127.0.0.1",
+                    bondPort = bondPort,
+                )
+            }
+            if (ok) return
+            // Don't leave the user offline if multi-room can't bring a room/balancer up — clean it up and
+            // fall back to the proven single-room path (the main room via the singleton).
+            addLog("Multi-room failed to start — falling back to single room")
+            olcrtcRoomManager?.let { runCatching { it.stop() } }
+            olcrtcRoomManager = null
+            activeMultiRoomTotal = 0
+        } else {
+            addLog(
+                "Starting olcRTC provider=${config.bypassProvider}, " +
+                    "transport=${config.transport}, room=${config.id}"
+            )
+        }
+        Mobile.startWithTransport(
+            config.bypassProvider, config.transport, config.id, deviceId, config.key,
+            port.toLong(), socksUsername, socksPassword,
+        )
+        Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
     }
 
     private suspend fun startStealthCore(
@@ -772,22 +900,8 @@ class OlcboxVpnService : VpnService() {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
             configureMobileTransport(config)
             applyTelemostCookies(config)
-            addLog(
-                "Starting olcRTC provider=${config.bypassProvider}, " +
-                    "transport=${config.transport}, room=${config.id}"
-            )
             lastMobileProvider = config.bypassProvider
-            Mobile.startWithTransport(
-                config.bypassProvider,
-                config.transport,
-                config.id,
-                deviceId,
-                config.key,
-                targetSocksPort.toLong(),
-                socksUsername,
-                socksPassword
-            )
-            Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+            startOlcrtcSocks(config, deviceId, targetSocksPort)
             if (requestedGeneration != generation) {
                 addLog("olcRTC start superseded")
                 return false
@@ -826,6 +940,209 @@ class OlcboxVpnService : VpnService() {
             if (!keepProcessBound || !Mobile.isRunning()) {
                 unbindProcessFromNetwork()
             }
+        }
+    }
+
+    /**
+     * dnstt (DNS tunnel): the dnstt client raises a transparent TCP forwarder on [socksListenPort];
+     * the dnstt-server relays each connection to its upstream SOCKS5, so the local port behaves as
+     * that SOCKS5 and the TUN bridge consumes it directly. dnstt carries only TCP (KCP + Noise over
+     * DNS TXT), and the forwarder can't terminate SOCKS auth, so the bridge runs no-auth (creds
+     * cleared). The dnstt UDP socket is protected so DNS queries egress the real network rather than
+     * looping back into the TUN.
+     */
+    private suspend fun startDnsttCore(
+        location: LocationConfig,
+        upstream: Network,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean
+    ): Boolean {
+        val config = location.normalized()
+        val dnstt = config.dnstt
+        if (dnstt == null || !dnstt.isComplete()) {
+            if (setErrorOnFailure) {
+                setStatus(VpnStatus.Error("DNSTT not configured"))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            return false
+        }
+        // Optional proxy chained ON TOP of the dnstt tunnel: the proxy server is dialled THROUGH the
+        // dnstt local SOCKS, so the public exit is the proxy, not the dnstt-server. When present, dnstt
+        // moves to an internal port and a proxy core (Xray/sing-box) fronts the bridge on socksListenPort.
+        // Accept a normal share link (vless/vmess/trojan/ss) OR a yptun://inbound link (a whole shared
+        // LocationConfig) — pulling its main/second proxy out — so the same paste that works for the
+        // Standard "additional proxy" field works here too.
+        val proxy = dnstt.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link)
+                ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?.takeIf { it.isComplete() }
+        }
+        if (dnstt.proxyLink.isNotBlank() && proxy == null) {
+            addLog("DNSTT: proxy link present but could not be parsed — exiting via dnstt SOCKS directly (no proxy)")
+        }
+        val useProxy = proxy != null
+        dnsttProxyActive = useProxy
+        // With a proxy, dnstt listens on the internal chain port and the proxy dials through it.
+        val dnsttPort = if (useProxy) chainOlcrtcPort else socksListenPort
+        return try {
+            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+            if (isLocalSocksPortOpen(socksListenPort)) {
+                throw IllegalStateException("SOCKS port $socksListenPort is still in use")
+            }
+            if (useProxy) {
+                waitForSocksPortReleased(dnsttPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+                if (isLocalSocksPortOpen(dnsttPort)) {
+                    throw IllegalStateException("DNSTT internal port $dnsttPort is still in use")
+                }
+            }
+            val dnsttAddr = "$socksListenHost:$dnsttPort"
+            addLog("Starting DNSTT on $dnsttAddr (domain=${dnstt.domain}, resolver=${dnstt.resolver})")
+            val client = Dnsttmobile.newClient(dnstt.resolver, dnstt.domain, dnstt.pubKey, dnsttAddr)
+            client.setProtectSocket(object : DnsttSocketProtector {
+                override fun protect(fd: Long): Boolean = this@OlcboxVpnService.protect(fd.toInt())
+            })
+            client.setShareProxy(false)
+            client.start()
+            dnsttClient = client
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("DNSTT start superseded")
+                return false
+            }
+            if (!awaitSocksPortOpen(dnsttPort, MOBILE_READY_TIMEOUT_MS)) {
+                throw IllegalStateException("DNSTT SOCKS port $dnsttPort did not open")
+            }
+            addLog("DNSTT ready on $dnsttAddr")
+
+            if (!useProxy) {
+                // No proxy core in front: the hev bridge talks straight to the dnstt forwarder, which
+                // pipes to the dnstt-server's own SOCKS5 end-to-end. That transparent path can't terminate
+                // a SOCKS auth handshake, so the bridge must run no-auth.
+                socksUsername = ""
+                socksPassword = ""
+                publishActiveSocks()
+                return true
+            }
+            // Proxy case: the bridge now talks to the Xray/sing-box SOCKS inbound (not the forwarder), so
+            // KEEP the per-session credentials — both the bridge and that inbound use them and must match,
+            // else the core rejects every connection ("proxy/socks: no matching auth method"). The
+            // core→dnstt detour is no-auth (olcrtcChainUser left blank), matching the transparent forwarder.
+
+            // Front the dnstt tunnel with the proxy core: TUN → core (socksListenPort) → proxy →
+            // dnstt SOCKS (dnsttPort) → dnstt-server → internet. Reuses the olcRTC-chain dialer wiring
+            // (the proxy dials its server through the local dnstt SOCKS). dnstt is TCP-only → block QUIC.
+            val traffic = loadTrafficSettings()
+            val profilesState = loadRoutingProfilesState()
+            val routingProfile = profilesState.resolve(config.routingProfileId)
+            val globalCore = loadAppBehavior().globalProxyCore
+            val profileWantsXray = routingProfile != null &&
+                (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
+                proxy!!.type in XRAY_SUPPORTED_TYPES
+            val useXray = dnstt.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
+            addLog("DNSTT chaining proxy ${proxy!!.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+            if (useXray) {
+                val assetPath = ensureGeoAssetPath(routingProfile)
+                val xrayJson = XrayConfig.build(
+                    profile = proxy,
+                    listenPort = socksListenPort,
+                    listenHost = socksListenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    olcrtcChainPort = dnsttPort,
+                    logLevel = "debug",
+                    traffic = traffic,
+                    routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                    blockQuic = true,
+                    // Don't force per-connection domain resolution (IPIfNonMatch) over the slow dnstt
+                    // tunnel — it stalls all traffic. The bridge's v6 drop keeps ipv4 pinned. See the
+                    // matching forceFamilyResolve/allowLocalResolve opt-out on the sing-box path below.
+                    forceFamilyResolve = false,
+                    // Chain the vless/trojan exit through the dnstt SOCKS at the SOCKET level (dialerProxy),
+                    // not proxySettings — otherwise a vless reality/xtls-vision exit loses its transport and
+                    // the server resets it ("если vless то connection reset").
+                    chainViaDialerProxy = true,
+                    // THE reset cause: Xray's default 4s handshake budget is far too short for the multi-hop
+                    // handshake over the DNS tunnel (SOCKS5→VPS, VPS→proxy server, then vless/TLS), so Xray
+                    // killed every connection mid-handshake. The no-proxy path survives because the hev
+                    // bridge waits 10s. Give the chained handshake 30s.
+                    handshakeTimeoutSec = 30,
+                    // Routing must NOT bypass the dnstt tunnel: a `direct` rule (e.g. Россия напрямую)
+                    // exits via the dnstt-server, not the real network. Routing only picks base-exit
+                    // (direct) vs second-proxy-exit (proxy); the tunnel itself is never routed around.
+                    directViaBase = true,
+                )
+                activeProxyCore = ProxyCore.Xray
+                addLog("Starting Xray (DNSTT proxy) via $socksListenHost:$socksListenPort")
+                xrayEngine().start(xrayJson, assetPath)
+            } else {
+                val json = SingBoxConfig.build(
+                    profile = proxy,
+                    listenPort = socksListenPort,
+                    listenHost = socksListenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    olcrtcChainPort = dnsttPort,
+                    autoDetectInterface = true,
+                    routing = loadRouting(),
+                    traffic = traffic,
+                    routingProfile = routingProfile,
+                    singboxGeositeBase = profilesState.singboxGeositeBase,
+                    singboxGeoipBase = profilesState.singboxGeoipBase,
+                    logLevel = "debug",
+                    blockQuic = true,
+                    // dnstt is the slowest tunnel we have (DNS TXT, tiny MTU). With forceFamilyResolve on
+                    // (the default), a strict ipv4_only/ipv6_only strategy makes sing-box add a per-connection
+                    // `resolve` action that resolves EVERY destination via the `remote` DNS server — whose
+                    // detour is PROXY_TAG, i.e. a DNS query THROUGH the vless proxy THROUGH the dnstt tunnel.
+                    // Every connection then blocks on a DNS round-trip over the DNS tunnel and stalls out
+                    // ("traffic doesn't flow"). Opt out exactly like the AmneziaWG/VK-TURN constrained
+                    // tunnels: domains pass straight to the proxy (resolved server-side on the VPS), and the
+                    // ipv4 family is still enforced by the bridge's IPv6 drop — so no per-hop DNS over dnstt
+                    // and no v6 leak.
+                    forceFamilyResolve = false,
+                    // Same reason for the geo/bypass-RU `resolve` action: resolving destinations through
+                    // the proxy over the DNS tunnel adds a fatal round-trip per connection. Skip it — over
+                    // dnstt all traffic rides the tunnel anyway (direct is censored), so IP-based RU-direct
+                    // is moot; domain/geosite rules still work.
+                    allowLocalResolve = false,
+                    // `direct` traffic exits via the dnstt-server (base tunnel), never the real network —
+                    // routing only governs the second proxy, the tunnel itself is never bypassed.
+                    directViaBase = true,
+                )
+                activeProxyCore = ProxyCore.SingBox
+                addLog("Starting sing-box (DNSTT proxy) via $socksListenHost:$socksListenPort")
+                singBoxEngine().start(json)
+            }
+            if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                throw IllegalStateException("DNSTT proxy SOCKS port $socksListenPort did not open")
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("DNSTT proxy start superseded")
+                return false
+            }
+            addLog("DNSTT proxy ready on $socksListenHost:$socksListenPort")
+            publishActiveSocks()
+            true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                addLog("DNSTT start canceled")
+                stopMobileAndWait()
+            }
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Transport failed"
+            addLog(if (staleRequest) "DNSTT start canceled: $message" else "DNSTT start failed: $message")
+            stopMobileAndWait()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            false
+        } finally {
+            unbindProcessFromNetwork()
         }
     }
 
@@ -871,17 +1188,11 @@ class OlcboxVpnService : VpnService() {
                 applyTelemostCookies(config)
                 addLog("Starting olcRTC (chain) provider=${config.bypassProvider}, room=${config.id}")
                 lastMobileProvider = config.bypassProvider
-                Mobile.startWithTransport(
-                    config.bypassProvider,
-                    config.transport,
-                    config.id,
-                    deviceIdentityProvider.hwid(),
-                    config.key,
-                    chainPort.toLong(),
-                    socksUsername,
-                    socksPassword
-                )
-                Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+                // Same multi-room fan-out as Stealth, but fronting the CHAIN port that sing-box/Xray dials
+                // its VLESS outbound through — so the proxy is wrapped in an aggregated WebRTC tunnel.
+                // enableBond: Stage-2 — the single Chain→VLESS flow is striped across rooms and reassembled
+                // server-side (needs the bond reassembler on the olcRTC host) instead of round-robined.
+                startOlcrtcSocks(config, deviceIdentityProvider.hwid(), chainPort, enableBond = true)
                 markRtcConnected()
                 coroutineContext.ensureActive()
                 if (requestedGeneration != generation) return false
@@ -976,6 +1287,17 @@ class OlcboxVpnService : VpnService() {
                 activeProxyCore = ProxyCore.Xray
                 addLog("Second (cascade) proxy uses xhttp → forcing Xray core")
             }
+            // Cascade diagnostics — make the "second proxy is ignored / exits via the 1st" symptom
+            // visible instead of silent: say whether the cascade is active, dropped as incomplete, or
+            // unusable because the main is a verbatim Xray config (prepareRaw can't chain a 2nd hop).
+            when {
+                secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() ->
+                    addLog("ВНИМАНИЕ: основной прокси — полный кастомный Xray-конфиг; второй (каскадный) прокси НЕ может быть прицеплен поверх него и игнорируется (выход остаётся через 1-й). Нужен обычный vless/vmess/trojan/ss как основной.")
+                secondProfile != null ->
+                    addLog("Каскад: выход через 2-й прокси '${secondProfile.displayName()}' поверх основного '${effectiveProfile.displayName()}'")
+                config.proxy2 != null ->
+                    addLog("Каскад: 2-й прокси ЗАДАН, но ссылка неполная/не распозналась — он отброшен, выход через 1-й прокси")
+            }
             if (activeProxyCore == ProxyCore.Xray) {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""
@@ -1020,6 +1342,7 @@ class OlcboxVpnService : VpnService() {
                         },
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                         secondProfile = secondProfile,
+                        bypassLan = loadRouting().bypassLan,
                     )
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -1112,12 +1435,17 @@ class OlcboxVpnService : VpnService() {
     ): Boolean {
         val config = location.normalized()
         val vk = config.vkturn
-        val profile = config.proxy
-        val outboundType = vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
-            ?: VkTurnConfig.OUTBOUND_WIREGUARD
-        val outboundConfigured = when (outboundType) {
-            VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
-            VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
+        // [profile] is the exit outbound. For WDTT it is SYNTHESIZED at runtime from the wdtt-server's
+        // WireGuard config (GETCONF/OnConfig) — the user enters only the server IP[:port], no WG keys.
+        var profile = config.proxy
+        val usesWdtt = vk?.usesWdtt() == true
+        // WDTT always exits via WireGuard (server-provided); the freeturn outbound choice is irrelevant.
+        val outboundType = if (usesWdtt) VkTurnConfig.OUTBOUND_WIREGUARD
+            else vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD } ?: VkTurnConfig.OUTBOUND_WIREGUARD
+        val outboundConfigured = when {
+            usesWdtt -> vk?.wdttPeer?.isNotBlank() == true // WG config comes from the server
+            outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
+            outboundType == VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
                 profile.server.isNotBlank() && profile.serverPort in 1..65535
             else -> !profile?.rawOutbound.isNullOrBlank()
         }
@@ -1136,35 +1464,152 @@ class OlcboxVpnService : VpnService() {
                 throw IllegalStateException("SOCKS port $socksListenPort is still in use")
             }
 
-            // 1. freeturn client: local WireGuard entry listener tunnelling through VK.
-            Freeturn.setDebug(false)
-            Freeturn.setLogWriter(object : FreeturnLogWriter {
-                override fun writeLog(line: String) {
-                    val trimmed = line.trimEnd()
-                    addLog("vkturn: $trimmed")
-                    Log.v("vkturn", trimmed)
-                }
-            })
+            // 1. The transport core that raises the local listener the WG/proxy outbound dials.
             val listenAddr = "127.0.0.1:${vk.listenPort}"
-            // freeturn rejects `bond=1` unless mode==tcp; an old/imported URI carrying it in a udp
-            // (WireGuard/AmneziaWG) tunnel makes the client fail to start. Strip it defensively.
-            val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
-                else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
-            addLog("Starting VK-TURN freeturn listener on $listenAddr (streams=${vk.streams.takeIf { it > 0 } ?: "default 10"})")
-            Freeturn.start(freeturnUri, listenAddr, vk.vkLink, vk.streams.toLong())
-            coroutineContext.ensureActive()
-            if (requestedGeneration != generation) return false
 
-            // Order the WireGuard bring-up behind the VK TURN relay: wait for the freeturn
-            // client to establish at least one TURN stream (DTLS handshake + TURN allocation)
-            // so the tunnel uplink is live before WireGuard starts handshaking. Otherwise the
-            // WireGuard outbound can exhaust its handshake attempts and report offline while the
-            // relay is still coming up (only masked on a fast same-LAN path). Best-effort: if the
-            // relay does not report ready in time we proceed anyway and let WireGuard retry.
-            if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
-                addLog("VK-TURN relay up (${Freeturn.connectedStreams()} stream(s)); starting WireGuard")
+            // Multi-server freeturn: front several freeturn servers AT ONCE and load-balance traffic
+            // across them per connection (Xray balancer over N WireGuard outbounds) so their bandwidth
+            // aggregates. Only for the freeturn core with a plain WireGuard exit and no chain proxy;
+            // a single server (or any other shape) keeps the exact original single-server path.
+            val freeturnServers = if (!vk.usesWdtt() &&
+                outboundType == VkTurnConfig.OUTBOUND_WIREGUARD &&
+                vk.chainProxyLink.isBlank()
+            ) vk.allFreeturnUris().take(1 + VKTURN_MAX_EXTRA_FREETURN) else emptyList()
+            // One WireGuard ProxyProfile per server, each dialing its OWN local freeturn listener:
+            // the primary uses [profile] (listener vk.listenPort); extras get vk.listenPort+i and their
+            // WG keys are pulled from each link's embedded wg=. Empty unless we actually go multi.
+            val freeturnWgProfiles: List<ProxyProfile> = if (freeturnServers.size > 1 && profile != null) buildList {
+                add(profile!!)
+                freeturnServers.drop(1).forEachIndexed { idx, u ->
+                    VkTurnComposer.freeturnUriToWgProfile(u, vk.listenPort + idx + 1, "VK-TURN ${idx + 2}")
+                        ?.let { add(it) }
+                }
+            } else emptyList()
+            // Need at least 2 working WG outbounds (else there's nothing to balance) to engage multi.
+            val multiFreeturn = freeturnWgProfiles.count { !it.rawOutbound.isNullOrBlank() } > 1
+
+            if (vk.usesWdtt()) {
+                // WDTT core (wg-turn-client): connects purely by the wdtt-server IP[:port] and FETCHES its
+                // WireGuard config from the server (GETCONF/OnConfig) — the user enters no WG keys. We bring
+                // WireGuard up from that returned config (Endpoint overridden to the local WDTT listener).
+                val peerAddr = vk.wdttPeerAddr()
+                val configSignal = CompletableDeferred<String>()
+                addLog(
+                    "Starting VK-TURN WDTT core on $listenAddr (peer=$peerAddr, " +
+                        "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"})"
+                )
+                Wdttmobile.start(
+                    peerAddr,
+                    vk.vkLink,
+                    vk.wdttPassword,
+                    listenAddr,
+                    vk.wdttWorkers.toLong(),
+                    deviceIdentityProvider.hwid(),
+                    vk.wdttFingerprint.ifBlank { "chrome" },
+                    "",
+                    object : WdttConfigSink {
+                        override fun onConfig(wgConf: String) {
+                            addLog("vkturn(wdtt): server WG config received (${wgConf.length} chars)")
+                            if (!configSignal.isCompleted) configSignal.complete(wgConf)
+                        }
+                    },
+                )
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) return false
+                // The WireGuard config arrives via OnConfig once the first worker has a VK TURN session up,
+                // so waiting on it doubles as the relay-ready gate. Build the WG outbound from it.
+                val wgConf = withTimeoutOrNull(VKTURN_RELAY_READY_TIMEOUT_MS) { configSignal.await() }
+                when {
+                    wgConf != null && wgConf.isNotBlank() -> {
+                        profile = buildWdttWgProfile(wgConf, vk.listenPort)
+                        addLog("VK-TURN WDTT relay up; WireGuard config from server applied")
+                    }
+                    profile?.rawOutbound?.isNotBlank() == true ->
+                        addLog("VK-TURN WDTT: no GETCONF — falling back to the stored WireGuard config")
+                    else -> throw IllegalStateException(
+                        "WDTT: no WireGuard config from server (GETCONF) and none stored"
+                    )
+                }
             } else {
-                addLog("VK-TURN relay not ready yet; starting WireGuard anyway (will retry)")
+                // freeturn client: local WireGuard entry listener tunnelling through VK.
+                Freeturn.setDebug(false)
+                Freeturn.setLogWriter(object : FreeturnLogWriter {
+                    override fun writeLog(line: String) {
+                        val trimmed = line.trimEnd()
+                        addLog("vkturn: $trimmed")
+                        Log.v("vkturn", trimmed)
+                    }
+                })
+                // freeturn rejects `bond=1` unless mode==tcp; an old/imported URI carrying it in a udp
+                // (WireGuard/AmneziaWG) tunnel makes the client fail to start. Strip it defensively.
+                val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
+                    else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+                // Parallel TURN stream count, scaled GENTLY with the number of VK call links. The earlier
+                // aggressive scaling (links×10) made it SLOWER, not faster: a single WireGuard flow sprayed
+                // across 20-64 TURN paths of differing latency reorders past WG's replay window → drops →
+                // throughput collapse, plus the per-packet obf on dozens of streams saturates the phone's CPU.
+                // So keep a proven base (~one call's worth) and add only a FEW streams per EXTRA call, capped
+                // low, to draw from more calls without exploding the parallel-path count. splitLinks() in
+                // freeturn splits on newline/CR/tab/space/comma — count the same way. An explicit vk.streams
+                // still acts as a power-user floor (up to a hard safety ceiling).
+                val linkCount = vk.vkLink
+                    .split('\n', '\r', '\t', ' ', ',')
+                    .count { it.isNotBlank() }
+                    .coerceAtLeast(1)
+                val autoStreams = (VKTURN_STREAMS_BASE + (linkCount - 1) * VKTURN_STREAMS_PER_EXTRA_CALL)
+                    .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
+                val effectiveStreams = maxOf(vk.streams, autoStreams)
+                    .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
+                if (multiFreeturn) {
+                    // One relay per server, each on its own local listener (vk.listenPort + index). The
+                    // VK call links are PARTITIONED across the servers (round-robin) — NOT shared in full
+                    // to every relay — so each VPS handles a distinct share of the calls instead of all
+                    // N relays hammering the same calls (which only multiplied phone CPU/obf and split
+                    // each call N ways → no speed gain). Per-server streams scale with that server's own
+                    // share of links. freeturn's StartMulti runs them together; Stop() cancels all.
+                    val allLinks = vk.vkLink.split('\n', '\r', '\t', ' ', ',').filter { it.isNotBlank() }
+                    val n = freeturnServers.size
+                    val specsJson = Json.encodeToString(buildJsonArray {
+                        freeturnServers.forEachIndexed { idx, u ->
+                            val sUri = u.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+                            // This server's share of the call links; if fewer links than servers, wrap
+                            // so every relay still gets at least one call.
+                            val myLinks = allLinks.filterIndexed { li, _ -> li % n == idx }
+                                .ifEmpty { listOfNotNull(allLinks.getOrNull(if (allLinks.isEmpty()) -1 else idx % allLinks.size)) }
+                            val myCount = myLinks.size.coerceAtLeast(1)
+                            val myStreams = (VKTURN_STREAMS_BASE + (myCount - 1) * VKTURN_STREAMS_PER_EXTRA_CALL)
+                                .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
+                                .let { maxOf(vk.streams.takeIf { s -> s > 0 } ?: 0, it) }
+                                .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
+                            addJsonObject {
+                                put("uri", sUri)
+                                put("listenAddr", "127.0.0.1:${vk.listenPort + idx}")
+                                put("vkLink", myLinks.joinToString("\n"))
+                                put("streams", myStreams)
+                            }
+                        }
+                    })
+                    addLog("Starting VK-TURN freeturn ×$n servers (balanced, ${allLinks.size} VK link(s) split across them, base ${vk.listenPort})")
+                    if (allLinks.size < n) addLog("VK-TURN: fewer VK links (${allLinks.size}) than servers ($n) — add more VK call links for real speed scaling")
+                    Freeturn.startMulti(specsJson)
+                } else {
+                    addLog("Starting VK-TURN freeturn listener on $listenAddr (links=$linkCount, streams=$effectiveStreams)")
+                    Freeturn.start(freeturnUri, listenAddr, vk.vkLink, effectiveStreams.toLong())
+                }
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) return false
+
+                // Order the WireGuard bring-up behind the VK TURN relay: wait for the freeturn
+                // client to establish at least one TURN stream (DTLS handshake + TURN allocation)
+                // so the tunnel uplink is live before WireGuard starts handshaking. Otherwise the
+                // WireGuard outbound can exhaust its handshake attempts and report offline while the
+                // relay is still coming up (only masked on a fast same-LAN path). Best-effort: if the
+                // relay does not report ready in time we proceed anyway and let WireGuard retry.
+                if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
+                    addLog("VK-TURN relay up (${Freeturn.connectedStreams()} stream(s)); starting WireGuard")
+                } else {
+                    addLog("VK-TURN relay not ready yet; starting WireGuard anyway (will retry)")
+                }
             }
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) return false
@@ -1181,16 +1626,73 @@ class OlcboxVpnService : VpnService() {
             val traffic = loadTrafficSettings()
             // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
             val ipv4Traffic = traffic.copy(domainStrategy = "ipv4_only")
-            // VK-TURN is intentionally EXCLUDED from routing profiles (like olcRTC): it tunnels
-            // everything through the WG-over-VK path, so no per-app routing is applied here.
             val profilesState = loadRoutingProfilesState()
-            val routingProfile: RoutingProfile? = null
 
-            // Chained proxy on top of WireGuard (parsed once; reused by both cores).
+            // Multi-server freeturn: build ONE Xray config that load-balances across the per-server
+            // WireGuard outbounds (each dialing its own local relay listener). Per-connection `random`
+            // balancing spreads traffic so the servers' bandwidth aggregates. No proxy/chain here, so
+            // the Standard cascade path is untouched.
+            if (multiFreeturn) {
+                val balancedProfiles = freeturnWgProfiles.filter { !it.rawOutbound.isNullOrBlank() }
+                val xrayJson = XrayConfig.buildWireguardBalancer(
+                    wgProfiles = balancedProfiles,
+                    listenPort = socksListenPort,
+                    listenHost = socksListenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    logLevel = "debug",
+                    traffic = ipv4Traffic,
+                    bypassLan = routing.bypassLan,
+                )
+                activeProxyCore = ProxyCore.Xray
+                activeFreeturnServers = balancedProfiles.size
+                addLog("Starting Xray (VK-TURN freeturn ×${balancedProfiles.size}, load-balanced) via $listenAddr")
+                xrayEngine().start(xrayJson, "")
+                if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                    throw IllegalStateException("Xray SOCKS port $socksListenPort did not open")
+                }
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) {
+                    addLog("VK-TURN multi-freeturn Xray start superseded")
+                    return false
+                }
+                addLog("Xray ready on $socksListenHost:$socksListenPort (${balancedProfiles.size} servers)")
+                publishActiveSocks()
+                return true
+            }
+
+            // Chained proxy on top of WireGuard (parsed once; reused by both cores). Applies to plain
+            // WireGuard AND to WDTT (which also exits via WireGuard) — a vless/trojan/ss link dialled
+            // THROUGH the WG-over-VK tunnel so the public exit is the proxy, not the VK/WDTT server.
             val chainProxy = if (outboundType == VkTurnConfig.OUTBOUND_WIREGUARD) {
-                vk.chainProxyLink.takeIf { it.isNotBlank() }
-                    ?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+                val raw = vk.chainProxyLink.takeIf { it.isNotBlank() }
+                // Accept a normal share link (vless/vmess/trojan/ss) OR a yptun://inbound link (a whole
+                // shared LocationConfig) — pulling its EXIT proxy (proxy2 ?: proxy). Previously only
+                // ShareLinkParser was tried, so a yptun:// chain proxy returned null and we silently
+                // exited via plain WireGuard ("2 прокси у VK-TURN мимо летит"). Mirrors the dnstt path
+                // and the Standard "additional proxy" field (proxyFromAnyLink).
+                val parsed = raw?.let { link ->
+                    (ShareLinkParser.parse(link)
+                        ?: YptunInboundCodec.parse(link)?.let { it.proxy2 ?: it.proxy })
+                        ?.takeIf { it.isComplete() }
+                }
+                // A link is present but didn't parse → we'd silently exit via plain WG (looks like the
+                // proxy is "ignored"). Make that loud so it's diagnosable instead of a silent bypass.
+                if (raw != null && parsed == null) {
+                    addLog("VK-TURN: ссылка прокси задана, но не распозналась — выход через чистый WireGuard (без прокси). Нужна vless/vmess/trojan/ss или yptun://inbound.")
+                }
+                parsed
             } else null
+
+            // Routing profiles apply ONLY where there's a real proxy exit to split traffic on: the
+            // proxy EXIT (outbound=Proxy) OR a chain/second proxy over WireGuard. Then the core listens
+            // on a local SOCKS and the profile can split (proxy bucket over VK, direct bucket straight
+            // out). Plain WireGuard / AmneziaWG / WDTT (no proxy) stay EXCLUDED (like olcRTC): they
+            // tunnel everything through the WG-over-VK path with nothing to route against.
+            val routingProfile: RoutingProfile? =
+                if (outboundType == VkTurnConfig.OUTBOUND_PROXY || chainProxy != null)
+                    profilesState.resolve(config.routingProfileId)
+                else null
 
             // The proxy whose core choice matters: the PROXY exit, or the WG chain proxy. AmneziaWG /
             // plain WireGuard have no typed proxy → always sing-box.
@@ -1224,6 +1726,7 @@ class OlcboxVpnService : VpnService() {
                         traffic = ipv4Traffic,
                         routingProfile = xrayProfile,
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                        bypassLan = routing.bypassLan,
                     )
                 } else {
                     addLog("VK-TURN chaining proxy ${chainProxy!!.displayName()} over WireGuard (Xray)")
@@ -1238,6 +1741,9 @@ class OlcboxVpnService : VpnService() {
                         traffic = ipv4Traffic,
                         routingProfile = xrayProfile,
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                        // Routing must NOT bypass the VK tunnel: a `direct` rule exits via the WG-over-VK
+                        // base, not the real network. Routing only picks VK-exit (direct) vs chain-proxy.
+                        directViaBase = true,
                     )
                 }
                 activeProxyCore = ProxyCore.Xray
@@ -1301,10 +1807,8 @@ class OlcboxVpnService : VpnService() {
                     )
                 }
 
-                else -> { // WireGuard, optionally with a proxy chained on top
-                    val chainProxy = vk.chainProxyLink.takeIf { it.isNotBlank() }
-                        ?.let { ShareLinkParser.parse(it) }
-                        ?.takeIf { it.isComplete() }
+                else -> { // WireGuard (incl. WDTT), optionally with a proxy chained on top
+                    // Reuse the proxy parsed above (single source of truth for both cores).
                     if (chainProxy != null) {
                         addLog("VK-TURN chaining proxy ${chainProxy.displayName()} over WireGuard")
                         SingBoxConfig.build(
@@ -1323,6 +1827,9 @@ class OlcboxVpnService : VpnService() {
                             logLevel = "debug",
                             dnsStrategyOverride = "ipv4_only",
                             blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                            // `direct` traffic exits via the WG-over-VK base, never the real network —
+                            // routing only governs the chain proxy; the VK tunnel is never bypassed.
+                            directViaBase = true,
                         )
                     } else {
                         SingBoxConfig.build(
@@ -1383,6 +1890,57 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
+    /**
+     * Builds a sing-box WireGuard outbound [ProxyProfile] from a wg-quick config string the wdtt-server
+     * returns (GETCONF). The peer Endpoint is overridden to the local WDTT listener (127.0.0.1:listenPort)
+     * — WG dials the WDTT core, which tunnels to the real WG server over VK.
+     */
+    private fun buildWdttWgProfile(wgConf: String, listenPort: Int): ProxyProfile {
+        var priv = ""
+        var pub = ""
+        var addr = ""
+        var mtu = 0
+        for (raw in wgConf.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("[") || line.startsWith("#")) continue
+            val eq = line.indexOf('=')
+            if (eq <= 0) continue
+            val k = line.substring(0, eq).trim().lowercase()
+            val v = line.substring(eq + 1).trim()
+            when (k) {
+                "privatekey" -> priv = v
+                "publickey" -> pub = v
+                "address" -> if (addr.isEmpty()) addr = v.substringBefore(',').trim()
+                "mtu" -> mtu = v.toIntOrNull() ?: 0
+            }
+        }
+        val localAddr = if (addr.isNotEmpty()) "\"$addr\"" else ""
+        // Clamp the WireGuard MTU to a value that survives the VK TURN + DTLS + RTP-obf path. The
+        // wdtt-server hands out MTU=1280, but through that wrapping the real path MTU is well under
+        // 1500 and 1280 black-holes large packets (uploads / TLS handshakes stall) — the same lesson
+        // the freeturn WG default (1200) encodes. With a proxy chained ON TOP, its header eats more
+        // headroom still, so cap at 1200 (honour a smaller server value if it sends one).
+        val effMtu = (if (mtu > 0) mtu else 1200).coerceAtMost(1200)
+        val json = buildString {
+            append("{")
+            append("\"type\":\"wireguard\",")
+            append("\"server\":\"127.0.0.1\",")
+            append("\"server_port\":$listenPort,")
+            append("\"local_address\":[$localAddr],")
+            append("\"private_key\":\"$priv\",")
+            append("\"peer_public_key\":\"$pub\",")
+            append("\"mtu\":$effMtu")
+            append("}")
+        }
+        return ProxyProfile(
+            tag = "WDTT",
+            type = "wireguard",
+            server = "127.0.0.1",
+            serverPort = listenPort,
+            rawOutbound = json,
+        )
+    }
+
     private fun singBoxEngine(): SingBoxEngine {
         return singBox ?: SingBoxEngine(
             context = applicationContext,
@@ -1404,12 +1962,19 @@ class OlcboxVpnService : VpnService() {
     private fun proxyCoreRunning(): Boolean =
         if (activeProxyCore == ProxyCore.Xray) xray?.isRunning == true else singBox?.isRunning == true
 
+    /** olcRTC is alive in single-room (singleton) OR multi-room (>=1 independent room up) mode. */
+    private fun olcrtcRunning(): Boolean =
+        Mobile.isRunning() || (olcrtcRoomManager != null && Mobile.roomsRunning() > 0)
+
     /** True when the active engine's core(s) are alive. */
     private fun coreRunning(): Boolean = when (engineType) {
-        EngineType.Stealth -> Mobile.isRunning()
+        EngineType.Stealth -> olcrtcRunning()
         EngineType.Standard -> proxyCoreRunning()
-        EngineType.Chain -> Mobile.isRunning() && proxyCoreRunning()
-        EngineType.VkTurn -> Freeturn.isRunning() && proxyCoreRunning()
+        EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
+        // VK-TURN runs either the freeturn OR the WDTT transport core (mutually exclusive per location).
+        EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
+        // dnstt raises its own local SOCKS listener; with a proxy-over-dnstt a proxy core fronts it.
+        EngineType.Dnstt -> dnsttClient?.isRunning == true && (!dnsttProxyActive || proxyCoreRunning())
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -1606,9 +2171,18 @@ class OlcboxVpnService : VpnService() {
                 .setSession("YPtun")
                 .setMtu(activeMtu)
                 .addAddress(TUN_IPV4_ADDRESS, IPV4_PREFIX_LENGTH)
-                .addRoute("0.0.0.0", 0)
                 .addDnsServer(MAPDNS_ADDRESS)
                 .setBlocking(true)
+            // IPv4 capture. With "Обход LAN" on, route everything EXCEPT the private/LAN ranges into
+            // the tunnel (so local-network traffic exits on the real interface — works for every engine,
+            // including the ones whose core can't route "direct": olcRTC/VK-TURN/dnstt). The mapped-DNS
+            // pool 100.64.0.0/10 is deliberately NOT excluded so synthetic DNS IPs still enter the tun.
+            // Off → capture all of 0.0.0.0/0 exactly as before.
+            if (activeBypassLan) {
+                ipv4RoutesExcludingLan().forEach { (addr, prefix) -> builder.addRoute(addr, prefix) }
+            } else {
+                builder.addRoute("0.0.0.0", 0)
+            }
             // Always capture IPv6 (addAddress + addRoute ::/0) so raw IPv6 traffic can NOT leak past
             // the tunnel to the real interface (was leaking the real IPv6 for VK-TURN). VK-TURN's
             // WireGuard/AmneziaWG/proxy paths all force ipv4_only DNS, so dual-stack apps never get
@@ -1625,6 +2199,61 @@ class OlcboxVpnService : VpnService() {
             setStatus(VpnStatus.Error(e.message ?: "VPN establish failed"))
             updateNotification(ns.notifVpnTunnelError)
             null
+        }
+    }
+
+    /**
+     * The minimal set of IPv4 routes that cover all of 0.0.0.0/0 EXCEPT the private/LAN ranges, so
+     * those addresses are left on the real network (the "Обход LAN" behaviour) for every engine. Built
+     * by subtracting the excluded CIDRs from the full space and re-packing each remaining gap into
+     * aligned CIDR blocks. Loopback (127/8) and link-local (169.254/16) are excluded alongside the
+     * RFC-1918 ranges, matching the per-core direct rules. Works on all API levels (no excludeRoute).
+     */
+    private fun ipv4RoutesExcludingLan(): List<Pair<String, Int>> {
+        val excluded = listOf(
+            cidrRange("10.0.0.0", 8),
+            cidrRange("127.0.0.0", 8),
+            cidrRange("169.254.0.0", 16),
+            cidrRange("172.16.0.0", 12),
+            cidrRange("192.168.0.0", 16)
+        ).sortedBy { it.first }
+
+        val routes = mutableListOf<Pair<String, Int>>()
+        var cursor = 0L
+        val max = 0xFFFFFFFFL
+        for ((start, end) in excluded) {
+            if (start > cursor) appendCidrs(cursor, start - 1, routes)
+            if (end + 1 > cursor) cursor = end + 1
+        }
+        if (cursor <= max) appendCidrs(cursor, max, routes)
+        return routes
+    }
+
+    /** [base, base+2^(32-prefix)-1] as an inclusive unsigned-32-bit range. */
+    private fun cidrRange(addr: String, prefix: Int): Pair<Long, Long> {
+        val base = ipv4ToLong(addr)
+        val size = 1L shl (32 - prefix)
+        return base to (base + size - 1)
+    }
+
+    private fun ipv4ToLong(addr: String): Long {
+        val p = addr.split(".")
+        return ((p[0].toLong() shl 24) or (p[1].toLong() shl 16) or (p[2].toLong() shl 8) or p[3].toLong()) and 0xFFFFFFFFL
+    }
+
+    private fun longToIpv4(value: Long): String =
+        "${(value shr 24) and 0xFF}.${(value shr 16) and 0xFF}.${(value shr 8) and 0xFF}.${value and 0xFF}"
+
+    /** Packs the inclusive range [start, end] into the fewest aligned CIDR blocks. */
+    private fun appendCidrs(start: Long, end: Long, out: MutableList<Pair<String, Int>>) {
+        var cur = start
+        while (cur <= end) {
+            // Largest block aligned at `cur` (its lowest set bit) that still fits the remaining span.
+            var size = if (cur == 0L) (1L shl 32) else cur.takeLowestOneBit()
+            val remaining = end - cur + 1
+            while (size > remaining) size = size shr 1
+            out.add(longToIpv4(cur) to (32 - size.countTrailingZeroBits()))
+            cur += size
         }
     }
 
@@ -1704,6 +2333,21 @@ class OlcboxVpnService : VpnService() {
     private fun writeTun2socksConfig(): File {
         val file = File(filesDir, TUN2SOCKS_CONFIG_FILE_NAME)
 
+        // IPv4-leaning strategy ("IPv4 only" OR "IPv4 preferred"): drop the tun's IPv6 address from the
+        // bridge config so hev-socks5-tunnel REFUSES every IPv6 session (no `tunnel.ipv6` ⇒
+        // ipv6_enabled=0 in the native bridge). This DROPS IPv6 for EVERY engine — including
+        // olcRTC(Stealth) and VK-TURN, which run no sing-box/Xray family enforcement and would otherwise
+        // carry IPv6 to an IPv4-only upstream → "google.com closed" (prefer_ipv4) or a server-side IPv6
+        // on a leak-check. The system TUN still routes ::/0 into the tunnel (see establishSystemVpnTunnel),
+        // so the refused IPv6 is blackholed — never leaked to the iface, in full OR split tunneling.
+        // Why prefer_ipv4 belongs here: the bridge's mapped-DNS only ever answers A (never AAAA), so the
+        // ONLY IPv6 reaching the bridge is from apps' own DoH/DoT (Chrome Secure DNS) or IPv6 literals —
+        // which an IPv4 tunnel can't serve. RST-ing it makes the app fall back to IPv4 (= "prefer IPv4").
+        // sing-box can still reach v6-only sites THROUGH the proxy (that path is app→fake-v4→domain→proxy,
+        // it never hits the bridge as raw v6). prefer_ipv6/ipv6_only keep dual-stack (cores handle family).
+        // [activeDropBridgeIpv6] is snapshotted in startMobile (loadTrafficSettings is suspend; this isn't).
+        val ipv6Line = if (activeDropBridgeIpv6) "# ipv6 disabled (IPv4 only/preferred)" else "ipv6: '$TUN_IPV6_ADDRESS'"
+
         file.writeText(
             """
             tunnel:
@@ -1711,12 +2355,12 @@ class OlcboxVpnService : VpnService() {
               mtu: $activeMtu
               multi-queue: false
               ipv4: $TUN_IPV4_ADDRESS
-              ipv6: '$TUN_IPV6_ADDRESS'
+              $ipv6Line
 
             socks5:
               address: ${socksConnectHost()}
               port: $socksListenPort
-              udp: '${if (engineType == EngineType.Stealth) "tcp" else "udp"}'
+              udp: '${if (engineType == EngineType.Stealth || engineType == EngineType.Dnstt) "tcp" else "udp"}'
               pipeline: false
               username: '$socksUsername'
               password: '$socksPassword'
@@ -1732,7 +2376,7 @@ class OlcboxVpnService : VpnService() {
               task-stack-size: 24576
               tcp-buffer-size: 4096
               max-session-count: 1200
-              connect-timeout: 10000
+              connect-timeout: ${if (engineType == EngineType.Dnstt) 30000 else 10000}
               tcp-read-write-timeout: 300000
               udp-read-write-timeout: 60000
               log-file: stderr
@@ -1750,18 +2394,31 @@ class OlcboxVpnService : VpnService() {
     private fun startSpeedUpdater() {
         speedJob?.cancel()
         if (connectionMode != AndroidConnectionMode.Tun) return
+        // Nothing to display → don't spin a 2s wake-up loop reading byte counters for no reason. Both
+        // flags default OFF, so by default this avoids a permanent every-2s wake-up while connected.
+        // The settings observer restarts this updater the moment either flag is toggled on.
+        if (!showSpeedInNotif && !showRoomsInNotif) return
+        // Energy-saver: tick less often (fewer wake-ups + JNI reads + notification reposts) at the cost
+        // of a slightly laggier speed/rooms readout.
+        val interval = if (activeEnergySaver) ENERGY_SAVER_SPEED_INTERVAL_MS else SPEED_INTERVAL_MS
         speedJob = scope.launch {
             var prev: Tun2SocksStats? = null
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
                 val cur = readTun2SocksStats()
+                // Re-evaluate the base text each tick when showing the rooms count so "up/total" updates
+                // live as rooms (re)connect; otherwise reuse the last status (cheap).
+                val base = if (showRoomsInNotif) connectedNotificationText()
+                else lastNotificationStatus.ifBlank { ns.notifConnected }
                 if (showSpeedInNotif && cur != null && prev != null) {
-                    val secs = (SPEED_INTERVAL_MS / 1000.0).coerceAtLeast(0.5)
+                    val secs = (interval / 1000.0).coerceAtLeast(0.5)
                     val down = ((cur.rxBytes - prev.rxBytes).coerceAtLeast(0L) / secs).toLong()
                     val up = ((cur.txBytes - prev.txBytes).coerceAtLeast(0L) / secs).toLong()
-                    updateNotification(lastNotificationStatus.ifBlank { ns.notifConnected }, speedLine(down, up))
+                    updateNotification(base, speedLine(down, up))
+                } else if (showRoomsInNotif) {
+                    updateNotification(base)
                 }
                 prev = cur
-                delay(SPEED_INTERVAL_MS)
+                delay(interval)
             }
         }
     }
@@ -1772,9 +2429,14 @@ class OlcboxVpnService : VpnService() {
         watchdogStalledSamples = 0
         val mode = connectionMode
         startSpeedUpdater()
+        val watchdogInterval = if (activeEnergySaver) {
+            AppBehaviorSettings.ENERGY_SAVER_WATCHDOG_INTERVAL_MS
+        } else {
+            WATCHDOG_INTERVAL_MS
+        }
         watchdogJob = scope.launch {
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
-                delay(WATCHDOG_INTERVAL_MS)
+                delay(watchdogInterval)
 
                 when {
                     !coreRunning() -> {
@@ -1960,6 +2622,10 @@ class OlcboxVpnService : VpnService() {
         runCatching { singBox?.stop() }
         runCatching { xray?.stop() }
         runCatching { Freeturn.stop() }
+        runCatching { Wdttmobile.stop() }
+        runCatching { dnsttClient?.stop() }
+        dnsttClient = null
+        dnsttProxyActive = false
         runCatching { Awg.stop() }
         runCatching { Hy2.stop() }
         val provider = lastMobileProvider
@@ -2205,6 +2871,13 @@ class OlcboxVpnService : VpnService() {
 
     private suspend fun stopMobileAndWait() {
         val socksPort = socksListenPort
+        // Multi-room: tear down the balancer + every independent room before the singleton stop.
+        olcrtcRoomManager?.let {
+            runCatching { it.stop() }
+            olcrtcRoomManager = null
+        }
+        activeMultiRoomTotal = 0
+        activeFreeturnServers = 0
         stopMobile()
         waitForSocksPortReleased(socksPort)
     }
@@ -2725,8 +3398,22 @@ class OlcboxVpnService : VpnService() {
      * Connected-state notification body: the active server's display name.
      * Falls back to the generic "Connected · VPN/Proxy" line if the name is empty.
      */
-    private fun connectedNotificationText(): String =
-        connectedLocationName.ifBlank { ns.notifConnectedMode(activeModeLabel()) }
+    private fun connectedNotificationText(): String {
+        val base = connectedLocationName.ifBlank { ns.notifConnectedMode(activeModeLabel()) }
+        if (showRoomsInNotif && olcrtcRoomManager != null && activeMultiRoomTotal > 0 &&
+            (engineType == EngineType.Stealth || engineType == EngineType.Chain)
+        ) {
+            val up = runCatching { Mobile.roomsRunning() }.getOrDefault(0)
+            return "$base · $up/$activeMultiRoomTotal комнат"
+        }
+        // VK-TURN multi-server freeturn: show connected/total servers (same toggle as rooms). The
+        // count of relays with a live TURN stream is the "connected" number.
+        if (showRoomsInNotif && engineType == EngineType.VkTurn && activeFreeturnServers > 1) {
+            val up = runCatching { Freeturn.activeRelays() }.getOrDefault(0)
+            return "$base · $up/$activeFreeturnServers серверов"
+        }
+        return base
+    }
 
     private class AuthenticatedSocksProxy(
         private val listenPort: Int,
@@ -2926,6 +3613,10 @@ class OlcboxVpnService : VpnService() {
         private const val NETWORK_STABILITY_GRACE_MS = 1_500L
         private const val WATCHDOG_INTERVAL_MS = 15_000L
         private const val SPEED_INTERVAL_MS = 2_000L
+        // Energy-saver: a much slower speed/rooms notification refresh (vs. SPEED_INTERVAL_MS). Network
+        // switches are event-driven (the NetworkCallback), so the watchdog is only a backstop for a
+        // silently-dead core / stalled traffic — safe to poll far less often when saving power.
+        private const val ENERGY_SAVER_SPEED_INTERVAL_MS = 6_000L
         private const val WATCHDOG_STALLED_TX_PACKET_DELTA = 8L
         private const val WATCHDOG_STALLED_SAMPLE_LIMIT = 3
         private const val RTC_RECOVERY_GRACE_MS = 2_500L
@@ -2942,6 +3633,22 @@ class OlcboxVpnService : VpnService() {
         private const val SOCKS_RELEASE_POLL_MS = 100L
         private const val VKTURN_RELAY_READY_TIMEOUT_MS = 20_000L
         private const val VKTURN_RELAY_POLL_MS = 200L
+        // Max EXTRA freeturn servers run alongside the primary for load-balancing (6 total).
+        private const val VKTURN_MAX_EXTRA_FREETURN = 5
+        // VK-TURN parallel TURN streams. freeturn fans these across the call links (multiProvider), so
+        // more streams = more parallel relay paths. But a single WireGuard flow degrades when sprayed
+        // across too many paths of differing latency (reorder past WG's replay window → drops) and each
+        // stream's per-packet obf burns phone CPU — so "more streams" backfires past a point. Keep a
+        // proven BASE (≈ one call's worth) and add only a few streams per EXTRA call, capped LOW.
+        private const val VKTURN_STREAMS_BASE = 10
+        private const val VKTURN_STREAMS_PER_EXTRA_CALL = 3
+        // Low auto cap on the gently-scaled total: 1 call→10, 2+→12. Upstream docs (free-turn-proxy
+        // docs/modes.md) say 6-12 streams is the comfortable range and >15-20 RISKS A VK BAN, so 12 is
+        // the safe ceiling — letting this run to 20-64 was the regression (slower + ban risk).
+        private const val VKTURN_STREAMS_AUTO_MAX = 12
+        // Hard ceiling that even an explicit power-user vk.streams can't exceed, so a huge pasted link
+        // list / manual value can't spawn a runaway number of DTLS handshakes / TURN allocations.
+        private const val VKTURN_STREAMS_HARD_MAX = 64
         private const val SOCKET_CONNECT_TIMEOUT_MS = 150
         private const val WAKE_LOCK_REFRESH_INTERVAL_MS = 30_000L
         private const val WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L
@@ -2965,6 +3672,20 @@ class OlcboxVpnService : VpnService() {
         private const val NOTIFICATION_CHANNEL_ID = "olcbox_vpn"
         private const val NOTIFICATION_ID = 100
         private const val TAG = "OlcboxVpnService"
+
+        // High-frequency Android UI/render/system spam that the whole-process logcat capture would
+        // otherwise pour into the in-app journal, drowning the VPN/core lines that actually matter.
+        // Matched case-insensitively as a substring of the raw logcat line (tag OR message).
+        private val LOGCAT_NOISE = listOf(
+            "frameRateCategory",   // Android 15/16 variable-refresh-rate: "frameRateCategory Request!"
+            "setFrameRate",
+            "BLASTBufferQueue",
+            "Choreographer",
+            "OpenGLRenderer",
+            "ViewRootImpl",
+            "ImeTracker",
+            "InsetsController",
+        )
 
         private fun addLog(msg: String) {
             OlcboxVpnState.addLog(msg)

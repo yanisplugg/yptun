@@ -473,6 +473,9 @@ func (s *Session) CanSend() bool {
 // GetSendQueue exposes the outbound queue.
 func (s *Session) GetSendQueue() chan []byte { return s.sendQueue }
 
+// SubscriberCanSend reports whether the subscriber path is ready to send.
+func (s *Session) SubscriberCanSend() bool { return s.CanSend() }
+
 // GetBufferedAmount is a stub for LiveKit (the SDK handles its own buffering).
 func (s *Session) GetBufferedAmount() uint64 { return 0 }
 

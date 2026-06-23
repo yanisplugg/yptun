@@ -1,6 +1,6 @@
 // Package common содержит хелперы, общие для udprelay и tcpfwd
 // (TURN-dial + создание obf-кодека). Два режима прокси по-разному компонуют DTLS
-// и rtpopus, поэтому полная абстракция Engine/Handler намеренно не вводится —
+// и rtpopus, поэтому полная абстракция Engine/Handler намеренно не вводится -
 // пакет собирает только действительно идентичный код.
 package common
 
@@ -11,12 +11,12 @@ import (
 	"net"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/turndial"
-	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
+	"github.com/samosvalishe/free-turn-proxy/internal/wire"
 )
 
 // GetCredsFunc разрешает TURN-реквизиты для streamID. Реализуется provider'ом
 // (см. internal/provider): provider держит идентификатор сессии (link/room/key)
-// внутри, pipeline передаёт только streamID. rawURLs — кандидаты host:port в
+// внутри, pipeline передаёт только streamID. rawURLs - кандидаты host:port в
 // порядке предпочтения.
 type GetCredsFunc func(ctx context.Context, streamID int) (user, pass string, rawURLs []string, err error)
 
@@ -33,7 +33,7 @@ func DialTURN(ctx context.Context, host, port string, udp bool, peer *net.UDPAdd
 	if len(rawURLs) == 0 {
 		return nil, fmt.Errorf("no TURN candidates")
 	}
-	// HostOverride (-turn) принудительно задаёт host → все кандидаты резолвятся
+	// HostOverride (-turn) принудительно задаёт host -> все кандидаты резолвятся
 	// в одну цель, гонять их нет смысла; пробуем только первого.
 	if host != "" {
 		rawURLs = rawURLs[:1]
@@ -56,11 +56,8 @@ func DialTURN(ctx context.Context, host, port string, udp bool, peer *net.UDPAdd
 	return nil, fmt.Errorf("all TURN candidates failed: %w", errors.Join(errs...))
 }
 
-// NewClientObf возвращает клиентский rtpopus.Conn если key нужной длины,
-// иначе (nil, nil) — обфускация отключена. Ошибки NewConn пробрасываются вызывающему.
-func NewClientObf(key []byte) (*rtpopus.Conn, error) {
-	if len(key) != rtpopus.KeyLen {
-		return nil, nil
-	}
-	return rtpopus.NewConn(key, false)
+// NewClientObf возвращает клиентский wire.Codec для профиля obf или (nil, nil),
+// если profile=none. Диспатч и валидация ключа - в wire.NewClientCodec.
+func NewClientObf(profile string, key []byte) (wire.Codec, error) {
+	return wire.NewClientCodec(profile, key)
 }

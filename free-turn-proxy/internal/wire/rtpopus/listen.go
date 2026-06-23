@@ -58,7 +58,7 @@ func (l *packetListener) Accept() (net.PacketConn, net.Addr, error) {
 func (l *packetListener) Close() error   { return l.inner.Close() }
 func (l *packetListener) Addr() net.Addr { return l.inner.Addr() }
 
-// packetConn — per-peer net.PacketConn, AEAD-оборачивающий чтение/запись
+// packetConn - per-peer net.PacketConn, AEAD-оборачивающий чтение/запись
 // через bufPool для allocation-free горячего пути.
 type packetConn struct {
 	inner net.PacketConn

@@ -1,4 +1,4 @@
-// Package stats — счётчики пропускной способности и обёртка net.Conn
+// Package stats - счётчики пропускной способности и обёртка net.Conn
 // с подсчётом байт. Используется и клиентом, и сервером.
 package stats
 
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Stats хранит счётчики tx/rx байт. При enabled=false Add* — no-op,
+// Stats хранит счётчики tx/rx байт. При enabled=false Add* - no-op,
 // LogEvery возвращается сразу (поведение под isDebug).
 type Stats struct {
 	tx      atomic.Uint64

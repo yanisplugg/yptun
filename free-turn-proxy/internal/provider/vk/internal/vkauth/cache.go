@@ -15,7 +15,7 @@ type StreamCredentialsCache struct {
 	lastErrorTime atomic.Int64
 }
 
-// Store отображает cache-id (streamID / streamsPerCache) → StreamCredentialsCache.
+// Store отображает cache-id ((streamID-1) / streamsPerCache) -> StreamCredentialsCache.
 type Store struct {
 	mu              sync.RWMutex
 	caches          map[int]*StreamCredentialsCache
@@ -32,8 +32,15 @@ func NewStore(streamsPerCache int) *Store {
 	}
 }
 
+// CacheID группирует потоки в блоки по streamsPerCache: потоки 1..streamsPerCache
+// делят один кэш реквизитов, streamsPerCache+1.. - следующий. streamID 1-based
+// (единый базис udprelay и tcpfwd); первый поток блока инициирует fetch к VK,
+// остальные переиспользуют тёплый кэш.
 func (s *Store) CacheID(streamID int) int {
-	return streamID / s.streamsPerCache
+	if streamID < 1 {
+		return 0
+	}
+	return (streamID - 1) / s.streamsPerCache
 }
 
 func (s *Store) Get(streamID int) *StreamCredentialsCache {
@@ -68,7 +75,7 @@ func (c *StreamCredentialsCache) Invalidate() {
 }
 
 // IsAuthError проверяет ошибку по эвристике TURN-клиента:
-// auth/401/stale-nonce — признак инвалидации кэша.
+// auth/401/stale-nonce - признак инвалидации кэша.
 func IsAuthError(err error) bool {
 	if err == nil {
 		return false

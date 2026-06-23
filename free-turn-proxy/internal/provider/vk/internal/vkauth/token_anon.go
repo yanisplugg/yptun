@@ -9,7 +9,7 @@ import (
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// fetchAnonToken — шаг 1 цепочки: обменивает app client_id/client_secret
+// fetchAnonToken - шаг 1 цепочки: обменивает app client_id/client_secret
 // на анонимный access token из login.vk.ru.
 func (c *Client) fetchAnonToken(ctx context.Context, httpClient tlsclient.HttpClient, profile browserprofile.Profile, creds VKCredentials) (string, error) {
 	data := fmt.Sprintf("client_id=%s&token_type=messages&client_secret=%s&version=1&app_id=%s",

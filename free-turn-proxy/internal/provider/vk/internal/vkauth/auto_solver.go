@@ -11,7 +11,7 @@ import (
 )
 
 // DefaultAutoSolve запускает in-page widget flow. Загружает сохранённый профиль
-// браузера, если доступен, — капча видит стабильные fingerprints на этапе
+// браузера, если доступен, - капча видит стабильные fingerprints на этапе
 // загрузки страницы и POST-запроса.
 func DefaultAutoSolve(
 	ctx context.Context,

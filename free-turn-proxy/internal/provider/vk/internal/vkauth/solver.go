@@ -10,7 +10,7 @@ import (
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// CaptchaSolveMode — выбор между автоматическим решением и ручным браузерным fallback.
+// CaptchaSolveMode - выбор между автоматическим решением и ручным браузерным fallback.
 type CaptchaSolveMode int
 
 const (
@@ -55,7 +55,7 @@ type AutoSolveFunc func(
 ) (token string, err error)
 
 // ManualSolveFunc открывает локальный браузерный fallback. Возвращает либо
-// success_token (token != ""), либо captcha_key — в зависимости от пути
+// success_token (token != ""), либо captcha_key - в зависимости от пути
 // ошибки VK.
 type ManualSolveFunc func(
 	ctx context.Context,

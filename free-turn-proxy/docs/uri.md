@@ -27,7 +27,7 @@ Payload - JSON-объект, закодированный `base64url` (без pa
 | `transport` | `-transport` | транспорт до TURN-реле: `tcp` \| `udp`. |
 | `mode` | `-mode` | режим туннеля: `udp` \| `tcp`. |
 | `bond` | `-bond` | bonding TCP (`true`), только с `mode=tcp`. |
-| `obf` | `-obf-profile` | профиль обфускации (`rtpopus`); `none` опускается. |
+| `obf` | `-obf-profile` | профиль обфускации (`rtpopus` \| `rtpopus2`); `none` опускается. |
 | `key` | `-obf-key` | ключ обфускации (hex), только при заданном `obf`. |
 | `n` | `-n` | число TURN-потоков. |
 | `spc` | `-streams-per-cred` | потоков на один кеш VK-учёток. |
@@ -54,7 +54,7 @@ Payload - JSON-объект, закодированный `base64url` (без pa
 ## Пример использования
 
 ```bash
-./client "freeturn://eyJ2IjoxLCJwcm92aWRlciI6InZrIiwicGVlciI6..." -link "https://vk.com/call/join/..."
+./client "freeturn://eyJ2IjoxLCJwcm92aWRlciI6InZrIiwicGVlciI6..." -link "https://vk.ru/call/join/..."
 ```
 
 Параметры из URI переопределяют базовые флаги (`-peer`, `-mode`, `-obf-key`, `-n` ...).

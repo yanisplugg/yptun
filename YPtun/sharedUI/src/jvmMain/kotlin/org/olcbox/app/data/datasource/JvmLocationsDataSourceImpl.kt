@@ -37,8 +37,9 @@ class JvmLocationsDataSourceImpl(
         val file = bundleFile.takeIf { it.exists() } ?: legacyBundleFile.takeIf { it.exists() }
             ?: return@withContext null
         if (!file.exists()) return@withContext null
+        // Raw decode only — the repository normalizes once on read (single funnel).
         runCatching {
-            json.decodeFromString(LocationBundleV4.serializer(), file.readText()).normalized()
+            json.decodeFromString(LocationBundleV4.serializer(), file.readText())
         }.getOrNull()
     }
 

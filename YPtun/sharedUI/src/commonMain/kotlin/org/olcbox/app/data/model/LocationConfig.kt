@@ -55,7 +55,70 @@ data class VkTurnConfig(
      */
     @SerialName("proxy_core")
     val proxyCore: ProxyCore = ProxyCore.Auto,
+    /**
+     * Which VK-TURN transport CORE raises the local listener the WG outbound dials:
+     * - [CORE_FREETURN]: the free-turn-proxy client (driven by [uri], the freeturn:// link).
+     * - [CORE_WDTT]: the WDTT (wg-turn-client) core — chunk-affinity dispatch across VK call-links so a
+     *   single WG flow actually aggregates. Driven by [wdttPeer]/[wdttPassword]/[vkLink] (call links =
+     *   the VK hashes); the wg= keys still come from [LocationConfig.proxy] (or the server's GETCONF).
+     */
+    @SerialName("core")
+    val core: String = CORE_FREETURN,
+    /** WDTT server IP (or host) the core dials over VK TURN (the wdtt-server / Peer). Port = [wdttPort]. */
+    @SerialName("wdtt_peer")
+    val wdttPeer: String = "",
+    /** WDTT server port; 0 → [DEFAULT_WDTT_PORT] (56000). Ignored if [wdttPeer] already carries ":port". */
+    @SerialName("wdtt_port")
+    val wdttPort: Int = 0,
+    /** WDTT connection password — the WRAP key is HKDF-derived from it server-side and client-side. */
+    @SerialName("wdtt_password")
+    val wdttPassword: String = "",
+    /** WDTT TLS fingerprint for the VK auth flow: chrome/safari/ios/android/firefox (blank → chrome). */
+    @SerialName("wdtt_fingerprint")
+    val wdttFingerprint: String = "",
+    /** WDTT worker count; 0 → core default. Clamped to [9,108] and rounded to a multiple of 9 in-core. */
+    @SerialName("wdtt_workers")
+    val wdttWorkers: Int = 0,
+    /**
+     * Master switch for multi-server freeturn. When off, only the primary [uri] is used (today's exact
+     * single-server behaviour) even if [extraFreeturnUris] is non-empty. When on, the extra servers
+     * run alongside the primary and traffic is load-balanced across them.
+     */
+    @SerialName("freeturn_multi_server")
+    val freeturnMultiServer: Boolean = false,
+    /**
+     * Additional freeturn:// servers (beyond the primary [uri]) to run AT THE SAME TIME for
+     * per-connection load-balancing — the servers' bandwidth aggregates. Each link is a full
+     * freeturn:// (carries its own peer/obf/embedded wg=). The location's VK call links are PARTITIONED
+     * across the servers (so each VPS handles a share, not all of them). Up to 5 extra (6 total). Only
+     * honoured for the freeturn core with a WireGuard exit (not WDTT / AmneziaWG / proxy exits).
+     */
+    @SerialName("extra_freeturn_uris")
+    val extraFreeturnUris: List<String> = emptyList(),
 ) {
+    /**
+     * All freeturn servers to front at once: the primary [uri] first, then the valid [extraFreeturnUris]
+     * — but ONLY when [freeturnMultiServer] is on. Off ⇒ just the primary, so the single-server path
+     * stays byte-identical.
+     */
+    fun allFreeturnUris(): List<String> {
+        val primary = listOf(uri)
+        val all = if (freeturnMultiServer) primary + extraFreeturnUris else primary
+        return all.map { it.trim() }.filter { it.startsWith("freeturn://", ignoreCase = true) }
+    }
+    /** True when the WDTT transport core is selected (vs. the default freeturn core). */
+    fun usesWdtt(): Boolean = core.equals(CORE_WDTT, ignoreCase = true)
+
+    /** The wdtt-server "host:port": uses [wdttPeer] verbatim if it already has a port, else appends
+     *  [wdttPort] (or [DEFAULT_WDTT_PORT]). */
+    fun wdttPeerAddr(): String {
+        val host = wdttPeer.trim()
+        if (host.isEmpty()) return ""
+        if (host.substringAfterLast(':', "").toIntOrNull() != null && host.contains(':')) return host
+        val port = wdttPort.takeIf { it in 1..65535 } ?: DEFAULT_WDTT_PORT
+        return "$host:$port"
+    }
+
     fun isComplete(): Boolean =
         isStorable() && vkLink.isNotBlank()
 
@@ -80,15 +143,24 @@ data class VkTurnConfig(
         const val OUTBOUND_WIREGUARD = "wireguard"
         const val OUTBOUND_AMNEZIAWG = "amneziawg"
         const val OUTBOUND_PROXY = "proxy"
+
+        const val CORE_FREETURN = "freeturn"
+        const val CORE_WDTT = "wdtt"
+
+        /** Default WDTT server port (matches the wdtt-server default). */
+        const val DEFAULT_WDTT_PORT = 56000
     }
 
     /**
-     * True when the freeturn link + WG transport are present. The per-client [vkLink]
-     * is filled in by the user via the location settings after import, so a location
-     * is storable (and shown in the list) before [isComplete] is satisfied.
+     * True when the transport core's required artefacts + WG transport are present. The per-client
+     * [vkLink] is filled in by the user via the location settings after import, so a location is
+     * storable (and shown in the list) before [isComplete] is satisfied. For the WDTT core there is no
+     * freeturn:// link — the [wdttPeer] (wdtt-server addr) is the gating artefact instead.
      */
-    fun isStorable(): Boolean =
-        uri.startsWith("freeturn://") && listenPort in 1..65535
+    fun isStorable(): Boolean = listenPort in 1..65535 && when {
+        usesWdtt() -> wdttPeer.isNotBlank()
+        else -> uri.startsWith("freeturn://")
+    }
 }
 
 /**
@@ -119,6 +191,78 @@ data class FakeDnsSpec(
     @SerialName("inet4_range") val inet4Range: String = "198.18.0.0/15",
     @SerialName("inet6_range") val inet6Range: String = "fc00::/18",
     @SerialName("block_regex") val blockRegex: List<String> = emptyList(),
+)
+
+/**
+ * dnstt (DNS tunnel) transport parameters for [EngineType.Dnstt]. The dnstt client raises a local
+ * listener that transparently forwards each TCP connection through DNS TXT queries to the
+ * dnstt-server, which relays to its upstream (typically a SOCKS5) — so the local port behaves as
+ * that SOCKS5 and the TUN bridge consumes it directly. KCP transport + Noise_NK encryption.
+ */
+@Serializable
+data class DnsttConfig(
+    /** Tunnel domain delegated to the dnstt-server, e.g. `t.example.com`. */
+    @SerialName("domain")
+    val domain: String = "",
+    /** Server Noise public key in hex (required — the Noise_NK responder key). */
+    @SerialName("pubkey")
+    val pubKey: String = "",
+    /**
+     * UDP DNS resolver that reaches the tunnel domain's authoritative server, e.g. `1.1.1.1:53`,
+     * `8.8.8.8`, or a local/ISP resolver. Port defaults to 53 if omitted. The mobile dnstt client
+     * speaks plain UDP DNS (no DoH/DoT), so this must be a UDP resolver address.
+     */
+    @SerialName("resolver")
+    val resolver: String = "",
+    /**
+     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the dnstt tunnel: the proxy
+     * server is dialed THROUGH the dnstt local SOCKS, so the public exit is the proxy, not the
+     * dnstt-server. Blank = exit straight via the dnstt-server's own SOCKS5.
+     */
+    @SerialName("proxy_link")
+    val proxyLink: String = "",
+    /**
+     * Which core runs the over-dnstt proxy (same choice as the Standard engine). [ProxyCore.Auto]
+     * picks Xray for raw-Xray/xhttp transports, otherwise sing-box.
+     */
+    @SerialName("proxy_core")
+    val proxyCore: ProxyCore = ProxyCore.Auto,
+) {
+    /** True when the dnstt tunnel has everything it needs to connect. */
+    fun isComplete(): Boolean =
+        domain.isNotBlank() && pubKey.isNotBlank() && resolver.isNotBlank()
+
+    /** True when a proxy is chained on top of the dnstt tunnel. */
+    fun hasProxy(): Boolean = proxyLink.isNotBlank()
+
+    /** Resolves [proxyCore]==Auto to a concrete backend for the over-dnstt [profile]. Mirrors
+     *  [VkTurnConfig.resolvedProxyCore], but defaults to Xray: chaining the exit over the dnstt SOCKS
+     *  needs socket-level dialerProxy chaining (Xray) to keep a vless reality/xtls-vision transport
+     *  intact — proxySettings/other paths reset it. An explicit per-location or global core still wins. */
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
+        proxyCore != ProxyCore.Auto -> proxyCore
+        !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
+        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        globalCore != ProxyCore.Auto -> globalCore
+        else -> ProxyCore.Xray
+    }
+
+    fun normalized(): DnsttConfig = DnsttConfig(
+        domain = domain.trim(),
+        pubKey = pubKey.trim(),
+        resolver = resolver.trim(),
+        proxyLink = proxyLink.trim(),
+        proxyCore = proxyCore,
+    )
+}
+
+/** One additional olcRTC room for the multi-room (aggregation) feature. */
+@Serializable
+data class ExtraRoom(
+    @SerialName("provider") val provider: String = "",
+    @SerialName("transport") val transport: String = "",
+    @SerialName("room") val room: String = "",
+    @SerialName("key") val key: String = "",
 )
 
 @Serializable
@@ -160,6 +304,8 @@ data class LocationConfig(
      * inside the link lives in [proxy].rawOutbound. Null for other engines.
      */
     val vkturn: VkTurnConfig? = null,
+    /** dnstt (DNS tunnel) transport for the [EngineType.Dnstt] engine. Null for other engines. */
+    val dnstt: DnsttConfig? = null,
     /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
     val advanced: AdvancedCoreConfig? = null,
     /**
@@ -175,7 +321,45 @@ data class LocationConfig(
      */
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
+    /**
+     * Multi-room (Stealth/Chain): when true and [extraRooms] is non-empty, the client raises the main
+     * room PLUS each extra room as an independent olcRTC instance and round-robins connections across
+     * them so bandwidth aggregates (up to [MAX_EXTRA_ROOMS]+1 rooms total).
+     */
+    @SerialName("multi_room")
+    val multiRoomEnabled: Boolean = false,
+    /** Additional olcRTC rooms raised alongside the main one when [multiRoomEnabled]. */
+    @SerialName("extra_rooms")
+    val extraRooms: List<ExtraRoom> = emptyList(),
+    /**
+     * Stage-2 bonding (Chain only): when true, the Chain→VLESS flow is BONDED across the rooms (one
+     * stream striped over all room lanes and reassembled in order on the server) instead of round-robined
+     * per-connection. This lets a SINGLE flow aggregate bandwidth ("many→single→vless"). Requires the
+     * bond reassembler running on the olcRTC server at [bondPort]. Ignored for Stealth (per-connection
+     * round-robin already aggregates parallel app flows there).
+     */
+    @SerialName("multi_room_bond")
+    val multiRoomBond: Boolean = false,
+    /** Server-side bond reassembler port the rooms' SOCKS dials (127.0.0.1:bondPort); 0 → [DEFAULT_BOND_PORT]. */
+    @SerialName("bond_port")
+    val bondPort: Int = 0,
 ) {
+    /** Effective list of rooms to raise for multi-room: the main room + the [extraRooms] (capped). */
+    fun multiRoomSpecs(): List<ExtraRoom> = buildList {
+        add(ExtraRoom(provider = bypassProvider, transport = transport, room = id, key = key))
+        extraRooms.forEach { add(it) }
+    }.filter { it.room.isNotBlank() && it.key.isNotBlank() }.take(MAX_EXTRA_ROOMS + 1)
+
+    /** True when multi-room is on AND there's at least one valid EXTRA room (so it's worth fanning out). */
+    fun usesMultiRoom(): Boolean =
+        multiRoomEnabled && extraRooms.any { it.room.isNotBlank() && it.key.isNotBlank() }
+
+    /** True when the Chain flow should be BONDED across the rooms (Stage-2). Bond needs multiple rooms. */
+    fun usesMultiRoomBond(): Boolean = multiRoomBond && usesMultiRoom()
+
+    /** Effective server bond reassembler port. */
+    fun effectiveBondPort(): Int = bondPort.takeIf { it in 1..65535 } ?: DEFAULT_BOND_PORT
+
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
         val normalizedTransport = normalizeTransport(transport, provider)
@@ -192,6 +376,7 @@ data class LocationConfig(
             proxy2 = proxy2,
             core = core,
             vkturn = vkturn,
+            dnstt = dnstt?.normalized(),
             routingProfileId = routingProfileId.trim(),
             fakeDns = fakeDns,
         )
@@ -226,6 +411,29 @@ data class LocationConfig(
         else -> ProxyCore.SingBox
     }
 
+    /**
+     * The VK-TURN exit artifact required by the chosen [VkTurnConfig.outbound] is present. The exit
+     * lives in [proxy] but in DIFFERENT fields per outbound, so a single `rawOutbound` check wrongly
+     * rejected the proxy/AmneziaWG exits (rawOutbound is only set for plain WireGuard) — that made a
+     * "Proxy (tcp) + bonding" VK-TURN location fail isStorable and VANISH on save.
+     */
+    private fun vkTurnExitPresent(): Boolean = when {
+        // WDTT connects purely by the wdtt-server IP[:port]; the WireGuard config is fetched FROM the
+        // server at runtime (GETCONF/OnConfig), so no stored exit artifact is required here.
+        vkturn?.usesWdtt() == true -> true
+        else -> vkTurnExitPresentFreeturn()
+    }
+
+    private fun vkTurnExitPresentFreeturn(): Boolean = when (vkturn?.outbound) {
+        // TCP proxy exit (vless/vmess/trojan/ss) dialled through the freeturn tcp listener — a normal
+        // ProxyProfile (server/uuid/…), NOT a rawOutbound blob.
+        VkTurnConfig.OUTBOUND_PROXY -> proxy?.isComplete() == true
+        // AmneziaWG exit keeps its wg-quick INI in awgConfig (not rawOutbound).
+        VkTurnConfig.OUTBOUND_AMNEZIAWG -> !proxy?.awgConfig.isNullOrBlank()
+        // Plain WireGuard exit: the sing-box outbound JSON in rawOutbound.
+        else -> !proxy?.rawOutbound.isNullOrBlank()
+    }
+
     /** True when this config has everything its [engine] needs to connect. */
     fun isComplete(): Boolean = when (engine) {
         // olcRTC needs a room id + key.
@@ -234,8 +442,10 @@ data class LocationConfig(
         EngineType.Standard -> proxy?.isComplete() == true
         // Chain needs the olcRTC stealth tunnel plus a valid main proxy. [proxy2] is optional.
         EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
-        // VK-TURN needs the freeturn link, the per-client VK call link and the WireGuard outbound.
-        EngineType.VkTurn -> vkturn?.isComplete() == true && !proxy?.rawOutbound.isNullOrBlank()
+        // VK-TURN needs the freeturn link, the per-client VK call link and the chosen exit artifact.
+        EngineType.VkTurn -> vkturn?.isComplete() == true && vkTurnExitPresent()
+        // dnstt needs the tunnel domain, server public key and a DNS resolver.
+        EngineType.Dnstt -> dnstt?.isComplete() == true
     }
 
     /**
@@ -244,7 +454,7 @@ data class LocationConfig(
      * link is filled in after import, so the location is kept (and shown) without it.
      */
     fun isStorable(): Boolean = when (engine) {
-        EngineType.VkTurn -> vkturn?.isStorable() == true && !proxy?.rawOutbound.isNullOrBlank()
+        EngineType.VkTurn -> vkturn?.isStorable() == true && vkTurnExitPresent()
         else -> isComplete()
     }
 
@@ -287,6 +497,11 @@ data class LocationConfig(
 
         /** Local port the freeturn client raises; must match the Endpoint baked into the WG config. */
         const val DEFAULT_FREETURN_PORT = 9000
+        /** Max ADDITIONAL multi-room rooms (so up to MAX_EXTRA_ROOMS+1 = 5 rooms run at once). */
+        const val MAX_EXTRA_ROOMS = 4
+
+        /** Default server-side bond reassembler port (must match the bond-server on the olcRTC host). */
+        const val DEFAULT_BOND_PORT = 7700
 
         val supportedBypassProviders = listOf(
             PROVIDER_JAZZ,
@@ -304,7 +519,9 @@ data class LocationConfig(
         fun supportedTransportsForProvider(provider: String): List<String> {
             return when (normalizeProvider(provider)) {
                 PROVIDER_TELEMOST -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
-                PROVIDER_JITSI -> listOf(TRANSPORT_DATACHANNEL)
+                // The olcRTC core registers transports GLOBALLY and the auth provider is independent, so
+                // Jitsi can carry any of them — offer all three (datachannel stays the default/known-good).
+                PROVIDER_JITSI -> listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
                 else -> supportedTransports
             }
         }
@@ -498,7 +715,32 @@ data class SubscriptionMetadata(
      * subscriptions keep auto-updating.
      */
     @SerialName("auto_update_enabled")
-    val autoUpdateEnabled: Boolean = true
+    val autoUpdateEnabled: Boolean = true,
+    /**
+     * Support link the panel advertises (Remnawave `support-url` header). Shown as a "support"
+     * action on the subscription so the user can reach the panel operator. Null when absent.
+     */
+    @SerialName("support_url")
+    val supportUrl: String? = null,
+    /**
+     * The panel's subscription web page (Remnawave `profile-web-page-url` header) — the human page
+     * where the user manages the subscription / sees plans. Opened in a browser. Null when absent.
+     */
+    @SerialName("web_page_url")
+    val webPageUrl: String? = null,
+    /**
+     * Announcement / notice the panel broadcasts (Remnawave `announce` header, may be `base64:`).
+     * Shown to the user on the subscription. Null when absent.
+     */
+    @SerialName("announce")
+    val announce: String? = null,
+    /**
+     * Provider ID (Happ/Remnawave `providerid` response header) — a tracking identifier the panel
+     * attaches to the subscription. Stored and reported daily to the Happ provider-check endpoint, the
+     * same behaviour as Happ. Null when the panel doesn't set it.
+     */
+    @SerialName("provider_id")
+    val providerId: String? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -512,7 +754,11 @@ data class SubscriptionMetadata(
             updateIntervalHours = updateIntervalHours?.coerceIn(MIN_UPDATE_INTERVAL_HOURS, MAX_UPDATE_INTERVAL_HOURS),
             lastRefreshAtEpochMs = lastRefreshAtEpochMs?.takeIf { it > 0 },
             expiresAtEpochMs = expiresAtEpochMs?.takeIf { it > 0 },
-            lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 }
+            lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 },
+            supportUrl = supportUrl.cleanMetadataValue(),
+            webPageUrl = webPageUrl.cleanMetadataValue(),
+            announce = announce.cleanMetadataValue(),
+            providerId = providerId.cleanMetadataValue()
         )
     }
 
@@ -528,7 +774,11 @@ data class SubscriptionMetadata(
                 lastRefreshAtEpochMs == null &&
                 expiresAtEpochMs == null &&
                 lastAttemptAtEpochMs == null &&
-                autoUpdateEnabled
+                autoUpdateEnabled &&
+                supportUrl.isNullOrBlank() &&
+                webPageUrl.isNullOrBlank() &&
+                announce.isNullOrBlank() &&
+                providerId.isNullOrBlank()
     }
 
     companion object {
@@ -598,6 +848,7 @@ data class LocationEntry(
     val proxyEnabled: Boolean = true,
     val core: ProxyCore? = null,
     val vkturn: VkTurnConfig? = null,
+    val dnstt: DnsttConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
@@ -638,7 +889,15 @@ data class LocationEntry(
     @SerialName("vp8_batch")
     val legacyVp8Batch: Int? = null,
     @SerialName("vp8Batch")
-    val legacyVp8BatchCamel: Int? = null
+    val legacyVp8BatchCamel: Int? = null,
+    @SerialName("multi_room")
+    val multiRoomEnabled: Boolean = false,
+    @SerialName("extra_rooms")
+    val extraRooms: List<ExtraRoom> = emptyList(),
+    @SerialName("multi_room_bond")
+    val multiRoomBond: Boolean = false,
+    @SerialName("bond_port")
+    val bondPort: Int = 0
 ) {
     val location: LocationConfig
         get() {
@@ -671,9 +930,14 @@ data class LocationEntry(
                 proxyEnabled = proxyEnabled,
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
+                dnstt = dnstt,
                 advanced = advanced,
                 fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
+                multiRoomEnabled = multiRoomEnabled,
+                extraRooms = extraRooms,
+                multiRoomBond = multiRoomBond,
+                bondPort = bondPort,
             ).normalized()
         }
 
@@ -696,11 +960,16 @@ data class LocationEntry(
             proxyEnabled = config.proxyEnabled,
             core = config.core,
             vkturn = config.vkturn,
+            dnstt = config.dnstt,
             advanced = config.advanced,
             fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
+            multiRoomEnabled = config.multiRoomEnabled,
+            extraRooms = config.extraRooms,
+            multiRoomBond = config.multiRoomBond,
+            bondPort = config.bondPort,
             metadata = metadata
                 ?.normalized()
                 ?.takeUnless { it.isEmpty() }
@@ -729,11 +998,16 @@ data class LocationEntry(
                 proxyEnabled = config.proxyEnabled,
                 core = config.core,
                 vkturn = config.vkturn,
+                dnstt = config.dnstt,
                 advanced = config.advanced,
                 fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },
                 authProvider = config.bypassProvider,
                 transport = LocationTransportConfig.from(config),
+                multiRoomEnabled = config.multiRoomEnabled,
+                extraRooms = config.extraRooms,
+                multiRoomBond = config.multiRoomBond,
+                bondPort = config.bondPort,
                 metadata = metadata
             ).normalized()
         }

@@ -52,8 +52,10 @@ fun PingButton(
     var pingState by remember { mutableStateOf<PingState>(PingState.Idle) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
 
-    // VK-TURN has no meaningful latency probe (bonded over VK calls) — show a neutral dash.
-    val isVkTurn = configGetter()?.engine == org.olcbox.app.data.model.EngineType.VkTurn
+    // VK-TURN / dnstt have no meaningful off-tunnel latency probe — show a neutral dash.
+    val engine = configGetter()?.engine
+    val isVkTurn = engine == org.olcbox.app.data.model.EngineType.VkTurn ||
+        engine == org.olcbox.app.data.model.EngineType.Dnstt
 
     val descriptionText = when {
         isVkTurn -> "—"

@@ -38,6 +38,7 @@ fun OlcboxAppContent(
     onAppSettingsClick: () -> Unit,
     onSplitTunnelingClick: () -> Unit = {},
     confirmBeforeDelete: Boolean = true,
+    allowVpsAutoInstall: Boolean = false,
     pingParallelism: Int = AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
     updateAvailable: Boolean = false,
     onUpdateClick: () -> Unit = {},
@@ -152,6 +153,7 @@ fun OlcboxAppContent(
                 LocationSettingsScreen(
                     viewModel = locationViewModel,
                     homeViewModel = homeViewModel,
+                    allowVpsAutoInstall = allowVpsAutoInstall,
                     onShareLocationRequested = onShareLocationRequested,
                     onBack = {
                         homeViewModel.loadCurrentConfig()

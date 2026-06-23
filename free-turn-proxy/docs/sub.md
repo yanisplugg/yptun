@@ -6,7 +6,7 @@
 ## Использование в клиенте
 
 ```bash
-./client -sub https://example.com/sub.md -link "https://vk.com/call/join/..."
+./client -sub https://example.com/sub.md -link "https://vk.ru/call/join/..."
 ```
 
 Клиент скачает подписку, найдет первый доступный сервер и автоматически применит его конфигурацию. Уникальная ссылка `-link` по-прежнему требуется.

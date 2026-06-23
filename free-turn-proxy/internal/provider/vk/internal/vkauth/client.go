@@ -11,15 +11,16 @@ import (
 	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
+	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/browserprofile"
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// Config конфигурирует Client. Нулевые значения — безопасные дефолты,
+// Config конфигурирует Client. Нулевые значения - безопасные дефолты,
 // кроме Dialer (должен быть задан явно для кастомного DNS).
 type Config struct {
-	// Credentials для перебора по порядку. nil/empty → DefaultCredentials.
+	// Credentials для перебора по порядку. nil/empty -> DefaultCredentials.
 	Credentials []VKCredentials
 
 	// Dialer для HTTP-транспорта запросов к VK API.
@@ -28,30 +29,35 @@ type Config struct {
 	// ManualOnly форсирует ручной путь captcha с первой попытки.
 	ManualOnly bool
 
-	// StreamsPerCache — делитель streamID → cacheID. <=0 → дефолт.
+	// StreamsPerCache - делитель streamID -> cacheID. <=0 -> дефолт.
 	StreamsPerCache int
 
 	// StreamsAlive возвращает число подключённых потоков; используется для
 	// решения, является ли исчерпанная captcha фатальной или только throttle.
-	// nil → 1.
+	// nil -> 1.
 	StreamsAlive func() int32
 
-	// AutoSolver / ManualSolver — подключаемые решалки captcha. nil отключает
+	// AutoSolver / ManualSolver - подключаемые решалки captcha. nil отключает
 	// соответствующий путь (поток переходит к следующей попытке).
 	AutoSolver   AutoSolveFunc
 	ManualSolver ManualSolveFunc
 
-	// Log — уровневый логгер. nil → no-op.
+	// Browser - браузерный профиль (UA + JA3 + client hints) для control-plane.
+	// Нулевое значение -> Chrome (исторический дефолт для прямых вызовов в тестах).
+	Browser browserprofile.Kind
+
+	// Log - уровневый логгер. nil -> no-op.
 	Log logx.Logger
 }
 
-// Client — фасад VK-аутентификации и кэша реквизитов. Владеет кэшем группы
+// Client - фасад VK-аутентификации и кэша реквизитов. Владеет кэшем группы
 // потоков, глобальным throttle запросов, таймером блокировки captcha и счётчиком
 // ошибок аутентификации для инвалидации устаревших TURN-реквизитов.
 type Client struct {
 	credentials []VKCredentials
 	dialer      net.Dialer
 	manualOnly  bool
+	browser     browserprofile.Kind
 	streamsFn   func() int32
 	autoSolver  AutoSolveFunc
 	manualSolve ManualSolveFunc
@@ -64,7 +70,7 @@ type Client struct {
 	fetchMu       sync.Mutex
 	lastFetchTime time.Time
 
-	// tokenChain — 4-шаговый получатель токена для пары credentials.
+	// tokenChain - 4-шаговый получатель токена для пары credentials.
 	// В prod подключён (*Client).getTokenChain; тесты подменяют fake.
 	tokenChain tokenChainFn
 
@@ -79,6 +85,7 @@ func New(cfg Config) *Client {
 		credentials: cfg.Credentials,
 		dialer:      cfg.Dialer,
 		manualOnly:  cfg.ManualOnly,
+		browser:     cfg.Browser,
 		streamsFn:   cfg.StreamsAlive,
 		autoSolver:  cfg.AutoSolver,
 		manualSolve: cfg.ManualSolver,
@@ -103,7 +110,7 @@ func New(cfg Config) *Client {
 
 // GetCredentials возвращает (username, password, server-addrs) для TURN-allocate,
 // обращаясь к VK (с throttle + кэшем) только при необходимости. Адреса отдаются
-// в порядке предпочтения для streamID (предпочтительный первым) — pipeline
+// в порядке предпочтения для streamID (предпочтительный первым) - pipeline
 // пробует их по очереди при allocate.
 func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) (string, string, []string, error) {
 	cache := c.store.Get(streamID)
@@ -143,7 +150,7 @@ func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) 
 }
 
 // orderAddrs возвращает копию addrs, ротированную так, что предпочтительный
-// для streamID адрес стоит первым, остальные — следом (сохраняя порядок).
+// для streamID адрес стоит первым, остальные - следом (сохраняя порядок).
 // Раскидывает primary по стримам (балансировка relay-IP), оставляя остальные
 // как фоллбэк при DPI-дропе.
 func orderAddrs(addrs []string, streamID int) []string {
@@ -194,7 +201,7 @@ func (c *Client) LockoutUntilUnix() int64 {
 	return c.lockout.Load()
 }
 
-// BackoffUntilUnix реализует provider.Provider — алиас LockoutUntilUnix.
+// BackoffUntilUnix реализует provider.Provider - алиас LockoutUntilUnix.
 // vkauth-lockout глобальный (без per-stream), streamID-параметра в самом
 // методе нет; интерфейс provider.Provider определяет no-arg сигнатуру.
 func (c *Client) BackoffUntilUnix() int64 { return c.LockoutUntilUnix() }
