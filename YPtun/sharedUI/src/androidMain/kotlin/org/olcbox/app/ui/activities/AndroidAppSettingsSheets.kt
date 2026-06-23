@@ -3465,6 +3465,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
 
         RoutingToggleRow(
+            title = s.energySaverTitle,
+            subtitle = s.energySaverSubtitle,
+            checked = settings.energySaver
+        ) { onChanged(settings.copy(energySaver = it)) }
+
+        RoutingToggleRow(
             title = s.confirmDeleteTitle,
             subtitle = s.confirmDeleteSubtitle,
             checked = settings.confirmBeforeDelete

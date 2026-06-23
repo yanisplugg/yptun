@@ -156,6 +156,14 @@ data class AppBehaviorSettings(
      * (default) keeps the original behaviour: sing-box unless the transport forces Xray.
      */
     val globalProxyCore: ProxyCore = ProxyCore.Auto,
+    /**
+     * Energy-saver mode: trims the always-on background work the VPN does while connected to cut
+     * battery use — the in-app logcat journal capture is skipped, and the health watchdog polls far
+     * less often ([ENERGY_SAVER_WATCHDOG_INTERVAL_MS] instead of the default). The trade-off is slower
+     * automatic recovery after a network drop and an empty diagnostics journal; live calls / throughput
+     * are unaffected. Off by default. Applied on the next connect.
+     */
+    val energySaver: Boolean = false,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"
@@ -200,6 +208,9 @@ data class AppBehaviorSettings(
         const val DEFAULT_PING_PARALLELISM = 5
         const val MIN_PING_PARALLELISM = 1
         const val MAX_PING_PARALLELISM = 20
+
+        /** Health-watchdog poll interval used while [energySaver] is on (vs. the default 15s). */
+        const val ENERGY_SAVER_WATCHDOG_INTERVAL_MS = 45_000L
     }
 
     /**

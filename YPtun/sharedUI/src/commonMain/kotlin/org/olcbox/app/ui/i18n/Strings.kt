@@ -145,6 +145,8 @@ interface Strings {
     // Application behavior
     val autoConnectTitle: String
     val autoConnectSubtitle: String
+    val energySaverTitle: String
+    val energySaverSubtitle: String
     val confirmDeleteTitle: String
     val confirmDeleteSubtitle: String
     val language: String
@@ -726,6 +728,8 @@ object RuStrings : Strings {
     override val howToConnect = "Как подключиться?"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
+    override val energySaverTitle = "Режим энергоэффективности"
+    override val energySaverSubtitle = "Меньше расход батареи: реже проверки соединения, без журнала. Может замедлить авто-восстановление; применяется при следующем подключении"
     override val confirmDeleteTitle = "Подтверждение удаления"
     override val confirmDeleteSubtitle = "Запрашивать подтверждение перед удалением подписок и конфигураций"
     override val language = "Язык"
@@ -1258,6 +1262,8 @@ object EnStrings : Strings {
     override val howToConnect = "How to connect?"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
+    override val energySaverTitle = "Energy-saver mode"
+    override val energySaverSubtitle = "Lower battery use: less frequent health checks, no journal. May slow auto-recovery; applied on next connect"
     override val confirmDeleteTitle = "Delete confirmation"
     override val confirmDeleteSubtitle = "Ask before deleting subscriptions and configs"
     override val language = "Language"
@@ -1790,6 +1796,8 @@ object FaStrings : Strings {
     override val howToConnect = "چگونه متصل شویم؟"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
+    override val energySaverTitle = "حالت صرفه‌جویی در انرژی"
+    override val energySaverSubtitle = "مصرف باتری کمتر: بررسی‌های کمتر اتصال، بدون گزارش. ممکن است بازیابی خودکار را کند کند؛ در اتصال بعدی اعمال می‌شود"
     override val confirmDeleteTitle = "تأیید حذف"
     override val confirmDeleteSubtitle = "پیش از حذف اشتراک‌ها و پیکربندی‌ها پرسیده شود"
     override val language = "زبان"

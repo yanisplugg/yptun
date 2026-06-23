@@ -210,6 +210,15 @@ class OlcboxVpnService : VpnService() {
     // IPv4, so the bridge refuses IPv6 (RST → Happy-Eyeballs falls back to IPv4). prefer_ipv6/
     // ipv6_only keep dual-stack. See [writeTun2socksConfig].
     private var activeDropBridgeIpv6: Boolean = false
+    // Snapshotted from the (suspend) routing settings in [startMobile] so the non-suspend
+    // [establishSystemVpnTunnel] can decide whether to carve the private/LAN ranges OUT of the TUN
+    // routes. Carving them out makes "Обход LAN" work for EVERY engine — including olcRTC(Stealth),
+    // VK-TURN and dnstt, whose cores tunnel everything and have no routing-engine "direct" bucket. LAN
+    // packets then never enter the tunnel and reach the local network on the real interface directly.
+    private var activeBypassLan: Boolean = false
+    // Energy-saver mode snapshot: trims background work while connected (no logcat journal capture, a
+    // much slower health watchdog). Read in [startMobile]; logcat is gated in [startLogcatCapture].
+    @Volatile private var activeEnergySaver: Boolean = false
     private var activeProxyCore: ProxyCore = ProxyCore.SingBox
 
     private data class StartOptions(
@@ -351,6 +360,13 @@ class OlcboxVpnService : VpnService() {
     private fun startLogcatCapture() {
         if (logcatStarted.getAndSet(true)) return
         scope.launch(Dispatchers.IO) {
+            // Energy-saver: skip the continuous logcat tail entirely (a persistent reader process +
+            // per-line wakeups is one of the few always-on CPU costs we can drop). The journal stays
+            // empty until the user turns energy-saver off and reconnects.
+            if (runCatching { loadAppBehavior().energySaver }.getOrDefault(false)) {
+                addLog("Energy saver on: in-app logcat journal disabled")
+                return@launch
+            }
             while (isActive) {
                 try {
                     val pid = android.os.Process.myPid()
@@ -402,6 +418,9 @@ class OlcboxVpnService : VpnService() {
                     showSpeedInNotif = speed
                     showRoomsInNotif = rooms
                     if (OlcboxVpnState.status.value is VpnStatus.Connected) {
+                        // Start/stop the 2s speed loop to match the new flags (it self-cancels when both
+                        // are off), then repost the notification so the speed line appears/clears now.
+                        startSpeedUpdater()
                         updateNotification(connectedNotificationText())
                     }
                 }
@@ -782,9 +801,11 @@ class OlcboxVpnService : VpnService() {
         activeMtu = trafficSettings.mtu
         activeDropBridgeIpv6 = trafficSettings.normalized().domainStrategy
             .let { it == "ipv4_only" || it == "prefer_ipv4" }
+        activeBypassLan = runCatching { loadRouting().bypassLan }.getOrDefault(true)
         loadAppBehavior().let {
             showSpeedInNotif = it.showSpeedInNotification
             showRoomsInNotif = it.showRoomsInNotification
+            activeEnergySaver = it.energySaver
         }
         return when (location.engine) {
             EngineType.Stealth -> startStealthCore(location, upstream, requestedGeneration, setErrorOnFailure)
@@ -2150,9 +2171,18 @@ class OlcboxVpnService : VpnService() {
                 .setSession("YPtun")
                 .setMtu(activeMtu)
                 .addAddress(TUN_IPV4_ADDRESS, IPV4_PREFIX_LENGTH)
-                .addRoute("0.0.0.0", 0)
                 .addDnsServer(MAPDNS_ADDRESS)
                 .setBlocking(true)
+            // IPv4 capture. With "Обход LAN" on, route everything EXCEPT the private/LAN ranges into
+            // the tunnel (so local-network traffic exits on the real interface — works for every engine,
+            // including the ones whose core can't route "direct": olcRTC/VK-TURN/dnstt). The mapped-DNS
+            // pool 100.64.0.0/10 is deliberately NOT excluded so synthetic DNS IPs still enter the tun.
+            // Off → capture all of 0.0.0.0/0 exactly as before.
+            if (activeBypassLan) {
+                ipv4RoutesExcludingLan().forEach { (addr, prefix) -> builder.addRoute(addr, prefix) }
+            } else {
+                builder.addRoute("0.0.0.0", 0)
+            }
             // Always capture IPv6 (addAddress + addRoute ::/0) so raw IPv6 traffic can NOT leak past
             // the tunnel to the real interface (was leaking the real IPv6 for VK-TURN). VK-TURN's
             // WireGuard/AmneziaWG/proxy paths all force ipv4_only DNS, so dual-stack apps never get
@@ -2169,6 +2199,61 @@ class OlcboxVpnService : VpnService() {
             setStatus(VpnStatus.Error(e.message ?: "VPN establish failed"))
             updateNotification(ns.notifVpnTunnelError)
             null
+        }
+    }
+
+    /**
+     * The minimal set of IPv4 routes that cover all of 0.0.0.0/0 EXCEPT the private/LAN ranges, so
+     * those addresses are left on the real network (the "Обход LAN" behaviour) for every engine. Built
+     * by subtracting the excluded CIDRs from the full space and re-packing each remaining gap into
+     * aligned CIDR blocks. Loopback (127/8) and link-local (169.254/16) are excluded alongside the
+     * RFC-1918 ranges, matching the per-core direct rules. Works on all API levels (no excludeRoute).
+     */
+    private fun ipv4RoutesExcludingLan(): List<Pair<String, Int>> {
+        val excluded = listOf(
+            cidrRange("10.0.0.0", 8),
+            cidrRange("127.0.0.0", 8),
+            cidrRange("169.254.0.0", 16),
+            cidrRange("172.16.0.0", 12),
+            cidrRange("192.168.0.0", 16)
+        ).sortedBy { it.first }
+
+        val routes = mutableListOf<Pair<String, Int>>()
+        var cursor = 0L
+        val max = 0xFFFFFFFFL
+        for ((start, end) in excluded) {
+            if (start > cursor) appendCidrs(cursor, start - 1, routes)
+            if (end + 1 > cursor) cursor = end + 1
+        }
+        if (cursor <= max) appendCidrs(cursor, max, routes)
+        return routes
+    }
+
+    /** [base, base+2^(32-prefix)-1] as an inclusive unsigned-32-bit range. */
+    private fun cidrRange(addr: String, prefix: Int): Pair<Long, Long> {
+        val base = ipv4ToLong(addr)
+        val size = 1L shl (32 - prefix)
+        return base to (base + size - 1)
+    }
+
+    private fun ipv4ToLong(addr: String): Long {
+        val p = addr.split(".")
+        return ((p[0].toLong() shl 24) or (p[1].toLong() shl 16) or (p[2].toLong() shl 8) or p[3].toLong()) and 0xFFFFFFFFL
+    }
+
+    private fun longToIpv4(value: Long): String =
+        "${(value shr 24) and 0xFF}.${(value shr 16) and 0xFF}.${(value shr 8) and 0xFF}.${value and 0xFF}"
+
+    /** Packs the inclusive range [start, end] into the fewest aligned CIDR blocks. */
+    private fun appendCidrs(start: Long, end: Long, out: MutableList<Pair<String, Int>>) {
+        var cur = start
+        while (cur <= end) {
+            // Largest block aligned at `cur` (its lowest set bit) that still fits the remaining span.
+            var size = if (cur == 0L) (1L shl 32) else cur.takeLowestOneBit()
+            val remaining = end - cur + 1
+            while (size > remaining) size = size shr 1
+            out.add(longToIpv4(cur) to (32 - size.countTrailingZeroBits()))
+            cur += size
         }
     }
 
@@ -2309,6 +2394,10 @@ class OlcboxVpnService : VpnService() {
     private fun startSpeedUpdater() {
         speedJob?.cancel()
         if (connectionMode != AndroidConnectionMode.Tun) return
+        // Nothing to display → don't spin a 2s wake-up loop reading byte counters for no reason. Both
+        // flags default OFF, so by default this avoids a permanent every-2s wake-up while connected.
+        // The settings observer restarts this updater the moment either flag is toggled on.
+        if (!showSpeedInNotif && !showRoomsInNotif) return
         speedJob = scope.launch {
             var prev: Tun2SocksStats? = null
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
@@ -2337,9 +2426,14 @@ class OlcboxVpnService : VpnService() {
         watchdogStalledSamples = 0
         val mode = connectionMode
         startSpeedUpdater()
+        val watchdogInterval = if (activeEnergySaver) {
+            AppBehaviorSettings.ENERGY_SAVER_WATCHDOG_INTERVAL_MS
+        } else {
+            WATCHDOG_INTERVAL_MS
+        }
         watchdogJob = scope.launch {
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
-                delay(WATCHDOG_INTERVAL_MS)
+                delay(watchdogInterval)
 
                 when {
                     !coreRunning() -> {
