@@ -743,15 +743,20 @@ class OlcboxVpnService : VpnService() {
         if (requestedGeneration != generation) return
 
         if (connectionMode == AndroidConnectionMode.Proxy) {
-//            if (!startAuthenticatedSocksProxy()) {
-//                stopTransportProcesses(closeTun = true)
-//                return
-//            }
+            // No TUN in Proxy mode: the core's own SOCKS5 listener IS the exposed proxy. startMobile has
+            // kept the process bound to the upstream (see releaseProcessBindingUnlessProxy /
+            // shouldKeepProcessBound) so the cores can actually reach the internet — without that the
+            // SOCKS connected but carried no traffic.
             restoreOrStartConnectedClock()
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
             updateNotification(connectedNotificationText())
             addLog("Proxy mode connected on SOCKS $socksListenHost:$socksListenPort")
+            if (socksUsername.isNotBlank()) {
+                addLog("SOCKS auth — username: $socksUsername, password: $socksPassword")
+            } else {
+                addLog("SOCKS auth disabled (no username/password set)")
+            }
             startWatchdog()
             return
         }
@@ -1142,7 +1147,7 @@ class OlcboxVpnService : VpnService() {
             }
             false
         } finally {
-            unbindProcessFromNetwork()
+            releaseProcessBindingUnlessProxy()
         }
     }
 
@@ -1416,7 +1421,7 @@ class OlcboxVpnService : VpnService() {
             }
             false
         } finally {
-            unbindProcessFromNetwork()
+            releaseProcessBindingUnlessProxy()
         }
     }
 
@@ -1886,7 +1891,7 @@ class OlcboxVpnService : VpnService() {
             }
             false
         } finally {
-            unbindProcessFromNetwork()
+            releaseProcessBindingUnlessProxy()
         }
     }
 
@@ -2469,6 +2474,12 @@ class OlcboxVpnService : VpnService() {
                     val previousTransport = currentNetworkTransport
                     val nextTransport = upstream.transportOrNull()
                     updateUnderlyingNetwork(upstream)
+                    // Proxy (SOCKS) mode has no TUN, so the cores reach the internet only through the
+                    // process→network binding. Re-pin it to the refreshed upstream; otherwise a benign
+                    // Wi-Fi handle swap leaves the cores bound to a dead Network and traffic stalls.
+                    if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) {
+                        bindProcessToNetwork(upstream)
+                    }
                     if (isBenignWifiRefresh(previousTransport, nextTransport)) {
                         addLog("Watchdog: refreshed Wi-Fi upstream")
                         continue
@@ -3237,6 +3248,19 @@ class OlcboxVpnService : VpnService() {
         bindProcessToNetwork(null)
     }
 
+    /**
+     * Releases the process→network binding after a transport's setup completes, EXCEPT when a live
+     * Proxy-mode session needs to keep it: in Proxy (SOCKS) mode there is no TUN, so protect()/
+     * setUnderlyingNetworks don't route the cores — only the process binding does. Keeping it bound for
+     * the session is what makes the exposed SOCKS actually carry traffic. TUN mode is unaffected (it
+     * always unbinds here, relying on protect()/underlying networks). On a failed start the core is
+     * already stopped (coreRunning() == false), so the binding is released as before.
+     */
+    private fun releaseProcessBindingUnlessProxy() {
+        if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) return
+        unbindProcessFromNetwork()
+    }
+
     private fun getNetName(network: Network): String {
         val caps = connectivityManager.getNetworkCapabilities(network)
         return if (caps != null) getNetName(caps) else "Other"
@@ -3250,6 +3274,12 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun shouldKeepProcessBound(network: Network): Boolean {
+        // Proxy (SOCKS) mode has no TUN: protect() is a no-op and setUnderlyingNetworks does not apply
+        // (see updateUnderlyingNetwork), so the process→network binding is the ONLY thing routing the
+        // cores' outbound sockets to the chosen upstream. Unbinding it after setup leaves the cores on
+        // the system default network, which is why the local SOCKS connected but carried no traffic.
+        // Keep the bind for the whole session on every transport in Proxy mode.
+        if (connectionMode == AndroidConnectionMode.Proxy) return true
         val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
     }
