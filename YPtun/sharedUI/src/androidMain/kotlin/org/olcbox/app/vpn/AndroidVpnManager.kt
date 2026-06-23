@@ -63,6 +63,9 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME_INITIALIZED
 import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
+import org.olcbox.app.vpn.telegram.TelegramProxyService
+import org.olcbox.app.vpn.telegram.TelegramProxyState
+import org.olcbox.app.vpn.telegram.WarpConfigGenerator
 import java.security.SecureRandom
 
 class AndroidVpnManager(private val context: Context) : VpnManager {
@@ -99,6 +102,10 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val trafficSettings: StateFlow<TrafficSettings> = _trafficSettings.asStateFlow()
     private val _appBehavior = MutableStateFlow(AppBehaviorSettings())
     val appBehavior: StateFlow<AppBehaviorSettings> = _appBehavior.asStateFlow()
+    private val _telegramProxyState =
+        MutableStateFlow<TelegramProxyState>(TelegramProxyState.Stopped)
+    /** State of the Telegram-over-WARP background proxy (for the settings UI). */
+    val telegramProxyState: StateFlow<TelegramProxyState> = _telegramProxyState.asStateFlow()
 
     /** De-dupe guard for subscription-expiry notifications (keyed by name + days-left), per process. */
     private val notifiedExpiry = java.util.Collections.synchronizedSet(mutableSetOf<String>())
@@ -185,6 +192,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     ?: AppBehaviorSettings()
                 // Mirror the subscription User-Agent choice into the process holder the fetch reads.
                 SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
+                // Restore the Telegram-over-WARP proxy if the user left it on (config is cached).
+                restoreTelegramProxyIfEnabled()
                 val lang = AppLanguage.fromId(preferences[KEY_ANDROID_LANGUAGE])
                 _language.value = lang
                 LocalizationState.language = lang
@@ -477,6 +486,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     fun setAppBehavior(settings: AppBehaviorSettings) {
+        val previous = _appBehavior.value
         _appBehavior.value = settings
         SubscriptionUserAgentHolder.mode = settings.subscriptionUserAgent
         scope.launch {
@@ -485,6 +495,53 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     Json.encodeToString(AppBehaviorSettings.serializer(), settings)
             }
         }
+        if (settings.telegramProxyEnabled != previous.telegramProxyEnabled) {
+            if (settings.telegramProxyEnabled) enableTelegramProxy() else disableTelegramProxy()
+        }
+    }
+
+    /**
+     * Brings up the Telegram-over-WARP proxy: ensures a cached WARP config exists (generating one from
+     * Cloudflare on first enable — requires internet), then starts the background [TelegramProxyService].
+     * On generation failure the toggle is reverted and an error is surfaced via [telegramProxyState].
+     */
+    private fun enableTelegramProxy() {
+        scope.launch {
+            val ds = LocationsDataSourceImpl(appContext)
+            var config = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
+            if (config.isNullOrBlank()) {
+                _telegramProxyState.value = TelegramProxyState.Generating
+                config = runCatching { WarpConfigGenerator.generate() }.getOrElse { e ->
+                    _telegramProxyState.value =
+                        TelegramProxyState.Error(e.message ?: "WARP config generation failed")
+                    // Revert the toggle (setAppBehavior re-entry will call disableTelegramProxy()).
+                    setAppBehavior(_appBehavior.value.copy(telegramProxyEnabled = false))
+                    return@launch
+                }
+                runCatching { ds.saveTelegramWarpConfig(config) }
+            }
+            runCatching { TelegramProxyService.start(appContext) }
+                .onSuccess {
+                    _telegramProxyState.value = TelegramProxyState.Running(
+                        TelegramProxyService.LISTEN_HOST,
+                        TelegramProxyService.LISTEN_PORT
+                    )
+                }
+                .onFailure {
+                    _telegramProxyState.value =
+                        TelegramProxyState.Error(it.message ?: "Failed to start Telegram proxy")
+                }
+        }
+    }
+
+    private fun disableTelegramProxy() {
+        runCatching { TelegramProxyService.stop(appContext) }
+        _telegramProxyState.value = TelegramProxyState.Stopped
+    }
+
+    /** Re-starts the Telegram proxy after process restart when the toggle was left on. */
+    private fun restoreTelegramProxyIfEnabled() {
+        if (_appBehavior.value.telegramProxyEnabled) enableTelegramProxy()
     }
 
     override fun needsPermission(): Boolean = needsPermission(_connectionMode.value)

@@ -170,6 +170,13 @@ data class AppBehaviorSettings(
      * are unaffected. Off by default. Applied on the next connect.
      */
     val energySaver: Boolean = false,
+    /**
+     * Telegram-over-WARP background proxy: when on, a lightweight foreground service raises an
+     * AmneziaWG (Cloudflare WARP) tunnel and exposes a local SOCKS5 the user points Telegram at. Runs
+     * independently of the main VPN. First enable requires internet (to generate + cache the WARP
+     * config); afterwards the same config is reused. Off by default.
+     */
+    val telegramProxyEnabled: Boolean = false,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"

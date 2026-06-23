@@ -116,6 +116,20 @@
         </service>
 
         <!--
+            Telegram-over-WARP background proxy: a separate lightweight foreground service that runs an
+            AmneziaWG (Cloudflare WARP) tunnel and exposes a local SOCKS5 the user points Telegram at.
+            Independent of the VPN service.
+        -->
+        <service
+            android:name="org.olcbox.app.vpn.telegram.TelegramProxyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="WARP proxy for Telegram" />
+        </service>
+
+        <!--
             Quick Settings tile — allows the user to toggle the VPN directly
             from the notification shade without opening the app.
             Requires Android 7.0+ (API 24). The tile must be added manually by

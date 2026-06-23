@@ -72,6 +72,13 @@ interface LocationsDataSource {
     suspend fun saveAppInstallId(value: String) = Unit
 
     /**
+     * Cached Telegram-over-WARP AmneziaWG config (generated once from Cloudflare on first enable, then
+     * reused). Default no-op store; only Android needs real persistence.
+     */
+    suspend fun loadTelegramWarpConfig(): String? = null
+    suspend fun saveTelegramWarpConfig(value: String) = Unit
+
+    /**
      * Persisted state for the Happ-style provider-usage report — an opaque JSON string mapping each
      * `providerid` to the epoch-day it was last reported, so the daily report fires at most once per
      * calendar day per id across restarts (and is shared with the background worker). Default no-op

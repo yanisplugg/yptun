@@ -141,6 +141,8 @@ import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.update.AppUpdateSettings
 import org.olcbox.app.ui.features.home.components.LogLines
 import org.olcbox.app.vpn.AndroidConnectionMode
+import org.olcbox.app.vpn.telegram.TelegramProxyService
+import org.olcbox.app.vpn.telegram.TelegramProxyState
 import org.olcbox.app.vpn.AndroidInstalledApp
 import org.olcbox.app.vpn.AndroidSocksProxySettings
 import org.olcbox.app.vpn.AndroidSplitTunnelList
@@ -174,6 +176,7 @@ internal fun AppSettingsSheet(
     onTrafficChanged: (TrafficSettings) -> Unit,
     appBehavior: AppBehaviorSettings,
     onAppBehaviorChanged: (AppBehaviorSettings) -> Unit,
+    telegramProxyState: TelegramProxyState,
     language: AppLanguage,
     onLanguageChanged: (AppLanguage) -> Unit,
     updateSettings: AppUpdateSettings,
@@ -343,6 +346,9 @@ internal fun AppSettingsSheet(
                     selectedMode = selectedMode,
                     proxySettings = proxySettings,
                     splitTunnelSettings = splitTunnelSettings,
+                    appBehavior = appBehavior,
+                    onAppBehaviorChanged = onAppBehaviorChanged,
+                    telegramProxyState = telegramProxyState,
                     enabled = enabled,
                     onBack = { route = AppSettingsRoute.Hub },
                     onConnectionModeClick = { route = AppSettingsRoute.ConnectionMode },
@@ -866,6 +872,9 @@ private fun ConnectionSettingsContent(
     selectedMode: AndroidConnectionMode,
     proxySettings: AndroidSocksProxySettings,
     splitTunnelSettings: AndroidSplitTunnelSettings,
+    appBehavior: AppBehaviorSettings,
+    onAppBehaviorChanged: (AppBehaviorSettings) -> Unit,
+    telegramProxyState: TelegramProxyState,
     enabled: Boolean,
     onBack: () -> Unit,
     onConnectionModeClick: () -> Unit,
@@ -909,6 +918,36 @@ private fun ConnectionSettingsContent(
                 enabled = enabled,
                 onClick = onSplitTunnelingClick
             )
+
+            RoutingToggleRow(
+                title = s.telegramProxyTitle,
+                subtitle = s.telegramProxySubtitle,
+                checked = appBehavior.telegramProxyEnabled
+            ) { onAppBehaviorChanged(appBehavior.copy(telegramProxyEnabled = it)) }
+
+            val tgStatus = when (val st = telegramProxyState) {
+                is TelegramProxyState.Generating -> s.telegramProxyGenerating
+                is TelegramProxyState.Running ->
+                    "${s.telegramProxyRunning}: SOCKS5 ${st.host}:${st.port}"
+                is TelegramProxyState.Error -> "${s.telegramProxyError}: ${st.message}"
+                is TelegramProxyState.Stopped -> if (appBehavior.telegramProxyEnabled) {
+                    "${s.telegramProxyRunning}: SOCKS5 ${TelegramProxyService.LISTEN_HOST}:${TelegramProxyService.LISTEN_PORT}"
+                } else {
+                    null
+                }
+            }
+            if (tgStatus != null) {
+                Text(
+                    text = tgStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (telegramProxyState is TelegramProxyState.Error) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
         }
     }
 }

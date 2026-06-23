@@ -76,6 +76,7 @@ import org.olcbox.app.vpn.xray.XrayConfig
 import org.olcbox.app.vpn.xray.XrayEngine
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
+import org.olcbox.app.vpn.telegram.VpnSocketProtectBridge
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
 import org.olcbox.app.vpn.UpstreamCandidate
 import org.olcbox.app.vpn.UpstreamNetworkSelector
@@ -461,6 +462,7 @@ class OlcboxVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        VpnSocketProtectBridge.protect = null
         cleanup(stopService = false)
     }
 
@@ -771,6 +773,9 @@ class OlcboxVpnService : VpnService() {
         }
 
         vpnInterface = pfd
+        // Publish protect() so the independent Telegram-over-WARP proxy can keep its WARP UDP socket
+        // out of this tun while it's up (see VpnSocketProtectBridge). Cleared on teardown.
+        VpnSocketProtectBridge.protect = { fd -> protect(fd) }
         if (!startTun2socks(pfd)) {
             stopTransportProcesses(closeTun = true)
             return
@@ -3137,6 +3142,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun cleanupVpnInterface() {
+        VpnSocketProtectBridge.protect = null
         runCatching { vpnInterface?.close() }
         vpnInterface = null
     }

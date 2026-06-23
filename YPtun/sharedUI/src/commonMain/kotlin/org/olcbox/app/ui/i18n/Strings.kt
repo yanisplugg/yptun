@@ -72,6 +72,11 @@ interface Strings {
     val groupSortByPing: String
     val groupAutoUpdate: String
     val visitSubscriptionPage: String
+    val telegramProxyTitle: String
+    val telegramProxySubtitle: String
+    val telegramProxyGenerating: String
+    val telegramProxyRunning: String
+    val telegramProxyError: String
     val groupDelete: String
 
     // Delete dialogs
@@ -653,6 +658,11 @@ object RuStrings : Strings {
     override val groupSortByPing = "Сортировать по пингу"
     override val groupAutoUpdate = "Автообновление"
     override val visitSubscriptionPage = "Посетить страницу подписки"
+    override val telegramProxyTitle = "Прокси Telegram (WARP)"
+    override val telegramProxySubtitle = "Фоновый SOCKS5 через Cloudflare WARP для Telegram. При первом включении нужен интернет — затем пропишите адрес в настройках прокси Telegram."
+    override val telegramProxyGenerating = "Генерация конфигурации… (нужен интернет)"
+    override val telegramProxyRunning = "Активен"
+    override val telegramProxyError = "Ошибка"
     override val groupDelete = "Удалить подписку"
     override val delete = "Удалить"
     override val cancel = "Отмена"
@@ -1188,6 +1198,11 @@ object EnStrings : Strings {
     override val groupSortByPing = "Sort by ping"
     override val groupAutoUpdate = "Auto-update"
     override val visitSubscriptionPage = "Visit subscription page"
+    override val telegramProxyTitle = "Telegram proxy (WARP)"
+    override val telegramProxySubtitle = "Background SOCKS5 over Cloudflare WARP for Telegram. First enable needs internet — then set the address in Telegram's proxy settings."
+    override val telegramProxyGenerating = "Generating config… (internet required)"
+    override val telegramProxyRunning = "Active"
+    override val telegramProxyError = "Error"
     override val groupDelete = "Delete subscription"
     override val delete = "Delete"
     override val cancel = "Cancel"
@@ -1723,6 +1738,11 @@ object FaStrings : Strings {
     override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
     override val groupAutoUpdate = "به‌روزرسانی خودکار"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
+    override val telegramProxyTitle = "پروکسی تلگرام (WARP)"
+    override val telegramProxySubtitle = "SOCKS5 پس‌زمینه از طریق Cloudflare WARP برای تلگرام. اولین فعال‌سازی به اینترنت نیاز دارد — سپس آدرس را در تنظیمات پروکسی تلگرام وارد کنید."
+    override val telegramProxyGenerating = "در حال تولید پیکربندی… (به اینترنت نیاز است)"
+    override val telegramProxyRunning = "فعال"
+    override val telegramProxyError = "خطا"
     override val groupDelete = "حذف اشتراک"
     override val delete = "حذف"
     override val cancel = "انصراف"
