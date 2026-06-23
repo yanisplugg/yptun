@@ -573,11 +573,21 @@ class OlcboxVpnService : VpnService() {
         // Security: in TUN mode the local SOCKS5 is purely internal (tun2socks <-> core), so
         // force per-session random credentials. Otherwise any app on the device could connect to
         // the unauthenticated 127.0.0.1 SOCKS listener, learn the real exit IP and bypass
-        // split tunneling (disclosed 2026 for xray/sing-box mobile clients). In Proxy mode the
-        // SOCKS is intentionally exposed, so the user's configured credentials are kept.
-        if (options.connectionMode == AndroidConnectionMode.Tun) {
-            socksUsername = randomSocksToken()
-            socksPassword = randomSocksToken()
+        // split tunneling (disclosed 2026 for xray/sing-box mobile clients).
+        //
+        // In Proxy mode the SOCKS is the user-facing product: force NO-AUTH so ANY local client
+        // connects immediately. Requiring an (auto-generated) username/password is exactly what made
+        // Proxy mode "connects but no traffic" — a client that doesn't send credentials is accepted at
+        // the TCP layer but its CONNECT is rejected, so nothing flows. Loopback-only listener anyway.
+        when (options.connectionMode) {
+            AndroidConnectionMode.Tun -> {
+                socksUsername = randomSocksToken()
+                socksPassword = randomSocksToken()
+            }
+            AndroidConnectionMode.Proxy -> {
+                socksUsername = ""
+                socksPassword = ""
+            }
         }
         splitTunnelMode = options.splitTunnelMode
         splitTunnelProxyApps = options.splitTunnelProxyApps
@@ -754,11 +764,8 @@ class OlcboxVpnService : VpnService() {
             resetRecoveryState()
             updateNotification(connectedNotificationText())
             addLog("Proxy mode connected on SOCKS $socksListenHost:$socksListenPort")
-            if (socksUsername.isNotBlank()) {
-                addLog("SOCKS auth — username: $socksUsername, password: $socksPassword")
-            } else {
-                addLog("SOCKS auth disabled (no username/password set)")
-            }
+            addLog("SOCKS auth disabled — any client may connect (no username/password)")
+            launchProxySelfCheck()
             startWatchdog()
             return
         }
@@ -2910,6 +2917,110 @@ class OlcboxVpnService : VpnService() {
         addLog("SOCKS port $port is still busy after stop")
     }
 
+    /**
+     * After Proxy mode reports Connected, actually drive traffic through the local SOCKS5 once and
+     * write the verdict to the in-app log: whether the path carries data and, on success, the exit IP
+     * the user is browsing from. This is the difference between "the listener is up" (which the
+     * watchdog already checks) and "a request genuinely reaches the internet and comes back". Best
+     * effort, fire-and-forget — never blocks the connect path or flips the VPN status.
+     */
+    private fun launchProxySelfCheck() {
+        scope.launch(Dispatchers.IO) {
+            // Give the core's SOCKS listener a moment to finish binding before the first dial.
+            delay(PROXY_SELF_CHECK_DELAY_MS)
+            val verdict = runCatching { probeProxyExitIp() }
+                .getOrElse { ProxySelfCheckResult.Failure(it.message ?: it.javaClass.simpleName) }
+            when (verdict) {
+                is ProxySelfCheckResult.Success ->
+                    addLog("Proxy self-check: traffic OK — exit IP ${verdict.ip}")
+                is ProxySelfCheckResult.Failure ->
+                    addLog("Proxy self-check: NO traffic through SOCKS (${verdict.reason})")
+            }
+        }
+    }
+
+    /**
+     * Opens the local SOCKS5, performs a no-auth handshake, asks it to CONNECT (by domain, so the
+     * exit node resolves it) to a plain-HTTP IP-echo endpoint, and parses the returned address. Throws
+     * or returns Failure if any step doesn't complete — i.e. the proxy "connected" but carries nothing.
+     */
+    private fun probeProxyExitIp(): ProxySelfCheckResult {
+        Socket().use { socket ->
+            socket.connect(
+                InetSocketAddress(socksConnectHost(), socksListenPort),
+                SOCKET_CONNECT_TIMEOUT_MS
+            )
+            socket.soTimeout = PROXY_SELF_CHECK_TIMEOUT_MS
+            val out = socket.getOutputStream()
+            val input = socket.getInputStream()
+
+            // Greeting: offer no-auth only (Proxy mode forces no-auth, see applyStartOptions).
+            out.write(byteArrayOf(0x05, 0x01, 0x00))
+            out.flush()
+            val method = ByteArray(2)
+            readFullyOrThrow(input, method)
+            if (method[0] != 0x05.toByte() || method[1] != 0x00.toByte()) {
+                return ProxySelfCheckResult.Failure("SOCKS no-auth not accepted")
+            }
+
+            // CONNECT api.ipify.org:80 via ATYP=domain so DNS is resolved at the exit, not locally.
+            val host = PROXY_SELF_CHECK_HOST.toByteArray(Charsets.US_ASCII)
+            val request = ByteArray(7 + host.size)
+            request[0] = 0x05; request[1] = 0x01; request[2] = 0x00; request[3] = 0x03
+            request[4] = host.size.toByte()
+            System.arraycopy(host, 0, request, 5, host.size)
+            request[5 + host.size] = 0x00            // port 80 high byte
+            request[6 + host.size] = 0x50.toByte()   // port 80 low byte
+            out.write(request)
+            out.flush()
+
+            val reply = ByteArray(4)
+            readFullyOrThrow(input, reply)
+            if (reply[1] != 0x00.toByte()) {
+                return ProxySelfCheckResult.Failure("SOCKS CONNECT rejected (0x%02x)".format(reply[1]))
+            }
+            // Consume the bound address the proxy echoes back (length depends on ATYP).
+            val boundLen = when (reply[3]) {
+                0x01.toByte() -> 4 + 2
+                0x04.toByte() -> 16 + 2
+                0x03.toByte() -> {
+                    val l = ByteArray(1); readFullyOrThrow(input, l); (l[0].toInt() and 0xFF) + 2
+                }
+                else -> return ProxySelfCheckResult.Failure("bad SOCKS bound ATYP")
+            }
+            readFullyOrThrow(input, ByteArray(boundLen))
+
+            out.write(
+                ("GET / HTTP/1.0\r\nHost: $PROXY_SELF_CHECK_HOST\r\n" +
+                    "User-Agent: olcbox\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII)
+            )
+            out.flush()
+
+            val response = input.readBytes().toString(Charsets.US_ASCII)
+            val body = response.substringAfter("\r\n\r\n", "").trim()
+            val ip = body.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+            return if (ip != null && ip.length in 7..45 && ip.any { it == '.' || it == ':' }) {
+                ProxySelfCheckResult.Success(ip)
+            } else {
+                ProxySelfCheckResult.Failure("empty/invalid IP response")
+            }
+        }
+    }
+
+    private fun readFullyOrThrow(input: java.io.InputStream, buf: ByteArray) {
+        var read = 0
+        while (read < buf.size) {
+            val n = input.read(buf, read, buf.size - read)
+            if (n < 0) throw java.io.EOFException("SOCKS stream closed early")
+            read += n
+        }
+    }
+
+    private sealed class ProxySelfCheckResult {
+        data class Success(val ip: String) : ProxySelfCheckResult()
+        data class Failure(val reason: String) : ProxySelfCheckResult()
+    }
+
     private fun isLocalSocksPortOpen(port: Int): Boolean {
         return runCatching {
             Socket().use { socket ->
@@ -3224,6 +3335,16 @@ class OlcboxVpnService : VpnService() {
         currentNetworkTransport = network?.transportOrNull()
         if (connectionMode == AndroidConnectionMode.Tun || vpnInterface != null) {
             setUnderlyingNetworks(if (network != null) arrayOf(network) else null)
+        }
+        // Proxy (SOCKS) mode has no TUN, so setUnderlyingNetworks above is a no-op and the
+        // process→network binding is the ONLY route out for the cores. Whenever the upstream handle
+        // changes (a benign Wi-Fi refresh swaps the Network object, a fallback to another network, …)
+        // the old binding goes STALE and traffic silently dies — and because currentNetwork now equals
+        // the new upstream, the watchdog's rebind check never fires. Re-pin here so every handle swap
+        // immediately re-routes the cores. null = lost network → unbinds (matches the wait-for-network
+        // path). Only while a core is live; the initial connect binds explicitly in startXxxCore.
+        if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) {
+            bindProcessToNetwork(network)
         }
     }
 
@@ -3686,6 +3807,12 @@ class OlcboxVpnService : VpnService() {
         // list / manual value can't spawn a runaway number of DTLS handshakes / TURN allocations.
         private const val VKTURN_STREAMS_HARD_MAX = 64
         private const val SOCKET_CONNECT_TIMEOUT_MS = 150
+        // Proxy-mode post-connect self-check: drive one real request through the local SOCKS to confirm
+        // the path actually carries traffic and learn the exit IP (logged for the user). Plain-HTTP
+        // endpoint so no TLS is needed and the body is the bare IP.
+        private const val PROXY_SELF_CHECK_DELAY_MS = 700L
+        private const val PROXY_SELF_CHECK_TIMEOUT_MS = 8_000
+        private const val PROXY_SELF_CHECK_HOST = "api.ipify.org"
         private const val WAKE_LOCK_REFRESH_INTERVAL_MS = 30_000L
         private const val WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L
         private const val TUN_MTU = 1500
