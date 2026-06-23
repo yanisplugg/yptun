@@ -5,6 +5,14 @@ import org.olcbox.app.data.datasource.LocationsDataSource
 
 interface DeviceIdentityProvider {
     suspend fun hwid(): String
+
+    /**
+     * Stable, app-specific install id sent as the `x-app-id` (goiID) header on subscription requests.
+     * Distinct from [hwid] (which is platform-stable / ANDROID_ID-derived): this is a random per-install
+     * identifier the panel owner can register/track for OUR app (e.g. in Remnawave) and use to target
+     * announcements. Generated once on first use and reused thereafter.
+     */
+    suspend fun appId(): String
 }
 
 class PersistentDeviceIdentityProvider(
@@ -23,6 +31,13 @@ class PersistentDeviceIdentityProvider(
         val stable = dataSource.platformStableId()?.takeIf { it.isNotBlank() }
         val identity = stable ?: generateInstallId()
         dataSource.saveDeviceIdentity(identity)
+        return identity
+    }
+
+    override suspend fun appId(): String {
+        dataSource.loadAppInstallId()?.takeIf { it.isNotBlank() }?.let { return it }
+        val identity = generateInstallId()
+        dataSource.saveAppInstallId(identity)
         return identity
     }
 

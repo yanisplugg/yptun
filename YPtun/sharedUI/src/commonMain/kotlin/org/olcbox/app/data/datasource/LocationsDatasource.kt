@@ -65,6 +65,13 @@ interface LocationsDataSource {
     suspend fun saveDeviceIdentity(value: String) = Unit
 
     /**
+     * Persisted app-specific install id (the `x-app-id`/goiID header). Distinct from the HWID; a random
+     * per-install token generated once. Default no-op store; only Android needs real persistence.
+     */
+    suspend fun loadAppInstallId(): String? = null
+    suspend fun saveAppInstallId(value: String) = Unit
+
+    /**
      * Persisted state for the Happ-style provider-usage report — an opaque JSON string mapping each
      * `providerid` to the epoch-day it was last reported, so the daily report fires at most once per
      * calendar day per id across restarts (and is shared with the background worker). Default no-op
@@ -540,6 +547,7 @@ class LocationsRepositoryImpl(
         val state = loadProviderReportDays().toMutableMap()
         // Identity + device descriptors, exactly like the subscription fetch sends to the panel.
         val hwid = runCatching { deviceIdentityProvider.hwid() }.getOrNull().orEmpty()
+        val appId = runCatching { deviceIdentityProvider.appId() }.getOrNull().orEmpty()
         val appVersion = CurrentAppInfo.value.version
 
         var changed = false
@@ -550,6 +558,7 @@ class LocationsRepositoryImpl(
                     headers {
                         append(HttpHeaders.UserAgent, subscriptionUserAgent())
                         if (hwid.isNotBlank()) append("x-hwid", hwid)
+                        if (appId.isNotBlank()) append(HEADER_APP_ID, appId)
                         append("x-device-os", DeviceInfo.os)
                         append("x-ver-os", DeviceInfo.osVersion)
                         append("x-device-model", DeviceInfo.model)
@@ -876,6 +885,11 @@ class LocationsRepositoryImpl(
         } else {
             null
         }
+        val appId = if (requestMode == SubscriptionRequestMode.Identity) {
+            runCatching { deviceIdentityProvider.appId() }.getOrNull()
+        } else {
+            null
+        }
         val client = if (subscriptionProxy == null) {
             httpClient
         } else {
@@ -902,6 +916,7 @@ class LocationsRepositoryImpl(
                             append(HttpHeaders.UserAgent, subscriptionUserAgent())
                             if (requestMode == SubscriptionRequestMode.Identity) {
                                 append("x-hwid", hwid.orEmpty())
+                                if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                 // Remnawave HWID device-limit descriptors.
                                 append("x-device-os", DeviceInfo.os)
                                 append("x-ver-os", DeviceInfo.osVersion)
@@ -930,6 +945,7 @@ class LocationsRepositoryImpl(
                             append(HttpHeaders.UserAgent, subscriptionUserAgent())
                             if (requestMode == SubscriptionRequestMode.Identity) {
                                 append("x-hwid", hwid.orEmpty())
+                                if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                             }
                         }
                     }
@@ -951,6 +967,7 @@ class LocationsRepositoryImpl(
                                 append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
                                 if (requestMode == SubscriptionRequestMode.Identity) {
                                     append("x-hwid", hwid.orEmpty())
+                                    if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                 }
                             }
                         }
@@ -2265,5 +2282,12 @@ class LocationsRepositoryImpl(
         const val UTF8_BOM = "\uFEFF"
         /** Happ provider-tracking check endpoint; the provider id is appended as the `id` query param. */
         const val PROVIDER_CHECK_URL = "https://check.happ-proxy.com/provider?id="
+
+        /**
+         * Unique app-install identifier header (a.k.a. goiID). Sent alongside `x-hwid` so the panel owner
+         * can register/track OUR app in Remnawave and target announcements. Change this single constant
+         * if the panel expects a different header name.
+         */
+        const val HEADER_APP_ID = "x-app-id"
     }
 }
