@@ -27,8 +27,9 @@ import kotlinx.serialization.json.put
  * IMPORTANT: Cloudflare WARP is PLAIN WireGuard, not AmneziaWG — so the obfuscation params keep the
  * handshake byte-identical to vanilla WireGuard (S1=S2=0, H1..H4 = the default message types 1..4) and
  * only add junk COVER packets (Jc/Jmin/Jmax) for DPI resistance. DNS is 1.1.1.1, the endpoint is the
- * standard one, and AllowedIPs is restricted to Telegram's ranges ("split tunnel Telegram"), so the
- * tunnel only ever carries Telegram traffic even though a dedicated local SOCKS already isolates it.
+ * standard one, and AllowedIPs is the full tunnel (0.0.0.0/0, ::/0) so the WARP device can carry any
+ * Telegram IP. The "Telegram only" split is done in the SOCKS layer (awg.Instance.SetSplitCIDRs): only
+ * Telegram's ranges ride WARP, everything else dials direct — a pure SOCKS, no VPN/TUN.
  */
 object WarpConfigGenerator {
 
@@ -38,16 +39,8 @@ object WarpConfigGenerator {
     private const val CF_CLIENT_VERSION = "a-6.3-2158"
     private const val CF_USER_AGENT = "okhttp/3.12.1"
 
-    /**
-     * Telegram DC IP ranges (AllowedIPs). Telegram's data-centres live entirely within these blocks,
-     * so the WARP tunnel carries Telegram and nothing else. Update if Telegram publishes new ranges.
-     */
-    private val TELEGRAM_ALLOWED_IPS = listOf(
-        "91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22", "91.108.16.0/22",
-        "91.108.20.0/22", "91.108.56.0/22", "91.105.192.0/23", "91.108.58.0/23",
-        "149.154.160.0/20", "149.154.164.0/22", "149.154.168.0/22", "149.154.172.0/22",
-        "2001:b28:f23d::/48", "2001:b28:f23f::/48", "2001:67c:4e8::/48", "2001:b28:f23c::/48",
-    )
+    /** Full tunnel: every connection the local SOCKS client (Telegram) makes rides WARP. */
+    private const val ALLOWED_IPS = "0.0.0.0/0, ::/0"
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -135,7 +128,7 @@ object WarpConfigGenerator {
             appendLine()
             appendLine("[Peer]")
             appendLine("PublicKey = $peerPublic")
-            appendLine("AllowedIPs = ${TELEGRAM_ALLOWED_IPS.joinToString(", ")}")
+            appendLine("AllowedIPs = $ALLOWED_IPS")
             appendLine("Endpoint = $ENDPOINT")
             appendLine("PersistentKeepalive = 25")
         }

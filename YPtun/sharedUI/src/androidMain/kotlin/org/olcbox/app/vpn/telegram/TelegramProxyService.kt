@@ -54,6 +54,9 @@ class TelegramProxyService : Service() {
             }
             val inst = Awg.newInstance().apply {
                 setDebug(false)
+                // Split SOCKS: ONLY Telegram IPs ride WARP; everything else dials direct. This is what
+                // makes it "Telegram-only via WARP, rest direct" — a pure SOCKS, no VPN/TUN.
+                setSplitCIDRs(TELEGRAM_CIDRS)
                 setLogWriter(object : AwgLogWriter {
                     override fun writeLog(line: String) { Log.v(TAG, line.trimEnd()) }
                 })
@@ -116,6 +119,16 @@ class TelegramProxyService : Service() {
         private const val TAG = "TgWarpProxy"
         private const val CHANNEL_ID = "olcbox_tg_proxy"
         private const val NOTIFICATION_ID = 49_001
+
+        /**
+         * Telegram DC / media IP ranges — only these ride WARP through the split SOCKS; everything else
+         * the client sends is dialed direct. Update if Telegram publishes new ranges.
+         */
+        const val TELEGRAM_CIDRS =
+            "91.108.4.0/22,91.108.8.0/22,91.108.12.0/22,91.108.16.0/22,91.108.20.0/22," +
+                "91.108.56.0/22,91.105.192.0/23,91.108.58.0/23,149.154.160.0/20,149.154.164.0/22," +
+                "149.154.168.0/22,149.154.172.0/22,2001:b28:f23d::/48,2001:b28:f23f::/48," +
+                "2001:67c:4e8::/48,2001:b28:f23c::/48"
 
         fun start(context: Context) {
             val intent = Intent(context, TelegramProxyService::class.java)
