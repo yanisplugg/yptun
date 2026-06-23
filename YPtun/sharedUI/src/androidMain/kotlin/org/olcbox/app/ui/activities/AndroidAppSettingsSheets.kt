@@ -1,6 +1,7 @@
 package org.olcbox.app.ui.activities
 
 import android.graphics.Bitmap
+import android.widget.Toast
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import androidx.activity.compose.BackHandler
@@ -43,6 +44,7 @@ import org.olcbox.app.ui.theme.ThemeState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -82,6 +84,7 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Public
@@ -948,6 +951,50 @@ private fun ConnectionSettingsContent(
                     modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }
+            // Auto-generated SOCKS5 credentials — selectable so the user can copy them into Telegram.
+            (telegramProxyState as? TelegramProxyState.Running)
+                ?.takeIf { it.user.isNotBlank() }
+                ?.let { running ->
+                    SelectionContainer {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "${s.telegramProxyLogin}: ${running.user}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            Text(
+                                text = "${s.telegramProxyPassword}: ${running.pass}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
+                    }
+                    // One-tap copyable t.me/socks link: opening it in Telegram auto-fills the SOCKS5
+                    // proxy (server/port/user/pass), no manual entry. Works on-device (server=127.0.0.1).
+                    val clipboard = LocalClipboardManager.current
+                    val context = LocalContext.current
+                    val tgLink = remember(running) {
+                        "https://t.me/socks?server=${running.host}&port=${running.port}" +
+                            "&user=${running.user}&pass=${running.pass}"
+                    }
+                    TextButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(tgLink))
+                            Toast.makeText(context, s.telegramProxyLinkCopied, Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(s.telegramProxyCopyLink)
+                    }
+                }
         }
     }
 }

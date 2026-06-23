@@ -63,6 +63,7 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME_INITIALIZED
 import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
+import org.olcbox.app.vpn.telegram.TelegramProxyCreds
 import org.olcbox.app.vpn.telegram.TelegramProxyService
 import org.olcbox.app.vpn.telegram.TelegramProxyState
 import org.olcbox.app.vpn.telegram.WarpConfigGenerator
@@ -507,11 +508,22 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      */
     private fun enableTelegramProxy() {
         scope.launch {
+            // All steps echo into the visible journal (OlcboxVpnState.addLog) — the TG proxy runs
+            // independently of the main VPN, so without this the user sees NOTHING in the in-app log.
+            OlcboxVpnState.addLog("Telegram proxy: enabling…")
             val ds = LocationsDataSourceImpl(appContext)
             var config = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
+            // Pre-2.5.3 caches came from direct Cloudflare registration (now blocked for some users) or
+            // never generated at all. Drop any cached config that points at the bare DNS endpoint with no
+            // body so the new server-side generator path runs; a valid cached config is kept as-is.
+            if (!config.isNullOrBlank() && !config.contains("PrivateKey", ignoreCase = true)) {
+                config = null
+            }
             if (config.isNullOrBlank()) {
+                OlcboxVpnState.addLog("Telegram proxy: no cached config — generating WARP via generators…")
                 _telegramProxyState.value = TelegramProxyState.Generating
                 config = runCatching { WarpConfigGenerator.generate() }.getOrElse { e ->
+                    OlcboxVpnState.addLog("Telegram proxy: WARP generation FAILED — ${e.message ?: e}")
                     _telegramProxyState.value =
                         TelegramProxyState.Error(e.message ?: "WARP config generation failed")
                     // Revert the toggle (setAppBehavior re-entry will call disableTelegramProxy()).
@@ -519,15 +531,28 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     return@launch
                 }
                 runCatching { ds.saveTelegramWarpConfig(config) }
+                OlcboxVpnState.addLog("Telegram proxy: WARP config generated (${config.length} chars)")
+            } else {
+                OlcboxVpnState.addLog("Telegram proxy: using cached WARP config")
             }
+            // Generate/persist the SOCKS credentials BEFORE the service starts so it reads the same
+            // pair (getOrCreate is idempotent) and the UI can show them.
+            val creds = runCatching { TelegramProxyCreds.getOrCreate(appContext) }.getOrNull()
             runCatching { TelegramProxyService.start(appContext) }
                 .onSuccess {
+                    OlcboxVpnState.addLog(
+                        "Telegram proxy: service started — SOCKS5 ${TelegramProxyService.LISTEN_HOST}:" +
+                            "${TelegramProxyService.LISTEN_PORT} (login ${creds?.user.orEmpty()})"
+                    )
                     _telegramProxyState.value = TelegramProxyState.Running(
                         TelegramProxyService.LISTEN_HOST,
-                        TelegramProxyService.LISTEN_PORT
+                        TelegramProxyService.LISTEN_PORT,
+                        creds?.user.orEmpty(),
+                        creds?.pass.orEmpty()
                     )
                 }
                 .onFailure {
+                    OlcboxVpnState.addLog("Telegram proxy: service FAILED to start — ${it.message ?: it}")
                     _telegramProxyState.value =
                         TelegramProxyState.Error(it.message ?: "Failed to start Telegram proxy")
                 }
@@ -535,6 +560,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     private fun disableTelegramProxy() {
+        OlcboxVpnState.addLog("Telegram proxy: disabling")
         runCatching { TelegramProxyService.stop(appContext) }
         _telegramProxyState.value = TelegramProxyState.Stopped
     }

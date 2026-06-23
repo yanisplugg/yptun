@@ -21,6 +21,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
+import org.olcbox.app.vpn.service.OlcboxVpnState
 
 /**
  * Lightweight always-on foreground service that runs the Telegram-over-WARP AmneziaWG tunnel and
@@ -49,16 +50,27 @@ class TelegramProxyService : Service() {
                 .getOrNull()
             if (config.isNullOrBlank()) {
                 Log.w(TAG, "No cached WARP config — stopping Telegram proxy")
+                OlcboxVpnState.addLog("Telegram proxy: no WARP config to start — stopping")
                 stopSelfSafely()
                 return@launch
             }
+            val creds = runCatching { TelegramProxyCreds.getOrCreate(applicationContext) }.getOrNull()
             val inst = Awg.newInstance().apply {
                 setDebug(false)
                 // Split SOCKS: ONLY Telegram IPs ride WARP; everything else dials direct. This is what
                 // makes it "Telegram-only via WARP, rest direct" — a pure SOCKS, no VPN/TUN.
                 setSplitCIDRs(TELEGRAM_CIDRS)
+                // Require auto-generated username/password (RFC 1929) so no other local app can quietly
+                // use the WARP proxy. The user types these into Telegram's SOCKS5 settings (shown in UI).
+                if (creds != null) setAuth(creds.user, creds.pass)
                 setLogWriter(object : AwgLogWriter {
-                    override fun writeLog(line: String) { Log.v(TAG, line.trimEnd()) }
+                    override fun writeLog(line: String) {
+                        val trimmed = line.trimEnd()
+                        Log.v(TAG, trimmed)
+                        // Surface handshake/transport lines in the visible journal so WARP failures
+                        // (e.g. handshake never completes) are diagnosable without logcat.
+                        if (trimmed.isNotEmpty()) OlcboxVpnState.addLog("TG-WARP: $trimmed")
+                    }
                 })
                 // Protect the WARP UDP socket through the main VpnService if its TUN is up (else no-op).
                 setProtector(object : AwgProtector {
@@ -71,10 +83,14 @@ class TelegramProxyService : Service() {
             runCatching { inst.start(config, "$LISTEN_HOST:$LISTEN_PORT") }
                 .onFailure {
                     Log.e(TAG, "Telegram WARP tunnel failed to start: ${it.message}")
+                    OlcboxVpnState.addLog("TG-WARP: tunnel FAILED to start — ${it.message ?: it}")
                     instance = null
                     stopSelfSafely()
                 }
-                .onSuccess { Log.i(TAG, "Telegram WARP SOCKS up on $LISTEN_HOST:$LISTEN_PORT") }
+                .onSuccess {
+                    Log.i(TAG, "Telegram WARP SOCKS up on $LISTEN_HOST:$LISTEN_PORT")
+                    OlcboxVpnState.addLog("TG-WARP: SOCKS up on $LISTEN_HOST:$LISTEN_PORT — point Telegram here")
+                }
         }
     }
 
@@ -104,7 +120,7 @@ class TelegramProxyService : Service() {
             .takeIf { it != 0 } ?: android.R.drawable.ic_lock_lock
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(icon)
-            .setContentTitle("Telegram прокси (WARP)")
+            .setContentTitle("Telegram прокси")
             .setContentText("SOCKS5 $LISTEN_HOST:$LISTEN_PORT")
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(true)
