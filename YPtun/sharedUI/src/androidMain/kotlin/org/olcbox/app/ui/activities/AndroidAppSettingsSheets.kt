@@ -3501,6 +3501,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(notifySubscriptionExpiry = it)) }
 
         RoutingToggleRow(
+            title = "Уведомления от панели",
+            subtitle = "Показывать системное уведомление, когда владелец панели присылает объявление.",
+            checked = settings.notifyPanelAnnouncements
+        ) { onChanged(settings.copy(notifyPanelAnnouncements = it)) }
+
+        RoutingToggleRow(
             title = "Автоустановка на VPS",
             subtitle = "Выполняет развёртывание движка на VPS.",
             checked = settings.allowVpsAutoInstall

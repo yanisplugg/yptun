@@ -53,10 +53,25 @@ interface VpnManager {
      * a day threshold and de-duplication). Default no-op for platforms without local notifications.
      */
     fun notifyExpiringSubscriptions(subscriptions: List<ExpiringSubscriptionInfo>) {}
+
+    /**
+     * Notify the user about panel announcements (Remnawave `announce` header). Called after each
+     * subscription refresh with EVERY subscription's current announcement; the platform decides whether
+     * to post (gated on [org.olcbox.app.data.model.AppBehaviorSettings.notifyPanelAnnouncements] and
+     * de-duplicated by content so the same announcement is shown only once). Default no-op for platforms
+     * without local notifications.
+     */
+    fun notifyPanelAnnouncements(announcements: List<PanelAnnouncementInfo>) {}
 }
 
 /** A subscription's display name + its expiry (wall-clock epoch-ms), for expiry notifications. */
 data class ExpiringSubscriptionInfo(
     val name: String,
     val expiresAtEpochMs: Long
+)
+
+/** A subscription's display name + the panel announcement text it carries, for announcement pushes. */
+data class PanelAnnouncementInfo(
+    val name: String,
+    val announce: String
 )

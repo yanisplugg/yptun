@@ -133,6 +133,12 @@ data class AppBehaviorSettings(
      */
     val notifySubscriptionExpiry: Boolean = false,
     /**
+     * Post a system notification when the panel broadcasts an announcement (Remnawave `announce`
+     * header). De-duplicated by content so the same announcement is shown only once. Off by default —
+     * needs the user's opt-in and the POST_NOTIFICATIONS permission, like [notifySubscriptionExpiry].
+     */
+    val notifyPanelAnnouncements: Boolean = false,
+    /**
      * Show a "live/total" badge in each subscription header — how many of its servers responded to
      * the last ping pass out of the total. Off by default.
      */

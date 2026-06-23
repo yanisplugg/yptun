@@ -102,6 +102,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     /** De-dupe guard for subscription-expiry notifications (keyed by name + days-left), per process. */
     private val notifiedExpiry = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    /** Per-process de-dupe for panel announcements (also persisted across restarts via SharedPreferences). */
+    private val notifiedAnnounce = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val _language = MutableStateFlow(AppLanguage.System)
     val language: StateFlow<AppLanguage> = _language.asStateFlow()
 
@@ -355,6 +357,60 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 manager.notify(SUB_EXPIRY_NOTIFICATION_BASE_ID + (sub.name.hashCode() and 0xFFFF), notification)
             }
         }
+    }
+
+    /**
+     * Posts a system notification for each NEW panel announcement (Remnawave `announce` header). Gated
+     * on the user's toggle and POST_NOTIFICATIONS. De-duplicated by content (name + text) both
+     * in-memory and persisted in SharedPreferences, so the same announcement is shown only once even
+     * across app restarts (the auto-refresh re-collects every announcement on each launch).
+     */
+    override fun notifyPanelAnnouncements(announcements: List<PanelAnnouncementInfo>) {
+        if (!_appBehavior.value.notifyPanelAnnouncements) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                appContext, android.Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val prefs = appContext.getSharedPreferences("olcbox_panel_announce", android.content.Context.MODE_PRIVATE)
+        val shown = prefs.getStringSet("shown_hashes", emptySet())?.toMutableSet() ?: mutableSetOf()
+        val manager = androidx.core.app.NotificationManagerCompat.from(appContext)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                PANEL_ANNOUNCE_CHANNEL_ID,
+                "Уведомления панели",
+                android.app.NotificationManager.IMPORTANCE_DEFAULT
+            )
+            manager.createNotificationChannel(channel)
+        }
+        val icon = appContext.resources
+            .getIdentifier("ic_stat_yptun", "drawable", appContext.packageName)
+            .takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
+
+        var changed = false
+        announcements.forEach { ann ->
+            val key = (ann.name + "|" + ann.announce).hashCode().toString()
+            if (!shown.add(key)) return@forEach // already shown in a previous session
+            notifiedAnnounce.add(key)
+            changed = true
+
+            val notification = androidx.core.app.NotificationCompat.Builder(appContext, PANEL_ANNOUNCE_CHANNEL_ID)
+                .setSmallIcon(icon)
+                .setContentTitle(ann.name)
+                .setContentText(ann.announce)
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(ann.announce))
+                .setAutoCancel(true)
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            runCatching {
+                manager.notify(PANEL_ANNOUNCE_NOTIFICATION_BASE_ID + (key.hashCode() and 0xFFFF), notification)
+            }
+        }
+        if (changed) prefs.edit().putStringSet("shown_hashes", shown).apply()
     }
 
     /** As [importRoutingProfileLink] but returns the new profile id (or null when not a routing profile). */
@@ -1004,6 +1060,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         const val TUNNEL_PING_TIMEOUT_MS = 6_000
         const val SUB_EXPIRY_CHANNEL_ID = "olcbox_sub_expiry"
         const val SUB_EXPIRY_NOTIFICATION_BASE_ID = 47_000
+        const val PANEL_ANNOUNCE_CHANNEL_ID = "olcbox_panel_announce"
+        const val PANEL_ANNOUNCE_NOTIFICATION_BASE_ID = 48_000
         val random = SecureRandom()
     }
 }
