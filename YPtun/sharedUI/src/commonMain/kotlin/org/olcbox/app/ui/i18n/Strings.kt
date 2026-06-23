@@ -71,6 +71,7 @@ interface Strings {
     val groupUnpinFromTop: String
     val groupSortByPing: String
     val groupAutoUpdate: String
+    val visitSubscriptionPage: String
     val groupDelete: String
 
     // Delete dialogs
@@ -651,6 +652,7 @@ object RuStrings : Strings {
     override val groupUnpinFromTop = "Открепить"
     override val groupSortByPing = "Сортировать по пингу"
     override val groupAutoUpdate = "Автообновление"
+    override val visitSubscriptionPage = "Посетить страницу подписки"
     override val groupDelete = "Удалить подписку"
     override val delete = "Удалить"
     override val cancel = "Отмена"
@@ -1185,6 +1187,7 @@ object EnStrings : Strings {
     override val groupUnpinFromTop = "Unpin"
     override val groupSortByPing = "Sort by ping"
     override val groupAutoUpdate = "Auto-update"
+    override val visitSubscriptionPage = "Visit subscription page"
     override val groupDelete = "Delete subscription"
     override val delete = "Delete"
     override val cancel = "Cancel"
@@ -1719,6 +1722,7 @@ object FaStrings : Strings {
     override val groupUnpinFromTop = "برداشتن سنجاق"
     override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
     override val groupAutoUpdate = "به‌روزرسانی خودکار"
+    override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
     override val groupDelete = "حذف اشتراک"
     override val delete = "حذف"
     override val cancel = "انصراف"
