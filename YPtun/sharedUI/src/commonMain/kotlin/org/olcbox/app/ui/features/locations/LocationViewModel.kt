@@ -31,6 +31,7 @@ import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
@@ -204,7 +205,7 @@ class LocationViewModel(
         }
 
     init {
-        loadLocations()
+        seedFromViewIndexThenLoad()
         viewModelScope.launch {
             locationsRepository.changes
                 .drop(1)
@@ -213,6 +214,46 @@ class LocationViewModel(
                 }
         }
     }
+
+    /**
+     * Paints the list INSTANTLY on a cold start: first reads the tiny [LocationViewIndex] (names +
+     * metadata only — decodes in a few ms) and shows it, then kicks off the authoritative full decode
+     * which swaps in the real configs (needed for pinging/connecting). The index items carry a
+     * display-only [LocationConfig] (no proxy/key), so they render the row label/engine but are not
+     * "complete" — pings stay idle for them until the full load replaces them a moment later.
+     *
+     * The seed is skipped if the full load has already populated the list (e.g. no index yet), so the
+     * authoritative data is never overwritten by a stale index.
+     */
+    private fun seedFromViewIndexThenLoad() {
+        viewModelScope.launch {
+            val index = withContext(Dispatchers.IO) {
+                runCatching { locationsRepository.getViewIndex() }.getOrNull()
+            }
+            if (index != null && !hasLoadedLocations && locations.isEmpty()) {
+                locations.clear()
+                locations.addAll(index.items.map { it.toDisplayLocationItem() })
+                selectedLocationId = index.activeLocationId
+                    ?: index.items.firstOrNull()?.storageId
+                hasLoadedLocations = true
+            }
+            loadLocations()
+        }
+    }
+
+    /** Builds a display-only [LocationItem] from a view-index entry (no connection payload). */
+    private fun LocationViewIndex.Item.toDisplayLocationItem(): LocationItem = LocationItem(
+        storageId = storageId,
+        fullName = name,
+        config = LocationConfig(
+            name = name,
+            engine = engine,
+            bypassProvider = authProvider,
+            transport = transport
+        ),
+        subscriptionUrl = subscriptionUrl,
+        metadata = metadata
+    )
 
     fun loadLocations(onComplete: () -> Unit = {}) {
         val requestId = ++loadLocationsRequest

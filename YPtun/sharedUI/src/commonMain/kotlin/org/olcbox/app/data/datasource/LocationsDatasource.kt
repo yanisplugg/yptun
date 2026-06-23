@@ -39,6 +39,7 @@ import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
@@ -50,6 +51,14 @@ import org.olcbox.app.util.IsoTime
 interface LocationsDataSource {
     suspend fun loadLocationBundle(): LocationBundleV4?
     suspend fun saveLocationBundle(bundle: LocationBundleV4)
+
+    /**
+     * Loads the lightweight [LocationViewIndex] persisted alongside the bundle (names + metadata only,
+     * no heavy connection payloads), used to paint the location list INSTANTLY on a cold start before
+     * the full bundle decode finishes. Default `null` = no fast index on this platform (falls back to
+     * the full decode); only Android, where the cold-start lag is felt, persists and returns it.
+     */
+    suspend fun loadLocationViewIndex(): LocationViewIndex? = null
     suspend fun loadLegacyLocations(): List<Pair<String, String>>
     suspend fun loadLegacyActiveLocationId(): String?
     suspend fun loadDeviceIdentity(): String? = null
@@ -183,6 +192,12 @@ class LocationsRepositoryImpl(
         return mutationMutex.withLock {
             getBundleUnlocked()
         }
+    }
+
+    override suspend fun getViewIndex(): LocationViewIndex? {
+        // Lock-free on purpose: this reads a SEPARATE, tiny file (no touch to the cached bundle) and is
+        // only ever used to paint the list fast on launch — it must not wait behind a long mutation.
+        return runCatching { dataSource.loadLocationViewIndex() }.getOrNull()
     }
 
     private suspend fun getBundleUnlocked(): LocationBundleV4 {

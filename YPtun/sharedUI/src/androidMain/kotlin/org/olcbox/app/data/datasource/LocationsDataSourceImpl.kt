@@ -10,7 +10,9 @@ import kotlinx.serialization.json.Json
 import org.olcbox.app.data.ACTIVE_LOCATION_CONFIG_FILE_NAME
 import org.olcbox.app.data.LEGACY_LOCATIONS_BUNDLE_FILE_NAME
 import org.olcbox.app.data.LOCATIONS_BUNDLE_FILE_NAME
+import org.olcbox.app.data.LOCATIONS_VIEW_INDEX_FILE_NAME
 import org.olcbox.app.data.model.LocationBundleV4
+import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.vpn.data.KEY_IS_VPN_CONFIG_READY
 import org.olcbox.app.vpn.data.KEY_VPN_CONFIG_PATH
 import org.olcbox.app.vpn.data.vpnPrefDataStore
@@ -47,9 +49,20 @@ class LocationsDataSourceImpl(
             ?: File(context.filesDir, LEGACY_LOCATIONS_BUNDLE_FILE_NAME).takeIf { it.exists() }
             ?: return@withContext null
         if (!file.exists()) return@withContext null
-        runCatching {
+        val bundle = runCatching {
             json.decodeFromString(LocationBundleV4.serializer(), file.readText()).normalized()
         }.getOrNull()
+        // One-time backfill for existing installs upgraded to the indexed launch: if the bundle exists
+        // but its view index doesn't yet (no save since the upgrade), write it now so the NEXT launch is
+        // instant instead of waiting for the first mutation. Best-effort.
+        if (bundle != null && !File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).exists()) {
+            runCatching {
+                File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).writeText(
+                    json.encodeToString(LocationViewIndex.serializer(), LocationViewIndex.from(bundle))
+                )
+            }
+        }
+        bundle
     }
 
     override suspend fun saveLocationBundle(bundle: LocationBundleV4): Unit = withContext(Dispatchers.IO) {
@@ -57,7 +70,23 @@ class LocationsDataSourceImpl(
         File(context.filesDir, LOCATIONS_BUNDLE_FILE_NAME).writeText(
             json.encodeToString(LocationBundleV4.serializer(), normalized)
         )
+        // Rewrite the lightweight view index from the SAME normalized bundle so it never drifts: every
+        // mutation funnels through here, so the index always matches what's on disk. Best-effort — a
+        // write failure just means the next launch falls back to the full decode.
+        runCatching {
+            File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).writeText(
+                json.encodeToString(LocationViewIndex.serializer(), LocationViewIndex.from(normalized))
+            )
+        }
         updateActiveLocationConfig(normalized)
+    }
+
+    override suspend fun loadLocationViewIndex(): LocationViewIndex? = withContext(Dispatchers.IO) {
+        val file = File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).takeIf { it.exists() }
+            ?: return@withContext null
+        runCatching {
+            json.decodeFromString(LocationViewIndex.serializer(), file.readText())
+        }.getOrNull()?.takeIf { it.items.isNotEmpty() }
     }
 
     /**

@@ -4,10 +4,18 @@ import kotlinx.coroutines.flow.StateFlow
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
+import org.olcbox.app.data.model.LocationViewIndex
 
 interface LocationsRepository {
     val changes: StateFlow<Long>
     suspend fun getBundle(): LocationBundleV4
+
+    /**
+     * Loads the lightweight view index (names + metadata only) so the UI can paint the location list
+     * instantly on a cold start, before the full [getBundle] decode completes. Null when the platform
+     * has no persisted index yet (first run / non-Android) — callers then fall back to [getBundle].
+     */
+    suspend fun getViewIndex(): LocationViewIndex?
     suspend fun saveBundle(bundle: LocationBundleV4)
     suspend fun exportBundle(): String
     suspend fun importText(text: String, subscriptionProxy: SubscriptionFetchProxy? = null): Boolean
