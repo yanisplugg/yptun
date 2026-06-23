@@ -2398,6 +2398,9 @@ class OlcboxVpnService : VpnService() {
         // flags default OFF, so by default this avoids a permanent every-2s wake-up while connected.
         // The settings observer restarts this updater the moment either flag is toggled on.
         if (!showSpeedInNotif && !showRoomsInNotif) return
+        // Energy-saver: tick less often (fewer wake-ups + JNI reads + notification reposts) at the cost
+        // of a slightly laggier speed/rooms readout.
+        val interval = if (activeEnergySaver) ENERGY_SAVER_SPEED_INTERVAL_MS else SPEED_INTERVAL_MS
         speedJob = scope.launch {
             var prev: Tun2SocksStats? = null
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
@@ -2407,7 +2410,7 @@ class OlcboxVpnService : VpnService() {
                 val base = if (showRoomsInNotif) connectedNotificationText()
                 else lastNotificationStatus.ifBlank { ns.notifConnected }
                 if (showSpeedInNotif && cur != null && prev != null) {
-                    val secs = (SPEED_INTERVAL_MS / 1000.0).coerceAtLeast(0.5)
+                    val secs = (interval / 1000.0).coerceAtLeast(0.5)
                     val down = ((cur.rxBytes - prev.rxBytes).coerceAtLeast(0L) / secs).toLong()
                     val up = ((cur.txBytes - prev.txBytes).coerceAtLeast(0L) / secs).toLong()
                     updateNotification(base, speedLine(down, up))
@@ -2415,7 +2418,7 @@ class OlcboxVpnService : VpnService() {
                     updateNotification(base)
                 }
                 prev = cur
-                delay(SPEED_INTERVAL_MS)
+                delay(interval)
             }
         }
     }
@@ -3610,6 +3613,10 @@ class OlcboxVpnService : VpnService() {
         private const val NETWORK_STABILITY_GRACE_MS = 1_500L
         private const val WATCHDOG_INTERVAL_MS = 15_000L
         private const val SPEED_INTERVAL_MS = 2_000L
+        // Energy-saver: a much slower speed/rooms notification refresh (vs. SPEED_INTERVAL_MS). Network
+        // switches are event-driven (the NetworkCallback), so the watchdog is only a backstop for a
+        // silently-dead core / stalled traffic — safe to poll far less often when saving power.
+        private const val ENERGY_SAVER_SPEED_INTERVAL_MS = 6_000L
         private const val WATCHDOG_STALLED_TX_PACKET_DELTA = 8L
         private const val WATCHDOG_STALLED_SAMPLE_LIMIT = 3
         private const val RTC_RECOVERY_GRACE_MS = 2_500L

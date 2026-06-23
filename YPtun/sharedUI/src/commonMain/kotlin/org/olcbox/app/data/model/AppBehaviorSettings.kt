@@ -209,8 +209,12 @@ data class AppBehaviorSettings(
         const val MIN_PING_PARALLELISM = 1
         const val MAX_PING_PARALLELISM = 20
 
-        /** Health-watchdog poll interval used while [energySaver] is on (vs. the default 15s). */
-        const val ENERGY_SAVER_WATCHDOG_INTERVAL_MS = 45_000L
+        /**
+         * Health-watchdog poll interval used while [energySaver] is on (vs. the default 15s). Network
+         * switches are handled by the event-driven NetworkCallback, so this only delays detection of a
+         * silently-dead core / stalled traffic — a 60s backstop is a good power/recovery trade-off.
+         */
+        const val ENERGY_SAVER_WATCHDOG_INTERVAL_MS = 60_000L
     }
 
     /**

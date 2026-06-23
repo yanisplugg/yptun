@@ -206,6 +206,10 @@ class LocationsRepositoryImpl(
             if (token != null && token == cachedToken) return cached
         }
 
+        // Normalization happens HERE (the repository is the single read funnel), so the platform
+        // datasources do raw IO + decode only and we never pay a double normalize+filter+dedup pass over
+        // the whole bundle. normalized() is idempotent and every write is already normalized, so this is
+        // behaviour-safe; it also keeps the in-memory token cache keyed to the canonical form.
         val stored = dataSource.loadLocationBundle()?.normalized()
         if (stored != null && stored.locations.isNotEmpty()) {
             cacheBundle(stored, token)

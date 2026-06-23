@@ -49,16 +49,19 @@ class LocationsDataSourceImpl(
             ?: File(context.filesDir, LEGACY_LOCATIONS_BUNDLE_FILE_NAME).takeIf { it.exists() }
             ?: return@withContext null
         if (!file.exists()) return@withContext null
+        // Raw decode only — the repository normalizes once on read (single funnel), so we don't pay a
+        // second normalize+filter+dedup pass over the whole bundle here on every cache miss.
         val bundle = runCatching {
-            json.decodeFromString(LocationBundleV4.serializer(), file.readText()).normalized()
+            json.decodeFromString(LocationBundleV4.serializer(), file.readText())
         }.getOrNull()
         // One-time backfill for existing installs upgraded to the indexed launch: if the bundle exists
         // but its view index doesn't yet (no save since the upgrade), write it now so the NEXT launch is
-        // instant instead of waiting for the first mutation. Best-effort.
+        // instant instead of waiting for the first mutation. Built from the NORMALIZED bundle so the
+        // index matches what the list shows. Best-effort.
         if (bundle != null && !File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).exists()) {
             runCatching {
                 File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).writeText(
-                    json.encodeToString(LocationViewIndex.serializer(), LocationViewIndex.from(bundle))
+                    json.encodeToString(LocationViewIndex.serializer(), LocationViewIndex.from(bundle.normalized()))
                 )
             }
         }

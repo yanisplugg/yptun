@@ -45,8 +45,9 @@ class IosLocationsDataSourceImpl(
             ?: legacyBundlePath.takeIf { fileExists(it) }
             ?: return@withContext null
 
+        // Raw decode only — the repository normalizes once on read (single funnel).
         runCatching {
-            json.decodeFromString(LocationBundleV4.serializer(), readText(file).orEmpty()).normalized()
+            json.decodeFromString(LocationBundleV4.serializer(), readText(file).orEmpty())
         }.getOrNull()
     }
 
