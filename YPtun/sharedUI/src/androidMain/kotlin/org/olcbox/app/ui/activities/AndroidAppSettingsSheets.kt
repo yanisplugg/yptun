@@ -3632,7 +3632,8 @@ private fun ApplicationBehaviorContent(
                 AppLanguage.System to "Авто / Auto",
                 AppLanguage.Russian to "🇷🇺 Русский",
                 AppLanguage.English to "🇺🇸 English",
-                AppLanguage.Persian to "🇮🇷 فارسی"
+                AppLanguage.Persian to "🇮🇷 فارسی",
+                AppLanguage.Chinese to "🇨🇳 中文"
             )
             options.forEach { (lang, title) ->
                 FilterChip(

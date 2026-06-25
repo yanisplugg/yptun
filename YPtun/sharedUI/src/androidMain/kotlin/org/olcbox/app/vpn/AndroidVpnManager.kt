@@ -119,6 +119,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         LocalizationState.systemLanguage = when (java.util.Locale.getDefault().language) {
             "ru" -> AppLanguage.Russian
             "fa" -> AppLanguage.Persian
+            "zh" -> AppLanguage.Chinese
             else -> AppLanguage.English
         }
 
