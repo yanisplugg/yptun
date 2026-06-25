@@ -178,9 +178,10 @@ data class AppBehaviorSettings(
      */
     val telegramProxyEnabled: Boolean = false,
     /**
-     * Hide the Telegram-proxy foreground-service notification. Android still requires a notification for
-     * a background service, so when this is on the proxy uses a minimal, silent low-priority notification
-     * (no status-bar icon) instead of the normal one. Off by default.
+     * Deprecated/vestigial. Previously hid the Telegram-proxy foreground-service notification; the toggle
+     * was removed and the proxy always uses the normal low-priority notification. Kept only so older saved
+     * settings still decode (default Json has no ignoreUnknownKeys — dropping the field would reset the
+     * whole AppBehaviorSettings to defaults on first load). Do not re-introduce a UI for it.
      */
     val hideTelegramProxyNotification: Boolean = false,
 ) {

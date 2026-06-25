@@ -30,12 +30,13 @@ import org.olcbox.app.vpn.service.OlcboxVpnState
 import java.net.Socket
 
 /**
- * Lightweight always-on foreground service that runs the Telegram-over-WARP AmneziaWG tunnel and
- * exposes a local SOCKS5 at [LISTEN_HOST]:[LISTEN_PORT]. The user points Telegram's SOCKS5 proxy at
- * it. Runs INDEPENDENTLY of the main VpnService (its own [Awg.newInstance] instance, own port), so it
- * never collides with a main-VPN AmneziaWG transport, and protects its WARP socket through the main
- * VpnService when one is active (see [VpnSocketProtectBridge]). Deliberately minimal: a low-importance
- * notification, no watchdog and no log journal — AmneziaWG idles at near-zero CPU.
+ * Lightweight always-on foreground service that runs a WARP AmneziaWG tunnel and exposes a local
+ * SOCKS5 at [LISTEN_HOST]:[LISTEN_PORT]. The user points Telegram's SOCKS5 proxy at it. This is a
+ * FULL-TUNNEL proxy: everything the SOCKS receives rides WARP, exactly like running the WARP config
+ * in TUN/VPN mode — only without an Android VpnService/TUN (no "VPN key" icon). Runs INDEPENDENTLY
+ * of the main VpnService (its own [Awg.newInstance] instance, own port), so it never collides with a
+ * main-VPN AmneziaWG transport, and protects its WARP socket through the main VpnService when one is
+ * active (see [VpnSocketProtectBridge]).
  */
 class TelegramProxyService : Service() {
 
@@ -53,16 +54,10 @@ class TelegramProxyService : Service() {
     @Volatile private var degraded = false
     // The WARP endpoint the live tunnel is using, so the watchdog can rotate AWAY from it on failure.
     @Volatile private var activeEndpoint: String? = null
-    // User setting: minimise the foreground notification. Carried in the start intent so a re-start with
-    // the new value just re-posts the notification (the instance!=null guard skips the tunnel).
-    @Volatile private var hideNotif = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.hasExtra(EXTRA_HIDE_NOTIF) == true) {
-            hideNotif = intent.getBooleanExtra(EXTRA_HIDE_NOTIF, false)
-        }
         startForeground(NOTIFICATION_ID, buildNotification())
         if (instance == null && !starting) {
             starting = true
@@ -216,9 +211,12 @@ class TelegramProxyService : Service() {
     private fun buildInstance(creds: TelegramProxyCreds.Credentials?): Instance =
         Awg.newInstance().apply {
             setDebug(false)
-            // Split SOCKS: ONLY Telegram IPs ride WARP; everything else dials direct. This is what
-            // makes it "Telegram-only via WARP, rest direct" — a pure SOCKS, no VPN/TUN.
-            setSplitCIDRs(TELEGRAM_CIDRS)
+            // FULL-TUNNEL SOCKS: route EVERYTHING the proxy receives through WARP — identical to
+            // running this WARP config in TUN/VPN mode, just exposed as a local SOCKS5 with no
+            // VpnService/TUN (no "VPN key" icon). Deliberately NOT a Telegram-only split: the split
+            // dialed non-Telegram destinations DIRECT, so the parts of Telegram that hit non-DC IPs
+            // (and DNS) leaked onto the blocked network and timed out, which is why the same WARP
+            // config "worked in TUN but not as a proxy". (No setSplitCIDRs → Go defaults to all-WARP.)
             // Require auto-generated username/password (RFC 1929) so no other local app can quietly
             // use the WARP proxy. The user types these into Telegram's SOCKS5 settings (shown in UI).
             if (creds != null) setAuth(creds.user, creds.pass)
@@ -255,8 +253,8 @@ class TelegramProxyService : Service() {
 
     /**
      * Decisive verdict that the WARP tunnel actually CARRIES traffic: open the local SOCKS5, authenticate,
-     * and CONNECT to a real Telegram DC (149.154.167.51:443 — inside [TELEGRAM_CIDRS] so it's routed via
-     * WARP). A success reply means the SYN/ACK round-tripped through WARP. Times out fast so a blocked
+     * and CONNECT to a real Telegram DC (149.154.167.51:443 — routed via WARP like everything in this
+     * full-tunnel SOCKS). A success reply means the SYN/ACK round-tripped through WARP. Times out fast so a blocked
      * endpoint doesn't stall the endpoint sweep.
      */
     private fun telegramReachableThroughWarp(creds: TelegramProxyCreds.Credentials?): Boolean = runCatching {
@@ -349,19 +347,14 @@ class TelegramProxyService : Service() {
 
     private fun buildNotification(): Notification {
         val s = stringsFor(LocalizationState.effective)
-        // "Hidden" mode = IMPORTANCE_MIN (no status-bar icon, collapsed at the bottom of the shade) —
-        // the most discreet Android allows for a foreground service; a separate channel id so toggling
-        // it actually takes effect (channel importance can't be lowered after creation).
-        val channelId = if (hideNotif) CHANNEL_ID_HIDDEN else CHANNEL_ID
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val importance = if (hideNotif) NotificationManager.IMPORTANCE_MIN else NotificationManager.IMPORTANCE_LOW
-            val channel = NotificationChannel(channelId, s.telegramProxyTitle, importance)
+            val channel = NotificationChannel(CHANNEL_ID, s.telegramProxyTitle, NotificationManager.IMPORTANCE_LOW)
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                 .createNotificationChannel(channel)
         }
         val icon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
             .takeIf { it != 0 } ?: android.R.drawable.ic_lock_lock
-        return NotificationCompat.Builder(this, channelId)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(icon)
             .setContentTitle(s.telegramProxyNotifActive)
             .setContentText("$LISTEN_HOST:$LISTEN_PORT")
@@ -377,9 +370,7 @@ class TelegramProxyService : Service() {
         const val LISTEN_PORT = 12080
         private const val TAG = "TgWarpProxy"
         private const val CHANNEL_ID = "olcbox_tg_proxy"
-        private const val CHANNEL_ID_HIDDEN = "olcbox_tg_proxy_min"
         private const val NOTIFICATION_ID = 49_001
-        private const val EXTRA_HIDE_NOTIF = "hide_notif"
 
         // How long the Telegram-DC verification waits for the SOCKS CONNECT reply. Long enough for the
         // WARP handshake + a real round-trip, short enough that a dead endpoint doesn't stall the sweep.
@@ -420,19 +411,8 @@ class TelegramProxyService : Service() {
             "188.114.97.1:955",
         )
 
-        /**
-         * Telegram DC / media IP ranges — only these ride WARP through the split SOCKS; everything else
-         * the client sends is dialed direct. Update if Telegram publishes new ranges.
-         */
-        const val TELEGRAM_CIDRS =
-            "91.108.4.0/22,91.108.8.0/22,91.108.12.0/22,91.108.16.0/22,91.108.20.0/22," +
-                "91.108.56.0/22,91.105.192.0/23,91.108.58.0/23,149.154.160.0/20,149.154.164.0/22," +
-                "149.154.168.0/22,149.154.172.0/22,2001:b28:f23d::/48,2001:b28:f23f::/48," +
-                "2001:67c:4e8::/48,2001:b28:f23c::/48"
-
-        fun start(context: Context, hideNotification: Boolean = false) {
+        fun start(context: Context) {
             val intent = Intent(context, TelegramProxyService::class.java)
-                .putExtra(EXTRA_HIDE_NOTIF, hideNotification)
             ContextCompat.startForegroundService(context, intent)
         }
 

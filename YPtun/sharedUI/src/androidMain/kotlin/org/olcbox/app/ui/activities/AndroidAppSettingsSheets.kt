@@ -933,14 +933,6 @@ private fun ConnectionSettingsContent(
                 checked = appBehavior.telegramProxyEnabled
             ) { onAppBehaviorChanged(appBehavior.copy(telegramProxyEnabled = it)) }
 
-            if (appBehavior.telegramProxyEnabled) {
-                RoutingToggleRow(
-                    title = s.hideTelegramProxyNotifTitle,
-                    subtitle = s.hideTelegramProxyNotifSubtitle,
-                    checked = appBehavior.hideTelegramProxyNotification
-                ) { onAppBehaviorChanged(appBehavior.copy(hideTelegramProxyNotification = it)) }
-            }
-
             val tgStatus = when (val st = telegramProxyState) {
                 is TelegramProxyState.Generating -> s.telegramProxyGenerating
                 is TelegramProxyState.Running ->

@@ -77,8 +77,6 @@ interface Strings {
     val telegramProxyTitle: String
     val telegramProxySubtitle: String
     val telegramProxyNotifActive: String
-    val hideTelegramProxyNotifTitle: String
-    val hideTelegramProxyNotifSubtitle: String
     val telegramProxyGenerating: String
     val telegramProxyRunning: String
     val telegramProxyError: String
@@ -671,8 +669,6 @@ object RuStrings : Strings {
     override val telegramProxyTitle = "Прокси Telegram"
     override val telegramProxySubtitle = "Фоновый SOCKS5 для Telegram. При первом включении нужен интернет — затем пропишите адрес в настройках прокси Telegram (или нажмите «Открыть Telegram»)."
     override val telegramProxyNotifActive = "Прокси Telegram активен"
-    override val hideTelegramProxyNotifTitle = "Скрыть уведомление прокси Telegram"
-    override val hideTelegramProxyNotifSubtitle = "Свернуть уведомление работающего прокси Telegram (Android не даёт убрать его полностью)"
     override val telegramProxyGenerating = "Генерация конфигурации… (нужен интернет)"
     override val telegramProxyRunning = "Активен"
     override val telegramProxyError = "Ошибка"
@@ -1219,8 +1215,6 @@ object EnStrings : Strings {
     override val telegramProxyTitle = "Telegram proxy"
     override val telegramProxySubtitle = "Background SOCKS5 for Telegram. First enable needs internet — then set the address in Telegram's proxy settings (or tap \"Open Telegram\")."
     override val telegramProxyNotifActive = "Telegram proxy active"
-    override val hideTelegramProxyNotifTitle = "Hide Telegram proxy notification"
-    override val hideTelegramProxyNotifSubtitle = "Minimize the running Telegram-proxy notification (Android won't let it be removed entirely)"
     override val telegramProxyGenerating = "Generating config… (internet required)"
     override val telegramProxyRunning = "Active"
     override val telegramProxyError = "Error"
@@ -1767,8 +1761,6 @@ object FaStrings : Strings {
     override val telegramProxyTitle = "پروکسی تلگرام"
     override val telegramProxySubtitle = "SOCKS5 پس‌زمینه برای تلگرام. اولین فعال‌سازی به اینترنت نیاز دارد — سپس آدرس را در تنظیمات پروکسی تلگرام وارد کنید (یا «باز کردن تلگرام» را بزنید)."
     override val telegramProxyNotifActive = "پروکسی تلگرام فعال است"
-    override val hideTelegramProxyNotifTitle = "پنهان کردن اعلان پروکسی تلگرام"
-    override val hideTelegramProxyNotifSubtitle = "کوچک‌کردن اعلان پروکسی در حال اجرا (اندروید اجازهٔ حذف کامل آن را نمی‌دهد)"
     override val telegramProxyGenerating = "در حال تولید پیکربندی… (به اینترنت نیاز است)"
     override val telegramProxyRunning = "فعال"
     override val telegramProxyError = "خطا"
@@ -2315,8 +2307,6 @@ object ZhStrings : Strings {
     override val telegramProxyTitle = "Telegram 代理"
     override val telegramProxySubtitle = "为 Telegram 提供后台 SOCKS5。首次启用需联网，随后在 Telegram 的代理设置中填入该地址（或点击“打开 Telegram”）。"
     override val telegramProxyNotifActive = "Telegram 代理已启用"
-    override val hideTelegramProxyNotifTitle = "隐藏 Telegram 代理通知"
-    override val hideTelegramProxyNotifSubtitle = "最小化运行中的 Telegram 代理通知（Android 不允许完全移除）"
     override val telegramProxyGenerating = "正在生成配置……（需要联网）"
     override val telegramProxyRunning = "已启用"
     override val telegramProxyError = "错误"

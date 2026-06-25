@@ -499,12 +499,6 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         }
         if (settings.telegramProxyEnabled != previous.telegramProxyEnabled) {
             if (settings.telegramProxyEnabled) enableTelegramProxy() else disableTelegramProxy()
-        } else if (settings.telegramProxyEnabled &&
-            settings.hideTelegramProxyNotification != previous.hideTelegramProxyNotification
-        ) {
-            // Notification visibility changed while running — re-post it without restarting the tunnel
-            // (the service's instance!=null guard skips the sweep, just refreshes the foreground notif).
-            runCatching { TelegramProxyService.start(appContext, settings.hideTelegramProxyNotification) }
         }
     }
 
@@ -545,7 +539,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Generate/persist the SOCKS credentials BEFORE the service starts so it reads the same
             // pair (getOrCreate is idempotent) and the UI can show them.
             val creds = runCatching { TelegramProxyCreds.getOrCreate(appContext) }.getOrNull()
-            runCatching { TelegramProxyService.start(appContext, _appBehavior.value.hideTelegramProxyNotification) }
+            runCatching { TelegramProxyService.start(appContext) }
                 .onSuccess {
                     OlcboxVpnState.addLog(
                         "Telegram proxy: service started — SOCKS5 ${TelegramProxyService.LISTEN_HOST}:" +
