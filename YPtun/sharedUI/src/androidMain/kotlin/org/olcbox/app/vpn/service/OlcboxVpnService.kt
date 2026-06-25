@@ -2977,13 +2977,33 @@ class OlcboxVpnService : VpnService() {
         scope.launch(Dispatchers.IO) {
             // Give the core's SOCKS listener a moment to finish binding before the first dial.
             delay(PROXY_SELF_CHECK_DELAY_MS)
-            val verdict = runCatching { probeProxyExitIp() }
+            // 1) Loopback path (127.0.0.1) — proves the core itself carries traffic.
+            val verdict = runCatching { probeProxyExitIp(socksConnectHost()) }
                 .getOrElse { ProxySelfCheckResult.Failure(it.message ?: it.javaClass.simpleName) }
             when (verdict) {
                 is ProxySelfCheckResult.Success ->
                     addLog("Proxy self-check: traffic OK — exit IP ${verdict.ip}")
                 is ProxySelfCheckResult.Failure ->
                     addLog("Proxy self-check: NO traffic through SOCKS (${verdict.reason})")
+            }
+
+            // 2) LAN path (the phone's own 192.168.x.x) — this is EXACTLY what a PC/other device on
+            //    the same Wi-Fi does. It's the decisive test for "expose SOCKS5/HTTP to the LAN":
+            //    if loopback works but this fails, the listener isn't reachable externally (binding,
+            //    Wi-Fi AP isolation, or a firewall) — not a "no traffic" problem. If both pass, the
+            //    proxy is good and the issue is on the client side (wrong address/port).
+            val lanIp = deviceLanIp()
+            if (lanIp == null) {
+                addLog("Proxy LAN check: no Wi-Fi/LAN IPv4 on this device — connect Wi-Fi to expose the proxy to a PC")
+            } else {
+                val lanVerdict = runCatching { probeProxyExitIp(lanIp) }
+                    .getOrElse { ProxySelfCheckResult.Failure(it.message ?: it.javaClass.simpleName) }
+                when (lanVerdict) {
+                    is ProxySelfCheckResult.Success ->
+                        addLog("Proxy LAN check: reachable on $lanIp:$socksListenPort (SOCKS5) / $lanIp:$httpProxyPort (HTTP) — point your PC here, exit IP ${lanVerdict.ip}")
+                    is ProxySelfCheckResult.Failure ->
+                        addLog("Proxy LAN check: NOT reachable on $lanIp:$socksListenPort (${lanVerdict.reason}) — check Wi-Fi AP isolation / firewall")
+                }
             }
         }
     }
@@ -2993,10 +3013,10 @@ class OlcboxVpnService : VpnService() {
      * exit node resolves it) to a plain-HTTP IP-echo endpoint, and parses the returned address. Throws
      * or returns Failure if any step doesn't complete — i.e. the proxy "connected" but carries nothing.
      */
-    private fun probeProxyExitIp(): ProxySelfCheckResult {
+    private fun probeProxyExitIp(host: String): ProxySelfCheckResult {
         Socket().use { socket ->
             socket.connect(
-                InetSocketAddress(socksConnectHost(), socksListenPort),
+                InetSocketAddress(host, socksListenPort),
                 SOCKET_CONNECT_TIMEOUT_MS
             )
             socket.soTimeout = PROXY_SELF_CHECK_TIMEOUT_MS
