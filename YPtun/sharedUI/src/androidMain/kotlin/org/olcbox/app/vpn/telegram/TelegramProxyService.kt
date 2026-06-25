@@ -17,8 +17,11 @@ import awg.LogWriter as AwgLogWriter
 import awg.Protector as AwgProtector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.vpn.service.OlcboxVpnState
@@ -36,59 +39,128 @@ class TelegramProxyService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var instance: Instance? = null
+    // Guards against the double-start race: two startForegroundService() calls deliver two
+    // onStartCommand()s before [instance] is set, which used to spawn two endpoint sweeps fighting
+    // over port 12080 ("address already in use"). Set synchronously on the main thread here.
+    @Volatile private var starting = false
+    private var healthJob: Job? = null
+    // Set by the AmneziaWG log writer the moment the UDP socket starts returning EPERM
+    // ("sendmsg: operation not permitted") so the health loop reacts in seconds, not at the slow tick.
+    @Volatile private var sendError = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
-        if (instance == null) startTunnel()
+        if (instance == null && !starting) {
+            starting = true
+            startTunnel()
+        }
         return START_STICKY
     }
 
     private fun startTunnel() {
         scope.launch {
-            val ds = LocationsDataSourceImpl(applicationContext)
-            val baseConfig = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
-            if (baseConfig.isNullOrBlank()) {
-                Log.w(TAG, "No cached WARP config — stopping Telegram proxy")
-                OlcboxVpnState.addLog("Telegram proxy: no WARP config to start — stopping")
-                stopSelfSafely()
-                return@launch
-            }
-            val creds = runCatching { TelegramProxyCreds.getOrCreate(applicationContext) }.getOrNull()
-
-            // WARP is anycast: the SAME account works on every WARP endpoint IP/port. The default
-            // engage.cloudflareclient.com:2408 is the one most heavily throttled/blocked (RU especially),
-            // so the handshake comes up but carries no traffic. Try the cached/working endpoint first,
-            // then a spread of alternate WARP IPs+ports, KEEPING the first that actually reaches a
-            // Telegram DC through the tunnel — and cache that working config so next time is instant.
-            val cachedEp = extractEndpoint(baseConfig)
-            val endpoints = (listOfNotNull(cachedEp) + WARP_FALLBACK_ENDPOINTS).distinct()
-            OlcboxVpnState.addLog("Telegram proxy: trying ${endpoints.size} WARP endpoint(s) — verifying via Telegram DC")
-
-            for ((i, ep) in endpoints.withIndex()) {
-                val cfg = rewriteEndpoint(baseConfig, ep)
-                OlcboxVpnState.addLog("TG-WARP: [${i + 1}/${endpoints.size}] handshake via $ep…")
-                val inst = buildInstance(creds)
-                val started = runCatching { inst.start(cfg, "$LISTEN_HOST:$LISTEN_PORT") }
-                    .onFailure { OlcboxVpnState.addLog("TG-WARP: start failed on $ep — ${it.message ?: it}") }
-                    .isSuccess
-                if (!started) { runCatching { inst.stop() }; continue }
-                instance = inst
-
-                if (telegramReachableThroughWarp(creds)) {
-                    OlcboxVpnState.addLog("TG-WARP: ✅ working via $ep — SOCKS5 $LISTEN_HOST:$LISTEN_PORT, point Telegram here")
-                    if (ep != cachedEp) runCatching { ds.saveTelegramWarpConfig(cfg) } // remember the working endpoint
+            try {
+                val ds = LocationsDataSourceImpl(applicationContext)
+                val baseConfig = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
+                if (baseConfig.isNullOrBlank()) {
+                    Log.w(TAG, "No cached WARP config — stopping Telegram proxy")
+                    OlcboxVpnState.addLog("Telegram proxy: no WARP config to start — stopping")
+                    stopSelfSafely()
                     return@launch
                 }
+                val creds = runCatching { TelegramProxyCreds.getOrCreate(applicationContext) }.getOrNull()
+                if (bringUp(ds, baseConfig, creds)) {
+                    startHealthLoop(ds, baseConfig, creds)
+                } else {
+                    stopSelfSafely()
+                }
+            } finally {
+                starting = false
+            }
+        }
+    }
 
-                OlcboxVpnState.addLog("TG-WARP: $ep handshake up but NO traffic to Telegram — trying next")
-                runCatching { inst.stop() }
-                instance = null
+    /**
+     * Sweeps the WARP endpoints and keeps the first that actually reaches a Telegram DC. WARP is
+     * anycast so the SAME generated account works on every endpoint IP/port — we only vary IP+port to
+     * dodge throttling/DPI on the default engage.cloudflareclient.com:2408 (the usual reason WARP
+     * "connects" but moves no data). On success [instance] is left running and the working config is
+     * cached so next start is instant. Returns whether a working endpoint was found.
+     */
+    private suspend fun bringUp(
+        ds: LocationsDataSourceImpl,
+        baseConfig: String,
+        creds: TelegramProxyCreds.Credentials?
+    ): Boolean {
+        val cachedEp = extractEndpoint(baseConfig)
+        val endpoints = (listOfNotNull(cachedEp) + WARP_FALLBACK_ENDPOINTS).distinct()
+        OlcboxVpnState.addLog("Telegram proxy: trying ${endpoints.size} WARP endpoint(s) — verifying via Telegram DC")
+
+        for ((i, ep) in endpoints.withIndex()) {
+            val cfg = rewriteEndpoint(baseConfig, ep)
+            OlcboxVpnState.addLog("TG-WARP: [${i + 1}/${endpoints.size}] handshake via $ep…")
+            val inst = buildInstance(creds)
+            val started = runCatching { inst.start(cfg, "$LISTEN_HOST:$LISTEN_PORT") }
+                .onFailure { OlcboxVpnState.addLog("TG-WARP: start failed on $ep — ${it.message ?: it}") }
+                .isSuccess
+            if (!started) { runCatching { inst.stop() }; continue }
+            instance = inst
+
+            if (telegramReachableThroughWarp(creds)) {
+                OlcboxVpnState.addLog("TG-WARP: ✅ working via $ep — SOCKS5 $LISTEN_HOST:$LISTEN_PORT, point Telegram here")
+                if (ep != cachedEp) runCatching { ds.saveTelegramWarpConfig(cfg) } // remember the working endpoint
+                return true
             }
 
-            OlcboxVpnState.addLog("TG-WARP: ❌ all ${endpoints.size} WARP endpoints blocked here — Cloudflare WARP appears unreachable on this network")
-            stopSelfSafely()
+            OlcboxVpnState.addLog("TG-WARP: $ep handshake up but NO traffic to Telegram — trying next")
+            runCatching { inst.stop() }
+            instance = null
+        }
+
+        OlcboxVpnState.addLog("TG-WARP: ❌ all ${endpoints.size} WARP endpoints blocked here — Cloudflare WARP appears unreachable on this network")
+        return false
+    }
+
+    /**
+     * Periodically re-verifies the tunnel and auto-restarts it when sends start failing. The AmneziaWG
+     * UDP socket gets EPERM ("sendmsg: operation not permitted") when the underlying network handle is
+     * swapped out from under it — frequent when the main proxy holds a process-wide bindProcessToNetwork
+     * and the device flaps Wi-Fi. A fresh [bringUp] re-opens the socket on the now-current network and
+     * recovers. Capped restarts so a genuinely-blocked network doesn't spin forever.
+     */
+    private fun startHealthLoop(
+        ds: LocationsDataSourceImpl,
+        baseConfig: String,
+        creds: TelegramProxyCreds.Credentials?
+    ) {
+        healthJob?.cancel()
+        sendError = false
+        healthJob = scope.launch {
+            var consecutiveFails = 0
+            var restarts = 0
+            var sinceVerifyMs = 0L
+            while (isActive && instance != null) {
+                delay(HEALTH_TICK_MS)
+                if (instance == null) break
+                val sawEperm = sendError.also { sendError = false }
+                sinceVerifyMs += HEALTH_TICK_MS
+                // Only spend a probe when something looks wrong (EPERM seen) or on the slow heartbeat.
+                if (!sawEperm && sinceVerifyMs < HEALTH_VERIFY_MS) continue
+                sinceVerifyMs = 0
+                if (telegramReachableThroughWarp(creds)) { consecutiveFails = 0; continue }
+                // EPERM is a decisive "socket is dead" signal — restart at once; otherwise wait for 2.
+                if (!sawEperm && ++consecutiveFails < 2) continue
+                if (restarts >= MAX_HEALTH_RESTARTS) {
+                    OlcboxVpnState.addLog("TG-WARP: tunnel keeps stalling after $restarts restarts — re-toggle the switch to retry")
+                    break
+                }
+                restarts++; consecutiveFails = 0
+                OlcboxVpnState.addLog("TG-WARP: tunnel stalled (network change / EPERM) — restarting [$restarts/$MAX_HEALTH_RESTARTS]")
+                runCatching { instance?.stop() }; instance = null
+                if (!bringUp(ds, baseConfig, creds)) break
+            }
         }
     }
 
@@ -105,6 +177,14 @@ class TelegramProxyService : Service() {
                 override fun writeLog(line: String) {
                     val trimmed = line.trimEnd()
                     Log.v(TAG, trimmed)
+                    // EPERM on the WARP UDP socket = network handle went stale → flag for fast recovery.
+                    // amneziawg spams this dozens of times a second; surface only the FIRST, drop repeats.
+                    if (trimmed.contains("operation not permitted")) {
+                        val first = !sendError
+                        sendError = true
+                        if (first) OlcboxVpnState.addLog("TG-WARP: UDP send blocked (EPERM) — network changed; will auto-restart")
+                        return
+                    }
                     if (trimmed.isNotEmpty()) OlcboxVpnState.addLog("TG-WARP: $trimmed")
                 }
             })
@@ -172,6 +252,8 @@ class TelegramProxyService : Service() {
     }
 
     override fun onDestroy() {
+        healthJob?.cancel()
+        healthJob = null
         runCatching { instance?.stop() }
         instance = null
         scope.cancel()
@@ -211,6 +293,13 @@ class TelegramProxyService : Service() {
         // How long the Telegram-DC verification waits for the SOCKS CONNECT reply. Long enough for the
         // WARP handshake + a real round-trip, short enough that a dead endpoint doesn't stall the sweep.
         private const val SELF_CHECK_TIMEOUT_MS = 6_000
+
+        // Health watchdog: poll on a short tick so an EPERM (flagged by the log writer) triggers a
+        // restart within seconds; otherwise actively probe only every HEALTH_VERIFY_MS to avoid traffic.
+        // Auto-restarts are capped so a genuinely-blocked network doesn't spin forever.
+        private const val HEALTH_TICK_MS = 4_000L
+        private const val HEALTH_VERIFY_MS = 30_000L
+        private const val MAX_HEALTH_RESTARTS = 5
 
         /**
          * WARP endpoints to try, in order, until one carries traffic to Telegram. WARP is anycast so the
