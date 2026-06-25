@@ -83,6 +83,7 @@ interface Strings {
     val telegramProxyPassword: String
     val telegramProxyCopyLink: String
     val telegramProxyLinkCopied: String
+    val telegramProxyOpen: String
     val groupDelete: String
 
     // Delete dialogs
@@ -673,6 +674,7 @@ object RuStrings : Strings {
     override val telegramProxyPassword = "Пароль"
     override val telegramProxyCopyLink = "Скопировать ссылку для Telegram"
     override val telegramProxyLinkCopied = "Ссылка скопирована"
+    override val telegramProxyOpen = "Открыть Telegram с прокси"
     override val groupDelete = "Удалить подписку"
     override val delete = "Удалить"
     override val cancel = "Отмена"
@@ -1217,6 +1219,7 @@ object EnStrings : Strings {
     override val telegramProxyPassword = "Password"
     override val telegramProxyCopyLink = "Copy link for Telegram"
     override val telegramProxyLinkCopied = "Link copied"
+    override val telegramProxyOpen = "Open Telegram with proxy"
     override val groupDelete = "Delete subscription"
     override val delete = "Delete"
     override val cancel = "Cancel"
@@ -1761,6 +1764,7 @@ object FaStrings : Strings {
     override val telegramProxyPassword = "رمز عبور"
     override val telegramProxyCopyLink = "کپی لینک برای تلگرام"
     override val telegramProxyLinkCopied = "لینک کپی شد"
+    override val telegramProxyOpen = "باز کردن تلگرام با پراکسی"
     override val groupDelete = "حذف اشتراک"
     override val delete = "حذف"
     override val cancel = "انصراف"
@@ -2305,6 +2309,7 @@ object ZhStrings : Strings {
     override val telegramProxyPassword = "密码"
     override val telegramProxyCopyLink = "复制 Telegram 链接"
     override val telegramProxyLinkCopied = "链接已复制"
+    override val telegramProxyOpen = "用此代理打开 Telegram"
     override val groupDelete = "删除订阅"
     override val delete = "删除"
     override val cancel = "取消"

@@ -1,6 +1,8 @@
 package org.olcbox.app.ui.activities
 
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.widget.Toast
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
@@ -84,6 +86,7 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Person
@@ -362,6 +365,8 @@ internal fun AppSettingsSheet(
                 AppSettingsRoute.ConnectionMode -> ConnectionModeSettingsContent(
                     selectedMode = selectedMode,
                     enabled = enabled,
+                    socksHost = proxySettings.host,
+                    socksPort = proxySettings.port,
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onModeSelected = onModeSelected
                 )
@@ -979,20 +984,50 @@ private fun ConnectionSettingsContent(
                         "https://t.me/socks?server=${running.host}&port=${running.port}" +
                             "&user=${running.user}&pass=${running.pass}"
                     }
-                    TextButton(
-                        onClick = {
-                            clipboard.setText(AnnotatedString(tgLink))
-                            Toast.makeText(context, s.telegramProxyLinkCopied, Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.ContentCopy,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(s.telegramProxyCopyLink)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // One tap → opens Telegram straight on its "Enable proxy?" dialog (tg://socks
+                        // deep link, server/port/user/pass prefilled), falling back to the https link.
+                        Button(
+                            onClick = {
+                                val tgDeep = "tg://socks?server=${running.host}&port=${running.port}" +
+                                    "&user=${running.user}&pass=${running.pass}"
+                                val opened = runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(tgDeep))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }.isSuccess
+                                if (!opened) runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(tgLink))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            },
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Send,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(s.telegramProxyOpen)
+                        }
+                        TextButton(
+                            onClick = {
+                                clipboard.setText(AnnotatedString(tgLink))
+                                Toast.makeText(context, s.telegramProxyLinkCopied, Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(s.telegramProxyCopyLink)
+                        }
                     }
                 }
         }
@@ -1003,10 +1038,13 @@ private fun ConnectionSettingsContent(
 private fun ConnectionModeSettingsContent(
     selectedMode: AndroidConnectionMode,
     enabled: Boolean,
+    socksHost: String,
+    socksPort: Int,
     onBack: () -> Unit,
     onModeSelected: (AndroidConnectionMode) -> Unit
 ) {
     val options = listOf(AndroidConnectionMode.Tun, AndroidConnectionMode.Proxy)
+    val s = LocalStrings.current
 
     Column(
         modifier = Modifier
@@ -1015,7 +1053,7 @@ private fun ConnectionModeSettingsContent(
             .padding(bottom = 32.dp)
     ) {
         SettingsDetailHeader(
-            title = LocalStrings.current.connectionMode,
+            title = s.connectionMode,
             subtitle = selectedMode.subtitle(),
             onBack = onBack
         )
@@ -1030,6 +1068,32 @@ private fun ConnectionModeSettingsContent(
                     enabled = enabled,
                     onClick = { onModeSelected(mode) }
                 )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Local SOCKS5 endpoint, shown right under the mode picker so the user always sees the port to
+        // point apps at. In Proxy mode it's also reachable on the LAN IP + an HTTP port (socks+4).
+        SelectionContainer {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = s.localSocksEndpoint,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "SOCKS5: $socksHost:$socksPort",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (selectedMode == AndroidConnectionMode.Proxy) {
+                    Text(
+                        text = "HTTP: $socksHost:${socksPort + 4}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
     }
