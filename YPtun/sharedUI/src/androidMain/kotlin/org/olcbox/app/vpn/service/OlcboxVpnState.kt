@@ -54,7 +54,7 @@ object OlcboxVpnState {
 
     fun addLog(msg: String) {
         Log.d(TAG, msg)
-        _logs.update { (it + msg).takeLast(MAX_LOG_ENTRIES) }
+        _logs.update { (it + stripAnsi(msg)).takeLast(MAX_LOG_ENTRIES) }
     }
 
     /**
@@ -62,8 +62,18 @@ object OlcboxVpnState {
      * ([OlcboxVpnService] full-logs capture) so reading our own process log doesn't feed itself.
      */
     fun appendRaw(line: String) {
-        _logs.update { (it + line).takeLast(MAX_LOG_ENTRIES) }
+        _logs.update { (it + stripAnsi(line)).takeLast(MAX_LOG_ENTRIES) }
     }
+
+    /**
+     * Removes ANSI/VT100 colour & cursor escape sequences. sing-box/xray emit coloured levels like
+     * `[36mINFO[0m` and 256-colour tags `[38;5;181m…` — left in, they render as
+     * "[36m…[0m" garbage in the in-app journal. Cheap fast-path when there's no escape byte at all.
+     */
+    private fun stripAnsi(s: String): String =
+        if (s.indexOf('') < 0) s else ANSI_ESCAPE.replace(s, "")
+
+    private val ANSI_ESCAPE = Regex("\\[[0-9;]*[A-Za-z]")
 
     /**
      * The live local SOCKS5 endpoint of the running core (host/port + the per-session credentials,
@@ -81,5 +91,5 @@ object OlcboxVpnState {
     )
 
     private const val MAX_LOG_ENTRIES = 5_000
-    private const val TAG = "OlcboxVpnService"
+    private const val TAG = "OlcboxVpnState"
 }

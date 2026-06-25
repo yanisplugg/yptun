@@ -2946,7 +2946,12 @@ class OlcboxVpnService : VpnService() {
             socksPort = socksListenPort,
             log = { addLog(it) },
         )
-        httpProxyBridge = if (bridge.start()) bridge else null
+        httpProxyBridge = if (bridge.start()) {
+            addLog("HTTP proxy ready on $socksListenHost:$httpProxyPort (forwards to SOCKS5 $socksListenPort)")
+            bridge
+        } else {
+            null
+        }
     }
 
     private fun stopHttpProxyBridge() {
@@ -3000,9 +3005,21 @@ class OlcboxVpnService : VpnService() {
                     .getOrElse { ProxySelfCheckResult.Failure(it.message ?: it.javaClass.simpleName) }
                 when (lanVerdict) {
                     is ProxySelfCheckResult.Success ->
-                        addLog("Proxy LAN check: reachable on $lanIp:$socksListenPort (SOCKS5) / $lanIp:$httpProxyPort (HTTP) — point your PC here, exit IP ${lanVerdict.ip}")
+                        addLog("Proxy LAN check (SOCKS5): reachable on $lanIp:$socksListenPort — exit IP ${lanVerdict.ip}")
                     is ProxySelfCheckResult.Failure ->
-                        addLog("Proxy LAN check: NOT reachable on $lanIp:$socksListenPort (${lanVerdict.reason}) — check Wi-Fi AP isolation / firewall")
+                        addLog("Proxy LAN check (SOCKS5): NOT reachable on $lanIp:$socksListenPort (${lanVerdict.reason}) — check Wi-Fi AP isolation / firewall")
+                }
+
+                // 3) HTTP path on the LAN IP (port +4). Browsers / the Windows system proxy speak an
+                //    HTTP proxy, NOT SOCKS — so this is the port a PC actually points at, and the one
+                //    that was never verified before. Drives a real absolute-form GET through the bridge.
+                val httpVerdict = runCatching { probeHttpProxyExitIp(lanIp, httpProxyPort) }
+                    .getOrElse { ProxySelfCheckResult.Failure(it.message ?: it.javaClass.simpleName) }
+                when (httpVerdict) {
+                    is ProxySelfCheckResult.Success ->
+                        addLog("Proxy LAN check (HTTP): reachable on $lanIp:$httpProxyPort — exit IP ${httpVerdict.ip}. Point your PC's HTTP proxy here.")
+                    is ProxySelfCheckResult.Failure ->
+                        addLog("Proxy LAN check (HTTP): FAILED on $lanIp:$httpProxyPort (${httpVerdict.reason}) — HTTP bridge not serving")
                 }
             }
         }
@@ -3082,6 +3099,36 @@ class OlcboxVpnService : VpnService() {
             val n = input.read(buf, read, buf.size - read)
             if (n < 0) throw java.io.EOFException("SOCKS stream closed early")
             read += n
+        }
+    }
+
+    /**
+     * Drives a real HTTP-proxy request through the HttpProxyBridge at [host]:[port] exactly like a
+     * browser / the Windows system proxy does: open TCP, send an ABSOLUTE-form `GET http://…` request
+     * line, read the IP-echo body. Proves the HTTP port (the one PCs actually point at) genuinely
+     * forwards through the bridge → core SOCKS → exit. Failure ⇒ the bridge isn't serving.
+     */
+    private fun probeHttpProxyExitIp(host: String, port: Int): ProxySelfCheckResult {
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(host, port), SOCKET_CONNECT_TIMEOUT_MS)
+            socket.soTimeout = PROXY_SELF_CHECK_TIMEOUT_MS
+            val out = socket.getOutputStream()
+            val input = socket.getInputStream()
+            out.write(
+                ("GET http://$PROXY_SELF_CHECK_HOST/ HTTP/1.0\r\nHost: $PROXY_SELF_CHECK_HOST\r\n" +
+                    "User-Agent: olcbox\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII)
+            )
+            out.flush()
+            val response = input.readBytes().toString(Charsets.US_ASCII)
+            if (response.isEmpty()) return ProxySelfCheckResult.Failure("no response from HTTP bridge")
+            val statusLine = response.substringBefore("\r\n")
+            val body = response.substringAfter("\r\n\r\n", "").trim()
+            val ip = body.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+            return if (ip != null && ip.length in 7..45 && ip.any { it == '.' || it == ':' }) {
+                ProxySelfCheckResult.Success(ip)
+            } else {
+                ProxySelfCheckResult.Failure("bad HTTP reply: ${statusLine.take(40)}")
+            }
         }
     }
 
@@ -3905,18 +3952,25 @@ class OlcboxVpnService : VpnService() {
         private const val NOTIFICATION_ID = 100
         private const val TAG = "OlcboxVpnService"
 
-        // High-frequency Android UI/render/system spam that the whole-process logcat capture would
-        // otherwise pour into the in-app journal, drowning the VPN/core lines that actually matter.
-        // Matched case-insensitively as a substring of the raw logcat line (tag OR message).
+        // High-frequency Android UI/render/system spam that the whole-process logcat capture (`*:V`)
+        // would otherwise pour into the in-app journal, drowning the VPN/core lines that actually
+        // matter. Tags are anchored with a leading "/" so they match the logcat tag column
+        // ("I/View   ( 1234): …") and never a substring of a core's message. Also drops the
+        // "/sing-box" logcat copy — sing-box output is already piped into the journal as "sb: …",
+        // so without this every sing-box line appeared TWICE. Matched case-insensitively.
         private val LOGCAT_NOISE = listOf(
-            "frameRateCategory",   // Android 15/16 variable-refresh-rate: "frameRateCategory Request!"
-            "setFrameRate",
-            "BLASTBufferQueue",
-            "Choreographer",
-            "OpenGLRenderer",
-            "ViewRootImpl",
-            "ImeTracker",
-            "InsetsController",
+            // sing-box is double-logged (Go LogWriter → "sb: …" AND android Log tag "sing-box").
+            "/sing-box",
+            // Android view / render / window / input framework — pure UI churn.
+            "/View", "/VRI[", "/HWUI", "/ViewRootImpl", "/DecorView", "/SurfaceView",
+            "/InputTransport", "/InputMethodManager", "/ImeFocusController", "/ImeTracker",
+            "/InsetsSourceConsumer", "/InsetsController", "/WindowOnBackDispatcher", "/WindowManager",
+            "/BufferQueueProducer", "/BLASTBufferQueue", "/SurfaceComposerClient", "/Choreographer",
+            "/OpenGLRenderer", "/AdrenoVK", "/Dialog", "/Looper", "/CustomFrequencyManager",
+            "/NativeCustomFrequencyManager", "/perf_hint", "/Compiler", "/NotificationManager", "/BBA2",
+            // Message-substring offenders (no stable tag).
+            "frameRateCategory", "setRequestedFrameRate", "setFrameRate", "ViewPostIme",
+            "CacheManager::trimMemory", "beginning of main", "beginning of system",
         )
 
         private fun addLog(msg: String) {
