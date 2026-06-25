@@ -478,7 +478,13 @@ object XrayConfig {
         val userOutbounds = (root["outbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
         val userOutboundTags = userOutbounds.mapNotNull { it["tag"]?.jsonPrimitive?.contentOrNull }.toSet()
         val userRouting = root["routing"] as? JsonObject
-        val mergedRouting: JsonObject? = routingProfile?.let { rp ->
+        // HONOR THE CONFIG'S OWN ROUTING: when the raw config already ships routing rules, the embedded
+        // routing takes precedence and the app's routing profile is NOT overlaid. Overlaying it injected
+        // extra selectors (e.g. geosite:category-ads) that need a geosite.dat the config never asked for,
+        // failing the whole config ("open .../geosite.dat: no such file"). The profile is still merged
+        // into configs that carry NO routing of their own (bare/cascade custom configs), keeping that path.
+        val userHasRouting = (userRouting?.get("rules") as? JsonArray)?.isNotEmpty() == true
+        val mergedRouting: JsonObject? = if (userHasRouting) null else routingProfile?.let { rp ->
             buildJsonObject {
                 // Keep the user's domainStrategy if they set one; else the profile's.
                 val ds = userRouting?.get("domainStrategy")?.jsonPrimitive?.contentOrNull

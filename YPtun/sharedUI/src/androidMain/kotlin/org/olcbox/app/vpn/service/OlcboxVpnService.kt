@@ -1335,12 +1335,20 @@ class OlcboxVpnService : VpnService() {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""
                 val json = if (!rawXray.isNullOrBlank()) {
-                    // User-supplied full Xray config: run mostly verbatim, but MERGE the routing profile
-                    // (e.g. domain:ru → direct) so it applies to cascade/custom configs too — previously
-                    // the profile was ignored here, which is why domain:ru worked on AWG but not vless.
-                    if (routingProfile != null) assetPath = ensureGeoAssetPath(routingProfile)
+                    // User-supplied full Xray config: run mostly verbatim. prepareRaw HONORS the config's
+                    // own routing (when it has any) and only merges the app routing profile into configs
+                    // that ship none. Either way, if the config itself references geosite:/geoip: (e.g.
+                    // geosite:private, geosite:telegram), make sure geoip.dat/geosite.dat are present and
+                    // XRAY_LOCATION_ASSET points at them — otherwise xray fails to load with
+                    // "open /system/bin/geosite.dat: no such file" even with NO in-app routing profile.
+                    val rawUsesGeo = rawXray.contains("geosite:") || rawXray.contains("geoip:")
+                    assetPath = when {
+                        routingProfile != null -> ensureGeoAssetPath(routingProfile)
+                        rawUsesGeo -> ensureGeoAssetPathForRawConfig()
+                        else -> ""
+                    }
                     addLog("Starting Xray with custom config" +
-                        if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else " (verbatim)")
+                        if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else " (verbatim, embedded routing honored)")
                     XrayConfig.prepareRaw(
                         rawConfigJson = rawXray,
                         listenPort = socksListenPort,
@@ -2810,6 +2818,27 @@ class OlcboxVpnService : VpnService() {
             GeoAssetManager.assetDir(applicationContext).absolutePath
         } else {
             addLog("Geo databases unavailable; profile geo rules will be skipped on Xray")
+            ""
+        }
+    }
+
+    /**
+     * Ensures geoip.dat/geosite.dat for a verbatim custom Xray config that references geosite:/geoip:
+     * ITSELF (e.g. an imported xhttp config with `geosite:private` in its routing), even when the user
+     * set NO in-app routing profile. Without the asset dir Xray loads from /system/bin and fails. Uses
+     * the app's default geo sources. Returns the asset dir, or "" if the download failed.
+     */
+    private suspend fun ensureGeoAssetPathForRawConfig(): String {
+        val state = loadRoutingProfilesState()
+        val geoip = state.geoipUrl.ifBlank { RoutingProfile.DEFAULT_GEOIP_URL }
+        val geosite = state.geositeUrl.ifBlank { RoutingProfile.DEFAULT_GEOSITE_URL }
+        val ok = runCatching { GeoAssetManager.ensureAssets(applicationContext, geoip, geosite) }
+            .getOrDefault(false)
+        return if (ok) {
+            addLog("Geo databases ready for custom config's own geosite:/geoip: rules")
+            GeoAssetManager.assetDir(applicationContext).absolutePath
+        } else {
+            addLog("Geo databases unavailable — the custom config's geosite:/geoip: rules may fail to load")
             ""
         }
     }
