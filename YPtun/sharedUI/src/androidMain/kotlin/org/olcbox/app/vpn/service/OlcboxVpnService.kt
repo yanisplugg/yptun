@@ -583,8 +583,14 @@ class OlcboxVpnService : VpnService() {
         // the TCP layer but its CONNECT is rejected, so nothing flows. Loopback-only listener anyway.
         when (options.connectionMode) {
             AndroidConnectionMode.Tun -> {
-                socksUsername = randomSocksToken()
-                socksPassword = randomSocksToken()
+                // Protect the internal loopback SOCKS5 (tun2socks <-> core) so no other app can use it.
+                // Honor the user's configured login/password if BOTH are set (that "SOCKS5 proxy" field
+                // is exactly for this); otherwise fall back to per-session random credentials so the
+                // listener is never left open with no auth.
+                if (options.socksUsername.isBlank() || options.socksPassword.isBlank()) {
+                    socksUsername = randomSocksToken()
+                    socksPassword = randomSocksToken()
+                }
             }
             AndroidConnectionMode.Proxy -> {
                 socksUsername = ""

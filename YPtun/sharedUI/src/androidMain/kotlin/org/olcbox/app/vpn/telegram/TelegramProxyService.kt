@@ -109,7 +109,11 @@ class TelegramProxyService : Service() {
         )
 
         for ((i, ep) in endpoints.withIndex()) {
-            val cfg = rewriteEndpoint(baseConfig, ep)
+            // Force a SHORT keepalive: WARP works in TUN mode (constant traffic) but here the SOCKS
+            // tunnel is mostly idle, and WARP drops an idle session in ~15s — faster than the config's
+            // PersistentKeepalive=25. A 10s keepalive keeps the session warm so it doesn't die between
+            // Telegram bursts. (No effect on the working TUN path, which is never idle.)
+            val cfg = forceKeepalive(rewriteEndpoint(baseConfig, ep), 10)
             OlcboxVpnState.addLog("TG-WARP: [${i + 1}/${endpoints.size}] handshake via $ep…")
             // A previous instance's SOCKS listener on 12080 is freed ASYNCHRONOUSLY by the Go side, so
             // starting the next one too soon failed every rotation with "bind: address already in use".
@@ -290,6 +294,23 @@ class TelegramProxyService : Service() {
     private fun extractEndpoint(config: String): String? =
         config.lineSequence().firstOrNull { it.trimStart().startsWith("Endpoint", ignoreCase = true) }
             ?.substringAfter('=')?.trim()?.takeIf { it.isNotBlank() }
+
+    /** Sets `PersistentKeepalive` to [seconds] in a WARP INI (replacing or inserting it under [Peer]). */
+    private fun forceKeepalive(config: String, seconds: Int): String {
+        if (config.contains("PersistentKeepalive", ignoreCase = true)) {
+            return config.lineSequence().joinToString("\n") {
+                if (it.trimStart().startsWith("PersistentKeepalive", ignoreCase = true)) {
+                    "PersistentKeepalive = $seconds"
+                } else it
+            }
+        }
+        // No keepalive line — add one right after the [Peer] section header, else append.
+        return if (config.contains("[Peer]")) {
+            config.replace("[Peer]", "[Peer]\nPersistentKeepalive = $seconds")
+        } else {
+            "$config\nPersistentKeepalive = $seconds"
+        }
+    }
 
     /** Blocks until [port] on loopback is bindable again (the prior awg listener has been torn down). */
     private suspend fun awaitPortFree(port: Int, timeoutMs: Long = 5_000) {
