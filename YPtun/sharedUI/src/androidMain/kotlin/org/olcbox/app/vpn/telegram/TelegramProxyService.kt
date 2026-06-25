@@ -22,6 +22,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.vpn.service.OlcboxVpnState
+import java.net.Socket
 
 /**
  * Lightweight always-on foreground service that runs the Telegram-over-WARP AmneziaWG tunnel and
@@ -46,53 +47,124 @@ class TelegramProxyService : Service() {
 
     private fun startTunnel() {
         scope.launch {
-            val config = runCatching { LocationsDataSourceImpl(applicationContext).loadTelegramWarpConfig() }
-                .getOrNull()
-            if (config.isNullOrBlank()) {
+            val ds = LocationsDataSourceImpl(applicationContext)
+            val baseConfig = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
+            if (baseConfig.isNullOrBlank()) {
                 Log.w(TAG, "No cached WARP config — stopping Telegram proxy")
                 OlcboxVpnState.addLog("Telegram proxy: no WARP config to start — stopping")
                 stopSelfSafely()
                 return@launch
             }
             val creds = runCatching { TelegramProxyCreds.getOrCreate(applicationContext) }.getOrNull()
-            val inst = Awg.newInstance().apply {
-                setDebug(false)
-                // Split SOCKS: ONLY Telegram IPs ride WARP; everything else dials direct. This is what
-                // makes it "Telegram-only via WARP, rest direct" — a pure SOCKS, no VPN/TUN.
-                setSplitCIDRs(TELEGRAM_CIDRS)
-                // Require auto-generated username/password (RFC 1929) so no other local app can quietly
-                // use the WARP proxy. The user types these into Telegram's SOCKS5 settings (shown in UI).
-                if (creds != null) setAuth(creds.user, creds.pass)
-                setLogWriter(object : AwgLogWriter {
-                    override fun writeLog(line: String) {
-                        val trimmed = line.trimEnd()
-                        Log.v(TAG, trimmed)
-                        // Surface handshake/transport lines in the visible journal so WARP failures
-                        // (e.g. handshake never completes) are diagnosable without logcat.
-                        if (trimmed.isNotEmpty()) OlcboxVpnState.addLog("TG-WARP: $trimmed")
-                    }
-                })
-                // Protect the WARP UDP socket through the main VpnService if its TUN is up (else no-op).
-                setProtector(object : AwgProtector {
-                    override fun protect(fd: Long): Boolean {
-                        return VpnSocketProtectBridge.protect?.invoke(fd.toInt()) ?: true
-                    }
-                })
+
+            // WARP is anycast: the SAME account works on every WARP endpoint IP/port. The default
+            // engage.cloudflareclient.com:2408 is the one most heavily throttled/blocked (RU especially),
+            // so the handshake comes up but carries no traffic. Try the cached/working endpoint first,
+            // then a spread of alternate WARP IPs+ports, KEEPING the first that actually reaches a
+            // Telegram DC through the tunnel — and cache that working config so next time is instant.
+            val cachedEp = extractEndpoint(baseConfig)
+            val endpoints = (listOfNotNull(cachedEp) + WARP_FALLBACK_ENDPOINTS).distinct()
+            OlcboxVpnState.addLog("Telegram proxy: trying ${endpoints.size} WARP endpoint(s) — verifying via Telegram DC")
+
+            for ((i, ep) in endpoints.withIndex()) {
+                val cfg = rewriteEndpoint(baseConfig, ep)
+                OlcboxVpnState.addLog("TG-WARP: [${i + 1}/${endpoints.size}] handshake via $ep…")
+                val inst = buildInstance(creds)
+                val started = runCatching { inst.start(cfg, "$LISTEN_HOST:$LISTEN_PORT") }
+                    .onFailure { OlcboxVpnState.addLog("TG-WARP: start failed on $ep — ${it.message ?: it}") }
+                    .isSuccess
+                if (!started) { runCatching { inst.stop() }; continue }
+                instance = inst
+
+                if (telegramReachableThroughWarp(creds)) {
+                    OlcboxVpnState.addLog("TG-WARP: ✅ working via $ep — SOCKS5 $LISTEN_HOST:$LISTEN_PORT, point Telegram here")
+                    if (ep != cachedEp) runCatching { ds.saveTelegramWarpConfig(cfg) } // remember the working endpoint
+                    return@launch
+                }
+
+                OlcboxVpnState.addLog("TG-WARP: $ep handshake up but NO traffic to Telegram — trying next")
+                runCatching { inst.stop() }
+                instance = null
             }
-            instance = inst
-            runCatching { inst.start(config, "$LISTEN_HOST:$LISTEN_PORT") }
-                .onFailure {
-                    Log.e(TAG, "Telegram WARP tunnel failed to start: ${it.message}")
-                    OlcboxVpnState.addLog("TG-WARP: tunnel FAILED to start — ${it.message ?: it}")
-                    instance = null
-                    stopSelfSafely()
-                }
-                .onSuccess {
-                    Log.i(TAG, "Telegram WARP SOCKS up on $LISTEN_HOST:$LISTEN_PORT")
-                    OlcboxVpnState.addLog("TG-WARP: SOCKS up on $LISTEN_HOST:$LISTEN_PORT — point Telegram here")
-                }
+
+            OlcboxVpnState.addLog("TG-WARP: ❌ all ${endpoints.size} WARP endpoints blocked here — Cloudflare WARP appears unreachable on this network")
+            stopSelfSafely()
         }
     }
+
+    private fun buildInstance(creds: TelegramProxyCreds.Credentials?): Instance =
+        Awg.newInstance().apply {
+            setDebug(false)
+            // Split SOCKS: ONLY Telegram IPs ride WARP; everything else dials direct. This is what
+            // makes it "Telegram-only via WARP, rest direct" — a pure SOCKS, no VPN/TUN.
+            setSplitCIDRs(TELEGRAM_CIDRS)
+            // Require auto-generated username/password (RFC 1929) so no other local app can quietly
+            // use the WARP proxy. The user types these into Telegram's SOCKS5 settings (shown in UI).
+            if (creds != null) setAuth(creds.user, creds.pass)
+            setLogWriter(object : AwgLogWriter {
+                override fun writeLog(line: String) {
+                    val trimmed = line.trimEnd()
+                    Log.v(TAG, trimmed)
+                    if (trimmed.isNotEmpty()) OlcboxVpnState.addLog("TG-WARP: $trimmed")
+                }
+            })
+            // Protect the WARP UDP socket through the main VpnService if its TUN is up (else no-op).
+            setProtector(object : AwgProtector {
+                override fun protect(fd: Long): Boolean {
+                    return VpnSocketProtectBridge.protect?.invoke(fd.toInt()) ?: true
+                }
+            })
+        }
+
+    /**
+     * Decisive verdict that the WARP tunnel actually CARRIES traffic: open the local SOCKS5, authenticate,
+     * and CONNECT to a real Telegram DC (149.154.167.51:443 — inside [TELEGRAM_CIDRS] so it's routed via
+     * WARP). A success reply means the SYN/ACK round-tripped through WARP. Times out fast so a blocked
+     * endpoint doesn't stall the endpoint sweep.
+     */
+    private fun telegramReachableThroughWarp(creds: TelegramProxyCreds.Credentials?): Boolean = runCatching {
+        Socket().use { s ->
+            s.connect(java.net.InetSocketAddress(LISTEN_HOST, LISTEN_PORT), 3_000)
+            s.soTimeout = SELF_CHECK_TIMEOUT_MS
+            val out = s.getOutputStream(); val inp = s.getInputStream()
+            // Greeting: offer no-auth + user/pass.
+            out.write(byteArrayOf(0x05, 0x02, 0x00, 0x02)); out.flush()
+            val m = ByteArray(2); if (!readFully(inp, m) || m[0] != 0x05.toByte()) return false
+            if (m[1] == 0x02.toByte()) {
+                val u = (creds?.user ?: "").toByteArray(); val p = (creds?.pass ?: "").toByteArray()
+                val auth = ByteArray(3 + u.size + p.size)
+                auth[0] = 0x01; auth[1] = u.size.toByte(); System.arraycopy(u, 0, auth, 2, u.size)
+                auth[2 + u.size] = p.size.toByte(); System.arraycopy(p, 0, auth, 3 + u.size, p.size)
+                out.write(auth); out.flush()
+                val ar = ByteArray(2); if (!readFully(inp, ar) || ar[1] != 0x00.toByte()) return false
+            } else if (m[1] != 0x00.toByte()) {
+                return false
+            }
+            // CONNECT 149.154.167.51:443 (ATYP=IPv4).
+            out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 149.toByte(), 154.toByte(), 167.toByte(), 51.toByte(), 0x01, 0xBB.toByte()))
+            out.flush()
+            val rep = ByteArray(4)
+            readFully(inp, rep) && rep[1] == 0x00.toByte()
+        }
+    }.getOrDefault(false)
+
+    private fun readFully(inp: java.io.InputStream, b: ByteArray): Boolean {
+        var n = 0
+        while (n < b.size) { val r = inp.read(b, n, b.size - n); if (r < 0) return false; n += r }
+        return true
+    }
+
+    /** Replaces (or appends) the `Endpoint = …` line in a WARP INI so the same account uses [endpoint]. */
+    private fun rewriteEndpoint(config: String, endpoint: String): String {
+        if (!config.contains("Endpoint", ignoreCase = true)) return "$config\nEndpoint = $endpoint"
+        return config.lineSequence().joinToString("\n") {
+            if (it.trimStart().startsWith("Endpoint", ignoreCase = true)) "Endpoint = $endpoint" else it
+        }
+    }
+
+    private fun extractEndpoint(config: String): String? =
+        config.lineSequence().firstOrNull { it.trimStart().startsWith("Endpoint", ignoreCase = true) }
+            ?.substringAfter('=')?.trim()?.takeIf { it.isNotBlank() }
 
     private fun stopSelfSafely() {
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
@@ -135,6 +207,30 @@ class TelegramProxyService : Service() {
         private const val TAG = "TgWarpProxy"
         private const val CHANNEL_ID = "olcbox_tg_proxy"
         private const val NOTIFICATION_ID = 49_001
+
+        // How long the Telegram-DC verification waits for the SOCKS CONNECT reply. Long enough for the
+        // WARP handshake + a real round-trip, short enough that a dead endpoint doesn't stall the sweep.
+        private const val SELF_CHECK_TIMEOUT_MS = 6_000
+
+        /**
+         * WARP endpoints to try, in order, until one carries traffic to Telegram. WARP is anycast so the
+         * SAME generated account works on every one — we only vary IP+port to dodge the throttling/DPI on
+         * the default engage.cloudflareclient.com:2408 (the usual reason WARP "connects" but moves no
+         * data in RU). Mix of the canonical 162.159.192/193 + 188.114.96/97 ranges on alternate ports
+         * that are commonly open. The cached/working endpoint is tried first (see startTunnel).
+         */
+        private val WARP_FALLBACK_ENDPOINTS = listOf(
+            "engage.cloudflareclient.com:2408",
+            "162.159.192.1:2408",
+            "162.159.193.10:2408",
+            "188.114.96.1:2408",
+            "188.114.97.1:2408",
+            "162.159.192.1:894",
+            "162.159.192.1:945",
+            "162.159.193.10:4500",
+            "188.114.96.1:1701",
+            "188.114.97.1:955",
+        )
 
         /**
          * Telegram DC / media IP ranges — only these ride WARP through the split SOCKS; everything else
