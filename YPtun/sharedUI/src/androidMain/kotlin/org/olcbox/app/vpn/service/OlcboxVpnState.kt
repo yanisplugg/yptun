@@ -91,5 +91,7 @@ object OlcboxVpnState {
     )
 
     private const val MAX_LOG_ENTRIES = 5_000
-    private const val TAG = "OlcboxVpnState"
+    // MUST stay "OlcboxVpnService": the full-logs logcat tailer skips lines whose tag contains this
+    // string so our own addLog() output isn't re-captured from logcat and duplicated in the journal.
+    private const val TAG = "OlcboxVpnService"
 }
