@@ -143,6 +143,12 @@ data class AppBehaviorSettings(
      * the last ping pass out of the total. Off by default.
      */
     val showSubscriptionAliveCount: Boolean = false,
+    /**
+     * Hide the protocol + server IP (the "endpoint" line) on a location row WHEN that location has a
+     * description — so a subscription's human description is shown instead of the technical endpoint.
+     * Rows without a description always show the endpoint. On by default.
+     */
+    val hideEndpointWhenDescription: Boolean = true,
     /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
     val customGroups: List<CustomGroup> = emptyList(),
     /**

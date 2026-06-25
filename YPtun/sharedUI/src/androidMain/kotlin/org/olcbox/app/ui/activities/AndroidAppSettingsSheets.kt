@@ -3670,6 +3670,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
 
         RoutingToggleRow(
+            title = s.hideEndpointWhenDescriptionTitle,
+            subtitle = s.hideEndpointWhenDescriptionSubtitle,
+            checked = settings.hideEndpointWhenDescription
+        ) { onChanged(settings.copy(hideEndpointWhenDescription = it)) }
+
+        RoutingToggleRow(
             title = "Уведомлять об окончании подписки",
             subtitle = "Локальное уведомление за несколько дней до конца подписки.",
             checked = settings.notifySubscriptionExpiry

@@ -448,6 +448,8 @@ interface Strings {
     val experimentalUnlocked: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
+    val hideEndpointWhenDescriptionTitle: String
+    val hideEndpointWhenDescriptionSubtitle: String
     val showSubscriptionExpiryTitle: String
     val showSubscriptionExpirySubtitle: String
     val subscriptionUserAgentLabel: String
@@ -1012,6 +1014,8 @@ object RuStrings : Strings {
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+    override val hideEndpointWhenDescriptionTitle = "Скрывать IP и протокол при описании"
+    override val hideEndpointWhenDescriptionSubtitle = "Если у локации есть описание — показывать его вместо протокола и IP в точке подключения."
     override val showSubscriptionExpiryTitle = "Показывать срок подписки"
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
@@ -1560,6 +1564,8 @@ object EnStrings : Strings {
     override val experimentalUnlocked = "Experimental settings unlocked"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+    override val hideEndpointWhenDescriptionTitle = "Hide IP & protocol when described"
+    override val hideEndpointWhenDescriptionSubtitle = "If a location has a description, show it instead of the protocol and IP at the connection point."
     override val showSubscriptionExpiryTitle = "Show subscription expiry"
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
@@ -2124,6 +2130,8 @@ object FaStrings : Strings {
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
+    override val hideEndpointWhenDescriptionTitle = "پنهان کردن IP و پروتکل هنگام وجود توضیح"
+    override val hideEndpointWhenDescriptionSubtitle = "اگر مکان توضیح دارد، به جای پروتکل و IP در نقطه اتصال نمایش داده شود."
     override val showSubscriptionExpiryTitle = "نمایش تاریخ انقضای اشتراک"
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
@@ -2656,6 +2664,8 @@ object ZhStrings : Strings {
     override val experimentalUnlocked = "已解锁实验性设置"
     override val notifSpeed = "通知栏显示速度"
     override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"
+    override val hideEndpointWhenDescriptionTitle = "有描述时隐藏 IP 和协议"
+    override val hideEndpointWhenDescriptionSubtitle = "如果位置有描述，则在连接点显示描述而非协议和 IP。"
     override val showSubscriptionExpiryTitle = "显示订阅到期"
     override val showSubscriptionExpirySubtitle = "在刷新日期下方显示“至 dd.mm.yyyy”"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"
