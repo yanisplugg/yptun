@@ -51,12 +51,16 @@ object XrayConfig {
      * stays consistent with the ipv4_only/ipv6_only enforcement.
      */
     private fun directDomainStrategy(traffic: TrafficSettings): String = when (traffic.domainStrategy) {
-        "ipv6_only" -> "UseIPv6"
+        // Force* (not Use*): also REFUSES a raw IP-literal of the wrong family. UseIPv4 only resolved
+        // DOMAINS to IPv4 — a direct site reached by an IPv6 LITERAL (e.g. an app's own-DoH AAAA, or a
+        // geoip:ru match on a v6 address) was still dialed over real IPv6, the leak the user reported on
+        // `domain:ru/geosite:ru/geoip:ru → direct` under prefer_ipv4. ForceIPv4 drops that v6 entirely.
+        "ipv6_only" -> "ForceIPv6"
         // ipv4_only AND the hybrid prefer_* strategies all force the DIRECT (freedom) outbound to IPv4.
         // Hybrid would otherwise resolve direct/bypass destinations dual-stack (UseIP) and dial the
         // user's REAL IPv6 for domain:ru → direct, leaking it. Pinning direct to IPv4 keeps bypass
         // traffic off real IPv6; proxied traffic is unaffected (it exits via the proxy's own IP).
-        else -> "UseIPv4"
+        else -> "ForceIPv4"
     }
 
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
@@ -181,6 +185,7 @@ object XrayConfig {
                     // FakeDNS first so sniffed domains get a synthetic IP before the real resolvers.
                     if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
                     add(traffic.remoteDns)
+                    if (traffic.remoteDns2.isNotBlank()) add(traffic.remoteDns2)
                     add(traffic.directDns)
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())
@@ -541,9 +546,10 @@ object XrayConfig {
                         put("tag", "direct")
                         put("protocol", "freedom")
                         // Resolve via xray's DNS (Go's resolver can't on Android) so direct rules work.
-                        // UseIPv4 (not UseIP) so the merged profile's domain:ru → direct never dials the
-                        // user's real IPv6 (no leak), matching the typed-config direct outbound above.
-                        putJsonObject("settings") { put("domainStrategy", "UseIPv4") }
+                        // ForceIPv4 (not UseIPv4) so the merged profile's domain:ru → direct never dials the
+                        // user's real IPv6 — including refusing a raw IPv6 literal — matching the typed-config
+                        // direct outbound above.
+                        putJsonObject("settings") { put("domainStrategy", "ForceIPv4") }
                     }
                 }
                 if (mergedRouting != null && "block" !in userOutboundTags) {
@@ -587,6 +593,7 @@ object XrayConfig {
                 putJsonArray("servers") {
                     if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
                     add(traffic.remoteDns)
+                    if (traffic.remoteDns2.isNotBlank()) add(traffic.remoteDns2)
                     add(traffic.directDns)
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())

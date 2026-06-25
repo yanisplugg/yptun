@@ -77,6 +77,7 @@ interface Strings {
     val telegramProxyTitle: String
     val telegramProxySubtitle: String
     val telegramProxyNotifActive: String
+    val telegramProxyRegionNote: String
     val telegramProxyGenerating: String
     val telegramProxyRunning: String
     val telegramProxyError: String
@@ -168,6 +169,7 @@ interface Strings {
     // Traffic settings
     val dns: String
     val remoteDnsLabel: String
+    val remoteDns2Label: String
     val directDnsLabel: String
     val domainStrategy: String
     val multiplexing: String
@@ -669,6 +671,7 @@ object RuStrings : Strings {
     override val telegramProxyTitle = "Прокси Telegram"
     override val telegramProxySubtitle = "Фоновый SOCKS5 для Telegram. При первом включении нужен интернет — затем пропишите адрес в настройках прокси Telegram (или нажмите «Открыть Telegram»)."
     override val telegramProxyNotifActive = "Прокси Telegram активен"
+    override val telegramProxyRegionNote = "⚠️ Работает не во всех регионах (преимущественно в России) и не у всех провайдеров."
     override val telegramProxyGenerating = "Генерация конфигурации… (нужен интернет)"
     override val telegramProxyRunning = "Активен"
     override val telegramProxyError = "Ошибка"
@@ -761,6 +764,7 @@ object RuStrings : Strings {
     override val language = "Язык"
     override val dns = "DNS"
     override val remoteDnsLabel = "Удалённый DNS (через прокси)"
+    override val remoteDns2Label = "Второй удалённый DNS (необязательно)"
     override val directDnsLabel = "Прямой DNS (bootstrap)"
     override val domainStrategy = "Доменная стратегия"
     override val multiplexing = "Мультиплексирование"
@@ -1215,6 +1219,7 @@ object EnStrings : Strings {
     override val telegramProxyTitle = "Telegram proxy"
     override val telegramProxySubtitle = "Background SOCKS5 for Telegram. First enable needs internet — then set the address in Telegram's proxy settings (or tap \"Open Telegram\")."
     override val telegramProxyNotifActive = "Telegram proxy active"
+    override val telegramProxyRegionNote = "⚠️ Works in some regions only (mainly Russia) and not on every ISP."
     override val telegramProxyGenerating = "Generating config… (internet required)"
     override val telegramProxyRunning = "Active"
     override val telegramProxyError = "Error"
@@ -1307,6 +1312,7 @@ object EnStrings : Strings {
     override val language = "Language"
     override val dns = "DNS"
     override val remoteDnsLabel = "Remote DNS (via proxy)"
+    override val remoteDns2Label = "Second remote DNS (optional)"
     override val directDnsLabel = "Direct DNS (bootstrap)"
     override val domainStrategy = "Domain strategy"
     override val multiplexing = "Multiplexing"
@@ -1761,6 +1767,7 @@ object FaStrings : Strings {
     override val telegramProxyTitle = "پروکسی تلگرام"
     override val telegramProxySubtitle = "SOCKS5 پس‌زمینه برای تلگرام. اولین فعال‌سازی به اینترنت نیاز دارد — سپس آدرس را در تنظیمات پروکسی تلگرام وارد کنید (یا «باز کردن تلگرام» را بزنید)."
     override val telegramProxyNotifActive = "پروکسی تلگرام فعال است"
+    override val telegramProxyRegionNote = "⚠️ فقط در برخی مناطق (عمدتاً روسیه) و نه روی همهٔ اپراتورها کار می‌کند."
     override val telegramProxyGenerating = "در حال تولید پیکربندی… (به اینترنت نیاز است)"
     override val telegramProxyRunning = "فعال"
     override val telegramProxyError = "خطا"
@@ -1853,6 +1860,7 @@ object FaStrings : Strings {
     override val language = "زبان"
     override val dns = "DNS"
     override val remoteDnsLabel = "DNS راه‌دور (از طریق پراکسی)"
+    override val remoteDns2Label = "DNS راه‌دور دوم (اختیاری)"
     override val directDnsLabel = "DNS مستقیم (راه‌انداز)"
     override val domainStrategy = "راهبرد دامنه"
     override val multiplexing = "چندتکثیری (Multiplexing)"
@@ -2307,6 +2315,7 @@ object ZhStrings : Strings {
     override val telegramProxyTitle = "Telegram 代理"
     override val telegramProxySubtitle = "为 Telegram 提供后台 SOCKS5。首次启用需联网，随后在 Telegram 的代理设置中填入该地址（或点击“打开 Telegram”）。"
     override val telegramProxyNotifActive = "Telegram 代理已启用"
+    override val telegramProxyRegionNote = "⚠️ 仅在部分地区可用（主要是俄罗斯），并非所有运营商都支持。"
     override val telegramProxyGenerating = "正在生成配置……（需要联网）"
     override val telegramProxyRunning = "已启用"
     override val telegramProxyError = "错误"
@@ -2399,6 +2408,7 @@ object ZhStrings : Strings {
     override val language = "语言"
     override val dns = "DNS"
     override val remoteDnsLabel = "远程 DNS（经代理）"
+    override val remoteDns2Label = "第二远程 DNS（可选）"
     override val directDnsLabel = "直连 DNS（引导）"
     override val domainStrategy = "域名策略"
     override val multiplexing = "多路复用"

@@ -155,6 +155,14 @@ object SingBoxConfig {
                         put("address", traffic.remoteDns)
                         put("detour", PROXY_TAG)
                     }
+                    // Optional second remote resolver (also via the proxy) — a fallback for "remote".
+                    if (traffic.remoteDns2.isNotBlank()) {
+                        addJsonObject {
+                            put("tag", "remote2")
+                            put("address", traffic.remoteDns2)
+                            put("detour", PROXY_TAG)
+                        }
+                    }
                     // Bootstrap: resolve the proxy server's own domain directly.
                     addJsonObject {
                         put("tag", "direct")

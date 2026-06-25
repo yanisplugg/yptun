@@ -956,6 +956,16 @@ private fun ConnectionSettingsContent(
                     modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }
+            // WARP-based: the proxy depends on Cloudflare WARP reachability, which is throttled/blocked
+            // on some networks — warn that it works mainly in Russia and not on every ISP.
+            if (appBehavior.telegramProxyEnabled) {
+                Text(
+                    text = s.telegramProxyRegionNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
             // Auto-generated SOCKS5 credentials — selectable so the user can copy them into Telegram.
             (telegramProxyState as? TelegramProxyState.Running)
                 ?.takeIf { it.user.isNotBlank() }
@@ -3419,6 +3429,7 @@ private fun TrafficSettingsContent(
     onTrafficChanged: (TrafficSettings) -> Unit
 ) {
     var remoteDns by remember(settings) { mutableStateOf(settings.remoteDns) }
+    var remoteDns2 by remember(settings) { mutableStateOf(settings.remoteDns2) }
     var directDns by remember(settings) { mutableStateOf(settings.directDns) }
     var strategy by remember(settings) { mutableStateOf(settings.domainStrategy) }
     var muxEnabled by remember(settings) { mutableStateOf(settings.muxEnabled) }
@@ -3458,6 +3469,14 @@ private fun TrafficSettingsContent(
             onValueChange = { remoteDns = it },
             label = { Text(s.remoteDnsLabel) },
             placeholder = { Text("8.8.8.8") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = remoteDns2,
+            onValueChange = { remoteDns2 = it },
+            label = { Text(s.remoteDns2Label) },
+            placeholder = { Text("1.1.1.1") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -3561,6 +3580,7 @@ private fun TrafficSettingsContent(
                 onTrafficChanged(
                     TrafficSettings(
                         remoteDns = remoteDns,
+                        remoteDns2 = remoteDns2,
                         directDns = directDns,
                         domainStrategy = strategy,
                         muxEnabled = muxEnabled,
