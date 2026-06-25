@@ -3,6 +3,7 @@ package org.olcbox.app.vpn.telegram
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -11,6 +12,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.datastore.preferences.core.edit
 import awg.Awg
 import awg.Instance
 import awg.LogWriter as AwgLogWriter
@@ -23,9 +25,13 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
+import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
+import org.olcbox.app.vpn.data.KEY_ANDROID_APP_BEHAVIOR
+import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnState
 import java.net.Socket
 
@@ -58,6 +64,12 @@ class TelegramProxyService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            // "Stop" tapped in the notification: turn the toggle OFF (persisted → the manager's live
+            // datastore collector reflects it in the UI and it won't auto-restart) and tear down.
+            stopFromNotification()
+            return START_NOT_STICKY
+        }
         startForeground(NOTIFICATION_ID, buildNotification())
         if (instance == null && !starting) {
             starting = true
@@ -336,6 +348,25 @@ class TelegramProxyService : Service() {
         stopSelf()
     }
 
+    /** Persists telegramProxyEnabled=false (so it won't auto-restart + UI toggle follows), then stops. */
+    private fun stopFromNotification() {
+        OlcboxVpnState.addLog("Telegram proxy: stopped from notification")
+        scope.launch {
+            runCatching {
+                applicationContext.vpnPrefDataStore.edit { prefs ->
+                    val current = prefs[KEY_ANDROID_APP_BEHAVIOR]
+                        ?.let { runCatching { Json.decodeFromString(AppBehaviorSettings.serializer(), it) }.getOrNull() }
+                        ?: AppBehaviorSettings()
+                    prefs[KEY_ANDROID_APP_BEHAVIOR] = Json.encodeToString(
+                        AppBehaviorSettings.serializer(),
+                        current.copy(telegramProxyEnabled = false)
+                    )
+                }
+            }
+            stopSelfSafely()
+        }
+    }
+
     override fun onDestroy() {
         healthJob?.cancel()
         healthJob = null
@@ -354,12 +385,19 @@ class TelegramProxyService : Service() {
         }
         val icon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
             .takeIf { it != 0 } ?: android.R.drawable.ic_lock_lock
+        // One-tap "Stop" in the notification: stops the proxy and turns the toggle off.
+        val stopIntent = Intent(this, TelegramProxyService::class.java).setAction(ACTION_STOP)
+        val stopPending = PendingIntent.getService(
+            this, 0, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(icon)
             .setContentTitle(s.telegramProxyNotifActive)
             .setContentText("$LISTEN_HOST:$LISTEN_PORT")
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(true)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, s.notifStop, stopPending)
             .build()
     }
 
@@ -371,6 +409,7 @@ class TelegramProxyService : Service() {
         private const val TAG = "TgWarpProxy"
         private const val CHANNEL_ID = "olcbox_tg_proxy"
         private const val NOTIFICATION_ID = 49_001
+        private const val ACTION_STOP = "org.olcbox.app.telegram.STOP"
 
         // How long the Telegram-DC verification waits for the SOCKS CONNECT reply. Long enough for the
         // WARP handshake + a real round-trip, short enough that a dead endpoint doesn't stall the sweep.
