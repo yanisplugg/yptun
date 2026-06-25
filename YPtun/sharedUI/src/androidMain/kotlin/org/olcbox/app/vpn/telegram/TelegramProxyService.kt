@@ -24,6 +24,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
+import org.olcbox.app.ui.i18n.LocalizationState
+import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.vpn.service.OlcboxVpnState
 import java.net.Socket
 
@@ -51,10 +53,16 @@ class TelegramProxyService : Service() {
     @Volatile private var degraded = false
     // The WARP endpoint the live tunnel is using, so the watchdog can rotate AWAY from it on failure.
     @Volatile private var activeEndpoint: String? = null
+    // User setting: minimise the foreground notification. Carried in the start intent so a re-start with
+    // the new value just re-posts the notification (the instance!=null guard skips the tunnel).
+    @Volatile private var hideNotif = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.hasExtra(EXTRA_HIDE_NOTIF) == true) {
+            hideNotif = intent.getBooleanExtra(EXTRA_HIDE_NOTIF, false)
+        }
         startForeground(NOTIFICATION_ID, buildNotification())
         if (instance == null && !starting) {
             starting = true
@@ -70,7 +78,7 @@ class TelegramProxyService : Service() {
                 val baseConfig = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
                 if (baseConfig.isNullOrBlank()) {
                     Log.w(TAG, "No cached WARP config — stopping Telegram proxy")
-                    OlcboxVpnState.addLog("Telegram proxy: no WARP config to start — stopping")
+                    OlcboxVpnState.addLog("Telegram proxy: no config to start — stopping")
                     stopSelfSafely()
                     return@launch
                 }
@@ -103,7 +111,7 @@ class TelegramProxyService : Service() {
         val endpoints = (listOfNotNull(cachedEp) + WARP_FALLBACK_ENDPOINTS).distinct().filterNot { it in avoid }
         if (endpoints.isEmpty()) return false
         OlcboxVpnState.addLog(
-            "Telegram proxy: trying ${endpoints.size} WARP endpoint(s)" +
+            "Telegram proxy: trying ${endpoints.size} relay(s)" +
                 (if (avoid.isNotEmpty()) " (rotating past ${avoid.size} dead)" else "") +
                 " — verifying via Telegram DC"
         )
@@ -114,14 +122,14 @@ class TelegramProxyService : Service() {
             // PersistentKeepalive=25. A 10s keepalive keeps the session warm so it doesn't die between
             // Telegram bursts. (No effect on the working TUN path, which is never idle.)
             val cfg = forceKeepalive(rewriteEndpoint(baseConfig, ep), 10)
-            OlcboxVpnState.addLog("TG-WARP: [${i + 1}/${endpoints.size}] handshake via $ep…")
+            OlcboxVpnState.addLog("Telegram: [${i + 1}/${endpoints.size}] connecting via $ep…")
             // A previous instance's SOCKS listener on 12080 is freed ASYNCHRONOUSLY by the Go side, so
             // starting the next one too soon failed every rotation with "bind: address already in use".
             // Wait for the port to actually free first.
             awaitPortFree(LISTEN_PORT)
             val inst = buildInstance(creds)
             val started = runCatching { inst.start(cfg, "$LISTEN_HOST:$LISTEN_PORT") }
-                .onFailure { OlcboxVpnState.addLog("TG-WARP: start failed on $ep — ${it.message ?: it}") }
+                .onFailure { OlcboxVpnState.addLog("Telegram: start failed on $ep — ${it.message ?: it}") }
                 .isSuccess
             if (!started) { runCatching { inst.stop() }; continue }
             instance = inst
@@ -129,16 +137,16 @@ class TelegramProxyService : Service() {
             if (telegramReachableThroughWarp(creds)) {
                 activeEndpoint = ep
                 degraded = false
-                OlcboxVpnState.addLog("TG-WARP: ✅ working via $ep — SOCKS5 $LISTEN_HOST:$LISTEN_PORT, point Telegram here")
+                OlcboxVpnState.addLog("Telegram: ✅ working via $ep — SOCKS5 $LISTEN_HOST:$LISTEN_PORT, point Telegram here")
                 return true
             }
 
-            OlcboxVpnState.addLog("TG-WARP: $ep handshake up but NO traffic to Telegram — trying next")
+            OlcboxVpnState.addLog("Telegram: $ep handshake up but NO traffic to Telegram — trying next")
             runCatching { inst.stop() }
             instance = null
         }
 
-        OlcboxVpnState.addLog("TG-WARP: ❌ all ${endpoints.size} WARP endpoints unreachable for Telegram on this network")
+        OlcboxVpnState.addLog("Telegram: ❌ all ${endpoints.size} relays unreachable for Telegram on this network")
         return false
     }
 
@@ -180,19 +188,19 @@ class TelegramProxyService : Service() {
                     if (ep != null && ep != persistedEp) {
                         runCatching { ds.saveTelegramWarpConfig(rewriteEndpoint(baseConfig, ep)) }
                         persistedEp = ep
-                        OlcboxVpnState.addLog("TG-WARP: cached working endpoint $ep")
+                        OlcboxVpnState.addLog("Telegram: cached working endpoint $ep")
                     }
                     continue
                 }
                 // A degrade signal (EPERM / silent handshake) is decisive — rotate at once; else wait for 2.
                 if (!sawDegrade && ++consecutiveFails < 2) continue
                 if (restarts >= MAX_HEALTH_RESTARTS) {
-                    OlcboxVpnState.addLog("TG-WARP: WARP keeps dying after $restarts tries — likely throttled on this network. Re-toggle to retry.")
+                    OlcboxVpnState.addLog("Telegram: relay keeps dying after $restarts tries — likely throttled on this network. Re-toggle to retry.")
                     break
                 }
                 restarts++; consecutiveFails = 0
                 activeEndpoint?.let { dead += it }
-                OlcboxVpnState.addLog("TG-WARP: tunnel died — rotating to another WARP endpoint [$restarts/$MAX_HEALTH_RESTARTS]")
+                OlcboxVpnState.addLog("Telegram: tunnel died — rotating to another relay [$restarts/$MAX_HEALTH_RESTARTS]")
                 runCatching { instance?.stop() }; instance = null
                 var ok = bringUp(ds, baseConfig, creds, avoid = dead)
                 if (!ok && dead.isNotEmpty()) {
@@ -223,18 +231,18 @@ class TelegramProxyService : Service() {
                         // amneziawg spams EPERM dozens of times/sec — surface only the first, drop repeats.
                         val first = !degraded
                         degraded = true
-                        if (first) OlcboxVpnState.addLog("TG-WARP: UDP send blocked (EPERM) — will rotate/restart")
+                        if (first) OlcboxVpnState.addLog("Telegram: UDP send blocked (EPERM) — will rotate/restart")
                         return
                     }
                     if (t.contains("stopped hearing back") || t.contains("Handshake did not complete")) {
                         degraded = true
-                        OlcboxVpnState.addLog("TG-WARP: $t")
+                        OlcboxVpnState.addLog("Telegram: $t")
                         return
                     }
                     // Drop amneziawg's internal per-routine churn — it floods the journal (1800+ lines).
                     // Keep only the meaningful lines (handshake result, endpoint, working/failed, errors).
                     if (TG_LOG_NOISE.any { t.contains(it) }) return
-                    OlcboxVpnState.addLog("TG-WARP: $t")
+                    OlcboxVpnState.addLog("Telegram: $t")
                 }
             })
             // Protect the WARP UDP socket through the main VpnService if its TUN is up (else no-op).
@@ -340,21 +348,23 @@ class TelegramProxyService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        val s = stringsFor(LocalizationState.effective)
+        // "Hidden" mode = IMPORTANCE_MIN (no status-bar icon, collapsed at the bottom of the shade) —
+        // the most discreet Android allows for a foreground service; a separate channel id so toggling
+        // it actually takes effect (channel importance can't be lowered after creation).
+        val channelId = if (hideNotif) CHANNEL_ID_HIDDEN else CHANNEL_ID
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Telegram прокси",
-                NotificationManager.IMPORTANCE_MIN
-            )
+            val importance = if (hideNotif) NotificationManager.IMPORTANCE_MIN else NotificationManager.IMPORTANCE_LOW
+            val channel = NotificationChannel(channelId, s.telegramProxyTitle, importance)
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                 .createNotificationChannel(channel)
         }
         val icon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
             .takeIf { it != 0 } ?: android.R.drawable.ic_lock_lock
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, channelId)
             .setSmallIcon(icon)
-            .setContentTitle("Telegram прокси")
-            .setContentText("SOCKS5 $LISTEN_HOST:$LISTEN_PORT")
+            .setContentTitle(s.telegramProxyNotifActive)
+            .setContentText("$LISTEN_HOST:$LISTEN_PORT")
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(true)
             .build()
@@ -367,7 +377,9 @@ class TelegramProxyService : Service() {
         const val LISTEN_PORT = 12080
         private const val TAG = "TgWarpProxy"
         private const val CHANNEL_ID = "olcbox_tg_proxy"
+        private const val CHANNEL_ID_HIDDEN = "olcbox_tg_proxy_min"
         private const val NOTIFICATION_ID = 49_001
+        private const val EXTRA_HIDE_NOTIF = "hide_notif"
 
         // How long the Telegram-DC verification waits for the SOCKS CONNECT reply. Long enough for the
         // WARP handshake + a real round-trip, short enough that a dead endpoint doesn't stall the sweep.
@@ -418,8 +430,9 @@ class TelegramProxyService : Service() {
                 "149.154.168.0/22,149.154.172.0/22,2001:b28:f23d::/48,2001:b28:f23f::/48," +
                 "2001:67c:4e8::/48,2001:b28:f23c::/48"
 
-        fun start(context: Context) {
+        fun start(context: Context, hideNotification: Boolean = false) {
             val intent = Intent(context, TelegramProxyService::class.java)
+                .putExtra(EXTRA_HIDE_NOTIF, hideNotification)
             ContextCompat.startForegroundService(context, intent)
         }
 

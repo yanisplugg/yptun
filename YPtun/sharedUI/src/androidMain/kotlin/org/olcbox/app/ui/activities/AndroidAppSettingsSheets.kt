@@ -933,6 +933,14 @@ private fun ConnectionSettingsContent(
                 checked = appBehavior.telegramProxyEnabled
             ) { onAppBehaviorChanged(appBehavior.copy(telegramProxyEnabled = it)) }
 
+            if (appBehavior.telegramProxyEnabled) {
+                RoutingToggleRow(
+                    title = s.hideTelegramProxyNotifTitle,
+                    subtitle = s.hideTelegramProxyNotifSubtitle,
+                    checked = appBehavior.hideTelegramProxyNotification
+                ) { onAppBehaviorChanged(appBehavior.copy(hideTelegramProxyNotification = it)) }
+            }
+
             val tgStatus = when (val st = telegramProxyState) {
                 is TelegramProxyState.Generating -> s.telegramProxyGenerating
                 is TelegramProxyState.Running ->
@@ -984,7 +992,11 @@ private fun ConnectionSettingsContent(
                         "https://t.me/socks?server=${running.host}&port=${running.port}" +
                             "&user=${running.user}&pass=${running.pass}"
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Stacked full-width so neither button's label gets clipped on narrow screens.
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         // One tap → opens Telegram straight on its "Enable proxy?" dialog (tg://socks
                         // deep link, server/port/user/pass prefilled), falling back to the https link.
                         Button(
@@ -1004,7 +1016,7 @@ private fun ConnectionSettingsContent(
                                     )
                                 }
                             },
-                            modifier = Modifier.padding(horizontal = 4.dp)
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Send,
@@ -1014,11 +1026,12 @@ private fun ConnectionSettingsContent(
                             Spacer(Modifier.width(8.dp))
                             Text(s.telegramProxyOpen)
                         }
-                        TextButton(
+                        OutlinedButton(
                             onClick = {
                                 clipboard.setText(AnnotatedString(tgLink))
                                 Toast.makeText(context, s.telegramProxyLinkCopied, Toast.LENGTH_SHORT).show()
-                            }
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.ContentCopy,

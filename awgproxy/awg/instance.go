@@ -43,6 +43,8 @@ type Instance struct {
 	authMu   sync.Mutex
 	authUser string
 	authPass string
+
+	cancelWarm context.CancelFunc
 }
 
 // SetAuth enables SOCKS5 username/password authentication on this instance (empty user = no auth).
@@ -381,14 +383,55 @@ func (i *Instance) Start(iniConfig, listenAddr string) error {
 	i.listener = ln
 	i.running.Store(true)
 	go i.serveSocks(ln, tnet)
+
+	// Keep the tunnel WARM. Unlike a full-tunnel (TUN) where traffic is constant, this SOCKS proxy is
+	// mostly idle between bursts, and WARP/Cloudflare drops a session it stops hearing data on (~15s) —
+	// the empty WireGuard keepalive isn't enough. Push a real DNS query through the tunnel every few
+	// seconds so genuine data keeps flowing and the session stays alive. Stops on Stop().
+	warmCtx, cancel := context.WithCancel(context.Background())
+	i.cancelWarm = cancel
+	go i.keepWarm(warmCtx, tnet)
+
 	log.New(i.logSink, "", 0).Printf("AmneziaWG SOCKS up on %s", listenAddr)
 	return nil
+}
+
+// keepWarm sends a tiny DNS query through the tunnel on an interval so the WARP session never goes
+// idle long enough to be dropped. Best-effort: failures are ignored (the health watchdog handles a
+// genuinely dead tunnel). A standard A query for "cloudflare.com" to 1.1.1.1:53 (reachable via WARP).
+func (i *Instance) keepWarm(ctx context.Context, tnet *netstack.Net) {
+	query := []byte{
+		0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x0a, 'c', 'l', 'o', 'u', 'd', 'f', 'l', 'a', 'r', 'e',
+		0x03, 'c', 'o', 'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+	}
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c, err := tnet.DialContext(ctx, "udp", "1.1.1.1:53")
+			if err != nil {
+				continue
+			}
+			_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+			_, _ = c.Write(query)
+			_, _ = c.Read(make([]byte, 512))
+			_ = c.Close()
+		}
+	}
 }
 
 // Stop tears down this instance's SOCKS listener and AmneziaWG device.
 func (i *Instance) Stop() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.cancelWarm != nil {
+		i.cancelWarm()
+		i.cancelWarm = nil
+	}
 	if i.listener != nil {
 		_ = i.listener.Close()
 		i.listener = nil

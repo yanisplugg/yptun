@@ -177,6 +177,12 @@ data class AppBehaviorSettings(
      * config); afterwards the same config is reused. Off by default.
      */
     val telegramProxyEnabled: Boolean = false,
+    /**
+     * Hide the Telegram-proxy foreground-service notification. Android still requires a notification for
+     * a background service, so when this is on the proxy uses a minimal, silent low-priority notification
+     * (no status-bar icon) instead of the normal one. Off by default.
+     */
+    val hideTelegramProxyNotification: Boolean = false,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"
