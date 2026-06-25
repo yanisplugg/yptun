@@ -426,6 +426,19 @@ object XrayConfig {
         // the fakedns plumbing (pool + dns server + sniffing + dns-out). A config that ALREADY carries
         // its own `fakedns` (e.g. a Remnawave/Happ subscription) is honored verbatim — never overwritten.
         fakeDnsEnabled: Boolean = false,
+        // Strip geosite:/geoip: selectors from the config's OWN routing rules & dns servers. xray-core
+        // FAILS TO LOAD ("open .../geosite.dat: no such file", or "failed to parse domain rule:
+        // geosite:<cat>") when the matching geoip.dat/geosite.dat isn't present (blocked network can't
+        // download it) or lacks a category the config used. Stripping keeps every regexp/domain/CIDR
+        // rule (which do the real RU routing) so the config ALWAYS loads; only the geo-DB-dependent
+        // selectors (geosite:private, geosite:telegram, geoip:private…) are dropped.
+        stripGeoSelectors: Boolean = false,
+        // Enforce IPv4 on a verbatim config under ipv4_only/prefer_ipv4: force every `freedom` outbound
+        // to ForceIPv4 (so a DIRECT site — e.g. 2ip.ru — never dials real IPv6, even via a raw v6
+        // literal; the embedded `direct` is plain freedom=AsIs and leaked) and override dns.queryStrategy
+        // to UseIPv4 (A-only resolution, so dual-stack sites never learn an AAAA to attempt). The hev
+        // bridge's IPv6 drop only gates tun→bridge, NOT the core's own outbound sockets — hence this.
+        forceIpv4: Boolean = false,
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
@@ -530,22 +543,36 @@ object XrayConfig {
             else -> null
         }
 
+        // The dns to write: injected-fakedns version if any, else the config's own — geo-stripped when
+        // requested so unresolvable geosite: DNS categories can't fail the load.
+        val baseDns = augmentedDns ?: (root["dns"] as? JsonObject)
+        val strippedDns = if (stripGeoSelectors) stripGeoFromDns(baseDns) else baseDns
+        // Force A-only resolution under ipv4_only/prefer_ipv4 so dual-stack sites never learn an AAAA.
+        val outDns = if (forceIpv4 && strippedDns != null) buildJsonObject {
+            strippedDns.forEach { (k, v) -> if (k != "queryStrategy") put(k, v) }
+            put("queryStrategy", "UseIPv4")
+        } else strippedDns
+        // The routing to write: strip geo ONLY from the config's OWN embedded routing (userHasRouting) —
+        // a merged routing PROFILE keeps its geo selectors (handled separately by the caller's asset path).
+        val routingToWrite =
+            if (stripGeoSelectors && userHasRouting) stripGeoFromRouting(finalRouting) else finalRouting
+
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
-                if (key != "inbounds" && key != "outbounds" && key != "routing" &&
-                    !(injectFake && (key == "dns" || key == "fakedns"))
+                if (key != "inbounds" && key != "outbounds" && key != "routing" && key != "dns" &&
+                    !(injectFake && key == "fakedns")
                 ) {
                     put(key, value)
                 }
             }
-            if (augmentedDns != null) put("dns", augmentedDns)
+            if (outDns != null) put("dns", outDns)
             if (injectFake) putJsonArray("fakedns") { add(fakeDnsPool()) }
             putJsonArray("inbounds") {
                 add(socksInbound)
                 nonSocks.forEach { add(it) }
             }
             putJsonArray("outbounds") {
-                userOutbounds.forEach { add(it) }
+                userOutbounds.forEach { add(if (forceIpv4) forceIpv4Freedom(it) else it) }
                 // The profile rules reference direct/block tags — make sure they exist.
                 if (mergedRouting != null && "direct" !in userOutboundTags) {
                     addJsonObject {
@@ -564,9 +591,87 @@ object XrayConfig {
                 // FakeDNS dns outbound for the hijacked queries.
                 if (injectFake && "dns-out" !in userOutboundTags) add(dnsOutOutbound())
             }
-            if (finalRouting != null) put("routing", finalRouting)
+            if (routingToWrite != null) put("routing", routingToWrite)
         }
         return json.encodeToString(newRoot)
+    }
+
+    /** Forces a `freedom` outbound to ForceIPv4 (so it never dials IPv6, incl. raw v6 literals). */
+    private fun forceIpv4Freedom(outbound: JsonObject): JsonObject {
+        if (outbound["protocol"]?.jsonPrimitive?.contentOrNull != "freedom") return outbound
+        val settings = outbound["settings"] as? JsonObject
+        return buildJsonObject {
+            outbound.forEach { (k, v) -> if (k != "settings") put(k, v) }
+            putJsonObject("settings") {
+                settings?.forEach { (k, v) -> if (k != "domainStrategy") put(k, v) }
+                put("domainStrategy", "ForceIPv4")
+            }
+        }
+    }
+
+    /** Removes geosite:/geoip: entries from a string array (keeps regexp:/domain:/CIDR/plain entries). */
+    private fun stripGeoArray(arr: JsonArray?): JsonArray = JsonArray(
+        (arr ?: JsonArray(emptyList())).filter {
+            val s = (it as? JsonPrimitive)?.contentOrNull?.lowercase()
+            s == null || !(s.startsWith("geosite:") || s.startsWith("geoip:"))
+        }
+    )
+
+    /**
+     * Strips geosite:/geoip: from a routing object's rules: cleans each rule's `domain`/`ip` arrays and
+     * DROPS a rule whose only matchers were geo selectors (now empty) so it can't accidentally match-all.
+     * Rules matched by other fields (network/port/protocol/inboundTag) are preserved untouched.
+     */
+    private fun stripGeoFromRouting(routing: JsonObject?): JsonObject? {
+        if (routing == null) return null
+        val rules = routing["rules"] as? JsonArray ?: return routing
+        val cleaned = rules.mapNotNull { el ->
+            val rule = el as? JsonObject ?: return@mapNotNull el
+            val hadDomain = rule["domain"] is JsonArray
+            val hadIp = rule["ip"] is JsonArray
+            val newDomain = if (hadDomain) stripGeoArray(rule["domain"] as? JsonArray) else null
+            val newIp = if (hadIp) stripGeoArray(rule["ip"] as? JsonArray) else null
+            val domainEmptied = hadDomain && newDomain!!.isEmpty()
+            val ipEmptied = hadIp && newIp!!.isEmpty()
+            // Drop only when EVERY matcher this rule had became empty (purely-geo rule).
+            when {
+                hadDomain && hadIp && domainEmptied && ipEmptied -> return@mapNotNull null
+                hadDomain && !hadIp && domainEmptied -> return@mapNotNull null
+                hadIp && !hadDomain && ipEmptied -> return@mapNotNull null
+            }
+            buildJsonObject {
+                rule.forEach { (k, v) ->
+                    when (k) {
+                        "domain" -> if (!newDomain!!.isEmpty()) put(k, newDomain)
+                        "ip" -> if (!newIp!!.isEmpty()) put(k, newIp)
+                        else -> put(k, v)
+                    }
+                }
+            }
+        }
+        return buildJsonObject {
+            routing.forEach { (k, v) -> if (k != "rules") put(k, v) }
+            put("rules", JsonArray(cleaned))
+        }
+    }
+
+    /** Strips geosite: entries from each dns server's `domains`; drops a server left with no domains. */
+    private fun stripGeoFromDns(dns: JsonObject?): JsonObject? {
+        if (dns == null) return null
+        val servers = dns["servers"] as? JsonArray ?: return dns
+        val cleaned = servers.mapNotNull { el ->
+            val server = el as? JsonObject ?: return@mapNotNull el // plain "1.1.1.1" string server
+            val domains = server["domains"] as? JsonArray ?: return@mapNotNull el
+            val newDomains = stripGeoArray(domains)
+            if (newDomains.isEmpty()) return@mapNotNull null // server only routed geo categories
+            buildJsonObject {
+                server.forEach { (k, v) -> if (k == "domains") put(k, newDomains) else put(k, v) }
+            }
+        }
+        return buildJsonObject {
+            dns.forEach { (k, v) -> if (k != "servers") put(k, v) }
+            put("servers", JsonArray(cleaned))
+        }
     }
 
     private const val WG_BAL_PREFIX = "wg-bal-"
