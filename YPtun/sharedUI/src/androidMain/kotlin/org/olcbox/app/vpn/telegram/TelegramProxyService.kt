@@ -111,6 +111,10 @@ class TelegramProxyService : Service() {
         for ((i, ep) in endpoints.withIndex()) {
             val cfg = rewriteEndpoint(baseConfig, ep)
             OlcboxVpnState.addLog("TG-WARP: [${i + 1}/${endpoints.size}] handshake via $ep…")
+            // A previous instance's SOCKS listener on 12080 is freed ASYNCHRONOUSLY by the Go side, so
+            // starting the next one too soon failed every rotation with "bind: address already in use".
+            // Wait for the port to actually free first.
+            awaitPortFree(LISTEN_PORT)
             val inst = buildInstance(creds)
             val started = runCatching { inst.start(cfg, "$LISTEN_HOST:$LISTEN_PORT") }
                 .onFailure { OlcboxVpnState.addLog("TG-WARP: start failed on $ep — ${it.message ?: it}") }
@@ -208,22 +212,25 @@ class TelegramProxyService : Service() {
             if (creds != null) setAuth(creds.user, creds.pass)
             setLogWriter(object : AwgLogWriter {
                 override fun writeLog(line: String) {
-                    val trimmed = line.trimEnd()
-                    Log.v(TAG, trimmed)
-                    if (trimmed.isEmpty()) return
-                    val eperm = trimmed.contains("operation not permitted")
-                    val silent = trimmed.contains("stopped hearing back") ||
-                        trimmed.contains("Handshake did not complete")
-                    if (eperm || silent) {
+                    val t = line.trimEnd()
+                    Log.v(TAG, t)
+                    if (t.isEmpty()) return
+                    if (t.contains("operation not permitted")) {
+                        // amneziawg spams EPERM dozens of times/sec — surface only the first, drop repeats.
                         val first = !degraded
                         degraded = true
-                        if (eperm) {
-                            // amneziawg spams EPERM dozens of times/sec — surface only the first, drop repeats.
-                            if (first) OlcboxVpnState.addLog("TG-WARP: UDP send blocked (EPERM) — will rotate/restart")
-                            return
-                        }
+                        if (first) OlcboxVpnState.addLog("TG-WARP: UDP send blocked (EPERM) — will rotate/restart")
+                        return
                     }
-                    OlcboxVpnState.addLog("TG-WARP: $trimmed")
+                    if (t.contains("stopped hearing back") || t.contains("Handshake did not complete")) {
+                        degraded = true
+                        OlcboxVpnState.addLog("TG-WARP: $t")
+                        return
+                    }
+                    // Drop amneziawg's internal per-routine churn — it floods the journal (1800+ lines).
+                    // Keep only the meaningful lines (handshake result, endpoint, working/failed, errors).
+                    if (TG_LOG_NOISE.any { t.contains(it) }) return
+                    OlcboxVpnState.addLog("TG-WARP: $t")
                 }
             })
             // Protect the WARP UDP socket through the main VpnService if its TUN is up (else no-op).
@@ -284,6 +291,19 @@ class TelegramProxyService : Service() {
         config.lineSequence().firstOrNull { it.trimStart().startsWith("Endpoint", ignoreCase = true) }
             ?.substringAfter('=')?.trim()?.takeIf { it.isNotBlank() }
 
+    /** Blocks until [port] on loopback is bindable again (the prior awg listener has been torn down). */
+    private suspend fun awaitPortFree(port: Int, timeoutMs: Long = 5_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val free = runCatching {
+                java.net.ServerSocket().use { it.bind(java.net.InetSocketAddress(LISTEN_HOST, port)) }
+                true
+            }.getOrDefault(false)
+            if (free) return
+            delay(120)
+        }
+    }
+
     private fun stopSelfSafely() {
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         stopSelf()
@@ -338,6 +358,14 @@ class TelegramProxyService : Service() {
         private const val HEALTH_TICK_MS = 4_000L
         private const val HEALTH_VERIFY_MS = 30_000L
         private const val MAX_HEALTH_RESTARTS = 5
+
+        // amneziawg-go internal per-goroutine churn — pure noise in the in-app journal. Meaningful lines
+        // (handshake result, endpoint sweep, working/failed, errors) don't match any of these.
+        private val TG_LOG_NOISE = listOf(
+            "Routine:", "UAPI:", "UDP bind has been updated", "Interface up requested",
+            "Interface state was", "transport packet lined up", "Device closing", "Device closed",
+            "- Starting", "- Stopping", "Sending keepalive packet", "Adding allowedip",
+        )
 
         /**
          * WARP endpoints to try, in order, until one carries traffic to Telegram. WARP is anycast so the
