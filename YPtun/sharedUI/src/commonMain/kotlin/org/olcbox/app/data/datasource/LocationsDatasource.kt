@@ -806,24 +806,71 @@ class LocationsRepositoryImpl(
             ).withSubscriptionInterval(initialSubscriptionInterval)
         ) ?: return null
 
-        // Enrich with FakeDNS recovered from the Happ-UA body (the only variant that carries it). The
-        // pool + dns.hosts are identical across all servers of a subscription, so a single spec is
-        // attached to every parsed location that doesn't already have one (the main YPtun/base64 import
-        // produces none). xhttp/raw-Xray locations run verbatim on Xray and are left untouched.
-        val fakeDnsSpec = source.fakednsJson?.let { fakeDnsSpecFromSubscriptionBody(it) } ?: return parsed
+        // Enrich from the Happ-UA rich body (the only variant that carries BOTH FakeDNS and the
+        // per-server `meta.serverDescription`). The main fetch keeps the user's UA (default YPtun →
+        // plain links with neither), so recover both here and attach them. FakeDNS pool + dns.hosts are
+        // identical across all servers, so one spec is attached to every location that lacks one;
+        // descriptions are matched per server. xhttp/raw-Xray locations run verbatim on Xray and are
+        // left untouched for FakeDNS.
+        val richBody = source.fakednsJson
+        val fakeDnsSpec = richBody?.let { fakeDnsSpecFromSubscriptionBody(it) }
+        val descByServer = richBody?.let { serverDescriptionsFromSubscriptionBody(it) }.orEmpty()
+        if (fakeDnsSpec == null && descByServer.isEmpty()) return parsed
         val enriched = parsed.bundle.copy(
             locations = parsed.bundle.locations.map { entry ->
-                if (entry.fakeDns != null ||
-                    !entry.proxy?.rawXrayConfig.isNullOrBlank() ||
-                    entry.proxy?.network == ProxyProfile.NETWORK_XHTTP
-                ) {
-                    entry
-                } else {
-                    entry.copy(fakeDns = fakeDnsSpec).normalized()
+                var e = entry
+                // Description: fill only when the location has none yet (a Happ-UA main fetch already set
+                // it during parse). Matched by the proxy's server:port against the rich body.
+                if (e.description.isBlank() && descByServer.isNotEmpty()) {
+                    val key = e.proxy?.let { "${it.server}:${it.serverPort}" }
+                    if (key != null) descByServer[key]?.let { d -> e = e.copy(description = d) }
                 }
+                // FakeDNS: attach to locations that don't already have one and aren't verbatim Xray.
+                if (fakeDnsSpec != null &&
+                    e.fakeDns == null &&
+                    e.proxy?.rawXrayConfig.isNullOrBlank() &&
+                    e.proxy?.network != ProxyProfile.NETWORK_XHTTP
+                ) {
+                    e = e.copy(fakeDns = fakeDnsSpec)
+                }
+                if (e !== entry) e.normalized() else entry
             }
         )
         return parsed.copy(bundle = enriched)
+    }
+
+    /**
+     * Maps `"server:port"` → per-server description (`meta.serverDescription`) from a rich Xray
+     * subscription body (Happ-UA variant). Used to attach descriptions to locations parsed from the
+     * user's chosen-UA body (default YPtun → plain links that carry no `meta`), the same way FakeDNS is
+     * recovered. Empty when the body has no descriptions.
+     */
+    private fun serverDescriptionsFromSubscriptionBody(body: String): Map<String, String> {
+        val element = runCatching { json.parseToJsonElement(body.trim()) }.getOrNull() ?: return emptyMap()
+        val configs = when {
+            element is JsonObject -> listOf(element)
+            else -> runCatching { element.jsonArray }.getOrNull()
+                ?.mapNotNull { it.jsonObjectOrNull() } ?: return emptyMap()
+        }
+        val out = mutableMapOf<String, String>()
+        val proxyProtocols = setOf("vless", "vmess", "trojan", "shadowsocks")
+        for (root in configs) {
+            val desc = root["meta"]?.jsonObjectOrNull()?.string("serverDescription")
+                ?.takeIf { it.isNotBlank() } ?: continue
+            val outbounds = runCatching { root["outbounds"]?.jsonArray }.getOrNull()
+                ?.mapNotNull { it.jsonObjectOrNull() } ?: continue
+            val proxyOutbound = outbounds.firstOrNull {
+                it.string("protocol")?.lowercase() in proxyProtocols
+            } ?: continue
+            val settings = proxyOutbound["settings"]?.jsonObjectOrNull()
+            val endpoint = settings?.get("vnext")?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?: settings?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
+            val first = endpoint?.firstOrNull()?.jsonObjectOrNull() ?: continue
+            val server = first.string("address") ?: continue
+            val port = first["port"]?.jsonPrimitive?.intOrNull ?: continue
+            out["$server:$port"] = desc
+        }
+        return out
     }
 
     /** Parses a rich Xray subscription body (array or single object) and returns its FakeDNS spec, or null. */

@@ -842,6 +842,8 @@ data class LocationEntry(
     @SerialName("storage_id")
     val storageId: String,
     val name: String = "",
+    /** Display-only description (e.g. subscription `meta.serverDescription`). See [LocationConfig.description]. */
+    val description: String = "",
     @SerialName("subscription_url")
     val subscriptionUrl: String? = null,
     val endpoint: LocationEndpointConfig? = null,
@@ -919,6 +921,7 @@ data class LocationEntry(
             val vp8Options = transportConfig.vp8
             return LocationConfig(
                 name = name,
+                description = description,
                 id = firstNotBlank(endpoint?.roomId, legacyId, legacyRoomId, legacyServer),
                 key = firstNotBlank(endpoint?.key, legacyKey, legacyPassword),
                 bypassProvider = provider,
@@ -956,6 +959,7 @@ data class LocationEntry(
         return LocationEntry(
             storageId = storageId.trim(),
             name = config.name,
+            description = config.description,
             subscriptionUrl = firstNotBlank(subscriptionUrl, legacySubscriptionUrl).ifBlank { null },
             endpoint = LocationEndpointConfig(
                 roomId = config.id,
@@ -994,6 +998,7 @@ data class LocationEntry(
             return LocationEntry(
                 storageId = storageId,
                 name = config.name,
+                description = config.description,
                 subscriptionUrl = subscriptionUrl,
                 endpoint = LocationEndpointConfig(
                     roomId = config.id,
