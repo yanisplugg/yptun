@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.olcbox.app.data.model.ProxyProfile
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -103,5 +104,52 @@ class PrepareRawXhttpTest {
         // The socks inbound was rewritten to our listen host/port.
         val inbounds = root["inbounds"]!!.jsonArray.map { it.jsonObject }
         assertTrue(inbounds.any { it["protocol"]?.jsonPrimitive?.content == "socks" && it["port"]?.jsonPrimitive?.content == "10808" })
+    }
+
+    @Test
+    fun cascadeSecondProxyChainsThroughXhttpMain() {
+        val second = ProxyProfile(
+            tag = "exit", type = ProxyProfile.TYPE_VLESS,
+            server = "exit.example.com", serverPort = 443, uuid = "exit-uuid",
+            network = ProxyProfile.NETWORK_TCP, security = ProxyProfile.SECURITY_TLS,
+            sni = "exit.example.com",
+        )
+        val out = XrayConfig.prepareRaw(
+            rawConfigJson = xhttpConfig,
+            listenPort = 10808,
+            stripGeoSelectors = true,
+            secondProfile = second,
+        )
+        val root = Json.parseToJsonElement(out).jsonObject
+        val outbounds = root["outbounds"]!!.jsonArray.map { it.jsonObject }
+        // Cascade exit present, is the FIRST outbound (default exit), and dials THROUGH the main "proxy".
+        assertEquals("cascade-exit", outbounds.first()["tag"]!!.jsonPrimitive.content)
+        val exit = outbounds.first { it["tag"]?.jsonPrimitive?.content == "cascade-exit" }
+        assertEquals("vless", exit["protocol"]!!.jsonPrimitive.content)
+        assertEquals(
+            "proxy",
+            exit["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content
+        )
+        // The xhttp main outbound is still there (as the first hop the exit dials through).
+        assertTrue(outbounds.any { it["tag"]?.jsonPrimitive?.content == "proxy" })
+    }
+
+    @Test
+    fun amneziawgSecondIsNotChainedOnRaw() {
+        val awg = ProxyProfile(
+            tag = "awg", type = ProxyProfile.TYPE_AMNEZIAWG,
+            server = "wg.example.com", serverPort = 51820,
+            awgConfig = "[Interface]\nPrivateKey = x\n[Peer]\nPublicKey = y\nEndpoint = wg.example.com:51820",
+        )
+        val out = XrayConfig.prepareRaw(
+            rawConfigJson = xhttpConfig,
+            listenPort = 10808,
+            stripGeoSelectors = true,
+            secondProfile = awg,
+        )
+        val root = Json.parseToJsonElement(out).jsonObject
+        val outbounds = root["outbounds"]!!.jsonArray.map { it.jsonObject }
+        // No cascade exit injected (AWG can't be an Xray exit outbound).
+        assertTrue(outbounds.none { it["tag"]?.jsonPrimitive?.content == "cascade-exit" })
     }
 }

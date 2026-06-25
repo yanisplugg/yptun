@@ -31,6 +31,9 @@ object XrayConfig {
     // Main (first-hop) proxy when a second/cascade proxy is present: the second exits as PROXY_TAG and
     // dials THROUGH this. With no second proxy the main itself is PROXY_TAG (the exit).
     private const val PROXY_BASE_TAG = "proxy-base"
+    // Cascade exit added on top of a VERBATIM config: dials through the config's own main proxy tag
+    // (which may itself be "proxy"), so it must be a distinct tag.
+    private const val CASCADE_EXIT_TAG = "cascade-exit"
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
 
@@ -439,6 +442,12 @@ object XrayConfig {
         // to UseIPv4 (A-only resolution, so dual-stack sites never learn an AAAA to attempt). The hev
         // bridge's IPv6 drop only gates tun→bridge, NOT the core's own outbound sockets — hence this.
         forceIpv4: Boolean = false,
+        // Optional SECOND/cascade proxy chained on top of a verbatim config: traffic exits via this
+        // proxy, which dials THROUGH the config's main proxy outbound (client → main-server →
+        // second-server → internet). Only standard Xray protocols (vless/vmess/trojan/ss) can be chained
+        // here — AmneziaWG/WireGuard/Hysteria2 aren't Xray exit outbounds and are ignored (logged by the
+        // caller). Null = single hop.
+        secondProfile: ProxyProfile? = null,
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
@@ -491,6 +500,28 @@ object XrayConfig {
         val userOutbounds = (root["outbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
         val userOutboundTags = userOutbounds.mapNotNull { it["tag"]?.jsonPrimitive?.contentOrNull }.toSet()
         val userRouting = root["routing"] as? JsonObject
+
+        // CASCADE: a standard second proxy chained on top of the verbatim config. Its exit outbound
+        // dials THROUGH the config's main proxy outbound (sockopt.dialerProxy) and becomes the default
+        // exit, so traffic flows client → main-server → second-server → internet.
+        val cascadeTypes = setOf(
+            ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS,
+            ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
+        )
+        val cascadeSecond = secondProfile?.takeIf { it.isComplete() && it.type in cascadeTypes }
+        // The config's main proxy outbound tag (the protocol outbound it exits through today).
+        val mainProxyTag = userOutbounds.firstOrNull {
+            it["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in cascadeTypes
+        }?.get("tag")?.jsonPrimitive?.contentOrNull
+        val cascadeOutbound = if (cascadeSecond != null && mainProxyTag != null) {
+            buildProxyOutbound(
+                cascadeSecond,
+                chained = false,
+                detourTagOverride = mainProxyTag,
+                tag = CASCADE_EXIT_TAG,
+                chainViaDialerProxy = true,
+            )
+        } else null
         // HONOR THE CONFIG'S OWN ROUTING: when the raw config already ships routing rules, the embedded
         // routing takes precedence and the app's routing profile is NOT overlaid. Overlaying it injected
         // extra selectors (e.g. geosite:category-ads) that need a geosite.dat the config never asked for,
@@ -554,8 +585,14 @@ object XrayConfig {
         } else strippedDns
         // The routing to write: strip geo ONLY from the config's OWN embedded routing (userHasRouting) —
         // a merged routing PROFILE keeps its geo selectors (handled separately by the caller's asset path).
-        val routingToWrite =
+        val geoStrippedRouting =
             if (stripGeoSelectors && userHasRouting) stripGeoFromRouting(finalRouting) else finalRouting
+        // Cascade: send everything that exited via the main proxy through the cascade exit instead, so
+        // the exit (which dials through the main) becomes the real exit. Default fall-through is also
+        // covered by emitting CASCADE_EXIT_TAG as the FIRST outbound below.
+        val routingToWrite = if (cascadeOutbound != null && mainProxyTag != null) {
+            rewriteOutboundTag(geoStrippedRouting, mainProxyTag, CASCADE_EXIT_TAG)
+        } else geoStrippedRouting
 
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
@@ -572,6 +609,8 @@ object XrayConfig {
                 nonSocks.forEach { add(it) }
             }
             putJsonArray("outbounds") {
+                // Cascade exit FIRST so it's xray's default outbound (fall-through traffic exits via it).
+                cascadeOutbound?.let { add(it) }
                 userOutbounds.forEach { add(if (forceIpv4) forceIpv4Freedom(it) else it) }
                 // The profile rules reference direct/block tags — make sure they exist.
                 if (mergedRouting != null && "direct" !in userOutboundTags) {
@@ -594,6 +633,24 @@ object XrayConfig {
             if (routingToWrite != null) put("routing", routingToWrite)
         }
         return json.encodeToString(newRoot)
+    }
+
+    /** Rewrites every routing rule whose `outboundTag` is [from] to [to] (used to redirect the main
+     *  proxy's traffic to the cascade exit). Leaves other rules untouched. */
+    private fun rewriteOutboundTag(routing: JsonObject?, from: String, to: String): JsonObject? {
+        if (routing == null) return null
+        val rules = routing["rules"] as? JsonArray ?: return routing
+        val rewritten = rules.map { el ->
+            val rule = el as? JsonObject ?: return@map el
+            if (rule["outboundTag"]?.jsonPrimitive?.contentOrNull != from) return@map el
+            buildJsonObject {
+                rule.forEach { (k, v) -> if (k == "outboundTag") put(k, to) else put(k, v) }
+            }
+        }
+        return buildJsonObject {
+            routing.forEach { (k, v) -> if (k != "rules") put(k, v) }
+            put("rules", JsonArray(rewritten))
+        }
     }
 
     /** Forces a `freedom` outbound to ForceIPv4 (so it never dials IPv6, incl. raw v6 literals). */

@@ -1323,9 +1323,17 @@ class OlcboxVpnService : VpnService() {
             // Cascade diagnostics — make the "second proxy is ignored / exits via the 1st" symptom
             // visible instead of silent: say whether the cascade is active, dropped as incomplete, or
             // unusable because the main is a verbatim Xray config (prepareRaw can't chain a 2nd hop).
+            // Standard Xray protocols can be chained over a verbatim config (prepareRaw dialerProxy);
+            // AmneziaWG/WireGuard/Hysteria2 can't (they're client tunnels, not Xray exit outbounds).
+            val secondChainableOnRaw = secondProfile?.type in setOf(
+                ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS,
+                ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
+            )
             when {
+                secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() && !secondChainableOnRaw ->
+                    addLog("ВНИМАНИЕ: 2-й прокси типа '${secondProfile.type}' (например AmneziaWG/WireGuard/Hysteria2) — это клиентский ТУННЕЛЬ, а не выходной Xray-outbound, поэтому НЕ может быть каскадом поверх кастомного Xray-конфига и игнорируется. Для каскада поверх xhttp используйте vless/vmess/trojan/ss.")
                 secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() ->
-                    addLog("ВНИМАНИЕ: основной прокси — полный кастомный Xray-конфиг; второй (каскадный) прокси НЕ может быть прицеплен поверх него и игнорируется (выход остаётся через 1-й). Нужен обычный vless/vmess/trojan/ss как основной.")
+                    addLog("Каскад: выход через 2-й прокси '${secondProfile.displayName()}' поверх кастомного Xray-конфига")
                 secondProfile != null ->
                     addLog("Каскад: выход через 2-й прокси '${secondProfile.displayName()}' поверх основного '${effectiveProfile.displayName()}'")
                 config.proxy2 != null ->
@@ -1360,6 +1368,9 @@ class OlcboxVpnService : VpnService() {
                         forceIpv4 = loadTrafficSettings().domainStrategy.let {
                             it == "ipv4_only" || it == "prefer_ipv4"
                         },
+                        // Chain a standard second proxy over the verbatim config (xhttp main + vless/etc.
+                        // second). Non-chainable seconds (AmneziaWG…) are ignored by prepareRaw.
+                        secondProfile = secondProfile,
                     )
                 } else {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
