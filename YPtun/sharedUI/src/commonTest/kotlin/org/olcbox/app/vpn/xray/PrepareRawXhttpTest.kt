@@ -135,6 +135,33 @@ class PrepareRawXhttpTest {
     }
 
     @Test
+    fun xhttpExtraHostIsLiftedToTopLevel() {
+        // Domain-fronted config: real host only in extra.host, top-level host empty + reality SNI set.
+        val fronted = """
+        {
+          "inbounds": [ { "listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": { "auth": "noauth", "udp": true }, "tag": "socks" } ],
+          "outbounds": [
+            { "protocol": "vless",
+              "settings": { "vnext": [ { "address": "poetica.example.com", "port": 443, "users": [ { "id": "uuid", "encryption": "none" } ] } ] },
+              "streamSettings": { "network": "xhttp", "security": "reality",
+                "realitySettings": { "publicKey": "PK", "serverName": "front.cdn.example", "shortId": "9c2e" },
+                "xhttpSettings": { "mode": "auto", "host": "", "extra": { "host": "poetica.example.com", "seqKey": "X-Request-Seq" } } },
+              "tag": "proxy" },
+            { "protocol": "freedom", "tag": "direct" }
+          ]
+        }
+        """.trimIndent()
+        val out = XrayConfig.prepareRaw(rawConfigJson = fronted, listenPort = 10808)
+        val proxy = Json.parseToJsonElement(out).jsonObject["outbounds"]!!.jsonArray
+            .map { it.jsonObject }.first { it["tag"]?.jsonPrimitive?.content == "proxy" }
+        val xhttp = proxy["streamSettings"]!!.jsonObject["xhttpSettings"]!!.jsonObject
+        // Top-level host now carries the real (fronted) host so xray's extra-override sends it correctly.
+        assertEquals("poetica.example.com", xhttp["host"]!!.jsonPrimitive.content)
+        // extra is preserved (seqKey etc. still there).
+        assertTrue(xhttp["extra"]!!.jsonObject["seqKey"] != null)
+    }
+
+    @Test
     fun amneziawgSecondIsNotChainedOnRaw() {
         val awg = ProxyProfile(
             tag = "awg", type = ProxyProfile.TYPE_AMNEZIAWG,

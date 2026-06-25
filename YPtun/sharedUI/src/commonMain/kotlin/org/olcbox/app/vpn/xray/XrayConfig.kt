@@ -611,7 +611,10 @@ object XrayConfig {
             putJsonArray("outbounds") {
                 // Cascade exit FIRST so it's xray's default outbound (fall-through traffic exits via it).
                 cascadeOutbound?.let { add(it) }
-                userOutbounds.forEach { add(if (forceIpv4) forceIpv4Freedom(it) else it) }
+                userOutbounds.forEach { ob ->
+                    val lifted = liftXhttpExtraHostPath(ob)
+                    add(if (forceIpv4) forceIpv4Freedom(lifted) else lifted)
+                }
                 // The profile rules reference direct/block tags — make sure they exist.
                 if (mergedRouting != null && "direct" !in userOutboundTags) {
                     addJsonObject {
@@ -650,6 +653,41 @@ object XrayConfig {
         return buildJsonObject {
             routing.forEach { (k, v) -> if (k != "rules") put(k, v) }
             put("rules", JsonArray(rewritten))
+        }
+    }
+
+    /**
+     * Lifts `xhttpSettings.extra.host`/`.path` to the TOP-LEVEL `xhttpSettings.host`/`.path` when the
+     * top level is empty. xray-core merges `extra` then OVERRIDES extra.Host/Path with the top-level
+     * values (infra/conf transport_internet: `extra.Host = c.Host`), so a domain-fronted config that
+     * only carries the real host in `extra.host` (top-level host="") sends an EMPTY host → xray falls
+     * back to the reality SNI as the Host header → the fronted backend returns HTTP 400. Copying the
+     * value up makes the override a no-op and the correct Host header is sent. No-op for configs that
+     * already put host at the top level (the working ones) or have no xhttp `extra`.
+     */
+    private fun liftXhttpExtraHostPath(outbound: JsonObject): JsonObject {
+        val stream = outbound["streamSettings"] as? JsonObject ?: return outbound
+        val xhttp = stream["xhttpSettings"] as? JsonObject ?: return outbound
+        val extra = xhttp["extra"] as? JsonObject ?: return outbound
+        val topHost = xhttp["host"]?.jsonPrimitive?.contentOrNull
+        val topPath = xhttp["path"]?.jsonPrimitive?.contentOrNull
+        val extraHost = extra["host"]?.jsonPrimitive?.contentOrNull
+        val extraPath = extra["path"]?.jsonPrimitive?.contentOrNull
+        val newHost = if (topHost.isNullOrBlank() && !extraHost.isNullOrBlank()) extraHost else topHost
+        val newPath = if (topPath.isNullOrBlank() && !extraPath.isNullOrBlank()) extraPath else topPath
+        if (newHost == topHost && newPath == topPath) return outbound
+        val newXhttp = buildJsonObject {
+            xhttp.forEach { (k, v) -> if (k != "host" && k != "path") put(k, v) }
+            if (!newHost.isNullOrBlank()) put("host", newHost)
+            if (!newPath.isNullOrBlank()) put("path", newPath)
+        }
+        val newStream = buildJsonObject {
+            stream.forEach { (k, v) -> if (k != "xhttpSettings") put(k, v) }
+            put("xhttpSettings", newXhttp)
+        }
+        return buildJsonObject {
+            outbound.forEach { (k, v) -> if (k != "streamSettings") put(k, v) }
+            put("streamSettings", newStream)
         }
     }
 
