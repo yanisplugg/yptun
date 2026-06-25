@@ -1026,7 +1026,7 @@ private fun ConnectionSettingsContent(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text(s.telegramProxyOpen)
+                            Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
                             onClick = {
@@ -1041,7 +1041,7 @@ private fun ConnectionSettingsContent(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text(s.telegramProxyCopyLink)
+                            Text(s.telegramProxyCopyLink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
