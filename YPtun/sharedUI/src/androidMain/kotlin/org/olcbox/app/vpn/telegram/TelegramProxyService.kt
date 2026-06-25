@@ -399,12 +399,16 @@ class TelegramProxyService : Service() {
          * that are commonly open. The cached/working endpoint is tried first (see startTunnel).
          */
         private val WARP_FALLBACK_ENDPOINTS = listOf(
+            // Proven-working endpoint+port from a real DPI network (port 894, NOT 2408 which DPI often
+            // throttles) — tried early so a fresh config lands on a port that actually carries data.
+            "162.159.192.8:894",
             "engage.cloudflareclient.com:2408",
+            "162.159.192.1:894",
+            "162.159.192.8:2408",
             "162.159.192.1:2408",
             "162.159.193.10:2408",
             "188.114.96.1:2408",
             "188.114.97.1:2408",
-            "162.159.192.1:894",
             "162.159.192.1:945",
             "162.159.193.10:4500",
             "188.114.96.1:1701",

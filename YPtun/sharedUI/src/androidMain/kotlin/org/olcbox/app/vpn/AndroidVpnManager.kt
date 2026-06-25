@@ -520,6 +520,14 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             if (!config.isNullOrBlank() && !config.contains("PrivateKey", ignoreCase = true)) {
                 config = null
             }
+            // Pre-I1 caches handshake but carry no data on DPI networks (no DPI-evasion I1 packet — see
+            // WarpConfigGenerator.WARP_I1). Drop them so a fresh config WITH I1 is regenerated.
+            if (!config.isNullOrBlank() &&
+                config.lineSequence().none { it.trimStart().startsWith("I1", ignoreCase = true) }
+            ) {
+                OlcboxVpnState.addLog("Telegram proxy: cached config has no DPI-evasion packet — regenerating")
+                config = null
+            }
             if (config.isNullOrBlank()) {
                 OlcboxVpnState.addLog("Telegram proxy: no cached config — generating WARP via generators…")
                 _telegramProxyState.value = TelegramProxyState.Generating
