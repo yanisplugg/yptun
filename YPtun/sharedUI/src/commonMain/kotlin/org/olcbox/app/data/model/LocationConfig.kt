@@ -268,6 +268,12 @@ data class ExtraRoom(
 @Serializable
 data class LocationConfig(
     val name: String = "",
+    /**
+     * Optional human-readable description shown under the location name. Populated from a subscription
+     * when the source carries one (Happ-style configs put it in `meta.serverDescription`); blank when
+     * the source has none. Display-only — does not affect routing.
+     */
+    val description: String = "",
     val id: String = "",
     val key: String = "",
     @SerialName("bypass_provider")
@@ -365,6 +371,7 @@ data class LocationConfig(
         val normalizedTransport = normalizeTransport(transport, provider)
         return copy(
             name = name.trim(),
+            description = description.trim(),
             id = id.trim(),
             key = key.trim(),
             bypassProvider = provider,

@@ -1824,6 +1824,9 @@ class LocationsRepositoryImpl(
             proxyOutbound.string("tag"),
             "$server:$port"
         )
+        // Happ-style subscriptions carry a per-server description in `meta.serverDescription` — surface
+        // it as the location's description (display-only). Blank when the source has none.
+        val description = root["meta"]?.jsonObjectOrNull()?.string("serverDescription").orEmpty()
 
         // Try to fully translate the Xray proxy outbound into typed sing-box-runnable fields PLUS a
         // FakeDNS spec (fakeip pool + dns.hosts blackholes). When that succeeds, the location runs on
@@ -1834,6 +1837,7 @@ class LocationsRepositoryImpl(
         val location = if (typed != null) {
             LocationConfig(
                 name = name,
+                description = description,
                 engine = EngineType.Standard,
                 proxy = typed,
                 core = ProxyCore.Auto,
@@ -1843,6 +1847,7 @@ class LocationsRepositoryImpl(
             // Untranslatable (xhttp / unknown transport) → run the whole template verbatim on Xray.
             LocationConfig(
                 name = name,
+                description = description,
                 engine = EngineType.Standard,
                 proxy = ProxyProfile(
                     tag = name,

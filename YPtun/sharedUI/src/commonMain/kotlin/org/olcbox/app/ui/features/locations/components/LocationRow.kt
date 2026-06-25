@@ -167,6 +167,19 @@ fun LocationRow(
                 overflow = TextOverflow.Visible,
                 softWrap = true
             )
+
+            // Subscription-supplied description (Happ `meta.serverDescription`), shown under the subtitle
+            // when present. Display-only; absent for locations whose source carries no description.
+            location.config?.description?.takeIf { it.isNotBlank() }?.let { desc ->
+                Text(
+                    text = desc,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true
+                )
+            }
         }
         
         // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),
