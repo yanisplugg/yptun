@@ -1020,13 +1020,23 @@ private fun ConnectionSettingsContent(
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
+                            // Icon pinned to the start + label centered in the remaining space, with a
+                            // trailing spacer the icon's width. BOTH buttons use this exact layout so their
+                            // icons/labels line up vertically — a plain centered icon+label group sits at a
+                            // different x on each button (labels differ in length) and looked skewed.
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Send,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(Modifier.width(8.dp))
-                            Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                s.telegramProxyOpen,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                            )
+                            Spacer(Modifier.width(18.dp))
                         }
                         OutlinedButton(
                             onClick = {
@@ -1040,8 +1050,14 @@ private fun ConnectionSettingsContent(
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(Modifier.width(8.dp))
-                            Text(s.telegramProxyCopyLink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                s.telegramProxyCopyLink,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                            )
+                            Spacer(Modifier.width(18.dp))
                         }
                     }
                 }
