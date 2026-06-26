@@ -58,10 +58,44 @@ class TelegramProxyService : Service() {
     // "Handshake did not complete"), which is how a throttled WARP endpoint dies after letting the
     // first handshake through. Lets the health loop react in seconds and rotate to another endpoint.
     @Volatile private var degraded = false
+    // Set when the default network changes (Wi-Fi⇄cellular, or connectivity returning after Doze): the
+    // WARP UDP socket is bound to the old handle and the health loop should re-verify/rotate AT ONCE
+    // rather than wait out its slow heartbeat (the cause of the long reconnect after the phone sleeps).
+    @Volatile private var networkKicked = false
     // The WARP endpoint the live tunnel is using, so the watchdog can rotate AWAY from it on failure.
     @Volatile private var activeEndpoint: String? = null
 
+    private var connectivityManager: android.net.ConnectivityManager? = null
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        // Watch the default network so we can recover the WARP tunnel the instant connectivity returns
+        // after sleep (or flips Wi-Fi⇄cellular) instead of waiting for the next slow health heartbeat.
+        runCatching {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+                // A new default network (connectivity back after Doze, or Wi-Fi⇄cellular) or losing one
+                // both mean the WARP socket's underlying handle changed — kick an immediate re-verify.
+                // (Deliberately NOT onCapabilitiesChanged: it fires on every signal/validation blip.)
+                override fun onAvailable(network: android.net.Network) { networkKicked = true }
+                override fun onLost(network: android.net.Network) { networkKicked = true }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                cm.registerDefaultNetworkCallback(cb)
+            } else {
+                // API 23: registerDefaultNetworkCallback doesn't exist — watch the INTERNET-capable network.
+                val req = android.net.NetworkRequest.Builder()
+                    .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                cm.registerNetworkCallback(req, cb)
+            }
+            connectivityManager = cm
+            networkCallback = cb
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -171,20 +205,35 @@ class TelegramProxyService : Service() {
     ) {
         healthJob?.cancel()
         degraded = false
+        networkKicked = false
         healthJob = scope.launch {
             var consecutiveFails = 0
             var restarts = 0
             var sinceVerifyMs = 0L
             var persistedEp = extractEndpoint(baseConfig)
             val dead = linkedSetOf<String>() // endpoints that died under us — rotate away from them
+            var lastWallMs = System.currentTimeMillis()
             while (isActive && instance != null) {
                 delay(HEALTH_TICK_MS)
                 if (instance == null) break
+                // Wall-clock gap >> the tick means the device was frozen in Doze / deep sleep: the WARP
+                // handshake is now stale (and the underlying network may have swapped). That's the slow
+                // post-sleep reconnect — the loop used to wait out the full HEALTH_VERIFY_MS heartbeat AND
+                // need two failures before rotating. On wake (or a network change) re-verify AT ONCE and
+                // treat a single failure as decisive, so recovery is seconds not a minute+.
+                val now = System.currentTimeMillis()
+                val wokeFromSleep = (now - lastWallMs) > HEALTH_TICK_MS * 3
+                lastWallMs = now
+                val kicked = networkKicked.also { networkKicked = false }
+                val wake = wokeFromSleep || kicked
                 val sawDegrade = degraded.also { degraded = false }
                 sinceVerifyMs += HEALTH_TICK_MS
-                // Only spend a probe when something looks wrong, or on the slow heartbeat.
-                if (!sawDegrade && sinceVerifyMs < HEALTH_VERIFY_MS) continue
+                // Only spend a probe when something looks wrong, on wake/network-change, or on the slow heartbeat.
+                if (!sawDegrade && !wake && sinceVerifyMs < HEALTH_VERIFY_MS) continue
                 sinceVerifyMs = 0
+                if (wake) OlcboxVpnState.addLog(
+                    "Telegram: ${if (wokeFromSleep) "woke from sleep" else "network changed"} — re-verifying tunnel now"
+                )
 
                 if (telegramReachableThroughWarp(creds)) {
                     consecutiveFails = 0
@@ -199,8 +248,9 @@ class TelegramProxyService : Service() {
                     }
                     continue
                 }
-                // A degrade signal (EPERM / silent handshake) is decisive — rotate at once; else wait for 2.
-                if (!sawDegrade && ++consecutiveFails < 2) continue
+                // A degrade signal (EPERM / silent handshake), a wake, or a network change is decisive —
+                // rotate at once; an ordinary mid-session blip still waits for 2 fails to avoid churn.
+                if (!sawDegrade && !wake && ++consecutiveFails < 2) continue
                 if (restarts >= MAX_HEALTH_RESTARTS) {
                     OlcboxVpnState.addLog("Telegram: relay keeps dying after $restarts tries — likely throttled on this network. Re-toggle to retry.")
                     break
@@ -370,6 +420,9 @@ class TelegramProxyService : Service() {
     override fun onDestroy() {
         healthJob?.cancel()
         healthJob = null
+        networkCallback?.let { cb -> runCatching { connectivityManager?.unregisterNetworkCallback(cb) } }
+        networkCallback = null
+        connectivityManager = null
         runCatching { instance?.stop() }
         instance = null
         scope.cancel()
