@@ -1069,7 +1069,14 @@ object XrayConfig {
                                     put("id", profile.uuid)
                                     if (profile.type == ProxyProfile.TYPE_VLESS) {
                                         put("encryption", "none")
-                                        if (profile.flow.isNotBlank()) put("flow", profile.flow)
+                                        // XTLS Vision (xtls-rprx-vision) splices the RAW TLS connection to
+                                        // ITS OWN server — it can't ride a chain. When this vless dials
+                                        // through a detour (cascade exit over the main, an olcRTC/VK-TURN/
+                                        // dnstt base hop), keeping the flow makes the exit hang = "no
+                                        // connection" (e.g. a tcp vless-reality 2nd proxy over an xhttp
+                                        // main). Drop it on chained hops; plain vless tunnels fine. The
+                                        // direct (un-chained) hop keeps its flow so Vision still works there.
+                                        if (profile.flow.isNotBlank() && detourTag == null) put("flow", profile.flow)
                                     } else {
                                         put("alterId", profile.alterId)
                                         put("security", profile.cipher.ifBlank { "auto" })

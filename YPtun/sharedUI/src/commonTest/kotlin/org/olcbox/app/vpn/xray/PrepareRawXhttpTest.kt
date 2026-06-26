@@ -168,6 +168,34 @@ class PrepareRawXhttpTest {
     }
 
     @Test
+    fun cascadeExitDropsXtlsVisionFlow() {
+        // XTLS Vision splices the RAW TLS to its own server and CAN'T ride a chain — a vless-reality/
+        // vision 2nd proxy over the xhttp main hung ("no connection"). The chained exit must drop `flow`.
+        val second = ProxyProfile(
+            tag = "exit", type = ProxyProfile.TYPE_VLESS,
+            server = "exit.example.com", serverPort = 443, uuid = "exit-uuid",
+            network = ProxyProfile.NETWORK_TCP, security = ProxyProfile.SECURITY_TLS,
+            sni = "exit.example.com", flow = "xtls-rprx-vision",
+        )
+        val out = XrayConfig.prepareRaw(
+            rawConfigJson = xhttpConfig,
+            listenPort = 10808,
+            stripGeoSelectors = true,
+            secondProfile = second,
+        )
+        val exit = Json.parseToJsonElement(out).jsonObject["outbounds"]!!.jsonArray
+            .map { it.jsonObject }.first { it["tag"]?.jsonPrimitive?.content == "cascade-exit" }
+        val user = exit["settings"]!!.jsonObject["vnext"]!!.jsonArray.first().jsonObject["users"]!!
+            .jsonArray.first().jsonObject
+        assertTrue(user["flow"] == null, "Vision flow must be dropped on a chained exit (else it hangs)")
+        // It still dials through the main proxy (chaining preserved).
+        assertEquals(
+            "proxy",
+            exit["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content
+        )
+    }
+
+    @Test
     fun xhttpExtraHostIsLiftedToTopLevel() {
         // Domain-fronted config: real host only in extra.host, top-level host empty + reality SNI set.
         val fronted = """
