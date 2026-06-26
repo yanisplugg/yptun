@@ -67,19 +67,34 @@ object XrayConfig {
     }
 
     /**
-     * Forces an UPSTREAM (proxied) DNS resolver to DNS-over-TCP. The remote resolvers ride the proxy/
-     * cascade, and a splithttp/cascade exit that drops or blocks UDP:53 to 8.8.8.8/1.1.1.1 made every
-     * lookup wait out a 4s serial timeout → "record not found" → ERR_CONNECTION_ABORTED. TCP rides the
-     * reliable stream instead. Only bare IP literals are converted: a hostname DNS server would need its
-     * own bootstrap resolution over TCP (possible deadlock), and a server that already carries a scheme
-     * (udp://, tcp://, https:// DoH, quic://) or a special keyword (fakedns) is left exactly as the user
-     * set it. Direct DNS is deliberately NOT routed through this — it's queried for direct/RU domains
-     * where plain UDP is fine.
+     * Major DNS providers that serve DNS-over-HTTPS on their well-known IP with a cert that carries the
+     * IP as a SAN — so `https://<ip>/dns-query` needs NO bootstrap resolution and can't be MITM'd.
      */
-    private fun tcpDns(server: String): String {
+    private val DOH_IP_PROVIDERS = setOf(
+        "8.8.8.8", "8.8.4.4",                 // Google
+        "1.1.1.1", "1.0.0.1",                 // Cloudflare
+        "9.9.9.9", "149.112.112.112",         // Quad9
+        "223.5.5.5", "223.6.6.6",             // AliDNS
+    )
+
+    /**
+     * Rewrites an UPSTREAM (proxied) DNS resolver so it survives an exit that blocks plain DNS. The
+     * remote resolvers ride the proxy/cascade, and a splithttp/cascade exit that drops UDP:53 *and*
+     * TCP:53 to 8.8.8.8/1.1.1.1 made every lookup wait out a 4s serial timeout → "record not found" →
+     * ERR_CONNECTION_ABORTED. So:
+     *  - a known major provider IP → DNS-over-HTTPS on its own IP (`https://<ip>/dns-query`): rides
+     *    443 like normal traffic, no bootstrap (IP-SAN cert), can't be port-53-blocked.
+     *  - any other bare IP → DNS-over-TCP (`tcp://<ip>`): reliable stream, still better than UDP.
+     *  - a server that already carries a scheme (udp/tcp/https/quic), a hostname, or `fakedns` is left
+     *    EXACTLY as the user set it (a hostname DoH would need its own bootstrap; don't touch it).
+     * Direct DNS is deliberately NOT routed through this — it's queried for direct/RU domains where
+     * plain UDP is fine.
+     */
+    private fun proxiedDns(server: String): String {
         val s = server.trim()
         if (s.isEmpty() || s.contains("://") || s == FAKEDNS_SERVER) return s
-        val isIpv4 = s.isNotEmpty() && s.all { it.isDigit() || it == '.' } && s.count { it == '.' } == 3
+        if (s in DOH_IP_PROVIDERS) return "https://$s/dns-query"
+        val isIpv4 = s.all { it.isDigit() || it == '.' } && s.count { it == '.' } == 3
         val isIpv6 = s.contains(':') && s.all { it.isDigit() || (it in 'a'..'f') || (it in 'A'..'F') || it == ':' }
         return if (isIpv4 || isIpv6) "tcp://$s" else s
     }
@@ -205,10 +220,11 @@ object XrayConfig {
                 putJsonArray("servers") {
                     // FakeDNS first so sniffed domains get a synthetic IP before the real resolvers.
                     if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
-                    // Remote resolvers ride the proxy/cascade → force DNS-over-TCP so they aren't dropped
-                    // by an exit that blocks UDP:53 (the 4s-serial-timeout → ERR_CONNECTION_ABORTED bug).
-                    add(tcpDns(traffic.remoteDns))
-                    if (traffic.remoteDns2.isNotBlank()) add(tcpDns(traffic.remoteDns2))
+                    // Remote resolvers ride the proxy/cascade → DoH-over-443 (major IPs) or DNS-over-TCP
+                    // so they aren't dropped by an exit that blocks port 53 (the 4s-serial-timeout →
+                    // ERR_CONNECTION_ABORTED bug).
+                    add(proxiedDns(traffic.remoteDns))
+                    if (traffic.remoteDns2.isNotBlank()) add(proxiedDns(traffic.remoteDns2))
                     add(traffic.directDns)
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())

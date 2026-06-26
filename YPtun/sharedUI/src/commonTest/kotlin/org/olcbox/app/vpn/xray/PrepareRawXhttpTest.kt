@@ -314,26 +314,34 @@ class PrepareRawXhttpTest {
     }
 
     @Test
-    fun buildForcesRemoteDnsOverTcpButLeavesDirectUdp() {
-        // Device logs (Finland-xhttp + Nürnberg cascade): UDP DNS to 8.8.8.8/1.1.1.1 timed out over the
-        // splithttp/cascade exit → 4s serial timeouts → ERR_CONNECTION_ABORTED. Remote resolvers must ride
-        // DNS-over-TCP; direct DNS stays plain UDP (queried for direct/RU domains where UDP is fine).
-        val main = ProxyProfile(
-            tag = "main", type = ProxyProfile.TYPE_VLESS, server = "main.example.com", serverPort = 8443,
-            uuid = "uuid-main", network = ProxyProfile.NETWORK_XHTTP, security = ProxyProfile.SECURITY_TLS,
-            sni = "main.example.com",
-        )
-        val out = XrayConfig.build(
-            profile = main, listenPort = 10808,
-            traffic = org.olcbox.app.data.model.TrafficSettings(
-                remoteDns = "8.8.8.8", remoteDns2 = "1.1.1.1", directDns = "223.5.5.5",
-            ),
-        )
-        val servers = Json.parseToJsonElement(out).jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
-            .map { it.jsonPrimitive.content }
-        assertTrue(servers.contains("tcp://8.8.8.8"), "remoteDns must be DNS-over-TCP")
-        assertTrue(servers.contains("tcp://1.1.1.1"), "remoteDns2 must be DNS-over-TCP")
-        assertTrue(servers.contains("223.5.5.5"), "directDns stays plain UDP")
-        assertFalse(servers.contains("tcp://223.5.5.5"), "directDns must NOT be forced to TCP")
+    fun buildRoutesRemoteDnsOverDohOrTcpButLeavesDirectUdp() {
+        // Device logs (Finland-xhttp + Nürnberg cascade): DNS to 8.8.8.8/1.1.1.1 timed out over the exit
+        // (port 53 blocked both UDP & TCP) → 4s serial timeouts → ERR_CONNECTION_ABORTED. Remote resolvers
+        // must ride DoH-over-443 (major provider IPs) or DNS-over-TCP (other IPs); direct DNS stays plain
+        // UDP (queried for direct/RU domains where UDP is fine).
+        fun servers(remote: String, remote2: String): List<String> {
+            val main = ProxyProfile(
+                tag = "main", type = ProxyProfile.TYPE_VLESS, server = "main.example.com", serverPort = 8443,
+                uuid = "uuid-main", network = ProxyProfile.NETWORK_XHTTP, security = ProxyProfile.SECURITY_TLS,
+                sni = "main.example.com",
+            )
+            val out = XrayConfig.build(
+                profile = main, listenPort = 10808,
+                traffic = org.olcbox.app.data.model.TrafficSettings(
+                    remoteDns = remote, remoteDns2 = remote2, directDns = "223.5.5.5",
+                ),
+            )
+            return Json.parseToJsonElement(out).jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
+                .map { it.jsonPrimitive.content }
+        }
+        // Major providers → DoH on their own IP; direct DNS untouched.
+        val s1 = servers("8.8.8.8", "1.1.1.1")
+        assertTrue(s1.contains("https://8.8.8.8/dns-query"), "Google remoteDns → DoH")
+        assertTrue(s1.contains("https://1.1.1.1/dns-query"), "Cloudflare remoteDns2 → DoH")
+        assertTrue(s1.contains("223.5.5.5"), "directDns stays plain UDP")
+        assertFalse(s1.contains("https://223.5.5.5/dns-query"), "directDns must NOT be rewritten")
+        // A non-DoH custom IP → DNS-over-TCP fallback (still no port-53-UDP reliance).
+        val s2 = servers("45.90.28.0", "")
+        assertTrue(s2.contains("tcp://45.90.28.0"), "unknown IP remoteDns → tcp://")
     }
 }
