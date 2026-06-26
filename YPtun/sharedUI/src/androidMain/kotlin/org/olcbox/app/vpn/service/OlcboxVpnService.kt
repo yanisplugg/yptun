@@ -1343,17 +1343,32 @@ class OlcboxVpnService : VpnService() {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""
                 val json = if (!rawXray.isNullOrBlank()) {
-                    // User-supplied full Xray config: run mostly verbatim. prepareRaw HONORS the config's
-                    // own routing (when it has any) and only merges the app routing profile into configs
-                    // that ship none. stripGeoSelectors=true drops the config's OWN geosite:/geoip:
-                    // selectors so it ALWAYS loads — otherwise xray fails ("open .../geosite.dat: no such
-                    // file" on a blocked network that can't download the db, or "failed to parse domain
-                    // rule: geosite:<cat>" when the db lacks a category). All regexp/domain/CIDR rules
-                    // (the real RU routing) are kept. The merged profile (configs with NO own routing)
-                    // still uses the downloaded geo db via assetPath.
-                    if (routingProfile != null) assetPath = ensureGeoAssetPath(routingProfile)
-                    addLog("Starting Xray with custom config (embedded routing honored)" +
-                        if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else "")
+                    // User-supplied full Xray config (e.g. a Happ/Remnawave JSON subscription): run it
+                    // VERBATIM and HONOR ITS OWN routing — the config's geosite:/geoip:/domain: rules take
+                    // PRECEDENCE over the app's routing profile (prepareRaw only merges the profile into
+                    // configs that ship NO routing of their own). To honor geosite:/geoip: selectors xray
+                    // needs the geo .dat, so when the config references them we download geoip.dat/
+                    // geosite.dat (from the profile's sources or the global runetfreedom defaults, which DO
+                    // carry ru-available-only-inside / category-ads-all) and hand xray the asset dir. Only
+                    // if that download genuinely fails (e.g. a blocked network with no db cached yet) do we
+                    // fall back to stripping the geo selectors so the config still LOADS (degraded routing)
+                    // instead of failing with "open .../geosite.dat: no such file". Non-geo rules always stay.
+                    val rawNeedsGeo = rawXray.contains("geosite:") || rawXray.contains("geoip:")
+                    assetPath = when {
+                        rawNeedsGeo -> ensureRawConfigGeoAssetPath(routingProfile)
+                        routingProfile != null -> ensureGeoAssetPath(routingProfile)
+                        else -> ""
+                    }
+                    // Honor the config's own geo routing when the db is available; strip ONLY as a
+                    // last-resort fallback when it couldn't be fetched (so the config still loads).
+                    val stripGeo = rawNeedsGeo && assetPath.isEmpty()
+                    addLog(
+                        "Starting Xray with custom config (embedded routing honored" +
+                            (if (rawNeedsGeo && assetPath.isNotEmpty()) ", geo db loaded for its geosite:/geoip:" else "") +
+                            (if (stripGeo) ", geo db unavailable → geo selectors stripped" else "") +
+                            (if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else "") +
+                            ")"
+                    )
                     XrayConfig.prepareRaw(
                         rawConfigJson = rawXray,
                         listenPort = socksListenPort,
@@ -1362,7 +1377,7 @@ class OlcboxVpnService : VpnService() {
                         socksPassword = socksPassword,
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                         fakeDnsEnabled = loadTrafficSettings().fakeDnsEnabled,
-                        stripGeoSelectors = true,
+                        stripGeoSelectors = stripGeo,
                         // ipv4_only/prefer_ipv4 → force the verbatim config's direct freedom + DNS to IPv4
                         // so direct .ru sites (e.g. 2ip.ru) can't leak real IPv6 past the bridge.
                         forceIpv4 = loadTrafficSettings().domainStrategy.let {
@@ -2832,6 +2847,27 @@ class OlcboxVpnService : VpnService() {
             GeoAssetManager.assetDir(applicationContext).absolutePath
         } else {
             addLog("Geo databases unavailable; profile geo rules will be skipped on Xray")
+            ""
+        }
+    }
+
+    /**
+     * Ensures the geo `.dat` files are present for a VERBATIM Xray config that ITSELF references
+     * geosite:/geoip: selectors (e.g. a Happ/Remnawave JSON subscription whose own routing sends RU
+     * sites direct and blocks ads). Unlike [ensureGeoAssetPath] this does NOT require an app routing
+     * profile — the config's OWN routing is honored, so the db must be available regardless of whether
+     * the user configured a profile. Uses the profile's geo sources when one is set, else the global
+     * defaults. Returns the asset dir, or "" if the db couldn't be fetched (caller then strips geo).
+     */
+    private suspend fun ensureRawConfigGeoAssetPath(profile: RoutingProfile?): String {
+        val state = loadRoutingProfilesState()
+        val geoip = profile?.geoipUrl?.takeIf { it.isNotBlank() } ?: state.geoipUrl
+        val geosite = profile?.geositeUrl?.takeIf { it.isNotBlank() } ?: state.geositeUrl
+        val ok = runCatching { GeoAssetManager.ensureAssets(applicationContext, geoip, geosite) }
+            .getOrDefault(false)
+        return if (ok) {
+            GeoAssetManager.assetDir(applicationContext).absolutePath
+        } else {
             ""
         }
     }

@@ -107,6 +107,39 @@ class PrepareRawXhttpTest {
     }
 
     @Test
+    fun xhttpConfigHonorsItsOwnGeoRoutingWhenNotStripped() {
+        // The user's requirement: a JSON config's OWN routing takes precedence over the app's. When the
+        // geo .dat is available (the service downloads it before connecting), prepareRaw runs with
+        // stripGeoSelectors=false so the config's geosite:/geoip: rules (RU-direct / ad-block) are kept
+        // VERBATIM — NOT stripped, NOT overlaid with the app routing profile. Guards against the
+        // strip-everything regression (geosite:ru-available-only-inside stripped → RU sites wrongly
+        // detour through the proxy = "slow"; the whole point of honoring the embedded routing).
+        val out = XrayConfig.prepareRaw(
+            rawConfigJson = xhttpConfig,
+            listenPort = 10808,
+            stripGeoSelectors = false,
+        )
+        val root = Json.parseToJsonElement(out).jsonObject
+        // Geo selectors preserved so xray-core applies the config's embedded routing.
+        assertTrue(out.contains("geosite:"), "geosite: must be preserved when not stripping")
+        assertTrue(out.contains("geoip:"), "geoip: must be preserved when not stripping")
+        // The config's own geo rules are intact (not dropped).
+        val rules = root["routing"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+        assertTrue(
+            rules.any { it["domain"]?.jsonArray?.any { d -> d.jsonPrimitive.content == "geosite:private" } == true },
+            "the config's geosite:private rule should survive verbatim"
+        )
+        assertTrue(
+            rules.any { it["ip"]?.jsonArray?.any { i -> i.jsonPrimitive.content == "geoip:private" } == true },
+            "the config's geoip:private rule should survive verbatim"
+        )
+        // The xhttp proxy outbound is untouched (verbatim transport → full speed).
+        val proxy = root["outbounds"]!!.jsonArray.map { it.jsonObject }
+            .first { it["tag"]?.jsonPrimitive?.content == "proxy" }
+        assertEquals("xhttp", proxy["streamSettings"]!!.jsonObject["network"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun cascadeSecondProxyChainsThroughXhttpMain() {
         val second = ProxyProfile(
             tag = "exit", type = ProxyProfile.TYPE_VLESS,
