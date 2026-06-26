@@ -815,7 +815,11 @@ class LocationsRepositoryImpl(
         val richBody = source.fakednsJson
         val fakeDnsSpec = richBody?.let { fakeDnsSpecFromSubscriptionBody(it) }
         val descByServer = richBody?.let { serverDescriptionsFromSubscriptionBody(it) }.orEmpty()
-        if (fakeDnsSpec == null && descByServer.isEmpty()) return parsed
+        // xhttp/splithttp verbatim configs from the Happ-UA body: a default-UA vless:// link can't carry
+        // the domain-fronting `extra` (seqKey/xPadding/extra.host…) these transports need, so we swap in
+        // the full config and run it as-is on Xray. See [verbatimXhttpConfigs].
+        val verbatimXhttp = richBody?.let { verbatimXhttpConfigs(it) }.orEmpty()
+        if (fakeDnsSpec == null && descByServer.isEmpty() && verbatimXhttp.isEmpty()) return parsed
         val enriched = parsed.bundle.copy(
             locations = parsed.bundle.locations.map { entry ->
                 var e = entry
@@ -824,6 +828,25 @@ class LocationsRepositoryImpl(
                 if (e.description.isBlank() && descByServer.isNotEmpty()) {
                     val key = e.proxy?.let { "${it.server}:${it.serverPort}" }
                     if (key != null) descByServer[key]?.let { d -> e = e.copy(description = d) }
+                }
+                // xhttp: replace the link-parsed typed profile (which lost its `extra` fronting block) with
+                // the verbatim Happ config so it runs identically to Happ. Match by NAME first — several
+                // xhttp servers share one host:port (same server, different routing), so server:port alone
+                // is ambiguous; fall back to it only when exactly one xhttp config has that endpoint.
+                if (verbatimXhttp.isNotEmpty() &&
+                    e.proxy != null &&
+                    e.proxy?.rawXrayConfig.isNullOrBlank() &&
+                    e.proxy?.network == ProxyProfile.NETWORK_XHTTP
+                ) {
+                    val sp = "${e.proxy?.server}:${e.proxy?.serverPort}"
+                    val match = verbatimXhttp.firstOrNull { it.first.isNotBlank() && it.first == e.name.trim() }
+                        ?: verbatimXhttp.singleOrNull { it.second == sp }
+                    if (match != null) {
+                        e = e.copy(
+                            proxy = e.proxy!!.copy(rawXrayConfig = match.third),
+                            core = ProxyCore.Xray,
+                        )
+                    }
                 }
                 // FakeDNS: attach to locations that don't already have one and aren't verbatim Xray.
                 if (fakeDnsSpec != null &&
@@ -869,6 +892,44 @@ class LocationsRepositoryImpl(
             val server = first.string("address") ?: continue
             val port = first["port"]?.jsonPrimitive?.intOrNull ?: continue
             out["$server:$port"] = desc
+        }
+        return out
+    }
+
+    /**
+     * Full verbatim Xray configs (as JSON text) for the xhttp/splithttp proxies in a rich Happ-UA
+     * subscription body. xhttp carries a domain-fronting `extra` block (seqKey / sessionKey / xPadding*
+     * / extra.host …) that a bare `vless://` link from the default-UA body can't fully reproduce — so
+     * when the main fetch parsed such a location from a link, we swap in the verbatim config (keeping the
+     * link's clean name) and run it as-is on Xray. Returns Triple(remarks/name, "server:port", json);
+     * callers match by NAME first since several xhttp configs commonly share one server:port (same host,
+     * different routing) and the panel even rotates the reality shortId per fetch.
+     */
+    private fun verbatimXhttpConfigs(body: String): List<Triple<String, String, String>> {
+        val element = runCatching { json.parseToJsonElement(body.trim()) }.getOrNull() ?: return emptyList()
+        val configs = when {
+            element is JsonObject -> listOf(element)
+            else -> runCatching { element.jsonArray }.getOrNull()
+                ?.mapNotNull { it.jsonObjectOrNull() } ?: return emptyList()
+        }
+        val proxyProtocols = setOf("vless", "vmess", "trojan", "shadowsocks")
+        val out = mutableListOf<Triple<String, String, String>>()
+        for (root in configs) {
+            val outbounds = runCatching { root["outbounds"]?.jsonArray }.getOrNull()
+                ?.mapNotNull { it.jsonObjectOrNull() } ?: continue
+            val proxyOutbound = outbounds.firstOrNull {
+                it.string("protocol")?.lowercase() in proxyProtocols
+            } ?: continue
+            val net = proxyOutbound["streamSettings"]?.jsonObjectOrNull()?.string("network")?.lowercase()
+            if (net != "xhttp" && net != "splithttp") continue
+            val settings = proxyOutbound["settings"]?.jsonObjectOrNull()
+            val endpoint = settings?.get("vnext")?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?: settings?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
+            val first = endpoint?.firstOrNull()?.jsonObjectOrNull() ?: continue
+            val server = first.string("address") ?: continue
+            val port = first["port"]?.jsonPrimitive?.intOrNull ?: continue
+            val name = root.string("remarks")?.trim().orEmpty()
+            out += Triple(name, "$server:$port", root.toString())
         }
         return out
     }
