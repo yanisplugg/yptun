@@ -66,6 +66,24 @@ object XrayConfig {
         else -> "ForceIPv4"
     }
 
+    /**
+     * Forces an UPSTREAM (proxied) DNS resolver to DNS-over-TCP. The remote resolvers ride the proxy/
+     * cascade, and a splithttp/cascade exit that drops or blocks UDP:53 to 8.8.8.8/1.1.1.1 made every
+     * lookup wait out a 4s serial timeout → "record not found" → ERR_CONNECTION_ABORTED. TCP rides the
+     * reliable stream instead. Only bare IP literals are converted: a hostname DNS server would need its
+     * own bootstrap resolution over TCP (possible deadlock), and a server that already carries a scheme
+     * (udp://, tcp://, https:// DoH, quic://) or a special keyword (fakedns) is left exactly as the user
+     * set it. Direct DNS is deliberately NOT routed through this — it's queried for direct/RU domains
+     * where plain UDP is fine.
+     */
+    private fun tcpDns(server: String): String {
+        val s = server.trim()
+        if (s.isEmpty() || s.contains("://") || s == FAKEDNS_SERVER) return s
+        val isIpv4 = s.isNotEmpty() && s.all { it.isDigit() || it == '.' } && s.count { it == '.' } == 3
+        val isIpv6 = s.contains(':') && s.all { it.isDigit() || (it in 'a'..'f') || (it in 'A'..'F') || it == ':' }
+        return if (isIpv4 || isIpv6) "tcp://$s" else s
+    }
+
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
 
     /** Routing rules that hijack DNS (UDP/53, TCP/853 DoT) to the `dns-out` outbound. */
@@ -187,8 +205,10 @@ object XrayConfig {
                 putJsonArray("servers") {
                     // FakeDNS first so sniffed domains get a synthetic IP before the real resolvers.
                     if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
-                    add(traffic.remoteDns)
-                    if (traffic.remoteDns2.isNotBlank()) add(traffic.remoteDns2)
+                    // Remote resolvers ride the proxy/cascade → force DNS-over-TCP so they aren't dropped
+                    // by an exit that blocks UDP:53 (the 4s-serial-timeout → ERR_CONNECTION_ABORTED bug).
+                    add(tcpDns(traffic.remoteDns))
+                    if (traffic.remoteDns2.isNotBlank()) add(tcpDns(traffic.remoteDns2))
                     add(traffic.directDns)
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())

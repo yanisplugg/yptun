@@ -312,4 +312,28 @@ class PrepareRawXhttpTest {
         // No cascade exit injected (AWG can't be an Xray exit outbound).
         assertTrue(outbounds.none { it["tag"]?.jsonPrimitive?.content == "cascade-exit" })
     }
+
+    @Test
+    fun buildForcesRemoteDnsOverTcpButLeavesDirectUdp() {
+        // Device logs (Finland-xhttp + Nürnberg cascade): UDP DNS to 8.8.8.8/1.1.1.1 timed out over the
+        // splithttp/cascade exit → 4s serial timeouts → ERR_CONNECTION_ABORTED. Remote resolvers must ride
+        // DNS-over-TCP; direct DNS stays plain UDP (queried for direct/RU domains where UDP is fine).
+        val main = ProxyProfile(
+            tag = "main", type = ProxyProfile.TYPE_VLESS, server = "main.example.com", serverPort = 8443,
+            uuid = "uuid-main", network = ProxyProfile.NETWORK_XHTTP, security = ProxyProfile.SECURITY_TLS,
+            sni = "main.example.com",
+        )
+        val out = XrayConfig.build(
+            profile = main, listenPort = 10808,
+            traffic = org.olcbox.app.data.model.TrafficSettings(
+                remoteDns = "8.8.8.8", remoteDns2 = "1.1.1.1", directDns = "223.5.5.5",
+            ),
+        )
+        val servers = Json.parseToJsonElement(out).jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
+            .map { it.jsonPrimitive.content }
+        assertTrue(servers.contains("tcp://8.8.8.8"), "remoteDns must be DNS-over-TCP")
+        assertTrue(servers.contains("tcp://1.1.1.1"), "remoteDns2 must be DNS-over-TCP")
+        assertTrue(servers.contains("223.5.5.5"), "directDns stays plain UDP")
+        assertFalse(servers.contains("tcp://223.5.5.5"), "directDns must NOT be forced to TCP")
+    }
 }
