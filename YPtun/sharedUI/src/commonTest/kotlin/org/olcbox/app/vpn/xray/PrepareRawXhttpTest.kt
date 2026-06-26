@@ -195,6 +195,51 @@ class PrepareRawXhttpTest {
     }
 
     @Test
+    fun rawProxyPingConfigKeepsVerbatimTransportAndRoutesAllViaProxy() {
+        // The per-server "ping" must probe THROUGH the verbatim xhttp/reality outbound — rebuilding a
+        // plain vless from type/server/port can't reach the server, which is why such locations falsely
+        // showed "недоступен". Pin: the xhttp+reality transport is preserved verbatim, the only outbound
+        // is the proxy (so every dialed destination exits via it, à la Happ), and NO geo selectors are
+        // referenced (a ping needs no geosite.dat, so it loads on any network).
+        val out = XrayConfig.buildRawProxyPingConfig(
+            rawConfigJson = xhttpConfig,
+            listenPort = 34567,
+        )!!
+        val root = Json.parseToJsonElement(out).jsonObject
+        assertFalse(out.contains("geosite:"), "ping config must not depend on a geosite.dat")
+        assertFalse(out.contains("geoip:"), "ping config must not depend on a geoip.dat")
+
+        // Exactly one outbound, the proxy, with its xhttp/reality streamSettings intact.
+        val outbounds = root["outbounds"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(1, outbounds.size, "all traffic must exit through the single proxy outbound")
+        val proxy = outbounds.single()
+        assertEquals("proxy", proxy["tag"]!!.jsonPrimitive.content)
+        assertEquals("vless", proxy["protocol"]!!.jsonPrimitive.content)
+        val stream = proxy["streamSettings"]!!.jsonObject
+        assertEquals("xhttp", stream["network"]!!.jsonPrimitive.content)
+        assertEquals("reality", stream["security"]!!.jsonPrimitive.content)
+        // The reality/xhttp fronting that a bare ProxyProfile loses is carried verbatim.
+        assertTrue(stream["realitySettings"] != null && stream["xhttpSettings"] != null)
+
+        // No routing block → default-routed to the lone proxy outbound.
+        assertTrue(root["routing"] == null, "ping config carries no routing (everything → proxy)")
+
+        // Listen host/port applied to the socks inbound.
+        val inbound = root["inbounds"]!!.jsonArray.map { it.jsonObject }.single()
+        assertEquals("socks", inbound["protocol"]!!.jsonPrimitive.content)
+        assertEquals("34567", inbound["port"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun rawProxyPingConfigReturnsNullWithoutProxyOutbound() {
+        // A config whose only outbounds are freedom/blackhole isn't pingable through a proxy.
+        val noProxy = """
+        { "outbounds": [ { "protocol": "freedom", "tag": "direct" }, { "protocol": "blackhole", "tag": "block" } ] }
+        """.trimIndent()
+        assertEquals(null, XrayConfig.buildRawProxyPingConfig(noProxy, listenPort = 10808))
+    }
+
+    @Test
     fun amneziawgSecondIsNotChainedOnRaw() {
         val awg = ProxyProfile(
             tag = "awg", type = ProxyProfile.TYPE_AMNEZIAWG,

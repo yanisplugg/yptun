@@ -638,6 +638,57 @@ object XrayConfig {
         return json.encodeToString(newRoot)
     }
 
+    /**
+     * Builds a THROWAWAY Xray config for the per-server URL-test ("ping") of a VERBATIM raw config —
+     * an xhttp/splithttp/reality node a bare [ProxyProfile] can't represent, so the connect path runs
+     * it from [ProxyProfile.rawXrayConfig]. The ping path used to ignore that and rebuild a plain
+     * vless from type/server/port (no streamSettings) — which can NEVER reach an xhttp/reality server,
+     * so every such location falsely showed "недоступен" even while it connected fine.
+     *
+     * This instead lifts the config's REAL proxy outbound (transport verbatim) and routes ALL traffic
+     * through it — no `routing`/`dns` block, so the probe measures the actual transport à la Happ
+     * instead of accidentally hitting a `direct`/`block` rule, and needs no geosite.dat. Returns null
+     * when the config has no recognizable proxy outbound.
+     */
+    fun buildRawProxyPingConfig(
+        rawConfigJson: String,
+        listenPort: Int,
+        listenHost: String = "127.0.0.1",
+    ): String? {
+        val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull() ?: return null
+        val outbounds = (root["outbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: return null
+        val proxyProtocols = setOf("vless", "vmess", "trojan", "shadowsocks")
+        val proxyOutbound = outbounds.firstOrNull {
+            it["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in proxyProtocols
+        } ?: return null
+        // Re-tag to "proxy" so it's unambiguously the sole exit; everything else is kept verbatim
+        // (streamSettings carry the xhttp/splithttp/reality fronting the probe must reproduce).
+        val pingOutbound = buildJsonObject {
+            var taggedProxy = false
+            proxyOutbound.forEach { (k, v) ->
+                if (k == "tag") { put("tag", PROXY_TAG); taggedProxy = true } else put(k, v)
+            }
+            if (!taggedProxy) put("tag", PROXY_TAG)
+        }
+        val socksInbound = buildJsonObject {
+            put("tag", "socks-in")
+            put("listen", listenHost)
+            put("port", listenPort)
+            put("protocol", "socks")
+            putJsonObject("settings") {
+                put("udp", true)
+                put("auth", "noauth")
+            }
+        }
+        val newRoot = buildJsonObject {
+            putJsonArray("inbounds") { add(socksInbound) }
+            putJsonArray("outbounds") { add(pingOutbound) }
+            // No routing/dns: a single outbound means every dialed destination exits via the proxy,
+            // and the server address resolves through the system resolver (no chicken-and-egg DNS).
+        }
+        return json.encodeToString(newRoot)
+    }
+
     /** Rewrites every routing rule whose `outboundTag` is [from] to [to] (used to redirect the main
      *  proxy's traffic to the cascade exit). Leaves other rules untouched. */
     private fun rewriteOutboundTag(routing: JsonObject?, from: String, to: String): JsonObject? {
