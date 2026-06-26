@@ -502,8 +502,8 @@ object XrayConfig {
         val userRouting = root["routing"] as? JsonObject
 
         // CASCADE: a standard second proxy chained on top of the verbatim config. Its exit outbound
-        // dials THROUGH the config's main proxy outbound (sockopt.dialerProxy) and becomes the default
-        // exit, so traffic flows client → main-server → second-server → internet.
+        // reaches its server THROUGH the config's main proxy outbound and becomes the default exit, so
+        // traffic flows client → main-server → second-server → internet.
         val cascadeTypes = setOf(
             ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS,
             ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
@@ -519,7 +519,13 @@ object XrayConfig {
                 chained = false,
                 detourTagOverride = mainProxyTag,
                 tag = CASCADE_EXIT_TAG,
-                chainViaDialerProxy = true,
+                // Chain mechanism: proxy-level (proxySettings) is the standard multi-hop and is what
+                // works when the BASE is xhttp/splithttp — sockopt.dialerProxy makes the exit's raw
+                // socket be dialed THROUGH the base, but splithttp can't serve as a generic sub-dialer,
+                // so a plain tcp/reality 2nd proxy over an xhttp main got NO connection. dialerProxy is
+                // only needed to preserve the EXIT's OWN transport when the EXIT itself is xhttp; force
+                // it just for that case (buildProxyOutbound also auto-uses it for an xhttp profile).
+                chainViaDialerProxy = cascadeSecond.network == ProxyProfile.NETWORK_XHTTP,
             )
         } else null
         // HONOR THE CONFIG'S OWN ROUTING: when the raw config already ships routing rules, the embedded

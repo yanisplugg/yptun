@@ -155,16 +155,43 @@ class PrepareRawXhttpTest {
         )
         val root = Json.parseToJsonElement(out).jsonObject
         val outbounds = root["outbounds"]!!.jsonArray.map { it.jsonObject }
-        // Cascade exit present, is the FIRST outbound (default exit), and dials THROUGH the main "proxy".
+        // Cascade exit present, is the FIRST outbound (default exit), and chains THROUGH the main "proxy".
         assertEquals("cascade-exit", outbounds.first()["tag"]!!.jsonPrimitive.content)
         val exit = outbounds.first { it["tag"]?.jsonPrimitive?.content == "cascade-exit" }
         assertEquals("vless", exit["protocol"]!!.jsonPrimitive.content)
+        // A tcp/reality exit chains at the PROXY level (proxySettings.tag), NOT sockopt.dialerProxy —
+        // dialerProxy makes the exit's raw socket be dialed through the base, and an xhttp/splithttp base
+        // can't serve as a generic sub-dialer (→ no connection). proxySettings is the working multi-hop.
+        assertEquals(
+            "proxy",
+            exit["proxySettings"]!!.jsonObject["tag"]!!.jsonPrimitive.content
+        )
+        assertTrue(exit["streamSettings"]!!.jsonObject["sockopt"] == null, "tcp exit must NOT use dialerProxy over an xhttp base")
+        // The xhttp main outbound is still there (as the first hop the exit chains through).
+        assertTrue(outbounds.any { it["tag"]?.jsonPrimitive?.content == "proxy" })
+    }
+
+    @Test
+    fun cascadeXhttpExitKeepsDialerProxy() {
+        // When the SECOND proxy is itself xhttp, dialerProxy IS required (proxySettings would drop the
+        // exit's xhttp transport → raw VLESS to the server → HTTP web-fallback reject). Pin that case.
+        val second = ProxyProfile(
+            tag = "exit", type = ProxyProfile.TYPE_VLESS,
+            server = "exit.example.com", serverPort = 443, uuid = "exit-uuid",
+            network = ProxyProfile.NETWORK_XHTTP, security = ProxyProfile.SECURITY_TLS,
+            sni = "exit.example.com",
+        )
+        val out = XrayConfig.prepareRaw(
+            rawConfigJson = xhttpConfig, listenPort = 10808,
+            stripGeoSelectors = true, secondProfile = second,
+        )
+        val exit = Json.parseToJsonElement(out).jsonObject["outbounds"]!!.jsonArray
+            .map { it.jsonObject }.first { it["tag"]?.jsonPrimitive?.content == "cascade-exit" }
         assertEquals(
             "proxy",
             exit["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content
         )
-        // The xhttp main outbound is still there (as the first hop the exit dials through).
-        assertTrue(outbounds.any { it["tag"]?.jsonPrimitive?.content == "proxy" })
+        assertTrue(exit["proxySettings"] == null, "xhttp exit chains via dialerProxy, not proxySettings")
     }
 
     @Test
@@ -188,10 +215,10 @@ class PrepareRawXhttpTest {
         val user = exit["settings"]!!.jsonObject["vnext"]!!.jsonArray.first().jsonObject["users"]!!
             .jsonArray.first().jsonObject
         assertTrue(user["flow"] == null, "Vision flow must be dropped on a chained exit (else it hangs)")
-        // It still dials through the main proxy (chaining preserved).
+        // It still chains through the main proxy (a tcp exit uses proxy-level proxySettings, not dialerProxy).
         assertEquals(
             "proxy",
-            exit["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content
+            exit["proxySettings"]!!.jsonObject["tag"]!!.jsonPrimitive.content
         )
     }
 
