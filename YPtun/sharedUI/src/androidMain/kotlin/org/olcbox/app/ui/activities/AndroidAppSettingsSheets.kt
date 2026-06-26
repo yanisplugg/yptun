@@ -893,7 +893,7 @@ private fun ConnectionSettingsContent(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 24.dp)
-            .padding(top = 16.dp, bottom = 32.dp)
+            .padding(top = 16.dp, bottom = 24.dp)
     ) {
         val s = LocalStrings.current
         SettingsDetailHeader(
@@ -994,10 +994,12 @@ private fun ConnectionSettingsContent(
                         "https://t.me/socks?server=${running.host}&port=${running.port}" +
                             "&user=${running.user}&pass=${running.pass}"
                     }
-                    // Stacked full-width so neither button's label gets clipped on narrow screens.
-                    Column(
+                    // Side-by-side (equal weights) so BOTH actions fit on one row and are fully visible
+                    // without scrolling the sheet — stacked, they overflowed the bottom and the copy
+                    // button was clipped to a sliver of its outline. Compact labels + icon stay one line.
+                    Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         // One tap → opens Telegram straight on its "Enable proxy?" dialog (tg://socks
                         // deep link, server/port/user/pass prefilled), falling back to the https link.
@@ -1018,46 +1020,32 @@ private fun ConnectionSettingsContent(
                                     )
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            // Icon pinned to the start + label centered in the remaining space, with a
-                            // trailing spacer the icon's width. BOTH buttons use this exact layout so their
-                            // icons/labels line up vertically — a plain centered icon+label group sits at a
-                            // different x on each button (labels differ in length) and looked skewed.
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Send,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Text(
-                                s.telegramProxyOpen,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                            )
-                            Spacer(Modifier.width(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
                             onClick = {
                                 clipboard.setText(AnnotatedString(tgLink))
                                 Toast.makeText(context, s.telegramProxyLinkCopied, Toast.LENGTH_SHORT).show()
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.ContentCopy,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Text(
-                                s.telegramProxyCopyLink,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                            )
-                            Spacer(Modifier.width(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.telegramProxyCopyLink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
