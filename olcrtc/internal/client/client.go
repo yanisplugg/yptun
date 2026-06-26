@@ -224,28 +224,20 @@ func (c *Client) bringUpLink(
 		return fmt.Errorf("failed to connect link: %w", err)
 	}
 
+	if err := waitForPeer(ctx, ln); err != nil {
+		return err
+	}
+
 	c.conn = muxconn.New(ln, c.cipher)
 	c.controlConn = muxconn.NewControl(ln, c.cipher)
 
-	sess, err := smux.Client(c.conn, smuxConfig(linkMaxPayload(ln)))
+	sess, controlSess, err := buildSmuxClient(ln, c.conn, c.controlConn)
 	if err != nil {
-		return fmt.Errorf("smux client: %w", err)
-	}
-
-	// If the transport has an isolated control plane, open the handshake/
-	// control smux session over it instead of the bulk data session.
-	var controlSess *smux.Session
-	if c.controlConn != nil {
-		var cerr error
-		controlSess, cerr = smux.Client(c.controlConn, controlSmuxConfig(linkMaxPayload(ln)))
-		if cerr != nil {
-			_ = sess.Close()
-			_ = c.conn.Close()
+		_ = c.conn.Close()
+		if c.controlConn != nil {
 			_ = c.controlConn.Close()
-			return fmt.Errorf("control smux client: %w", cerr)
 		}
-	} else {
-		controlSess = sess
+		return err
 	}
 
 	control, sid, err := openControlStream(ctx, controlSess, c.deviceID, c.claims)
@@ -273,6 +265,56 @@ func (c *Client) bringUpLink(
 
 	go ln.WatchConnection(ctx)
 	return nil
+}
+
+// peerWaitTimeout bounds how long bringUpLink/tryReopenSession will block
+// waiting for the remote peer to appear before giving up. Without a bound a
+// missing peer (server offline, wrong room, never joins) would hang the
+// caller indefinitely — before the SOCKS listener is even created — instead
+// of surfacing a failure. We reuse the handshake timeout so a missing peer
+// fails on the same ~15s budget as a wedged handshake would.
+const peerWaitTimeout = handshake.DefaultTimeout
+
+// waitForPeer blocks until the transport reports a remote peer is ready, the
+// peer-wait deadline elapses, or ctx is cancelled. Transports that don't
+// implement PeerReadyTransport return immediately.
+func waitForPeer(ctx context.Context, ln transport.Transport) error {
+	waiter, ok := ln.(transport.PeerReadyTransport)
+	if !ok {
+		return nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, peerWaitTimeout)
+	defer cancel()
+	if err := waiter.WaitForPeer(waitCtx); err != nil {
+		return fmt.Errorf("wait for peer: %w", err)
+	}
+	return nil
+}
+
+// buildSmuxClient creates the bulk-data smux session over conn and, when the
+// transport exposes an isolated control plane (controlConn != nil), a separate
+// smux session over controlConn for handshake/control traffic. When there is
+// no control plane the bulk session doubles as the control session. On error
+// any session opened here is closed; the caller owns conn/controlConn.
+func buildSmuxClient(
+	ln transport.Transport,
+	conn, controlConn *muxconn.Conn,
+) (*smux.Session, *smux.Session, error) {
+	sess, err := smux.Client(conn, runtime.SmuxConfigFor(ln))
+	if err != nil {
+		return nil, nil, fmt.Errorf("smux client: %w", err)
+	}
+	if controlConn == nil {
+		return sess, sess, nil
+	}
+	// Separate smux session for the control stream only: small buffers, no
+	// smux keepalive (our own control.Run ping/pong handles liveness).
+	controlSess, err := smux.Client(controlConn, controlSmuxConfig(linkMaxPayload(ln)))
+	if err != nil {
+		_ = sess.Close()
+		return nil, nil, fmt.Errorf("control smux client: %w", err)
+	}
+	return sess, controlSess, nil
 }
 
 // openControlStream opens stream #1 on sess and performs the handshake.
@@ -510,31 +552,25 @@ func (c *Client) tryReopenSession(
 		_ = oldCtrl.Close()
 	}
 
-	// When we have a dedicated control conn, open the handshake/control smux
-	// session over it. Otherwise fall back to the data conn (legacy transports).
-	controlSmuxConn := conn
-	if controlConn != nil {
-		controlSmuxConn = controlConn
-	}
-
-	sess, err := smux.Client(conn, smuxConfig(linkMaxPayload(c.ln)))
+	sess, controlSess, err := buildSmuxClient(c.ln, conn, controlConn)
 	if err != nil {
 		logger.Warnf("smux re-init failed (attempt %d): %v", attempt, err)
 		return false
 	}
 
-	var controlSess *smux.Session
-	if controlConn != nil {
-		// Separate smux session for the control stream only. We use a minimal
-		// config: small buffers, no keepalive (liveness is our own ping/pong).
-		controlSess, err = smux.Client(controlSmuxConn, controlSmuxConfig(linkMaxPayload(c.ln)))
-		if err != nil {
-			logger.Warnf("control smux re-init failed (attempt %d): %v", attempt, err)
-			_ = sess.Close()
-			return false
+	// Wait for the peer to re-announce before opening the control stream.
+	// resetLinkPeer cleared the peer epoch on reconnect, so without this the
+	// client's first SYN can race ahead of the server's bridge being open
+	// again — the same handshake-ordering race WaitForPeer guards against on
+	// the initial connect. The retry/backoff loop would eventually recover,
+	// but only after a full handshake timeout per attempt.
+	if err := waitForPeer(ctx, c.ln); err != nil {
+		logger.Warnf("wait for peer on reconnect failed (attempt %d): %v", attempt, err)
+		_ = sess.Close()
+		if controlSess != sess {
+			_ = controlSess.Close()
 		}
-	} else {
-		controlSess = sess
+		return false
 	}
 
 	ctrlStream, sid, err := openControlStreamTimeout(ctx, controlSess, c.deviceID, c.claims, handshake.DefaultTimeout)
@@ -570,6 +606,14 @@ func (c *Client) startControlLoop(
 	c.sessMu.Unlock()
 
 	liveness := cfg.Liveness
+	// Relax the pong timeout only for transports with an isolated control
+	// plane (vp8channel): KCP batching + frame pacing can delay control
+	// packets under load. Conventional carriers (jitsi/datachannel) keep the
+	// conservative default so a dead link is detected promptly. A user-set
+	// timeout larger than the default is left untouched.
+	if runtime.IsControlPlane(c.ln) && liveness.Timeout <= control.DefaultTimeout {
+		liveness.Timeout = runtime.LivenessTimeout(c.ln)
+	}
 	onPong := liveness.OnPong
 	onMissedPong := liveness.OnMissedPong
 	onUnhealthy := liveness.OnUnhealthy
@@ -808,11 +852,11 @@ func (c *Client) sendConnectRequest(stream *smux.Stream, targetAddr string, targ
 	_ = stream.SetWriteDeadline(time.Time{})
 
 	ack := make([]byte, 1)
-	// In peer-routing mode the SFU may take up to ~30s to complete
-	// renegotiation and start forwarding data frames from the client to the
-	// server. Use a generous deadline so we do not give up before the server
-	// peer session is established.
-	_ = stream.SetReadDeadline(time.Now().Add(90 * time.Second))
+	// ControlPlane transports (vp8channel peer-routing) may take ~30s for the
+	// SFU to complete renegotiation and start forwarding data frames, so they
+	// get a generous deadline. Conventional carriers (jitsi/datachannel) use
+	// the conservative window so a stuck CONNECT fails fast.
+	_ = stream.SetReadDeadline(time.Now().Add(runtime.ConnectAckTimeout(c.ln)))
 	if _, err := io.ReadFull(stream, ack); err != nil || ack[0] != 0x00 {
 		return fmt.Errorf("sid=%d: %w (read_err=%w ack=%v)", stream.ID(), ErrRemoteNotReady, err, ack)
 	}

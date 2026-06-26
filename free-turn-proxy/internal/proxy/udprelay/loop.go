@@ -362,6 +362,9 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 
 			written, err1 := relayConn.WriteTo(out, peer)
 			st.AddTx(written)
+			if params.TrafficStats != nil {
+				params.TrafficStats.AddTx(written)
+			}
 			if err1 != nil {
 				return
 			}
@@ -397,6 +400,9 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 					payload = p
 				}
 				st.AddRx(len(payload))
+				if params.TrafficStats != nil {
+					params.TrafficStats.AddRx(len(payload))
+				}
 				if _, err := conn2.WriteTo(payload, addr); err != nil {
 					return
 				}

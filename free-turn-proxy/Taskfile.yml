@@ -27,6 +27,21 @@ tasks:
     cmds:
       - goreleaser release --snapshot --clean --skip=publish,sign
 
+  build:ios:
+    desc: Build iOS XCFramework to dist/Mobile.xcframework
+    platforms: [darwin]
+    cmds:
+      - rm -rf dist/Mobile.xcframework
+      - mkdir -p dist
+      - gomobile bind -target ios,iossimulator -ldflags "-checklinkname=0" -o dist/Mobile.xcframework ./mobile
+
+  build:android:
+    desc: Build Android Archive (AAR) to dist/mobile.aar
+    cmds:
+      - rm -rf dist/mobile.aar dist/mobile-sources.jar
+      - mkdir -p dist
+      - gomobile bind -target android -androidapi 21 -ldflags "-checklinkname=0" -o dist/mobile.aar ./mobile
+
   test:
     desc: Run unit tests with race detector
     cmds:

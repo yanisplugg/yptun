@@ -139,6 +139,7 @@ func (r *memoryRoom) connectedCount() int {
 	return count
 }
 
+//nolint:unparam // want is fixed at 1 today but kept for call-site clarity/future multi-peer rooms
 func (r *memoryRoom) waitConnected(t *testing.T, want int) {
 	t.Helper()
 
@@ -184,6 +185,25 @@ func (r *memoryRoom) triggerEnded(reason string) {
 	}
 }
 
+// enableBlackhole flips every stream in the room into the silent-dead-link
+// state: the carrier stays "connected" but no further frame is delivered.
+// Only the control-stream liveness timeout can detect this, so the time from
+// here to the first reconnect attempt measures the dead-link detection window.
+func (r *memoryRoom) enableBlackhole() {
+	r.mu.Lock()
+	streams := make([]*memoryStream, 0, len(r.streams))
+	for stream := range r.streams {
+		streams = append(streams, stream)
+	}
+	r.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.mu.Lock()
+		stream.blackhole = true
+		stream.mu.Unlock()
+	}
+}
+
 // peerOf returns the other stream in a 2-party room or nil if there is
 // no peer (yet). Video loopback relies on a single 1:1 partner so we
 // just pick the first non-self stream we see.
@@ -220,6 +240,13 @@ type memoryStream struct {
 	mu        sync.Mutex
 	connected bool
 	closed    bool
+	// blackhole simulates a silently dead link: the carrier stays
+	// "connected" (Send returns nil, the pipe is not closed) but no frame
+	// is ever delivered to the peer. This is the failure mode a real SFU
+	// produces when a peer leaves but the WebRTC PC has not yet torn down:
+	// only the control-stream liveness timeout can detect it. Used to prove
+	// the dead-link detection window is governed by the liveness timeout.
+	blackhole bool
 	reconnect func()
 	ended     func(string)
 	track     webrtc.TrackLocal
@@ -280,6 +307,12 @@ func (s *memoryStream) Send(data []byte) error {
 	if s.closed {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
+	}
+	// Silently dead link: pretend the send succeeded but deliver nothing.
+	// The carrier stays "up", so only control-stream liveness can detect it.
+	if s.blackhole {
+		s.mu.Unlock()
+		return nil
 	}
 	s.mu.Unlock()
 

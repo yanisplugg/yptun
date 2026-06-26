@@ -1,9 +1,41 @@
 package manual
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"net/url"
 	"testing"
+	"time"
 )
+
+func TestRunCaptchaServerPresentsAfterListen(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	keyCh := make(chan string, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ready")
+	})
+	present := func(captchaURL string) {
+		response, err := http.Get(captchaURL) //nolint:gosec,noctx // local test server
+		if err != nil {
+			t.Errorf("present called before server was ready: %v", err)
+			keyCh <- "failed"
+			return
+		}
+		_ = response.Body.Close()
+		keyCh <- "token"
+	}
+
+	got, err := runCaptchaServerAndWait(ctx, handler, localCaptchaOrigin(), keyCh, "test", present)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "token" {
+		t.Fatalf("token = %q, want token", got)
+	}
+}
 
 func TestRewriteProxyRedirectLocation(t *testing.T) {
 	t.Parallel()

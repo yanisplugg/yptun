@@ -15,6 +15,7 @@ import (
 
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/common"
+	"github.com/samosvalishe/free-turn-proxy/internal/stats"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
 )
 
@@ -42,6 +43,7 @@ type Params struct {
 	ObfTiming    time.Duration
 	GetCreds     GetCredsFunc
 	ClientID     string
+	TrafficStats *stats.Stats
 }
 
 // streamStartBarrier - максимум, который стримы 2..N ждут прогрева кэша

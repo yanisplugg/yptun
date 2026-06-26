@@ -244,6 +244,18 @@ func (s *Server) setupResolver() {
 	}
 }
 
+// dataSmuxConfig returns the data-plane smux config for the server's
+// transport. It mirrors the client (buildSmuxClient -> runtime.SmuxConfigFor):
+// ControlPlane transports (vp8channel) get the relaxed keep-alive window so a
+// legitimately silent carrier (publisher-PC reconnect / SFU renegotiation) is
+// not torn down at the conservative 30s timeout. Keeping this in lockstep with
+// the client avoids the asymmetric teardown where the server drops its peer
+// data session first, surfacing as "closed pipe" on the client and a reconnect
+// storm (issue #95).
+func dataSmuxConfig(tr transport.Transport) *smux.Config {
+	return runtime.SmuxConfigFor(tr)
+}
+
 func smuxConfig(maxWirePayload int) *smux.Config {
 	return runtime.SmuxConfig(maxWirePayload)
 }
@@ -327,7 +339,7 @@ func (s *Server) bringUpLink(
 
 func (s *Server) installSession() {
 	conn := muxconn.New(s.ln, s.cipher)
-	sess, err := smux.Server(conn, smuxConfig(linkMaxPayload(s.ln)))
+	sess, err := smux.Server(conn, dataSmuxConfig(s.ln))
 	if err != nil {
 		logger.Warnf("smux server init failed: %v", err)
 		return
@@ -434,7 +446,7 @@ type replacementSession struct {
 // built.
 func (s *Server) buildReplacementSession() *replacementSession {
 	conn := muxconn.New(s.ln, s.cipher)
-	sess, err := smux.Server(conn, smuxConfig(linkMaxPayload(s.ln)))
+	sess, err := smux.Server(conn, dataSmuxConfig(s.ln))
 	if err != nil {
 		logger.Warnf("smux server init failed: %v", err)
 		_ = conn.Close()
@@ -658,7 +670,7 @@ func (s *Server) getPeerSession(peerID string) *peerSession {
 		return ps
 	}
 	conn := muxconn.NewPeer(s.peerLn, s.cipher, peerID)
-	sess, err := smux.Server(conn, smuxConfig(linkMaxPayload(s.ln)))
+	sess, err := smux.Server(conn, dataSmuxConfig(s.ln))
 	if err != nil {
 		s.sessMu.Unlock()
 		logger.Warnf("smux server init failed for peer %s: %v", peerID, err)
@@ -861,27 +873,8 @@ func (s *Server) acceptHandshake(ctx context.Context, sess *smux.Session) bool {
 }
 
 func (s *Server) servePeer(ps *peerSession) {
-	// In peer-routing mode the handshake runs on the isolated control KCP
-	// session (acceptHandshake). The first data frame may arrive before the
-	// control handshake completes, so we spin-wait here until sessionID is
-	// set. If the context is cancelled first we bail out cleanly.
-	if ps.sessionID == "" {
-		for {
-			if s.stopping() {
-				s.removePeerSession(ps.peerID, "closed")
-				return
-			}
-			s.sessMu.RLock()
-			sid := s.sessionID
-			did := s.deviceID
-			s.sessMu.RUnlock()
-			if sid != "" {
-				ps.sessionID = sid
-				ps.deviceID = did
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+	if ps.sessionID == "" && !s.establishPeerSession(ps) {
+		return
 	}
 	for {
 		if s.stopping() {
@@ -904,6 +897,53 @@ func (s *Server) servePeer(ps *peerSession) {
 	}
 }
 
+// establishPeerSession completes the handshake for a freshly accepted peer
+// session and populates ps.sessionID/deviceID. It returns false if the peer
+// should be dropped (handshake failed or the server is shutting down).
+func (s *Server) establishPeerSession(ps *peerSession) bool {
+	s.sessMu.RLock()
+	hasControl := s.controlConn != nil
+	s.sessMu.RUnlock()
+	if !hasControl {
+		// No isolated control plane (e.g. datachannel in peer-routing mode):
+		// drive the handshake inline on this peer's smux session, mirroring
+		// the legacy path in waitHandshake/serveSingle.
+		if !s.acceptHandshake(s.baseCtx, ps.session) {
+			s.removePeerSession(ps.peerID, "handshake failed")
+			return false
+		}
+		s.sessMu.RLock()
+		ps.sessionID = s.sessionID
+		ps.deviceID = s.deviceID
+		s.sessMu.RUnlock()
+		return true
+	}
+	// Isolated control plane: spin-wait until acceptHandshake completes.
+	return s.waitPeerHandshake(ps)
+}
+
+// waitPeerHandshake blocks until the isolated control plane has completed the
+// handshake and published a session ID, copying it onto ps. Returns false if
+// the server stops before the handshake lands.
+func (s *Server) waitPeerHandshake(ps *peerSession) bool {
+	for {
+		if s.stopping() {
+			s.removePeerSession(ps.peerID, "closed")
+			return false
+		}
+		s.sessMu.RLock()
+		sid := s.sessionID
+		did := s.deviceID
+		s.sessMu.RUnlock()
+		if sid != "" {
+			ps.sessionID = sid
+			ps.deviceID = did
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (s *Server) resetLinkPeer() {
 	s.sessMu.RLock()
 	ln := s.ln
@@ -921,6 +961,13 @@ func (s *Server) startControlLoop(ctx context.Context, sess *smux.Session, strea
 	s.sessMu.Unlock()
 
 	liveness := s.liveness
+	// Relax the pong timeout only for transports with an isolated control
+	// plane (vp8channel); conventional carriers keep the conservative default
+	// so dead links are detected and reconnected promptly. A user-set timeout
+	// larger than the default is left untouched.
+	if runtime.IsControlPlane(s.ln) && liveness.Timeout <= control.DefaultTimeout {
+		liveness.Timeout = runtime.LivenessTimeout(s.ln)
+	}
 	onPong := liveness.OnPong
 	onMissedPong := liveness.OnMissedPong
 	onUnhealthy := liveness.OnUnhealthy

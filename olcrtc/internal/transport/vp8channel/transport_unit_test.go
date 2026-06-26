@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -391,5 +392,78 @@ func TestHandleIncomingFrameEpochFilteringAndReconnect(t *testing.T) {
 	}
 	if tr.peerEpoch.Load() != 2 {
 		t.Fatalf("peer epoch not re-latched: got %d want 2", tr.peerEpoch.Load())
+	}
+}
+
+func seqList(pkts []*rtp.Packet) []uint16 {
+	out := make([]uint16, len(pkts))
+	for i, p := range pkts {
+		out[i] = p.SequenceNumber
+	}
+	return out
+}
+
+func TestReorderBufferRestoresOrderAndSurvivesLoss(t *testing.T) {
+	// In-order packets pass straight through.
+	b := newReorderBuffer()
+	got := make([]uint16, 0, 3)
+	for _, seq := range []uint16{100, 101, 102} {
+		got = append(got, seqList(b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: seq}}))...)
+	}
+	if !reflect.DeepEqual(got, []uint16{100, 101, 102}) {
+		t.Fatalf("in-order drain = %v, want [100 101 102]", got)
+	}
+
+	// A reordered packet is held until the gap fills, then both drain in order.
+	b = newReorderBuffer()
+	if out := b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 10}}); !reflect.DeepEqual(seqList(out), []uint16{10}) {
+		t.Fatalf("first packet = %v, want [10]", seqList(out))
+	}
+	// 12 arrives before 11: must be buffered, nothing delivered yet.
+	if out := b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 12}}); out != nil {
+		t.Fatalf("out-of-order packet drained early = %v, want nil", seqList(out))
+	}
+	// 11 fills the hole: 11 and 12 drain in order.
+	out := b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 11}})
+	if !reflect.DeepEqual(seqList(out), []uint16{11, 12}) {
+		t.Fatalf("gap fill drain = %v, want [11 12]", seqList(out))
+	}
+
+	// Genuine loss: a full window piles up behind a hole, buffer skips the
+	// lost sequence rather than stalling forever.
+	b = newReorderBuffer()
+	_ = b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 0}})
+	var delivered int
+	for i := 2; i <= reorderWindow+2; i++ {
+		seq := uint16(i & 0xffff)
+		delivered += len(b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: seq}}))
+	}
+	if delivered == 0 {
+		t.Fatal("buffer stalled on lost packet: nothing delivered after window overflow")
+	}
+
+	// Stale packets older than the current position are dropped.
+	b = newReorderBuffer()
+	_ = b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 50}})
+	if out := b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 49}}); out != nil {
+		t.Fatalf("stale packet delivered = %v, want nil", seqList(out))
+	}
+}
+
+func TestSeqLessWrapAround(t *testing.T) {
+	cases := []struct {
+		a, b uint16
+		want bool
+	}{
+		{1, 2, true},
+		{2, 1, false},
+		{65535, 0, true},  // wrap: 65535 precedes 0
+		{0, 65535, false}, // wrap: 0 follows 65535
+		{10, 10, false},
+	}
+	for _, c := range cases {
+		if got := seqLess(c.a, c.b); got != c.want {
+			t.Fatalf("seqLess(%d, %d) = %v, want %v", c.a, c.b, got, c.want)
+		}
 	}
 }

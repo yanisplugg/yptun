@@ -23,9 +23,16 @@ func New(enabled bool) *Stats {
 	return &Stats{enabled: enabled}
 }
 
+func (s *Stats) Counters() (tx, rx uint64) {
+	return s.tx.Load(), s.rx.Load()
+}
+
 // AddTx учитывает n переданных байт.
 func (s *Stats) AddTx(n int) {
-	if !s.enabled || n <= 0 {
+	if n <= 0 {
+		return
+	}
+	if !s.enabled {
 		return
 	}
 	s.tx.Add(uint64(n))
@@ -33,7 +40,10 @@ func (s *Stats) AddTx(n int) {
 
 // AddRx учитывает n полученных байт.
 func (s *Stats) AddRx(n int) {
-	if !s.enabled || n <= 0 {
+	if n <= 0 {
+		return
+	}
+	if !s.enabled {
 		return
 	}
 	s.rx.Add(uint64(n))
