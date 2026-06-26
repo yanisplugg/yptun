@@ -1,5 +1,6 @@
 package org.olcbox.app.vpn.telegram
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -112,6 +113,29 @@ class TelegramProxyService : Service() {
         return START_STICKY
     }
 
+    /**
+     * The user swiped the app out of Recents. A started foreground service should survive that, but
+     * several OEMs (and the AOSP "task removed" path) kill the whole process anyway — which dropped the
+     * SOCKS proxy. The toggle is still ON (we only stop on an explicit ACTION_STOP / notification Stop),
+     * so schedule a prompt self-restart. START_STICKY is the fallback if this alarm is throttled.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        runCatching {
+            val restart = Intent(applicationContext, TelegramProxyService::class.java)
+            val flags = PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+            val pi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PendingIntent.getForegroundService(applicationContext, 7, restart, flags)
+            } else {
+                PendingIntent.getService(applicationContext, 7, restart, flags)
+            }
+            val am = applicationContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            // setAndAllowWhileIdle needs no SCHEDULE_EXACT_ALARM permission, fires within ~seconds even in
+            // Doze, and grants a brief foreground-service-start allowance from its callback.
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1_000, pi)
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     private fun startTunnel() {
         scope.launch {
             try {
@@ -124,11 +148,13 @@ class TelegramProxyService : Service() {
                     return@launch
                 }
                 val creds = runCatching { TelegramProxyCreds.getOrCreate(applicationContext) }.getOrNull()
-                if (bringUp(ds, baseConfig, creds)) {
-                    startHealthLoop(ds, baseConfig, creds)
-                } else {
-                    stopSelfSafely()
+                // Try once now, but run the health loop EITHER WAY — if the radio isn't ready yet or the
+                // network is momentarily blocked at start, the loop keeps retrying instead of the service
+                // giving up and stopping (which left the proxy permanently dead until re-toggled).
+                if (!bringUp(ds, baseConfig, creds)) {
+                    OlcboxVpnState.addLog("Telegram: first connect didn't land — watchdog will keep retrying")
                 }
+                startHealthLoop(ds, baseConfig, creds)
             } finally {
                 starting = false
             }
@@ -192,11 +218,13 @@ class TelegramProxyService : Service() {
     }
 
     /**
-     * Periodically re-verifies the tunnel and auto-restarts it when sends start failing. The AmneziaWG
-     * UDP socket gets EPERM ("sendmsg: operation not permitted") when the underlying network handle is
-     * swapped out from under it — frequent when the main proxy holds a process-wide bindProcessToNetwork
-     * and the device flaps Wi-Fi. A fresh [bringUp] re-opens the socket on the now-current network and
-     * recovers. Capped restarts so a genuinely-blocked network doesn't spin forever.
+     * Keeps the WARP tunnel alive for the WHOLE lifetime of the service — it NEVER permanently gives up.
+     * The AmneziaWG UDP socket gets EPERM ("sendmsg: operation not permitted") when the underlying network
+     * handle is swapped (Wi-Fi⇄cellular, connectivity returning after Doze); a fresh [bringUp] re-opens it
+     * on the now-current network. The old loop exited on the first failed bring-up and after a restart cap
+     * ("отказывается реконнектиться") — so after sleep, if the network wasn't ready on the first try, the
+     * proxy stayed dead until re-toggled. Now: while DOWN we keep retrying with a capped backoff, and a
+     * wake/network-change resets everything and retries AT ONCE (fast reconnect).
      */
     private fun startHealthLoop(
         ds: LocationsDataSourceImpl,
@@ -208,32 +236,53 @@ class TelegramProxyService : Service() {
         networkKicked = false
         healthJob = scope.launch {
             var consecutiveFails = 0
-            var restarts = 0
             var sinceVerifyMs = 0L
             var persistedEp = extractEndpoint(baseConfig)
             val dead = linkedSetOf<String>() // endpoints that died under us — rotate away from them
             var lastWallMs = System.currentTimeMillis()
-            while (isActive && instance != null) {
+            var downWaitMs = 0L // backoff countdown between bring-up attempts while the tunnel is down
+
+            // Brings the tunnel up, trying the dead-avoiding sweep first then a clean retry. Returns success.
+            suspend fun reviveTunnel(): Boolean {
+                var ok = bringUp(ds, baseConfig, creds, avoid = dead)
+                if (!ok && dead.isNotEmpty()) { dead.clear(); ok = bringUp(ds, baseConfig, creds) }
+                if (ok) { dead.clear(); downWaitMs = 0; consecutiveFails = 0; sinceVerifyMs = 0 }
+                return ok
+            }
+
+            while (isActive) {
                 delay(HEALTH_TICK_MS)
-                if (instance == null) break
-                // Wall-clock gap >> the tick means the device was frozen in Doze / deep sleep: the WARP
-                // handshake is now stale (and the underlying network may have swapped). That's the slow
-                // post-sleep reconnect — the loop used to wait out the full HEALTH_VERIFY_MS heartbeat AND
-                // need two failures before rotating. On wake (or a network change) re-verify AT ONCE and
-                // treat a single failure as decisive, so recovery is seconds not a minute+.
+                // Wall-clock gap >> the tick means the device was frozen in Doze/deep sleep: the WARP
+                // handshake is stale and the network may have swapped. Treat wake & network-change as a
+                // fresh chance — forget dead relays and the backoff so we retry everything immediately.
                 val now = System.currentTimeMillis()
                 val wokeFromSleep = (now - lastWallMs) > HEALTH_TICK_MS * 3
                 lastWallMs = now
                 val kicked = networkKicked.also { networkKicked = false }
                 val wake = wokeFromSleep || kicked
+                if (wake) {
+                    dead.clear(); downWaitMs = 0; consecutiveFails = 0
+                    OlcboxVpnState.addLog(
+                        "Telegram: ${if (wokeFromSleep) "woke from sleep" else "network changed"} — re-checking tunnel now"
+                    )
+                }
+
+                // TUNNEL DOWN → keep trying to bring it back (never stay dead), with a capped backoff.
+                if (instance == null) {
+                    if (!wake && downWaitMs > 0) { downWaitMs -= HEALTH_TICK_MS; continue }
+                    if (!reviveTunnel()) {
+                        downWaitMs = (if (downWaitMs <= 0) HEALTH_TICK_MS else downWaitMs * 2)
+                            .coerceAtMost(DOWN_RETRY_MAX_MS)
+                        OlcboxVpnState.addLog("Telegram: no working relay yet — retrying in ${downWaitMs / 1000}s")
+                    }
+                    continue
+                }
+
+                // TUNNEL UP → verify on a degrade signal, a wake/network change, or the slow heartbeat.
                 val sawDegrade = degraded.also { degraded = false }
                 sinceVerifyMs += HEALTH_TICK_MS
-                // Only spend a probe when something looks wrong, on wake/network-change, or on the slow heartbeat.
                 if (!sawDegrade && !wake && sinceVerifyMs < HEALTH_VERIFY_MS) continue
                 sinceVerifyMs = 0
-                if (wake) OlcboxVpnState.addLog(
-                    "Telegram: ${if (wokeFromSleep) "woke from sleep" else "network changed"} — re-verifying tunnel now"
-                )
 
                 if (telegramReachableThroughWarp(creds)) {
                     consecutiveFails = 0
@@ -251,21 +300,13 @@ class TelegramProxyService : Service() {
                 // A degrade signal (EPERM / silent handshake), a wake, or a network change is decisive —
                 // rotate at once; an ordinary mid-session blip still waits for 2 fails to avoid churn.
                 if (!sawDegrade && !wake && ++consecutiveFails < 2) continue
-                if (restarts >= MAX_HEALTH_RESTARTS) {
-                    OlcboxVpnState.addLog("Telegram: relay keeps dying after $restarts tries — likely throttled on this network. Re-toggle to retry.")
-                    break
-                }
-                restarts++; consecutiveFails = 0
+                consecutiveFails = 0
                 activeEndpoint?.let { dead += it }
-                OlcboxVpnState.addLog("Telegram: tunnel died — rotating to another relay [$restarts/$MAX_HEALTH_RESTARTS]")
+                OlcboxVpnState.addLog("Telegram: tunnel died — rotating relay")
                 runCatching { instance?.stop() }; instance = null
-                var ok = bringUp(ds, baseConfig, creds, avoid = dead)
-                if (!ok && dead.isNotEmpty()) {
-                    // Tried them all — reset and start over (the network may have recovered since).
-                    dead.clear()
-                    ok = bringUp(ds, baseConfig, creds)
-                }
-                if (!ok) break
+                // Revive immediately (don't wait a tick) for a fast reconnect; the down-branch keeps
+                // retrying on later ticks if this attempt didn't land.
+                if (!reviveTunnel()) downWaitMs = HEALTH_TICK_MS
             }
         }
     }
@@ -470,10 +511,12 @@ class TelegramProxyService : Service() {
 
         // Health watchdog: poll on a short tick so an EPERM (flagged by the log writer) triggers a
         // restart within seconds; otherwise actively probe only every HEALTH_VERIFY_MS to avoid traffic.
-        // Auto-restarts are capped so a genuinely-blocked network doesn't spin forever.
         private const val HEALTH_TICK_MS = 4_000L
         private const val HEALTH_VERIFY_MS = 30_000L
-        private const val MAX_HEALTH_RESTARTS = 5
+        // While the tunnel is DOWN the watchdog retries bring-up with an exponential backoff capped here —
+        // it never permanently gives up (the proxy must keep trying to recover on its own), but on a truly
+        // blocked network it backs off to one full relay sweep per minute instead of spinning.
+        private const val DOWN_RETRY_MAX_MS = 60_000L
 
         // amneziawg-go internal per-goroutine churn — pure noise in the in-app journal. Meaningful lines
         // (handshake result, endpoint sweep, working/failed, errors) don't match any of these.
