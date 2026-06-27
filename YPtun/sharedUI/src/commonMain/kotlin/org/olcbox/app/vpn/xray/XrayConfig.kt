@@ -338,6 +338,8 @@ object XrayConfig {
                             traffic = traffic,
                             detourTagOverride = baseDetour,
                             tag = PROXY_BASE_TAG,
+                            // Pack the loopback's many per-flow connections onto few main H2 tunnels.
+                            xhttpHighConcurrency = cascadeLoopActive,
                         )
                     )
                     // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
@@ -768,7 +770,12 @@ object XrayConfig {
                 cascadeLoopOutbound?.let { add(it) }
                 userOutbounds.forEach { ob ->
                     val lifted = liftXhttpExtraHostPath(ob)
-                    add(if (forceIpv4) forceIpv4Freedom(lifted) else lifted)
+                    // Cascade base: pack the loopback's per-flow connections onto few main H2 tunnels
+                    // (only the xhttp main, only when it has no xmux of its own — honor the user's).
+                    val tuned = if (cascadeLoopActive &&
+                        ob["tag"]?.jsonPrimitive?.contentOrNull == mainProxyTag
+                    ) withXhttpHighConcurrency(lifted) else lifted
+                    add(if (forceIpv4) forceIpv4Freedom(tuned) else tuned)
                 }
                 // The profile rules reference direct/block tags — make sure they exist.
                 if (mergedRouting != null && "direct" !in userOutboundTags) {
@@ -886,6 +893,35 @@ object XrayConfig {
             xhttp.forEach { (k, v) -> if (k != "host" && k != "path") put(k, v) }
             if (!newHost.isNullOrBlank()) put("host", newHost)
             if (!newPath.isNullOrBlank()) put("path", newPath)
+        }
+        val newStream = buildJsonObject {
+            stream.forEach { (k, v) -> if (k != "xhttpSettings") put(k, v) }
+            put("xhttpSettings", newXhttp)
+        }
+        return buildJsonObject {
+            outbound.forEach { (k, v) -> if (k != "streamSettings") put(k, v) }
+            put("streamSettings", newStream)
+        }
+    }
+
+    /**
+     * Gives a verbatim xhttp outbound a high-concurrency `xmux` so the cascade SOCKS loopback's many
+     * per-app-flow connections collapse onto a couple of HTTP/2 tunnels (else the main spawned a fresh
+     * H2 connection per flow → 18+ → server dropped them = stalls). No-op if the outbound isn't xhttp or
+     * already defines its own `xmux` (honor the user's tuning).
+     */
+    private fun withXhttpHighConcurrency(outbound: JsonObject): JsonObject {
+        val stream = outbound["streamSettings"] as? JsonObject ?: return outbound
+        val xhttp = stream["xhttpSettings"] as? JsonObject ?: return outbound
+        if (xhttp["xmux"] != null) return outbound
+        val newXhttp = buildJsonObject {
+            xhttp.forEach { (k, v) -> put(k, v) }
+            putJsonObject("xmux") {
+                put("maxConcurrency", "128-256")
+                put("maxConnections", 0)
+                put("cMaxReuseTimes", 0)
+                put("cMaxLifetimeMs", 0)
+            }
         }
         val newStream = buildJsonObject {
             stream.forEach { (k, v) -> if (k != "xhttpSettings") put(k, v) }
@@ -1212,6 +1248,9 @@ object XrayConfig {
         // vless inbound REQUIRES the flow it was configured with (drop it → "EOF"/reset). The generic
         // olcRTC/WG/dnstt detours still drop flow (they can't carry Vision's raw-TLS splice reliably).
         preserveFlow: Boolean = false,
+        // Cascade base (xhttp main): give its xhttp transport a high-concurrency xmux so the loopback's
+        // per-app-flow connections collapse onto a couple of H2 tunnels (see buildStreamSettings).
+        xhttpHighConcurrency: Boolean = false,
     ) = buildJsonObject {
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", tag)
@@ -1314,7 +1353,8 @@ object XrayConfig {
             put("streamSettings", buildStreamSettings(
                 profile,
                 fragmentDialer = traffic.fragmentEnabled && detourTag == null,
-                dialerProxyTag = dialerProxyTag
+                dialerProxyTag = dialerProxyTag,
+                xhttpHighConcurrency = xhttpHighConcurrency,
             ))
         }
 
@@ -1337,6 +1377,12 @@ object XrayConfig {
         // (transport-level chaining that preserves THIS profile's transport, e.g. xhttp). Mutually
         // exclusive with [fragmentDialer] in practice (fragment only runs when there is no detour).
         dialerProxyTag: String? = null,
+        // Cascade base over xhttp: pack MANY tunnel streams onto FEW HTTP/2 connections. The SOCKS
+        // loopback opens a fresh connection to this xhttp main per app-flow; without a high xmux
+        // concurrency the main spawned a new H2 connection EACH time (xmuxClients 1→18) and the server
+        // dropped them past ~14 (broken pipe / stalls). An xhttp 2nd proxy never hit this because its own
+        // mux collapsed everything to ~1-2 connections — this makes a non-muxable (Vision) 2nd match that.
+        xhttpHighConcurrency: Boolean = false,
     ) = buildJsonObject {
         if (dialerProxyTag != null) {
             putJsonObject("sockopt") { put("dialerProxy", dialerProxyTag) }
@@ -1393,6 +1439,14 @@ object XrayConfig {
                 if (profile.path.isNotBlank()) put("path", profile.path)
                 if (profile.host.isNotBlank()) put("host", profile.host)
                 put("mode", "auto")
+                // Cascade base: multiplex up to ~256 tunnel streams per H2 connection so the loopback's
+                // many per-app-flow connections collapse onto a couple of main tunnels (see param doc).
+                if (xhttpHighConcurrency) putJsonObject("xmux") {
+                    put("maxConcurrency", "128-256")
+                    put("maxConnections", 0)
+                    put("cMaxReuseTimes", 0)
+                    put("cMaxLifetimeMs", 0)
+                }
             }
 
             "httpupgrade" -> putJsonObject("httpupgradeSettings") {
