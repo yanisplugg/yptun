@@ -64,6 +64,10 @@ const (
 	// periodic XMPP ping IQ resets that idle timer end-to-end and works for
 	// the WebSocket transport too.
 	xmppKeepaliveInterval = 25 * time.Second
+	// xmppKeepaliveTimeout is the maximum time to wait for a pong reply.
+	// A half-open TCP connection lets Send() succeed while replies never
+	// arrive; waiting for the IQ result detects this and triggers reconnect.
+	xmppKeepaliveTimeout = 15 * time.Second
 	reconnectJoinTimeout  = 30 * time.Second
 )
 
@@ -842,11 +846,11 @@ func (s *Session) xmppKeepalive() {
 				`<iq type="get" to="%s" id="%s" xmlns="jabber:client"><ping xmlns="urn:xmpp:ping"/></iq>`,
 				conn.Host(), id,
 			)
-			if err := conn.Send(ping); err != nil {
+			if _, err := conn.SendIQWait(ping, id, xmppKeepaliveTimeout); err != nil {
 				if s.closed.Load() {
 					return
 				}
-				logger.Debugf("jitsi: xmpp keepalive send: %v", err)
+				logger.Debugf("jitsi: xmpp keepalive: %v", err)
 				// Avoid spamming the supervisor with identical
 				// requests during the reconnect; once a request
 				// is enqueued the channel is buffered to depth 1,
@@ -1151,12 +1155,16 @@ func (s *Session) recvLoop() {
 
 	jSess := s.jSess.Load()
 	if jSess == nil || (s.onData == nil && s.onPeerData == nil) || !s.bridgeReady.Load() {
+		logger.Debugf("jitsi: recvLoop early exit jSess=%v onData=%v onPeerData=%v bridgeReady=%v",
+			jSess != nil, s.onData != nil, s.onPeerData != nil, s.bridgeReady.Load())
 		return
 	}
 	msgs := jSess.BridgeMessages()
 	if msgs == nil {
+		logger.Debugf("jitsi: recvLoop: BridgeMessages() returned nil, exiting")
 		return
 	}
+	logger.Debugf("jitsi: recvLoop started")
 	for {
 		select {
 		case <-s.done:
@@ -1262,10 +1270,30 @@ func (s *Session) acceptEpochFrame(payload []byte) ([]byte, bool) {
 			receiverEpoch, s.localEpoch.Load())
 		return nil, false
 	}
+	// Untargeted (broadcast) frame handling. A broadcast carries
+	// receiverEpoch==0 because the sender does not yet know our localEpoch.
+	//
+	// We MUST accept a broadcast while we are still unlatched (peerEpoch==0):
+	// the client blocks in WaitForPeer until peerEpoch latches, and that latch
+	// can only come from the peer's first frame. On both initial connect and
+	// after a reconnect (which resets peerEpoch to 0 and re-announces via a
+	// broadcast Send(nil)), that first frame is a broadcast - the sender has
+	// not learned our epoch yet. Dropping it here wedges WaitForPeer for its
+	// whole timeout and the link never comes up ("ping works, no connection").
+	//
+	// Once we ARE latched (peerEpoch!=0) we only accept broadcasts from that
+	// same latched sender; a broadcast from a different senderEpoch is a
+	// third-party olcrtc instance or a stale ghost in a polluted room and is
+	// dropped. A genuine peer reconnect arrives as a fresh-epoch broadcast
+	// only after peerEpoch was reset to 0, so it bootstraps via the unlatched
+	// branch above.
 	if s.requireTargetedPeer && s.onPeerData == nil && receiverEpoch != s.localEpoch.Load() {
-		logger.Debugf("jitsi: drop untargeted bridge frame senderEpoch=0x%08x localEpoch=0x%08x",
-			senderEpoch, s.localEpoch.Load())
-		return nil, false
+		knownPeerEpoch := s.peerEpoch.Load()
+		if knownPeerEpoch != 0 && senderEpoch != knownPeerEpoch {
+			logger.Debugf("jitsi: drop untargeted bridge frame senderEpoch=0x%08x localEpoch=0x%08x",
+				senderEpoch, s.localEpoch.Load())
+			return nil, false
+		}
 	}
 	// Update the peer-epoch latch and ALWAYS accept the frame.
 	//
@@ -1812,6 +1840,23 @@ func (s *Session) resetPeerEpochs() {
 	s.peerEpochMu.Lock()
 	clear(s.peerEpochs)
 	s.peerEpochMu.Unlock()
+}
+
+// WaitForPeer blocks until at least one remote participant has sent an epoch
+// frame (confirming their bridge is open), or ctx is cancelled.
+// Implements engine.PeerReadySession.
+func (s *Session) WaitForPeer(ctx context.Context) error {
+	const pollInterval = 50 * time.Millisecond
+	for {
+		if s.peerEpoch.Load() != 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for peer: %w", ctx.Err())
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
 // CanSend reports whether the session is ready to accept new data.

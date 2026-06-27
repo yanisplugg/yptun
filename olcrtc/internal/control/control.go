@@ -34,15 +34,13 @@ const (
 	// ping byte can be head-of-line blocked behind queued data for several
 	// seconds, which is liveness-OK, not a dead link.
 	//
-	// Increased from 15s to 45s to prevent false-positive disconnects on
-	// vp8channel and other video-paced transports where KCP batching and
-	// frame pacing can delay control packets under load (issue #95).
-	//
-	// 45s is based on empirical stress testing: with vp8channel's pacing at
-	// 60fps and 512-segment KCP window, worst-case head-of-line blocking under
-	// sustained bulk transfer can reach ~25-30s before control packet gets
-	// through. 45s gives sufficient margin for jitter and RTT variation.
-	DefaultTimeout = 45 * time.Second
+	// Conservative default: a conventional carrier (jitsi/datachannel) that
+	// goes silent this long is genuinely dead and should reconnect promptly.
+	// Video-paced transports with isolated control planes (vp8channel) need a
+	// longer window because KCP batching + frame pacing can delay control
+	// packets under load (issue #95); that relaxed window is applied per
+	// transport via runtime.LivenessTimeout, not by widening this default.
+	DefaultTimeout = 15 * time.Second
 	// DefaultFailures is the default number of consecutive missed pongs before
 	// the stream is marked unhealthy.
 	DefaultFailures = 4

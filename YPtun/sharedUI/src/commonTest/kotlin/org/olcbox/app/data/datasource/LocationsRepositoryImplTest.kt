@@ -754,5 +754,6 @@ class LocationsRepositoryImplTest {
         private val value: String
     ) : DeviceIdentityProvider {
         override suspend fun hwid(): String = value
+        override suspend fun appId(): String = value
     }
 }

@@ -111,6 +111,16 @@ type videoSession interface {
 type streamTransport struct {
 	stream        videoSession
 	track         *webrtc.TrackLocalStaticSample
+	// writeMu serializes all track.WriteSample calls. pion's WriteSample is
+	// not safe for concurrent use (see writeSampleLocked); the server writes
+	// bulk data from per-peer pumps while writerLoop writes control frames
+	// and keepalives, so both paths must funnel through this lock.
+	writeMu       sync.Mutex
+	// sampleWriter, when set, replaces the real track.WriteSample call.
+	// Tests inject a writer here to observe the exact byte stream that
+	// reaches the track and to assert that writeSampleLocked serializes
+	// concurrent callers. Always invoked under writeMu.
+	sampleWriter  func([]byte) bool
 	onData        func([]byte)
 	onPeerData    func(peerID string, data []byte)
 	// onControlData is called with every reassembled message from the
@@ -577,6 +587,23 @@ func (p *streamTransport) WatchConnection(ctx context.Context) {
 	p.stream.WatchConnection(ctx)
 }
 
+// WaitForPeer blocks until the remote peer has been observed (first epoch
+// frame received), or ctx is cancelled.
+// Implements transport.PeerReadyTransport.
+func (p *streamTransport) WaitForPeer(ctx context.Context) error {
+	const pollInterval = 50 * time.Millisecond
+	for {
+		if p.peerEpoch.Load() != 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for peer: %w", ctx.Err())
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
 func (p *streamTransport) CanSend() bool {
 	if p.closed.Load() {
 		return false
@@ -630,9 +657,30 @@ type writerState struct {
 }
 
 func (w *writerState) writeSample(data []byte) bool {
-	return w.p.track.WriteSample(media.Sample{
+	return w.p.writeSampleLocked(data)
+}
+
+// writeSampleLocked serializes every WriteSample call on the shared video
+// track behind a single mutex. pion's TrackLocalStaticSample.WriteSample is
+// NOT safe for concurrent use: it packetizes under its own lock but then
+// releases that lock before pushing the resulting RTP packets onto the wire.
+// Two concurrent callers therefore each reserve a contiguous block of RTP
+// sequence numbers and then race to emit their packets, interleaving them on
+// the wire. The receiver's VP8 reassembler enforces strict sequence
+// contiguity, so any interleaved frame is discarded - which is exactly the
+// server->client bulk-data stall in issue #95 (the server runs a per-peer
+// peerWriterPump for data plus writerLoop for control/keepalive, both hitting
+// this track at once). Funneling all writes through this mutex makes each
+// sample's packetize+send atomic and keeps sequence numbers monotonic.
+func (p *streamTransport) writeSampleLocked(data []byte) bool {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	if p.sampleWriter != nil {
+		return p.sampleWriter(data)
+	}
+	return p.track.WriteSample(media.Sample{
 		Data:     data,
-		Duration: w.p.frameInterval,
+		Duration: p.frameInterval,
 	}) == nil
 }
 
@@ -722,6 +770,14 @@ func (p *streamTransport) writerLoop() {
 }
 
 func (p *streamTransport) batchSample(first []byte, maxBytes int) []byte {
+	return p.batchSampleFrom(p.outbound, first, maxBytes)
+}
+
+// batchSampleFrom coalesces up to batchSize KCP frames drained from src into a
+// single VP8 sample, bounded by maxBytes. The shared writerLoop drains the
+// single-peer outbound queue; per-peer pumps drain their own queue through the
+// same batching so the server->client path is paced identically to the client.
+func (p *streamTransport) batchSampleFrom(src <-chan []byte, first []byte, maxBytes int) []byte {
 	if maxBytes <= 0 || maxBytes > defaultMaxPayloadSize {
 		maxBytes = defaultMaxPayloadSize
 	}
@@ -736,7 +792,7 @@ func (p *streamTransport) batchSample(first []byte, maxBytes int) []byte {
 
 	for packets := 1; packets < p.batchSize; packets++ {
 		select {
-		case frame := <-p.outbound:
+		case frame := <-src:
 			if len(frame) <= epochHdrLen {
 				continue
 			}
@@ -778,33 +834,6 @@ func (p *streamTransport) restartKCP(epochHdr [epochHdrLen]byte) {
 	p.kcpMu.Lock()
 	p.kcp = rt
 	p.kcpMu.Unlock()
-}
-
-func (p *streamTransport) restartControlKCP() {
-	p.drainControlOutbound()
-	p.controlKCPMu.Lock()
-	old := p.controlKCP
-	p.controlKCP = nil
-	p.controlKCPMu.Unlock()
-	if old != nil {
-		old.close()
-	}
-	controlCb := func(data []byte) {
-		p.controlOnDataMu.RLock()
-		cb := p.onControlData
-		p.controlOnDataMu.RUnlock()
-		if cb != nil {
-			cb(data)
-		}
-	}
-	chdr := p.controlEpochHeader()
-	rt, err := startKCP(p.controlOutbound, controlCb, chdr)
-	if err != nil {
-		return
-	}
-	p.controlKCPMu.Lock()
-	p.controlKCP = rt
-	p.controlKCPMu.Unlock()
 }
 
 // restartControlKCPWithHeader restarts the control KCP with a specific epoch header,
@@ -854,6 +883,90 @@ func (p *streamTransport) drainTrack(track *webrtc.TrackRemote) {
 			return
 		}
 	}
+}
+
+// reorderWindow bounds how many out-of-order RTP packets the reorder buffer
+// holds while waiting for a gap to fill. Real SFUs reorder within a handful of
+// packets; once this many newer packets pile up behind a hole, the missing
+// sequence is treated as genuinely lost and we advance, so a truly dropped
+// packet cannot stall delivery indefinitely.
+const reorderWindow = 256
+
+// seqLess reports whether RTP sequence a precedes b using wrap-around aware
+// comparison (RFC 1982 serial arithmetic on uint16).
+func seqLess(a, b uint16) bool {
+	// bit15 of the wrap-around difference is the serial sign bit: set means a
+	// precedes b. Avoids a signed conversion gosec flags as overflow.
+	return (a-b)&0x8000 != 0
+}
+
+// reorderBuffer restores RTP sequence order before frame assembly. The SFU may
+// deliver packets out of order or drop them; feeding that stream straight into
+// the strict contiguity check in processRTPPacket made every reorder look like
+// loss and discarded whole frames (issue #95: ~80-90% of VP8 frames dropped on
+// a live SFU). Buffering by sequence number and draining in order means only
+// genuine loss produces a gap.
+type reorderBuffer struct {
+	pkts    map[uint16]*rtp.Packet
+	nextSeq uint16
+	started bool
+}
+
+func newReorderBuffer() *reorderBuffer {
+	return &reorderBuffer{pkts: make(map[uint16]*rtp.Packet, reorderWindow)}
+}
+
+// push adds pkt and returns any packets now deliverable in strict sequence
+// order. The caller reuses its read buffer across packets, so the payload is
+// copied before buffering.
+func (b *reorderBuffer) push(pkt *rtp.Packet) []*rtp.Packet {
+	if !b.started {
+		b.started = true
+		b.nextSeq = pkt.SequenceNumber
+	}
+	// Drop packets older than our current position: already delivered, or
+	// skipped past as lost.
+	if seqLess(pkt.SequenceNumber, b.nextSeq) {
+		return nil
+	}
+	cp := &rtp.Packet{Header: pkt.Header}
+	cp.Payload = append([]byte(nil), pkt.Payload...)
+	b.pkts[pkt.SequenceNumber] = cp
+
+	// Holding a full window behind a hole means the head sequence is
+	// genuinely lost: skip forward to the oldest buffered packet.
+	if len(b.pkts) > reorderWindow {
+		b.skipToOldest()
+	}
+	return b.drain()
+}
+
+// drain pops contiguous packets starting at nextSeq.
+func (b *reorderBuffer) drain() []*rtp.Packet {
+	var out []*rtp.Packet
+	for {
+		pkt, ok := b.pkts[b.nextSeq]
+		if !ok {
+			return out
+		}
+		out = append(out, pkt)
+		delete(b.pkts, b.nextSeq)
+		b.nextSeq++
+	}
+}
+
+// skipToOldest advances nextSeq to the lowest buffered sequence, abandoning a
+// lost packet so drain can make progress.
+func (b *reorderBuffer) skipToOldest() {
+	first := true
+	var oldest uint16
+	for seq := range b.pkts {
+		if first || seqLess(seq, oldest) {
+			oldest = seq
+			first = false
+		}
+	}
+	b.nextSeq = oldest
 }
 
 type vp8FrameState struct {
@@ -912,6 +1025,7 @@ func (s *vp8FrameState) processRTPPacket(pkt *rtp.Packet) []byte {
 
 func (p *streamTransport) readVP8Track(track *webrtc.TrackRemote) {
 	var state vp8FrameState
+	reorder := newReorderBuffer()
 	buf := make([]byte, rtpBufSize)
 	var rtpCount, frameCount int
 
@@ -929,13 +1043,16 @@ func (p *streamTransport) readVP8Track(track *webrtc.TrackRemote) {
 			continue
 		}
 
-		frame := state.processRTPPacket(pkt)
-		if frame == nil {
-			continue
+		// Restore sequence order before assembly so SFU reordering is not
+		// mistaken for loss.
+		for _, ordered := range reorder.push(pkt) {
+			frame := state.processRTPPacket(ordered)
+			if frame == nil {
+				continue
+			}
+			frameCount++
+			p.handleIncomingFrame(frame)
 		}
-		frameCount++
-
-		p.handleIncomingFrame(frame)
 	}
 }
 
@@ -1066,20 +1183,48 @@ func (p *streamTransport) getOrCreatePeerKCP(epoch uint32) *kcpRuntime {
 }
 
 // peerWriterPump drains a peer's outbound KCP queue and writes frames to the
-// shared video track. Stops when the channel is closed or transport shuts down.
+// shared video track. It paces the server->client path on the same frame
+// ticker and per-tick byte budget as writerLoop drives the client->server
+// path. Without this, the pump emitted every KCP frame the instant it was
+// queued: with KCP congestion control off (nc=1) and a BDP-sized window, that
+// overran the SFU's policer, drove burst loss, and collapsed throughput to
+// zero within ~20-40s (issue #95). Stops when the channel is closed or the
+// transport shuts down.
 func (p *streamTransport) peerWriterPump(_ uint32, out chan []byte) {
+	ticker := time.NewTicker(p.frameInterval)
+	defer ticker.Stop()
+
+	// Inject a decodable VP8 keyframe on the same cadence writerLoop uses for
+	// the client->server path. The server's per-peer bulk path previously
+	// emitted only opaque KCP data frames, which never form a decodable VP8
+	// keyframe: the SFU's decoder times out (~40s without a keyframe) and stops
+	// forwarding the server's track to the subscriber. The client side was
+	// kept alive by writerLoop.forceKeepalive; the server side had no
+	// equivalent, so the server->client direction collapsed first while the
+	// client->server direction kept flowing (issue #95).
+	keyframeEvery := max(int((2*time.Second)/p.frameInterval), 1)
+	ticksSinceKeyframe := 0
+
 	for {
 		select {
 		case <-p.closeCh:
 			return
-		case frame, ok := <-out:
-			if !ok {
-				return
+		case <-ticker.C:
+			ticksSinceKeyframe++
+			if ticksSinceKeyframe >= keyframeEvery {
+				ticksSinceKeyframe = 0
+				hdr := p.epochHeader()
+				_ = p.writeSampleLocked(hdr[:])
 			}
-			_ = p.track.WriteSample(media.Sample{
-				Data:     frame,
-				Duration: p.frameInterval,
-			})
+			select {
+			case frame, ok := <-out:
+				if !ok {
+					return
+				}
+				sample := p.batchSampleFrom(out, frame, p.perTickBytes)
+				_ = p.writeSampleLocked(sample)
+			default:
+			}
 		}
 	}
 }

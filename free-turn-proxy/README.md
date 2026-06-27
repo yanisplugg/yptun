@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/license-Happy_Bunny-ff69b4?style=flat-square&logoColor=white&labelColor=0D1117)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white&labelColor=0D1117)
 ![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white&labelColor=0D1117)
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android-green?style=flat-square&labelColor=0D1117)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20iOS-green?style=flat-square&labelColor=0D1117)
 </div>
 
 ## О проекте
@@ -31,6 +31,8 @@ task tools:install
 task                # список доступных задач
 task build          # собрать client + server в dist/ для текущего хоста
 task build:all      # кросс-сборка всех target через goreleaser snapshot
+task build:ios      # сборка XCFramework для iOS в dist/Mobile.xcframework
+task build:android  # сборка AAR архива для Android в dist/mobile.aar
 task test           # go test -race
 task test:cover     # тесты + покрытие → cover.html
 task lint           # golangci-lint

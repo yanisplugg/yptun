@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.sp
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.ui.features.home.components.LogLines
+import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.update.AppUpdateInfo
 import org.olcbox.app.update.AppUpdateSettings
 import kotlin.time.Instant
@@ -689,6 +690,7 @@ private fun SharedUpdateOfferCard(
     onDownload: () -> Unit,
     onLater: () -> Unit
 ) {
+    val strings = LocalStrings.current
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
@@ -700,7 +702,7 @@ private fun SharedUpdateOfferCard(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "Обновите приложение",
+                text = strings.updateBannerTitle,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold
@@ -714,10 +716,10 @@ private fun SharedUpdateOfferCard(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onLater) {
-                    Text("Later")
+                    Text(strings.later)
                 }
                 Button(onClick = onDownload) {
-                    Text("Download")
+                    Text(strings.download)
                 }
             }
         }

@@ -76,6 +76,12 @@ val LocalShowSubscriptionExpiry = staticCompositionLocalOf { false }
  */
 val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
 
+/**
+ * When true, a location row that HAS a description hides its protocol/IP "endpoint" subtitle (showing
+ * the description in its place). Rows without a description always show the endpoint. On by default.
+ */
+val LocalHideEndpointWhenDescription = staticCompositionLocalOf { true }
+
 /** Fixed "success green" for the ping tick — theme-independent so it's always clearly green. */
 private val PingOkGreen = Color(0xFF22C55E)
 
@@ -159,14 +165,32 @@ fun LocationRow(
                 softWrap = true
             )
 
-            Text(
-                text = locationSubtitle(location),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Visible,
-                softWrap = true
-            )
+            // Subscription-supplied description (Happ `meta.serverDescription`), shown right under the
+            // name and ABOVE the protocol/IP subtitle. Display-only; absent when the source has none.
+            val description = location.config?.description?.takeIf { it.isNotBlank() }
+            description?.let { desc ->
+                Text(
+                    text = desc,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true
+                )
+            }
+
+            // Protocol/IP "endpoint" subtitle — hidden when this location has a description and the
+            // "hide endpoint when description" setting is on (default), so the description stands in for it.
+            if (description == null || !LocalHideEndpointWhenDescription.current) {
+                Text(
+                    text = locationSubtitle(location),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Visible,
+                    softWrap = true
+                )
+            }
         }
         
         // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),

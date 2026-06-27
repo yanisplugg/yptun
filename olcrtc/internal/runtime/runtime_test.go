@@ -46,6 +46,13 @@ func TestSmuxConfigDefault(t *testing.T) {
 	}
 }
 
+func TestSmuxConfigLong(t *testing.T) {
+	cfg := runtime.SmuxConfigLong(0)
+	if cfg.KeepAliveInterval != 10*time.Second || cfg.KeepAliveTimeout != 120*time.Second {
+		t.Fatalf("SmuxConfigLong(0) keepalive = %+v", cfg)
+	}
+}
+
 func TestSmuxConfigShrinks(t *testing.T) {
 	// 100-byte wire payload minus smux+crypto overhead is far below default
 	// 32768, so MaxFrameSize must shrink.

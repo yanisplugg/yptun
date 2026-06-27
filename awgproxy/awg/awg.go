@@ -141,7 +141,7 @@ func Start(iniConfig, listenAddr string) error {
 	logger.Verbosef = func(format string, args ...any) { log.New(logSink, "", 0).Printf(format, args...) }
 	logger.Errorf = func(format string, args ...any) { log.New(logSink, "", 0).Printf(format, args...) }
 
-	bind := conn.NewDefaultBind()
+	bind := bindFor(cfg)
 	d := device.NewDevice(tunDev, bind, logger)
 	if err := d.IpcSet(uapi); err != nil {
 		d.Close()
@@ -184,7 +184,7 @@ func Probe(iniConfig string) int64 {
 	if err != nil {
 		return -1
 	}
-	bind := conn.NewDefaultBind()
+	bind := bindFor(cfg)
 	d := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "[awg-probe] "))
 	defer d.Close()
 	if err := d.IpcSet(uapi); err != nil {
@@ -222,7 +222,7 @@ func MeasureDelay(iniConfig, url, method string, timeoutMs int) int64 {
 	if err != nil {
 		return -1
 	}
-	bind := conn.NewDefaultBind()
+	bind := bindFor(cfg)
 	d := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "[awg-urltest] "))
 	defer d.Close()
 	if err := d.IpcSet(uapi); err != nil {
@@ -291,6 +291,12 @@ type wgConfig struct {
 	// Amnezia obfuscation knobs (jc/jmin/jmax/s1..s4/h1..h4/i1..i5/j1..j3/itime), preserved in
 	// input order with their raw values (e.g. i-packets are "<b 0x...>").
 	awgParams [][2]string
+	// Cloudflare WARP "reserved" header bytes (the registration client_id). WARP REQUIRES every
+	// outgoing WireGuard message to carry these 3 bytes in the otherwise-reserved header field
+	// (bytes 1..3); amneziawg-go leaves them zero, so Cloudflare silently drops all data. Stamped
+	// on Send by reservedBind. Zero/absent (hasReserved=false) for normal AmneziaWG servers.
+	reserved    [3]byte
+	hasReserved bool
 }
 
 // awgKnobs are the AmneziaWG obfuscation keys passed through verbatim to the device UAPI.
@@ -357,6 +363,25 @@ func parseConfig(ini string) (*wgConfig, error) {
 		case "mtu":
 			if m, err := strconv.Atoi(val); err == nil && m > 0 {
 				c.mtu = m
+			}
+		case "reserved":
+			// "b0, b1, b2" — three decimal bytes (Cloudflare WARP client_id). Anything else is ignored.
+			parts := strings.Split(val, ",")
+			if len(parts) == 3 {
+				ok := true
+				var r [3]byte
+				for i, p := range parts {
+					n, err := strconv.Atoi(strings.TrimSpace(p))
+					if err != nil || n < 0 || n > 255 {
+						ok = false
+						break
+					}
+					r[i] = byte(n)
+				}
+				if ok && r != ([3]byte{}) {
+					c.reserved = r
+					c.hasReserved = true
+				}
 			}
 		default:
 			if awgKnobs[key] && val != "" {

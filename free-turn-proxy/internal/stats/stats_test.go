@@ -83,4 +83,8 @@ func TestStatsEnabledAccumulates(t *testing.T) {
 	if got := s.rx.Load(); got != 7 {
 		t.Errorf("rx=%d, want 7", got)
 	}
+	tx, rx := s.Counters()
+	if tx != 150 || rx != 7 {
+		t.Fatalf("Counters() = (%d, %d), want (150, 7)", tx, rx)
+	}
 }

@@ -182,6 +182,22 @@ data class ProxyProfile(
             .joinToString("\n")
     )
 
+    /**
+     * True when [other] points at the SAME node as this one — used to stop a user chaining their own
+     * main proxy into the second/cascade slot (a proxy-into-itself, which loops/can't work). Matches on
+     * any of: full dedup-equality (the same link pasted twice), an identical raw Xray/sing-box config,
+     * or the same server:port (the same endpoint reached via a differently-formatted link).
+     */
+    fun isSameNodeAs(other: ProxyProfile): Boolean {
+        if (dedupNormalized() == other.dedupNormalized()) return true
+        if (!rawXrayConfig.isNullOrBlank() && rawXrayConfig == other.rawXrayConfig) return true
+        if (!rawOutbound.isNullOrBlank() && rawOutbound == other.rawOutbound) return true
+        if (server.isNotBlank() && serverPort in 1..65535 &&
+            server.equals(other.server, ignoreCase = true) && serverPort == other.serverPort
+        ) return true
+        return false
+    }
+
     companion object {
         const val TYPE_VLESS = "vless"
         const val TYPE_VMESS = "vmess"

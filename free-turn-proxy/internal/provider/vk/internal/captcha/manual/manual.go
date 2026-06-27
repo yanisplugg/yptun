@@ -548,7 +548,7 @@ func startCaptchaServer(srv *http.Server, logPrefix string) error {
 
 // runCaptchaServerAndWait открывает браузер и ждёт токен решения.
 // При срабатывании ctx возвращает ctx.Err(); в обоих случаях HTTP-сервер останавливается.
-func runCaptchaServerAndWait(ctx context.Context, handler http.Handler, captchaURL string, keyCh <-chan string, logPrefix string) (string, error) {
+func runCaptchaServerAndWait(ctx context.Context, handler http.Handler, captchaURL string, keyCh <-chan string, logPrefix string, present func(string)) (string, error) {
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
 	if err := startCaptchaServer(srv, logPrefix); err != nil {
@@ -572,8 +572,7 @@ func runCaptchaServerAndWait(ctx context.Context, handler http.Handler, captchaU
 	fmt.Println("==============================================")
 	fmt.Println()
 
-	Log.Infof("[%s] Opening browser...", logPrefix)
-	openBrowser(captchaURL)
+	present(captchaURL)
 
 	select {
 	case key := <-keyCh:
@@ -623,7 +622,7 @@ button{font-size:24px;padding:12px 32px;margin-top:12px;cursor:pointer}</style>
 		_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><body><h2>Done!</h2></body></html>`)
 	})
 
-	return runCaptchaServerAndWait(ctx, mux, localCaptchaOrigin(), keyCh, "captcha HTTP server error")
+	return runCaptchaServerAndWait(ctx, mux, localCaptchaOrigin(), keyCh, "captcha HTTP server error", openBrowser)
 }
 
 type loggingTransport struct {
@@ -683,6 +682,18 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // переписывая абсолютные URL так, чтобы браузер всё время оставался на
 // 127.0.0.1:8765; возвращает результирующий auth-токен.
 func SolveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer) (string, error) {
+	return solveViaProxy(ctx, redirectURI, dialer, openBrowser)
+}
+
+// SolveViaProxyWithPresenter передаёт URL вызывающему после запуска сервера.
+func SolveViaProxyWithPresenter(ctx context.Context, redirectURI string, dialer net.Dialer, present func(string)) (string, error) {
+	if present == nil {
+		present = func(string) {}
+	}
+	return solveViaProxy(ctx, redirectURI, dialer, present)
+}
+
+func solveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer, present func(string)) (string, error) {
 	keyCh := make(chan string, 1)
 
 	targetURL, err := neturl.Parse(redirectURI)
@@ -867,7 +878,7 @@ func SolveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer) (
 		proxy.ServeHTTP(w, r)
 	})
 
-	return runCaptchaServerAndWait(ctx, mux, localCaptchaURLForTarget(targetURL), keyCh, "proxy HTTP server error")
+	return runCaptchaServerAndWait(ctx, mux, localCaptchaURLForTarget(targetURL), keyCh, "proxy HTTP server error", present)
 }
 
 func openBrowser(url string) {

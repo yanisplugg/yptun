@@ -343,8 +343,20 @@ func TestReconnectEpochAnnounceWithZeroPeerEpochIsAccepted(t *testing.T) {
 	}
 }
 
+// TestRequireTargetedPeerLatchesFirstBroadcastThenRejectsOthers codifies the
+// field-verified handshake order under WaitForPeer. The client blocks in
+// WaitForPeer until peerEpoch latches, and the latch can only come from the
+// peer's first bridge frame. Because the client waits before sending its own
+// SYN, the server has not learned the client's localEpoch yet, so that first
+// frame necessarily arrives as a broadcast (receiverEpoch==0). The guard must
+// therefore accept an unlatched broadcast (or WaitForPeer wedges and the link
+// never comes up - "ping works, no connection"). Once latched, broadcasts from
+// a different senderEpoch (a third-party olcrtc instance or a stale ghost in a
+// polluted room) are dropped, while further frames from the latched peer keep
+// flowing.
+//
 //nolint:cyclop // setup asserts latch, epoch, and delivery state
-func TestRequireTargetedPeerDropsOtherClientBroadcastBeforeLatch(t *testing.T) {
+func TestRequireTargetedPeerLatchesFirstBroadcastThenRejectsOthers(t *testing.T) {
 	var received [][]byte
 	sess, err := New(context.Background(), engine.Config{
 		URL:                 testHost,
@@ -365,28 +377,37 @@ func TestRequireTargetedPeerDropsOtherClientBroadcastBeforeLatch(t *testing.T) {
 	}
 	js.localEpoch.Store(0x3333)
 
-	otherClient := makeBridgeFrameForEpoch(t, 0x2222, 0, []byte("CLIENT_HELLO"))
-	js.deliverBridgeMessage(makeBridgeMessageFrom("clientB", map[string]any{rawFieldKey: otherClient}), true)
-	if len(received) != 0 {
-		t.Fatalf("received other client broadcast = %q, want none", received)
-	}
-	if got := js.peerEpoch.Load(); got != 0 {
-		t.Fatalf("peerEpoch after other client broadcast = 0x%08x, want 0", got)
-	}
-	if got := js.peerEndpoint.Load(); got != nil {
-		t.Fatalf("peerEndpoint after other client broadcast = %q, want nil", *got)
-	}
-
-	serverWelcome := makeBridgeFrameForEpoch(t, 0x1111, 0x3333, []byte("SERVER_WELCOME"))
+	// Server welcome arrives as a broadcast (receiverEpoch==0) because the
+	// server has not learned our epoch yet. It must latch us and be delivered
+	// so WaitForPeer can unblock.
+	serverWelcome := makeBridgeFrameForEpoch(t, 0x1111, 0, []byte("SERVER_WELCOME"))
 	js.deliverBridgeMessage(makeBridgeMessageFrom("server", map[string]any{rawFieldKey: serverWelcome}), true)
 	if len(received) != 1 || string(received[0]) != "SERVER_WELCOME" {
-		t.Fatalf("received = %q, want targeted server welcome", received)
+		t.Fatalf("received = %q, want server welcome", received)
 	}
 	if got := js.peerEpoch.Load(); got != 0x1111 {
-		t.Fatalf("peerEpoch = 0x%08x, want server epoch", got)
+		t.Fatalf("peerEpoch after welcome = 0x%08x, want server epoch", got)
 	}
 	if got := js.peerEndpoint.Load(); got == nil || *got != "server" {
-		t.Fatalf("peerEndpoint = %v, want server", got)
+		t.Fatalf("peerEndpoint after welcome = %v, want server", got)
+	}
+
+	// A broadcast from a different senderEpoch after we are latched is a
+	// third-party/ghost and must be dropped.
+	otherClient := makeBridgeFrameForEpoch(t, 0x2222, 0, []byte("CLIENT_HELLO"))
+	js.deliverBridgeMessage(makeBridgeMessageFrom("clientB", map[string]any{rawFieldKey: otherClient}), true)
+	if len(received) != 1 {
+		t.Fatalf("received after third-party broadcast = %q, want only server welcome", received)
+	}
+	if got := js.peerEpoch.Load(); got != 0x1111 {
+		t.Fatalf("peerEpoch after third-party broadcast = 0x%08x, want latched server epoch", got)
+	}
+
+	// A further frame from the latched peer keeps flowing.
+	more := makeBridgeFrameForEpoch(t, 0x1111, 0, []byte("MORE"))
+	js.deliverBridgeMessage(makeBridgeMessageFrom("server", map[string]any{rawFieldKey: more}), true)
+	if len(received) != 2 || string(received[1]) != "MORE" {
+		t.Fatalf("received = %q, want server welcome + MORE", received)
 	}
 }
 

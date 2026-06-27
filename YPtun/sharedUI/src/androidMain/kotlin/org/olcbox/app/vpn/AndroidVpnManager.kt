@@ -63,6 +63,10 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME_INITIALIZED
 import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
+import org.olcbox.app.vpn.telegram.TelegramProxyCreds
+import org.olcbox.app.vpn.telegram.TelegramProxyService
+import org.olcbox.app.vpn.telegram.TelegramProxyState
+import org.olcbox.app.vpn.telegram.WarpConfigGenerator
 import java.security.SecureRandom
 
 class AndroidVpnManager(private val context: Context) : VpnManager {
@@ -99,9 +103,15 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val trafficSettings: StateFlow<TrafficSettings> = _trafficSettings.asStateFlow()
     private val _appBehavior = MutableStateFlow(AppBehaviorSettings())
     val appBehavior: StateFlow<AppBehaviorSettings> = _appBehavior.asStateFlow()
+    private val _telegramProxyState =
+        MutableStateFlow<TelegramProxyState>(TelegramProxyState.Stopped)
+    /** State of the Telegram-over-WARP background proxy (for the settings UI). */
+    val telegramProxyState: StateFlow<TelegramProxyState> = _telegramProxyState.asStateFlow()
 
     /** De-dupe guard for subscription-expiry notifications (keyed by name + days-left), per process. */
     private val notifiedExpiry = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    /** Per-process de-dupe for panel announcements (also persisted across restarts via SharedPreferences). */
+    private val notifiedAnnounce = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val _language = MutableStateFlow(AppLanguage.System)
     val language: StateFlow<AppLanguage> = _language.asStateFlow()
 
@@ -109,6 +119,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         LocalizationState.systemLanguage = when (java.util.Locale.getDefault().language) {
             "ru" -> AppLanguage.Russian
             "fa" -> AppLanguage.Persian
+            "zh" -> AppLanguage.Chinese
             else -> AppLanguage.English
         }
 
@@ -183,6 +194,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     ?: AppBehaviorSettings()
                 // Mirror the subscription User-Agent choice into the process holder the fetch reads.
                 SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
+                // Restore the Telegram-over-WARP proxy if the user left it on (config is cached).
+                restoreTelegramProxyIfEnabled()
                 val lang = AppLanguage.fromId(preferences[KEY_ANDROID_LANGUAGE])
                 _language.value = lang
                 LocalizationState.language = lang
@@ -357,6 +370,60 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         }
     }
 
+    /**
+     * Posts a system notification for each NEW panel announcement (Remnawave `announce` header). Gated
+     * on the user's toggle and POST_NOTIFICATIONS. De-duplicated by content (name + text) both
+     * in-memory and persisted in SharedPreferences, so the same announcement is shown only once even
+     * across app restarts (the auto-refresh re-collects every announcement on each launch).
+     */
+    override fun notifyPanelAnnouncements(announcements: List<PanelAnnouncementInfo>) {
+        if (!_appBehavior.value.notifyPanelAnnouncements) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                appContext, android.Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val prefs = appContext.getSharedPreferences("olcbox_panel_announce", android.content.Context.MODE_PRIVATE)
+        val shown = prefs.getStringSet("shown_hashes", emptySet())?.toMutableSet() ?: mutableSetOf()
+        val manager = androidx.core.app.NotificationManagerCompat.from(appContext)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                PANEL_ANNOUNCE_CHANNEL_ID,
+                "Уведомления панели",
+                android.app.NotificationManager.IMPORTANCE_DEFAULT
+            )
+            manager.createNotificationChannel(channel)
+        }
+        val icon = appContext.resources
+            .getIdentifier("ic_stat_yptun", "drawable", appContext.packageName)
+            .takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
+
+        var changed = false
+        announcements.forEach { ann ->
+            val key = (ann.name + "|" + ann.announce).hashCode().toString()
+            if (!shown.add(key)) return@forEach // already shown in a previous session
+            notifiedAnnounce.add(key)
+            changed = true
+
+            val notification = androidx.core.app.NotificationCompat.Builder(appContext, PANEL_ANNOUNCE_CHANNEL_ID)
+                .setSmallIcon(icon)
+                .setContentTitle(ann.name)
+                .setContentText(ann.announce)
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(ann.announce))
+                .setAutoCancel(true)
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            runCatching {
+                manager.notify(PANEL_ANNOUNCE_NOTIFICATION_BASE_ID + (key.hashCode() and 0xFFFF), notification)
+            }
+        }
+        if (changed) prefs.edit().putStringSet("shown_hashes", shown).apply()
+    }
+
     /** As [importRoutingProfileLink] but returns the new profile id (or null when not a routing profile). */
     fun importRoutingProfileId(link: String): String? {
         val parsed = HappRoutingParser.parseAny(link) ?: return null
@@ -421,6 +488,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     fun setAppBehavior(settings: AppBehaviorSettings) {
+        val previous = _appBehavior.value
         _appBehavior.value = settings
         SubscriptionUserAgentHolder.mode = settings.subscriptionUserAgent
         scope.launch {
@@ -429,6 +497,86 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     Json.encodeToString(AppBehaviorSettings.serializer(), settings)
             }
         }
+        if (settings.telegramProxyEnabled != previous.telegramProxyEnabled) {
+            if (settings.telegramProxyEnabled) enableTelegramProxy() else disableTelegramProxy()
+        }
+    }
+
+    /**
+     * Brings up the Telegram-over-WARP proxy: ensures a cached WARP config exists (generating one from
+     * Cloudflare on first enable — requires internet), then starts the background [TelegramProxyService].
+     * On generation failure the toggle is reverted and an error is surfaced via [telegramProxyState].
+     */
+    private fun enableTelegramProxy() {
+        scope.launch {
+            // All steps echo into the visible journal (OlcboxVpnState.addLog) — the TG proxy runs
+            // independently of the main VPN, so without this the user sees NOTHING in the in-app log.
+            OlcboxVpnState.addLog("Telegram proxy: enabling…")
+            val ds = LocationsDataSourceImpl(appContext)
+            var config = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
+            // Pre-2.5.3 caches came from direct Cloudflare registration (now blocked for some users) or
+            // never generated at all. Drop any cached config that points at the bare DNS endpoint with no
+            // body so the new server-side generator path runs; a valid cached config is kept as-is.
+            if (!config.isNullOrBlank() && !config.contains("PrivateKey", ignoreCase = true)) {
+                config = null
+            }
+            // Pre-I1 caches handshake but carry no data on DPI networks (no DPI-evasion I1 packet — see
+            // WarpConfigGenerator.WARP_I1). Drop them so a fresh config WITH I1 is regenerated.
+            if (!config.isNullOrBlank() &&
+                config.lineSequence().none { it.trimStart().startsWith("I1", ignoreCase = true) }
+            ) {
+                OlcboxVpnState.addLog("Telegram proxy: cached config has no DPI-evasion packet — regenerating")
+                config = null
+            }
+            if (config.isNullOrBlank()) {
+                OlcboxVpnState.addLog("Telegram proxy: no cached config — generating WARP via generators…")
+                _telegramProxyState.value = TelegramProxyState.Generating
+                config = runCatching { WarpConfigGenerator.generate() }.getOrElse { e ->
+                    OlcboxVpnState.addLog("Telegram proxy: WARP generation FAILED — ${e.message ?: e}")
+                    _telegramProxyState.value =
+                        TelegramProxyState.Error(e.message ?: "WARP config generation failed")
+                    // Revert the toggle (setAppBehavior re-entry will call disableTelegramProxy()).
+                    setAppBehavior(_appBehavior.value.copy(telegramProxyEnabled = false))
+                    return@launch
+                }
+                runCatching { ds.saveTelegramWarpConfig(config) }
+                OlcboxVpnState.addLog("Telegram proxy: WARP config generated (${config.length} chars)")
+            } else {
+                OlcboxVpnState.addLog("Telegram proxy: using cached WARP config")
+            }
+            // Generate/persist the SOCKS credentials BEFORE the service starts so it reads the same
+            // pair (getOrCreate is idempotent) and the UI can show them.
+            val creds = runCatching { TelegramProxyCreds.getOrCreate(appContext) }.getOrNull()
+            runCatching { TelegramProxyService.start(appContext) }
+                .onSuccess {
+                    OlcboxVpnState.addLog(
+                        "Telegram proxy: service started — SOCKS5 ${TelegramProxyService.LISTEN_HOST}:" +
+                            "${TelegramProxyService.LISTEN_PORT} (login ${creds?.user.orEmpty()})"
+                    )
+                    _telegramProxyState.value = TelegramProxyState.Running(
+                        TelegramProxyService.LISTEN_HOST,
+                        TelegramProxyService.LISTEN_PORT,
+                        creds?.user.orEmpty(),
+                        creds?.pass.orEmpty()
+                    )
+                }
+                .onFailure {
+                    OlcboxVpnState.addLog("Telegram proxy: service FAILED to start — ${it.message ?: it}")
+                    _telegramProxyState.value =
+                        TelegramProxyState.Error(it.message ?: "Failed to start Telegram proxy")
+                }
+        }
+    }
+
+    private fun disableTelegramProxy() {
+        OlcboxVpnState.addLog("Telegram proxy: disabling")
+        runCatching { TelegramProxyService.stop(appContext) }
+        _telegramProxyState.value = TelegramProxyState.Stopped
+    }
+
+    /** Re-starts the Telegram proxy after process restart when the toggle was left on. */
+    private fun restoreTelegramProxyIfEnabled() {
+        if (_appBehavior.value.telegramProxyEnabled) enableTelegramProxy()
     }
 
     override fun needsPermission(): Boolean = needsPermission(_connectionMode.value)
@@ -824,7 +972,20 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 return@withContext null
             }
             val listenPort = (20_000..60_000).random()
-            val configJson = runCatching {
+            // A verbatim raw config (xhttp/splithttp/reality) can't be rebuilt from type/server/port —
+            // its transport lives only in rawXrayConfig. Probe THROUGH that verbatim proxy outbound, or
+            // the test would dial a plain vless and falsely report the server "недоступен".
+            val rawXray = profile.rawXrayConfig
+            val configJson = if (!rawXray.isNullOrBlank()) {
+                org.olcbox.app.vpn.xray.XrayConfig.buildRawProxyPingConfig(
+                    rawConfigJson = rawXray,
+                    listenPort = listenPort,
+                    listenHost = "127.0.0.1",
+                ) ?: run {
+                    OlcboxVpnState.addLog("Proxy $method ping: no proxy outbound in verbatim config for ${profile.server}")
+                    return@withContext null
+                }
+            } else runCatching {
                 org.olcbox.app.vpn.xray.XrayConfig.build(
                     profile = profile,
                     listenPort = listenPort,
@@ -1004,6 +1165,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         const val TUNNEL_PING_TIMEOUT_MS = 6_000
         const val SUB_EXPIRY_CHANNEL_ID = "olcbox_sub_expiry"
         const val SUB_EXPIRY_NOTIFICATION_BASE_ID = 47_000
+        const val PANEL_ANNOUNCE_CHANNEL_ID = "olcbox_panel_announce"
+        const val PANEL_ANNOUNCE_NOTIFICATION_BASE_ID = 48_000
         val random = SecureRandom()
     }
 }

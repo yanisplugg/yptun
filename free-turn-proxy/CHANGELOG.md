@@ -1,5 +1,54 @@
 # Changelog
 
+## [1.5.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.5.1...v1.5.2) (2026-06-25)
+
+
+### Bug Fixes
+
+* ci ([ab9c708](https://github.com/samosvalishe/free-turn-proxy/commit/ab9c708ef0bb36c0099fff01cfa2328cca066b54))
+
+## [1.5.1](https://github.com/samosvalishe/free-turn-proxy/compare/v1.5.0...v1.5.1) (2026-06-25)
+
+
+### Bug Fixes
+
+* ci ([7eb33da](https://github.com/samosvalishe/free-turn-proxy/commit/7eb33da28a3ea1b0773ed633b90fbdb12764b032))
+
+## [1.5.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.4...v1.5.0) (2026-06-25)
+
+
+### Features
+
+* **mobile:** переименование ios -&gt; mobile, универсальный движок для iOS/Android ([575f278](https://github.com/samosvalishe/free-turn-proxy/commit/575f278a9a8090b356e5315bb8c8b545a1be6f6b))
+
+
+### Bug Fixes
+
+* ci ([bfaabcd](https://github.com/samosvalishe/free-turn-proxy/commit/bfaabcdc80c3f50c6bf53b76f3d010278274049b))
+* ci ([b42924e](https://github.com/samosvalishe/free-turn-proxy/commit/b42924e3603d6327993bec7e9b9aac11aa9e9165))
+
+## [1.4.4](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.3...v1.4.4) (2026-06-24)
+
+
+### Bug Fixes
+
+* заменить устаревший token_type=messages на анонимные скоупы в VK авторизации ([384c350](https://github.com/samosvalishe/free-turn-proxy/commit/384c350e7d9f1fbefa643cbfc352975c5bd7d263))
+
+## [1.4.3](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.2...v1.4.3) (2026-06-22)
+
+
+### Bug Fixes
+
+* bump captcha ([b0c3e65](https://github.com/samosvalishe/free-turn-proxy/commit/b0c3e65c40bed7e09610d5a4a49d322fa6d55fea))
+* OBF_TIMING -&gt; docker ([d8f0e7e](https://github.com/samosvalishe/free-turn-proxy/commit/d8f0e7e99554372a4b6dd057e760509e8a65bece))
+
+## [1.4.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.1...v1.4.2) (2026-06-22)
+
+
+### Bug Fixes
+
+* captcha ([d73f426](https://github.com/samosvalishe/free-turn-proxy/commit/d73f42603aacefa3ec08d43771a073393ae0500b))
+
 ## [1.4.1](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.0...v1.4.1) (2026-06-19)
 
 

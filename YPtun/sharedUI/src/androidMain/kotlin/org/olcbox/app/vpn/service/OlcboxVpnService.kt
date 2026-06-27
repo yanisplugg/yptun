@@ -76,6 +76,8 @@ import org.olcbox.app.vpn.xray.XrayConfig
 import org.olcbox.app.vpn.xray.XrayEngine
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
+import org.olcbox.app.vpn.proxy.HttpProxyBridge
+import org.olcbox.app.vpn.telegram.VpnSocketProtectBridge
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
 import org.olcbox.app.vpn.UpstreamCandidate
 import org.olcbox.app.vpn.UpstreamNetworkSelector
@@ -197,6 +199,7 @@ class OlcboxVpnService : VpnService() {
     private var splitTunnelProxyApps = emptySet<String>()
     private var splitTunnelBypassApps = emptySet<String>()
     private var socksProxy: AuthenticatedSocksProxy? = null
+    private var httpProxyBridge: HttpProxyBridge? = null
     private var singBox: SingBoxEngine? = null
     private var xray: XrayEngine? = null
     // Multi-room (Stealth/Chain): when a location uses it, the singleton Mobile.start* is replaced by N
@@ -461,6 +464,7 @@ class OlcboxVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        VpnSocketProtectBridge.protect = null
         cleanup(stopService = false)
     }
 
@@ -571,11 +575,31 @@ class OlcboxVpnService : VpnService() {
         // Security: in TUN mode the local SOCKS5 is purely internal (tun2socks <-> core), so
         // force per-session random credentials. Otherwise any app on the device could connect to
         // the unauthenticated 127.0.0.1 SOCKS listener, learn the real exit IP and bypass
-        // split tunneling (disclosed 2026 for xray/sing-box mobile clients). In Proxy mode the
-        // SOCKS is intentionally exposed, so the user's configured credentials are kept.
-        if (options.connectionMode == AndroidConnectionMode.Tun) {
-            socksUsername = randomSocksToken()
-            socksPassword = randomSocksToken()
+        // split tunneling (disclosed 2026 for xray/sing-box mobile clients).
+        //
+        // In Proxy mode the SOCKS is the user-facing product: force NO-AUTH so ANY local client
+        // connects immediately. Requiring an (auto-generated) username/password is exactly what made
+        // Proxy mode "connects but no traffic" — a client that doesn't send credentials is accepted at
+        // the TCP layer but its CONNECT is rejected, so nothing flows. Loopback-only listener anyway.
+        when (options.connectionMode) {
+            AndroidConnectionMode.Tun -> {
+                // Protect the internal loopback SOCKS5 (tun2socks <-> core) so no other app can use it.
+                // Honor the user's configured login/password if BOTH are set (that "SOCKS5 proxy" field
+                // is exactly for this); otherwise fall back to per-session random credentials so the
+                // listener is never left open with no auth.
+                if (options.socksUsername.isBlank() || options.socksPassword.isBlank()) {
+                    socksUsername = randomSocksToken()
+                    socksPassword = randomSocksToken()
+                }
+            }
+            AndroidConnectionMode.Proxy -> {
+                socksUsername = ""
+                socksPassword = ""
+                // Bind the exposed SOCKS on all interfaces so it's reachable from loopback (on-device
+                // Chrome via the Wi-Fi proxy) AND the LAN (a PC pointing at the phone's IP) — like Happ's
+                // local-proxy mode. The HttpProxyBridge binds the same host. (TUN keeps its 127.0.0.1.)
+                socksListenHost = AndroidSocksProxySettings.ALL_INTERFACES
+            }
         }
         splitTunnelMode = options.splitTunnelMode
         splitTunnelProxyApps = options.splitTunnelProxyApps
@@ -743,15 +767,21 @@ class OlcboxVpnService : VpnService() {
         if (requestedGeneration != generation) return
 
         if (connectionMode == AndroidConnectionMode.Proxy) {
-//            if (!startAuthenticatedSocksProxy()) {
-//                stopTransportProcesses(closeTun = true)
-//                return
-//            }
+            // No TUN in Proxy mode: the core's own SOCKS5 listener IS the exposed proxy. startMobile has
+            // kept the process bound to the upstream (see releaseProcessBindingUnlessProxy /
+            // shouldKeepProcessBound) so the cores can actually reach the internet — without that the
+            // SOCKS connected but carried no traffic.
             restoreOrStartConnectedClock()
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
             updateNotification(connectedNotificationText())
-            addLog("Proxy mode connected on SOCKS $socksListenHost:$socksListenPort")
+            startHttpProxyBridge()
+            val shown = deviceLanIp() ?: "127.0.0.1"
+            addLog("Proxy ready (no VPN tunnel) — point apps here:")
+            addLog("  • SOCKS5: $shown:$socksListenPort")
+            addLog("  • HTTP:   $shown:$httpProxyPort")
+            addLog("SOCKS/HTTP auth disabled — any client may connect (no username/password)")
+            launchProxySelfCheck()
             startWatchdog()
             return
         }
@@ -766,6 +796,9 @@ class OlcboxVpnService : VpnService() {
         }
 
         vpnInterface = pfd
+        // Publish protect() so the independent Telegram-over-WARP proxy can keep its WARP UDP socket
+        // out of this tun while it's up (see VpnSocketProtectBridge). Cleared on teardown.
+        VpnSocketProtectBridge.protect = { fd -> protect(fd) }
         if (!startTun2socks(pfd)) {
             stopTransportProcesses(closeTun = true)
             return
@@ -1142,7 +1175,7 @@ class OlcboxVpnService : VpnService() {
             }
             false
         } finally {
-            unbindProcessFromNetwork()
+            releaseProcessBindingUnlessProxy()
         }
     }
 
@@ -1171,7 +1204,15 @@ class OlcboxVpnService : VpnService() {
         val chainPort = chainOlcrtcPort
         // Optional SECOND/cascade proxy chained on top of the main: traffic exits via it, dialing
         // through the main (→ olcRTC for Chain). Null = single hop (main is the exit).
-        val secondProfile = config.proxy2?.takeIf { it.isComplete() }
+        // Foolproofing/defense-in-depth: drop a 2nd proxy that points at the SAME node as the main
+        // (a proxy-into-itself can't work) — covers a bad import/subscription, not just manual entry.
+        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
+            val main = config.proxy
+            if (main != null && main.isComplete() && main.isSameNodeAs(second)) {
+                addLog("ВНИМАНИЕ: 2-й (каскадный) прокси совпадает с основным — каскад сам в себя невозможен, игнорирую (выход через основной)")
+                null
+            } else second
+        }
         return try {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
 
@@ -1290,9 +1331,17 @@ class OlcboxVpnService : VpnService() {
             // Cascade diagnostics — make the "second proxy is ignored / exits via the 1st" symptom
             // visible instead of silent: say whether the cascade is active, dropped as incomplete, or
             // unusable because the main is a verbatim Xray config (prepareRaw can't chain a 2nd hop).
+            // Standard Xray protocols can be chained over a verbatim config (prepareRaw dialerProxy);
+            // AmneziaWG/WireGuard/Hysteria2 can't (they're client tunnels, not Xray exit outbounds).
+            val secondChainableOnRaw = secondProfile?.type in setOf(
+                ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS,
+                ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
+            )
             when {
+                secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() && !secondChainableOnRaw ->
+                    addLog("ВНИМАНИЕ: 2-й прокси типа '${secondProfile.type}' (например AmneziaWG/WireGuard/Hysteria2) — это клиентский ТУННЕЛЬ, а не выходной Xray-outbound, поэтому НЕ может быть каскадом поверх кастомного Xray-конфига и игнорируется. Для каскада поверх xhttp используйте vless/vmess/trojan/ss.")
                 secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() ->
-                    addLog("ВНИМАНИЕ: основной прокси — полный кастомный Xray-конфиг; второй (каскадный) прокси НЕ может быть прицеплен поверх него и игнорируется (выход остаётся через 1-й). Нужен обычный vless/vmess/trojan/ss как основной.")
+                    addLog("Каскад: выход через 2-й прокси '${secondProfile.displayName()}' поверх кастомного Xray-конфига")
                 secondProfile != null ->
                     addLog("Каскад: выход через 2-й прокси '${secondProfile.displayName()}' поверх основного '${effectiveProfile.displayName()}'")
                 config.proxy2 != null ->
@@ -1302,12 +1351,32 @@ class OlcboxVpnService : VpnService() {
                 val rawXray = effectiveProfile.rawXrayConfig
                 var assetPath = ""
                 val json = if (!rawXray.isNullOrBlank()) {
-                    // User-supplied full Xray config: run mostly verbatim, but MERGE the routing profile
-                    // (e.g. domain:ru → direct) so it applies to cascade/custom configs too — previously
-                    // the profile was ignored here, which is why domain:ru worked on AWG but not vless.
-                    if (routingProfile != null) assetPath = ensureGeoAssetPath(routingProfile)
-                    addLog("Starting Xray with custom config" +
-                        if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else " (verbatim)")
+                    // User-supplied full Xray config (e.g. a Happ/Remnawave JSON subscription): run it
+                    // VERBATIM and HONOR ITS OWN routing — the config's geosite:/geoip:/domain: rules take
+                    // PRECEDENCE over the app's routing profile (prepareRaw only merges the profile into
+                    // configs that ship NO routing of their own). To honor geosite:/geoip: selectors xray
+                    // needs the geo .dat, so when the config references them we download geoip.dat/
+                    // geosite.dat (from the profile's sources or the global runetfreedom defaults, which DO
+                    // carry ru-available-only-inside / category-ads-all) and hand xray the asset dir. Only
+                    // if that download genuinely fails (e.g. a blocked network with no db cached yet) do we
+                    // fall back to stripping the geo selectors so the config still LOADS (degraded routing)
+                    // instead of failing with "open .../geosite.dat: no such file". Non-geo rules always stay.
+                    val rawNeedsGeo = rawXray.contains("geosite:") || rawXray.contains("geoip:")
+                    assetPath = when {
+                        rawNeedsGeo -> ensureRawConfigGeoAssetPath(routingProfile)
+                        routingProfile != null -> ensureGeoAssetPath(routingProfile)
+                        else -> ""
+                    }
+                    // Honor the config's own geo routing when the db is available; strip ONLY as a
+                    // last-resort fallback when it couldn't be fetched (so the config still loads).
+                    val stripGeo = rawNeedsGeo && assetPath.isEmpty()
+                    addLog(
+                        "Starting Xray with custom config (embedded routing honored" +
+                            (if (rawNeedsGeo && assetPath.isNotEmpty()) ", geo db loaded for its geosite:/geoip:" else "") +
+                            (if (stripGeo) ", geo db unavailable → geo selectors stripped" else "") +
+                            (if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else "") +
+                            ")"
+                    )
                     XrayConfig.prepareRaw(
                         rawConfigJson = rawXray,
                         listenPort = socksListenPort,
@@ -1316,6 +1385,15 @@ class OlcboxVpnService : VpnService() {
                         socksPassword = socksPassword,
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                         fakeDnsEnabled = loadTrafficSettings().fakeDnsEnabled,
+                        stripGeoSelectors = stripGeo,
+                        // ipv4_only/prefer_ipv4 → force the verbatim config's direct freedom + DNS to IPv4
+                        // so direct .ru sites (e.g. 2ip.ru) can't leak real IPv6 past the bridge.
+                        forceIpv4 = loadTrafficSettings().domainStrategy.let {
+                            it == "ipv4_only" || it == "prefer_ipv4"
+                        },
+                        // Chain a standard second proxy over the verbatim config (xhttp main + vless/etc.
+                        // second). Non-chainable seconds (AmneziaWG…) are ignored by prepareRaw.
+                        secondProfile = secondProfile,
                     )
                 } else {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
@@ -1416,7 +1494,7 @@ class OlcboxVpnService : VpnService() {
             }
             false
         } finally {
-            unbindProcessFromNetwork()
+            releaseProcessBindingUnlessProxy()
         }
     }
 
@@ -1886,7 +1964,7 @@ class OlcboxVpnService : VpnService() {
             }
             false
         } finally {
-            unbindProcessFromNetwork()
+            releaseProcessBindingUnlessProxy()
         }
     }
 
@@ -2469,6 +2547,12 @@ class OlcboxVpnService : VpnService() {
                     val previousTransport = currentNetworkTransport
                     val nextTransport = upstream.transportOrNull()
                     updateUnderlyingNetwork(upstream)
+                    // Proxy (SOCKS) mode has no TUN, so the cores reach the internet only through the
+                    // process→network binding. Re-pin it to the refreshed upstream; otherwise a benign
+                    // Wi-Fi handle swap leaves the cores bound to a dead Network and traffic stalls.
+                    if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) {
+                        bindProcessToNetwork(upstream)
+                    }
                     if (isBenignWifiRefresh(previousTransport, nextTransport)) {
                         addLog("Watchdog: refreshed Wi-Fi upstream")
                         continue
@@ -2508,6 +2592,7 @@ class OlcboxVpnService : VpnService() {
 
         val cleanupGeneration = ++generation
         setStatus(VpnStatus.Stopping)
+        stopHttpProxyBridge()
         startupJob?.cancel()
         watchdogJob?.cancel()
         speedJob?.cancel()
@@ -2610,7 +2695,8 @@ class OlcboxVpnService : VpnService() {
     /** Publishes the live SOCKS endpoint + per-session creds so the in-process ping can use them. */
     private fun publishActiveSocks() {
         OlcboxVpnState.activeSocks = OlcboxVpnState.SocksEndpoint(
-            host = socksListenHost,
+            // connectHost maps a 0.0.0.0 listen (Proxy mode) back to 127.0.0.1 so the in-process ping dials a real address.
+            host = socksConnectHost(),
             port = socksListenPort,
             username = socksUsername,
             password = socksPassword,
@@ -2774,6 +2860,27 @@ class OlcboxVpnService : VpnService() {
     }
 
     /**
+     * Ensures the geo `.dat` files are present for a VERBATIM Xray config that ITSELF references
+     * geosite:/geoip: selectors (e.g. a Happ/Remnawave JSON subscription whose own routing sends RU
+     * sites direct and blocks ads). Unlike [ensureGeoAssetPath] this does NOT require an app routing
+     * profile — the config's OWN routing is honored, so the db must be available regardless of whether
+     * the user configured a profile. Uses the profile's geo sources when one is set, else the global
+     * defaults. Returns the asset dir, or "" if the db couldn't be fetched (caller then strips geo).
+     */
+    private suspend fun ensureRawConfigGeoAssetPath(profile: RoutingProfile?): String {
+        val state = loadRoutingProfilesState()
+        val geoip = profile?.geoipUrl?.takeIf { it.isNotBlank() } ?: state.geoipUrl
+        val geosite = profile?.geositeUrl?.takeIf { it.isNotBlank() } ?: state.geositeUrl
+        val ok = runCatching { GeoAssetManager.ensureAssets(applicationContext, geoip, geosite) }
+            .getOrDefault(false)
+        return if (ok) {
+            GeoAssetManager.assetDir(applicationContext).absolutePath
+        } else {
+            ""
+        }
+    }
+
+    /**
      * The routing profile to hand to xray-core: dropped when it needs `geoip.dat`/`geosite.dat` that
      * couldn't be downloaded ([assetPath] blank), since an Xray config referencing geosite:/geoip:
      * without the data fails to load. Degrading to no profile keeps the connection working.
@@ -2892,6 +2999,214 @@ class OlcboxVpnService : VpnService() {
             delay(SOCKS_RELEASE_POLL_MS)
         }
         addLog("SOCKS port $port is still busy after stop")
+    }
+
+    // HTTP-proxy port for Proxy mode (Happ-style "HTTP Port" next to the "SOCKS5 Port"). Offset by +4 to
+    // clear the internal helper ports (+1 chain, +2 awg base, +3 hy2). Browsers point their HTTP proxy here.
+    private val httpProxyPort: Int get() = socksListenPort + 4
+
+    /**
+     * Proxy mode only: raise the engine-agnostic HTTP→SOCKS bridge so browsers (which speak an HTTP proxy,
+     * not SOCKS) can use the local proxy. Forwards to the core's own SOCKS5. Never started in TUN mode.
+     */
+    private fun startHttpProxyBridge() {
+        stopHttpProxyBridge()
+        val bridge = HttpProxyBridge(
+            listenHost = socksListenHost,
+            listenPort = httpProxyPort,
+            socksHost = socksConnectHost(),
+            socksPort = socksListenPort,
+            log = { addLog(it) },
+        )
+        httpProxyBridge = if (bridge.start()) {
+            addLog("HTTP proxy ready on $socksListenHost:$httpProxyPort (forwards to SOCKS5 $socksListenPort)")
+            bridge
+        } else {
+            null
+        }
+    }
+
+    private fun stopHttpProxyBridge() {
+        httpProxyBridge?.let { runCatching { it.stop() } }
+        httpProxyBridge = null
+    }
+
+    /** The phone's current LAN IPv4 (e.g. 192.168.x.x) for display, or null if none found. */
+    private fun deviceLanIp(): String? {
+        return runCatching {
+            java.net.NetworkInterface.getNetworkInterfaces().asSequence()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { it.inetAddresses.asSequence() }
+                .firstOrNull { addr ->
+                    addr is java.net.Inet4Address && !addr.isLoopbackAddress && addr.isSiteLocalAddress
+                }?.hostAddress
+        }.getOrNull()
+    }
+
+    /**
+     * After Proxy mode reports Connected, actually drive traffic through the local SOCKS5 once and
+     * write the verdict to the in-app log: whether the path carries data and, on success, the exit IP
+     * the user is browsing from. This is the difference between "the listener is up" (which the
+     * watchdog already checks) and "a request genuinely reaches the internet and comes back". Best
+     * effort, fire-and-forget — never blocks the connect path or flips the VPN status.
+     */
+    private fun launchProxySelfCheck() {
+        scope.launch(Dispatchers.IO) {
+            // Give the core's SOCKS listener a moment to finish binding before the first dial.
+            delay(PROXY_SELF_CHECK_DELAY_MS)
+            // 1) Loopback path (127.0.0.1) — proves the core itself carries traffic.
+            val verdict = runCatching { probeProxyExitIp(socksConnectHost()) }
+                .getOrElse { ProxySelfCheckResult.Failure(it.message ?: it.javaClass.simpleName) }
+            when (verdict) {
+                is ProxySelfCheckResult.Success ->
+                    addLog("Proxy self-check: traffic OK — exit IP ${verdict.ip}")
+                is ProxySelfCheckResult.Failure ->
+                    addLog("Proxy self-check: NO traffic through SOCKS (${verdict.reason})")
+            }
+
+            // 2) LAN path (the phone's own 192.168.x.x) — this is EXACTLY what a PC/other device on
+            //    the same Wi-Fi does. It's the decisive test for "expose SOCKS5/HTTP to the LAN":
+            //    if loopback works but this fails, the listener isn't reachable externally (binding,
+            //    Wi-Fi AP isolation, or a firewall) — not a "no traffic" problem. If both pass, the
+            //    proxy is good and the issue is on the client side (wrong address/port).
+            val lanIp = deviceLanIp()
+            if (lanIp == null) {
+                addLog("Proxy LAN check: no Wi-Fi/LAN IPv4 on this device — connect Wi-Fi to expose the proxy to a PC")
+            } else {
+                val lanVerdict = runCatching { probeProxyExitIp(lanIp) }
+                    .getOrElse { ProxySelfCheckResult.Failure(it.message ?: it.javaClass.simpleName) }
+                when (lanVerdict) {
+                    is ProxySelfCheckResult.Success ->
+                        addLog("Proxy LAN check (SOCKS5): reachable on $lanIp:$socksListenPort — exit IP ${lanVerdict.ip}")
+                    is ProxySelfCheckResult.Failure ->
+                        addLog("Proxy LAN check (SOCKS5): NOT reachable on $lanIp:$socksListenPort (${lanVerdict.reason}) — check Wi-Fi AP isolation / firewall")
+                }
+
+                // 3) HTTP path on the LAN IP (port +4). Browsers / the Windows system proxy speak an
+                //    HTTP proxy, NOT SOCKS — so this is the port a PC actually points at, and the one
+                //    that was never verified before. Drives a real absolute-form GET through the bridge.
+                val httpVerdict = runCatching { probeHttpProxyExitIp(lanIp, httpProxyPort) }
+                    .getOrElse { ProxySelfCheckResult.Failure(it.message ?: it.javaClass.simpleName) }
+                when (httpVerdict) {
+                    is ProxySelfCheckResult.Success ->
+                        addLog("Proxy LAN check (HTTP): reachable on $lanIp:$httpProxyPort — exit IP ${httpVerdict.ip}. Point your PC's HTTP proxy here.")
+                    is ProxySelfCheckResult.Failure ->
+                        addLog("Proxy LAN check (HTTP): FAILED on $lanIp:$httpProxyPort (${httpVerdict.reason}) — HTTP bridge not serving")
+                }
+            }
+        }
+    }
+
+    /**
+     * Opens the local SOCKS5, performs a no-auth handshake, asks it to CONNECT (by domain, so the
+     * exit node resolves it) to a plain-HTTP IP-echo endpoint, and parses the returned address. Throws
+     * or returns Failure if any step doesn't complete — i.e. the proxy "connected" but carries nothing.
+     */
+    private fun probeProxyExitIp(host: String): ProxySelfCheckResult {
+        Socket().use { socket ->
+            socket.connect(
+                InetSocketAddress(host, socksListenPort),
+                SOCKET_CONNECT_TIMEOUT_MS
+            )
+            socket.soTimeout = PROXY_SELF_CHECK_TIMEOUT_MS
+            val out = socket.getOutputStream()
+            val input = socket.getInputStream()
+
+            // Greeting: offer no-auth only (Proxy mode forces no-auth, see applyStartOptions).
+            out.write(byteArrayOf(0x05, 0x01, 0x00))
+            out.flush()
+            val method = ByteArray(2)
+            readFullyOrThrow(input, method)
+            if (method[0] != 0x05.toByte() || method[1] != 0x00.toByte()) {
+                return ProxySelfCheckResult.Failure("SOCKS no-auth not accepted")
+            }
+
+            // CONNECT api.ipify.org:80 via ATYP=domain so DNS is resolved at the exit, not locally.
+            val host = PROXY_SELF_CHECK_HOST.toByteArray(Charsets.US_ASCII)
+            val request = ByteArray(7 + host.size)
+            request[0] = 0x05; request[1] = 0x01; request[2] = 0x00; request[3] = 0x03
+            request[4] = host.size.toByte()
+            System.arraycopy(host, 0, request, 5, host.size)
+            request[5 + host.size] = 0x00            // port 80 high byte
+            request[6 + host.size] = 0x50.toByte()   // port 80 low byte
+            out.write(request)
+            out.flush()
+
+            val reply = ByteArray(4)
+            readFullyOrThrow(input, reply)
+            if (reply[1] != 0x00.toByte()) {
+                return ProxySelfCheckResult.Failure("SOCKS CONNECT rejected (0x%02x)".format(reply[1]))
+            }
+            // Consume the bound address the proxy echoes back (length depends on ATYP).
+            val boundLen = when (reply[3]) {
+                0x01.toByte() -> 4 + 2
+                0x04.toByte() -> 16 + 2
+                0x03.toByte() -> {
+                    val l = ByteArray(1); readFullyOrThrow(input, l); (l[0].toInt() and 0xFF) + 2
+                }
+                else -> return ProxySelfCheckResult.Failure("bad SOCKS bound ATYP")
+            }
+            readFullyOrThrow(input, ByteArray(boundLen))
+
+            out.write(
+                ("GET / HTTP/1.0\r\nHost: $PROXY_SELF_CHECK_HOST\r\n" +
+                    "User-Agent: olcbox\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII)
+            )
+            out.flush()
+
+            val response = input.readBytes().toString(Charsets.US_ASCII)
+            val body = response.substringAfter("\r\n\r\n", "").trim()
+            val ip = body.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+            return if (ip != null && ip.length in 7..45 && ip.any { it == '.' || it == ':' }) {
+                ProxySelfCheckResult.Success(ip)
+            } else {
+                ProxySelfCheckResult.Failure("empty/invalid IP response")
+            }
+        }
+    }
+
+    private fun readFullyOrThrow(input: java.io.InputStream, buf: ByteArray) {
+        var read = 0
+        while (read < buf.size) {
+            val n = input.read(buf, read, buf.size - read)
+            if (n < 0) throw java.io.EOFException("SOCKS stream closed early")
+            read += n
+        }
+    }
+
+    /**
+     * Drives a real HTTP-proxy request through the HttpProxyBridge at [host]:[port] exactly like a
+     * browser / the Windows system proxy does: open TCP, send an ABSOLUTE-form `GET http://…` request
+     * line, read the IP-echo body. Proves the HTTP port (the one PCs actually point at) genuinely
+     * forwards through the bridge → core SOCKS → exit. Failure ⇒ the bridge isn't serving.
+     */
+    private fun probeHttpProxyExitIp(host: String, port: Int): ProxySelfCheckResult {
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(host, port), SOCKET_CONNECT_TIMEOUT_MS)
+            socket.soTimeout = PROXY_SELF_CHECK_TIMEOUT_MS
+            val out = socket.getOutputStream()
+            val input = socket.getInputStream()
+            out.write(
+                ("GET http://$PROXY_SELF_CHECK_HOST/ HTTP/1.0\r\nHost: $PROXY_SELF_CHECK_HOST\r\n" +
+                    "User-Agent: olcbox\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII)
+            )
+            out.flush()
+            val response = input.readBytes().toString(Charsets.US_ASCII)
+            if (response.isEmpty()) return ProxySelfCheckResult.Failure("no response from HTTP bridge")
+            val statusLine = response.substringBefore("\r\n")
+            val body = response.substringAfter("\r\n\r\n", "").trim()
+            val ip = body.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+            return if (ip != null && ip.length in 7..45 && ip.any { it == '.' || it == ':' }) {
+                ProxySelfCheckResult.Success(ip)
+            } else {
+                ProxySelfCheckResult.Failure("bad HTTP reply: ${statusLine.take(40)}")
+            }
+        }
+    }
+
+    private sealed class ProxySelfCheckResult {
+        data class Success(val ip: String) : ProxySelfCheckResult()
+        data class Failure(val reason: String) : ProxySelfCheckResult()
     }
 
     private fun isLocalSocksPortOpen(port: Int): Boolean {
@@ -3126,6 +3441,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun cleanupVpnInterface() {
+        VpnSocketProtectBridge.protect = null
         runCatching { vpnInterface?.close() }
         vpnInterface = null
     }
@@ -3208,6 +3524,16 @@ class OlcboxVpnService : VpnService() {
         if (connectionMode == AndroidConnectionMode.Tun || vpnInterface != null) {
             setUnderlyingNetworks(if (network != null) arrayOf(network) else null)
         }
+        // Proxy (SOCKS) mode has no TUN, so setUnderlyingNetworks above is a no-op and the
+        // process→network binding is the ONLY route out for the cores. Whenever the upstream handle
+        // changes (a benign Wi-Fi refresh swaps the Network object, a fallback to another network, …)
+        // the old binding goes STALE and traffic silently dies — and because currentNetwork now equals
+        // the new upstream, the watchdog's rebind check never fires. Re-pin here so every handle swap
+        // immediately re-routes the cores. null = lost network → unbinds (matches the wait-for-network
+        // path). Only while a core is live; the initial connect binds explicitly in startXxxCore.
+        if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) {
+            bindProcessToNetwork(network)
+        }
     }
 
     private fun Network.transportOrNull(): UpstreamTransport? {
@@ -3237,6 +3563,19 @@ class OlcboxVpnService : VpnService() {
         bindProcessToNetwork(null)
     }
 
+    /**
+     * Releases the process→network binding after a transport's setup completes, EXCEPT when a live
+     * Proxy-mode session needs to keep it: in Proxy (SOCKS) mode there is no TUN, so protect()/
+     * setUnderlyingNetworks don't route the cores — only the process binding does. Keeping it bound for
+     * the session is what makes the exposed SOCKS actually carry traffic. TUN mode is unaffected (it
+     * always unbinds here, relying on protect()/underlying networks). On a failed start the core is
+     * already stopped (coreRunning() == false), so the binding is released as before.
+     */
+    private fun releaseProcessBindingUnlessProxy() {
+        if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) return
+        unbindProcessFromNetwork()
+    }
+
     private fun getNetName(network: Network): String {
         val caps = connectivityManager.getNetworkCapabilities(network)
         return if (caps != null) getNetName(caps) else "Other"
@@ -3250,6 +3589,12 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun shouldKeepProcessBound(network: Network): Boolean {
+        // Proxy (SOCKS) mode has no TUN: protect() is a no-op and setUnderlyingNetworks does not apply
+        // (see updateUnderlyingNetwork), so the process→network binding is the ONLY thing routing the
+        // cores' outbound sockets to the chosen upstream. Unbinding it after setup leaves the cores on
+        // the system default network, which is why the local SOCKS connected but carried no traffic.
+        // Keep the bind for the whole session on every transport in Proxy mode.
+        if (connectionMode == AndroidConnectionMode.Proxy) return true
         val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
     }
@@ -3650,6 +3995,12 @@ class OlcboxVpnService : VpnService() {
         // list / manual value can't spawn a runaway number of DTLS handshakes / TURN allocations.
         private const val VKTURN_STREAMS_HARD_MAX = 64
         private const val SOCKET_CONNECT_TIMEOUT_MS = 150
+        // Proxy-mode post-connect self-check: drive one real request through the local SOCKS to confirm
+        // the path actually carries traffic and learn the exit IP (logged for the user). Plain-HTTP
+        // endpoint so no TLS is needed and the body is the bare IP.
+        private const val PROXY_SELF_CHECK_DELAY_MS = 700L
+        private const val PROXY_SELF_CHECK_TIMEOUT_MS = 8_000
+        private const val PROXY_SELF_CHECK_HOST = "api.ipify.org"
         private const val WAKE_LOCK_REFRESH_INTERVAL_MS = 30_000L
         private const val WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L
         private const val TUN_MTU = 1500
@@ -3673,18 +4024,25 @@ class OlcboxVpnService : VpnService() {
         private const val NOTIFICATION_ID = 100
         private const val TAG = "OlcboxVpnService"
 
-        // High-frequency Android UI/render/system spam that the whole-process logcat capture would
-        // otherwise pour into the in-app journal, drowning the VPN/core lines that actually matter.
-        // Matched case-insensitively as a substring of the raw logcat line (tag OR message).
+        // High-frequency Android UI/render/system spam that the whole-process logcat capture (`*:V`)
+        // would otherwise pour into the in-app journal, drowning the VPN/core lines that actually
+        // matter. Tags are anchored with a leading "/" so they match the logcat tag column
+        // ("I/View   ( 1234): …") and never a substring of a core's message. Also drops the
+        // "/sing-box" logcat copy — sing-box output is already piped into the journal as "sb: …",
+        // so without this every sing-box line appeared TWICE. Matched case-insensitively.
         private val LOGCAT_NOISE = listOf(
-            "frameRateCategory",   // Android 15/16 variable-refresh-rate: "frameRateCategory Request!"
-            "setFrameRate",
-            "BLASTBufferQueue",
-            "Choreographer",
-            "OpenGLRenderer",
-            "ViewRootImpl",
-            "ImeTracker",
-            "InsetsController",
+            // sing-box is double-logged (Go LogWriter → "sb: …" AND android Log tag "sing-box").
+            "/sing-box",
+            // Android view / render / window / input framework — pure UI churn.
+            "/View", "/VRI[", "/HWUI", "/ViewRootImpl", "/DecorView", "/SurfaceView",
+            "/InputTransport", "/InputMethodManager", "/ImeFocusController", "/ImeTracker",
+            "/InsetsSourceConsumer", "/InsetsController", "/WindowOnBackDispatcher", "/WindowManager",
+            "/BufferQueueProducer", "/BLASTBufferQueue", "/SurfaceComposerClient", "/Choreographer",
+            "/OpenGLRenderer", "/AdrenoVK", "/Dialog", "/Looper", "/CustomFrequencyManager",
+            "/NativeCustomFrequencyManager", "/perf_hint", "/Compiler", "/NotificationManager", "/BBA2",
+            // Message-substring offenders (no stable tag).
+            "frameRateCategory", "setRequestedFrameRate", "setFrameRate", "ViewPostIme",
+            "CacheManager::trimMemory", "beginning of main", "beginning of system",
         )
 
         private fun addLog(msg: String) {

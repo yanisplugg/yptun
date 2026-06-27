@@ -18,6 +18,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.vpn.ExpiringSubscriptionInfo
+import org.olcbox.app.vpn.PanelAnnouncementInfo
 import org.olcbox.app.vpn.VpnManager
 import org.olcbox.app.vpn.VpnStatus
 
@@ -438,11 +439,13 @@ class HomeScreenViewModel(
             // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.
             refreshDueSubscriptionsIfNeeded(retryFailed = true)
             notifyExpiringSubscriptions()
+            notifyPanelAnnouncements()
             reportProviderUsage()
             while (true) {
                 delay(SUBSCRIPTION_AUTO_REFRESH_POLL_MS)
                 refreshDueSubscriptionsIfNeeded()
                 notifyExpiringSubscriptions()
+                notifyPanelAnnouncements()
                 reportProviderUsage()
             }
         }
@@ -477,6 +480,30 @@ class HomeScreenViewModel(
             }
         }.getOrDefault(emptyList())
         if (subs.isNotEmpty()) vpnManager.notifyExpiringSubscriptions(subs)
+    }
+
+    /**
+     * Hand every subscription's panel announcement (Remnawave `announce` header) to the platform so it
+     * can push it to the user. The platform applies the user's toggle and de-duplicates by content —
+     * here we only collect one (name → announce) per subscription.
+     */
+    private suspend fun notifyPanelAnnouncements() {
+        val announcements = runCatching {
+            withContext(Dispatchers.IO) {
+                locationsRepository.getBundle().locations
+                    .filter { !it.subscriptionUrl.isNullOrBlank() }
+                    .groupBy { it.subscriptionUrl!!.trim() }
+                    .mapNotNull { (url, entries) ->
+                        val meta = entries.firstNotNullOfOrNull { it.metadata?.subscription }
+                        val announce = meta?.announce?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        val name = meta.name?.takeIf { it.isNotBlank() }
+                            ?: entries.firstOrNull { it.name.isNotBlank() }?.name
+                            ?: url
+                        PanelAnnouncementInfo(name = name, announce = announce)
+                    }
+            }
+        }.getOrDefault(emptyList())
+        if (announcements.isNotEmpty()) vpnManager.notifyPanelAnnouncements(announcements)
     }
 
     /**

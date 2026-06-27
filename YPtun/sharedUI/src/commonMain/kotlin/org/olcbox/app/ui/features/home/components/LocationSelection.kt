@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.PushPin
@@ -242,6 +243,9 @@ fun LazyListScope.locationSelectorContent(
                         // Overflow menu: pin, sort-by-ping, auto-update, delete.
                         val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
                         val groupSubUrl = group.firstOrNull()?.subscriptionUrl
+                        val groupWebPageUrl = group.firstNotNullOfOrNull {
+                            it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                        }
                         SubscriptionGroupMenu(
                             isPinned = isPinned,
                             isPingSorted = isPingSorted,
@@ -253,7 +257,8 @@ fun LazyListScope.locationSelectorContent(
                                 groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
                             },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
-                            onDelete = { onDeleteSubscription(groupIds) }
+                            onDelete = { onDeleteSubscription(groupIds) },
+                            subscriptionPageUrl = groupWebPageUrl
                         )
                     }
 
@@ -387,6 +392,9 @@ fun LazyListScope.locationSelectorContent(
                                             )
                                             val mAutoUpdate = mGroup.none { it.metadata?.subscription?.autoUpdateEnabled == false }
                                             val mSubUrl = mGroup.firstOrNull()?.subscriptionUrl
+                                            val mWebPageUrl = mGroup.firstNotNullOfOrNull {
+                                                it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                                            }
                                             SubscriptionGroupMenu(
                                                 isPinned = mPinned,
                                                 isPingSorted = mPingSorted,
@@ -398,7 +406,8 @@ fun LazyListScope.locationSelectorContent(
                                                     mSubUrl?.let { onSetSubscriptionAutoUpdate(it, !mAutoUpdate) }
                                                 },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
-                                                onDelete = { onDeleteSubscription(mIds) }
+                                                onDelete = { onDeleteSubscription(mIds) },
+                                                subscriptionPageUrl = mWebPageUrl
                                             )
                                         }
                                         if (!mCollapsed) {
@@ -764,10 +773,12 @@ private fun SubscriptionGroupMenu(
     onTogglePingSort: () -> Unit,
     onToggleAutoUpdate: () -> Unit,
     onMoveToFolder: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    subscriptionPageUrl: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -782,6 +793,17 @@ private fun SubscriptionGroupMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            // Remnawave `profile-web-page-url` — the panel's subscription/management page.
+            if (!subscriptionPageUrl.isNullOrBlank()) {
+                DropdownMenuItem(
+                    text = { Text(s.visitSubscriptionPage) },
+                    leadingIcon = { Icon(Icons.Outlined.OpenInNew, contentDescription = null) },
+                    onClick = {
+                        runCatching { uriHandler.openUri(subscriptionPageUrl) }
+                        expanded = false
+                    }
+                )
+            }
             DropdownMenuItem(
                 text = { Text(if (isPinned) s.groupUnpinFromTop else s.groupPinToTop) },
                 leadingIcon = {

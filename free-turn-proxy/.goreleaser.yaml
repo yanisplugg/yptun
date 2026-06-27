@@ -145,13 +145,13 @@ changelog:
       - 'Merge branch'
 
 release:
-  github:
-    owner: samosvalishe
-    name: free-turn-proxy
   prerelease: auto
   mode: replace
   draft: false
   name_template: "{{ .ProjectName }} {{ .Version }}"
+  extra_files:
+    - glob: mobile-dist/mobile.aar
+    - glob: mobile-dist/Mobile.xcframework.zip
 
 dockers_v2:
   - id: server
@@ -159,7 +159,7 @@ dockers_v2:
       - server
     dockerfile: Dockerfile.goreleaser
     images:
-      - ghcr.io/samosvalishe/free-turn-proxy
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}"
     tags:
       - "{{ .Version }}"
       - '{{ if not .Prerelease }}latest{{ end }}'
@@ -167,7 +167,7 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
     labels:
-      org.opencontainers.image.source: https://github.com/samosvalishe/free-turn-proxy
+      org.opencontainers.image.source: "https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .Date }}"

@@ -93,6 +93,7 @@ fun AndroidMainScreen(
     val geoUpdateStatus by vpnManager.geoUpdateStatus.collectAsState()
     val trafficSettings by vpnManager.trafficSettings.collectAsState()
     val appBehavior by vpnManager.appBehavior.collectAsState()
+    val telegramProxyState by vpnManager.telegramProxyState.collectAsState()
     val language by vpnManager.language.collectAsState()
     val installedApps by vpnManager.installedApps.collectAsState()
     val homeState by viewModel.state.collectAsState()
@@ -412,7 +413,8 @@ fun AndroidMainScreen(
     androidx.compose.runtime.CompositionLocalProvider(
         org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry,
-        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides appBehavior.showSubscriptionAliveCount
+        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides appBehavior.showSubscriptionAliveCount,
+        org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides appBehavior.hideEndpointWhenDescription
     ) {
     OlcboxAppContent(
         homeViewModel = viewModel,
@@ -644,6 +646,7 @@ fun AndroidMainScreen(
             trafficSettings = trafficSettings,
             onTrafficChanged = vpnManager::setTrafficSettings,
             appBehavior = appBehavior,
+            telegramProxyState = telegramProxyState,
             onAppBehaviorChanged = { newBehavior ->
                 val expiryJustEnabled = newBehavior.showSubscriptionExpiry &&
                     !appBehavior.showSubscriptionExpiry

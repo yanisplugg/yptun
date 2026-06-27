@@ -268,6 +268,12 @@ data class ExtraRoom(
 @Serializable
 data class LocationConfig(
     val name: String = "",
+    /**
+     * Optional human-readable description shown under the location name. Populated from a subscription
+     * when the source carries one (Happ-style configs put it in `meta.serverDescription`); blank when
+     * the source has none. Display-only — does not affect routing.
+     */
+    val description: String = "",
     val id: String = "",
     val key: String = "",
     @SerialName("bypass_provider")
@@ -365,6 +371,7 @@ data class LocationConfig(
         val normalizedTransport = normalizeTransport(transport, provider)
         return copy(
             name = name.trim(),
+            description = description.trim(),
             id = id.trim(),
             key = key.trim(),
             bypassProvider = provider,
@@ -835,6 +842,8 @@ data class LocationEntry(
     @SerialName("storage_id")
     val storageId: String,
     val name: String = "",
+    /** Display-only description (e.g. subscription `meta.serverDescription`). See [LocationConfig.description]. */
+    val description: String = "",
     @SerialName("subscription_url")
     val subscriptionUrl: String? = null,
     val endpoint: LocationEndpointConfig? = null,
@@ -912,6 +921,7 @@ data class LocationEntry(
             val vp8Options = transportConfig.vp8
             return LocationConfig(
                 name = name,
+                description = description,
                 id = firstNotBlank(endpoint?.roomId, legacyId, legacyRoomId, legacyServer),
                 key = firstNotBlank(endpoint?.key, legacyKey, legacyPassword),
                 bypassProvider = provider,
@@ -949,6 +959,7 @@ data class LocationEntry(
         return LocationEntry(
             storageId = storageId.trim(),
             name = config.name,
+            description = config.description,
             subscriptionUrl = firstNotBlank(subscriptionUrl, legacySubscriptionUrl).ifBlank { null },
             endpoint = LocationEndpointConfig(
                 roomId = config.id,
@@ -987,6 +998,7 @@ data class LocationEntry(
             return LocationEntry(
                 storageId = storageId,
                 name = config.name,
+                description = config.description,
                 subscriptionUrl = subscriptionUrl,
                 endpoint = LocationEndpointConfig(
                     roomId = config.id,

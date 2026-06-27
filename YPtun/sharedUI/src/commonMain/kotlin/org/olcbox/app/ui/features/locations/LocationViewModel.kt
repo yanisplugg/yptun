@@ -741,10 +741,21 @@ class LocationViewModel(
             if (isChainOrStd && editingConfig.proxy?.isComplete() != true) {
                 editingConfig = editingConfig.copy(proxy = profile)
                 editingProxyLink = trimmed
+                proxy2Error = null
             } else {
+                // Foolproofing: refuse the user's OWN main proxy as the cascade exit — chaining a node
+                // through itself loops / can't work (and is the usual mistake of pasting the same link).
+                val main = editingConfig.proxy
+                if (main != null && main.isComplete() && main.isSameNodeAs(profile)) {
+                    editingConfig = editingConfig.copy(proxy2 = null)
+                    proxy2Error = org.olcbox.app.ui.i18n.stringsFor(
+                        org.olcbox.app.ui.i18n.LocalizationState.effective
+                    ).secondProxySameAsMain
+                    return
+                }
                 editingConfig = editingConfig.copy(proxy2 = profile)
+                proxy2Error = null
             }
-            proxy2Error = null
         } else {
             editingConfig = editingConfig.copy(proxy2 = null)
             proxy2Error = "Unrecognized proxy link or sing-box config"

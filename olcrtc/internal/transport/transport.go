@@ -71,6 +71,13 @@ type PeerTransport interface {
 	SupportsPeerRouting() bool
 }
 
+// PeerReadyTransport is implemented by transports whose carrier can signal
+// when a remote peer has appeared. WaitForPeer blocks until the remote side
+// is confirmed ready (first epoch frame received), or ctx is cancelled.
+type PeerReadyTransport interface {
+	WaitForPeer(ctx context.Context) error
+}
+
 // Options is a marker for per-transport option structs. Each transport package
 // defines its own Options type (e.g. videochannel.Options) and registers a
 // factory that consumes it via type assertion. A nil Options is valid for

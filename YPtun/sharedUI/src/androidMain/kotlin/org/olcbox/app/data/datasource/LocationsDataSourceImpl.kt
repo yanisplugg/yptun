@@ -20,6 +20,8 @@ import java.io.File
 
 private val KEY_LEGACY_SELECTED_LOCATION_ID = stringPreferencesKey("selected_hysteria_id")
 private val KEY_DEVICE_IDENTITY = stringPreferencesKey("olcbox_device_identity")
+private val KEY_APP_INSTALL_ID = stringPreferencesKey("olcbox_app_install_id")
+private val KEY_TG_WARP_CONFIG = stringPreferencesKey("olcbox_tg_warp_config")
 private val KEY_PROVIDER_REPORT_STATE = stringPreferencesKey("olcbox_provider_report_state")
 
 class LocationsDataSourceImpl(
@@ -132,6 +134,26 @@ class LocationsDataSourceImpl(
     override suspend fun saveDeviceIdentity(value: String) {
         context.vpnPrefDataStore.edit {
             it[KEY_DEVICE_IDENTITY] = value
+        }
+    }
+
+    override suspend fun loadAppInstallId(): String? {
+        return context.vpnPrefDataStore.data.first()[KEY_APP_INSTALL_ID]?.ifBlank { null }
+    }
+
+    override suspend fun saveAppInstallId(value: String) {
+        context.vpnPrefDataStore.edit {
+            it[KEY_APP_INSTALL_ID] = value
+        }
+    }
+
+    override suspend fun loadTelegramWarpConfig(): String? {
+        return context.vpnPrefDataStore.data.first()[KEY_TG_WARP_CONFIG]?.ifBlank { null }
+    }
+
+    override suspend fun saveTelegramWarpConfig(value: String) {
+        context.vpnPrefDataStore.edit {
+            it[KEY_TG_WARP_CONFIG] = value
         }
     }
 

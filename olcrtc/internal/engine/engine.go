@@ -98,6 +98,13 @@ type PeerSession interface {
 	SendTo(peerID string, data []byte) error
 }
 
+// PeerReadySession is implemented by engines that can signal when a remote
+// peer has appeared in the shared room. WaitForPeer blocks until the first
+// epoch frame from a remote participant is received, or ctx is cancelled.
+type PeerReadySession interface {
+	WaitForPeer(ctx context.Context) error
+}
+
 // VideoTrackCapable is implemented by engines that can exchange video tracks.
 type VideoTrackCapable interface {
 	AddVideoTrack(track webrtc.TrackLocal) error

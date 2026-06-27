@@ -133,10 +133,22 @@ data class AppBehaviorSettings(
      */
     val notifySubscriptionExpiry: Boolean = false,
     /**
+     * Post a system notification when the panel broadcasts an announcement (Remnawave `announce`
+     * header). De-duplicated by content so the same announcement is shown only once. Off by default —
+     * needs the user's opt-in and the POST_NOTIFICATIONS permission, like [notifySubscriptionExpiry].
+     */
+    val notifyPanelAnnouncements: Boolean = false,
+    /**
      * Show a "live/total" badge in each subscription header — how many of its servers responded to
      * the last ping pass out of the total. Off by default.
      */
     val showSubscriptionAliveCount: Boolean = false,
+    /**
+     * Hide the protocol + server IP (the "endpoint" line) on a location row WHEN that location has a
+     * description — so a subscription's human description is shown instead of the technical endpoint.
+     * Rows without a description always show the endpoint. On by default.
+     */
+    val hideEndpointWhenDescription: Boolean = true,
     /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
     val customGroups: List<CustomGroup> = emptyList(),
     /**
@@ -164,6 +176,20 @@ data class AppBehaviorSettings(
      * are unaffected. Off by default. Applied on the next connect.
      */
     val energySaver: Boolean = false,
+    /**
+     * Telegram-over-WARP background proxy: when on, a lightweight foreground service raises an
+     * AmneziaWG (Cloudflare WARP) tunnel and exposes a local SOCKS5 the user points Telegram at. Runs
+     * independently of the main VPN. First enable requires internet (to generate + cache the WARP
+     * config); afterwards the same config is reused. Off by default.
+     */
+    val telegramProxyEnabled: Boolean = false,
+    /**
+     * Deprecated/vestigial. Previously hid the Telegram-proxy foreground-service notification; the toggle
+     * was removed and the proxy always uses the normal low-priority notification. Kept only so older saved
+     * settings still decode (default Json has no ignoreUnknownKeys — dropping the field would reset the
+     * whole AppBehaviorSettings to defaults on first load). Do not re-introduce a UI for it.
+     */
+    val hideTelegramProxyNotification: Boolean = false,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"
