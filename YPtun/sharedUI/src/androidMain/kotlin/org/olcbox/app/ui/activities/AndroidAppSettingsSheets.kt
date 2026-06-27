@@ -3662,8 +3662,8 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
         RoutingToggleRow(
-            title = "Комнаты / серверы в уведомлении",
-            subtitle = "Показывать «подключено/всего» комнат (olcRTC мультикомната) или серверов (VK-TURN мультисервер freeturn)",
+            title = s.roomsInNotifTitle,
+            subtitle = s.roomsInNotifSubtitle,
             checked = settings.showRoomsInNotification
         ) { onChanged(settings.copy(showRoomsInNotification = it)) }
 
@@ -3680,20 +3680,20 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(hideEndpointWhenDescription = it)) }
 
         RoutingToggleRow(
-            title = "Уведомлять об окончании подписки",
-            subtitle = "Локальное уведомление за несколько дней до конца подписки.",
+            title = s.notifySubExpiryTitle,
+            subtitle = s.notifySubExpirySubtitle,
             checked = settings.notifySubscriptionExpiry
         ) { onChanged(settings.copy(notifySubscriptionExpiry = it)) }
 
         RoutingToggleRow(
-            title = "Уведомления от панели",
-            subtitle = "Показывать системное уведомление, когда владелец панели присылает объявление.",
+            title = s.panelAnnouncementsTitle,
+            subtitle = s.panelAnnouncementsSubtitle,
             checked = settings.notifyPanelAnnouncements
         ) { onChanged(settings.copy(notifyPanelAnnouncements = it)) }
 
         RoutingToggleRow(
-            title = "Автоустановка на VPS",
-            subtitle = "Выполняет развёртывание движка на VPS.",
+            title = s.vpsAutoInstallTitle,
+            subtitle = s.vpsAutoInstallSubtitle,
             checked = settings.allowVpsAutoInstall
         ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
 

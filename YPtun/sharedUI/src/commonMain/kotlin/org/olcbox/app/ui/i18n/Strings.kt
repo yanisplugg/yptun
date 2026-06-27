@@ -448,6 +448,14 @@ interface Strings {
     val experimentalUnlocked: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
+    val roomsInNotifTitle: String
+    val roomsInNotifSubtitle: String
+    val notifySubExpiryTitle: String
+    val notifySubExpirySubtitle: String
+    val panelAnnouncementsTitle: String
+    val panelAnnouncementsSubtitle: String
+    val vpsAutoInstallTitle: String
+    val vpsAutoInstallSubtitle: String
     val hideEndpointWhenDescriptionTitle: String
     val hideEndpointWhenDescriptionSubtitle: String
     val showSubscriptionExpiryTitle: String
@@ -1015,6 +1023,14 @@ object RuStrings : Strings {
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+    override val roomsInNotifTitle = "Комнаты / серверы в уведомлении"
+    override val roomsInNotifSubtitle = "Показывать «подключено/всего» комнат (olcRTC мультикомната) или серверов (VK-TURN мультисервер freeturn)"
+    override val notifySubExpiryTitle = "Уведомлять об окончании подписки"
+    override val notifySubExpirySubtitle = "Локальное уведомление за несколько дней до конца подписки."
+    override val panelAnnouncementsTitle = "Уведомления от панели"
+    override val panelAnnouncementsSubtitle = "Показывать системное уведомление, когда владелец панели присылает объявление."
+    override val vpsAutoInstallTitle = "Автоустановка на VPS"
+    override val vpsAutoInstallSubtitle = "Выполняет развёртывание движка на VPS."
     override val hideEndpointWhenDescriptionTitle = "Скрывать IP и протокол при описании"
     override val hideEndpointWhenDescriptionSubtitle = "Если у локации есть описание — показывать его вместо протокола и IP в точке подключения."
     override val showSubscriptionExpiryTitle = "Показывать срок подписки"
@@ -1567,6 +1583,14 @@ object EnStrings : Strings {
     override val experimentalUnlocked = "Experimental settings unlocked"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+    override val roomsInNotifTitle = "Rooms / servers in notification"
+    override val roomsInNotifSubtitle = "Show «connected/total» rooms (olcRTC multi-room) or servers (VK-TURN freeturn multi-server)"
+    override val notifySubExpiryTitle = "Notify on subscription expiry"
+    override val notifySubExpirySubtitle = "Local notification a few days before the subscription ends."
+    override val panelAnnouncementsTitle = "Panel announcements"
+    override val panelAnnouncementsSubtitle = "Show a system notification when the panel owner sends an announcement."
+    override val vpsAutoInstallTitle = "Auto-install on VPS"
+    override val vpsAutoInstallSubtitle = "Deploys the engine onto a VPS."
     override val hideEndpointWhenDescriptionTitle = "Hide IP & protocol when described"
     override val hideEndpointWhenDescriptionSubtitle = "If a location has a description, show it instead of the protocol and IP at the connection point."
     override val showSubscriptionExpiryTitle = "Show subscription expiry"
@@ -2135,6 +2159,14 @@ object FaStrings : Strings {
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
+    override val roomsInNotifTitle = "اتاق‌ها / سرورها در اعلان"
+    override val roomsInNotifSubtitle = "نمایش «متصل/کل» اتاق‌ها (olcRTC چنداتاقی) یا سرورها (VK-TURN چندسروره freeturn)"
+    override val notifySubExpiryTitle = "اعلان پایان اشتراک"
+    override val notifySubExpirySubtitle = "اعلان محلی چند روز پیش از پایان اشتراک."
+    override val panelAnnouncementsTitle = "اعلان‌های پنل"
+    override val panelAnnouncementsSubtitle = "نمایش اعلان سیستمی هنگامی که مالک پنل اطلاعیه‌ای می‌فرستد."
+    override val vpsAutoInstallTitle = "نصب خودکار روی VPS"
+    override val vpsAutoInstallSubtitle = "موتور را روی یک VPS مستقر می‌کند."
     override val hideEndpointWhenDescriptionTitle = "پنهان کردن IP و پروتکل هنگام وجود توضیح"
     override val hideEndpointWhenDescriptionSubtitle = "اگر مکان توضیح دارد، به جای پروتکل و IP در نقطه اتصال نمایش داده شود."
     override val showSubscriptionExpiryTitle = "نمایش تاریخ انقضای اشتراک"
@@ -2671,6 +2703,14 @@ object ZhStrings : Strings {
     override val experimentalUnlocked = "已解锁实验性设置"
     override val notifSpeed = "通知栏显示速度"
     override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"
+    override val roomsInNotifTitle = "通知中显示房间 / 服务器"
+    override val roomsInNotifSubtitle = "显示房间（olcRTC 多房间）或服务器（VK-TURN freeturn 多服务器）的「已连接/总数」"
+    override val notifySubExpiryTitle = "订阅到期提醒"
+    override val notifySubExpirySubtitle = "在订阅结束前几天发送本地通知。"
+    override val panelAnnouncementsTitle = "面板公告"
+    override val panelAnnouncementsSubtitle = "当面板所有者发送公告时显示系统通知。"
+    override val vpsAutoInstallTitle = "在 VPS 上自动安装"
+    override val vpsAutoInstallSubtitle = "将引擎部署到 VPS。"
     override val hideEndpointWhenDescriptionTitle = "有描述时隐藏 IP 和协议"
     override val hideEndpointWhenDescriptionSubtitle = "如果位置有描述，则在连接点显示描述而非协议和 IP。"
     override val showSubscriptionExpiryTitle = "显示订阅到期"
