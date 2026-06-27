@@ -338,8 +338,11 @@ object XrayConfig {
                             traffic = traffic,
                             detourTagOverride = baseDetour,
                             tag = PROXY_BASE_TAG,
-                            // Pack the loopback's many per-flow connections onto few main H2 tunnels.
+                            // Pack the loopback's many per-flow connections onto few main H2 tunnels...
                             xhttpHighConcurrency = cascadeLoopActive,
+                            // ...AND multiplex them into a few vless sessions so the main server sees only
+                            // a handful of logical streams (else the inner hop stalls under load).
+                            forceMuxConcurrency = if (cascadeLoopActive) 8 else null,
                         )
                     )
                     // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
@@ -927,8 +930,14 @@ object XrayConfig {
             put("xhttpSettings", newXhttp)
         }
         return buildJsonObject {
-            outbound.forEach { (k, v) -> if (k != "streamSettings") put(k, v) }
+            outbound.forEach { (k, v) -> if (k != "streamSettings" && k != "mux") put(k, v) }
             put("streamSettings", newStream)
+            // Also multiplex the loopback's tunnel streams into a few vless sessions (honor an existing
+            // mux if the user set one). Keeps the main server's logical-stream count tiny under load.
+            put("mux", (outbound["mux"] as? JsonObject) ?: buildJsonObject {
+                put("enabled", true)
+                put("concurrency", 8)
+            })
         }
     }
 
@@ -1250,6 +1259,12 @@ object XrayConfig {
         // Cascade base (xhttp main): give its xhttp transport a high-concurrency xmux so the loopback's
         // per-app-flow connections collapse onto a couple of H2 tunnels (see buildStreamSettings).
         xhttpHighConcurrency: Boolean = false,
+        // Cascade base (xhttp main): force vless mux.cool with this concurrency so the loopback's MANY
+        // tunnel streams collapse into a FEW multiplexed vless sessions to the main — the main server then
+        // sees ~handful of logical streams instead of dozens (the inner-hop stall / broken-pipe under
+        // load). The main isn't Vision (xhttp can't be), so mux is safe here; Xray vless inbounds demux
+        // natively. Mirrors how an xhttp 2nd proxy's own mux keeps the main's stream count tiny.
+        forceMuxConcurrency: Int? = null,
     ) = buildJsonObject {
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", tag)
@@ -1361,7 +1376,13 @@ object XrayConfig {
             putJsonObject("proxySettings") { put("tag", detourTag) }
         }
 
-        if (traffic.muxEnabled && !isLocalSocks) {
+        if (forceMuxConcurrency != null && !isLocalSocks) {
+            // Cascade base: collapse the loopback's many tunnel streams into few vless sessions.
+            putJsonObject("mux") {
+                put("enabled", true)
+                put("concurrency", forceMuxConcurrency)
+            }
+        } else if (traffic.muxEnabled && !isLocalSocks) {
             putJsonObject("mux") {
                 put("enabled", true)
                 put("concurrency", traffic.muxMaxConnections)

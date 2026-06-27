@@ -391,6 +391,8 @@ class PrepareRawXhttpTest {
             "4-8",
             base["streamSettings"]!!.jsonObject["xhttpSettings"]!!.jsonObject["xmux"]!!.jsonObject["maxConnections"]!!.jsonPrimitive.content
         )
+        // ...and vless mux collapses the loopback's many streams into a few sessions to the main.
+        assertEquals(true, base["mux"]!!.jsonObject["enabled"]!!.jsonPrimitive.content.toBoolean())
         // The relay inbound listens on the loopback port.
         val loopIn = root["inbounds"]!!.jsonArray.map { it.jsonObject }
             .first { it["tag"]?.jsonPrimitive?.content == "cascade-loop-in" }
