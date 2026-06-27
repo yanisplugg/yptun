@@ -34,6 +34,11 @@ object XrayConfig {
     // Cascade exit added on top of a VERBATIM config: dials through the config's own main proxy tag
     // (which may itself be "proxy"), so it must be a distinct tag.
     private const val CASCADE_EXIT_TAG = "cascade-exit"
+    // Loopback-SOCKS relay used to chain a 2nd proxy over an xhttp/splithttp MAIN (which can't be a
+    // sub-dialer): the exit dials its server through CASCADE_LOOP_OUT_TAG (a local socks outbound),
+    // whose CASCADE_LOOP_IN_TAG inbound is routed to the real xhttp main (now a normal outbound).
+    private const val CASCADE_LOOP_IN_TAG = "cascade-loop-in"
+    private const val CASCADE_LOOP_OUT_TAG = "cascade-loop-out"
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
 
@@ -545,24 +550,63 @@ object XrayConfig {
             ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
         )
         val cascadeSecond = secondProfile?.takeIf { it.isComplete() && it.type in cascadeTypes }
-        // The config's main proxy outbound tag (the protocol outbound it exits through today).
-        val mainProxyTag = userOutbounds.firstOrNull {
+        // The config's main proxy outbound (the protocol outbound it exits through today).
+        val mainProxyOutbound = userOutbounds.firstOrNull {
             it["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in cascadeTypes
-        }?.get("tag")?.jsonPrimitive?.contentOrNull
+        }
+        val mainProxyTag = mainProxyOutbound?.get("tag")?.jsonPrimitive?.contentOrNull
+        // An xhttp/splithttp MAIN can't serve as an intermediate hop: Xray's splithttp transport can be
+        // NEITHER a proxySettings target NOR a sockopt.dialerProxy sub-dialer, so a 2nd proxy chained
+        // "through" it (either mechanism) gets NO connection — the long-standing "xhttp + 2nd tcp proxy
+        // doesn't connect". Fix: chain via a local SOCKS loopback (CASCADE_LOOP_*) so the xhttp main runs
+        // as an ORDINARY outbound that just proxies the TCP to the 2nd server. Non-xhttp mains keep the
+        // direct chain (proxySettings for tcp/reality, dialerProxy only when the EXIT itself is xhttp).
+        val mainNetwork = (mainProxyOutbound?.get("streamSettings") as? JsonObject)
+            ?.get("network")?.jsonPrimitive?.contentOrNull?.lowercase()
+        val mainIsXhttp = mainNetwork == "xhttp" || mainNetwork == "splithttp"
+        // Internal loopback SOCKS port: one above the app's listen port (127.0.0.1 only, not exposed).
+        val cascadeLoopPort = listenPort + 1
         val cascadeOutbound = if (cascadeSecond != null && mainProxyTag != null) {
-            buildProxyOutbound(
-                cascadeSecond,
-                chained = false,
-                detourTagOverride = mainProxyTag,
-                tag = CASCADE_EXIT_TAG,
-                // Chain mechanism: proxy-level (proxySettings) is the standard multi-hop and is what
-                // works when the BASE is xhttp/splithttp — sockopt.dialerProxy makes the exit's raw
-                // socket be dialed THROUGH the base, but splithttp can't serve as a generic sub-dialer,
-                // so a plain tcp/reality 2nd proxy over an xhttp main got NO connection. dialerProxy is
-                // only needed to preserve the EXIT's OWN transport when the EXIT itself is xhttp; force
-                // it just for that case (buildProxyOutbound also auto-uses it for an xhttp profile).
-                chainViaDialerProxy = cascadeSecond.network == ProxyProfile.NETWORK_XHTTP,
-            )
+            if (mainIsXhttp) {
+                buildProxyOutbound(
+                    cascadeSecond,
+                    chained = false,
+                    // Dial the exit's socket through the loopback SOCKS (which routes to the xhttp main).
+                    // Force dialerProxy so the exit's OWN transport (tcp/reality/ws/xhttp) is preserved.
+                    detourTagOverride = CASCADE_LOOP_OUT_TAG,
+                    tag = CASCADE_EXIT_TAG,
+                    chainViaDialerProxy = true,
+                )
+            } else {
+                buildProxyOutbound(
+                    cascadeSecond,
+                    chained = false,
+                    detourTagOverride = mainProxyTag,
+                    tag = CASCADE_EXIT_TAG,
+                    // Non-xhttp base: proxy-level (proxySettings) is the standard multi-hop. dialerProxy
+                    // is only needed to preserve the EXIT's OWN transport when the EXIT itself is xhttp.
+                    chainViaDialerProxy = cascadeSecond.network == ProxyProfile.NETWORK_XHTTP,
+                )
+            }
+        } else null
+        val cascadeLoopActive = cascadeOutbound != null && mainProxyTag != null && mainIsXhttp
+        // The local SOCKS outbound the exit dials through (→ the loopback inbound below).
+        val cascadeLoopOutbound = if (cascadeLoopActive) buildJsonObject {
+            put("tag", CASCADE_LOOP_OUT_TAG)
+            put("protocol", "socks")
+            putJsonObject("settings") {
+                putJsonArray("servers") {
+                    addJsonObject { put("address", "127.0.0.1"); put("port", cascadeLoopPort) }
+                }
+            }
+        } else null
+        // The loopback SOCKS inbound; its traffic is routed straight to the xhttp main (rule added below).
+        val cascadeLoopInbound = if (cascadeLoopActive) buildJsonObject {
+            put("tag", CASCADE_LOOP_IN_TAG)
+            put("listen", "127.0.0.1")
+            put("port", cascadeLoopPort)
+            put("protocol", "socks")
+            putJsonObject("settings") { put("udp", true); put("auth", "noauth") }
         } else null
         // HONOR THE CONFIG'S OWN ROUTING: when the raw config already ships routing rules, the embedded
         // routing takes precedence and the app's routing profile is NOT overlaid. Overlaying it injected
@@ -632,9 +676,24 @@ object XrayConfig {
         // Cascade: send everything that exited via the main proxy through the cascade exit instead, so
         // the exit (which dials through the main) becomes the real exit. Default fall-through is also
         // covered by emitting CASCADE_EXIT_TAG as the FIRST outbound below.
-        val routingToWrite = if (cascadeOutbound != null && mainProxyTag != null) {
+        val routingAfterCascade = if (cascadeOutbound != null && mainProxyTag != null) {
             rewriteOutboundTag(geoStrippedRouting, mainProxyTag, CASCADE_EXIT_TAG)
         } else geoStrippedRouting
+        // Loopback chaining: the relay inbound the exit dials through MUST exit via the real xhttp main —
+        // NOT direct/geo, and NOT the rewritten cascade-exit (that would loop forever). Prepend a
+        // high-priority inboundTag rule so it wins over every other rule. mainProxyTag is non-null here.
+        val routingToWrite = if (cascadeLoopActive) {
+            val loopRule = buildJsonObject {
+                put("type", "field")
+                putJsonArray("inboundTag") { add(CASCADE_LOOP_IN_TAG) }
+                put("outboundTag", mainProxyTag)
+            }
+            val existingRules = (routingAfterCascade?.get("rules") as? JsonArray)?.toList() ?: emptyList()
+            buildJsonObject {
+                routingAfterCascade?.forEach { (k, v) -> if (k != "rules") put(k, v) }
+                putJsonArray("rules") { add(loopRule); existingRules.forEach { add(it) } }
+            }
+        } else routingAfterCascade
 
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
@@ -648,11 +707,15 @@ object XrayConfig {
             if (injectFake) putJsonArray("fakedns") { add(fakeDnsPool()) }
             putJsonArray("inbounds") {
                 add(socksInbound)
+                // Loopback SOCKS relay (only present for the xhttp-main cascade), 127.0.0.1 only.
+                cascadeLoopInbound?.let { add(it) }
                 nonSocks.forEach { add(it) }
             }
             putJsonArray("outbounds") {
                 // Cascade exit FIRST so it's xray's default outbound (fall-through traffic exits via it).
                 cascadeOutbound?.let { add(it) }
+                // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
+                cascadeLoopOutbound?.let { add(it) }
                 userOutbounds.forEach { ob ->
                     val lifted = liftXhttpExtraHostPath(ob)
                     add(if (forceIpv4) forceIpv4Freedom(lifted) else lifted)
