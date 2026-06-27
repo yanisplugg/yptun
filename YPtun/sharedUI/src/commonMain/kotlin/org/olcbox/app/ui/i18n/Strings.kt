@@ -530,6 +530,7 @@ interface Strings {
     val additionalProxySection: String
     val additionalProxySubtitle: String
     val enableAdditionalProxy: String
+    val secondProxySameAsMain: String
     val freeturnTransportSection: String
     val freeturnTransportSubtitle: String
     val wireguardSubtitle: String
@@ -1094,6 +1095,8 @@ object RuStrings : Strings {
     override val additionalProxySubtitle =
         "Поверх основного: трафик → основной прокси → этот"
     override val enableAdditionalProxy = "Дополнительный прокси (каскад)"
+    override val secondProxySameAsMain =
+        "Это тот же сервер, что и основной прокси — каскад сам в себя не имеет смысла"
     override val freeturnTransportSection = "Транспорт Freeturn"
     override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
     override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
@@ -1644,6 +1647,8 @@ object EnStrings : Strings {
     override val additionalProxySubtitle =
         "On top of the main: traffic → main proxy → this"
     override val enableAdditionalProxy = "Additional proxy (cascade)"
+    override val secondProxySameAsMain =
+        "This is the same server as the main proxy — a cascade into itself makes no sense"
     override val freeturnTransportSection = "Freeturn transport"
     override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
     override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
@@ -2194,6 +2199,8 @@ object FaStrings : Strings {
     override val additionalProxySubtitle =
         "روی پراکسی اصلی: ترافیک ← پراکسی اصلی ← این"
     override val enableAdditionalProxy = "پراکسی اضافی (آبشاری)"
+    override val secondProxySameAsMain =
+        "این همان سرور پراکسی اصلی است — آبشار به خودش بی‌معناست"
     override val freeturnTransportSection = "حامل Freeturn"
     override val freeturnTransportSubtitle = "نقطهٔ پایانی بازپخش VK TURN و مبهم‌سازی"
     override val wireguardSubtitle = "تونل sing-box از طریق شنودگر محلی freeturn شماره‌گیری می‌کند"
@@ -2744,6 +2751,8 @@ object ZhStrings : Strings {
     override val additionalProxySubtitle =
         "在主代理之上：流量 → 主代理 → 此代理"
     override val enableAdditionalProxy = "附加代理（级联）"
+    override val secondProxySameAsMain =
+        "这与主代理是同一台服务器——级联到自身没有意义"
     override val freeturnTransportSection = "Freeturn 传输"
     override val freeturnTransportSubtitle = "VK TURN 中继端点与混淆"
     override val wireguardSubtitle = "sing-box 经本地 freeturn 监听器拨号的隧道"

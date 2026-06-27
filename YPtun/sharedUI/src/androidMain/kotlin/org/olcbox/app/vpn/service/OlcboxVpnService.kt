@@ -1204,7 +1204,15 @@ class OlcboxVpnService : VpnService() {
         val chainPort = chainOlcrtcPort
         // Optional SECOND/cascade proxy chained on top of the main: traffic exits via it, dialing
         // through the main (→ olcRTC for Chain). Null = single hop (main is the exit).
-        val secondProfile = config.proxy2?.takeIf { it.isComplete() }
+        // Foolproofing/defense-in-depth: drop a 2nd proxy that points at the SAME node as the main
+        // (a proxy-into-itself can't work) — covers a bad import/subscription, not just manual entry.
+        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
+            val main = config.proxy
+            if (main != null && main.isComplete() && main.isSameNodeAs(second)) {
+                addLog("ВНИМАНИЕ: 2-й (каскадный) прокси совпадает с основным — каскад сам в себя невозможен, игнорирую (выход через основной)")
+                null
+            } else second
+        }
         return try {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
 
