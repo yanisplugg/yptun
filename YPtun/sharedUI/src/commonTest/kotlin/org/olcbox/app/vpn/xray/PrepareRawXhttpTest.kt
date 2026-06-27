@@ -384,11 +384,12 @@ class PrepareRawXhttpTest {
         val loopOut = outbounds.first { it["tag"]?.jsonPrimitive?.content == "cascade-loop-out" }
         assertEquals("10809", loopOut["settings"]!!.jsonObject["servers"]!!.jsonArray.first().jsonObject["port"]!!.jsonPrimitive.content)
         val base = outbounds.first { it["tag"]?.jsonPrimitive?.content == "proxy-base" }
-        // The xhttp main gets a high-concurrency xmux so the loopback's per-flow connections collapse
-        // onto few H2 tunnels (a non-muxable Vision 2nd otherwise spawned 18+ main connections → stalls).
+        // The xhttp main gets an xmux that spreads the loopback's per-flow connections across a small
+        // pool of reused H2 tunnels (4-8): under the server cap that broke 18 connections, yet parallel
+        // enough to avoid funnelling everything onto one HOL-blocked connection.
         assertEquals(
-            "128-256",
-            base["streamSettings"]!!.jsonObject["xhttpSettings"]!!.jsonObject["xmux"]!!.jsonObject["maxConcurrency"]!!.jsonPrimitive.content
+            "4-8",
+            base["streamSettings"]!!.jsonObject["xhttpSettings"]!!.jsonObject["xmux"]!!.jsonObject["maxConnections"]!!.jsonPrimitive.content
         )
         // The relay inbound listens on the loopback port.
         val loopIn = root["inbounds"]!!.jsonArray.map { it.jsonObject }

@@ -917,9 +917,8 @@ object XrayConfig {
         val newXhttp = buildJsonObject {
             xhttp.forEach { (k, v) -> put(k, v) }
             putJsonObject("xmux") {
-                put("maxConcurrency", "128-256")
-                put("maxConnections", 0)
-                put("cMaxReuseTimes", 0)
+                put("maxConnections", "4-8")
+                put("cMaxReuseTimes", "64-128")
                 put("cMaxLifetimeMs", 0)
             }
         }
@@ -1439,12 +1438,13 @@ object XrayConfig {
                 if (profile.path.isNotBlank()) put("path", profile.path)
                 if (profile.host.isNotBlank()) put("host", profile.host)
                 put("mode", "auto")
-                // Cascade base: multiplex up to ~256 tunnel streams per H2 connection so the loopback's
-                // many per-app-flow connections collapse onto a couple of main tunnels (see param doc).
+                // Cascade base: spread the loopback's per-app-flow tunnels across a SMALL POOL of reused
+                // H2 connections (4-8). Funnelling everything onto 1 connection (high maxConcurrency)
+                // chokes on H2 head-of-line blocking; opening one-per-flow (no xmux) overran the server
+                // past ~14 (the 18-connection broken-pipe). A 4-8 pool is under that cap yet parallel.
                 if (xhttpHighConcurrency) putJsonObject("xmux") {
-                    put("maxConcurrency", "128-256")
-                    put("maxConnections", 0)
-                    put("cMaxReuseTimes", 0)
+                    put("maxConnections", "4-8")
+                    put("cMaxReuseTimes", "64-128")
                     put("cMaxLifetimeMs", 0)
                 }
             }
