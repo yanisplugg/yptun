@@ -325,6 +325,10 @@ object XrayConfig {
                             tag = PROXY_TAG,
                             // Force dialerProxy over the loopback so the exit's OWN transport is preserved.
                             chainViaDialerProxy = cascadeLoopActive,
+                            // Over the clean loopback tunnel, KEEP the exit's XTLS Vision flow — the 2nd
+                            // server requires it (a vless-reality-vision tcp 2nd proxy reset with it dropped
+                            // while an xhttp 2nd, which has no Vision flow, worked).
+                            preserveFlow = cascadeLoopActive,
                         )
                     )
                     add(
@@ -620,6 +624,8 @@ object XrayConfig {
                     detourTagOverride = CASCADE_LOOP_OUT_TAG,
                     tag = CASCADE_EXIT_TAG,
                     chainViaDialerProxy = true,
+                    // Keep XTLS Vision flow over the clean loopback — the 2nd server requires it.
+                    preserveFlow = true,
                 )
             } else {
                 buildProxyOutbound(
@@ -1201,6 +1207,11 @@ object XrayConfig {
         // Force socket-level (dialerProxy) chaining over the detour even for non-xhttp transports — keeps
         // a vless reality/vision exit intact over the dnstt chain (see [build]'s chainViaDialerProxy).
         chainViaDialerProxy: Boolean = false,
+        // Keep XTLS Vision `flow` even though this is a chained hop. Set for the cascade SOCKS loopback,
+        // which hands the exit a CLEAN transparent TCP stream Vision can traverse — and the 2nd server's
+        // vless inbound REQUIRES the flow it was configured with (drop it → "EOF"/reset). The generic
+        // olcRTC/WG/dnstt detours still drop flow (they can't carry Vision's raw-TLS splice reliably).
+        preserveFlow: Boolean = false,
     ) = buildJsonObject {
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", tag)
@@ -1225,7 +1236,9 @@ object XrayConfig {
                                         // connection" (e.g. a tcp vless-reality 2nd proxy over an xhttp
                                         // main). Drop it on chained hops; plain vless tunnels fine. The
                                         // direct (un-chained) hop keeps its flow so Vision still works there.
-                                        if (profile.flow.isNotBlank() && detourTag == null) put("flow", profile.flow)
+                                        // The cascade SOCKS loopback also keeps it (preserveFlow): the
+                                        // 2nd server's vless inbound requires the Vision flow it expects.
+                                        if (profile.flow.isNotBlank() && (detourTag == null || preserveFlow)) put("flow", profile.flow)
                                     } else {
                                         put("alterId", profile.alterId)
                                         put("security", profile.cipher.ifBlank { "auto" })

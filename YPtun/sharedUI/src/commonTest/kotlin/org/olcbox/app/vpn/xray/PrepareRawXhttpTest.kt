@@ -211,13 +211,15 @@ class PrepareRawXhttpTest {
     }
 
     @Test
-    fun cascadeExitDropsXtlsVisionFlow() {
-        // XTLS Vision splices the RAW TLS to its own server and CAN'T ride a chain — a vless-reality/
-        // vision 2nd proxy over the xhttp main hung ("no connection"). The chained exit must drop `flow`.
+    fun cascadeExitKeepsXtlsVisionFlowOverLoopback() {
+        // A vless-reality-VISION tcp 2nd proxy over an xhttp main: the 2nd server's vless inbound REQUIRES
+        // the Vision flow it was configured with. Dropping it on the chained exit made the server reset
+        // every stream ("EOF") — while an xhttp 2nd (no Vision flow) worked. The SOCKS loopback gives the
+        // exit a clean transparent TCP stream Vision can traverse, so the flow must be KEPT here.
         val second = ProxyProfile(
             tag = "exit", type = ProxyProfile.TYPE_VLESS,
             server = "exit.example.com", serverPort = 443, uuid = "exit-uuid",
-            network = ProxyProfile.NETWORK_TCP, security = ProxyProfile.SECURITY_TLS,
+            network = ProxyProfile.NETWORK_TCP, security = ProxyProfile.SECURITY_REALITY,
             sni = "exit.example.com", flow = "xtls-rprx-vision",
         )
         val out = XrayConfig.prepareRaw(
@@ -230,13 +232,34 @@ class PrepareRawXhttpTest {
             .map { it.jsonObject }.first { it["tag"]?.jsonPrimitive?.content == "cascade-exit" }
         val user = exit["settings"]!!.jsonObject["vnext"]!!.jsonArray.first().jsonObject["users"]!!
             .jsonArray.first().jsonObject
-        assertTrue(user["flow"] == null, "Vision flow must be dropped on a chained exit (else it hangs)")
+        assertEquals("xtls-rprx-vision", user["flow"]!!.jsonPrimitive.content, "Vision flow must be KEPT over the clean loopback")
         // It still chains through the main proxy — over an xhttp main via the SOCKS loopback dialer.
         assertEquals(
             "cascade-loop-out",
             exit["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content
         )
         assertTrue(exit["proxySettings"] == null, "xhttp-main cascade chains via the loopback dialer, not proxySettings")
+    }
+
+    @Test
+    fun buildCascadeOverXhttpMainKeepsVisionFlow() {
+        // Same Vision-flow requirement on the build() path (normal ProxyProfile main, the user's real case).
+        val main = ProxyProfile(
+            tag = "main", type = ProxyProfile.TYPE_VLESS, server = "fin.example.com", serverPort = 8443,
+            uuid = "uuid-main", network = ProxyProfile.NETWORK_XHTTP, security = ProxyProfile.SECURITY_REALITY,
+            sni = "fin.example.com",
+        )
+        val second = ProxyProfile(
+            tag = "exit", type = ProxyProfile.TYPE_VLESS, server = "nbg.example.com", serverPort = 9444,
+            uuid = "uuid-exit", network = ProxyProfile.NETWORK_TCP, security = ProxyProfile.SECURITY_REALITY,
+            sni = "nbg.example.com", flow = "xtls-rprx-vision",
+        )
+        val out = XrayConfig.build(profile = main, listenPort = 10808, secondProfile = second)
+        val exit = Json.parseToJsonElement(out).jsonObject["outbounds"]!!.jsonArray
+            .map { it.jsonObject }.first { it["tag"]?.jsonPrimitive?.content == "proxy" }
+        val user = exit["settings"]!!.jsonObject["vnext"]!!.jsonArray.first().jsonObject["users"]!!
+            .jsonArray.first().jsonObject
+        assertEquals("xtls-rprx-vision", user["flow"]!!.jsonPrimitive.content)
     }
 
     @Test
