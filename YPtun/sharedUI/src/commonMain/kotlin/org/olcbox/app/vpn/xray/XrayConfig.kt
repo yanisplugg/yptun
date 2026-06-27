@@ -194,6 +194,16 @@ object XrayConfig {
         // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
         handshakeTimeoutSec: Int? = null,
     ): String {
+        // Cascade over an xhttp/splithttp MAIN: Xray's splithttp transport can be NEITHER a
+        // sockopt.dialerProxy sub-dialer NOR a proxySettings target, so the 2nd-proxy exit can't reach
+        // its server "through" the main (→ "failed to find an available destination > EOF" = the user's
+        // "xhttp + 2nd tcp proxy = нет соединения"). Route the exit through a local SOCKS loopback
+        // instead; the main ([PROXY_BASE_TAG]) then runs as an ORDINARY outbound that just proxies the
+        // TCP to the 2nd server. Same fix as prepareRaw(). Non-xhttp mains keep the direct dialerProxy.
+        val cascadeMainIsXhttp = profile.network == ProxyProfile.NETWORK_XHTTP
+        val cascadeLoopActive = secondProfile?.isComplete() == true && cascadeMainIsXhttp
+        // Internal loopback SOCKS port: one above the app's listen port (127.0.0.1 only, not exposed).
+        val cascadeLoopPort = listenPort + 1
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
 
@@ -275,6 +285,15 @@ object XrayConfig {
                         if (expert && routingProfile!!.xrayRouteOnly) put("routeOnly", true)
                     }
                 }
+                // Loopback SOCKS relay for the xhttp-main cascade (127.0.0.1 only, not exposed). Its
+                // traffic is routed straight to the xhttp main ([PROXY_BASE_TAG]) by the rule below.
+                if (cascadeLoopActive) addJsonObject {
+                    put("tag", CASCADE_LOOP_IN_TAG)
+                    put("listen", "127.0.0.1")
+                    put("port", cascadeLoopPort)
+                    put("protocol", "socks")
+                    putJsonObject("settings") { put("udp", true); put("auth", "noauth") }
+                }
             }
 
             val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
@@ -300,8 +319,12 @@ object XrayConfig {
                             second,
                             chained = false,
                             traffic = traffic,
-                            detourTagOverride = PROXY_BASE_TAG,
+                            // xhttp main can't sub-dial → the exit dials through the SOCKS loopback
+                            // (which routes to the main). Otherwise it dials directly through the main.
+                            detourTagOverride = if (cascadeLoopActive) CASCADE_LOOP_OUT_TAG else PROXY_BASE_TAG,
                             tag = PROXY_TAG,
+                            // Force dialerProxy over the loopback so the exit's OWN transport is preserved.
+                            chainViaDialerProxy = cascadeLoopActive,
                         )
                     )
                     add(
@@ -313,6 +336,16 @@ object XrayConfig {
                             tag = PROXY_BASE_TAG,
                         )
                     )
+                    // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
+                    if (cascadeLoopActive) addJsonObject {
+                        put("tag", CASCADE_LOOP_OUT_TAG)
+                        put("protocol", "socks")
+                        putJsonObject("settings") {
+                            putJsonArray("servers") {
+                                addJsonObject { put("address", "127.0.0.1"); put("port", cascadeLoopPort) }
+                            }
+                        }
+                    }
                 } else {
                     // Single hop: the main proxy IS the exit (tag PROXY_TAG), dialing through olcRTC/WG.
                     add(
@@ -410,6 +443,14 @@ object XrayConfig {
             val forceFamily = familyBlockRule != null
             // LAN/private → real direct (only when `direct` is the real network, never on a base-detour
             // tunnel exit). Matched before the proxy buckets so local addresses never enter the tunnel.
+            // Loopback chaining: the relay inbound the exit dials through MUST exit via the real xhttp
+            // main ([PROXY_BASE_TAG]) — never direct/geo/quic-block/family-block (which would drop it).
+            // Emitted FIRST so it wins over every other rule.
+            val cascadeLoopRule = if (cascadeLoopActive) buildJsonObject {
+                put("type", "field")
+                putJsonArray("inboundTag") { add(CASCADE_LOOP_IN_TAG) }
+                put("outboundTag", PROXY_BASE_TAG)
+            } else null
             val lanBypassRule = if (bypassLan && !directViaBase) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
@@ -426,6 +467,8 @@ object XrayConfig {
                     val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
                     put("domainStrategy", if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy)
                     putJsonArray("rules") {
+                        // Loopback relay → xhttp main, before anything that could drop/redirect it.
+                        cascadeLoopRule?.let { add(it) }
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
                         dnsOutRules.forEach { add(it) }
                         lanBypassRule?.let { add(it) }
@@ -437,6 +480,7 @@ object XrayConfig {
                 } else {
                     put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
+                        cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)

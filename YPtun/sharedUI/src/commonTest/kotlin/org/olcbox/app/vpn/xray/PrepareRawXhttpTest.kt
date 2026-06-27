@@ -331,6 +331,59 @@ class PrepareRawXhttpTest {
     }
 
     @Test
+    fun buildCascadeOverXhttpMainUsesSocksLoopback() {
+        // The user's real setup (Finland-xhttp MAIN + Nürnberg-tcp 2nd proxy) runs through build(), NOT
+        // prepareRaw(). An xhttp main can't be a dialerProxy sub-dialer, so the exit dialing "through"
+        // proxy-base died ("failed to find an available destination > EOF"). Pin the loopback fix:
+        // the exit dials via cascade-loop-out, a relay inbound exists, and a rule routes it to proxy-base.
+        val main = ProxyProfile(
+            tag = "main", type = ProxyProfile.TYPE_VLESS, server = "fin.example.com", serverPort = 8443,
+            uuid = "uuid-main", network = ProxyProfile.NETWORK_XHTTP, security = ProxyProfile.SECURITY_REALITY,
+            sni = "fin.example.com",
+        )
+        val second = ProxyProfile(
+            tag = "exit", type = ProxyProfile.TYPE_VLESS, server = "nbg.example.com", serverPort = 9444,
+            uuid = "uuid-exit", network = ProxyProfile.NETWORK_TCP, security = ProxyProfile.SECURITY_TLS,
+            sni = "nbg.example.com",
+        )
+        val out = XrayConfig.build(profile = main, listenPort = 10808, secondProfile = second)
+        val root = Json.parseToJsonElement(out).jsonObject
+
+        val outbounds = root["outbounds"]!!.jsonArray.map { it.jsonObject }
+        // Exit is PROXY_TAG and dials through the SOCKS loopback, NOT directly through proxy-base.
+        val exit = outbounds.first { it["tag"]?.jsonPrimitive?.content == "proxy" }
+        assertEquals(
+            "cascade-loop-out",
+            exit["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content
+        )
+        assertTrue(exit["proxySettings"] == null)
+        // The relay outbound (socks → 127.0.0.1:10809) and the main (proxy-base) both exist.
+        val loopOut = outbounds.first { it["tag"]?.jsonPrimitive?.content == "cascade-loop-out" }
+        assertEquals("10809", loopOut["settings"]!!.jsonObject["servers"]!!.jsonArray.first().jsonObject["port"]!!.jsonPrimitive.content)
+        assertTrue(outbounds.any { it["tag"]?.jsonPrimitive?.content == "proxy-base" })
+        // The relay inbound listens on the loopback port.
+        val loopIn = root["inbounds"]!!.jsonArray.map { it.jsonObject }
+            .first { it["tag"]?.jsonPrimitive?.content == "cascade-loop-in" }
+        assertEquals("10809", loopIn["port"]!!.jsonPrimitive.content)
+        // First routing rule sends the relay inbound straight to the xhttp main.
+        val firstRule = root["routing"]!!.jsonObject["rules"]!!.jsonArray.first().jsonObject
+        assertEquals("cascade-loop-in", firstRule["inboundTag"]!!.jsonArray.first().jsonPrimitive.content)
+        assertEquals("proxy-base", firstRule["outboundTag"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun buildSingleHopXhttpHasNoLoopback() {
+        // No second proxy → no loopback machinery at all (single-hop xhttp is unaffected).
+        val main = ProxyProfile(
+            tag = "main", type = ProxyProfile.TYPE_VLESS, server = "fin.example.com", serverPort = 8443,
+            uuid = "uuid-main", network = ProxyProfile.NETWORK_XHTTP, security = ProxyProfile.SECURITY_REALITY,
+            sni = "fin.example.com",
+        )
+        val out = XrayConfig.build(profile = main, listenPort = 10808)
+        assertFalse(out.contains("cascade-loop"), "single-hop must not add loopback inbound/outbound")
+    }
+
+    @Test
     fun buildRoutesRemoteDnsOverDohOrTcpButLeavesDirectUdp() {
         // Device logs (Finland-xhttp + Nürnberg cascade): DNS to 8.8.8.8/1.1.1.1 timed out over the exit
         // (port 53 blocked both UDP & TCP) → 4s serial timeouts → ERR_CONNECTION_ABORTED. Remote resolvers
