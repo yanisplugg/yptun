@@ -82,8 +82,38 @@ val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
  */
 val LocalHideEndpointWhenDescription = staticCompositionLocalOf { true }
 
+/** A live throughput sample (bytes per second) for the active connection. */
+data class SpeedSample(val downBytesPerSec: Long, val upBytesPerSec: Long)
+
+/**
+ * Live down/up throughput of the active connection, or null when not connected OR the "speed on
+ * home" toggle is off. When non-null it's rendered as a compact one-line readout under the SELECTED
+ * location's subtitle. Provided near the app root; null by default so other platforms keep their look.
+ */
+val LocalConnectedSpeed = staticCompositionLocalOf<SpeedSample?> { null }
+
 /** Fixed "success green" for the ping tick — theme-independent so it's always clearly green. */
 private val PingOkGreen = Color(0xFF22C55E)
+
+/** Download / upload accent colours for the Home speed line (match the notification's green/blue). */
+private val SpeedDownGreen = Color(0xFF22C55E)
+private val SpeedUpBlue = Color(0xFF3B82F6)
+
+/**
+ * Formats a bytes/sec rate compactly (B/s, KB/s, MB/s) using integer math so it stays
+ * multiplatform-safe (no String.format / locale).
+ */
+private fun formatSpeedRate(bytesPerSec: Long): String {
+    val b = bytesPerSec.coerceAtLeast(0L)
+    return when {
+        b >= 1024L * 1024L -> {
+            val tenths = b * 10L / (1024L * 1024L)
+            "${tenths / 10}.${tenths % 10} MB/s"
+        }
+        b >= 1024L -> "${b / 1024L} KB/s"
+        else -> "$b B/s"
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -190,6 +220,32 @@ fun LocationRow(
                     overflow = TextOverflow.Visible,
                     softWrap = true
                 )
+            }
+
+            // Live throughput line — only under the SELECTED row, and only when the user enabled
+            // "speed on home" AND a connection is up (provider supplies null otherwise). A single
+            // compact horizontal line so it slots in without growing the row.
+            val speed = LocalConnectedSpeed.current
+            if (isSelected && speed != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "↓ ${formatSpeedRate(speed.downBytesPerSec)}",
+                        color = SpeedDownGreen,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "↑ ${formatSpeedRate(speed.upBytesPerSec)}",
+                        color = SpeedUpBlue,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip
+                    )
+                }
             }
         }
         

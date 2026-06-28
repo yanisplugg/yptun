@@ -98,6 +98,9 @@ fun AndroidMainScreen(
     val installedApps by vpnManager.installedApps.collectAsState()
     val homeState by viewModel.state.collectAsState()
     val logs by viewModel.logs.collectAsState()
+    // Live throughput for the optional Home speed line: shown only when the toggle is on AND connected.
+    val liveSpeed by org.olcbox.app.vpn.service.OlcboxVpnState.speed.collectAsState()
+    val isVpnConnected by org.olcbox.app.vpn.service.OlcboxVpnState.isConnected.collectAsState()
     val pendingLogSaveCallbacks = remember {
         mutableStateOf<Pair<(String) -> Unit, (String) -> Unit>?>(null)
     }
@@ -414,7 +417,9 @@ fun AndroidMainScreen(
         org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides appBehavior.showSubscriptionAliveCount,
-        org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides appBehavior.hideEndpointWhenDescription
+        org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides appBehavior.hideEndpointWhenDescription,
+        org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides
+            (if (appBehavior.showSpeedOnHome && isVpnConnected) liveSpeed else null)
     ) {
     OlcboxAppContent(
         homeViewModel = viewModel,

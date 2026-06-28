@@ -3662,6 +3662,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
         RoutingToggleRow(
+            title = s.speedOnHomeTitle,
+            subtitle = s.speedOnHomeSubtitle,
+            checked = settings.showSpeedOnHome
+        ) { onChanged(settings.copy(showSpeedOnHome = it)) }
+
+        RoutingToggleRow(
             title = s.roomsInNotifTitle,
             subtitle = s.roomsInNotifSubtitle,
             checked = settings.showRoomsInNotification
