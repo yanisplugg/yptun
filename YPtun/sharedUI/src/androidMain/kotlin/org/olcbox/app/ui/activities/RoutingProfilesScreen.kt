@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AssistChip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
@@ -47,6 +49,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import org.olcbox.app.data.model.Asn
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.ui.i18n.LocalStrings
@@ -446,11 +449,11 @@ private fun RoutingProfileEditor(
         }
 
         BucketField(s.routingProxySites, s.routingSelectorsHint, proxySites) { proxySites = it }
-        BucketField(s.routingProxyIp, s.routingIpSelectorsHint, proxyIp) { proxyIp = it }
+        BucketField(s.routingProxyIp, s.routingIpSelectorsHint, proxyIp, asnPresets = true) { proxyIp = it }
         BucketField(s.routingDirectSites, s.routingSelectorsHint, directSites) { directSites = it }
-        BucketField(s.routingDirectIp, s.routingIpSelectorsHint, directIp) { directIp = it }
+        BucketField(s.routingDirectIp, s.routingIpSelectorsHint, directIp, asnPresets = true) { directIp = it }
         BucketField(s.routingBlockSites, s.routingSelectorsHint, blockSites) { blockSites = it }
-        BucketField(s.routingBlockIp, s.routingIpSelectorsHint, blockIp) { blockIp = it }
+        BucketField(s.routingBlockIp, s.routingIpSelectorsHint, blockIp, asnPresets = true) { blockIp = it }
 
         SectionLabel(s.routingGeoDatabases)
         OutlinedTextField(
@@ -534,16 +537,47 @@ private fun RoutingProfileEditor(
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun BucketField(label: String, hint: String, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(label) },
-        placeholder = { Text(hint) },
-        minLines = 2,
-        modifier = Modifier.fillMaxWidth(),
-    )
+private fun BucketField(
+    label: String,
+    hint: String,
+    value: String,
+    asnPresets: Boolean = false,
+    onChange: (String) -> Unit,
+) {
+    Column {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            label = { Text(label) },
+            placeholder = { Text(hint) },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // One-tap ASN presets for the IP buckets — append `asn:<n>` (no duplicate) so users don't have
+        // to look numbers up. Any ASN can still be typed by hand into the field above.
+        if (asnPresets) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            ) {
+                Asn.COMMON_PRESETS.forEach { (name, number) ->
+                    AssistChip(
+                        onClick = { onChange(appendAsnSelector(value, number)) },
+                        label = { Text(name) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Appends `asn:<number>` on its own line, unless that ASN is already listed. */
+private fun appendAsnSelector(current: String, number: String): String {
+    val lines = current.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+    if (lines.any { Asn.normalize(it) == number }) return current
+    return (lines + "asn:$number").joinToString("\n")
 }
 
 @Composable

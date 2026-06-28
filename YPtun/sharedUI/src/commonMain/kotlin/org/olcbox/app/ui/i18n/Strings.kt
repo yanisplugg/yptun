@@ -100,6 +100,12 @@ interface Strings {
     val deleteAllConfigsMessage: String
     val menuDeleteAllSubscriptions: String
     val menuDeleteAllConfigs: String
+    val menuAutoConnect: String
+    val autoButtonLabel: String
+    val autoConnectSearching: String
+    val autoConnectNoServers: String
+    val autoConnectFailed: String
+    fun autoConnectConnected(name: String): String
     val menuDeleteUnreachable: String
     val menuDeleteDuplicates: String
     // Folders (user-created groups)
@@ -448,6 +454,8 @@ interface Strings {
     val experimentalUnlocked: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
+    val speedOnHomeTitle: String
+    val speedOnHomeSubtitle: String
     val roomsInNotifTitle: String
     val roomsInNotifSubtitle: String
     val notifySubExpiryTitle: String
@@ -706,6 +714,12 @@ object RuStrings : Strings {
         "Будут удалены все конфигурации и подписки. Это действие необратимо."
     override val menuDeleteAllSubscriptions = "Удалить все подписки"
     override val menuDeleteAllConfigs = "Удалить все конфигурации"
+    override val menuAutoConnect = "Авто (быстрейший)"
+    override val autoButtonLabel = "Авто"
+    override val autoConnectSearching = "Поиск быстрейшего сервера…"
+    override val autoConnectNoServers = "Нет готовых серверов"
+    override val autoConnectFailed = "Не удалось подключиться ни к одному серверу"
+    override fun autoConnectConnected(name: String) = "Подключено: $name"
     override val menuDeleteUnreachable = "Удалить недоступные"
     override val menuDeleteDuplicates = "Удалить дубликаты"
     override val createFolder = "Создать группу"
@@ -897,7 +911,7 @@ object RuStrings : Strings {
     override val routingBlockSites = "Блокировать: сайты"
     override val routingBlockIp = "Блокировать: IP"
     override val routingSelectorsHint = "geosite:ru, domain:vk.com — по одному на строку"
-    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — по одному на строку"
+    override val routingIpSelectorsHint = "geoip:ru, asn:62041, 10.0.0.0/8 — по одному на строку"
     override val routingGeoDatabases = "Геобазы (geoip.dat / geosite.dat)"
     override val routingGeoDatabasesDesc = "Нужны для селекторов geoip:/geosite: на ядре Xray. Загружаются из указанных ниже источников."
     override val routingGeoUpdate = "Обновить геобазы"
@@ -1023,6 +1037,8 @@ object RuStrings : Strings {
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+    override val speedOnHomeTitle = "Скорость на главном экране"
+    override val speedOnHomeSubtitle = "Под выбранной конфигурацией показывать ↓ и ↑"
     override val roomsInNotifTitle = "Комнаты / серверы в уведомлении"
     override val roomsInNotifSubtitle = "Показывать «подключено/всего» комнат (olcRTC мультикомната) или серверов (VK-TURN мультисервер freeturn)"
     override val notifySubExpiryTitle = "Уведомлять об окончании подписки"
@@ -1266,6 +1282,12 @@ object EnStrings : Strings {
         "All configurations and subscriptions will be removed. This cannot be undone."
     override val menuDeleteAllSubscriptions = "Delete all subscriptions"
     override val menuDeleteAllConfigs = "Delete all configs"
+    override val menuAutoConnect = "Auto (fastest)"
+    override val autoButtonLabel = "Auto"
+    override val autoConnectSearching = "Finding the fastest server…"
+    override val autoConnectNoServers = "No ready servers"
+    override val autoConnectFailed = "Couldn't connect to any server"
+    override fun autoConnectConnected(name: String) = "Connected: $name"
     override val menuDeleteUnreachable = "Delete unreachable"
     override val menuDeleteDuplicates = "Delete duplicates"
     override val createFolder = "Create group"
@@ -1457,7 +1479,7 @@ object EnStrings : Strings {
     override val routingBlockSites = "Block: sites"
     override val routingBlockIp = "Block: IPs"
     override val routingSelectorsHint = "geosite:ru, domain:vk.com — one per line"
-    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — one per line"
+    override val routingIpSelectorsHint = "geoip:ru, asn:62041, 10.0.0.0/8 — one per line"
     override val routingGeoDatabases = "Geo databases (geoip.dat / geosite.dat)"
     override val routingGeoDatabasesDesc = "Needed for geoip:/geosite: selectors on the Xray core. Downloaded from the sources below."
     override val routingGeoUpdate = "Update geo databases"
@@ -1583,6 +1605,8 @@ object EnStrings : Strings {
     override val experimentalUnlocked = "Experimental settings unlocked"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+    override val speedOnHomeTitle = "Speed on home screen"
+    override val speedOnHomeSubtitle = "Show ↓ and ↑ under the selected configuration"
     override val roomsInNotifTitle = "Rooms / servers in notification"
     override val roomsInNotifSubtitle = "Show «connected/total» rooms (olcRTC multi-room) or servers (VK-TURN freeturn multi-server)"
     override val notifySubExpiryTitle = "Notify on subscription expiry"
@@ -1826,6 +1850,12 @@ object FaStrings : Strings {
         "همهٔ پیکربندی‌ها و اشتراک‌ها حذف می‌شوند. این کار بازگشت‌ناپذیر است."
     override val menuDeleteAllSubscriptions = "حذف همهٔ اشتراک‌ها"
     override val menuDeleteAllConfigs = "حذف همهٔ پیکربندی‌ها"
+    override val menuAutoConnect = "خودکار (سریع‌ترین)"
+    override val autoButtonLabel = "خودکار"
+    override val autoConnectSearching = "در حال یافتن سریع‌ترین سرور…"
+    override val autoConnectNoServers = "سروری آماده نیست"
+    override val autoConnectFailed = "اتصال به هیچ سروری ممکن نشد"
+    override fun autoConnectConnected(name: String) = "متصل شد: $name"
     override val menuDeleteUnreachable = "حذف موارد در دسترس‌نبودن"
     override val menuDeleteDuplicates = "حذف موارد تکراری"
     override val createFolder = "ساخت گروه"
@@ -2017,7 +2047,7 @@ object FaStrings : Strings {
     override val routingBlockSites = "مسدود: سایت‌ها"
     override val routingBlockIp = "مسدود: IP"
     override val routingSelectorsHint = "geosite:ru, domain:vk.com — هر کدام در یک خط"
-    override val routingIpSelectorsHint = "geoip:ru, 10.0.0.0/8 — هر کدام در یک خط"
+    override val routingIpSelectorsHint = "geoip:ru, asn:62041, 10.0.0.0/8 — هر کدام در یک خط"
     override val routingGeoDatabases = "پایگاه‌های جغرافیایی (geoip.dat / geosite.dat)"
     override val routingGeoDatabasesDesc = "برای گزینشگرهای geoip:/geosite: روی هستهٔ Xray لازم است. از منابع زیر دانلود می‌شود."
     override val routingGeoUpdate = "به‌روزرسانی پایگاه‌های جغرافیایی"
@@ -2159,6 +2189,8 @@ object FaStrings : Strings {
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
+    override val speedOnHomeTitle = "سرعت در صفحه اصلی"
+    override val speedOnHomeSubtitle = "نمایش ↓ و ↑ زیر پیکربندی انتخاب‌شده"
     override val roomsInNotifTitle = "اتاق‌ها / سرورها در اعلان"
     override val roomsInNotifSubtitle = "نمایش «متصل/کل» اتاق‌ها (olcRTC چنداتاقی) یا سرورها (VK-TURN چندسروره freeturn)"
     override val notifySubExpiryTitle = "اعلان پایان اشتراک"
@@ -2386,6 +2418,12 @@ object ZhStrings : Strings {
         "所有配置和订阅都将被删除，此操作无法撤销。"
     override val menuDeleteAllSubscriptions = "删除所有订阅"
     override val menuDeleteAllConfigs = "删除所有配置"
+    override val menuAutoConnect = "自动（最快）"
+    override val autoButtonLabel = "自动"
+    override val autoConnectSearching = "正在查找最快的服务器…"
+    override val autoConnectNoServers = "没有可用的服务器"
+    override val autoConnectFailed = "无法连接到任何服务器"
+    override fun autoConnectConnected(name: String) = "已连接：$name"
     override val menuDeleteUnreachable = "删除不可达节点"
     override val menuDeleteDuplicates = "删除重复项"
     override val createFolder = "创建分组"
@@ -2577,7 +2615,7 @@ object ZhStrings : Strings {
     override val routingBlockSites = "拦截：站点"
     override val routingBlockIp = "拦截：IP"
     override val routingSelectorsHint = "geosite:ru、domain:vk.com — 每行一个"
-    override val routingIpSelectorsHint = "geoip:ru、10.0.0.0/8 — 每行一个"
+    override val routingIpSelectorsHint = "geoip:ru、asn:62041、10.0.0.0/8 — 每行一个"
     override val routingGeoDatabases = "Geo 数据库（geoip.dat / geosite.dat）"
     override val routingGeoDatabasesDesc = "Xray 内核上使用 geoip:/geosite: 选择器时需要。从下方来源下载。"
     override val routingGeoUpdate = "更新 Geo 数据库"
@@ -2703,6 +2741,8 @@ object ZhStrings : Strings {
     override val experimentalUnlocked = "已解锁实验性设置"
     override val notifSpeed = "通知栏显示速度"
     override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"
+    override val speedOnHomeTitle = "主屏幕显示速度"
+    override val speedOnHomeSubtitle = "在所选配置下方显示 ↓ 和 ↑"
     override val roomsInNotifTitle = "通知中显示房间 / 服务器"
     override val roomsInNotifSubtitle = "显示房间（olcRTC 多房间）或服务器（VK-TURN freeturn 多服务器）的「已连接/总数」"
     override val notifySubExpiryTitle = "订阅到期提醒"

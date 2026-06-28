@@ -101,6 +101,7 @@ import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.SingBoxRule
+import org.olcbox.app.vpn.geo.AsnResolver
 import org.olcbox.app.vpn.geo.GeoAssetManager
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
@@ -142,6 +143,9 @@ class OlcboxVpnService : VpnService() {
     /** Display name of the currently-connecting/connected location, shown in the notification. */
     @Volatile private var connectedLocationName = ""
     @Volatile private var showSpeedInNotif = false
+    // Publish live throughput to OlcboxVpnState for the optional Home-screen speed line (independent
+    // of the notification speed toggle). Drives whether the 2s speed loop runs.
+    @Volatile private var showSpeedOnHome = false
     // "connected/total rooms" in the notification (olcRTC multi-room only). [activeMultiRoomTotal] is
     // the number of rooms configured for the current connection (0 = not multi-room).
     @Volatile private var showRoomsInNotif = false
@@ -410,16 +414,17 @@ class OlcboxVpnService : VpnService() {
         scope.launch {
             applicationContext.vpnPrefDataStore.data
                 .map { prefs ->
-                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map false to false
+                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map Triple(false, false, false)
                     runCatching {
                         val s = Json.decodeFromString(AppBehaviorSettings.serializer(), raw)
-                        s.showSpeedInNotification to s.showRoomsInNotification
-                    }.getOrDefault(false to false)
+                        Triple(s.showSpeedInNotification, s.showRoomsInNotification, s.showSpeedOnHome)
+                    }.getOrDefault(Triple(false, false, false))
                 }
                 .distinctUntilChanged()
-                .collect { (speed, rooms) ->
+                .collect { (speed, rooms, speedHome) ->
                     showSpeedInNotif = speed
                     showRoomsInNotif = rooms
+                    showSpeedOnHome = speedHome
                     if (OlcboxVpnState.status.value is VpnStatus.Connected) {
                         // Start/stop the 2s speed loop to match the new flags (it self-cancels when both
                         // are off), then repost the notification so the speed line appears/clears now.
@@ -834,10 +839,11 @@ class OlcboxVpnService : VpnService() {
         activeMtu = trafficSettings.mtu
         activeDropBridgeIpv6 = trafficSettings.normalized().domainStrategy
             .let { it == "ipv4_only" || it == "prefer_ipv4" }
-        activeBypassLan = runCatching { loadRouting().bypassLan }.getOrDefault(true)
+        activeBypassLan = runCatching { loadRouting(expandAsn = false).bypassLan }.getOrDefault(true)
         loadAppBehavior().let {
             showSpeedInNotif = it.showSpeedInNotification
             showRoomsInNotif = it.showRoomsInNotification
+            showSpeedOnHome = it.showSpeedOnHome
             activeEnergySaver = it.energySaver
         }
         return when (location.engine) {
@@ -1067,7 +1073,7 @@ class OlcboxVpnService : VpnService() {
             // (the proxy dials its server through the local dnstt SOCKS). dnstt is TCP-only → block QUIC.
             val traffic = loadTrafficSettings()
             val profilesState = loadRoutingProfilesState()
-            val routingProfile = profilesState.resolve(config.routingProfileId)
+            val routingProfile = resolveProfileExpandingAsn(profilesState, config.routingProfileId)
             val globalCore = loadAppBehavior().globalProxyCore
             val profileWantsXray = routingProfile != null &&
                 (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
@@ -1254,7 +1260,7 @@ class OlcboxVpnService : VpnService() {
 
             // Happ-style routing profile (per-location override → global default), if any.
             val profilesState = loadRoutingProfilesState()
-            val routingProfile = profilesState.resolve(config.routingProfileId)
+            val routingProfile = resolveProfileExpandingAsn(profilesState, config.routingProfileId)
             // Diagnostic: surfaces which profile (if any) is actually applied, so a "routing ignored"
             // report can be traced to "no profile resolved" vs "profile applied but ineffective".
             if (routingProfile == null) {
@@ -1420,7 +1426,7 @@ class OlcboxVpnService : VpnService() {
                         },
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                         secondProfile = secondProfile,
-                        bypassLan = loadRouting().bypassLan,
+                        bypassLan = loadRouting(expandAsn = false).bypassLan,
                     )
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -1769,7 +1775,7 @@ class OlcboxVpnService : VpnService() {
             // tunnel everything through the WG-over-VK path with nothing to route against.
             val routingProfile: RoutingProfile? =
                 if (outboundType == VkTurnConfig.OUTBOUND_PROXY || chainProxy != null)
-                    profilesState.resolve(config.routingProfileId)
+                    resolveProfileExpandingAsn(profilesState, config.routingProfileId)
                 else null
 
             // The proxy whose core choice matters: the PROXY exit, or the WG chain proxy. AmneziaWG /
@@ -2475,7 +2481,7 @@ class OlcboxVpnService : VpnService() {
         // Nothing to display → don't spin a 2s wake-up loop reading byte counters for no reason. Both
         // flags default OFF, so by default this avoids a permanent every-2s wake-up while connected.
         // The settings observer restarts this updater the moment either flag is toggled on.
-        if (!showSpeedInNotif && !showRoomsInNotif) return
+        if (!showSpeedInNotif && !showRoomsInNotif && !showSpeedOnHome) return
         // Energy-saver: tick less often (fewer wake-ups + JNI reads + notification reposts) at the cost
         // of a slightly laggier speed/rooms readout.
         val interval = if (activeEnergySaver) ENERGY_SAVER_SPEED_INTERVAL_MS else SPEED_INTERVAL_MS
@@ -2487,11 +2493,17 @@ class OlcboxVpnService : VpnService() {
                 // live as rooms (re)connect; otherwise reuse the last status (cheap).
                 val base = if (showRoomsInNotif) connectedNotificationText()
                 else lastNotificationStatus.ifBlank { ns.notifConnected }
-                if (showSpeedInNotif && cur != null && prev != null) {
+                if (cur != null && prev != null) {
                     val secs = (interval / 1000.0).coerceAtLeast(0.5)
                     val down = ((cur.rxBytes - prev.rxBytes).coerceAtLeast(0L) / secs).toLong()
                     val up = ((cur.txBytes - prev.txBytes).coerceAtLeast(0L) / secs).toLong()
-                    updateNotification(base, speedLine(down, up))
+                    // Publish to state for the optional Home speed line regardless of the notif toggle.
+                    if (showSpeedOnHome) OlcboxVpnState.setSpeed(down, up)
+                    if (showSpeedInNotif) {
+                        updateNotification(base, speedLine(down, up))
+                    } else if (showRoomsInNotif) {
+                        updateNotification(base)
+                    }
                 } else if (showRoomsInNotif) {
                     updateNotification(base)
                 }
@@ -2810,7 +2822,7 @@ class OlcboxVpnService : VpnService() {
         )
     }
 
-    private suspend fun loadRouting(): RoutingRules {
+    private suspend fun loadRouting(expandAsn: Boolean = true): RoutingRules {
         val raw = runCatching {
             applicationContext.vpnPrefDataStore.data.first()[KEY_ANDROID_ROUTING]
         }.getOrNull() ?: return RoutingRules()
@@ -2818,11 +2830,22 @@ class OlcboxVpnService : VpnService() {
             .getOrDefault(RoutingRules())
         // sing-box has no native package-regex matcher: expand each rule's regex against the
         // device's installed packages into concrete `package_name` entries before building.
-        if (routing.rules.none { it.packageRegex.isNotEmpty() }) return routing
-        val installed = runCatching {
-            packageManager.getInstalledPackages(0).map { it.packageName }
-        }.getOrDefault(emptyList())
-        return routing.copy(rules = SingBoxRule.expandPackageRegex(routing.rules, installed))
+        val withPackages = if (routing.rules.any { it.packageRegex.isNotEmpty() }) {
+            val installed = runCatching {
+                packageManager.getInstalledPackages(0).map { it.packageName }
+            }.getOrDefault(emptyList())
+            routing.copy(rules = SingBoxRule.expandPackageRegex(routing.rules, installed))
+        } else {
+            routing
+        }
+        // Likewise neither core matches ASN natively: resolve each rule's `asn:` selectors to CIDRs
+        // (cached per ASN) before building. Skipped for the bypassLan-only callers (expandAsn=false)
+        // so reading one flag never triggers a network fetch. Graceful: an unresolved ASN is dropped.
+        if (!expandAsn) return withPackages
+        val asns = SingBoxRule.collectAsns(withPackages.rules)
+        if (asns.isEmpty()) return withPackages
+        val cidrs = runCatching { AsnResolver.ensure(applicationContext, asns) }.getOrDefault(emptyMap())
+        return withPackages.copy(rules = SingBoxRule.expandAsn(withPackages.rules, cidrs))
     }
 
     private suspend fun loadRoutingProfilesState(): RoutingProfilesState {
@@ -2835,7 +2858,26 @@ class OlcboxVpnService : VpnService() {
 
     /** The Happ-style routing profile in effect for [config]: per-location override → global default. */
     private suspend fun resolveRoutingProfile(config: LocationConfig): RoutingProfile? =
-        loadRoutingProfilesState().resolve(config.routingProfileId)
+        expandProfileAsn(loadRoutingProfilesState().resolve(config.routingProfileId))
+
+    /**
+     * Resolves the profile for [locationProfileId] from [state] AND expands any `asn:` selectors to
+     * CIDRs (cached per ASN). Use this on every connect path instead of a bare `state.resolve(...)` so
+     * ASN-based rules work on both cores. Null profile → null (no-op); unresolved ASNs are dropped.
+     */
+    private suspend fun resolveProfileExpandingAsn(
+        state: RoutingProfilesState,
+        locationProfileId: String?,
+    ): RoutingProfile? = expandProfileAsn(state.resolve(locationProfileId))
+
+    /** Replaces the profile's `asn:` selectors with their CIDR lists (no-op when it has none). */
+    private suspend fun expandProfileAsn(profile: RoutingProfile?): RoutingProfile? {
+        if (profile == null) return null
+        val asns = profile.referencedAsns()
+        if (asns.isEmpty()) return profile
+        val cidrs = runCatching { AsnResolver.ensure(applicationContext, asns) }.getOrDefault(emptyMap())
+        return profile.expandAsn(cidrs)
+    }
 
     /**
      * When [profile] references geosite:/geoip: selectors, makes sure the geo `.dat` files are present

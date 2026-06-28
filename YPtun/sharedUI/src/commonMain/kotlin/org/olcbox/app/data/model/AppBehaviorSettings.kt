@@ -45,6 +45,11 @@ data class AppBehaviorSettings(
     val confirmBeforeDelete: Boolean = true,
     /** Show live download/upload speed in the foreground notification. */
     val showSpeedInNotification: Boolean = false,
+    /**
+     * Show a compact live download/upload speed line under the SELECTED configuration on the Home
+     * list (same byte counters that feed the notification speed). Off by default.
+     */
+    val showSpeedOnHome: Boolean = false,
     /** Show "connected/total rooms" in the notification (olcRTC multi-room only). */
     val showRoomsInNotification: Boolean = false,
     /** Hidden "Experimental" section unlocked by tapping the connection timer 5×. */

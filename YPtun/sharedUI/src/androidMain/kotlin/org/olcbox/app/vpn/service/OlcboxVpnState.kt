@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import org.olcbox.app.ui.features.locations.components.SpeedSample
 import org.olcbox.app.vpn.VpnStatus
 
 object OlcboxVpnState {
@@ -24,6 +25,17 @@ object OlcboxVpnState {
     private val _connectedSinceMs = MutableStateFlow(0L)
     val connectedSinceMs = _connectedSinceMs.asStateFlow()
 
+    /**
+     * Live down/up throughput (bytes per second) of the current connection, published by the
+     * service's speed loop. Drives the optional Home-screen speed line. Reset to zero on disconnect.
+     */
+    private val _speed = MutableStateFlow(SpeedSample(0L, 0L))
+    val speed = _speed.asStateFlow()
+
+    fun setSpeed(downBytesPerSec: Long, upBytesPerSec: Long) {
+        _speed.value = SpeedSample(downBytesPerSec, upBytesPerSec)
+    }
+
     fun setStatus(status: VpnStatus) {
         _status.value = status
         _isConnected.value = status is VpnStatus.Connected
@@ -36,7 +48,10 @@ object OlcboxVpnState {
             // ping pass) — keep counting so the on-screen timer never resets mid-session. A genuine
             // fresh connect always passes through Disconnected/Stopping first (or the service clears the
             // persisted value), so the next Connected re-stamps from 0.
-            is VpnStatus.Disconnected, is VpnStatus.Stopping -> _connectedSinceMs.value = 0L
+            is VpnStatus.Disconnected, is VpnStatus.Stopping -> {
+                _connectedSinceMs.value = 0L
+                _speed.value = SpeedSample(0L, 0L)
+            }
             else -> { /* Connecting / Reconnecting / Error: keep the running clock */ }
         }
     }

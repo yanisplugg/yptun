@@ -96,6 +96,23 @@ data class SingBoxRule(
         fun textToList(text: String): List<String> =
             text.split('\n', '\r', ',', ';').map { it.trim() }.filter { it.isNotEmpty() }
 
+        /** The distinct ASN numbers referenced by any enabled rule's `asn:` IP selectors. */
+        fun collectAsns(rules: List<SingBoxRule>): Set<String> =
+            rules.flatMap { Asn.collect(it.ip) }.toSet()
+
+        /**
+         * Replaces every `asn:N` entry in each rule's [ip] list with that ASN's CIDRs (from
+         * [cidrsByAsn]); unresolved ASNs contribute nothing. Returns [rules] unchanged when none use
+         * an `asn:` selector. Mirrors [expandPackageRegex] — both expand at config-build time.
+         */
+        fun expandAsn(rules: List<SingBoxRule>, cidrsByAsn: Map<String, List<String>>): List<SingBoxRule> {
+            if (rules.none { rule -> rule.ip.any { Asn.isSelector(it) } }) return rules
+            return rules.map { rule ->
+                if (rule.ip.none { Asn.isSelector(it) }) rule
+                else rule.copy(ip = Asn.expand(rule.ip, cidrsByAsn))
+            }
+        }
+
         /**
          * Resolve [packageRegex] against the device's [installedPackages], merging every matching
          * package into [packageNames] (sing-box has no native package-regex matcher). Invalid
