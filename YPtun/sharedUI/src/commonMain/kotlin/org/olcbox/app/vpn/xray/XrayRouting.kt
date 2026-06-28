@@ -84,7 +84,10 @@ object XrayRouting {
      */
     private fun bucketSplitRules(sites: List<String>, ips: List<String>, tag: String): List<JsonObject> {
         val s = sites.map { it.trim() }.filter { it.isNotEmpty() }
-        val i = ips.map { it.trim() }.filter { it.isNotEmpty() }
+        // `asn:` selectors are expanded to CIDRs before config build; drop any unresolved ones so they
+        // never reach xray's `ip` array (which would reject the whole config).
+        val i = ips.map { it.trim() }
+            .filter { it.isNotEmpty() && !org.olcbox.app.data.model.Asn.isSelector(it) }
         return buildList {
             if (s.isNotEmpty()) add(buildJsonObject {
                 put("type", "field")

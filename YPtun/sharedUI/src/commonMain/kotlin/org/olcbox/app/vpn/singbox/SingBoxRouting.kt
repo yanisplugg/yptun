@@ -303,6 +303,9 @@ object SingBoxRouting {
         when {
             v.startsWith("geoip:", true) -> sel(geoip = listOf(v.substringAfter(':').trim().lowercase()))
             v.startsWith("geosite:", true) -> sel(geosite = listOf(v.substringAfter(':').trim().lowercase()))
+            // `asn:` selectors are expanded to CIDRs before config build; ignore any that slipped
+            // through unresolved so they never become a malformed `ip_cidr` entry.
+            org.olcbox.app.data.model.Asn.isSelector(v) -> null
             else -> sel(cidr = listOf(toCidr(v)))
         }
     }
