@@ -4,13 +4,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -140,6 +145,9 @@ fun HomeScreen(
     val state by viewModel.state.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    // True while an "Auto = fastest" pass (ping → pick → connect) is in flight, so the Auto button
+    // shows a spinner and ignores re-taps instead of launching a second concurrent pass.
+    var autoRunning by remember { mutableStateOf(false) }
     val pingsState = locationViewModel.pingsState
     val locations = locationViewModel.locations.toList()
     // Drop selected ids that no longer exist (e.g. after a delete) so the count stays accurate.
@@ -178,6 +186,48 @@ fun HomeScreen(
             parallelism = pingParallelism,
             performPing = { config ->
                 viewModel.performPingFor(config)
+            },
+        )
+    }
+
+    // "Auto = fastest": proxy-ping every ready location in parallel (the real-handshake probe, the only
+    // measure that reflects whether a node actually WORKS — not just that a TCP/ICMP port answers),
+    // then hand the fastest-first order to the model, which connects to the first that comes up and
+    // advances on failure. App-level only; nothing about the running tunnel is touched.
+    fun autoConnectFastest() {
+        if (autoRunning) return
+        val candidates = locations.filter { it.config?.isComplete() == true }
+        if (candidates.isEmpty()) {
+            scope.launch { snackbarHostState.showSnackbar(s.autoConnectNoServers) }
+            return
+        }
+        autoRunning = true
+        scope.launch { snackbarHostState.showSnackbar(s.autoConnectSearching) }
+        locationViewModel.refreshPings(
+            targetLocationIds = candidates.map { it.storageId },
+            // Crank parallelism for the auto pass so a big group is probed fast, independent of the
+            // user's normal ping setting.
+            parallelism = AUTO_CONNECT_PING_PARALLELISM,
+            performPing = { config -> viewModel.performPingFor(config) },
+            onComplete = { _, _ ->
+                val pings = (locationViewModel.pingsState as? org.olcbox.app.ui.features.locations.PingsState.Success)
+                    ?.pings.orEmpty()
+                // Reachable nodes first, fastest → slowest; if none answered, still try them all in list order.
+                val reachable = candidates
+                    .map { it.storageId to pings[it.storageId] }
+                    .filter { it.second != null }
+                    .sortedBy { it.second }
+                    .map { it.first }
+                val order = reachable.ifEmpty { candidates.map { it.storageId } }
+                viewModel.autoConnectInOrder(order) { connectedName ->
+                    autoRunning = false
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            if (connectedName != null) s.autoConnectConnected(connectedName)
+                            else s.autoConnectFailed
+                        )
+                    }
+                }
             },
         )
     }
@@ -274,20 +324,54 @@ fun HomeScreen(
             }
 
             item(key = "start-button") {
-                StartButton(
-                    isActive = state.isVpnConnected,
-                    isLoading = state.isVpnLoading,
-                    requiresSetup = requiresSetup,
-                    label = primaryActionLabel,
-                    enabled = true,
-                    onClick = {
-                        if (requiresSetup) {
-                            isAddSheetOpen = true
-                        } else {
-                            onToggleClick()
+                // The main connect button, with a small round "Авто" satellite to its right that
+                // proxy-pings every server and (re)connects to the fastest. Always available while there
+                // are usable servers — tapping it while connected re-rolls onto the new fastest node.
+                val canAutoConnect = locations.any { it.config?.isComplete() == true }
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    StartButton(
+                        isActive = state.isVpnConnected,
+                        isLoading = state.isVpnLoading,
+                        requiresSetup = requiresSetup,
+                        label = primaryActionLabel,
+                        enabled = true,
+                        onClick = {
+                            if (requiresSetup) {
+                                isAddSheetOpen = true
+                            } else {
+                                onToggleClick()
+                            }
+                        }
+                    )
+                    if (canAutoConnect) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .offset(x = 100.dp)
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .clickable(enabled = !autoRunning) { autoConnectFastest() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (autoRunning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Text(
+                                    text = s.autoButtonLabel,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                )
+                            }
                         }
                     }
-                )
+                }
             }
 
             if (hasSubscriptions) {
@@ -736,3 +820,6 @@ private fun SubscriptionsRefreshRow(text: String, onClick: () -> Unit) {
         )
     }
 }
+
+/** Probe this many locations at once during an auto-connect pass (faster than the normal ping setting). */
+private const val AUTO_CONNECT_PING_PARALLELISM = 16
