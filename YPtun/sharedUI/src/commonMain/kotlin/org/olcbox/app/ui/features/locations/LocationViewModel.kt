@@ -325,7 +325,9 @@ class LocationViewModel(
     ) {
         // Probe up to [parallelism] locations at once (the ping-speed knob). A fresh semaphore per pass
         // so a changed setting takes effect immediately.
-        val semaphore = Semaphore(parallelism.coerceIn(1, 20))
+        val semaphore = Semaphore(
+            parallelism.coerceIn(1, org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM)
+        )
         val previousPings = currentPingsSnapshot()
         // Seed the live map with prior results so a targeted refresh doesn't drop other groups' pings.
         livePings.clear()

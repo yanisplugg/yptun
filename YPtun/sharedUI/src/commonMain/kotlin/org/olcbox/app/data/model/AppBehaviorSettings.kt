@@ -238,7 +238,9 @@ data class AppBehaviorSettings(
         /** Parallel ping streams: how many locations are probed at once. */
         const val DEFAULT_PING_PARALLELISM = 5
         const val MIN_PING_PARALLELISM = 1
-        const val MAX_PING_PARALLELISM = 20
+        // 30 (was 20): this one slider now also drives the Auto-connect probe pass, whose old
+        // hardcoded parallelism was 16 — give big subscription lists headroom to ping faster.
+        const val MAX_PING_PARALLELISM = 30
 
         /**
          * Health-watchdog poll interval used while [energySaver] is on (vs. the default 15s). Network

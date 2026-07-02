@@ -205,9 +205,9 @@ fun HomeScreen(
         scope.launch { snackbarHostState.showSnackbar(s.autoConnectSearching) }
         locationViewModel.refreshPings(
             targetLocationIds = candidates.map { it.storageId },
-            // Crank parallelism for the auto pass so a big group is probed fast, independent of the
-            // user's normal ping setting.
-            parallelism = AUTO_CONNECT_PING_PARALLELISM,
+            // One shared knob: the auto pass uses the same "ping parallelism" slider from settings
+            // as the manual ping button, so users control both speeds in one place.
+            parallelism = pingParallelism,
             performPing = { config -> viewModel.performPingFor(config) },
             onComplete = { _, _ ->
                 val pings = (locationViewModel.pingsState as? org.olcbox.app.ui.features.locations.PingsState.Success)
@@ -830,6 +830,3 @@ private fun SubscriptionsRefreshRow(text: String, onClick: () -> Unit) {
         )
     }
 }
-
-/** Probe this many locations at once during an auto-connect pass (faster than the normal ping setting). */
-private const val AUTO_CONNECT_PING_PARALLELISM = 16
