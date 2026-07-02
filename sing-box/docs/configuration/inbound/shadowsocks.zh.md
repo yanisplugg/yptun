@@ -49,9 +49,9 @@
 }
 ```
 
-### Listen Fields
+### 监听字段
 
-See [Listen Fields](/configuration/shared/listen/) for details.
+参阅 [监听字段](/zh/configuration/shared/listen/)。
 
 ### 字段
 
@@ -93,4 +93,4 @@ See [Listen Fields](/configuration/shared/listen/) for details.
 
 #### multiplex
 
-参阅 [多路复用](/zh/configuration/shared/multiplex#inbound)。
+参阅 [多路复用](/zh/configuration/shared/multiplex#入站)。

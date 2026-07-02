@@ -10,7 +10,6 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 
@@ -100,13 +99,13 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		return nil, err
 	}
 	client := NewGunServiceClient(clientConn).(GunServiceCustomNameClient)
-	ctx, cancel := common.ContextWithCancelCause(ctx)
+	ctx, cancel := context.WithCancelCause(ctx)
 	stream, err := client.TunCustomName(ctx, c.serviceName)
 	if err != nil {
 		cancel(err)
 		return nil, err
 	}
-	return NewGRPCConn(stream), nil
+	return NewGRPCConn(stream, cancel), nil
 }
 
 func (c *Client) Close() error {

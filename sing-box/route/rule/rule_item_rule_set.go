@@ -41,14 +41,23 @@ func (r *RuleSetItem) Start() error {
 }
 
 func (r *RuleSetItem) Match(metadata *adapter.InboundContext) bool {
-	metadata.IPCIDRMatchSource = r.ipCidrMatchSource
-	metadata.IPCIDRAcceptEmpty = r.ipCidrAcceptEmpty
+	return !r.matchStates(metadata).isEmpty()
+}
+
+func (r *RuleSetItem) matchStates(metadata *adapter.InboundContext) ruleMatchStateSet {
+	return r.matchStatesWithBase(metadata, 0)
+}
+
+func (r *RuleSetItem) matchStatesWithBase(metadata *adapter.InboundContext, base ruleMatchState) ruleMatchStateSet {
+	var stateSet ruleMatchStateSet
 	for _, ruleSet := range r.setList {
-		if ruleSet.Match(metadata) {
-			return true
-		}
+		nestedMetadata := *metadata
+		nestedMetadata.ResetRuleMatchCache()
+		nestedMetadata.IPCIDRMatchSource = r.ipCidrMatchSource
+		nestedMetadata.IPCIDRAcceptEmpty = r.ipCidrAcceptEmpty
+		stateSet = stateSet.merge(matchHeadlessRuleStatesWithBase(ruleSet, &nestedMetadata, base))
 	}
-	return false
+	return stateSet
 }
 
 func (r *RuleSetItem) ContainsDestinationIPCIDRRule() bool {

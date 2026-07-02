@@ -1,20 +1,14 @@
 package libbox
 
-import (
-	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/option"
-)
+import C "github.com/sagernet/sing-box/constant"
 
 type PlatformInterface interface {
 	LocalDNSTransport() LocalDNSTransport
 	UsePlatformAutoDetectInterfaceControl() bool
 	AutoDetectInterfaceControl(fd int32) error
 	OpenTun(options TunOptions) (int32, error)
-	WriteLog(message string)
 	UseProcFS() bool
-	FindConnectionOwner(ipProtocol int32, sourceAddress string, sourcePort int32, destinationAddress string, destinationPort int32) (int32, error)
-	PackageNameByUid(uid int32) (string, error)
-	UIDByPackageName(packageName string) (int32, error)
+	FindConnectionOwner(ipProtocol int32, sourceAddress string, sourcePort int32, destinationAddress string, destinationPort int32) (*ConnectionOwner, error)
 	StartDefaultInterfaceMonitor(listener InterfaceUpdateListener) error
 	CloseDefaultInterfaceMonitor(listener InterfaceUpdateListener) error
 	GetInterfaces() (NetworkInterfaceIterator, error)
@@ -26,9 +20,19 @@ type PlatformInterface interface {
 	SendNotification(notification *Notification) error
 }
 
-type TunInterface interface {
-	FileDescriptor() int32
-	Close() error
+type ConnectionOwner struct {
+	UserId              int32
+	UserName            string
+	ProcessPath         string
+	androidPackageNames []string
+}
+
+func (c *ConnectionOwner) SetAndroidPackageNames(names StringIterator) {
+	c.androidPackageNames = iteratorToArray[string](names)
+}
+
+func (c *ConnectionOwner) AndroidPackageNames() StringIterator {
+	return newIterator(c.androidPackageNames)
 }
 
 type InterfaceUpdateListener interface {
@@ -90,38 +94,4 @@ type OnDemandRule interface {
 type OnDemandRuleIterator interface {
 	Next() OnDemandRule
 	HasNext() bool
-}
-
-type onDemandRule struct {
-	option.OnDemandRule
-}
-
-func (r *onDemandRule) Target() int32 {
-	if r.OnDemandRule.Action == nil {
-		return -1
-	}
-	return int32(*r.OnDemandRule.Action)
-}
-
-func (r *onDemandRule) DNSSearchDomainMatch() StringIterator {
-	return newIterator(r.OnDemandRule.DNSSearchDomainMatch)
-}
-
-func (r *onDemandRule) DNSServerAddressMatch() StringIterator {
-	return newIterator(r.OnDemandRule.DNSServerAddressMatch)
-}
-
-func (r *onDemandRule) InterfaceTypeMatch() int32 {
-	if r.OnDemandRule.InterfaceTypeMatch == nil {
-		return -1
-	}
-	return int32(*r.OnDemandRule.InterfaceTypeMatch)
-}
-
-func (r *onDemandRule) SSIDMatch() StringIterator {
-	return newIterator(r.OnDemandRule.SSIDMatch)
-}
-
-func (r *onDemandRule) ProbeURL() string {
-	return r.OnDemandRule.ProbeURL
 }

@@ -2,8 +2,20 @@
 icon: material/new-box
 ---
 
-!!! quote "Changes in sing-box 1.12.18"
+!!! quote "Changes in sing-box 1.14.0"
 
+    :material-plus: [include_mac_address](#include_mac_address)
+    :material-plus: [exclude_mac_address](#exclude_mac_address)
+
+!!! quote "Changes in sing-box 1.13.3"
+
+    :material-alert: [strict_route](#strict_route)
+
+!!! quote "Changes in sing-box 1.13.0"
+
+    :material-plus: [auto_redirect_reset_mark](#auto_redirect_reset_mark)  
+    :material-plus: [auto_redirect_nfqueue](#auto_redirect_nfqueue)  
+    :material-plus: [exclude_mptcp](#exclude_mptcp)  
     :material-plus: [auto_redirect_iproute2_fallback_rule_index](#auto_redirect_iproute2_fallback_rule_index)
 
 !!! quote "Changes in sing-box 1.12.0"
@@ -38,7 +50,7 @@ icon: material/new-box
 !!! quote "Changes in sing-box 1.9.0"
 
     :material-plus: [platform.http_proxy.bypass_domain](#platformhttp_proxybypass_domain)  
-    :material-plus: [platform.http_proxy.match_domain](#platformhttp_proxymatch_domain)  
+    :material-plus: [platform.http_proxy.match_domain](#platformhttp_proxymatch_domain)
 
 !!! quote "Changes in sing-box 1.8.0"
 
@@ -67,7 +79,10 @@ icon: material/new-box
   "auto_redirect": true,
   "auto_redirect_input_mark": "0x2023",
   "auto_redirect_output_mark": "0x2024",
+  "auto_redirect_reset_mark": "0x2025",
+  "auto_redirect_nfqueue": 100,
   "auto_redirect_iproute2_fallback_rule_index": 32768,
+  "exclude_mptcp": false,
   "loopback_address": [
     "10.7.0.1"
   ],
@@ -283,6 +298,22 @@ Connection output mark used by `auto_redirect`.
 
 `0x2024` is used by default.
 
+#### auto_redirect_reset_mark
+
+!!! question "Since sing-box 1.13.0"
+
+Connection reset mark used by `auto_redirect` pre-matching.
+
+`0x2025` is used by default.
+
+#### auto_redirect_nfqueue
+
+!!! question "Since sing-box 1.13.0"
+
+NFQueue number used by `auto_redirect` pre-matching.
+
+`100` is used by default.
+
 #### auto_redirect_iproute2_fallback_rule_index
 
 !!! question "Since sing-box 1.12.18"
@@ -293,6 +324,20 @@ This rule is checked after system default rules (32766: main, 32767: default),
 routing traffic to the sing-box table only when no route is found in system tables.
 
 `32768` is used by default.
+
+#### exclude_mptcp
+
+!!! question "Since sing-box 1.13.0"
+
+!!! quote ""
+
+    Only supported on Linux with nftables and requires `auto_route` and `auto_redirect` enabled.
+
+MPTCP cannot be transparently proxied due to protocol limitations.
+
+Such traffic is usually created by Apple systems.
+
+When enabled, MPTCP connections will bypass sing-box and connect directly, otherwise, will be rejected to avoid errors by default.
 
 #### loopback_address
 
@@ -312,6 +357,9 @@ Enforce strict routing rules when `auto_route` is enabled:
 
 * Let unsupported network unreachable
 * For legacy reasons, when neither `strict_route` nor `auto_redirect` are enabled, all ICMP traffic will not go through TUN.
+* When `auto_redirect` is enabled, `strict_route` also affects `SO_BINDTODEVICE` traffic:
+    * Enabled: `SO_BINDTODEVICE` traffic is redirected through sing-box.
+    * Disabled: `SO_BINDTODEVICE` traffic bypasses sing-box.
 
 *In Windows*:
 

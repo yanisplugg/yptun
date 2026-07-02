@@ -4,16 +4,20 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.util.Log
-import libbox.BoxService
+import libbox.CommandServer
+import libbox.CommandServerHandler
+import libbox.ConnectionOwner
 import libbox.InterfaceUpdateListener
 import libbox.Libbox
 import libbox.LocalDNSTransport
 import libbox.NetworkInterface as LibboxNetworkInterface
 import libbox.NetworkInterfaceIterator
 import libbox.Notification
+import libbox.OverrideOptions
 import libbox.PlatformInterface
 import libbox.SetupOptions
 import libbox.StringIterator
+import libbox.SystemProxyStatus
 import libbox.TunOptions
 import libbox.WIFIState
 import java.io.File
@@ -21,13 +25,19 @@ import java.net.NetworkInterface as JavaNetworkInterface
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Wrapper around sing-box's gomobile `libbox` binding (pinned to v1.12.25).
+ * Wrapper around sing-box's gomobile `libbox` binding (pinned to v1.13.14).
  *
  * sing-box runs as a userspace proxy: the config exposes a SOCKS5 inbound (consumed by the
  * TUN bridge) and the proxy outbound. `route.auto_detect_interface = true`, so sing-box binds
  * and protects each outbound socket via [PlatformInterface.autoDetectInterfaceControl] →
  * [protect] (VpnService.protect), keeping its traffic off the TUN (no routing loop). The TUN
  * device itself stays owned by OlcboxVpnService (hev-socks5-tunnel), so [openTun] is never used.
+ *
+ * Since 1.13 libbox exposes the service through a [CommandServer] (`startOrReloadService` /
+ * `closeService`) instead of the old `newService`/`BoxService`. We never call `server.start()`,
+ * so no command socket / gRPC listener is opened — the CommandServer is used purely as the
+ * service lifecycle holder. Core log lines arrive via [CommandServerHandler.writeDebugMessage]
+ * (the old PlatformInterface.writeLog is gone).
  *
  * @param protect protects a socket fd from the VPN (VpnService.protect).
  * @param log forwards sing-box log lines into the app log.
@@ -43,7 +53,7 @@ class SingBoxEngine(
     private val underlyingNetwork: () -> Network?,
 ) {
     private val running = AtomicBoolean(false)
-    private var service: BoxService? = null
+    private var server: CommandServer? = null
     private val connectivity =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
@@ -53,19 +63,26 @@ class SingBoxEngine(
     fun start(configJson: String) {
         if (running.get()) stop()
         ensureSetup()
-        val boxService = Libbox.newService(configJson, PlatformBridge())
-        boxService.start()
-        service = boxService
+        val commandServer = Libbox.newCommandServer(CommandBridge(), PlatformBridge())
+        try {
+            commandServer.startOrReloadService(configJson, OverrideOptions())
+        } catch (e: Exception) {
+            runCatching { commandServer.close() }
+            throw e
+        }
+        server = commandServer
         running.set(true)
         Log.i(TAG, "sing-box service started")
     }
 
     @Synchronized
     fun stop() {
-        val boxService = service ?: run { running.set(false); return }
-        runCatching { boxService.close() }
-            .onFailure { Log.w(TAG, "sing-box close failed", it) }
-        service = null
+        val commandServer = server ?: run { running.set(false); return }
+        runCatching { commandServer.closeService() }
+            .onFailure { Log.w(TAG, "sing-box service close failed", it) }
+        runCatching { commandServer.close() }
+            .onFailure { Log.w(TAG, "sing-box command server close failed", it) }
+        server = null
         running.set(false)
         Log.i(TAG, "sing-box service stopped")
     }
@@ -80,12 +97,37 @@ class SingBoxEngine(
                 basePath = workDir.absolutePath
                 workingPath = workDir.absolutePath
                 tempPath = tempDir.absolutePath
-                username = ""
-                isTVOS = false
                 fixAndroidStack = true
             }
             Libbox.setup(options)
             setupDone = true
+        }
+    }
+
+    /** Lifecycle callbacks from the daemon; we have no command clients, so most are no-ops. */
+    private inner class CommandBridge : CommandServerHandler {
+
+        override fun serviceStop() {
+            // Stop is always initiated from the Kotlin side (OlcboxVpnService); nothing to do.
+        }
+
+        override fun serviceReload() {
+            // Config reloads always come from the Kotlin side via startOrReloadService.
+        }
+
+        override fun getSystemProxyStatus(): SystemProxyStatus =
+            SystemProxyStatus().apply {
+                available = false
+                enabled = false
+            }
+
+        override fun setSystemProxyEnabled(enabled: Boolean) {
+            // System proxy management is not used; the TUN bridge owns routing.
+        }
+
+        override fun writeDebugMessage(message: String) {
+            log("sb: ${message.trimEnd()}")
+            Log.v("sing-box", message)
         }
     }
 
@@ -103,11 +145,6 @@ class SingBoxEngine(
             throw UnsupportedOperationException("sing-box TUN is not used; hev-socks5-tunnel owns the TUN")
         }
 
-        override fun writeLog(message: String) {
-            log("sb: ${message.trimEnd()}")
-            Log.v("sing-box", message)
-        }
-
         override fun useProcFS(): Boolean = false
 
         override fun findConnectionOwner(
@@ -116,13 +153,7 @@ class SingBoxEngine(
             sourcePort: Int,
             destinationAddress: String,
             destinationPort: Int,
-        ): Int = throw UnsupportedOperationException("connection owner lookup not supported")
-
-        override fun packageNameByUid(uid: Int): String =
-            throw UnsupportedOperationException("packageNameByUid not supported")
-
-        override fun uidByPackageName(packageName: String): Int =
-            throw UnsupportedOperationException("uidByPackageName not supported")
+        ): ConnectionOwner = throw UnsupportedOperationException("connection owner lookup not supported")
 
         override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
             pushDefaultInterface(listener)
@@ -145,7 +176,7 @@ class SingBoxEngine(
 
         override fun clearDNSCache() {}
 
-        override fun sendNotification(notification: Notification) {}
+        override fun sendNotification(notification: Notification?) {}
     }
 
     /** Reports the current upstream interface so sing-box has a default to bind sockets to. */

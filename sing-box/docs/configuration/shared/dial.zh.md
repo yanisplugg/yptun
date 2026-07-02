@@ -2,6 +2,13 @@
 icon: material/new-box
 ---
 
+!!! quote "sing-box 1.13.0 中的更改"
+
+    :material-plus: [disable_tcp_keep_alive](#disable_tcp_keep_alive)  
+    :material-plus: [tcp_keep_alive](#tcp_keep_alive)  
+    :material-plus: [tcp_keep_alive_interval](#tcp_keep_alive_interval)  
+    :material-plus: [bind_address_no_port](#bind_address_no_port)
+
 !!! quote "sing-box 1.12.0 中的更改"
 
     :material-plus: [domain_resolver](#domain_resolver)  
@@ -23,13 +30,18 @@ icon: material/new-box
   "bind_interface": "",
   "inet4_bind_address": "",
   "inet6_bind_address": "",
+  "bind_address_no_port": false,
   "routing_mark": 0,
   "reuse_addr": false,
   "netns": "",
   "connect_timeout": "",
   "tcp_fast_open": false,
   "tcp_multi_path": false,
+  "disable_tcp_keep_alive": false,
+  "tcp_keep_alive": "",
+  "tcp_keep_alive_interval": "",
   "udp_fragment": false,
+
   "domain_resolver": "", // 或 {}
   "network_strategy": "",
   "network_type": [],
@@ -65,6 +77,18 @@ icon: material/new-box
 #### inet6_bind_address
 
 要绑定的 IPv6 地址。
+
+#### bind_address_no_port
+
+!!! question "自 sing-box 1.13.0 起"
+
+!!! quote ""
+
+    仅支持 Linux。
+
+绑定到源地址时不保留端口。
+
+这允许在完整的四元组（源 IP、源端口、目标 IP、目标端口）保持唯一的情况下，为多个连接复用同一源端口。
 
 #### routing_mark
 
@@ -109,6 +133,30 @@ icon: material/new-box
 
 启用 TCP Multi Path。
 
+#### disable_tcp_keep_alive
+
+!!! question "自 sing-box 1.13.0 起"
+
+禁用 TCP keep alive。
+
+#### tcp_keep_alive
+
+!!! question "自 sing-box 1.13.0 起"
+
+    默认值从 `10m` 更改为 `5m`。
+
+TCP keep alive 初始周期。
+
+默认使用 `5m`。
+
+#### tcp_keep_alive_interval
+
+!!! question "自 sing-box 1.13.0 起"
+
+TCP keep alive 间隔。
+
+默认使用 `75s`。
+
 #### udp_fragment
 
 启用 UDP 分段。
@@ -125,7 +173,7 @@ icon: material/new-box
 
 用于设置解析域名的域名解析器。
 
-此选项的格式与 [路由 DNS 规则动作](/configuration/dns/rule_action/#route) 相同，但不包含 `action` 字段。  
+此选项的格式与 [路由 DNS 规则动作](/zh/configuration/dns/rule_action/#route) 相同，但不包含 `action` 字段。  
 
 若直接将此选项设置为字符串，则等同于设置该选项的 `server` 字段。
 
@@ -198,7 +246,7 @@ icon: material/new-box
 
 !!! failure "已在 sing-box 1.12.0 废弃"
 
-    `domain_strategy` 已废弃且将在 sing-box 1.14.0 中被移除，参阅 [迁移指南](/migration/#migrate-outbound-domain-strategy-option-to-domain-resolver)。
+    `domain_strategy` 已废弃且将在 sing-box 1.14.0 中被移除，参阅 [迁移指南](/zh/migration/#迁移出站域名策略选项到域名解析器)。
 
 可选值：`prefer_ipv4` `prefer_ipv6` `ipv4_only` `ipv6_only`。
 

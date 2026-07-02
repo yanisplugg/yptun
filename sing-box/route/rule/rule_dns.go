@@ -5,7 +5,6 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/experimental/deprecated"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common"
@@ -46,6 +45,10 @@ var _ adapter.DNSRule = (*DefaultDNSRule)(nil)
 
 type DefaultDNSRule struct {
 	abstractDefaultRule
+}
+
+func (r *DefaultDNSRule) matchStates(metadata *adapter.InboundContext) ruleMatchStateSet {
+	return r.abstractDefaultRule.matchStates(metadata)
 }
 
 func NewDefaultDNSRule(ctx context.Context, logger log.ContextLogger, options option.DefaultDNSRule) (*DefaultDNSRule, error) {
@@ -247,18 +250,32 @@ func NewDefaultDNSRule(ctx context.Context, logger log.ContextLogger, options op
 		rule.items = append(rule.items, item)
 		rule.allItems = append(rule.allItems, item)
 	}
+	if options.InterfaceAddress != nil && options.InterfaceAddress.Size() > 0 {
+		item := NewInterfaceAddressItem(networkManager, options.InterfaceAddress)
+		rule.items = append(rule.items, item)
+		rule.allItems = append(rule.allItems, item)
+	}
+	if options.NetworkInterfaceAddress != nil && options.NetworkInterfaceAddress.Size() > 0 {
+		item := NewNetworkInterfaceAddressItem(networkManager, options.NetworkInterfaceAddress)
+		rule.items = append(rule.items, item)
+		rule.allItems = append(rule.allItems, item)
+	}
+	if len(options.DefaultInterfaceAddress) > 0 {
+		item := NewDefaultInterfaceAddressItem(networkManager, options.DefaultInterfaceAddress)
+		rule.items = append(rule.items, item)
+		rule.allItems = append(rule.allItems, item)
+	}
 	if len(options.RuleSet) > 0 {
+		//nolint:staticcheck
+		if options.Deprecated_RulesetIPCIDRMatchSource {
+			return nil, E.New("rule_set_ipcidr_match_source is deprecated in sing-box 1.10.0 and removed in sing-box 1.11.0")
+		}
 		var matchSource bool
 		if options.RuleSetIPCIDRMatchSource {
 			matchSource = true
-		} else
-		//nolint:staticcheck
-		if options.Deprecated_RulesetIPCIDRMatchSource {
-			matchSource = true
-			deprecated.Report(ctx, deprecated.OptionBadMatchSource)
 		}
 		item := NewRuleSetItem(router, options.RuleSet, matchSource, options.RuleSetIPCIDRAcceptEmpty)
-		rule.items = append(rule.items, item)
+		rule.ruleSetItem = item
 		rule.allItems = append(rule.allItems, item)
 	}
 	return rule, nil
@@ -272,12 +289,9 @@ func (r *DefaultDNSRule) WithAddressLimit() bool {
 	if len(r.destinationIPCIDRItems) > 0 {
 		return true
 	}
-	for _, rawRule := range r.items {
-		ruleSet, isRuleSet := rawRule.(*RuleSetItem)
-		if !isRuleSet {
-			continue
-		}
-		if ruleSet.ContainsDestinationIPCIDRRule() {
+	if r.ruleSetItem != nil {
+		ruleSet, isRuleSet := r.ruleSetItem.(*RuleSetItem)
+		if isRuleSet && ruleSet.ContainsDestinationIPCIDRRule() {
 			return true
 		}
 	}
@@ -289,17 +303,21 @@ func (r *DefaultDNSRule) Match(metadata *adapter.InboundContext) bool {
 	defer func() {
 		metadata.IgnoreDestinationIPCIDRMatch = false
 	}()
-	return r.abstractDefaultRule.Match(metadata)
+	return !r.matchStates(metadata).isEmpty()
 }
 
 func (r *DefaultDNSRule) MatchAddressLimit(metadata *adapter.InboundContext) bool {
-	return r.abstractDefaultRule.Match(metadata)
+	return !r.matchStates(metadata).isEmpty()
 }
 
 var _ adapter.DNSRule = (*LogicalDNSRule)(nil)
 
 type LogicalDNSRule struct {
 	abstractLogicalRule
+}
+
+func (r *LogicalDNSRule) matchStates(metadata *adapter.InboundContext) ruleMatchStateSet {
+	return r.abstractLogicalRule.matchStates(metadata)
 }
 
 func NewLogicalDNSRule(ctx context.Context, logger log.ContextLogger, options option.LogicalDNSRule) (*LogicalDNSRule, error) {
@@ -349,29 +367,13 @@ func (r *LogicalDNSRule) WithAddressLimit() bool {
 }
 
 func (r *LogicalDNSRule) Match(metadata *adapter.InboundContext) bool {
-	if r.mode == C.LogicalTypeAnd {
-		return common.All(r.rules, func(it adapter.HeadlessRule) bool {
-			metadata.ResetRuleCache()
-			return it.(adapter.DNSRule).Match(metadata)
-		}) != r.invert
-	} else {
-		return common.Any(r.rules, func(it adapter.HeadlessRule) bool {
-			metadata.ResetRuleCache()
-			return it.(adapter.DNSRule).Match(metadata)
-		}) != r.invert
-	}
+	metadata.IgnoreDestinationIPCIDRMatch = true
+	defer func() {
+		metadata.IgnoreDestinationIPCIDRMatch = false
+	}()
+	return !r.matchStates(metadata).isEmpty()
 }
 
 func (r *LogicalDNSRule) MatchAddressLimit(metadata *adapter.InboundContext) bool {
-	if r.mode == C.LogicalTypeAnd {
-		return common.All(r.rules, func(it adapter.HeadlessRule) bool {
-			metadata.ResetRuleCache()
-			return it.(adapter.DNSRule).MatchAddressLimit(metadata)
-		}) != r.invert
-	} else {
-		return common.Any(r.rules, func(it adapter.HeadlessRule) bool {
-			metadata.ResetRuleCache()
-			return it.(adapter.DNSRule).MatchAddressLimit(metadata)
-		}) != r.invert
-	}
+	return !r.matchStates(metadata).isEmpty()
 }

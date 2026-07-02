@@ -12,7 +12,6 @@ import (
 	"github.com/sagernet/fswatch"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/experimental/libbox/platform"
 	"github.com/sagernet/sing-box/option"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
@@ -23,6 +22,7 @@ var _ adapter.CertificateStore = (*Store)(nil)
 
 type Store struct {
 	access                    sync.RWMutex
+	storeType                 string
 	systemPool                *x509.CertPool
 	currentPool               *x509.CertPool
 	certificate               string
@@ -32,11 +32,15 @@ type Store struct {
 }
 
 func NewStore(ctx context.Context, logger logger.Logger, options option.CertificateOptions) (*Store, error) {
+	storeType := options.Store
+	if storeType == "" {
+		storeType = C.CertificateStoreSystem
+	}
 	var systemPool *x509.CertPool
-	switch options.Store {
-	case C.CertificateStoreSystem, "":
+	switch storeType {
+	case C.CertificateStoreSystem:
 		systemPool = x509.NewCertPool()
-		platformInterface := service.FromContext[platform.Interface](ctx)
+		platformInterface := service.FromContext[adapter.PlatformInterface](ctx)
 		var systemValid bool
 		if platformInterface != nil {
 			for _, cert := range platformInterface.SystemCertificates() {
@@ -52,14 +56,13 @@ func NewStore(ctx context.Context, logger logger.Logger, options option.Certific
 			}
 			systemPool = certPool
 		}
-	case C.CertificateStoreMozilla:
-		systemPool = mozillaIncluded
+	case C.CertificateStoreMozilla, C.CertificateStoreChrome:
 	case C.CertificateStoreNone:
-		systemPool = nil
 	default:
 		return nil, E.New("unknown certificate store: ", options.Store)
 	}
 	store := &Store{
+		storeType:                 storeType,
 		systemPool:                systemPool,
 		certificate:               strings.Join(options.Certificate, "\n"),
 		certificatePaths:          options.CertificatePath,
@@ -123,13 +126,9 @@ func (s *Store) Pool() *x509.CertPool {
 }
 
 func (s *Store) update() error {
-	s.access.Lock()
-	defer s.access.Unlock()
-	var currentPool *x509.CertPool
-	if s.systemPool == nil {
-		currentPool = x509.NewCertPool()
-	} else {
-		currentPool = s.systemPool.Clone()
+	currentPool, err := s.newBasePool()
+	if err != nil {
+		return err
 	}
 	if s.certificate != "" {
 		if !currentPool.AppendCertsFromPEM([]byte(s.certificate)) {
@@ -164,8 +163,28 @@ func (s *Store) update() error {
 	if firstErr != nil {
 		return firstErr
 	}
+	s.access.Lock()
+	defer s.access.Unlock()
 	s.currentPool = currentPool
 	return nil
+}
+
+func (s *Store) newBasePool() (*x509.CertPool, error) {
+	switch s.storeType {
+	case C.CertificateStoreSystem:
+		if s.systemPool == nil {
+			return x509.NewCertPool(), nil
+		}
+		return s.systemPool.Clone(), nil
+	case C.CertificateStoreMozilla:
+		return newMozillaIncluded(), nil
+	case C.CertificateStoreChrome:
+		return newChromeIncluded(), nil
+	case C.CertificateStoreNone:
+		return x509.NewCertPool(), nil
+	default:
+		return nil, E.New("unknown certificate store: ", s.storeType)
+	}
 }
 
 func readUniqueDirectoryEntries(dir string) ([]fs.DirEntry, error) {

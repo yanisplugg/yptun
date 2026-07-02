@@ -22,6 +22,9 @@ import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -35,15 +38,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import awg.Awg
 import awg.LogWriter as AwgLogWriter
 import awg.Protector as AwgProtector
-import hy2.Hy2
-import hy2.LogWriter as Hy2LogWriter
-import hy2.Protector as Hy2Protector
 import xraybridge.Xraybridge
 import xraybridge.Protector as XrayProtector
 import freeturn.Freeturn
@@ -76,6 +78,7 @@ import org.olcbox.app.vpn.xray.XrayConfig
 import org.olcbox.app.vpn.xray.XrayEngine
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
+import org.olcbox.app.vpn.AndroidVpnManager
 import org.olcbox.app.vpn.proxy.HttpProxyBridge
 import org.olcbox.app.vpn.telegram.VpnSocketProtectBridge
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
@@ -138,6 +141,9 @@ class OlcboxVpnService : VpnService() {
     private val deviceIdentityProvider by lazy {
         PersistentDeviceIdentityProvider(LocationsDataSourceImpl(applicationContext))
     }
+
+    /** In-flight widget "Auto = fastest" search (ping pass + connect); null/inactive when idle. */
+    private var autoConnectJob: Job? = null
 
     private var lastNotificationStatus = ""
     /** Display name of the currently-connecting/connected location, shown in the notification. */
@@ -356,7 +362,32 @@ class OlcboxVpnService : VpnService() {
         observeSpeedNotificationSetting()
         startLogcatCapture()
         seedConnectedClockFromDisk()
+        observeStatusForWidgets()
     }
+
+    /**
+     * Repaints the home-screen widgets on every connection-status change (connect / disconnect /
+     * reconnect / error). Live download/upload speed for the status widget is pushed separately by the
+     * speed loop. The broadcast is explicit (targeted by class name) so it reaches the providers in
+     * androidApp without the shared module referencing them.
+     */
+    private fun observeStatusForWidgets() {
+        scope.launch {
+            OlcboxVpnState.status.collect { refreshWidgets() }
+        }
+    }
+
+    private fun refreshWidgets() {
+        org.olcbox.app.widget.WidgetRefresh.ping(this)
+    }
+
+    /** True when at least one "full" status widget is placed — used to keep the speed loop alive. */
+    private fun hasStatusWidgets(): Boolean = runCatching {
+        android.appwidget.AppWidgetManager.getInstance(this)
+            .getAppWidgetIds(
+                android.content.ComponentName(packageName, "org.olcbox.app.widget.StatusWidgetProvider")
+            ).isNotEmpty()
+    }.getOrDefault(false)
 
     /**
      * Full-logs capture: tails this process's logcat into the in-app journal, so EVERYTHING the
@@ -443,6 +474,13 @@ class OlcboxVpnService : VpnService() {
                 return START_NOT_STICKY
             }
 
+            OlcboxVpnActions.ACTION_AUTO_CONNECT -> {
+                applyStartOptions(loadStartOptions(intent))
+                startForeground(ns.autoConnectSearching)
+                startAutoConnectSearch()
+                return START_NOT_STICKY
+            }
+
             OlcboxVpnActions.ACTION_START_VPN -> Unit
             else -> {
                 cleanup()
@@ -457,10 +495,10 @@ class OlcboxVpnService : VpnService() {
             addLog("Restarting ${activeModeLabel()} for selected location")
         }
         startForeground(
-            if (connectionMode == AndroidConnectionMode.Proxy) {
-                "Starting proxy..."
-            } else {
-                "Protecting your connection"
+            when (connectionMode) {
+                AndroidConnectionMode.Proxy -> "Starting proxy..."
+                AndroidConnectionMode.Tproxy -> "Starting transparent proxy..."
+                AndroidConnectionMode.Tun -> "Protecting your connection"
             }
         )
         startTunnel(isMigration = false, isRestart = isRestart)
@@ -483,7 +521,7 @@ class OlcboxVpnService : VpnService() {
     private fun installMobileCallbacks() {
         Mobile.setProtector(object : SocketProtector {
             override fun protect(fd: Long): Boolean {
-                if (connectionMode == AndroidConnectionMode.Proxy) return true
+                if (connectionMode.isTunless) return true
                 return this@OlcboxVpnService.protect(fd.toInt())
             }
         })
@@ -494,7 +532,7 @@ class OlcboxVpnService : VpnService() {
         runCatching {
             Xraybridge.setProtector(object : XrayProtector {
                 override fun protect(fd: Long): Boolean {
-                    if (connectionMode == AndroidConnectionMode.Proxy) return true
+                    if (connectionMode.isTunless) return true
                     return this@OlcboxVpnService.protect(fd.toInt())
                 }
             })
@@ -502,19 +540,11 @@ class OlcboxVpnService : VpnService() {
         runCatching {
             Awg.setProtector(object : AwgProtector {
                 override fun protect(fd: Long): Boolean {
-                    if (connectionMode == AndroidConnectionMode.Proxy) return true
+                    if (connectionMode.isTunless) return true
                     return this@OlcboxVpnService.protect(fd.toInt())
                 }
             })
         }.onFailure { Log.w(TAG, "awg setProtector failed", it) }
-        runCatching {
-            Hy2.setProtector(object : Hy2Protector {
-                override fun protect(fd: Long): Boolean {
-                    if (connectionMode == AndroidConnectionMode.Proxy) return true
-                    return this@OlcboxVpnService.protect(fd.toInt())
-                }
-            })
-        }.onFailure { Log.w(TAG, "hy2 setProtector failed", it) }
         Mobile.setProviders()
         Mobile.setLogWriter(object : LogWriter {
             override fun writeLog(msg: String) {
@@ -597,12 +627,13 @@ class OlcboxVpnService : VpnService() {
                     socksPassword = randomSocksToken()
                 }
             }
-            AndroidConnectionMode.Proxy -> {
+            AndroidConnectionMode.Proxy, AndroidConnectionMode.Tproxy -> {
                 socksUsername = ""
                 socksPassword = ""
-                // Bind the exposed SOCKS on all interfaces so it's reachable from loopback (on-device
-                // Chrome via the Wi-Fi proxy) AND the LAN (a PC pointing at the phone's IP) — like Happ's
-                // local-proxy mode. The HttpProxyBridge binds the same host. (TUN keeps its 127.0.0.1.)
+                // Bind the exposed SOCKS (and, in Tproxy mode, the tproxy inbound) on all interfaces so
+                // it's reachable from loopback (on-device Chrome via the Wi-Fi proxy) AND the LAN (a PC or
+                // a router redirecting to the phone's IP) — like Happ's local-proxy mode. The
+                // HttpProxyBridge binds the same host. (TUN keeps its 127.0.0.1.)
                 socksListenHost = AndroidSocksProxySettings.ALL_INTERFACES
             }
         }
@@ -623,6 +654,61 @@ class OlcboxVpnService : VpnService() {
         return items
             .mapNotNull { (it as? String)?.trim()?.takeIf { item -> item.isNotBlank() } }
             .toSet()
+    }
+
+    /**
+     * Widget "Auto = fastest" without opening the app: probes every complete location in parallel
+     * (the same per-engine probe the in-app ping uses, via a process-shared [AndroidVpnManager]),
+     * persists the fastest as the active location and connects it through the normal [startTunnel]
+     * path — all inside the already-foregrounded service. When nothing answers the probe, falls back
+     * to the current active location (the user explicitly tapped, so still connect SOMETHING).
+     * Status goes Connecting immediately so both widgets repaint amber on the tap.
+     */
+    private fun startAutoConnectSearch() {
+        if (autoConnectJob?.isActive == true) return
+        addLog("Auto-connect: searching for the fastest server")
+        setStatus(VpnStatus.Connecting)
+        updateNotification(ns.autoConnectSearching)
+        autoConnectJob = scope.launch {
+            val bundle = runCatching { repository.getBundle() }.getOrNull()
+            val candidates = bundle?.locations
+                ?.map { it.storageId to it.location.normalized() }
+                ?.filter { it.second.isComplete() }
+                .orEmpty()
+            if (candidates.isEmpty()) {
+                addLog("Auto-connect: no ready locations")
+                setStatus(VpnStatus.Disconnected)
+                cleanup()
+                return@launch
+            }
+            val manager = autoPingManager(applicationContext)
+            val gate = Semaphore(AUTO_CONNECT_PING_PARALLELISM)
+            val results = coroutineScope {
+                candidates.map { (id, config) ->
+                    async {
+                        val ms = gate.withPermit {
+                            runCatching {
+                                withTimeoutOrNull(AUTO_CONNECT_PING_TIMEOUT_MS) { manager.ping(config) }
+                            }.getOrNull()
+                        }
+                        id to ms
+                    }
+                }.awaitAll()
+            }
+            val fastest = results.filter { it.second != null }.minByOrNull { it.second!! }
+            val targetId = fastest?.first ?: bundle?.activeLocationId ?: candidates.first().first
+            addLog(
+                if (fastest != null) "Auto-connect: fastest server picked (${fastest.second} ms)"
+                else "Auto-connect: no server answered the probe; connecting the active location"
+            )
+            if (targetId != bundle?.activeLocationId) {
+                // Funnels through saveLocationBundle → widgets repaint with the new active name.
+                runCatching { repository.setActiveLocationId(targetId) }
+            }
+            withContext(Dispatchers.Main) {
+                startTunnel(isMigration = false, isRestart = shouldRestartForStartCommand())
+            }
+        }
     }
 
     private fun startTunnel(
@@ -771,8 +857,8 @@ class OlcboxVpnService : VpnService() {
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
 
-        if (connectionMode == AndroidConnectionMode.Proxy) {
-            // No TUN in Proxy mode: the core's own SOCKS5 listener IS the exposed proxy. startMobile has
+        if (connectionMode.isTunless) {
+            // No TUN in Proxy/Tproxy mode: the core's own listeners ARE the exposed proxy. startMobile has
             // kept the process bound to the upstream (see releaseProcessBindingUnlessProxy /
             // shouldKeepProcessBound) so the cores can actually reach the internet — without that the
             // SOCKS connected but carried no traffic.
@@ -782,9 +868,16 @@ class OlcboxVpnService : VpnService() {
             updateNotification(connectedNotificationText())
             startHttpProxyBridge()
             val shown = deviceLanIp() ?: "127.0.0.1"
-            addLog("Proxy ready (no VPN tunnel) — point apps here:")
-            addLog("  • SOCKS5: $shown:$socksListenPort")
-            addLog("  • HTTP:   $shown:$httpProxyPort")
+            if (connectionMode == AndroidConnectionMode.Tproxy) {
+                addLog("Transparent proxy ready (no VPN tunnel) — redirect traffic here:")
+                addLog("  • TPROXY: $shown:$tproxyPort (TCP+UDP, needs root/iptables TPROXY)")
+                addLog("  • SOCKS5: $shown:$socksListenPort")
+                addLog("  • HTTP:   $shown:$httpProxyPort")
+            } else {
+                addLog("Proxy ready (no VPN tunnel) — point apps here:")
+                addLog("  • SOCKS5: $shown:$socksListenPort")
+                addLog("  • HTTP:   $shown:$httpProxyPort")
+            }
             addLog("SOCKS/HTTP auth disabled — any client may connect (no username/password)")
             launchProxySelfCheck()
             startWatchdog()
@@ -1246,17 +1339,15 @@ class OlcboxVpnService : VpnService() {
                 addLog("olcRTC chain ready on 127.0.0.1:$chainPort")
             }
 
-            // AmneziaWG / Hysteria2: raise a local SOCKS (awgproxy / hysteria2proxy) and route the
-            // proxy through it. Both are full UDP tunnels (carry QUIC natively), modeled as a socks
-            // outbound → sing-box core, exactly like the AmneziaWG path.
+            // AmneziaWG: raise a local SOCKS (awgproxy) and route the proxy through it — a full UDP
+            // tunnel modeled as a socks outbound → sing-box core. Hysteria2 is a NATIVE sing-box
+            // outbound since the 1.13 upgrade (with_quic builds alongside xray now), so it no longer
+            // needs the old hysteria2proxy SOCKS bridge — but like AWG it's a full UDP/QUIC tunnel,
+            // so keep QUIC unblocked and force the sing-box core (xray has no hysteria2).
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
             val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
-            val effectiveProfile = when {
-                isAwg -> prepareAmneziaWgProxy(profile)
-                isHy2 -> prepareHysteria2Proxy(profile)
-                else -> profile
-            }
-            val isLocalUdpTunnel = isAwg || isHy2
+            val effectiveProfile = if (isAwg) prepareAmneziaWgProxy(profile) else profile
+            val isLocalUdpTunnel = isAwg
 
             // Happ-style routing profile (per-location override → global default), if any.
             val profilesState = loadRoutingProfilesState()
@@ -1279,7 +1370,8 @@ class OlcboxVpnService : VpnService() {
             // App-wide engine default (Auto/sing-box/Xray); applied only when the location core is Auto
             // and the transport doesn't force a core — a per-location choice still wins (see resolvedCore).
             val globalCore = loadAppBehavior().globalProxyCore
-            activeProxyCore = if (isLocalUdpTunnel) ProxyCore.SingBox else config.resolvedCore(globalCore)
+            activeProxyCore =
+                if (isLocalUdpTunnel || isHy2) ProxyCore.SingBox else config.resolvedCore(globalCore)
             // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
@@ -1438,7 +1530,7 @@ class OlcboxVpnService : VpnService() {
                 // IPv6 literal and is re-resolved to IPv4, so traffic rides the tunnel as IPv4 (no
                 // IPv6 leak) AND Chrome's IPv6 attempts aren't rejected/flooded.
                 if (isAwg) addLog("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4 (no IPv6 leak)")
-                if (isHy2) addLog("Hysteria2 outbound: QUIC allowed + sniff-override→IPv4 (no IPv6 leak)")
+                if (isHy2) addLog("Hysteria2 outbound: native sing-box (QUIC allowed)")
                 val json = SingBoxConfig.build(
                     profile = effectiveProfile,
                     listenPort = socksListenPort,
@@ -1455,7 +1547,7 @@ class OlcboxVpnService : VpnService() {
                     routingProfile = routingProfile,
                     singboxGeositeBase = profilesState.singboxGeositeBase,
                     singboxGeoipBase = profilesState.singboxGeoipBase,
-                    blockQuic = !isLocalUdpTunnel,
+                    blockQuic = !(isLocalUdpTunnel || isHy2),
                     sniffOverrideDestination = isLocalUdpTunnel,
                     // STRICT "IPv4 only": forceFamilyResolve (default true) keeps the `::/0 reject` so a real
                     // IPv6 destination never leaves. This stays on EVEN with fakeip — but fakeip now also
@@ -1466,6 +1558,8 @@ class OlcboxVpnService : VpnService() {
                     secondProfile = secondProfile,
                     // FakeDNS translated from an imported Xray config → reproduced natively on sing-box.
                     fakeDnsSpec = config.fakeDns,
+                    // Transparent-proxy inbound (root-only) — only emitted in Tproxy mode.
+                    tproxyPort = tproxyPortOrNull,
                 )
                 if (config.fakeDns != null) addLog("FakeDNS spec present → enabling sing-box fakeip (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -2481,7 +2575,7 @@ class OlcboxVpnService : VpnService() {
         // Nothing to display → don't spin a 2s wake-up loop reading byte counters for no reason. Both
         // flags default OFF, so by default this avoids a permanent every-2s wake-up while connected.
         // The settings observer restarts this updater the moment either flag is toggled on.
-        if (!showSpeedInNotif && !showRoomsInNotif && !showSpeedOnHome) return
+        if (!showSpeedInNotif && !showRoomsInNotif && !showSpeedOnHome && !hasStatusWidgets()) return
         // Energy-saver: tick less often (fewer wake-ups + JNI reads + notification reposts) at the cost
         // of a slightly laggier speed/rooms readout.
         val interval = if (activeEnergySaver) ENERGY_SAVER_SPEED_INTERVAL_MS else SPEED_INTERVAL_MS
@@ -2497,13 +2591,18 @@ class OlcboxVpnService : VpnService() {
                     val secs = (interval / 1000.0).coerceAtLeast(0.5)
                     val down = ((cur.rxBytes - prev.rxBytes).coerceAtLeast(0L) / secs).toLong()
                     val up = ((cur.txBytes - prev.txBytes).coerceAtLeast(0L) / secs).toLong()
-                    // Publish to state for the optional Home speed line regardless of the notif toggle.
-                    if (showSpeedOnHome) OlcboxVpnState.setSpeed(down, up)
+                    // Publish to state for the optional Home speed line / status widget regardless of
+                    // the notif toggle.
+                    val statusWidgets = hasStatusWidgets()
+                    if (showSpeedOnHome || statusWidgets) OlcboxVpnState.setSpeed(down, up)
                     if (showSpeedInNotif) {
                         updateNotification(base, speedLine(down, up))
                     } else if (showRoomsInNotif) {
                         updateNotification(base)
                     }
+                    // The status-change observer doesn't fire while merely the speed changes, so push
+                    // the live rate to the status widget on every tick it's present.
+                    if (statusWidgets) refreshWidgets()
                 } else if (showRoomsInNotif) {
                     updateNotification(base)
                 }
@@ -2541,7 +2640,7 @@ class OlcboxVpnService : VpnService() {
                         return@launch
                     }
 
-                    mode == AndroidConnectionMode.Proxy && !isLocalSocksPortOpen(socksListenPort) -> {
+                    mode.isTunless && !isLocalSocksPortOpen(socksListenPort) -> {
                         addLog("Watchdog: SOCKS port is not accepting connections")
                         requestTransportRecovery("SOCKS port unavailable", fullRestart = true)
                         return@launch
@@ -2562,7 +2661,7 @@ class OlcboxVpnService : VpnService() {
                     // Proxy (SOCKS) mode has no TUN, so the cores reach the internet only through the
                     // process→network binding. Re-pin it to the refreshed upstream; otherwise a benign
                     // Wi-Fi handle swap leaves the cores bound to a dead Network and traffic stalls.
-                    if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) {
+                    if (connectionMode.isTunless && coreRunning()) {
                         bindProcessToNetwork(upstream)
                     }
                     if (isBenignWifiRefresh(previousTransport, nextTransport)) {
@@ -2605,6 +2704,7 @@ class OlcboxVpnService : VpnService() {
         val cleanupGeneration = ++generation
         setStatus(VpnStatus.Stopping)
         stopHttpProxyBridge()
+        autoConnectJob?.cancel()
         startupJob?.cancel()
         watchdogJob?.cancel()
         speedJob?.cancel()
@@ -2725,7 +2825,6 @@ class OlcboxVpnService : VpnService() {
         dnsttClient = null
         dnsttProxyActive = false
         runCatching { Awg.stop() }
-        runCatching { Hy2.stop() }
         val provider = lastMobileProvider
         val wasRunning = Mobile.isRunning()
         runCatching { Mobile.stop() }
@@ -2739,6 +2838,13 @@ class OlcboxVpnService : VpnService() {
 
     /** AmneziaWG's local SOCKS port (awgproxy) when a proxy uses the AmneziaWG transport. */
     private val awgLocalPort: Int get() = socksListenPort + 2
+
+    /** Transparent-proxy (tproxy) listen port; offset from the SOCKS port to avoid collisions. */
+    private val tproxyPort: Int get() = socksListenPort + 4
+
+    /** The tproxy inbound port to emit in the sing-box config — only in Tproxy mode, else null. */
+    private val tproxyPortOrNull: Int?
+        get() = if (connectionMode == AndroidConnectionMode.Tproxy) tproxyPort else null
 
     /**
      * If [profile] is AmneziaWG, raise the awgproxy SOCKS5 from its config and return a SOCKS proxy
@@ -2769,55 +2875,6 @@ class OlcboxVpnService : VpnService() {
             type = "socks",
             server = "127.0.0.1",
             serverPort = awgLocalPort,
-            rawOutbound = raw,
-        )
-    }
-
-    private val hy2LocalPort: Int get() = socksListenPort + 3
-
-    /**
-     * If [profile] is Hysteria2, raise the hysteria2proxy SOCKS5 from its config and return a SOCKS
-     * proxy pointing at it, so sing-box (standalone or chained) routes through the Hysteria2 tunnel.
-     * Otherwise returns [profile] unchanged. Mirrors [prepareAmneziaWgProxy].
-     */
-    private suspend fun prepareHysteria2Proxy(profile: ProxyProfile): ProxyProfile {
-        if (profile.type != ProxyProfile.TYPE_HYSTERIA2) return profile
-        runCatching { Hy2.stop() }
-        Hy2.setDebug(false)
-        Hy2.setLogWriter(object : Hy2LogWriter {
-            override fun writeLog(line: String) {
-                val trimmed = line.trimEnd()
-                addLog("hy2: $trimmed")
-                Log.v("hy2", trimmed)
-            }
-        })
-        val cfg = buildJsonObject {
-            put("server", profile.server)
-            put("port", profile.serverPort)
-            if (profile.hy2Ports.isNotBlank()) put("ports", profile.hy2Ports)
-            put("auth", profile.password)
-            put("sni", profile.sni.ifBlank { profile.server })
-            put("insecure", profile.allowInsecure)
-            if (profile.hy2Obfs.isNotBlank()) {
-                put("obfs", profile.hy2Obfs)
-                put("obfsPassword", profile.hy2ObfsPassword)
-            }
-            if (profile.hy2UpMbps > 0) put("upMbps", profile.hy2UpMbps)
-            if (profile.hy2DownMbps > 0) put("downMbps", profile.hy2DownMbps)
-        }.toString()
-        val listen = "127.0.0.1:$hy2LocalPort"
-        addLog("Starting Hysteria2 SOCKS on $listen")
-        Hy2.start(cfg, listen)
-        if (!awaitSocksPortOpen(hy2LocalPort, MOBILE_READY_TIMEOUT_MS)) {
-            throw IllegalStateException("Hysteria2 SOCKS port $hy2LocalPort did not open")
-        }
-        val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
-            "\"server_port\":$hy2LocalPort,\"version\":\"5\"}"
-        return ProxyProfile(
-            tag = profile.tag.ifBlank { "Hysteria2" },
-            type = "socks",
-            server = "127.0.0.1",
-            serverPort = hy2LocalPort,
             rawOutbound = raw,
         )
     }
@@ -3491,7 +3548,7 @@ class OlcboxVpnService : VpnService() {
     private fun canReconnectTransportInPlace(): Boolean {
         return when (connectionMode) {
             AndroidConnectionMode.Tun -> vpnInterface != null && tun2socksThread?.isAlive == true
-            AndroidConnectionMode.Proxy -> coreRunning()
+            AndroidConnectionMode.Proxy, AndroidConnectionMode.Tproxy -> coreRunning()
         }
     }
 
@@ -3573,7 +3630,7 @@ class OlcboxVpnService : VpnService() {
         // the new upstream, the watchdog's rebind check never fires. Re-pin here so every handle swap
         // immediately re-routes the cores. null = lost network → unbinds (matches the wait-for-network
         // path). Only while a core is live; the initial connect binds explicitly in startXxxCore.
-        if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) {
+        if (connectionMode.isTunless && coreRunning()) {
             bindProcessToNetwork(network)
         }
     }
@@ -3614,7 +3671,7 @@ class OlcboxVpnService : VpnService() {
      * already stopped (coreRunning() == false), so the binding is released as before.
      */
     private fun releaseProcessBindingUnlessProxy() {
-        if (connectionMode == AndroidConnectionMode.Proxy && coreRunning()) return
+        if (connectionMode.isTunless && coreRunning()) return
         unbindProcessFromNetwork()
     }
 
@@ -3636,7 +3693,7 @@ class OlcboxVpnService : VpnService() {
         // cores' outbound sockets to the chosen upstream. Unbinding it after setup leaves the cores on
         // the system default network, which is why the local SOCKS connected but carried no traffic.
         // Keep the bind for the whole session on every transport in Proxy mode.
-        if (connectionMode == AndroidConnectionMode.Proxy) return true
+        if (connectionMode.isTunless) return true
         val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
     }
@@ -3775,6 +3832,7 @@ class OlcboxVpnService : VpnService() {
         return when (connectionMode) {
             AndroidConnectionMode.Tun -> "VPN"
             AndroidConnectionMode.Proxy -> "Proxy"
+            AndroidConnectionMode.Tproxy -> "Transparent proxy"
         }
     }
 
@@ -3988,6 +4046,24 @@ class OlcboxVpnService : VpnService() {
 
         const val ACTION_START_VPN = OlcboxVpnActions.ACTION_START_VPN
         const val ACTION_STOP_VPN = OlcboxVpnActions.ACTION_STOP_VPN
+
+        // Widget "Auto = fastest" probe pass (see startAutoConnectSearch).
+        private const val AUTO_CONNECT_PING_PARALLELISM = 16
+        private const val AUTO_CONNECT_PING_TIMEOUT_MS = 10_000L
+
+        /**
+         * Process-shared [AndroidVpnManager] used ONLY for the widget auto-connect probe pass.
+         * Created once and kept (its init launches never-ending preference collectors, so churning
+         * instances would leak coroutines). The Activity keeps its own instance as before.
+         */
+        @Volatile
+        private var autoPingManager: AndroidVpnManager? = null
+
+        private fun autoPingManager(context: Context): AndroidVpnManager =
+            autoPingManager ?: synchronized(OlcboxVpnService::class.java) {
+                autoPingManager
+                    ?: AndroidVpnManager(context.applicationContext).also { autoPingManager = it }
+            }
 
         private const val LOCAL_SOCKS_PORT_BASE = 10818
         private const val LOCAL_SOCKS_PORT_MAX = 10858
