@@ -272,6 +272,7 @@ func Stop() {
 		case <-time.After(5 * time.Second):
 		}
 	}
+	captchaActive.Store(false)
 	running.Store(false)
 }
 
@@ -364,6 +365,16 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 		if len(links) == 0 {
 			links = cfg.VK.Links
 		}
+		// Prefer the app-registered captcha presenter (in-app WebView) over DefaultManualSolver,
+		// whose localhost-browser flow is unreachable on Android. ProxyManualSolver serializes
+		// concurrent solves internally, so sharing one solver across links/relays is safe.
+		solver := vk.DefaultManualSolver
+		if p := currentCaptchaPresenter(); p != nil {
+			solver = vk.ProxyManualSolver(
+				func(url string) { captchaActive.Store(true); p.Show(url) },
+				func() { captchaActive.Store(false); p.Hide() },
+			)
+		}
 		provs := make([]provider.Provider, 0, len(links))
 		for _, link := range links {
 			p, err := vk.New(vk.Config{
@@ -377,7 +388,7 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 				StreamsAlive:    connected.Load,
 				Log:             logger,
 				Debug:           cfg.Log.Debug,
-			}, vk.DefaultManualSolver)
+			}, solver)
 			if err != nil {
 				return nil, err
 			}

@@ -85,8 +85,10 @@ data class ProxyProfile(
     val serverPort: Int = 0,
     /** VLESS/VMess user id. */
     val uuid: String = "",
-    /** Trojan/Shadowsocks password. */
+    /** Trojan/Shadowsocks/Naive password. */
     val password: String = "",
+    /** Naive (NaïveProxy) username; empty for the other protocols. */
+    val username: String = "",
     /** Shadowsocks method (cipher), e.g. "aes-128-gcm", "2022-blake3-aes-128-gcm". */
     val method: String = "",
     /** VMess alterId (0 for AEAD). */
@@ -149,9 +151,17 @@ data class ProxyProfile(
     val hy2DownMbps: Int = 0,
     @SerialName("hy2_ports")
     val hy2Ports: String = "",
+    /**
+     * Naive ([TYPE_NAIVE]) over QUIC instead of HTTPS/H2 — from a `naive+quic://` link. Auth uses
+     * [username]/[password]; TLS is mandatory (sni from the link), served natively by sing-box's
+     * cronet-based naive outbound (with_naive_outbound build).
+     */
+    @SerialName("naive_quic")
+    val naiveQuic: Boolean = false,
 ) {
     fun isComplete(): Boolean {
         if (type == TYPE_HYSTERIA2) return server.isNotBlank() && serverPort in 1..65535
+        if (type == TYPE_NAIVE) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_AMNEZIAWG) return awgConfig.isNotBlank()
         if (!rawXrayConfig.isNullOrBlank()) return true
         if (!rawOutbound.isNullOrBlank()) return true
@@ -205,6 +215,7 @@ data class ProxyProfile(
         const val TYPE_SHADOWSOCKS = "shadowsocks"
         const val TYPE_AMNEZIAWG = "amneziawg"
         const val TYPE_HYSTERIA2 = "hysteria2"
+        const val TYPE_NAIVE = "naive"
 
         const val NETWORK_TCP = "tcp"
         const val NETWORK_WS = "ws"

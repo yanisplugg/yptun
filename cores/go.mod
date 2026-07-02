@@ -251,6 +251,12 @@ require (
 
 replace github.com/openlibrecommunity/olcrtc => ../olcrtc
 
+// Local fork of xray-core v26.3.27 (copied from the module cache) carrying ONE fix:
+// proxy/wireguard netBind.Close made idempotent. Upstream closes closedCh unguarded,
+// so handler shutdown racing an in-flight processWireGuard (VK-TURN stop/reconnect)
+// panics with "close of closed channel" and kills the whole app process.
+replace github.com/xtls/xray-core => ../xray-core
+
 replace github.com/sagernet/sing-box => ../sing-box
 
 replace github.com/samosvalishe/free-turn-proxy => ../free-turn-proxy

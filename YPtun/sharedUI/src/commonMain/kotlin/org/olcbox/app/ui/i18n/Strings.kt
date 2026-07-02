@@ -512,6 +512,8 @@ interface Strings {
     val notifVpnTunnelError: String
     val notifSplitTunnelError: String
     val notifStop: String
+    val notifVkCaptcha: String
+    val vkCaptchaTitle: String
     val noFileSelected: String
     val qrImported: String
     fun cannotOpenFilePicker(msg: String): String
@@ -1096,6 +1098,8 @@ object RuStrings : Strings {
     override val notifVpnTunnelError = "Ошибка VPN-туннеля"
     override val notifSplitTunnelError = "Ошибка раздельного туннелирования"
     override val notifStop = "Стоп"
+    override val notifVkCaptcha = "VK просит капчу — нажмите, чтобы решить"
+    override val vkCaptchaTitle = "Капча VK"
     override val noFileSelected = "Файл не выбран"
     override val qrImported = "QR-код импортирован"
     override fun cannotOpenFilePicker(msg: String) = "Не удалось открыть выбор файла: $msg"
@@ -1174,7 +1178,7 @@ object RuStrings : Strings {
     override val showAliveCountSubtitle =
         "В шапке подписки показывать «живые/всего» по последнему пингу"
     override val pingThreadsTitle = "Потоки пинга"
-    override val pingThreadsSubtitle = "Сколько локаций пинговать одновременно (1–20)"
+    override val pingThreadsSubtitle = "Сколько локаций проверять одновременно (1–30) — и для пинга, и для кнопки Авто"
     override val pingModeAuto = "Авто"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -1664,6 +1668,8 @@ object EnStrings : Strings {
     override val notifVpnTunnelError = "VPN tunnel error"
     override val notifSplitTunnelError = "Split tunneling error"
     override val notifStop = "Stop"
+    override val notifVkCaptcha = "VK asks for a captcha — tap to solve"
+    override val vkCaptchaTitle = "VK captcha"
     override val noFileSelected = "No file selected"
     override val qrImported = "QR imported"
     override fun cannotOpenFilePicker(msg: String) = "Cannot open file picker: $msg"
@@ -1742,7 +1748,7 @@ object EnStrings : Strings {
     override val showAliveCountSubtitle =
         "Show \"live/total\" in the subscription header from the last ping pass"
     override val pingThreadsTitle = "Ping threads"
-    override val pingThreadsSubtitle = "How many locations to ping at once (1–20)"
+    override val pingThreadsSubtitle = "How many locations to probe at once (1–30) — for ping and the Auto button"
     override val pingModeAuto = "Auto"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -2232,6 +2238,8 @@ object FaStrings : Strings {
     override val notifVpnTunnelError = "خطای تونل VPN"
     override val notifSplitTunnelError = "خطای تونل‌سازی تفکیکی"
     override val notifStop = "توقف"
+    override val notifVkCaptcha = "VK کپچا می‌خواهد — برای حل ضربه بزنید"
+    override val vkCaptchaTitle = "کپچای VK"
     override val noFileSelected = "پرونده‌ای انتخاب نشد"
     override val qrImported = "QR وارد شد"
     override fun cannotOpenFilePicker(msg: String) = "بازکردن انتخابگر پرونده ممکن نشد: $msg"
@@ -2310,7 +2318,7 @@ object FaStrings : Strings {
     override val showAliveCountSubtitle =
         "نمایش «فعال/کل» در سربرگ اشتراک بر اساس آخرین پینگ"
     override val pingThreadsTitle = "رشته‌های پینگ"
-    override val pingThreadsSubtitle = "چند موقعیت هم‌زمان پینگ شوند (۱ تا ۲۰)"
+    override val pingThreadsSubtitle = "چند موقعیت هم‌زمان بررسی شوند (۱ تا ۳۰) — برای پینگ و دکمه خودکار"
     override val pingModeAuto = "خودکار"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"
@@ -2800,6 +2808,8 @@ object ZhStrings : Strings {
     override val notifVpnTunnelError = "VPN 隧道错误"
     override val notifSplitTunnelError = "分应用代理错误"
     override val notifStop = "停止"
+    override val notifVkCaptcha = "VK 要求验证码 — 点按解决"
+    override val vkCaptchaTitle = "VK 验证码"
     override val noFileSelected = "未选择文件"
     override val qrImported = "二维码已导入"
     override fun cannotOpenFilePicker(msg: String) = "无法打开文件选择器：$msg"
@@ -2878,7 +2888,7 @@ object ZhStrings : Strings {
     override val showAliveCountSubtitle =
         "在订阅标题中显示上次测试的“可用/总数”"
     override val pingThreadsTitle = "测试线程"
-    override val pingThreadsSubtitle = "同时测试多少个节点（1–20）"
+    override val pingThreadsSubtitle = "同时测试多少个节点（1–30）— 测速和自动连接共用"
     override val pingModeAuto = "自动"
     override val pingModeTcp = "TCP"
     override val pingModeIcmp = "ICMP"

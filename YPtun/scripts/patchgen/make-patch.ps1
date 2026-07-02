@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Generates a YPtun delta-update patch (gzip File-by-File v1) between two release APKs of the SAME ABI.
 
@@ -50,7 +50,7 @@ $recon = Join-Path $env:TEMP ("yptun-recon-{0}.apk" -f ([guid]::NewGuid().ToStri
 $h1 = (Get-FileHash $NewApk -Algorithm SHA256).Hash.ToLower()
 $h2 = (Get-FileHash $recon  -Algorithm SHA256).Hash.ToLower()
 Remove-Item $recon -Force -ErrorAction SilentlyContinue
-if ($h1 -ne $h2) { throw "ROUND-TRIP MISMATCH — patch is broken, do NOT upload" }
+if ($h1 -ne $h2) { throw "ROUND-TRIP MISMATCH - patch is broken, do NOT upload" }
 
 $fullMb  = [math]::Round((Get-Item $NewApk).Length / 1MB, 2)
 $patchMb = [math]::Round((Get-Item $patch).Length / 1MB, 2)
