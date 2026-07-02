@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -263,14 +264,20 @@ object SingBoxConfig {
                 }
             }
 
+            // WireGuard moved from an `outbound` (removed in sing-box 1.13.0) to a top-level
+            // `endpoints` entry, referenced by tag. Build them here so the outbounds below can detour
+            // to them and the endpoints array is emitted as a sibling of `outbounds`.
+            val wgBaseEndpoint = wireguardBase?.let { buildWireguardEndpoint(it, WG_BASE_TAG) }
+            val mainIsWireguard = profile.type == "wireguard"
+            val wgExitEndpoint = if (mainIsWireguard) buildWireguardEndpoint(profile, PROXY_TAG) else null
+
             putJsonArray("outbounds") {
-                val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
-                val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
+                val baseDetour = if (wgBaseEndpoint != null) WG_BASE_TAG else null
                 // Base tunnel exit tag (WG for VK-TURN, dnstt SOCKS for dnstt) — keeps `direct` traffic on
                 // the tunnel when [directViaBase].
                 val baseExitTag = when {
-                    wgBaseOutbound != null -> WG_BASE_TAG
+                    wgBaseEndpoint != null -> WG_BASE_TAG
                     olcrtcChainPort != null -> OLCRTC_TAG
                     else -> null
                 }
@@ -300,7 +307,7 @@ object SingBoxConfig {
                             tag = PROXY_TAG
                         )
                     )
-                } else {
+                } else if (!mainIsWireguard) {
                     // Single hop: the main proxy IS the exit (tag PROXY_TAG), dialing through olcRTC/WG.
                     add(
                         buildProxyOutbound(
@@ -313,9 +320,7 @@ object SingBoxConfig {
                         )
                     )
                 }
-                if (wgBaseOutbound != null) {
-                    add(wgBaseOutbound)
-                }
+                // else: the main IS WireGuard — its exit is the `endpoints` entry tagged PROXY_TAG.
                 // olcRTC chain detour: the main proxy dials through this local SOCKS.
                 if (olcrtcChainPort != null) {
                     add(olcrtcSocksOutbound(OLCRTC_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
@@ -338,6 +343,12 @@ object SingBoxConfig {
                         put("domain_strategy", "ipv4_only")
                     }
                 }
+            }
+
+            // WireGuard endpoints (sing-box 1.13 replacement for the removed wireguard outbound).
+            val wgEndpoints = listOfNotNull(wgExitEndpoint, wgBaseEndpoint)
+            if (wgEndpoints.isNotEmpty()) {
+                putJsonArray("endpoints") { wgEndpoints.forEach { add(it) } }
             }
 
             putJsonObject("route") {
@@ -701,13 +712,40 @@ object SingBoxConfig {
             }
         }
 
-    /** A raw WireGuard outbound used as a chain base (tagged [WG_BASE_TAG], no mux/detour). */
-    private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {
+    /**
+     * Converts a legacy WireGuard *outbound* JSON (as stored in [ProxyProfile.rawOutbound]:
+     * `server`/`server_port`/`local_address`/`private_key`/`peer_public_key`/`mtu`) into a sing-box
+     * 1.13 WireGuard *endpoint* object (`address`/`private_key`/`peers[]`). The wireguard outbound was
+     * removed in sing-box 1.13.0, so VK-TURN / WDTT (which tunnel through a local WireGuard listener)
+     * must use an endpoint instead. Returns null if the raw JSON isn't a wireguard outbound.
+     */
+    private fun buildWireguardEndpoint(profile: ProxyProfile, tag: String): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
-        val rawObj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        if (obj["type"]?.jsonPrimitive?.contentOrNull != "wireguard") return null
+        val server = obj["server"]?.jsonPrimitive?.contentOrNull ?: "127.0.0.1"
+        val serverPort = obj["server_port"]?.jsonPrimitive?.intOrNull ?: return null
+        val privateKey = obj["private_key"]?.jsonPrimitive?.contentOrNull ?: return null
+        val peerPublicKey = obj["peer_public_key"]?.jsonPrimitive?.contentOrNull ?: return null
+        val localAddrs = obj["local_address"]?.jsonArray ?: buildJsonArray { }
+        val mtu = obj["mtu"]?.jsonPrimitive?.intOrNull
         return buildJsonObject {
-            rawObj.forEach { (k, v) -> if (k != "tag" && k != "detour") put(k, v) }
-            put("tag", WG_BASE_TAG)
+            put("type", "wireguard")
+            put("tag", tag)
+            // Userspace gVisor stack (the process is already bound to the upstream network).
+            put("system", false)
+            if (mtu != null && mtu > 0) put("mtu", mtu)
+            putJsonArray("address") { localAddrs.forEach { add(it) } }
+            put("private_key", privateKey)
+            putJsonArray("peers") {
+                addJsonObject {
+                    put("address", server)
+                    put("port", serverPort)
+                    put("public_key", peerPublicKey)
+                    // The local WG listener carries everything (VK-TURN tunnel is IPv4-only).
+                    putJsonArray("allowed_ips") { add("0.0.0.0/0") }
+                }
+            }
         }
     }
 
