@@ -604,6 +604,16 @@ fun AndroidMainScreen(
         )
     }
 
+    // Manual VK captcha for a VK-TURN connect: the service's CaptchaPresenter publishes the local
+    // captcha-proxy URL; solving it in this WebView lets the TURN relay come up.
+    val vkCaptchaUrl by org.olcbox.app.vpn.service.OlcboxVpnState.vkCaptchaUrl.collectAsState()
+    vkCaptchaUrl?.let { url ->
+        org.olcbox.app.ui.components.VkCaptchaDialog(
+            url = url,
+            onDismiss = { org.olcbox.app.vpn.service.OlcboxVpnState.setVkCaptchaUrl(null) }
+        )
+    }
+
     homeState.vkTurnLinkPrompt?.let { prompt ->
         VkTurnLinkPromptDialog(
             locationName = prompt.locationName,

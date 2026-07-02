@@ -48,6 +48,7 @@ import awg.LogWriter as AwgLogWriter
 import awg.Protector as AwgProtector
 import xraybridge.Xraybridge
 import xraybridge.Protector as XrayProtector
+import freeturn.CaptchaPresenter as FreeturnCaptchaPresenter
 import freeturn.Freeturn
 import freeturn.LogWriter as FreeturnLogWriter
 import wdttmobile.Wdttmobile
@@ -682,7 +683,8 @@ class OlcboxVpnService : VpnService() {
                 return@launch
             }
             val manager = autoPingManager(applicationContext)
-            val gate = Semaphore(AUTO_CONNECT_PING_PARALLELISM)
+            // Same "ping parallelism" slider as the in-app ping/auto pass — one knob everywhere.
+            val gate = Semaphore(loadAppBehavior().effectivePingParallelism())
             val results = coroutineScope {
                 candidates.map { (id, config) ->
                     async {
@@ -1346,6 +1348,8 @@ class OlcboxVpnService : VpnService() {
             // so keep QUIC unblocked and force the sing-box core (xray has no hysteria2).
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
             val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
+            // Naive (NaïveProxy) is a native sing-box outbound (cronet) — xray has no equivalent.
+            val isNaive = profile.type == ProxyProfile.TYPE_NAIVE
             val effectiveProfile = if (isAwg) prepareAmneziaWgProxy(profile) else profile
             val isLocalUdpTunnel = isAwg
 
@@ -1371,7 +1375,7 @@ class OlcboxVpnService : VpnService() {
             // and the transport doesn't force a core — a per-location choice still wins (see resolvedCore).
             val globalCore = loadAppBehavior().globalProxyCore
             activeProxyCore =
-                if (isLocalUdpTunnel || isHy2) ProxyCore.SingBox else config.resolvedCore(globalCore)
+                if (isLocalUdpTunnel || isHy2 || isNaive) ProxyCore.SingBox else config.resolvedCore(globalCore)
             // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
@@ -1531,6 +1535,7 @@ class OlcboxVpnService : VpnService() {
                 // IPv6 leak) AND Chrome's IPv6 attempts aren't rejected/flooded.
                 if (isAwg) addLog("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4 (no IPv6 leak)")
                 if (isHy2) addLog("Hysteria2 outbound: native sing-box (QUIC allowed)")
+                if (isNaive) addLog("Naive outbound: native sing-box (cronet${if (effectiveProfile.naiveQuic) ", QUIC" else ""})")
                 val json = SingBoxConfig.build(
                     profile = effectiveProfile,
                     listenPort = socksListenPort,
@@ -1547,7 +1552,8 @@ class OlcboxVpnService : VpnService() {
                     routingProfile = routingProfile,
                     singboxGeositeBase = profilesState.singboxGeositeBase,
                     singboxGeoipBase = profilesState.singboxGeoipBase,
-                    blockQuic = !(isLocalUdpTunnel || isHy2),
+                    // A naive+quic server needs its own QUIC uplink unblocked too.
+                    blockQuic = !(isLocalUdpTunnel || isHy2 || (isNaive && effectiveProfile.naiveQuic)),
                     sniffOverrideDestination = isLocalUdpTunnel,
                     // STRICT "IPv4 only": forceFamilyResolve (default true) keeps the `::/0 reject` so a real
                     // IPv6 destination never leaves. This stays on EVEN with fakeip — but fakeip now also
@@ -1716,6 +1722,22 @@ class OlcboxVpnService : VpnService() {
                         val trimmed = line.trimEnd()
                         addLog("vkturn: $trimmed")
                         Log.v("vkturn", trimmed)
+                    }
+                })
+                // VK auth may hit a Smart Captcha the auto-solver can't pass (status=BOT). Without a
+                // presenter freeturn falls back to "open localhost:8765 in a browser", which nothing on
+                // Android ever does — the relay then never allocates and the tunnel black-holes. Route
+                // the captcha page into the app instead: a WebView dialog + a heads-up notification.
+                Freeturn.setCaptchaPresenter(object : FreeturnCaptchaPresenter {
+                    override fun show(url: String) {
+                        addLog("VK-TURN: manual captcha required — opening $url in-app")
+                        OlcboxVpnState.setVkCaptchaUrl(url)
+                        notifyVkCaptcha(url)
+                    }
+
+                    override fun hide() {
+                        OlcboxVpnState.setVkCaptchaUrl(null)
+                        cancelVkCaptchaNotification()
                     }
                 })
                 // freeturn rejects `bond=1` unless mode==tcp; an old/imported URI carrying it in a udp
@@ -2166,10 +2188,15 @@ class OlcboxVpnService : VpnService() {
 
     /** Waits for the freeturn client to bring up at least one TURN relay stream. */
     private suspend fun awaitVkTurnRelayReady(timeoutMs: Long): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
+        var deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (!Freeturn.isRunning()) return false
             if (Freeturn.connectedStreams() > 0) return true
+            // A manual captcha is on screen: the relay CANNOT come up until the user solves it, so
+            // a fixed timeout would elapse mid-solve and start WireGuard against a dead listener.
+            // Keep pushing the deadline while the captcha is pending (freeturn itself gives up after
+            // 3 minutes, dropping captchaActive, so this can't wait forever).
+            if (Freeturn.captchaActive()) deadline = System.currentTimeMillis() + timeoutMs
             delay(VKTURN_RELAY_POLL_MS)
         }
         return Freeturn.connectedStreams() > 0
@@ -2820,6 +2847,9 @@ class OlcboxVpnService : VpnService() {
         runCatching { singBox?.stop() }
         runCatching { xray?.stop() }
         runCatching { Freeturn.stop() }
+        // Drop any pending manual-captcha UI: the session it belonged to is gone.
+        OlcboxVpnState.setVkCaptchaUrl(null)
+        cancelVkCaptchaNotification()
         runCatching { Wdttmobile.stop() }
         runCatching { dnsttClient?.stop() }
         dnsttClient = null
@@ -3824,6 +3854,41 @@ class OlcboxVpnService : VpnService() {
         )
     }
 
+    /**
+     * Heads-up notification for a pending manual VK captcha (VK-TURN): if the app is backgrounded
+     * mid-connect the user has no other way to learn the tunnel is waiting on them. Tapping opens
+     * the app, where the captcha WebView dialog is already up (driven by [OlcboxVpnState.vkCaptchaUrl]).
+     * Separate high-importance channel — the foreground channel is LOW and would not pop.
+     */
+    private fun notifyVkCaptcha(url: String) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    VK_CAPTCHA_CHANNEL_ID,
+                    "VK captcha",
+                    NotificationManager.IMPORTANCE_HIGH
+                )
+            )
+        }
+        val statIcon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
+            .takeIf { it != 0 } ?: android.R.drawable.ic_lock_lock
+        val notification = NotificationCompat.Builder(this, VK_CAPTCHA_CHANNEL_ID)
+            .setSmallIcon(statIcon)
+            .setContentTitle(ns.vkCaptchaTitle)
+            .setContentText(ns.notifVkCaptcha)
+            .setContentIntent(getAppPendingIntent())
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        nm.notify(VK_CAPTCHA_NOTIFICATION_ID, notification)
+    }
+
+    private fun cancelVkCaptchaNotification() {
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .cancel(VK_CAPTCHA_NOTIFICATION_ID)
+    }
+
     private fun setStatus(status: VpnStatus) {
         OlcboxVpnState.setStatus(status)
     }
@@ -4048,7 +4113,6 @@ class OlcboxVpnService : VpnService() {
         const val ACTION_STOP_VPN = OlcboxVpnActions.ACTION_STOP_VPN
 
         // Widget "Auto = fastest" probe pass (see startAutoConnectSearch).
-        private const val AUTO_CONNECT_PING_PARALLELISM = 16
         private const val AUTO_CONNECT_PING_TIMEOUT_MS = 10_000L
 
         /**
@@ -4140,6 +4204,8 @@ class OlcboxVpnService : VpnService() {
         )
         private const val NOTIFICATION_CHANNEL_ID = "olcbox_vpn"
         private const val NOTIFICATION_ID = 100
+        private const val VK_CAPTCHA_CHANNEL_ID = "olcbox_vk_captcha"
+        private const val VK_CAPTCHA_NOTIFICATION_ID = 101
         private const val TAG = "OlcboxVpnService"
 
         // High-frequency Android UI/render/system spam that the whole-process logcat capture (`*:V`)

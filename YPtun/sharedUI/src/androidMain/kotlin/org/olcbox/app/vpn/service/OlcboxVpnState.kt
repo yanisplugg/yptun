@@ -36,6 +36,19 @@ object OlcboxVpnState {
         _speed.value = SpeedSample(downBytesPerSec, upBytesPerSec)
     }
 
+    /**
+     * Manual VK captcha page for a VK-TURN (freeturn) connect, served by the freeturn client on a
+     * localhost HTTP proxy. Non-null while the user has to solve it — the UI opens it in an in-app
+     * WebView; solving lets the TURN relay come up. Published by the service's CaptchaPresenter,
+     * cleared when the captcha is solved/cancelled or the session stops.
+     */
+    private val _vkCaptchaUrl = MutableStateFlow<String?>(null)
+    val vkCaptchaUrl = _vkCaptchaUrl.asStateFlow()
+
+    fun setVkCaptchaUrl(url: String?) {
+        _vkCaptchaUrl.value = url
+    }
+
     fun setStatus(status: VpnStatus) {
         _status.value = status
         _isConnected.value = status is VpnStatus.Connected
