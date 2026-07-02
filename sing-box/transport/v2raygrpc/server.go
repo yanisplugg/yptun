@@ -52,7 +52,7 @@ func NewServer(ctx context.Context, logger logger.ContextLogger, options option.
 }
 
 func (s *Server) Tun(server GunService_TunServer) error {
-	conn := NewGRPCConn(server)
+	conn := NewGRPCConn(server, nil)
 	var source M.Socksaddr
 	if remotePeer, loaded := peer.FromContext(server.Context()); loaded {
 		source = M.SocksaddrFromNet(remotePeer.Addr)
@@ -60,7 +60,7 @@ func (s *Server) Tun(server GunService_TunServer) error {
 	if grpcMetadata, loaded := gM.FromIncomingContext(server.Context()); loaded {
 		forwardFrom := strings.Join(grpcMetadata.Get("X-Forwarded-For"), ",")
 		if forwardFrom != "" {
-			for _, from := range strings.Split(forwardFrom, ",") {
+			for from := range strings.SplitSeq(forwardFrom, ",") {
 				originAddr := M.ParseSocksaddr(from)
 				if originAddr.IsValid() {
 					source = originAddr.Unwrap()

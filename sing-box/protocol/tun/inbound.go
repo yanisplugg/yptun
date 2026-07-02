@@ -14,10 +14,9 @@ import (
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/common/taskmonitor"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/experimental/deprecated"
-	"github.com/sagernet/sing-box/experimental/libbox/platform"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/route/rule"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -36,19 +35,17 @@ func RegisterInbound(registry *inbound.Registry) {
 }
 
 type Inbound struct {
-	tag            string
-	ctx            context.Context
-	router         adapter.Router
-	networkManager adapter.NetworkManager
-	logger         log.ContextLogger
-	//nolint:staticcheck
-	inboundOptions              option.InboundOptions
+	tag                         string
+	ctx                         context.Context
+	router                      adapter.Router
+	networkManager              adapter.NetworkManager
+	logger                      log.ContextLogger
 	tunOptions                  tun.Options
 	udpTimeout                  time.Duration
 	stack                       string
 	tunIf                       tun.Tun
 	tunStack                    tun.Stack
-	platformInterface           platform.Interface
+	platformInterface           adapter.PlatformInterface
 	platformOptions             option.TunPlatformOptions
 	autoRedirect                tun.AutoRedirect
 	routeRuleSet                []adapter.RuleSet
@@ -60,20 +57,22 @@ type Inbound struct {
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+	//nolint:staticcheck
+	if len(options.Inet4Address) > 0 || len(options.Inet6Address) > 0 ||
+		len(options.Inet4RouteAddress) > 0 || len(options.Inet6RouteAddress) > 0 ||
+		len(options.Inet4RouteExcludeAddress) > 0 || len(options.Inet6RouteExcludeAddress) > 0 {
+		return nil, E.New("legacy tun address fields are deprecated in sing-box 1.10.0 and removed in sing-box 1.12.0")
+	}
+	//nolint:staticcheck
+	if options.GSO {
+		return nil, E.New("GSO option in tun is deprecated in sing-box 1.11.0 and removed in sing-box 1.12.0")
+	}
+	//nolint:staticcheck
+	if options.InboundOptions != (option.InboundOptions{}) {
+		return nil, E.New("legacy inbound fields are deprecated in sing-box 1.11.0 and removed in sing-box 1.13.0, checkout migration: https://sing-box.sagernet.org/migration/#migrate-legacy-inbound-fields-to-rule-actions")
+	}
+
 	address := options.Address
-	var deprecatedAddressUsed bool
-
-	//nolint:staticcheck
-	if len(options.Inet4Address) > 0 {
-		address = append(address, options.Inet4Address...)
-		deprecatedAddressUsed = true
-	}
-
-	//nolint:staticcheck
-	if len(options.Inet6Address) > 0 {
-		address = append(address, options.Inet6Address...)
-		deprecatedAddressUsed = true
-	}
 	inet4Address := common.Filter(address, func(it netip.Prefix) bool {
 		return it.Addr().Is4()
 	})
@@ -82,18 +81,6 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	})
 
 	routeAddress := options.RouteAddress
-
-	//nolint:staticcheck
-	if len(options.Inet4RouteAddress) > 0 {
-		routeAddress = append(routeAddress, options.Inet4RouteAddress...)
-		deprecatedAddressUsed = true
-	}
-
-	//nolint:staticcheck
-	if len(options.Inet6RouteAddress) > 0 {
-		routeAddress = append(routeAddress, options.Inet6RouteAddress...)
-		deprecatedAddressUsed = true
-	}
 	inet4RouteAddress := common.Filter(routeAddress, func(it netip.Prefix) bool {
 		return it.Addr().Is4()
 	})
@@ -102,18 +89,6 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	})
 
 	routeExcludeAddress := options.RouteExcludeAddress
-
-	//nolint:staticcheck
-	if len(options.Inet4RouteExcludeAddress) > 0 {
-		routeExcludeAddress = append(routeExcludeAddress, options.Inet4RouteExcludeAddress...)
-		deprecatedAddressUsed = true
-	}
-
-	//nolint:staticcheck
-	if len(options.Inet6RouteExcludeAddress) > 0 {
-		routeExcludeAddress = append(routeExcludeAddress, options.Inet6RouteExcludeAddress...)
-		deprecatedAddressUsed = true
-	}
 	inet4RouteExcludeAddress := common.Filter(routeExcludeAddress, func(it netip.Prefix) bool {
 		return it.Addr().Is4()
 	})
@@ -121,16 +96,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		return it.Addr().Is6()
 	})
 
-	if deprecatedAddressUsed {
-		deprecated.Report(ctx, deprecated.OptionTUNAddressX)
-	}
-
-	//nolint:staticcheck
-	if options.GSO {
-		deprecated.Report(ctx, deprecated.OptionTUNGSO)
-	}
-
-	platformInterface := service.FromContext[platform.Interface](ctx)
+	platformInterface := service.FromContext[adapter.PlatformInterface](ctx)
 	tunMTU := options.MTU
 	enableGSO := C.IsLinux && options.Stack == "gvisor" && platformInterface == nil && tunMTU > 0 && tunMTU < 49152
 	if tunMTU == 0 {
@@ -174,7 +140,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	if ruleIndex == 0 {
 		ruleIndex = tun.DefaultIPRoute2RuleIndex
 	}
-	autoRedirectFallbackRuleIndex := options.AutoRedirectIPRoute2FallbackRuleIndex
+	autoRedirectFallbackRuleIndex := options.AutoRedirectFallbackRuleIndex
 	if autoRedirectFallbackRuleIndex == 0 {
 		autoRedirectFallbackRuleIndex = tun.DefaultIPRoute2AutoRedirectFallbackRuleIndex
 	}
@@ -186,6 +152,14 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	if outputMark == 0 {
 		outputMark = tun.DefaultAutoRedirectOutputMark
 	}
+	resetMark := uint32(options.AutoRedirectResetMark)
+	if resetMark == 0 {
+		resetMark = tun.DefaultAutoRedirectResetMark
+	}
+	nfQueue := options.AutoRedirectNFQueue
+	if nfQueue == 0 {
+		nfQueue = tun.DefaultAutoRedirectNFQueue
+	}
 	networkManager := service.FromContext[adapter.NetworkManager](ctx)
 	multiPendingPackets := C.IsDarwin && ((options.Stack == "gvisor" && tunMTU < 32768) || (options.Stack != "gvisor" && options.MTU <= 9000))
 	inbound := &Inbound{
@@ -194,7 +168,6 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		router:         router,
 		networkManager: networkManager,
 		logger:         logger,
-		inboundOptions: options.InboundOptions,
 		tunOptions: tun.Options{
 			Name:                                  options.InterfaceName,
 			MTU:                                   tunMTU,
@@ -207,6 +180,9 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 			IPRoute2AutoRedirectFallbackRuleIndex: autoRedirectFallbackRuleIndex,
 			AutoRedirectInputMark:                 inputMark,
 			AutoRedirectOutputMark:                outputMark,
+			AutoRedirectResetMark:                 resetMark,
+			AutoRedirectNFQueue:                   nfQueue,
+			ExcludeMPTCP:                          options.ExcludeMPTCP,
 			Inet4LoopbackAddress:                  common.Filter(options.LoopbackAddress, netip.Addr.Is4),
 			Inet6LoopbackAddress:                  common.Filter(options.LoopbackAddress, netip.Addr.Is6),
 			StrictRoute:                           options.StrictRoute,
@@ -324,6 +300,7 @@ func (t *Inbound) Start(stage adapter.StartStage) error {
 			t.tunOptions.Name = tun.CalculateInterfaceName("")
 		}
 		if t.platformInterface == nil {
+			t.routeAddressSet = common.FlatMap(t.routeRuleSet, adapter.RuleSet.ExtractIPSet)
 			for _, routeRuleSet := range t.routeRuleSet {
 				ipSets := routeRuleSet.ExtractIPSet()
 				if len(ipSets) == 0 {
@@ -335,6 +312,7 @@ func (t *Inbound) Start(stage adapter.StartStage) error {
 					t.routeRuleSetCallback = append(t.routeRuleSetCallback, routeRuleSet.RegisterCallback(t.updateRouteAddressSet))
 				}
 			}
+			t.routeExcludeAddressSet = common.FlatMap(t.routeExcludeRuleSet, adapter.RuleSet.ExtractIPSet)
 			for _, routeExcludeRuleSet := range t.routeExcludeRuleSet {
 				ipSets := routeExcludeRuleSet.ExtractIPSet()
 				if len(ipSets) == 0 {
@@ -374,8 +352,8 @@ func (t *Inbound) Start(stage adapter.StartStage) error {
 			}
 		}
 		monitor.Start("open interface")
-		if t.platformInterface != nil {
-			tunInterface, err = t.platformInterface.OpenTun(&tunOptions, t.platformOptions)
+		if t.platformInterface != nil && t.platformInterface.UsePlatformInterface() {
+			tunInterface, err = t.platformInterface.OpenInterface(&tunOptions, t.platformOptions)
 		} else {
 			if HookBeforeCreatePlatformInterface != nil {
 				HookBeforeCreatePlatformInterface()
@@ -395,13 +373,14 @@ func (t *Inbound) Start(stage adapter.StartStage) error {
 		)
 		if t.platformInterface != nil {
 			forwarderBindInterface = true
-			includeAllNetworks = t.platformInterface.IncludeAllNetworks()
+			includeAllNetworks = t.platformInterface.NetworkExtensionIncludeAllNetworks()
 		}
 		tunStack, err := tun.NewStack(t.stack, tun.StackOptions{
 			Context:                t.ctx,
 			Tun:                    tunInterface,
 			TunOptions:             t.tunOptions,
 			UDPTimeout:             t.udpTimeout,
+			ICMPTimeout:            C.ICMPTimeout,
 			Handler:                t,
 			Logger:                 t.logger,
 			ForwarderBindInterface: forwarderBindInterface,
@@ -457,15 +436,34 @@ func (t *Inbound) Close() error {
 	)
 }
 
-func (t *Inbound) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr) error {
-	return t.router.PreMatch(adapter.InboundContext{
-		Inbound:        t.tag,
-		InboundType:    C.TypeTun,
-		Network:        network,
-		Source:         source,
-		Destination:    destination,
-		InboundOptions: t.inboundOptions,
-	})
+func (t *Inbound) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr, routeContext tun.DirectRouteContext, timeout time.Duration) (tun.DirectRouteDestination, error) {
+	var ipVersion uint8
+	if !destination.IsIPv6() {
+		ipVersion = 4
+	} else {
+		ipVersion = 6
+	}
+	routeDestination, err := t.router.PreMatch(adapter.InboundContext{
+		Inbound:     t.tag,
+		InboundType: C.TypeTun,
+		IPVersion:   ipVersion,
+		Network:     network,
+		Source:      source,
+		Destination: destination,
+	}, routeContext, timeout, false)
+	if err != nil {
+		switch {
+		case rule.IsBypassed(err):
+			err = nil
+		case rule.IsRejected(err):
+			t.logger.Trace("reject ", network, " connection from ", source.AddrString(), " to ", destination.AddrString())
+		default:
+			if network == N.NetworkICMP {
+				t.logger.Warn(E.Cause(err, "link ", network, " connection from ", source.AddrString(), " to ", destination.AddrString()))
+			}
+		}
+	}
+	return routeDestination, err
 }
 
 func (t *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
@@ -475,8 +473,7 @@ func (t *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 	metadata.InboundType = C.TypeTun
 	metadata.Source = source
 	metadata.Destination = destination
-	//nolint:staticcheck
-	metadata.InboundOptions = t.inboundOptions
+
 	t.logger.InfoContext(ctx, "inbound connection from ", metadata.Source)
 	t.logger.InfoContext(ctx, "inbound connection to ", metadata.Destination)
 	t.router.RouteConnectionEx(ctx, conn, metadata, onClose)
@@ -489,14 +486,43 @@ func (t *Inbound) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 	metadata.InboundType = C.TypeTun
 	metadata.Source = source
 	metadata.Destination = destination
-	//nolint:staticcheck
-	metadata.InboundOptions = t.inboundOptions
+
 	t.logger.InfoContext(ctx, "inbound packet connection from ", metadata.Source)
 	t.logger.InfoContext(ctx, "inbound packet connection to ", metadata.Destination)
 	t.router.RoutePacketConnectionEx(ctx, conn, metadata, onClose)
 }
 
 type autoRedirectHandler Inbound
+
+func (t *autoRedirectHandler) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr, routeContext tun.DirectRouteContext, timeout time.Duration) (tun.DirectRouteDestination, error) {
+	var ipVersion uint8
+	if !destination.IsIPv6() {
+		ipVersion = 4
+	} else {
+		ipVersion = 6
+	}
+	routeDestination, err := t.router.PreMatch(adapter.InboundContext{
+		Inbound:     t.tag,
+		InboundType: C.TypeTun,
+		IPVersion:   ipVersion,
+		Network:     network,
+		Source:      source,
+		Destination: destination,
+	}, routeContext, timeout, true)
+	if err != nil {
+		switch {
+		case rule.IsBypassed(err):
+			t.logger.Trace("bypass ", network, " connection from ", source.AddrString(), " to ", destination.AddrString())
+		case rule.IsRejected(err):
+			t.logger.Trace("reject ", network, " connection from ", source.AddrString(), " to ", destination.AddrString())
+		default:
+			if network == N.NetworkICMP {
+				t.logger.Warn(E.Cause(err, "link ", network, " connection from ", source.AddrString(), " to ", destination.AddrString()))
+			}
+		}
+	}
+	return routeDestination, err
+}
 
 func (t *autoRedirectHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	ctx = log.ContextWithNewID(ctx)
@@ -505,9 +531,12 @@ func (t *autoRedirectHandler) NewConnectionEx(ctx context.Context, conn net.Conn
 	metadata.InboundType = C.TypeTun
 	metadata.Source = source
 	metadata.Destination = destination
-	//nolint:staticcheck
-	metadata.InboundOptions = t.inboundOptions
+
 	t.logger.InfoContext(ctx, "inbound redirect connection from ", metadata.Source)
 	t.logger.InfoContext(ctx, "inbound connection to ", metadata.Destination)
 	t.router.RouteConnectionEx(ctx, conn, metadata, onClose)
+}
+
+func (t *autoRedirectHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	panic("unexcepted")
 }

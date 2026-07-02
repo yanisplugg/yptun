@@ -10,7 +10,6 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/taskmonitor"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/experimental/libbox/platform"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	R "github.com/sagernet/sing-box/route/rule"
@@ -38,7 +37,7 @@ type Router struct {
 	rules                 []adapter.DNSRule
 	defaultDomainStrategy C.DomainStrategy
 	dnsReverseMapping     freelru.Cache[netip.Addr, string]
-	platformInterface     platform.Interface
+	platformInterface     adapter.PlatformInterface
 }
 
 func NewRouter(ctx context.Context, logFactory log.Factory, options option.DNSOptions) *Router {
@@ -196,7 +195,16 @@ func (r *Router) matchDNS(ctx context.Context, allowFakeIP bool, ruleIndex int, 
 			}
 		}
 	}
-	return r.transport.Default(), nil, -1
+	transport := r.transport.Default()
+	if legacyTransport, isLegacy := transport.(adapter.LegacyDNSTransport); isLegacy {
+		if options.Strategy == C.DomainStrategyAsIS {
+			options.Strategy = legacyTransport.LegacyStrategy()
+		}
+		if !options.ClientSubnet.IsValid() {
+			options.ClientSubnet = legacyTransport.LegacyClientSubnet()
+		}
+	}
+	return transport, nil, -1
 }
 
 func (r *Router) Exchange(ctx context.Context, message *mDNS.Msg, options adapter.DNSQueryOptions) (*mDNS.Msg, error) {
@@ -346,7 +354,7 @@ func (r *Router) Lookup(ctx context.Context, domain string, options adapter.DNSQ
 		transport := options.Transport
 		if legacyTransport, isLegacy := transport.(adapter.LegacyDNSTransport); isLegacy {
 			if options.Strategy == C.DomainStrategyAsIS {
-				options.Strategy = r.defaultDomainStrategy
+				options.Strategy = legacyTransport.LegacyStrategy()
 			}
 			if !options.ClientSubnet.IsValid() {
 				options.ClientSubnet = legacyTransport.LegacyClientSubnet()
@@ -447,6 +455,6 @@ func (r *Router) LookupReverseMapping(ip netip.Addr) (string, bool) {
 func (r *Router) ResetNetwork() {
 	r.ClearCache()
 	for _, transport := range r.transport.Transports() {
-		transport.Close()
+		transport.Reset()
 	}
 }

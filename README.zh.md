@@ -36,15 +36,17 @@
 
 ---
 
-## 2.6.1 新功能
+## 3.0.0 新功能
 
 | | |
 |---|---|
-| **自动连接最快服务器** | 连接按钮旁的「自动」按钮：通过代理对所有就绪服务器并行进行真实握手测速（而不仅是 TCP/ICMP），连接到最快的一个，失败则自动切到下一个。连接后按钮仍可用，再点一次即可重新选出当前最快的服务器。 |
-| **基于 ASN 的分流** | 分流配置中新增 `asn:62041`（Telegram）、`asn:13335`（Cloudflare）选择器 —— 可匹配某运营商的**全部**网络，包括域名列表会漏掉的纯 IP 服务。运行时展开为真实地址段，两个内核都支持。编辑器内提供一键预设。 |
-| **主屏显示速度** | 在所选配置下方可选显示 `↓ / ↑` 速率（设置中开关，默认关闭）。 |
-| **基于 WARP 的 Telegram 代理** | 独立的后台代理：建立 AmneziaWG 的 Cloudflare WARP 隧道并提供本地 SOCKS5 供 Telegram 使用。独立于主 VPN 运行，并会自动避开失效的 WARP 节点。 |
-| **双代理级联** | 在主代理之上再叠加一个（出口）代理 —— 包括通过本地 SOCKS 在 xhttp 连接之上，带正确的 `xmux` 与 XTLS Vision；DNS 通过 TCP/DoH 在级联上解析。 |
+| **sing-box 内核升级到 1.13** | 带来最新修复与兼容性。最重要的是，Hysteria2 与 NaïveProxy 现在**原生**内置于 sing-box，无需单独桥接。 |
+| **原生 Hysteria2** | 完全改用 sing-box 原生出站（auth、上/下行、Salamander 混淆、端口跳跃）—— 更快更稳；旧的外部模块已移除。 |
+| **NaïveProxy** | 新协议：把流量伪装成普通的 Chrome HTTP/2（Chromium cronet 引擎）。适用于按特征（DPI）阻断连接的环境。 |
+| **透明代理（tproxy）** | 新的连接模式：内核级拦截（TCP + UDP），无需 TUN。仅限 root（需要 `CAP_NET_ADMIN`）。 |
+| **主屏小组件** | 两个与应用主题一致的小组件：一个开关，以及带 `↓/↑` 速率、`‹ ›` 服务器切换和「自动」按钮的状态小组件。直接从服务连接/切换 —— **无需打开应用**；「自动」按钮现在也在后台运行并即时响应。 |
+| **构建保护 + 增量更新** | 若 APK 被他人重新签名（重打包/植入广告的构建）会给出警告。更新以约 1 MB 的补丁下载，而非完整 APK。 |
+| **VK-TURN 内核更新** | freeturn 1.6.0 与 WDTT —— 刷新 VK 认证（`vkcalls` 模式）、验证码与指纹。 |
 
 ---
 
@@ -128,7 +130,7 @@
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=2.6.1 -Polcbox.versionCode=286
+  -Polcbox.version=3.0.0 -Polcbox.versionCode=287
 ```
 
 APK 会生成在 `YPtun/androidApp/build/outputs/apk/release/`。

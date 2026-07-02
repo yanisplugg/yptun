@@ -32,7 +32,7 @@ type Config struct {
 	// ManualOnly форсирует ручной путь captcha с первой попытки.
 	ManualOnly bool
 
-	// Browser - браузерный профиль control-plane: "chrome" | "firefox".
+	// Browser - браузерный профиль control-plane: "chrome" | "firefox" | "safari".
 	// Пустое -> firefox (дефолт продукта).
 	Browser string
 

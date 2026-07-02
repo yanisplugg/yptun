@@ -36,7 +36,9 @@ func (c *Client) doRequest(ctx context.Context, httpClient tlsclient.HttpClient,
 	req.Header.Set("Sec-Fetch-Site", "same-site")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
-	req.Header.Set("Priority", "u=1, i")
+	if browserprofile.Family(profile) != browserprofile.Firefox {
+		req.Header.Set("Priority", "u=1, i")
+	}
 
 	httpResp, err := httpClient.Do(req)
 	if err != nil {

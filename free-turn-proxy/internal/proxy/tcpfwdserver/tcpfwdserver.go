@@ -14,7 +14,6 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/netconn"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/bondserver"
-	"github.com/samosvalishe/free-turn-proxy/internal/stats"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcptun"
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/bondframe"
 	"github.com/xtaci/smux"
@@ -24,18 +23,7 @@ import (
 // TCP-соединение к connectAddr. Потоки, чьи первые 4 байта совпадают с bond magic,
 // передаются в registry.
 func Handle(ctx context.Context, logger logx.Logger, registry *bondserver.Registry, dtlsConn net.Conn, connectAddr string, kcpProfile kcptun.Profile, kcpFEC kcptun.FEC) {
-	statsCtx, statsCancel := context.WithCancel(ctx)
-	defer statsCancel()
-	st := stats.New(logger.DebugEnabled())
-	go st.LogEvery(
-		statsCtx,
-		logger.Debugf,
-		"[VLESS "+dtlsConn.RemoteAddr().String()+"]",
-		"to-client",
-		"from-client",
-	)
-
-	kcpSess, err := kcptun.NewKCPOverDTLS(&stats.CountingConn{Conn: dtlsConn, Stats: st}, true, kcpProfile, kcpFEC)
+	kcpSess, err := kcptun.NewKCPOverDTLS(dtlsConn, true, kcpProfile, kcpFEC)
 	if err != nil {
 		logger.Errorf("tcpfwdserver: KCP session: %s", err)
 		return

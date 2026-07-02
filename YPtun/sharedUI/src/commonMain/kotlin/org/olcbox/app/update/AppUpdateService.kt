@@ -51,7 +51,14 @@ data class AppUpdateInfo(
     val htmlUrl: String,
     val publishedAt: String?,
     val asset: AppUpdateAsset,
-    val isUpdateAvailable: Boolean
+    val isUpdateAvailable: Boolean,
+    /**
+     * Optional binary-delta asset that patches the user's CURRENT version up to [version] for their
+     * ABI (Android only), so only a few MB are downloaded instead of the whole APK. Null when no
+     * matching patch is published (then the installer downloads [asset] in full). The reconstructed
+     * APK is signature-verified before install, so a missing/forged patch always degrades safely.
+     */
+    val deltaAsset: AppUpdateAsset? = null
 )
 
 class AppUpdateService(
@@ -75,17 +82,22 @@ class AppUpdateService(
                             .orEmpty()
             )
 
+        val resolvedVersion = updateVersion(channel, release.tagName, asset)
+        val available = isUpdateAvailable(
+            channel = channel,
+            releaseTag = resolvedVersion,
+            currentVersion = currentVersion
+        )
         AppUpdateInfo(
             channel = channel,
-            version = updateVersion(channel, release.tagName, asset),
+            version = resolvedVersion,
             htmlUrl = release.htmlUrl,
             publishedAt = release.publishedAt,
             asset = asset,
-            isUpdateAvailable = isUpdateAvailable(
-                channel = channel,
-                releaseTag = updateVersion(channel, release.tagName, asset),
-                currentVersion = currentVersion
-            )
+            isUpdateAvailable = available,
+            deltaAsset = if (available) {
+                selectDeltaAsset(release.assets, platform, currentVersion, resolvedVersion, asset.name)
+            } else null
         )
     }
 
@@ -149,6 +161,42 @@ class AppUpdateService(
             }
 
             return asset?.let {
+                AppUpdateAsset(
+                    name = it.name,
+                    downloadUrl = it.browserDownloadUrl,
+                    sizeBytes = it.size,
+                    updatedAt = it.updatedAt
+                )
+            }
+        }
+
+        /**
+         * Finds the binary-delta patch that upgrades [fromVersion]→[toVersion] for the device ABI.
+         * Convention: assets are named `YPtun-delta-<from>-<to>-<abi>.patch.gz` (raw File-by-File v1
+         * patch, gzip-compressed for transport). The ABI is taken from the already-chosen full
+         * [fullAssetName] so the patch matches exactly what's installed. Android only.
+         */
+        fun selectDeltaAsset(
+            assets: List<GithubReleaseAsset>,
+            platform: UpdatePlatform,
+            fromVersion: String,
+            toVersion: String,
+            fullAssetName: String
+        ): AppUpdateAsset? {
+            if (platform.os != "android") return null
+            val from = fromVersion.removePrefix("v")
+            val to = toVersion.removePrefix("v")
+            if (from.isBlank() || to.isBlank() || from == to) return null
+            val fullName = fullAssetName.lowercase()
+            val abi = platform.androidArchTokens.firstOrNull { it in fullName }
+            val candidates = assets.filter { asset ->
+                val name = asset.name.lowercase()
+                (name.endsWith(".patch.gz") || name.endsWith(".patch")) &&
+                    "delta" in name && from in name && to in name
+            }
+            val chosen = if (abi != null) candidates.firstOrNull { abi in it.name.lowercase() }
+            else candidates.firstOrNull()
+            return chosen?.let {
                 AppUpdateAsset(
                     name = it.name,
                     downloadUrl = it.browserDownloadUrl,

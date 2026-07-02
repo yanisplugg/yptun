@@ -68,9 +68,9 @@ func localCaptchaHosts() []string {
 
 func isAllowedProxyHost(hostname string) bool {
 	allowed := []string{
-		".vk.ru", ".vk.ru", ".vkontakte.ru",
+		".vk.com", ".vk.ru", ".vkontakte.ru",
 		".userapi.com", ".okcdn.ru", ".mycdn.me",
-		".api.vk.ru",
+		".api.vk.com", ".api.vk.ru",
 	}
 	for _, suffix := range allowed {
 		if strings.HasSuffix(hostname, suffix) || hostname == suffix[1:] {
@@ -663,6 +663,7 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 						SecChUa:         req.Header.Get("Sec-Ch-Ua"),
 						SecChUaMobile:   req.Header.Get("Sec-Ch-Ua-Mobile"),
 						SecChUaPlatform: req.Header.Get("Sec-Ch-Ua-Platform"),
+						AcceptLanguage:  req.Header.Get("Accept-Language"),
 					},
 					DeviceJSON: device,
 					BrowserFp:  browserFp,
@@ -847,10 +848,7 @@ func solveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer, p
 				// разрешаем cross-origin доступ к ресурсу
 				res.Header.Set("Access-Control-Allow-Origin", "*")
 
-				// captchaNotRobot.check уходит на api.vk.ru (другой хост, чем
-				// upstream vk.ru), поэтому идёт через /generic_proxy. Извлекаем
-				// success_token здесь - серверный путь работает на iOS даже если
-				// JS-callback в браузере не сработал.
+				// captchaNotRobot.check идёт через /generic_proxy на api.vk.com/api.vk.ru.
 				if strings.Contains(targetAuthURL, "captchaNotRobot.check") {
 					bodyBytes, readErr := io.ReadAll(res.Body)
 					if readErr == nil {

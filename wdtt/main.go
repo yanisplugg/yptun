@@ -26,6 +26,10 @@ var CaptchaResultChan = make(chan string, 1)
 
 var captchaModeValue atomic.Value
 
+// vkAuthModeValue selects how VK TURN creds are fetched: "vkcalls" (new upstream
+// path via the VK Calls API, with automatic legacy fallback) or "legacy".
+var vkAuthModeValue atomic.Value
+
 // pauseFlag pauses the worker groups (e.g. on Android Doze). 0 = run, 1 = pause.
 var pauseFlag int32
 
@@ -34,6 +38,30 @@ var running atomic.Bool
 
 func init() {
 	captchaModeValue.Store("auto")
+	vkAuthModeValue.Store("vkcalls")
+}
+
+func normalizeVKAuthMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "legacy":
+		return "legacy"
+	default:
+		return "vkcalls"
+	}
+}
+
+func setVKAuthMode(mode string) string {
+	normalized := normalizeVKAuthMode(mode)
+	vkAuthModeValue.Store(normalized)
+	return normalized
+}
+
+func getVKAuthMode() string {
+	mode, _ := vkAuthModeValue.Load().(string)
+	if mode == "" {
+		return "vkcalls"
+	}
+	return mode
 }
 
 func normalizeCaptchaMode(mode string) string {
@@ -101,6 +129,7 @@ type Config struct {
 	Fingerprint string // TLS fingerprint: chrome/safari/ios/android/firefox (default "chrome")
 	ClientIDs   string // VK client IDs, comma-separated (optional override)
 	CaptchaMode string // auto/wv/rjs (default auto)
+	VKAuthMode  string // vkcalls/legacy (default vkcalls, auto-falls back to legacy)
 	TurnHost    string // optional TURN IP override
 	TurnPort    string // optional TURN port override
 
@@ -115,6 +144,7 @@ type Config struct {
 func Run(ctx context.Context, cfg Config) error {
 	setupGlobalResolver()
 	setCaptchaMode(cfg.CaptchaMode)
+	setVKAuthMode(cfg.VKAuthMode)
 
 	if strings.TrimSpace(cfg.Peer) == "" || strings.TrimSpace(cfg.VKHashes) == "" {
 		return fmt.Errorf("wdtt: Peer and VKHashes are required")

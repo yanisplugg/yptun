@@ -50,6 +50,13 @@ class AndroidUpdateInstaller(
             }
 
             val file = download(asset, onProgress).getOrThrow()
+            // Update-channel hardening: never hand the OS an APK that isn't signed with the official
+            // YPtun key (a MITM on the download could otherwise swap in a malicious build). The OS
+            // install would reject a mismatched signature anyway, but we abort early + delete it.
+            if (!org.olcbox.app.security.IntegrityGuard.isOfficialApk(appContext, file)) {
+                file.delete()
+                error("Update signature mismatch — download rejected for safety")
+            }
             val installIntent = installIntent(file)
             try {
                 appContext.startActivity(installIntent)
@@ -95,6 +102,50 @@ class AndroidUpdateInstaller(
             "${appContext.packageName}.fileprovider",
             file
         )
+    }
+
+    /**
+     * Produces the verified, ready-to-install new APK. Prefers a binary delta when one is published
+     * (downloads a few-MB patch + reconstructs the APK locally from the installed one); falls back to
+     * a full download on any delta failure (no patch, base APK mismatch, apply error). In BOTH paths
+     * the resulting APK's signature is checked against the official key before it is returned, so a
+     * MITM-swapped download or a bad reconstruction can never reach the installer.
+     */
+    suspend fun resolveUpdateApk(
+        info: AppUpdateInfo,
+        onProgress: (Float) -> Unit = {}
+    ): Result<File> = runCatching {
+        info.deltaAsset?.let { delta ->
+            val patched = runCatching { applyDeltaUpdate(delta, onProgress) }.getOrNull()
+            if (patched != null) return@runCatching patched
+            // Any delta failure → fall through to the full download below.
+        }
+        val full = download(info.asset, onProgress).getOrThrow()
+        if (!org.olcbox.app.security.IntegrityGuard.isOfficialApk(appContext, full)) {
+            full.delete()
+            error("Update signature mismatch — download rejected for safety")
+        }
+        full
+    }
+
+    private suspend fun applyDeltaUpdate(
+        delta: AppUpdateAsset,
+        onProgress: (Float) -> Unit
+    ): File = withContext(Dispatchers.IO) {
+        val baseApk = File(appContext.applicationInfo.sourceDir)
+        require(baseApk.exists() && baseApk.length() > 0) { "installed base APK not found" }
+        val patchGz = download(delta, onProgress).getOrThrow()
+        val outApk = File(File(appContext.cacheDir, "updates").apply { mkdirs() }, "yptun-delta-update.apk")
+        try {
+            DeltaApkPatcher.apply(appContext, baseApk, patchGz, outApk)
+        } finally {
+            patchGz.delete()
+        }
+        if (!org.olcbox.app.security.IntegrityGuard.isOfficialApk(appContext, outApk)) {
+            outApk.delete()
+            error("Reconstructed APK failed signature check")
+        }
+        outApk
     }
 
     suspend fun download(asset: AppUpdateAsset, onProgress: (Float) -> Unit): Result<File> = runCatching {

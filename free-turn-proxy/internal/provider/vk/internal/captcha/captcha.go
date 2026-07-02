@@ -11,7 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	neturl "net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,18 +28,19 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 )
 
-// Log - пакетный логгер. По умолчанию no-op; main устанавливает его через
-// SetLogger, чтобы captcha-вывод подчинялся глобальному -debug. Solve также
-// принимает logger параметром для DI.
+// Log - пакетный логгер.
 var Log logx.Logger = logx.Nop()
 
-// SetLogger ставит логгер пакета. Безопасно вызывать один раз при старте.
+// SetLogger ставит логгер пакета.
 func SetLogger(l logx.Logger) { Log = logx.OrNop(l) }
 
 const (
-	captchaAPIVersion    = "5.131"
-	captchaScriptVersion = "1.1.1359"
-	captchaDeviceInfo    = `{"screenWidth":1920,"screenHeight":1080,"screenAvailWidth":1920,"screenAvailHeight":1080,"innerWidth":1920,"innerHeight":951,"devicePixelRatio":1,"language":"en-US","languages":["en-US","en"],"webdriver":false,"hardwareConcurrency":8,"notificationsPermission":"denied"}`
+	captchaAPIVersion        = "5.131"
+	captchaScriptVersion     = "1.1.1370"
+	captchaAPIOrigin         = "https://id.vk.ru"
+	captchaDomain            = "vk.ru"
+	captchaDeviceInfo        = `{"screenWidth":1920,"screenHeight":1080,"screenAvailWidth":1920,"screenAvailHeight":1032,"innerWidth":1147,"innerHeight":945,"devicePixelRatio":1,"language":"ru-RU","languages":["ru-RU"],"webdriver":false,"hardwareConcurrency":8,"deviceMemory":16,"connectionEffectiveType":"4g","notificationsPermission":"denied"}`
+	captchaConnectionSamples = 4
 )
 
 var (
@@ -84,8 +88,9 @@ type captchaInitData struct {
 }
 
 type captchaInitSetting struct {
-	Type     string `json:"type"`
-	Settings string `json:"settings"`
+	Type        string `json:"type"`
+	Settings    string `json:"settings"`
+	SettingsKey string `json:"settings_key"`
 }
 
 type captchaPage struct {
@@ -114,6 +119,7 @@ type captchaSession struct {
 	client       tlsclient.HttpClient
 	profile      browserprofile.Profile
 	savedProfile *browserprofile.Saved
+	domain       string
 	log          logx.Logger
 }
 
@@ -124,9 +130,7 @@ func (s *captchaSession) logger() logx.Logger {
 	return Log
 }
 
-// Solve запускает авторешение captcha против VK captchaNotRobot API
-// и возвращает success-токен при успехе. log может быть nil - тогда
-// используется пакетный Log.
+// Solve запускает авторешение captcha против VK captchaNotRobot API.
 func Solve(
 	ctx context.Context,
 	captchaErr *Error,
@@ -142,7 +146,7 @@ func Solve(
 	l := logx.OrNop(log)
 	l.Infof("[STREAM %d] [Captcha] Solving VK Smart Captcha automatically...", streamID)
 
-	s := &captchaSession{ctx: ctx, client: client, profile: profile, savedProfile: savedProfile, log: l}
+	s := &captchaSession{ctx: ctx, client: client, profile: profile, savedProfile: savedProfile, domain: captchaDomain, log: l}
 
 	for attempt := 1; attempt <= captchaMaxAttempts; attempt++ {
 		token, solveErr := s.solveOnce(captchaErr)
@@ -150,7 +154,7 @@ func Solve(
 			return token, nil
 		}
 		l.Warnf("[STREAM %d] [Captcha] solve attempt %d failed: %v", streamID, attempt, solveErr)
-		if errors.Is(solveErr, errCaptchaRateLimit) {
+		if errors.Is(solveErr, errCaptchaRateLimit) || errors.Is(solveErr, errCaptchaBot) {
 			return "", solveErr
 		}
 
@@ -167,29 +171,34 @@ func Solve(
 }
 
 func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) {
+	s.domain = captchaDomainFromRedirectURI(captchaErr.RedirectURI)
+	s.logger().Debugf("[Captcha] using domain=%s", s.domain)
+
 	html, err := s.fetchCaptchaHTML(captchaErr.RedirectURI)
 	if err != nil {
 		return "", err
 	}
+	s.logger().Debugf("[Captcha] html fetched bytes=%d", len(html))
 
 	page, err := parseCaptchaPage(html)
 	if err != nil {
 		return "", err
 	}
+	s.logCaptchaPage(page)
 	if page.PowInput == "" {
 		return "", errors.New("failed to find PoW settings")
 	}
 
-	sliderSettings := ""
+	sliderContent := captchaContentRef{}
 	if page.Init != nil {
 		for _, setting := range page.Init.Data.CaptchaSettings {
 			if setting.Type == "slider" {
-				sliderSettings = setting.Settings
+				sliderContent = setting.contentRef()
 			}
 		}
 	}
-	if page.Init != nil && page.Init.Data.ShowCaptchaType == "slider" && sliderSettings == "" {
-		return "", errors.New("failed to find slider captcha settings")
+	if page.Init != nil && page.Init.Data.ShowCaptchaType == "slider" && sliderContent.Value == "" {
+		return "", errors.New("failed to find slider captcha settings key")
 	}
 
 	s.logger().Debugf("[Captcha] solving pow difficulty=%d", page.PowDifficulty)
@@ -197,9 +206,9 @@ func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) {
 	if hash == "" {
 		return "", errors.New("captcha pow failed")
 	}
-	s.logger().Debugf("[Captcha] pow solved")
+	s.logger().Debugf("[Captcha] pow solved hash_len=%d", len(hash))
 
-	base := captchaBaseValues(captchaErr.SessionToken)
+	base := s.captchaBaseValues(captchaErr.SessionToken)
 	if _, settingsErr := s.captchaRequest("captchaNotRobot.settings", base); settingsErr != nil {
 		return "", fmt.Errorf("captcha settings failed: %w", settingsErr)
 	}
@@ -208,13 +217,16 @@ func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	browserFPSource := "generated"
 	if s.savedProfile != nil && strings.TrimSpace(s.savedProfile.BrowserFp) != "" {
 		browserFP = s.savedProfile.BrowserFp
+		browserFPSource = "saved"
 	}
+	s.logger().Debugf("[Captcha] browser_fp source=%s len=%d", browserFPSource, len(browserFP))
 
 	if m := reCaptchaVersion.FindStringSubmatch(page.ScriptURL); len(m) > 1 {
 		if m[1] != captchaScriptVersion {
-			s.logger().Warnf("[Captcha] script version drift: known=%s latest=%s", captchaScriptVersion, m[1])
+			s.logger().Debugf("[Captcha] script version drift: known=%s latest=%s", captchaScriptVersion, m[1])
 		}
 	}
 
@@ -227,30 +239,18 @@ func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) {
 	if page.Init != nil {
 		showType = page.Init.Data.ShowCaptchaType
 	}
+	s.logger().Debugf("[Captcha] solving show_type=%s", showType)
 	var token string
-	for {
-		s.logger().Debugf("[Captcha] solving show_type=%s", showType)
-		switch showType {
-		case "slider":
-			token, err = s.solveSliderCaptcha(captchaErr.SessionToken, browserFP, hash, sliderSettings, debugInfo)
-		case "checkbox", "":
-			token, err = s.solveCheckboxCaptcha(captchaErr.SessionToken, browserFP, hash, debugInfo)
-		default:
-			return "", fmt.Errorf("unsupported captcha type: %s", showType)
-		}
-		if err == nil {
-			break
-		}
-		if errors.Is(err, errCaptchaBot) && !strings.EqualFold(showType, "slider") && sliderSettings != "" {
-			s.logger().Infof("[Captcha] checkbox returned BOT, trying slider challenge")
-			showType = "slider"
-			continue
-		}
-		var stErr *captchaShowTypeError
-		if !errors.As(err, &stErr) || stErr.ShowType == "" {
-			return "", err
-		}
-		showType = stErr.ShowType
+	switch showType {
+	case "slider":
+		token, err = s.solveSliderCaptcha(captchaErr.SessionToken, browserFP, hash, sliderContent, debugInfo)
+	case "checkbox", "":
+		token, err = s.solveCheckboxCaptcha(captchaErr.SessionToken, browserFP, hash, debugInfo)
+	default:
+		return "", fmt.Errorf("unsupported captcha type: %s", showType)
+	}
+	if err != nil {
+		return "", err
 	}
 
 	if _, endErr := s.captchaRequest("captchaNotRobot.endSession", base); endErr != nil {
@@ -259,13 +259,41 @@ func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) {
 	return token, nil
 }
 
-func captchaBaseValues(sessionToken string) [][2]string {
+// captchaContentRef несёт значение настроек слайдера.
+type captchaContentRef struct {
+	Source string
+	Value  string
+}
+
+func (s captchaInitSetting) contentRef() captchaContentRef {
+	if v := strings.TrimSpace(s.SettingsKey); v != "" {
+		return captchaContentRef{Source: "settings_key", Value: v}
+	}
+	if v := strings.TrimSpace(s.Settings); v != "" {
+		return captchaContentRef{Source: "captcha_settings", Value: v}
+	}
+	return captchaContentRef{}
+}
+
+func (s *captchaSession) captchaBaseValues(sessionToken string) [][2]string {
 	return [][2]string{
 		{"session_token", sessionToken},
-		{"domain", "vk.ru"},
+		{"domain", s.domain},
 		{"adFp", ""},
 		{"access_token", ""},
 	}
+}
+
+func captchaDomainFromRedirectURI(redirectURI string) string {
+	u, err := neturl.Parse(redirectURI)
+	if err != nil {
+		return captchaDomain
+	}
+	domain := strings.TrimSpace(u.Query().Get("domain"))
+	if domain == "" {
+		return captchaDomain
+	}
+	return domain
 }
 
 func captchaBrowserFP() (string, error) {
@@ -298,7 +326,7 @@ func (s *captchaSession) fetchDebugInfo(scriptURL string) (string, error) {
 	}
 	body, err := s.doRaw(fhttp.MethodGet, scriptURL, nil, map[string]string{
 		"Accept":  "text/javascript,*/*",
-		"Referer": "https://id.vk.ru/",
+		"Referer": captchaAPIOrigin + "/",
 	})
 	if err != nil {
 		return "", err
@@ -353,11 +381,14 @@ func parseCaptchaPage(html string) (*captchaPage, error) {
 
 func (s *captchaSession) captchaRequest(method string, form [][2]string) (map[string]any, error) {
 	endpoint := "https://api.vk.ru/method/" + method + "?v=" + captchaAPIVersion
-	body, err := s.doRaw(fhttp.MethodPost, endpoint, form, map[string]string{
-		"Origin":   "https://id.vk.ru",
-		"Referer":  "https://id.vk.ru/",
-		"Priority": "u=1, i",
-	})
+	headers := map[string]string{
+		"Origin":  captchaAPIOrigin,
+		"Referer": captchaAPIOrigin + "/",
+	}
+	if browserprofile.Family(s.profile) != browserprofile.Firefox {
+		headers["Priority"] = "u=1, i"
+	}
+	body, err := s.doRaw(fhttp.MethodPost, endpoint, form, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -365,6 +396,7 @@ func (s *captchaSession) captchaRequest(method string, form [][2]string) (map[st
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("captcha api decode: %w", err)
 	}
+	s.logger().Debugf("[Captcha] api %s response=%s", method, captchaAPIResponseSummary(out))
 	return out, nil
 }
 
@@ -376,27 +408,35 @@ func (s *captchaSession) performCaptchaCheck(
 	cursor string,
 	debugInfo string,
 ) (*captchaCheck, error) {
-	values := [][2]string{
-		{"session_token", sessionToken},
-		{"domain", "vk.ru"},
-		{"adFp", ""},
-		{"accelerometer", "[]"},
-		{"gyroscope", "[]"},
-		{"motion", "[]"},
-		{"cursor", cursor},
-		{"taps", "[]"},
-		{"connectionRtt", "[]"},
-		{"connectionDownlink", "[]"},
-		{"browser_fp", browserFP},
-		{"hash", hash},
-		{"answer", base64.StdEncoding.EncodeToString([]byte(answerJSON))},
-		{"debug_info", debugInfo},
-		{"access_token", ""},
+	mobile := browserprofile.IsMobile(s.profile)
+	accelerometer := "[]"
+	if mobile {
+		accelerometer = captchaMobileAccelerometer()
 	}
+	values := make([][2]string, 0, 15)
+	values = append(values,
+		[2]string{"session_token", sessionToken},
+		[2]string{"domain", s.domain},
+		[2]string{"adFp", ""},
+		[2]string{"accelerometer", accelerometer},
+		[2]string{"gyroscope", "[]"},
+		[2]string{"motion", "[]"},
+		[2]string{"cursor", cursor},
+		[2]string{"taps", "[]"},
+	)
+	values = append(values, captchaConnectionFields(browserprofile.Family(s.profile), mobile)...)
+	values = append(values,
+		[2]string{"browser_fp", browserFP},
+		[2]string{"hash", hash},
+		[2]string{"answer", base64.StdEncoding.EncodeToString([]byte(answerJSON))},
+		[2]string{"debug_info", debugInfo},
+		[2]string{"access_token", ""},
+	)
 	resp, err := s.captchaRequest("captchaNotRobot.check", values)
 	if err != nil {
 		return nil, fmt.Errorf("captcha check failed: %w", err)
 	}
+	s.logger().Debugf("[Captcha] check payload answer_bytes=%d cursor_bytes=%d debug_info=%t", len(answerJSON), len(cursor), debugInfo != "")
 	check, err := parseCaptchaCheck(resp)
 	if err != nil {
 		return nil, err
@@ -432,12 +472,15 @@ func (s *captchaSession) solveCheckboxCaptcha(
 	debugInfo string,
 ) (string, error) {
 	deviceJSON := captchaDeviceInfo
+	deviceSource := "default"
 	if s.savedProfile != nil && strings.TrimSpace(s.savedProfile.DeviceJSON) != "" {
 		deviceJSON = s.savedProfile.DeviceJSON
+		deviceSource = "saved"
 	}
+	s.logger().Debugf("[Captcha] checkbox componentDone device_source=%s device_bytes=%d", deviceSource, len(deviceJSON))
 	if _, err := s.captchaRequest("captchaNotRobot.componentDone", [][2]string{
 		{"session_token", sessionToken},
-		{"domain", "vk.ru"},
+		{"domain", s.domain},
 		{"adFp", ""},
 		{"browser_fp", browserFP},
 		{"device", deviceJSON},
@@ -479,8 +522,6 @@ func solveCaptchaPoW(ctx context.Context, input string, difficulty int) string {
 		return ""
 	}
 	target := strings.Repeat("0", difficulty)
-	// ctx-check каждые 1024 итерации - задержка отмены в пределах нескольких мс
-	// даже на слабом ARM (было 4096).
 	buf := make([]byte, 0, len(input)+20)
 	buf = append(buf, input...)
 	for nonce := 1; nonce <= 10_000_000; nonce++ {
@@ -495,10 +536,24 @@ func solveCaptchaPoW(ctx context.Context, input string, difficulty int) string {
 		sum := sha256.Sum256(buf)
 		hashHex := hex.EncodeToString(sum[:])
 		if strings.HasPrefix(hashHex, target) {
-			return hashHex
+			return encodeCaptchaPoW(hashHex, nonce)
 		}
 	}
 	return ""
+}
+
+func encodeCaptchaPoW(hash string, nonce int) string {
+	payload, err := json.Marshal(struct {
+		Hash  string `json:"hash"`
+		Nonce int    `json:"nonce"`
+	}{
+		Hash:  hash,
+		Nonce: nonce,
+	})
+	if err != nil {
+		return ""
+	}
+	return "v2." + base64.RawURLEncoding.EncodeToString(payload)
 }
 
 func (s *captchaSession) doRaw(
@@ -520,8 +575,8 @@ func (s *captchaSession) doRaw(
 	req.Header.Set("Sec-Fetch-Site", "same-site")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
-	req.Header.Set("Origin", "https://vk.ru")
-	req.Header.Set("Referer", "https://vk.ru/")
+	req.Header.Set("Origin", captchaAPIOrigin)
+	req.Header.Set("Referer", captchaAPIOrigin+"/")
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -531,8 +586,10 @@ func (s *captchaSession) doRaw(
 	req.Header[fhttp.HeaderOrderKey] = captchaHeaderOrder
 	req.Header[fhttp.PHeaderOrderKey] = captchaPHeaderOrder
 
+	start := time.Now()
 	resp, err := s.client.Do(req)
 	if err != nil {
+		s.logger().Debugf("[Captcha] http %s %s failed after=%s form=%s err=%v", method, captchaSafeURL(endpoint), time.Since(start).Truncate(time.Millisecond), captchaFormSummary(form), err)
 		return nil, err
 	}
 	defer func() {
@@ -540,7 +597,87 @@ func (s *captchaSession) doRaw(
 			s.logger().Warnf("[Captcha] close body: %s", closeErr)
 		}
 	}()
-	return io.ReadAll(resp.Body)
+	data, readErr := io.ReadAll(resp.Body)
+	s.logger().Debugf("[Captcha] http %s %s status=%d bytes=%d after=%s form=%s", method, captchaSafeURL(endpoint), resp.StatusCode, len(data), time.Since(start).Truncate(time.Millisecond), captchaFormSummary(form))
+	return data, readErr
+}
+
+func (s *captchaSession) logCaptchaPage(page *captchaPage) {
+	showType := ""
+	settingsSummary := "none"
+	if page.Init != nil {
+		showType = page.Init.Data.ShowCaptchaType
+		parts := make([]string, 0, len(page.Init.Data.CaptchaSettings))
+		for _, setting := range page.Init.Data.CaptchaSettings {
+			ref := setting.contentRef()
+			valueLen := 0
+			if ref.Value != "" {
+				valueLen = len(ref.Value)
+			}
+			parts = append(parts, fmt.Sprintf("%s:%s:%d", setting.Type, ref.Source, valueLen))
+		}
+		if len(parts) > 0 {
+			settingsSummary = strings.Join(parts, ",")
+		}
+	}
+	scriptVersion := ""
+	if m := reCaptchaVersion.FindStringSubmatch(page.ScriptURL); len(m) > 1 {
+		scriptVersion = m[1]
+	}
+	s.logger().Debugf("[Captcha] page parsed show_type=%q settings=%s pow_difficulty=%d script_version=%q script_url=%s", showType, settingsSummary, page.PowDifficulty, scriptVersion, captchaSafeURL(page.ScriptURL))
+}
+
+func captchaAPIResponseSummary(raw map[string]any) string {
+	if errData, ok := raw["error"].(map[string]any); ok {
+		return fmt.Sprintf("error code=%s msg=%q keys=%s", captchaStringifyAny(errData["error_code"]), captchaStringifyAny(errData["error_msg"]), captchaMapKeys(errData))
+	}
+	if resp, ok := raw["response"].(map[string]any); ok {
+		status := captchaStringifyAny(resp["status"])
+		showType := captchaStringifyAny(resp["show_captcha_type"])
+		tokenLen := len(captchaStringifyAny(resp["success_token"]))
+		return fmt.Sprintf("ok status=%q show_type=%q success_token_len=%d keys=%s", status, showType, tokenLen, captchaMapKeys(resp))
+	}
+	return "unknown keys=" + captchaMapKeys(raw)
+}
+
+func captchaMapKeys(m map[string]any) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+func captchaSafeURL(raw string) string {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return "<invalid-url>"
+	}
+	if u.Host == "" {
+		return u.Path
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	return u.Host + path
+}
+
+func captchaFormSummary(values [][2]string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(values))
+	for _, kv := range values {
+		switch kv[0] {
+		case "session_token", "browser_fp", "hash", "answer", "debug_info", "device", "settings_key", "captcha_settings":
+			parts = append(parts, fmt.Sprintf("%s:%d", kv[0], len(kv[1])))
+		default:
+			parts = append(parts, kv[0])
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 func captchaEncodeForm(values [][2]string) string {
@@ -597,4 +734,99 @@ func captchaStringifyAny(value any) string {
 		}
 		return string(data)
 	}
+}
+
+// captchaConnectionFields возвращает Chrome-only поля NetworkInformation API.
+func captchaConnectionFields(family browserprofile.Kind, mobile bool) [][2]string {
+	if family != browserprofile.Chrome {
+		return nil
+	}
+	n := captchaConnectionSamples
+	if mobile {
+		rtt := 50 * (1 + randx.Intn(2)) // 50 | 100
+		dl := 1.4 + randx.Float64()*0.7 // [1.4, 2.1)
+		return [][2]string{
+			{"connectionRtt", captchaRepeatNumberJSON(rtt, n)},
+			{"connectionDownlink", captchaRepeatFloatJSON(round2(dl), n)},
+		}
+	}
+	rtt := 50 * (1 + randx.Intn(3)) // 50 | 100 | 150
+	dl := 5.0 + randx.Float64()*5.0 // [5, 10)
+	return [][2]string{
+		{"connectionRtt", captchaRepeatNumberJSON(rtt, n)},
+		{"connectionDownlink", captchaRepeatFloatJSON(round1(dl), n)},
+	}
+}
+
+// captchaMobileAccelerometer генерирует сэмплы покоящегося телефона.
+func captchaMobileAccelerometer() string {
+	type sample struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+		Z float64 `json:"z"`
+	}
+	const g = 9.81
+	bx := -2.5 + randx.Float64()*5.0 // [-2.5, 2.5)
+	by := 4.0 + randx.Float64()*4.0  // [4, 8)
+	bz := g
+	if rem := g*g - bx*bx - by*by; rem > 0 {
+		bz = math.Sqrt(rem)
+	}
+	jitter := func() float64 { return (randx.Float64() - 0.5) * 0.2 } // ±0.1
+	pts := make([]sample, 3)
+	for i := range pts {
+		pts[i] = sample{X: round1(bx + jitter()), Y: round1(by + jitter()), Z: round1(bz + jitter())}
+	}
+	data, err := json.Marshal(pts)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func round1(v float64) float64 { return math.Round(v*10) / 10 }
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
+
+func captchaRepeatFloatJSON(value float64, count int) string {
+	if count <= 0 {
+		return "[]"
+	}
+	s := strconv.FormatFloat(value, 'g', -1, 64)
+	parts := make([]string, count)
+	for i := range parts {
+		parts[i] = s
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func captchaCursorPointCount(cursor string) int {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" || cursor == "[]" {
+		return 0
+	}
+	var points []struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	}
+	if err := json.Unmarshal([]byte(cursor), &points); err != nil {
+		return 0
+	}
+	return len(points)
+}
+
+func captchaRepeatNumberJSON(value int, count int) string {
+	if count <= 0 {
+		return "[]"
+	}
+	var sb strings.Builder
+	sb.Grow(count*4 + 2)
+	sb.WriteByte('[')
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(strconv.Itoa(value))
+	}
+	sb.WriteByte(']')
+	return sb.String()
 }

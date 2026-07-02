@@ -37,6 +37,7 @@ object SingBoxConfig {
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
     private const val SOCKS_IN_TAG = "socks-in"
+    private const val TPROXY_IN_TAG = "tproxy-in"
 
     /**
      * Well-known DNS-over-HTTPS/TLS endpoints that browsers & apps dial directly (often over IPv6),
@@ -132,6 +133,10 @@ object SingBoxConfig {
         // blackhole domains become `domain_regex → reject` route rules — so FakeDNS works on sing-box
         // too, not only xray-core. Overrides the (now per-config) [TrafficSettings.fakeDnsEnabled].
         fakeDnsSpec: FakeDnsSpec? = null,
+        // Transparent-proxy mode: when set, a `tproxy` inbound (TCP+UDP) is added on [listenHost]:this,
+        // so a rooted device / router can redirect traffic through the core with no per-app proxy. The
+        // SOCKS inbound is still emitted for coexistence. Requires root (IP_TRANSPARENT) to bind.
+        tproxyPort: Int? = null,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
@@ -238,6 +243,22 @@ object SingBoxConfig {
                         put("sniff", true)
                         put("sniff_override_destination", true)
                         put("domain_strategy", effectiveStrategy)
+                    }
+                }
+                // Transparent-proxy inbound (root-only): TCP+UDP redirected traffic enters here. Sniff
+                // is enabled so routing/DNS rules still match on domain, exactly like the socks inbound.
+                if (tproxyPort != null) {
+                    addJsonObject {
+                        put("type", "tproxy")
+                        put("tag", TPROXY_IN_TAG)
+                        put("listen", listenHost)
+                        put("listen_port", tproxyPort)
+                        // network omitted → both TCP and UDP redirected traffic is accepted.
+                        put("sniff", true)
+                        if (sniffOverrideDestination) {
+                            put("sniff_override_destination", true)
+                            put("domain_strategy", effectiveStrategy)
+                        }
                     }
                 }
             }
@@ -608,19 +629,59 @@ object SingBoxConfig {
                     put("method", profile.method)
                     put("password", profile.password)
                 }
+
+                // Native since sing-box 1.13 in this build (with_quic no longer clashes with
+                // xray's quic fork) — replaces the old hysteria2proxy SOCKS bridge.
+                ProxyProfile.TYPE_HYSTERIA2 -> {
+                    put("password", profile.password)
+                    if (profile.hy2UpMbps > 0) put("up_mbps", profile.hy2UpMbps)
+                    if (profile.hy2DownMbps > 0) put("down_mbps", profile.hy2DownMbps)
+                    if (profile.hy2Obfs == "salamander" && profile.hy2ObfsPassword.isNotBlank()) {
+                        putJsonObject("obfs") {
+                            put("type", "salamander")
+                            put("password", profile.hy2ObfsPassword)
+                        }
+                    }
+                    // Port hopping: link `mport=443-2000,5000` → sing-box `server_ports` ranges
+                    // ("start:end"); a bare port becomes a one-port range.
+                    hy2ServerPorts(profile.hy2Ports).takeIf { it.isNotEmpty() }?.let { ranges ->
+                        putJsonArray("server_ports") { ranges.forEach { add(it) } }
+                    }
+                }
             }
 
-            // TLS/transport apply to vless/vmess/trojan; shadowsocks ignores them.
+            // TLS/transport apply to vless/vmess/trojan; shadowsocks ignores them. hysteria2 is
+            // QUIC-native: TLS yes (mandatory), but no v2ray transport layer.
             if (profile.type != ProxyProfile.TYPE_SHADOWSOCKS) {
                 buildTls(profile)?.let { put("tls", it) }
-                buildTransport(profile)?.let { put("transport", it) }
+                if (profile.type != ProxyProfile.TYPE_HYSTERIA2) {
+                    buildTransport(profile)?.let { put("transport", it) }
+                }
             }
 
             if (detourTag != null) put("detour", detourTag)
-            if (tfo) put("tcp_fast_open", true)
-            buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
+            // hysteria2 has no TCP leg and no smux support: skip tcp_fast_open + multiplex.
+            if (profile.type != ProxyProfile.TYPE_HYSTERIA2) {
+                if (tfo) put("tcp_fast_open", true)
+                buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
+            }
         }
     }
+
+    /**
+     * Converts the link-style hysteria2 port-hopping spec ("443,2000-3000" / "2000-3000") into
+     * sing-box `server_ports` entries ("start:end"). Invalid chunks are dropped.
+     */
+    private fun hy2ServerPorts(spec: String): List<String> =
+        spec.split(',').mapNotNull { chunk ->
+            val part = chunk.trim()
+            if (part.isEmpty()) return@mapNotNull null
+            val bits = part.split('-', ':').map { it.trim() }
+            val start = bits.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+            val end = if (bits.size > 1) bits.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null else start
+            if (start !in 1..65535 || end !in 1..65535 || end < start) return@mapNotNull null
+            "$start:$end"
+        }
 
     /**
      * A SOCKS5 outbound pointing at olcRTC's local listener on [port]. Used as the chain detour

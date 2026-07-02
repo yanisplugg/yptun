@@ -44,6 +44,12 @@ func (h *Inbound) UnmarshalJSONContext(ctx context.Context, content []byte) erro
 	if err != nil {
 		return err
 	}
+	if listenWrapper, isListen := options.(ListenOptionsWrapper); isListen {
+		//nolint:staticcheck
+		if listenWrapper.TakeListenOptions().InboundOptions != (InboundOptions{}) {
+			return E.New("legacy inbound fields are deprecated in sing-box 1.11.0 and removed in sing-box 1.13.0, checkout migration: https://sing-box.sagernet.org/migration/#migrate-legacy-inbound-fields-to-rule-actions")
+		}
+	}
 	h.Options = options
 	return nil
 }
@@ -55,7 +61,6 @@ type InboundOptions struct {
 	SniffTimeout              badoption.Duration `json:"sniff_timeout,omitempty"`
 	DomainStrategy            DomainStrategy     `json:"domain_strategy,omitempty"`
 	UDPDisableDomainUnmapping bool               `json:"udp_disable_domain_unmapping,omitempty"`
-	Detour                    string             `json:"detour,omitempty"`
 }
 
 type ListenOptions struct {
@@ -65,6 +70,7 @@ type ListenOptions struct {
 	RoutingMark          FwMark             `json:"routing_mark,omitempty"`
 	ReuseAddr            bool               `json:"reuse_addr,omitempty"`
 	NetNs                string             `json:"netns,omitempty"`
+	DisableTCPKeepAlive  bool               `json:"disable_tcp_keep_alive,omitempty"`
 	TCPKeepAlive         badoption.Duration `json:"tcp_keep_alive,omitempty"`
 	TCPKeepAliveInterval badoption.Duration `json:"tcp_keep_alive_interval,omitempty"`
 	TCPFastOpen          bool               `json:"tcp_fast_open,omitempty"`
@@ -72,6 +78,7 @@ type ListenOptions struct {
 	UDPFragment          *bool              `json:"udp_fragment,omitempty"`
 	UDPFragmentDefault   bool               `json:"-"`
 	UDPTimeout           UDPTimeoutCompat   `json:"udp_timeout,omitempty"`
+	Detour               string             `json:"detour,omitempty"`
 
 	// Deprecated: removed
 	ProxyProtocol bool `json:"proxy_protocol,omitempty"`

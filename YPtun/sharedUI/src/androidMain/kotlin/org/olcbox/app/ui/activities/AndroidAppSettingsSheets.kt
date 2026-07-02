@@ -1062,7 +1062,11 @@ private fun ConnectionModeSettingsContent(
     onBack: () -> Unit,
     onModeSelected: (AndroidConnectionMode) -> Unit
 ) {
-    val options = listOf(AndroidConnectionMode.Tun, AndroidConnectionMode.Proxy)
+    val options = listOf(
+        AndroidConnectionMode.Tun,
+        AndroidConnectionMode.Proxy,
+        AndroidConnectionMode.Tproxy,
+    )
     val s = LocalStrings.current
 
     Column(
@@ -4182,6 +4186,7 @@ private fun AndroidConnectionMode.label(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> "TUN"
         AndroidConnectionMode.Proxy -> "Proxy"
+        AndroidConnectionMode.Tproxy -> "TProxy"
     }
 }
 
@@ -4211,6 +4216,7 @@ private fun AndroidConnectionMode.shortLabel(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> "TUN"
         AndroidConnectionMode.Proxy -> "SOCKS"
+        AndroidConnectionMode.Tproxy -> "TPROXY"
     }
 }
 
@@ -4219,6 +4225,7 @@ private fun AndroidConnectionMode.subtitle(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> s.fullTunnel
         AndroidConnectionMode.Proxy -> s.localSocksProxy
+        AndroidConnectionMode.Tproxy -> "Transparent proxy (root)"
     }
 }
 
@@ -4227,6 +4234,7 @@ private fun AndroidConnectionMode.settingsSummary(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> "TUN · ${s.fullTunnel}"
         AndroidConnectionMode.Proxy -> "SOCKS · ${s.localSocksProxy}"
+        AndroidConnectionMode.Tproxy -> "TPROXY · transparent proxy (root)"
     }
 }
 
@@ -4235,12 +4243,15 @@ private fun AndroidConnectionMode.description(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> s.systemVpnInterface
         AndroidConnectionMode.Proxy -> s.localSocksEndpoint
+        AndroidConnectionMode.Tproxy ->
+            "Transparent-proxy inbound (TCP+UDP) on the LAN — redirect traffic here via iptables TPROXY. Requires root."
     }
 }
 
 private fun AndroidConnectionMode.icon() = when (this) {
     AndroidConnectionMode.Tun -> Icons.Outlined.Shield
     AndroidConnectionMode.Proxy -> Icons.Rounded.Public
+    AndroidConnectionMode.Tproxy -> Icons.Rounded.Public
 }
 
 private fun AndroidSplitTunnelSettings.settingsSummary(): String {
@@ -4368,7 +4379,7 @@ private fun splitTunnelStatusSubtitle(
 ): String {
     val s = stringsFor(LocalizationState.effective)
     return when {
-        selectedMode == AndroidConnectionMode.Proxy -> s.savedForTunMode
+        selectedMode != AndroidConnectionMode.Tun -> s.savedForTunMode
         isConnectionActive -> s.appliesWhenSettingsClose
         else -> s.tunModeRoutingRule
     }

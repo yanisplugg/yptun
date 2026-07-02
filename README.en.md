@@ -36,15 +36,17 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 
 ---
 
-## What's new in 2.6.1
+## What's new in 3.0.0
 
 | | |
 |---|---|
-| **Auto-connect to the fastest** | An "Auto" button next to the connect button: it proxy-pings every ready server in parallel with a real handshake (not just TCP/ICMP), connects to the fastest, and advances on failure. The button stays available while connected, so a tap re-rolls onto the new fastest server. |
-| **ASN-based routing** | A new `asn:62041` (Telegram), `asn:13335` (Cloudflare) selector in routing profiles — it catches **all** of an operator's networks, including bare-IP services that domain lists miss. Expanded to real ranges on the fly; works on both cores. One-tap presets in the editor. |
-| **Speed on the home screen** | An optional `↓ / ↑` line under the selected configuration (a settings toggle, off by default). |
-| **Telegram proxy over WARP** | A standalone background proxy: it raises an AmneziaWG Cloudflare WARP tunnel and exposes a local SOCKS5 for Telegram. Runs independently of the main VPN and rotates off dead WARP endpoints automatically. |
-| **Two-proxy cascade** | A second (exit) proxy on top of the main one — including over an xhttp connection via local SOCKS, with proper `xmux` and XTLS Vision; DNS resolves over the cascade via TCP/DoH. |
+| **sing-box core upgraded to 1.13** | Latest fixes and compatibility. Most importantly, Hysteria2 and NaïveProxy now build **natively** inside sing-box, with no separate bridges. |
+| **Native Hysteria2** | Fully moved to sing-box's native outbound (auth, up/down, Salamander obfs, port hopping) — faster and more robust; the old external module is gone. |
+| **NaïveProxy** | A new protocol: it disguises traffic as ordinary Chrome HTTP/2 (Chromium cronet engine). Useful where connections are cut by signature (DPI). |
+| **Transparent proxy (tproxy)** | A new connection mode: kernel-level interception (TCP + UDP) with no TUN. Root only (needs `CAP_NET_ADMIN`). |
+| **Home-screen widgets** | Two themed widgets: a toggle, and a status widget with `↓/↑` speed, a `‹ ›` server switcher and an Auto button. They connect/switch straight from the service — **without opening the app**; the Auto button now runs in the background too and responds instantly. |
+| **Build protection + delta updates** | A warning if the APK was re-signed by someone else (repackaged/ad-injected build). Updates download as ~1 MB patches instead of the full APK. |
+| **VK-TURN cores updated** | freeturn 1.6.0 and WDTT — refreshed VK auth (`vkcalls` mode), captcha and fingerprints. |
 
 ---
 
@@ -128,7 +130,7 @@ Everything needed is already vendored (`cores`, `olcrtc`, `sing-box`, `awgproxy`
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=2.6.1 -Polcbox.versionCode=286
+  -Polcbox.version=3.0.0 -Polcbox.versionCode=287
 ```
 
 APKs land in `YPtun/androidApp/build/outputs/apk/release/`.

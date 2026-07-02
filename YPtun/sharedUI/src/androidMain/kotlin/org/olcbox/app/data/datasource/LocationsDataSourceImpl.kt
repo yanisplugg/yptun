@@ -84,6 +84,8 @@ class LocationsDataSourceImpl(
             )
         }
         updateActiveLocationConfig(normalized)
+        // Keep the home-screen widgets in sync with the active location (app ↔ widget both funnel here).
+        org.olcbox.app.widget.WidgetRefresh.ping(context)
     }
 
     override suspend fun loadLocationViewIndex(): LocationViewIndex? = withContext(Dispatchers.IO) {
