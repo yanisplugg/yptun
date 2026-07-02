@@ -271,16 +271,11 @@ func createSmuxSession(ctx context.Context, deps *Deps, params *Params, peer *ne
 		return nil, nil, fmt.Errorf("send client ID: %w", werr)
 	}
 
-	statsCtx, statsCancel := context.WithCancel(ctx) //nolint:gosec // cancel is held in cleanupFns and invoked via cleanup() LIFO
-	cleanupFns = append(cleanupFns, statsCancel)
-	st := stats.New(deps.log().DebugEnabled())
-	go st.LogEvery(statsCtx, deps.log().Debugf, fmt.Sprintf("[session %d] TCP", id), "to-turn", "from-turn")
-
 	var countedConn net.Conn = dtlsConn
 	if params.TrafficStats != nil {
 		countedConn = &stats.CountingConn{Conn: countedConn, Stats: params.TrafficStats}
 	}
-	kcpSess, err := kcptun.NewKCPOverDTLS(&stats.CountingConn{Conn: countedConn, Stats: st}, false, params.KCPProfile, params.KCPFEC)
+	kcpSess, err := kcptun.NewKCPOverDTLS(countedConn, false, params.KCPProfile, params.KCPFEC)
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("KCP session: %w", err)

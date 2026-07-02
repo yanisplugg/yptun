@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/bogdanfinn/fhttp v0.6.8
-	github.com/bogdanfinn/tls-client v1.14.0
+	github.com/bogdanfinn/tls-client v1.15.1
 	github.com/cbeuw/connutil v1.0.1
 	github.com/google/uuid v1.6.0
 	github.com/miekg/dns v1.1.72

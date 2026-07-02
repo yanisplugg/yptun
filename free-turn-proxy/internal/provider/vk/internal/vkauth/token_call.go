@@ -87,7 +87,7 @@ func (c *Client) solveCaptcha(
 	case CaptchaSolveModeAuto:
 		solveFn := c.autoSolver
 		if solveFn == nil {
-			solveFn = DefaultAutoSolve
+			solveFn = c.defaultAutoSolve
 		}
 		if captchaErr.SessionToken != "" && captchaErr.RedirectURI != "" {
 			successToken, solveErr = solveFn(ctx, captchaErr, streamID, httpClient, profile)

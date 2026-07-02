@@ -49,23 +49,25 @@ func (d *splitDialer) DialContext(ctx context.Context, network, addr string) (ne
 	}, nil
 }
 
-// clientProfile выбирает TLS/HTTP2-профиль (JA3 + client hints) под браузер.
-// JA3 обязан совпадать с UA из browserprofile.ForKind, иначе рассинхрон = флаг.
-func (c *Client) clientProfile() profiles.ClientProfile {
-	if c.browser == browserprofile.Firefox {
-		return profiles.Firefox_147
+// clientProfileForKind мапит семейство браузера в TLS/HTTP2-профиль.
+func clientProfileForKind(kind browserprofile.Kind) profiles.ClientProfile {
+	switch kind {
+	case browserprofile.Safari:
+		return profiles.Safari_16_0
+	case browserprofile.Firefox:
+		return profiles.Firefox_148
 	}
 	return profiles.Chrome_146
 }
 
-// newTLSClient строит tls-client с Chrome-fingerprint и фрагментацией
-// ClientHello на всех исходящих control-plane TLS-соединениях. Базовый дилер -
-// c.dialer (несёт DNS-резолвер dnsdial); фабрика вызывается без proxyUrl, поэтому
-// CONNECT не используется - splitDialer работает как прямой транспорт.
 func (c *Client) newTLSClient(jar tlsclient.CookieJar) (tlsclient.HttpClient, error) {
+	return c.newTLSClientForKind(c.browser, jar)
+}
+
+func (c *Client) newTLSClientForKind(kind browserprofile.Kind, jar tlsclient.CookieJar) (tlsclient.HttpClient, error) {
 	return tlsclient.NewHttpClient(tlsclient.NewNoopLogger(),
 		tlsclient.WithTimeoutSeconds(20),
-		tlsclient.WithClientProfile(c.clientProfile()),
+		tlsclient.WithClientProfile(clientProfileForKind(kind)),
 		tlsclient.WithCookieJar(jar),
 		tlsclient.WithProxyDialerFactory(func(_ string, timeout time.Duration, localAddr *net.TCPAddr, _ fhttp.Header, _ tlsclient.Logger) (proxy.ContextDialer, error) {
 			base := c.dialer
