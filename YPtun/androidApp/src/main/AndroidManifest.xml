@@ -151,6 +151,34 @@
                 android:value="true" />
         </service>
 
+        <!--
+            Home-screen widgets. The running VPN service repaints them by sending an explicit
+            ACTION_WIDGET_REFRESH broadcast (no intent-filter needed for explicit/same-app delivery).
+        -->
+        <receiver
+            android:name=".widget.ToggleWidgetProvider"
+            android:label="@string/widget_toggle_label"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_toggle_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.StatusWidgetProvider"
+            android:label="@string/widget_status_description"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_status_info" />
+        </receiver>
+
     </application>
 
 </manifest>

@@ -232,6 +232,16 @@ fun HomeScreen(
         )
     }
 
+    // Home-screen widget "Auto" button → fastest-server search. Waits until at least one ready
+    // location is loaded so a cold start (app launched by the tap) doesn't see an empty list.
+    val autoSignalPending by org.olcbox.app.widget.WidgetAutoSignal.pending.collectAsState()
+    LaunchedEffect(autoSignalPending, locations.size) {
+        if (autoSignalPending && locations.any { it.config?.isComplete() == true }) {
+            org.olcbox.app.widget.WidgetAutoSignal.consume()
+            autoConnectFastest()
+        }
+    }
+
     fun afterDeletion(message: String) {
         viewModel.loadCurrentConfig()
         viewModel.restartVpnIfRunning()
