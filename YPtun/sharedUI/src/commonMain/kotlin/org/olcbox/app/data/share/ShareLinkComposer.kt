@@ -32,8 +32,19 @@ object ShareLinkComposer {
             ProxyProfile.TYPE_SHADOWSOCKS -> composeShadowsocks(profile)
             ProxyProfile.TYPE_VMESS -> composeVmess(profile)
             ProxyProfile.TYPE_HYSTERIA2 -> composeHysteria2(profile)
+            ProxyProfile.TYPE_NAIVE -> composeNaive(profile)
             else -> profile.rawOutbound?.takeIf { it.isNotBlank() }
         }
+    }
+
+    private fun composeNaive(p: ProxyProfile): String = buildString {
+        append(if (p.naiveQuic) "naive+quic://" else "naive+https://")
+        if (p.username.isNotBlank() || p.password.isNotBlank()) {
+            append(percentEncode(p.username)).append(':').append(percentEncode(p.password)).append('@')
+        }
+        append(p.server).append(':').append(p.serverPort)
+        if (p.sni.isNotBlank()) append("?sni=").append(percentEncode(p.sni))
+        appendRemark(p.tag)
     }
 
     private fun composeHysteria2(p: ProxyProfile): String = buildString {

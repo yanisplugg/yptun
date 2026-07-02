@@ -60,7 +60,7 @@ object SingBoxConfig {
     )
 
     /** Raw-outbound types that do not support sing-box smux and must not get a multiplex block. */
-    private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks")
+    private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks", "naive")
 
     private val json = Json { prettyPrint = true }
 
@@ -659,20 +659,28 @@ object SingBoxConfig {
                         putJsonArray("server_ports") { ranges.forEach { add(it) } }
                     }
                 }
+
+                // NaïveProxy — native sing-box outbound (with_naive_outbound, cronet-based). TLS is
+                // mandatory and comes from buildTls below; QUIC flag from a naive+quic:// link.
+                ProxyProfile.TYPE_NAIVE -> {
+                    if (profile.username.isNotBlank()) put("username", profile.username)
+                    if (profile.password.isNotBlank()) put("password", profile.password)
+                    if (profile.naiveQuic) put("quic", true)
+                }
             }
 
-            // TLS/transport apply to vless/vmess/trojan; shadowsocks ignores them. hysteria2 is
-            // QUIC-native: TLS yes (mandatory), but no v2ray transport layer.
+            // TLS/transport apply to vless/vmess/trojan; shadowsocks ignores them. hysteria2 and
+            // naive carry their own protocol: TLS yes (mandatory), but no v2ray transport layer.
             if (profile.type != ProxyProfile.TYPE_SHADOWSOCKS) {
                 buildTls(profile)?.let { put("tls", it) }
-                if (profile.type != ProxyProfile.TYPE_HYSTERIA2) {
+                if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE) {
                     buildTransport(profile)?.let { put("transport", it) }
                 }
             }
 
             if (detourTag != null) put("detour", detourTag)
-            // hysteria2 has no TCP leg and no smux support: skip tcp_fast_open + multiplex.
-            if (profile.type != ProxyProfile.TYPE_HYSTERIA2) {
+            // hysteria2/naive have no plain TCP leg and no smux support: skip tcp_fast_open + multiplex.
+            if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE) {
                 if (tfo) put("tcp_fast_open", true)
                 buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
             }

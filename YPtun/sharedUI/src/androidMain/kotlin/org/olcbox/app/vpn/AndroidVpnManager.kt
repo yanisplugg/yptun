@@ -961,10 +961,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     null
                 }
             }
-            // Hysteria2 is QUIC-based and not xray-serviceable; the via-proxy URL test isn't available
-            // (use Auto/ICMP ping mode instead).
-            if (profile.type == ProxyProfile.TYPE_HYSTERIA2) {
-                OlcboxVpnState.addLog("Proxy $method ping: Hysteria2 not supported (use Auto/ICMP)")
+            // Hysteria2 and Naive are native sing-box protocols, not xray-serviceable; the via-proxy
+            // URL test isn't available (use Auto/ICMP ping mode instead — Auto's TCP probe still
+            // reaches a naive server's HTTPS port).
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_NAIVE) {
+                OlcboxVpnState.addLog("Proxy $method ping: ${profile.type} not supported (use Auto/ICMP)")
                 return@withContext null
             }
             if (profile.server.isBlank()) {
