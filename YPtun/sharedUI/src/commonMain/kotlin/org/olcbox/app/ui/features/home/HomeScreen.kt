@@ -105,6 +105,8 @@ fun HomeScreen(
     pinnedCustomLocations: List<String> = emptyList(),
     customLocationsPingSorted: Boolean = false,
     customLocationsPingSortDescending: Boolean = false,
+    // Render the config list as a 2-column grid (app-settings toggle).
+    twoColumns: Boolean = false,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {},
@@ -453,6 +455,7 @@ fun HomeScreen(
                     isAddSheetOpen = true
                 },
                 hasLoaded = locationViewModel.hasLoadedLocations,
+                twoColumns = twoColumns,
                 locations = locations,
                 selectedLocationId = locationViewModel.selectedLocationId,
                 pingsState = pingsState,

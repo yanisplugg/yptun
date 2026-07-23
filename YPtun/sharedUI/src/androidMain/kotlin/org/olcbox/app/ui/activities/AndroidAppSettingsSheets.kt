@@ -3690,6 +3690,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(hideEndpointWhenDescription = it)) }
 
         RoutingToggleRow(
+            title = s.twoColumnLayoutTitle,
+            subtitle = s.twoColumnLayoutSubtitle,
+            checked = settings.twoColumnLayout
+        ) { onChanged(settings.copy(twoColumnLayout = it)) }
+
+        RoutingToggleRow(
             title = s.notifySubExpiryTitle,
             subtitle = s.notifySubExpirySubtitle,
             checked = settings.notifySubscriptionExpiry

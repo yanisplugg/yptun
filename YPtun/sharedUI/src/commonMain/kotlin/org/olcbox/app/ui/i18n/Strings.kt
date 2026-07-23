@@ -466,6 +466,8 @@ interface Strings {
     val vpsAutoInstallSubtitle: String
     val hideEndpointWhenDescriptionTitle: String
     val hideEndpointWhenDescriptionSubtitle: String
+    val twoColumnLayoutTitle: String
+    val twoColumnLayoutSubtitle: String
     val showSubscriptionExpiryTitle: String
     val showSubscriptionExpirySubtitle: String
     val subscriptionUserAgentLabel: String
@@ -1051,6 +1053,8 @@ object RuStrings : Strings {
     override val vpsAutoInstallSubtitle = "Выполняет развёртывание движка на VPS."
     override val hideEndpointWhenDescriptionTitle = "Скрывать IP и протокол при описании"
     override val hideEndpointWhenDescriptionSubtitle = "Если у локации есть описание — показывать его вместо протокола и IP в точке подключения."
+    override val twoColumnLayoutTitle = "Конфигурации в две колонки"
+    override val twoColumnLayoutSubtitle = "Показывать список конфигураций на главном экране в виде сетки из двух колонок."
     override val showSubscriptionExpiryTitle = "Показывать срок подписки"
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
@@ -1621,6 +1625,8 @@ object EnStrings : Strings {
     override val vpsAutoInstallSubtitle = "Deploys the engine onto a VPS."
     override val hideEndpointWhenDescriptionTitle = "Hide IP & protocol when described"
     override val hideEndpointWhenDescriptionSubtitle = "If a location has a description, show it instead of the protocol and IP at the connection point."
+    override val twoColumnLayoutTitle = "Two-column config layout"
+    override val twoColumnLayoutSubtitle = "Show the configuration list on the home screen as a two-column grid."
     override val showSubscriptionExpiryTitle = "Show subscription expiry"
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
@@ -2207,6 +2213,8 @@ object FaStrings : Strings {
     override val vpsAutoInstallSubtitle = "موتور را روی یک VPS مستقر می‌کند."
     override val hideEndpointWhenDescriptionTitle = "پنهان کردن IP و پروتکل هنگام وجود توضیح"
     override val hideEndpointWhenDescriptionSubtitle = "اگر مکان توضیح دارد، به جای پروتکل و IP در نقطه اتصال نمایش داده شود."
+    override val twoColumnLayoutTitle = "چیدمان دو ستونی پیکربندی‌ها"
+    override val twoColumnLayoutSubtitle = "نمایش فهرست پیکربندی‌ها در صفحه اصلی به صورت شبکه دو ستونی."
     override val showSubscriptionExpiryTitle = "نمایش تاریخ انقضای اشتراک"
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
@@ -2761,6 +2769,8 @@ object ZhStrings : Strings {
     override val vpsAutoInstallSubtitle = "将引擎部署到 VPS。"
     override val hideEndpointWhenDescriptionTitle = "有描述时隐藏 IP 和协议"
     override val hideEndpointWhenDescriptionSubtitle = "如果位置有描述，则在连接点显示描述而非协议和 IP。"
+    override val twoColumnLayoutTitle = "配置双列布局"
+    override val twoColumnLayoutSubtitle = "在主屏幕上以双列网格显示配置列表。"
     override val showSubscriptionExpiryTitle = "显示订阅到期"
     override val showSubscriptionExpirySubtitle = "在刷新日期下方显示“至 dd.mm.yyyy”"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"

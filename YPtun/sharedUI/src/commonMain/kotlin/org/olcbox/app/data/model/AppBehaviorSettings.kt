@@ -157,6 +157,12 @@ data class AppBehaviorSettings(
     /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
     val customGroups: List<CustomGroup> = emptyList(),
     /**
+     * Render the configuration list on the Home screen as a 2-column grid of compact cards instead of
+     * the default single-column rows. Group/folder headers stay full-width; only the server/location
+     * cards pair up. Off by default.
+     */
+    val twoColumnLayout: Boolean = false,
+    /**
      * Which User-Agent the app sends for the MAIN subscription fetch (names / title / links). Panels do
      * UA content-negotiation: [SUB_UA_YPTUN] (the app's own UA) usually yields clean base64 links with
      * proper server names; [SUB_UA_HAPP] ("Happ/1.0") yields the rich per-server Xray JSON but often

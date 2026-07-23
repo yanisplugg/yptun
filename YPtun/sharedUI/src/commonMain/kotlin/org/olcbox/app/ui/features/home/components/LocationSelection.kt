@@ -83,6 +83,8 @@ fun LazyListScope.locationSelectorContent(
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
     hasLoaded: Boolean = true,
+    // Render server/location cards in a 2-column grid (headers stay full-width). App-settings toggle.
+    twoColumns: Boolean = false,
     locations: List<LocationItem>,
     selectedLocationId: String?,
     pingsState: PingsState,
@@ -277,10 +279,7 @@ fun LazyListScope.locationSelectorContent(
                 group
             }
 
-            items(
-                items = orderedGroup,
-                key = { "row-${it.storageId}" }
-            ) { location ->
+            locationCards(orderedGroup, twoColumns, keyPrefix = "row") { location, cellModifier ->
                 LocationSelectorRow(
                     location = location,
                     selectedLocationId = selectedLocationId,
@@ -290,7 +289,9 @@ fun LazyListScope.locationSelectorContent(
                     selectionMode = selectionMode,
                     isChecked = location.storageId in selectedIds,
                     onToggleSelect = onToggleSelect,
-                    onStartSelection = onStartSelection
+                    onStartSelection = onStartSelection,
+                    twoColumns = twoColumns,
+                    modifier = cellModifier
                 )
             }
         }
@@ -418,7 +419,7 @@ fun LazyListScope.locationSelectorContent(
                                             } else {
                                                 mGroup
                                             }
-                                            ordered.forEach { location ->
+                                            LocationCardsColumn(ordered, twoColumns) { location, cellModifier ->
                                                 LocationSelectorRow(
                                                     location = location,
                                                     selectedLocationId = selectedLocationId,
@@ -428,7 +429,9 @@ fun LazyListScope.locationSelectorContent(
                                                     selectionMode = selectionMode,
                                                     isChecked = location.storageId in selectedIds,
                                                     onToggleSelect = onToggleSelect,
-                                                    onStartSelection = onStartSelection
+                                                    onStartSelection = onStartSelection,
+                                                    twoColumns = twoColumns,
+                                                    modifier = cellModifier
                                                 )
                                             }
                                         }
@@ -436,8 +439,15 @@ fun LazyListScope.locationSelectorContent(
                                 }
                             }
 
-                            // Member custom locations: rows directly on the folder fill.
-                            memberCustom.forEach { location ->
+                            // Member custom locations: rows directly on the folder fill. Pinned ones
+                            // float to the top of the folder (in pin order) — same rule as the
+                            // top-level "own locations" section. Without this the in-folder pin toggle
+                            // flipped the icon but never reordered the item ("закрепление внутри группы").
+                            val orderedMemberCustom = memberCustom.sortedBy { loc ->
+                                val pinIndex = pinnedCustomLocations.indexOf(loc.storageId)
+                                if (pinIndex >= 0) pinIndex else Int.MAX_VALUE
+                            }
+                            LocationCardsColumn(orderedMemberCustom, twoColumns) { location, cellModifier ->
                                 LocationSelectorRow(
                                     location = location,
                                     selectedLocationId = selectedLocationId,
@@ -449,7 +459,9 @@ fun LazyListScope.locationSelectorContent(
                                     selectionMode = selectionMode,
                                     isChecked = location.storageId in selectedIds,
                                     onToggleSelect = onToggleSelect,
-                                    onStartSelection = onStartSelection
+                                    onStartSelection = onStartSelection,
+                                    twoColumns = twoColumns,
+                                    modifier = cellModifier
                                 )
                             }
 
@@ -514,10 +526,7 @@ fun LazyListScope.locationSelectorContent(
             }
         }
 
-        items(
-            items = orderedCustom,
-            key = { "custom-row-${it.storageId}" }
-        ) { location ->
+        locationCards(orderedCustom, twoColumns, keyPrefix = "custom-row") { location, cellModifier ->
             LocationSelectorRow(
                 location = location,
                 selectedLocationId = selectedLocationId,
@@ -529,7 +538,9 @@ fun LazyListScope.locationSelectorContent(
                 selectionMode = selectionMode,
                 isChecked = location.storageId in selectedIds,
                 onToggleSelect = onToggleSelect,
-                onStartSelection = onStartSelection
+                onStartSelection = onStartSelection,
+                twoColumns = twoColumns,
+                modifier = cellModifier
             )
         }
     }
@@ -1191,6 +1202,69 @@ private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
     }
 }
 
+/**
+ * Lays out a list of location cards into the hosting [LazyListScope]: one lazy item per card in
+ * single-column mode, or one lazy item per PAIR (a Row of two half-width cells) in [twoColumns] mode.
+ * [keyPrefix] keeps the Compose item keys stable/unique across sections.
+ */
+private fun LazyListScope.locationCards(
+    items: List<LocationItem>,
+    twoColumns: Boolean,
+    keyPrefix: String,
+    cell: @Composable (LocationItem, Modifier) -> Unit
+) {
+    if (twoColumns) {
+        val pairs = items.chunked(2)
+        items(
+            items = pairs,
+            key = { pair -> "$keyPrefix-pair-${pair.first().storageId}" }
+        ) { pair ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f)) { cell(pair[0], Modifier.fillMaxWidth()) }
+                if (pair.size > 1) {
+                    Box(modifier = Modifier.weight(1f)) { cell(pair[1], Modifier.fillMaxWidth()) }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    } else {
+        items(
+            items = items,
+            key = { "$keyPrefix-${it.storageId}" }
+        ) { location -> cell(location, Modifier.fillMaxWidth()) }
+    }
+}
+
+/** Non-lazy [locationCards] for cards that live inside a folder's [Column] (already a single item). */
+@Composable
+private fun LocationCardsColumn(
+    items: List<LocationItem>,
+    twoColumns: Boolean,
+    cell: @Composable (LocationItem, Modifier) -> Unit
+) {
+    if (twoColumns) {
+        items.chunked(2).forEach { pair ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f)) { cell(pair[0], Modifier.fillMaxWidth()) }
+                if (pair.size > 1) {
+                    Box(modifier = Modifier.weight(1f)) { cell(pair[1], Modifier.fillMaxWidth()) }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    } else {
+        items.forEach { location -> cell(location, Modifier.fillMaxWidth()) }
+    }
+}
+
 @Composable
 private fun LocationSelectorRow(
     location: LocationItem,
@@ -1203,7 +1277,9 @@ private fun LocationSelectorRow(
     selectionMode: Boolean = false,
     isChecked: Boolean = false,
     onToggleSelect: (String) -> Unit = {},
-    onStartSelection: (String) -> Unit = {}
+    onStartSelection: (String) -> Unit = {},
+    twoColumns: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
     val pingMs = pingsState.pingFor(location.storageId)
     val isLoading = pingsState.isChecking(location.storageId)
@@ -1227,20 +1303,38 @@ private fun LocationSelectorRow(
         { if (selectionMode) latestToggle(location.storageId) else latestStart(location.storageId) }
     }
 
-    LocationRow(
-        location = location,
-        isSelected = selectedLocationId == location.storageId,
-        isLoading = isLoading,
-        isError = isOffline,
-        pingMs = pingMs,
-        selectionMode = selectionMode,
-        isChecked = isChecked,
-        onSettingsClick = onSettings,
-        onLongClick = onLongPress,
-        onClick = onClick,
-        isPinned = isPinned,
-        onTogglePinned = onTogglePinned
-    )
+    if (twoColumns) {
+        org.olcbox.app.ui.features.locations.components.LocationGridCell(
+            location = location,
+            isSelected = selectedLocationId == location.storageId,
+            isLoading = isLoading,
+            isError = isOffline,
+            pingMs = pingMs,
+            selectionMode = selectionMode,
+            isChecked = isChecked,
+            onSettingsClick = onSettings,
+            onLongClick = onLongPress,
+            onClick = onClick,
+            isPinned = isPinned,
+            onTogglePinned = onTogglePinned,
+            modifier = modifier
+        )
+    } else {
+        LocationRow(
+            location = location,
+            isSelected = selectedLocationId == location.storageId,
+            isLoading = isLoading,
+            isError = isOffline,
+            pingMs = pingMs,
+            selectionMode = selectionMode,
+            isChecked = isChecked,
+            onSettingsClick = onSettings,
+            onLongClick = onLongPress,
+            onClick = onClick,
+            isPinned = isPinned,
+            onTogglePinned = onTogglePinned
+        )
+    }
 }
 
 /**
