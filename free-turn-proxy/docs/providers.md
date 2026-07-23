@@ -9,8 +9,10 @@
 VK Calls API. Перебирает встроенные `app_id/app_secret`, получает короткоживущие (≈10 мин) TURN-creds через 4-шаговый token chain. Solver captcha auto+manual.
 
 **Обязательные флаги:**
-- `-link` — VK callroom URL вида `https://vk.ru/call/join/<code>` (нормализуется до join-кода).
+- `-link` - VK callroom URL вида `https://vk.ru/call/join/<code>` (нормализуется до join-кода).
 
 **Опциональные:**
-- `-streams-per-cred` (default 10) — сколько TURN-стримов делят один кеш креденшалов.
-- `-manual-captcha` — пропустить auto-solver, сразу открыть браузер.
+- `-streams-per-cred` (default 10) - сколько TURN-стримов делят один кеш креденшалов.
+- `-manual-captcha` - пропустить auto-solver, сразу открыть браузер.
+- `-browser` (default `firefox`) - семейство персоны auth (UA + TLS JA3 + client hints + device): `chrome` \| `firefox` \| `safari`.
+- `-platform` (default `desktop`) - класс устройства персоны: `desktop` \| `mobile`.

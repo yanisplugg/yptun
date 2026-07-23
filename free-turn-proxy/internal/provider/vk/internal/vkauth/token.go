@@ -15,9 +15,9 @@ import (
 // и возвращает тройку TURN-allocate. Ошибки captcha запускают настроенную цепочку
 // auto/manual solver.
 func (c *Client) getTokenChain(ctx context.Context, link string, streamID int, creds VKCredentials, jar tlsclient.CookieJar) (string, string, []string, error) {
-	profile := browserprofile.ForKind(c.browser)
+	profile := browserprofile.For(c.browser, c.platform)
 
-	httpClient, err := c.newTLSClient(jar)
+	httpClient, err := c.newTLSClient(profile, jar)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("failed to initialize tls_client: %w", err)
 	}

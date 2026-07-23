@@ -3,15 +3,13 @@
 package stats
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
 )
 
-// Stats хранит счётчики tx/rx байт. При enabled=false Add* - no-op,
-// LogEvery возвращается сразу (поведение под isDebug).
+// Stats хранит счётчики tx/rx байт. При enabled=false Add* - no-op.
 type Stats struct {
 	tx      atomic.Uint64
 	rx      atomic.Uint64
@@ -47,49 +45,6 @@ func (s *Stats) AddRx(n int) {
 		return
 	}
 	s.rx.Add(uint64(n))
-}
-
-// LogEvery каждые 5с печатает сводку пропускной способности через logf,
-// пока не отменён ctx. No-op, если Stats выключен.
-func (s *Stats) LogEvery(ctx context.Context, logf func(string, ...any), label, txName, rxName string) {
-	if !s.enabled {
-		return
-	}
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	var prevTx, prevRx uint64
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			tx := s.tx.Load()
-			rx := s.rx.Load()
-			deltaTx := tx - prevTx
-			deltaRx := rx - prevRx
-			prevTx = tx
-			prevRx = rx
-
-			if deltaTx == 0 && deltaRx == 0 {
-				continue
-			}
-
-			logf(
-				"%s throughput: %s=%s %s=%s total_%s=%s total_%s=%s",
-				label,
-				txName,
-				FormatBitsPerSecond(deltaTx, 5*time.Second),
-				rxName,
-				FormatBitsPerSecond(deltaRx, 5*time.Second),
-				txName,
-				FormatByteCount(tx),
-				rxName,
-				FormatByteCount(rx),
-			)
-		}
-	}
 }
 
 // FormatBitsPerSecond форматирует пропускную способность из числа байт и интервала.

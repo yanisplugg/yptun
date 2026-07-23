@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	neturl "net/url"
+	"strings"
 	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/browserprofile"
@@ -43,6 +44,10 @@ func (c *Client) fetchCallToken(
 				data = retryData
 				continue
 			}
+			if termErr := classifyLinkError(errObj); termErr != nil {
+				c.log.Errorf("[STREAM %d] [VK Auth] terminal link error: %v", streamID, termErr)
+				return "", termErr
+			}
 			return "", fmt.Errorf("VK API error: %v", errObj)
 		}
 
@@ -56,6 +61,48 @@ func (c *Client) fetchCallToken(
 		}
 		return token2, nil
 	}
+}
+
+// classifyLinkError распознаёт ТЕРМИНАЛЬНЫЕ ответы VK в join-флоу и возвращает
+// соответствующий sentinel (или nil, если ошибку можно ретраить дальше по
+// client_id). Терминал = ни client_id, ни captcha не помогут, поэтому fast-fail
+// вместо бесконечного цикла "решить captcha -> ошибка -> следующий client_id".
+//
+// Порядок важен: сначала явные коды (терминальные и транзиентные), и только для
+// неизвестного кода - матч по тексту error_msg. Так текстовый матч не может
+// перекрыть транзиентный код (5 auth-failed, 6/9/29 rate/flood, 14 captcha) и
+// убить рабочее подключение из-за подстроки в сообщении.
+func classifyLinkError(errObj map[string]any) error {
+	code := 0
+	if f, ok := errObj["error_code"].(float64); ok {
+		code = int(f)
+	}
+
+	// Явные терминальные коды: 9008 Join link is not valid, 9000 Call not found.
+	if code == 9000 || code == 9008 {
+		return ErrInvalidJoinLink
+	}
+	// Явные транзиентные коды: гасить нельзя, текст ниже к ним не применяем.
+	switch code {
+	case 5, 6, 9, 14, 29:
+		return nil
+	}
+
+	// Код неизвестен/плавает - осторожный матч по тексту.
+	msg := ""
+	if s, ok := errObj["error_msg"].(string); ok {
+		msg = strings.ToLower(s)
+	}
+	switch {
+	case strings.Contains(msg, "not valid") || strings.Contains(msg, "not found"):
+		return ErrInvalidJoinLink
+	// Анонимный вход запрещён. Матчим по "anonym" (не "authoriz" - коллизия с auth-failed).
+	case strings.Contains(msg, "anonym"):
+		return ErrAnonymousBlocked
+	case strings.Contains(msg, "full"):
+		return ErrCallFull
+	}
+	return nil
 }
 
 // solveCaptcha выполняет одну попытку решения captcha и возвращает тело POST
@@ -80,7 +127,6 @@ func (c *Client) solveCaptcha(
 	}
 
 	var successToken string
-	var captchaKey string
 	var solveErr error
 
 	switch solveMode {
@@ -111,21 +157,19 @@ func (c *Client) solveCaptcha(
 
 		type manualRes struct {
 			token string
-			key   string
 			err   error
 		}
 		resCh := make(chan manualRes, 1)
 		go func() {
-			t, k, e := c.manualSolve(manualCtx, captchaErr, c.dialer)
-			resCh <- manualRes{t, k, e}
+			t, e := c.manualSolve(manualCtx, captchaErr, c.dialer)
+			resCh <- manualRes{t, e}
 		}()
 
 		select {
 		case res := <-resCh:
 			successToken = res.token
-			captchaKey = res.key
 			solveErr = res.err
-			if successToken != "" || captchaKey != "" {
+			if successToken != "" {
 				if solveErr != nil {
 					c.log.Debugf("[STREAM %d] [Captcha] Token received (ignoring cleanup error: %v)", streamID, solveErr)
 					solveErr = nil
@@ -151,7 +195,7 @@ func (c *Client) solveCaptcha(
 		if hasNextSolveMode {
 			c.log.Infof("[STREAM %d] [Captcha] Falling back to %s",
 				streamID, CaptchaSolveModeLabel(nextSolveMode))
-			return buildCaptchaRetryData(link, escapedName, token1, captchaErr, "", captchaKey), nil
+			return buildCaptchaRetryData(link, escapedName, token1, captchaErr, ""), nil
 		}
 		c.engageLockout(60 * time.Second)
 		if c.streamsFn() == 0 {
@@ -164,11 +208,10 @@ func (c *Client) solveCaptcha(
 	if captchaErr.CaptchaAttempt == "0" || captchaErr.CaptchaAttempt == "" {
 		captchaErr.CaptchaAttempt = "1"
 	}
-	return buildCaptchaRetryData(link, escapedName, token1, captchaErr, successToken, captchaKey), nil
+	return buildCaptchaRetryData(link, escapedName, token1, captchaErr, successToken), nil
 }
 
-// buildCaptchaRetryData формирует тело POST для следующей попытки captcha.
-func buildCaptchaRetryData(link, escapedName, token1 string, captchaErr *captcha.Error, successToken, captchaKey string) string {
+func buildCaptchaRetryData(link, escapedName, token1 string, captchaErr *captcha.Error, successToken string) string {
 	if captchaErr.CaptchaSid == "" {
 		// 1.4.3: VK sometimes omits captcha_sid on the smart-captcha (script) path. Retrying with an
 		// empty/invalid sid just re-triggers the challenge, so send the retry without captcha params
@@ -177,12 +220,6 @@ func buildCaptchaRetryData(link, escapedName, token1 string, captchaErr *captcha
 			"vk_join_link=https://vk.ru/call/join/%s&name=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
 			link, escapedName, neturl.QueryEscape(successToken),
 			captchaErr.CaptchaTs, captchaErr.CaptchaAttempt, token1,
-		)
-	}
-	if captchaKey != "" {
-		return fmt.Sprintf(
-			"vk_join_link=https://vk.ru/call/join/%s&name=%s&captcha_key=%s&captcha_sid=%s&access_token=%s",
-			link, escapedName, neturl.QueryEscape(captchaKey), captchaErr.CaptchaSid, token1,
 		)
 	}
 	return fmt.Sprintf(

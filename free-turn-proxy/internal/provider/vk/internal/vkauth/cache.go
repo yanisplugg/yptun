@@ -6,8 +6,6 @@ import (
 	"sync/atomic"
 )
 
-// StreamCredentialsCache хранит TURN-реквизиты для группы потоков
-// и счётчик ошибок для решений об инвалидации.
 type StreamCredentialsCache struct {
 	creds         TurnCredentials
 	mutex         sync.RWMutex
@@ -15,7 +13,6 @@ type StreamCredentialsCache struct {
 	lastErrorTime atomic.Int64
 }
 
-// Store отображает cache-id ((streamID-1) / streamsPerCache) -> StreamCredentialsCache.
 type Store struct {
 	mu              sync.RWMutex
 	caches          map[int]*StreamCredentialsCache
@@ -64,7 +61,6 @@ func (s *Store) Get(streamID int) *StreamCredentialsCache {
 	return cache
 }
 
-// Invalidate сбрасывает реквизиты кэша потока и обнуляет счётчик ошибок.
 func (c *StreamCredentialsCache) Invalidate() {
 	c.mutex.Lock()
 	c.creds = TurnCredentials{}
@@ -74,8 +70,6 @@ func (c *StreamCredentialsCache) Invalidate() {
 	c.lastErrorTime.Store(0)
 }
 
-// IsAuthError проверяет ошибку по эвристике TURN-клиента:
-// auth/401/stale-nonce - признак инвалидации кэша.
 func IsAuthError(err error) bool {
 	if err == nil {
 		return false
