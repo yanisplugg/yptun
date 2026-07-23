@@ -237,6 +237,9 @@ func (i *Instance) socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 	if _, err := client.Write(rep); err != nil {
 		return
 	}
+	// Clear the handshake deadline (see socks.go): the UDP association must live as long as the TCP
+	// control connection, else the 30s deadline kills the relay mid-session (e.g. Telegram VoIP over WARP).
+	_ = client.SetDeadline(time.Time{})
 
 	conns := make(map[string]net.Conn)
 	defer func() {

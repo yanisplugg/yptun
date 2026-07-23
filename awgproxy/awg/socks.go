@@ -103,6 +103,11 @@ func socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 	if _, err := client.Write(rep); err != nil {
 		return
 	}
+	// Clear the handshake deadline set in handleSocks: a SOCKS5 UDP association lives as long as its
+	// TCP control connection stays open (the client holds it idle). Without this the 30s deadline fired,
+	// io.Copy(client) below returned, and relay.Close() tore down ALL UDP after 30s — so standalone
+	// AmneziaWG lost DNS/QUIC and "only worked" behind a second proxy (which rides a long-lived CONNECT).
+	_ = client.SetDeadline(time.Time{})
 
 	// Per-target UDP conns through the tunnel; return packets are wrapped back to the client addr.
 	// The netstack Dial returns a gVisor gonet conn (net.Conn), NOT *net.UDPConn — never assert.
