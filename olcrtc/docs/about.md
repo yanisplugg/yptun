@@ -5,42 +5,44 @@
 ![License](https://img.shields.io/badge/license-WTFPL-0D1117?style=flat-square&logo=open-source-initiative&logoColor=green&labelColor=0D1117)
 ![Golang](https://img.shields.io/badge/-Golang-0D1117?style=flat-square&logo=go&logoColor=00A7D0)
 
+[RU](about.ru.md) / **EN**
+
 </div>
 
 
 
-# olcRTC - общее описание
+# olcRTC - overview
 
-`olcRTC` (OpenLibreCommunity RTC) - зашифрованный TCP-over-WebRTC туннель. Он маскирует трафик под обычное участие в WebRTC/SFU-сервисе: Jitsi Meet, Yandex Telemost или WbStream.
+`olcRTC` (OpenLibreCommunity RTC) is an encrypted TCP-over-WebRTC tunnel. It disguises traffic as ordinary participation in a WebRTC/SFU service: Jitsi Meet, Yandex Telemost or WbStream.
 
-Проект: [github.com/openlibrecommunity/olcrtc](https://github.com/openlibrecommunity/olcrtc)  
-Лицензия: WTFPL  
-Статус: **Beta**
+Project: [github.com/openlibrecommunity/olcrtc](https://github.com/openlibrecommunity/olcrtc)  
+License: WTFPL  
+Status: **Beta**
 
-## Зачем это нужно
+## Why it is needed
 
-В сценариях, где прямой доступ к произвольному VPS / IP заблокирован, приходится переносить трафик через сервисы, которые уже доступны у пользователя. Для внешнего наблюдателя соединение выглядит как обычный WebRTC-звонок по разрешенному IP сервиса, а полезная нагрузка внутри дополнительно шифруется общим ключом `crypto.key`.
+In scenarios where direct access to an arbitrary VPS / IP is blocked, traffic has to be carried through services that are already reachable for the user. To an outside observer the connection looks like an ordinary WebRTC call to an allowed service IP, and the payload inside is additionally encrypted with the shared `crypto.key`.
 
-> **Важно:** Обязательно проверяйте, есть ли сервис видеозвонков у вас в белых списках. Если его там нет - используйте другой. Список всех сервисов в белых списках скоро будет опубликован.
+> **Important:** always check that the video call service you need is on the allow lists. If it is not there, use another one. A list of all allow-listed services will be published soon.
 
-Базовая схема:
+Basic scheme:
 
 ```text
-приложение
+app
   -> SOCKS5 127.0.0.1:8808
    -> olcrtc cnc
-    -> WebRTC/SFU сервис
+    -> WebRTC/SFU service
      -> olcrtc srv
-       -> интернет
+       -> internet
 ```
 
-## Как это работает
+## How it works
 
-Клиентский режим `cnc` поднимает локальный SOCKS5. Браузер, curl, sing-box, olcbox или другое приложение подключается к нему как к обычному proxy.
+Client mode `cnc` starts a local SOCKS5. A browser, curl, sing-box, olcbox or another app connects to it as to an ordinary proxy.
 
-Серверный режим `srv` подключается к той же комнате/сессии, принимает зашифрованный smux stream и от своего имени открывает TCP-соединения к целевым адресам.
+Server mode `srv` connects to the same room/session, accepts the encrypted smux stream and opens TCP connections to the target addresses on its own behalf.
 
-Внутри туннеля:
+Inside the tunnel:
 
 ```text
 SOCKS CONNECT
@@ -51,15 +53,15 @@ SOCKS CONNECT
       -> WebRTC/SFU
 ```
 
-## Режимы
+## Modes
 
-| Режим | Назначение |
+| Mode | Purpose |
 |---|---|
-| `srv` | серверная сторона, принимает tunnel streams и делает TCP dial к целям |
-| `cnc` | клиентская сторона, слушает локальный SOCKS5 |
-| `gen` | создаёт Room ID для провайдеров, которые умеют создавать комнаты |
+| `srv` | server side, accepts tunnel streams and does TCP dial to targets |
+| `cnc` | client side, listens on a local SOCKS5 |
+| `gen` | creates Room IDs for providers that can create rooms |
 
-CLI принимает один YAML-файл:
+The CLI takes a single YAML file:
 
 ```bash
 olcrtc server.yaml
@@ -68,71 +70,71 @@ olcrtc client.yaml
 
 ## Auth Providers
 
-`auth.provider` выбирает сервис и способ получения credentials.
+`auth.provider` selects the service and the way credentials are obtained.
 
-| Provider | Engine | Комментарий |
+| Provider | Engine | Comment |
 |---|---|---|
-| `jitsi` | `jitsi` | URL комнаты Jitsi (`meet.small-dm.ru`, `meet1.arbitr.ru` или `meet.handyweb.org`), без отдельной регистрации |
-| `telemost` | `goolom` | credentials через Yandex Telemost API, с отдельной регистрацией |
-| `wbstream` | `livekit` | credentials через WbBStream API, с отдельной регистрацией |
-| `none` | задаётся в `engine.name` | прямой engine-режим с `engine.url` и `engine.token`, с отдельной регистрацией |
+| `jitsi` | `jitsi` | Jitsi room URL, instances in docs/examples/jitsi.instances.yaml, no separate registration |
+| `telemost` | `goolom` | credentials via Yandex Telemost API, separate registration |
+| `wbstream` | `livekit` | credentials via WbBStream API, separate registration |
+| `none` | set in `engine.name` | direct engine mode with `engine.url` and `engine.token`, separate registration |
 
-Термин `carrier` ещё встречается во внутреннем API и логах как историческое имя для выбранного auth/provider пути. В YAML актуальное поле - `auth.provider`.
+The term `carrier` still appears in the internal API and logs as a historical name for the chosen auth/provider path. In YAML the current field is `auth.provider`.
 
 ## Engines
 
-`engine` - низкоуровневый протокол конкретного SFU/signaling:
+`engine` is the low-level protocol of a concrete SFU/signaling:
 
-| Engine | Пакет | Возможности |
+| Engine | Package | Capabilities |
 |---|---|---|
 | `livekit` | `internal/engine/livekit` | data packets/video tracks/LiveKit SDK |
 | `goolom` | `internal/engine/goolom` | Telemost/Goolom signaling, publisher/subscriber PeerConnection |
 | `jitsi` | `internal/engine/jitsi` | Jitsi MUC/Jingle/colibri-ws, datachannel/best-effort video |
 
-`internal/engine/builtin` связывает `auth.provider` с нужным engine. Отдельного пакета `internal/carrier` в текущем проекте нет.
+`internal/engine/builtin` binds `auth.provider` to the proper engine. There is no separate `internal/carrier` package in the current project.
 
 ## Transports
 
-`net.transport` определяет, как tunnel bytes помещаются в WebRTC primitive.
+`net.transport` defines how tunnel bytes are placed into a WebRTC primitive.
 
-| Transport | Как передаёт данные | Основной сценарий |
+| Transport | How it carries data | Main scenario |
 |---|---|---|
-| `datachannel` | нативный byte/data path engine | самый простой и быстрый путь, стабильно с Jitsi |
-| `vp8channel` | KCP поверх VP8-like video frames | основной video-path для WB Stream и Telemost |
-| `seichannel` | payload в H264 SEI NAL units, ACK/retry | fallback для WB Stream / Jitsi|
-| `videochannel` | QR/tile кадры через ffmpeg, ACK/retry | экспериментальный визуальный транспорт |
+| `datachannel` | native byte/data path of the engine | simplest and fastest path, stable with Jitsi |
+| `vp8channel` | KCP over VP8-like video frames | main video path for WB Stream and Telemost |
+| `seichannel` | payload in H264 SEI NAL units, ACK/retry | fallback for WB Stream / Jitsi |
+| `videochannel` | QR/tile frames via ffmpeg, ACK/retry | experimental visual transport |
 
-Рекомендуемый старт: `jitsi + datachannel`. Альтернатива: `wbstream + vp8channel`.
+Recommended start: `jitsi + datachannel`. Alternative: `wbstream + vp8channel`.
 
-## Шифрование и handshake
+## Encryption and handshake
 
-`internal/crypto` использует XChaCha20-Poly1305. Общий ключ задаётся как 64 hex-символа:
+`internal/crypto` uses XChaCha20-Poly1305. The shared key is set as 64 hex characters:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Поверх зашифрованного `muxconn` запускается `smux`. Первый smux stream занят handshake и control protocol:
+`smux` runs on top of the encrypted `muxconn`. The first smux stream is occupied by the handshake and the control protocol:
 
 ```text
 CLIENT_HELLO -> SERVER_WELCOME
 CONTROL_PING <-> CONTROL_PONG
 ```
 
-Если control pong не приходит несколько раз подряд, runtime пересобирает smux-сессию или отдаёт управление failover supervisor.
+If the control pong does not arrive several times in a row, the runtime rebuilds the smux session or hands control to the failover supervisor.
 
 ## YAML
 
-Минимальный сервер:
+Minimal server:
 
 ```yaml
 mode: srv
 auth:
   provider: jitsi
 room:
-  # Используйте тот Jitsi-сервер, который работает в вашей сети:
-  # https://meet.small-dm.ru/ROOM  или  https://meet1.arbitr.ru/ROOM  или  https://meet.handyweb.org/ROOM
-  id: "https://meet.small-dm.ru/REPLACE_ME_WITH_ROOM_ID"
+  # Use the Jitsi server that works in your network:
+  # Instances: see docs/examples/jitsi.instances.yaml - https://HOST/ROOM
+  id: "https://meet.example.org/REPLACE_ME_WITH_ROOM_ID"
 crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS"
 net:
@@ -141,16 +143,16 @@ net:
 data: data
 ```
 
-Минимальный клиент:
+Minimal client:
 
 ```yaml
 mode: cnc
 auth:
   provider: jitsi
 room:
-  # Используйте тот Jitsi-сервер, который работает в вашей сети:
-  # https://meet.small-dm.ru/ROOM  или  https://meet1.arbitr.ru/ROOM  или  https://meet.handyweb.org/ROOM
-  id: "https://meet.small-dm.ru/REPLACE_ME_WITH_ROOM_ID"
+  # Use the Jitsi server that works in your network:
+  # Instances: see docs/examples/jitsi.instances.yaml - https://HOST/ROOM
+  id: "https://meet.example.org/REPLACE_ME_WITH_ROOM_ID"
 crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS"
 net:
@@ -162,25 +164,25 @@ socks:
 data: data
 ```
 
-Подробнее: [configuration.md](configuration.md), [settings.md](settings.md).
+More: [configuration.md](configuration.md), [settings.md](settings.md).
 
 ## Failover
 
-`profiles[]` позволяет запускать несколько конфигураций по порядку. Например, сначала `wbstream + vp8channel`, потом `jitsi + datachannel`. Верхнеуровневые поля работают как defaults, профиль переопределяет только нужные части.
+`profiles[]` lets you run several configurations in order. For example, first `wbstream + vp8channel`, then `jitsi + datachannel`. Top-level fields act as defaults, a profile overrides only the parts it needs.
 
-Активные smux streams при смене профиля не мигрируют. Новые подключения смогут подняться на следующем профиле.
+Active smux streams do not migrate when the profile changes. New connections can come up on the next profile.
 
-## Структура репозитория
+## Repository structure
 
-| Путь | Что внутри |
+| Path | What is inside |
 |---|---|
 | `cmd/olcrtc` | CLI entrypoint |
 | `cmd/olcrtc-cgo` | c-shared entrypoint |
 | `pkg/olcrtc` | embeddable client/engine API |
 | `pkg/olcrtc/tunnel` | embeddable server tunnel API |
-| `mobile` | gomobile bindings для Android |
+| `mobile` | gomobile bindings for Android |
 | `internal/config` | YAML parsing, `crypto.key_file` |
-| `internal/app/session` | defaults, validation, routing в `srv`/`cnc`/`gen` |
+| `internal/app/session` | defaults, validation, routing into `srv`/`cnc`/`gen` |
 | `internal/auth` | provider-specific credential flows |
 | `internal/engine` | SFU/signaling implementations |
 | `internal/transport` | datachannel/vp8/sei/video transports |
@@ -188,9 +190,9 @@ data: data
 | `internal/client` | SOCKS5 listener, client-side smux |
 | `internal/control` | liveness ping/pong |
 | `internal/supervisor` | failover profiles |
-| `docs` | документация и примеры YAML |
+| `docs` | documentation and YAML examples |
 
-## Сборка
+## Build
 
 ```bash
 go install github.com/magefile/mage@latest
@@ -202,17 +204,17 @@ mage lint
 mage mobile
 ```
 
-Go версия: `1.26+`. Для `videochannel` нужен `ffmpeg`; для `codec: tile` требуется разрешение `1080x1080`.
+Go version: `1.26+`. `videochannel` requires `ffmpeg`; `codec: tile` requires a resolution of `1080x1080`.
 
 ## Public API
 
-`pkg/olcrtc` возвращает `net.Conn`-подобный объект поверх auth/engine:
+`pkg/olcrtc` returns a `net.Conn`-like object on top of auth/engine:
 
 ```go
 sess, err := olcrtc.New(ctx, olcrtc.Config{
     Auth:   "jitsi",
-    // Используйте meet.small-dm.ru, meet1.arbitr.ru или meet.handyweb.org - тот, что работает в вашей сети
-    RoomID: "https://meet.small-dm.ru/myroom",
+    // Instances: see docs/examples/jitsi.instances.yaml
+    RoomID: "https://meet.example.org/myroom",
 })
 if err != nil {
     return err
@@ -220,34 +222,34 @@ if err != nil {
 conn, err := sess.Dial(ctx)
 ```
 
-`pkg/olcrtc/tunnel` встраивает серверную сторону и даёт hooks:
+`pkg/olcrtc/tunnel` embeds the server side and exposes hooks:
 
 ```go
 srv := tunnel.New(tunnel.Config{
     Transport: "datachannel",
     Carrier:   "jitsi",
-    // Используйте meet.small-dm.ru, meet1.arbitr.ru или meet.handyweb.org - тот, что работает в вашей сети
-    RoomURL:   "https://meet.small-dm.ru/myroom",
+    // Instances: see docs/examples/jitsi.instances.yaml
+    RoomURL:   "https://meet.example.org/myroom",
     KeyHex:    "<64-char hex>",
     DNSServer: "8.8.8.8:53",
 })
 err := srv.Run(ctx)
 ```
 
-В этом API поле `Carrier` сохранено ради совместимости с существующими интеграциями; по смыслу это имя `auth.provider`.
+In this API the `Carrier` field is kept for compatibility with existing integrations; semantically it is the `auth.provider` name.
 
 ## Mobile / Android
 
-`mobile/mobile.go` предоставляет gomobile API:
+`mobile/mobile.go` provides a gomobile API:
 
-- `SetProtector` для Android VPN `protect(fd)`;
+- `SetProtector` for Android VPN `protect(fd)`;
 - `SetTransport`, `SetDNS`, `SetVP8Options`, `SetLivenessOptions`;
 - `Start`, `StartWithTransport`, `Stop`;
-- `Check`/ping helpers для проверки доступности.
+- `Check`/ping helpers to check reachability.
 
-По умолчанию mobile-клиент использует `vp8channel`; `datachannel` тоже поддерживается.
+By default the mobile client uses `vp8channel`; `datachannel` is also supported.
 
-## Тесты
+## Tests
 
 ```bash
 go test -count=1 ./...
@@ -255,28 +257,28 @@ mage test
 mage e2e
 ```
 
-Real-provider E2E включаются через переменные:
+Real-provider E2E is enabled via variables:
 
 ```bash
 E2E_CARRIERS=wbstream E2E_TRANSPORTS= vp8channel mage e2e
 ```
 
-## Частые проблемы
+## Common problems
 
-| Симптом | Что проверить |
+| Symptom | What to check |
 |---|---|
-| `key required` или `invalid key` | на обеих сторонах одинаковый 64-символьный hex key |
-| SOCKS5 не слушает | `mode: cnc`, `socks.host`, `socks.port`, логи клиента |
-| Jitsi не соединяется без второго участника | сервер и клиент должны быть в одной комнате |
-| WB Stream + datachannel не работает | в guest flow нет `canPublishData`; используй `vp8channel`, `seichannel` или `videochannel` |
-| `seichannel ack timeout` | провайдер режет/не маршрутизирует video path; смени transport/provider |
-| `ffmpeg` not found | установи ffmpeg или задай `ffmpeg: /path/to/ffmpeg` |
+| `key required` or `invalid key` | the same 64-character hex key on both sides |
+| SOCKS5 not listening | `mode: cnc`, `socks.host`, `socks.port`, client logs |
+| Jitsi does not connect without a second participant | server and client must be in the same room |
+| WB Stream + datachannel does not work | guest flow has no `canPublishData`; use `vp8channel`, `seichannel` or `videochannel` |
+| `seichannel ack timeout` | the provider throttles/does not route the video path; change transport/provider |
+| `ffmpeg` not found | install ffmpeg or set `ffmpeg: /path/to/ffmpeg` |
 
-## Ссылки
+## Links
 
-- [Быстрый старт](fast.md)
-- [Ручная сборка](manual.md)
-- [Настройка YAML](configuration.md)
-- [Матрица совместимости](settings.md)
-- [URI формат](uri.md)
-- [Формат подписки](sub.md)
+- [Quick start](fast.md)
+- [Manual build](manual.md)
+- [YAML configuration](configuration.md)
+- [Compatibility matrix](settings.md)
+- [URI format](uri.md)
+- [Subscription format](sub.md)

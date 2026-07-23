@@ -155,6 +155,30 @@ func NewPeer(ln transport.PeerTransport, cipher *crypto.Cipher, peerID string) *
 	}
 }
 
+// NewPeerControl wires a Conn to the per-peer control plane of a
+// transport.PeerControlPlane. Returns nil if the transport does not implement
+// PeerControlPlane. The caller is responsible for registering a push callback
+// via cp.SetControlOnPeerData to drive this conn's Push.
+func NewPeerControl(ln transport.Transport, cipher *crypto.Cipher, peerID string) *Conn {
+	cp, ok := ln.(transport.PeerControlPlane)
+	if !ok {
+		return nil
+	}
+	c := &Conn{
+		ln: ln,
+		send: func(data []byte) error {
+			return cp.ControlSendTo(peerID, data)
+		},
+		canSend: func() bool {
+			return cp.ControlPeerCanSend(peerID)
+		},
+		cipher:  cipher,
+		in:      make(chan *[]byte, inboundQueue),
+		closeCh: make(chan struct{}),
+	}
+	return c
+}
+
 // Push hands an encrypted wire payload (one OnData event) to the conn.
 //
 // On the producer side: borrow a pooled plaintext buffer, decrypt into

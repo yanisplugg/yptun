@@ -2,7 +2,9 @@ package vp8channel
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"net"
 	"testing"
 	"time"
@@ -26,15 +28,28 @@ func TestKCPConnReadWriteDeadlinesAndClose(t *testing.T) {
 		t.Fatalf("WriteTo() = (%d, %v), want payload length", n, err)
 	}
 	wire := <-out
-	if !bytes.Equal(wire[:epochHdrLen], hdr[:]) || string(wire[epochHdrLen:]) != "payload" {
+	// Wire layout is [epoch header][KCP packet][CRC32(packet)].
+	body := wire[epochHdrLen : len(wire)-wireCRCLen]
+	if !bytes.Equal(wire[:epochHdrLen], hdr[:]) || string(body) != "payload" {
 		t.Fatalf("wire packet = %v", wire)
 	}
 
-	conn.deliver([]byte("incoming"))
+	// deliver expects the CRC trailer WriteTo appends; build it the same way.
+	incoming := append([]byte("incoming"), make([]byte, wireCRCLen)...)
+	binary.BigEndian.PutUint32(incoming[len("incoming"):], crc32.Checksum([]byte("incoming"), crcTable))
+	conn.deliver(incoming)
 	buf := make([]byte, 64)
 	n, addr, err := conn.ReadFrom(buf)
 	if err != nil || addr == nil || string(buf[:n]) != "incoming" {
 		t.Fatalf("ReadFrom() = (%d, %v, %v), payload %q", n, addr, err, buf[:n])
+	}
+
+	// A corrupted packet (CRC mismatch) must be dropped, not delivered.
+	corrupt := append([]byte("incoming"), make([]byte, wireCRCLen)...)
+	binary.BigEndian.PutUint32(corrupt[len("incoming"):], 0xDEADBEEF)
+	conn.deliver(corrupt)
+	if len(conn.in) != 0 {
+		t.Fatalf("corrupt packet was delivered, in-queue len = %d", len(conn.in))
 	}
 
 	if err := conn.Close(); err != nil {

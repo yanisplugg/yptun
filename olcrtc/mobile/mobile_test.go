@@ -208,6 +208,40 @@ func TestStartWithInjectedRunnerLifecycle(t *testing.T) {
 	}
 }
 
+func TestSetWBTokenReachesClientConfig(t *testing.T) {
+	resetMobileGlobals(t)
+	t.Cleanup(func() {
+		resetMobileGlobals(t)
+	})
+
+	SetWBToken("  tok-123  ")
+
+	seen := make(chan string, 1)
+	runClientWithReady = func(ctx context.Context, cfg client.Config, onReady func()) error {
+		seen <- cfg.AuthToken
+		onReady()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	if err := Start(carrierWBStream, testRoomID, "client", "key", 1086, "", ""); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := WaitReady(100); err != nil {
+		t.Fatalf("WaitReady() error = %v", err)
+	}
+	Stop()
+
+	select {
+	case got := <-seen:
+		if got != "tok-123" {
+			t.Fatalf("AuthToken = %q, want %q", got, "tok-123")
+		}
+	default:
+		t.Fatal("Start did not pass AuthToken to client")
+	}
+}
+
 //nolint:cyclop // table-driven test naturally has many branches
 func TestStartUsesDefaultsAndCheckWithInjectedRunner(t *testing.T) {
 	resetMobileGlobals(t)

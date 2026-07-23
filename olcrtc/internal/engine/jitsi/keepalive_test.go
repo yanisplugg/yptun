@@ -322,6 +322,39 @@ func TestPeerConnectionFailureRequestsReconnect(t *testing.T) {
 	}
 }
 
+// TestXMPPDomainTargetsVirtualhost guards the keepalive ping target fix:
+// the ping must be addressed to the XMPP domain taken from the bound JID,
+// not the public web host. On instances where the web host differs from
+// the XMPP virtualhost (e.g. host meet.mamba.group vs domain meet.jitsi)
+// Prosody rejected a ping to the web host with not-allowed, leaving the
+// keepalive dead and the BOSH session expiring 60s into every idle window.
+func TestXMPPDomainTargetsVirtualhost(t *testing.T) {
+	const (
+		xmppVHost = "meet.jitsi"
+		webHost   = "meet.mamba.group"
+	)
+	tests := []struct {
+		name     string
+		jid      string
+		fallback string
+		want     string
+	}{
+		{"web host differs from xmpp domain", "8307a4f4@" + xmppVHost + "/T4i4s0jt", webHost, xmppVHost},
+		{"no resource part", "uuid@" + xmppVHost, webHost, xmppVHost},
+		{"empty jid falls back to host", "", webHost, webHost},
+		{"jid without domain falls back", "node-only", "meet.handyweb.org", "meet.handyweb.org"},
+		{"empty domain falls back", "node@/resource", "meet.small-dm.ru", "meet.small-dm.ru"},
+		{"domain only with resource", "node@" + xmppVHost + "/", "fallback.host", xmppVHost},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := xmppDomain(tt.jid, tt.fallback); got != tt.want {
+				t.Fatalf("xmppDomain(%q, %q) = %q, want %q", tt.jid, tt.fallback, got, tt.want)
+			}
+		})
+	}
+}
+
 func drainReconnectChNonBlocking(s *Session) {
 	for {
 		select {

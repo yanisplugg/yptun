@@ -5,14 +5,16 @@
 ![License](https://img.shields.io/badge/license-WTFPL-0D1117?style=flat-square&logo=open-source-initiative&logoColor=green&labelColor=0D1117)
 ![Golang](https://img.shields.io/badge/-Golang-0D1117?style=flat-square&logo=go&logoColor=00A7D0)
 
+[RU](settings.ru.md) / **EN**
+
 </div>
 
 
-# Настройки
+# Settings
 
-> **Важно:** Обязательно проверяйте, есть ли сервис видеозвонков у вас в белых списках. Если его там нет - используйте другой. Список всех сервисов в белых списках скоро будет опубликован.
+> **Important:** always check whether the video call service you need is on the allow lists. If it is not there, use another one. A list of all allow-listed services will be published soon.
 
-## Матрица совместимости
+## Compatibility matrix
 
 | Transport | telemost | wbstream | jitsi |
 |-----------|:--------:|:--------:|:-----:|
@@ -21,189 +23,206 @@
 | seichannel | - | + | ~ |
 | videochannel | + | + | ~ |
 
-**Легенда:**
-- `+` - работает (pass в E2E тестах)
-- `-` - не работает / не поддерживается (fail в E2E тестах)
-- `~` - нестабильно (может работать)
+**Legend:**
+- `+` - works (passes E2E tests)
+- `-` - does not work / not supported (fails E2E tests)
+- `~` - unstable (may work)
 
-**Telemost:** только vp8channel стабильно проходит. DataChannel удалён из Telemost. seichannel не поддерживается. videochannel - медленно.
+**Telemost:** only vp8channel passes stably. DataChannel was removed from Telemost. seichannel is not supported. videochannel is slow.
 
-**WBStream:** все транспорты кроме datachannel работают. DataChannel в обычном guest flow без выдавания модератора не работает - WB Stream выдаёт токены с `canPublishData=false`, и DC не маршрутизирует данные.
+**WBStream:** all transports except datachannel work. DataChannel does not work in the normal guest flow without being granted moderator - WB Stream issues tokens with `canPublishData=false`, and DC does not route data. To use `datachannel` over `wbstream`, set `auth.token` to an account/moderator token (`canPublishData=true`); see `auth.token` in the optional fields below.
 
-**Jitsi:** datachannel стабильно проходит - реализован поверх colibri-ws bridge channel и шлёт байты через `EndpointMessage{raw}` broadcast. Подходит для self-hosted и публичных Jitsi Meet инстансов без аутентификации (`https://meet.small-dm.ru/...`, `https://meet1.arbitr.ru/...`, `https://meet.handyweb.org/...`, `https://meet.jit.si/...` и т.п.). Проверьте в браузере, какой из серверов доступен в вашей сети. Видео-транспорты (vp8channel, seichannel, videochannel) экспонируют sendable VideoTrack через pion PeerConnection после Jingle session-accept, но Jicofo требует дополнительных протокольных шагов (LastN, ReceiverVideoConstraints, source-add) для маршрутизации видео - поэтому они помечены `~` .
+**Jitsi:** datachannel passes stably - it is implemented on top of the colibri-ws bridge channel and sends bytes via an `EndpointMessage{raw}` broadcast. It fits self-hosted and public Jitsi Meet instances without authentication (`https://meet.jit.si/...` etc.; instances in docs/examples/jitsi.instances.yaml). Check in a browser which of the servers is reachable in your network. Video transports (vp8channel, seichannel, videochannel) expose a sendable VideoTrack through the pion PeerConnection after the Jingle session-accept, but Jicofo requires additional protocol steps (LastN, ReceiverVideoConstraints, source-add) to route video - that is why they are marked `~`.
 
-**Jitsi + seichannel - отдельная оговорка.** SEI NAL-юниты идут пассажиром в H.264 видеопотоке, а Jicofo на self-hosted инстансах (например `meet.small-dm.ru`, `meet1.arbitr.ru`) периодически режет/откладывает upstream видео когда ресивера в комнате формально нет - для нас это выглядит как `seichannel ack timeout` при формально живом PeerConnection. В steady-state транспорт работает, но e2e матрица помечает его `Unstable` (флаппит): зелёного и красного результата в CI достаточно, тест suite на этом не валится. Для надёжной передачи данных через jitsi предпочтительнее `datachannel` или `vp8channel`.
+**Jitsi + seichannel - a separate caveat.** SEI NAL units ride along inside the H.264 video stream, and Jicofo on self-hosted instances (for example `meet.egovm.ru`) periodically cuts/delays upstream video when there is formally no receiver in the room - for us this looks like a `seichannel ack timeout` while the PeerConnection is formally alive. In steady state the transport works, but the e2e matrix marks it `Unstable` (it flaps): a green or red result in CI is enough, the test suite does not fail on it. For reliable data transfer over jitsi, prefer `datachannel` or `vp8channel`.
 
-**Рекомендуемая комбинация: `jitsi + datachannel`** - стабильно работает на любом self-hosted или публичном Jitsi Meet (например `meet.small-dm.ru`, `meet1.arbitr.ru` или `meet.handyweb.org` - проверьте, какой доступен в вашей сети), не требует регистрации, простая руму создания. Альтернатива: `wbstream + vp8channel` - стабильно для коммерческих сценариев, не требует специальных прав.
+**Recommended combination: `jitsi + datachannel`** - works stably on any self-hosted or public Jitsi Meet (instances in docs/examples/jitsi.instances.yaml - check which one is reachable), needs no registration, simple room creation. Alternative: `wbstream + vp8channel` - stable for commercial scenarios, needs no special rights.
 
-Скорость по убыванию: `datachannel` > `vp8channel` > `seichannel` > `videochannel`
+Speed in descending order: `datachannel` > `vp8channel` > `seichannel` > `videochannel`
 
 ---
 
-## Обязательные поля YAML конфига
+## Required YAML config fields
 
-| YAML поле | Что вводить |
+| YAML field | What to enter |
 |-----------|-------------|
-| `mode` | `srv` на сервере, `cnc` на клиенте, `gen` для генерации Room ID |
-| `auth.provider` | `telemost`, `wbstream`, `jitsi` или `none` |
-| `net.transport` | `datachannel`, `vp8channel`, `seichannel` или `videochannel` |
+| `mode` | `srv` on the server, `cnc` on the client, `gen` to generate a Room ID |
+| `auth.provider` | `telemost`, `wbstream`, `jitsi` or `none` |
+| `net.transport` | `datachannel`, `vp8channel`, `seichannel` or `videochannel` |
 | `room.id` | Room ID |
-| `crypto.key` или `crypto.key_file` | Ключ шифрования hex 64 символа. Генерация: `openssl rand -hex 32` |
-| `data` | Всегда `data` |
-| `net.dns` | DNS-сервер, например `8.8.8.8:53` |
+| `crypto.key` or `crypto.key_file` | Encryption key, hex 64 chars. Generate: `openssl rand -hex 32` |
+| `data` | Always `data` |
+| `net.dns` | DNS server, e.g. `8.8.8.8:53` |
 
 ---
 
-## Необязательные поля
+## Optional fields
 
-| YAML поле | Описание |
+| YAML field | Description |
 |-----------|----------|
-| `debug` | `true` для подробных логов соединений |
-| `profiles` | Список профилей failover для `srv`/`cnc` |
-| `failover.retry_delay` | Пауза перед следующим профилем, например `2s` |
-| `failover.max_cycles` | Сколько полных проходов по профилям сделать; `0` = бесконечно |
-| `liveness.interval` | Интервал ping по control stream, по умолчанию `10s` |
-| `liveness.timeout` | Сколько ждать pong, по умолчанию `5s` |
-| `liveness.failures` | Сколько pong можно пропустить перед rebuild, по умолчанию `3` |
-| `lifecycle.max_session_duration` | Плановый rebuild сессии после указанного времени, например `6h`; если поле не задано, выключено |
-| `traffic.max_payload_size` | Лимит размера зашифрованного wire-message; `0` = лимит транспорта |
-| `traffic.min_delay` / `.max_delay` | Необязательный pacing отправки, например `5ms` / `30ms` |
+| `debug` | `true` for verbose connection logs |
+| `auth.token` | Pre-issued account token for `wbstream`. When set, the session joins as that account instead of an anonymous guest; empty uses the guest flow. In the guest flow the obtained token is logged once so it can be copied back into this field to keep the same identity. Practical effect for `datachannel`: a guest token carries `canPublishData=false`, so the SCTP data channel opens but routes no bytes (the tunnel is up and silent); an account token with moderator rights carries `canPublishData=true` and routes data normally. So `datachannel` over `wbstream` requires an `auth.token` with publish rights; on the guest flow use `vp8channel`, `seichannel` or `videochannel` instead. To grant moderator: open the participants list, then the three dots next to the client/server entry, then the `Moderator` button (needed on both sides) |
+| `profiles` | List of failover profiles for `srv`/`cnc` |
+| `failover.retry_delay` | Pause before the next profile, e.g. `2s` |
+| `failover.max_cycles` | How many full passes over the profiles to make; `0` = unlimited |
+| `liveness.interval` | Ping interval over the control stream, default `10s` |
+| `liveness.timeout` | How long to wait for a pong, default `5s` |
+| `liveness.failures` | How many pongs may be missed before a rebuild, default `3` |
+| `lifecycle.max_session_duration` | Planned session rebuild after the given time, e.g. `6h`; if unset, disabled |
+| `traffic.max_payload_size` | Limit on the encrypted wire-message size; `0` = transport limit |
+| `traffic.min_delay` / `.max_delay` | Optional send pacing, e.g. `5ms` / `30ms` |
 
-`crypto.key_file` читается относительно YAML-файла. Не указывай `crypto.key` и `crypto.key_file` одновременно.
+`crypto.key_file` is read relative to the YAML file. Do not set `crypto.key` and `crypto.key_file` at the same time.
 
-Если задан `profiles`, поля верхнего уровня становятся общими defaults, а
-каждый профиль переопределяет только свои `auth`, `room`, `net`, `engine` и
-настройки транспорта/liveness. Порядок профилей должен совпадать на сервере и
-клиенте.
+If `profiles` is set, the top-level fields become shared defaults, and each
+profile overrides only its own `auth`, `room`, `net`, `engine` and
+transport/liveness settings. The profile order must match on server and client.
 
-`liveness` проверяет именно зашифрованный smux control stream после handshake,
-а не только статус WebRTC/provider соединения. Если pong не приходит несколько
-раз подряд, текущая smux-сессия пересоздается.
+`liveness` checks the encrypted smux control stream after the handshake,
+not just the WebRTC/provider connection status. If a pong does not arrive
+several times in a row, the current smux session is rebuilt.
 
-`lifecycle.max_session_duration` ограничивает длительность одного звонка /
-provider session. Когда таймер истекает, текущая `srv` или `cnc` сессия
-закрывается и стартует заново с тем же конфигом. Пока эта настройка включена,
-чистое завершение сессии тоже перезапускается, чтобы второй peer мог догнать
-плановый rebuild. Формат значения: `30m`, `2h`, `6h`; `0s` и отрицательные
-значения не принимаются.
+`lifecycle.max_session_duration` limits the duration of a single call /
+provider session. When the timer expires, the current `srv` or `cnc` session
+closes and starts again with the same config. While this setting is enabled,
+a clean session end is also restarted so the second peer can catch up with the
+planned rebuild. Value format: `30m`, `2h`, `6h`; `0s` and negative values are
+not accepted.
 
-`traffic` добавляет общий wrapper над выбранным transport. Он может ограничить
-размер зашифрованного сообщения и добавить небольшую задержку перед отправкой.
-Данные не обрезаются: если сообщение не помещается в эффективный лимит, send
-возвращает явную ошибку. При заданном `max_payload_size` smux frame size также
-уменьшается с учетом crypto overhead; при `0` остается лимит выбранного
-transport. Используй одинаковые traffic-настройки на обеих сторонах.
+`traffic` adds a common wrapper over the chosen transport. It can limit the
+encrypted message size and add a small delay before sending. Data is not
+truncated: if a message does not fit the effective limit, send returns an
+explicit error. When `max_payload_size` is set, the smux frame size is also
+reduced by the crypto overhead; with `0` the chosen transport limit remains.
+Use the same traffic settings on both sides.
 
 ---
 
 ## mode: gen
 
-`gen` оставлен для auth-провайдеров, которые умеют создавать комнаты через API.
-Сейчас встроенные провайдеры не поддерживают автосоздание комнат через `olcrtc`.
+`gen` is kept for auth providers that can create rooms through an API.
+Currently the built-in providers do not support room auto-creation through `olcrtc`.
 
-Для `telemost` и `wbstream` создай комнату через сайт сервиса и вставь её ID в
-`room.id`. Для `jitsi` укажи URL комнаты.
+For `telemost` and `wbstream`, create a room through the service site and paste
+its ID into `room.id`. For `jitsi`, specify the room URL.
 
 ---
 
-## Поля только для сервера (`mode: srv`)
+## Server-only fields (`mode: srv`)
 
-| YAML поле | Описание |
+| YAML field | Description |
 |-----------|----------|
-| `socks.proxy_addr` | Адрес SOCKS5-прокси для исходящего трафика сервера |
-| `socks.proxy_port` | Порт этого прокси |
-| `socks.proxy_user` | Логин для аутентификации на upstream-прокси (необязательно) |
-| `socks.proxy_pass` | Пароль для аутентификации на upstream-прокси (необязательно) |
+| `socks.proxy_addr` | Address of the SOCKS5 proxy for the server outbound traffic |
+| `socks.proxy_port` | Port of that proxy |
+| `socks.proxy_user` | Login for upstream-proxy authentication (optional) |
+| `socks.proxy_pass` | Password for upstream-proxy authentication (optional) |
 
-Если `socks.proxy_user` пуст - сервер ходит к прокси без аутентификации (метод `0x00`).
-Если задан - используется username/password auth по RFC 1929 (`proxy_pass` опционален, может быть пустым).
+If `socks.proxy_user` is empty, the server reaches the proxy without authentication (method `0x00`).
+If it is set, username/password auth per RFC 1929 is used (`proxy_pass` is optional and may be empty).
 
 ---
 
-## Поля только для клиента (`mode: cnc`)
+## Client-only fields (`mode: cnc`)
 
-| YAML поле | Описание | По умолчанию |
+| YAML field | Description | Default |
 |-----------|----------|:------------:|
-| `socks.host` | На каком адресе поднять SOCKS5 | `127.0.0.1` |
-| `socks.port` | На каком порту поднять SOCKS5 | `1080` |
-| `socks.user` | Логин для входящих SOCKS5-подключений (необязательно) | - |
-| `socks.pass` | Пароль для входящих SOCKS5-подключений (необязательно) | - |
+| `socks.host` | Which address to start SOCKS5 on | `127.0.0.1` |
+| `socks.port` | Which port to start SOCKS5 on | `1080` |
+| `socks.user` | Login for incoming SOCKS5 connections (optional) | - |
+| `socks.pass` | Password for incoming SOCKS5 connections (optional) | - |
 
-Если `socks.user` не задан - аутентификация отключена (любой локальный клиент может подключиться).  
-Если задан - клиент принимает только подключения с правильным логином и паролем (RFC 1929).
+If `socks.user` is not set, authentication is disabled (any local client may connect).  
+If it is set, the client accepts only connections with the correct login and password (RFC 1929).
 
-Если `socks.host` не loopback (`127.0.0.1`, `::1`, `localhost`), `socks.user` и `socks.pass` обязательны.
-Это защита от случайного открытого SOCKS5-прокси в локальной сети или интернете.
+If `socks.host` is not loopback (`127.0.0.1`, `::1`, `localhost`), `socks.user` and `socks.pass` are required.
+This protects against accidentally opening a SOCKS5 proxy on the local network or the internet.
 
 ---
 
 ## datachannel
 
-Дополнительных полей нет - всё по умолчанию.
+No extra fields - everything is default.
 
 ---
 
 ## vp8channel
 
-**Рекомендуется: `fps: 30`, `batch_size: 64`** (меньше FPS снижает CPU-нагрузку, больший batch = выше скорость)
+**Recommended: `fps: 30`, `batch_size: 64`** (lower FPS reduces CPU load, larger batch = higher speed)
 
-| YAML поле | Описание | По умолчанию |
+| YAML field | Description | Default |
 |-----------|----------|:------------:|
-| `vp8.fps` | FPS VP8 потока | `30` |
-| `vp8.batch_size` | Кадров за тик | `64` |
+| `vp8.fps` | VP8 stream FPS | `30` |
+| `vp8.batch_size` | Frames per tick | `64` |
 
 ---
 
 ## seichannel
 
-**Рекомендуется: `fps: 30`, `batch_size: 64`, `fragment_size: 900`, `ack_timeout_ms: 2000`**
+**Recommended: `fps: 30`, `batch_size: 64`, `fragment_size: 900`, `ack_timeout_ms: 2000`**
 
-| YAML поле | Описание | По умолчанию |
+| YAML field | Description | Default |
 |-----------|----------|:------------:|
-| `sei.fps` | FPS H264 потока | `30` |
-| `sei.batch_size` | Кадров за тик | `64` |
-| `sei.fragment_size` | Размер фрагмента в байтах | `900` |
-| `sei.ack_timeout_ms` | Таймаут ACK в миллисекундах | `2000` |
+| `sei.fps` | H264 stream FPS | `30` |
+| `sei.batch_size` | Frames per tick | `64` |
+| `sei.fragment_size` | Fragment size in bytes | `900` |
+| `sei.ack_timeout_ms` | ACK timeout in milliseconds | `2000` |
 
 ---
 
 ## videochannel
 
-**Рекомендуется: `codec: qrcode`, `width: 1080`, `height: 1080`, `fps: 30`, `bitrate: "5000k"`, `hw: none`**
+**Recommended: `codec: qrcode`, `width: 1080`, `height: 1080`, `fps: 30`, `bitrate: "5000k"`, `hw: none`**
 
-| YAML поле | Описание | По умолчанию |
+| YAML field | Description | Default |
 |-----------|----------|:------------:|
-| `video.codec` | `qrcode` или `tile` | `qrcode` |
-| `video.width` | Ширина в пикселях | `1920` |
-| `video.height` | Высота в пикселях | `1080` |
+| `video.codec` | `qrcode` or `tile` | `qrcode` |
+| `video.width` | Width in pixels | `1920` |
+| `video.height` | Height in pixels | `1080` |
 | `video.fps` | FPS | `30` |
-| `video.bitrate` | Битрейт, например `"2M"` или `"5000k"` | `"2M"` |
-| `video.hw` | Аппаратное ускорение: `none` или `nvenc` | `none` |
-| `video.qr_recovery` | Коррекция ошибок QR: `low` / `medium` / `high` / `highest` | `low` |
-| `video.qr_size` | Размер фрагмента QR в байтах, `0` = авто | `0` |
-| `video.tile_module` | Размер тайла в пикселях 1..270 (только `tile`) | `4` |
-| `video.tile_rs` | Reed-Solomon паритет % 0..200 (только `tile`) | `20` |
-| `ffmpeg` | Путь к исполняемому файлу ffmpeg | `ffmpeg` |
+| `video.bitrate` | Bitrate, e.g. `"2M"` or `"5000k"` | `"2M"` |
+| `video.hw` | Hardware acceleration: `none` or `nvenc` | `none` |
+| `video.qr_recovery` | QR error correction: `low` / `medium` / `high` / `highest` | `low` |
+| `video.qr_size` | QR fragment size in bytes, `0` = auto | `0` |
+| `video.tile_module` | Tile size in pixels 1..270 (`tile` only) | `4` |
+| `video.tile_rs` | Reed-Solomon parity % 0..200 (`tile` only) | `20` |
+| `ffmpeg` | Path to the ffmpeg executable | `ffmpeg` |
 
-Для codec `tile` нужно точно `1080x1080`.
+For codec `tile` exactly `1080x1080` is required.
 
 ---
 
-## Готовые конфиги
+## Ready-made configs
 
-### wbstream + datachannel (не работает в обычном guest flow)
+### wbstream + datachannel (does not work in the normal guest flow)
 
-WB Stream DataChannel **не работает** в обычном guest flow - WB Stream выдаёт токены с `canPublishData=false`, и DC не маршрутизирует данные. Этот режим помечен как expected fail в E2E тестах. Для обычного использования выбирай `vp8channel`, `seichannel` или `videochannel`.
+WB Stream DataChannel **does not work** in the normal guest flow - WB Stream issues tokens with `canPublishData=false`, and DC does not route data. This mode is marked as expected fail in E2E tests. For normal use pick `vp8channel`, `seichannel` or `videochannel`.
+
+To make `datachannel` work you need an account/moderator token in `auth.token` (`canPublishData=true`) on both sides. To grant moderator in the WB Stream UI: open the participants list
+
+![participants list](asset/participants.png)
+
+click the three dots next to the client/server entry
+
+![entry menu](asset/menu.png)
+
+then press the `Moderator` button
+
+![moderator button](asset/moderator-button.png)
+
+> Future work: when joining with a ghost/account token that already holds
+> moderator rights, the client could be auto-promoted to moderator so
+> `datachannel` works without manual promotion. Not implemented yet;
+> moderator is still required on both sides manually.
 
 ```yaml
-# room ID нужно создать вручную через https://stream.wb.ru
+# the room ID must be created manually via https://stream.wb.ru
 
 # server.yaml
 mode: srv
 auth:
   provider: wbstream
 room:
-  id: "<room-id-со-stream.wb.ru>"
+  id: "<room-id-from-stream.wb.ru>"
 crypto:
   key: "<hex-key>"
 net:
@@ -218,7 +237,7 @@ mode: cnc
 auth:
   provider: wbstream
 room:
-  id: "<room-id-со-stream.wb.ru>"
+  id: "<room-id-from-stream.wb.ru>"
 crypto:
   key: "<hex-key>"
 net:
@@ -230,10 +249,10 @@ socks:
 data: data
 ```
 
-### wbstream + datachannel + SOCKS5 аутентификация (не работает в обычном guest flow)
+### wbstream + datachannel + SOCKS5 authentication (does not work in the normal guest flow)
 
 ```yaml
-# client.yaml с логином и паролем на прокси
+# client.yaml with proxy login and password
 mode: cnc
 auth:
   provider: wbstream
@@ -252,10 +271,10 @@ socks:
 data: data
 ```
 
-Использование:
+Usage:
 ```sh
 curl --socks5-hostname myuser:mypass@127.0.0.1:8808 https://icanhazip.com
-# или
+# or
 export all_proxy=socks5h://myuser:mypass@127.0.0.1:8808
 ```
 
@@ -302,9 +321,9 @@ vp8:
 data: data
 ```
 
-### telemost + seichannel (не работает)
+### telemost + seichannel (does not work)
 
-> ⚠️ Эта комбинация помечена как expected fail в E2E тестах. Telemost не поддерживает seichannel.
+> ⚠️ This combination is marked as expected fail in E2E tests. Telemost does not support seichannel.
 
 ```yaml
 # server.yaml
@@ -349,7 +368,7 @@ sei:
 data: data
 ```
 
-### telemost + videochannel (best effort, нестабильно)
+### telemost + videochannel (best effort, unstable)
 
 ```yaml
 # server.yaml
@@ -400,6 +419,6 @@ data: data
 
 ---
 
-Подробнее про запуск: [Быстрый старт](fast.md) · [Мануальная сборка](manual.md)
+More on running: [Quick start](fast.md) · [Manual build](manual.md)
 
-URI-формат для клиентов: [uri.md](uri.md) · [Формат подписки](sub.md)
+URI format for clients: [uri.md](uri.md) · [Subscription format](sub.md)

@@ -71,11 +71,37 @@ type PeerTransport interface {
 	SupportsPeerRouting() bool
 }
 
+// PeerControlPlane is implemented by transports that support per-peer isolated
+// control planes. Each peer identified by peerID gets its own KCP session so
+// that multiple clients can handshake and maintain liveness independently.
+// The server uses this to create per-peer smux control sessions.
+type PeerControlPlane interface {
+	// ControlSendTo sends a control frame to a specific peer.
+	ControlSendTo(peerID string, data []byte) error
+	// SetControlOnPeerData registers the callback invoked when a control frame
+	// arrives for any peer. peerID is the hex data-epoch string.
+	SetControlOnPeerData(cb func(peerID string, data []byte))
+	// ControlPeerCanSend reports whether the control plane for a specific peer
+	// is ready to send.
+	ControlPeerCanSend(peerID string) bool
+}
+
 // PeerReadyTransport is implemented by transports whose carrier can signal
 // when a remote peer has appeared. WaitForPeer blocks until the remote side
 // is confirmed ready (first epoch frame received), or ctx is cancelled.
 type PeerReadyTransport interface {
 	WaitForPeer(ctx context.Context) error
+}
+
+// LinkHealthObserver is implemented by transports whose peer-restart
+// heuristics want corroborating evidence from a session-specific liveness
+// signal before acting on carrier-level noise (e.g. unrelated room
+// participants).
+//
+// ai-generated: new interface, part of the "fix(vp8channel): gate
+// peer-restart heuristic on control-plane health" PR.
+type LinkHealthObserver interface {
+	NotifyLinkHealth(unhealthy bool)
 }
 
 // Options is a marker for per-transport option structs. Each transport package
@@ -100,9 +126,13 @@ type Config struct {
 	RoomURL string
 	// Engine, URL, Token are forwarded to carrier.Config for the "none" auth
 	// carrier (direct engine access without a service-specific auth flow).
-	Engine     string
-	URL        string
-	Token      string
+	Engine string
+	URL    string
+	Token  string
+	// AuthToken is an optional pre-issued account token forwarded to the auth
+	// provider (e.g. a WB Stream account token). Empty uses the provider's
+	// default guest flow.
+	AuthToken  string
 	ChannelID  string
 	DeviceID   string
 	Name       string

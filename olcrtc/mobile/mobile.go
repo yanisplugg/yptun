@@ -88,6 +88,7 @@ type mobileConfig struct {
 	transport        string
 	dnsServer        string
 	socksListenHost  string
+	authToken        string
 	vp8FPS           int
 	vp8BatchSize     int
 	livenessInterval time.Duration
@@ -147,6 +148,17 @@ func SetDNS(dnsServer string) {
 	defer mu.Unlock()
 	ensureDefaultConfigLocked()
 	defaults.dnsServer = dnsServer
+}
+
+// SetWBToken sets the pre-issued wbstream account token (auth.token).
+// When set, the session joins as that account instead of an anonymous guest;
+// empty keeps the guest flow. Required for datachannel over wbstream, which
+// needs an account/moderator token with canPublishData=true.
+func SetWBToken(token string) {
+	mu.Lock()
+	defer mu.Unlock()
+	ensureDefaultConfigLocked()
+	defaults.authToken = strings.TrimSpace(token)
 }
 
 // SetSocksListenHost selects the local bind host for the SOCKS5 listener.
@@ -268,6 +280,7 @@ func Check(
 				DeviceID:  clientID,
 				LocalAddr: socksListenAddr(cfg.socksListenHost, socksPort),
 				DNSServer: defaultDNSServer,
+				AuthToken: cfg.authToken,
 				TransportOptions: vp8channel.Options{
 					FPS:       clampAtLeastOne(vp8FPS, 120),
 					BatchSize: clampAtLeastOne(vp8BatchSize, 64),
@@ -358,6 +371,7 @@ func Ping(
 				DeviceID:  clientID,
 				LocalAddr: socksListenAddr(cfg.socksListenHost, socksPort),
 				DNSServer: defaultDNSServer,
+				AuthToken: cfg.authToken,
 				TransportOptions: vp8channel.Options{
 					FPS:       clampAtLeastOne(vp8FPS, 120),
 					BatchSize: clampAtLeastOne(vp8BatchSize, 64),
@@ -605,6 +619,7 @@ func startWithConfig(
 				DeviceID:  clientID,
 				LocalAddr: socksListenAddr(cfg.socksListenHost, socksPort),
 				DNSServer: cfg.dnsServer,
+				AuthToken: cfg.authToken,
 				SOCKSUser: socksUser,
 				SOCKSPass: socksPass,
 				TransportOptions: vp8channel.Options{
