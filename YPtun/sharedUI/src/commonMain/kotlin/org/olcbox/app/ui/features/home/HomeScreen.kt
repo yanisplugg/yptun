@@ -182,6 +182,22 @@ fun HomeScreen(
         }
     }
 
+    fun refreshOneSubscription(url: String) {
+        viewModel.refreshSubscription(url) { updatedCount ->
+            locationViewModel.loadLocations {
+                viewModel.restartVpnIfRunning()
+                val message = if (updatedCount > 0) {
+                    s.subscriptionsUpdatedCount(updatedCount)
+                } else {
+                    s.subscriptionsUpdated
+                }
+                scope.launch {
+                    snackbarHostState.showSnackbar(message)
+                }
+            }
+        }
+    }
+
     fun refreshHttpPings(targetLocationIds: List<String>? = null) {
         locationViewModel.refreshPings(
             targetLocationIds = targetLocationIds,
@@ -476,6 +492,9 @@ fun HomeScreen(
                 },
                 onSetSubscriptionAutoUpdate = { url, enabled ->
                     locationViewModel.setSubscriptionAutoUpdate(url, enabled)
+                },
+                onRefreshSubscription = { url ->
+                    refreshOneSubscription(url)
                 },
                 collapsedGroups = collapsedGroups,
                 pinnedGroups = pinnedGroups,

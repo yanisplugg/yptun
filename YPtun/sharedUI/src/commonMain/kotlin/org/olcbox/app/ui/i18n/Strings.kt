@@ -73,6 +73,7 @@ interface Strings {
     val groupUnpinFromTop: String
     val groupSortByPing: String
     val groupAutoUpdate: String
+    val refreshThisSubscription: String
     val visitSubscriptionPage: String
     val telegramProxyTitle: String
     val telegramProxySubtitle: String
@@ -690,6 +691,7 @@ object RuStrings : Strings {
     override val groupUnpinFromTop = "Открепить"
     override val groupSortByPing = "Сортировать по пингу"
     override val groupAutoUpdate = "Автообновление"
+    override val refreshThisSubscription = "Обновить подписку"
     override val visitSubscriptionPage = "Посетить страницу подписки"
     override val telegramProxyTitle = "Прокси Telegram"
     override val telegramProxySubtitle = "Фоновый SOCKS5 для Telegram. При первом включении нужен интернет — затем пропишите адрес в настройках прокси Telegram (или нажмите «Открыть Telegram»)."
@@ -1262,6 +1264,7 @@ object EnStrings : Strings {
     override val groupUnpinFromTop = "Unpin"
     override val groupSortByPing = "Sort by ping"
     override val groupAutoUpdate = "Auto-update"
+    override val refreshThisSubscription = "Update subscription"
     override val visitSubscriptionPage = "Visit subscription page"
     override val telegramProxyTitle = "Telegram proxy"
     override val telegramProxySubtitle = "Background SOCKS5 for Telegram. First enable needs internet — then set the address in Telegram's proxy settings (or tap \"Open Telegram\")."
@@ -1834,6 +1837,7 @@ object FaStrings : Strings {
     override val groupUnpinFromTop = "برداشتن سنجاق"
     override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
     override val groupAutoUpdate = "به‌روزرسانی خودکار"
+    override val refreshThisSubscription = "به‌روزرسانی اشتراک"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
     override val telegramProxyTitle = "پروکسی تلگرام"
     override val telegramProxySubtitle = "SOCKS5 پس‌زمینه برای تلگرام. اولین فعال‌سازی به اینترنت نیاز دارد — سپس آدرس را در تنظیمات پروکسی تلگرام وارد کنید (یا «باز کردن تلگرام» را بزنید)."
@@ -2406,6 +2410,7 @@ object ZhStrings : Strings {
     override val groupUnpinFromTop = "取消置顶"
     override val groupSortByPing = "按延迟排序"
     override val groupAutoUpdate = "自动更新"
+    override val refreshThisSubscription = "更新订阅"
     override val visitSubscriptionPage = "打开订阅页面"
     override val telegramProxyTitle = "Telegram 代理"
     override val telegramProxySubtitle = "为 Telegram 提供后台 SOCKS5。首次启用需联网，随后在 Telegram 的代理设置中填入该地址（或点击“打开 Telegram”）。"

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.SyncDisabled
@@ -93,6 +95,8 @@ fun LazyListScope.locationSelectorContent(
     onDeleteSubscription: (List<String>) -> Unit = {},
     // Toggle a single subscription's automatic refresh (keyed by its URL).
     onSetSubscriptionAutoUpdate: (subscriptionUrl: String, enabled: Boolean) -> Unit = { _, _ -> },
+    // Re-download a single subscription now (keyed by its URL), triggered from its overflow menu.
+    onRefreshSubscription: (subscriptionUrl: String) -> Unit = {},
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -258,6 +262,7 @@ fun LazyListScope.locationSelectorContent(
                             onToggleAutoUpdate = {
                                 groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
                             },
+                            onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) },
                             subscriptionPageUrl = groupWebPageUrl
@@ -406,6 +411,7 @@ fun LazyListScope.locationSelectorContent(
                                                 onToggleAutoUpdate = {
                                                     mSubUrl?.let { onSetSubscriptionAutoUpdate(it, !mAutoUpdate) }
                                                 },
+                                                onRefreshSubscription = mSubUrl?.let { url -> { onRefreshSubscription(url) } },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) },
                                                 subscriptionPageUrl = mWebPageUrl
@@ -783,6 +789,8 @@ private fun SubscriptionGroupMenu(
     onTogglePin: () -> Unit,
     onTogglePingSort: () -> Unit,
     onToggleAutoUpdate: () -> Unit,
+    // Non-null only when this group is backed by a subscription URL we can re-download.
+    onRefreshSubscription: (() -> Unit)? = null,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit,
     subscriptionPageUrl: String? = null
@@ -811,6 +819,17 @@ private fun SubscriptionGroupMenu(
                     leadingIcon = { Icon(Icons.Outlined.OpenInNew, contentDescription = null) },
                     onClick = {
                         runCatching { uriHandler.openUri(subscriptionPageUrl) }
+                        expanded = false
+                    }
+                )
+            }
+            // Re-download just this subscription now (distinct from the ping RefreshButton next to it).
+            if (onRefreshSubscription != null) {
+                DropdownMenuItem(
+                    text = { Text(s.refreshThisSubscription) },
+                    leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
+                    onClick = {
+                        onRefreshSubscription()
                         expanded = false
                     }
                 )
@@ -1219,13 +1238,20 @@ private fun LazyListScope.locationCards(
             items = pairs,
             key = { pair -> "$keyPrefix-pair-${pair.first().storageId}" }
         ) { pair ->
+            // height(IntrinsicSize.Max) + fillMaxHeight on the cells makes both tiles in the pair grow
+            // to the taller one's height, so paired tiles are always the same size ("плитки одинакового
+            // размера"). The lone-odd cell keeps its natural height (its Spacer partner has no content).
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Box(modifier = Modifier.weight(1f)) { cell(pair[0], Modifier.fillMaxWidth()) }
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    cell(pair[0], Modifier.fillMaxWidth().fillMaxHeight())
+                }
                 if (pair.size > 1) {
-                    Box(modifier = Modifier.weight(1f)) { cell(pair[1], Modifier.fillMaxWidth()) }
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        cell(pair[1], Modifier.fillMaxWidth().fillMaxHeight())
+                    }
                 } else {
                     Spacer(modifier = Modifier.weight(1f))
                 }
@@ -1249,12 +1275,16 @@ private fun LocationCardsColumn(
     if (twoColumns) {
         items.chunked(2).forEach { pair ->
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Box(modifier = Modifier.weight(1f)) { cell(pair[0], Modifier.fillMaxWidth()) }
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    cell(pair[0], Modifier.fillMaxWidth().fillMaxHeight())
+                }
                 if (pair.size > 1) {
-                    Box(modifier = Modifier.weight(1f)) { cell(pair[1], Modifier.fillMaxWidth()) }
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        cell(pair[1], Modifier.fillMaxWidth().fillMaxHeight())
+                    }
                 } else {
                     Spacer(modifier = Modifier.weight(1f))
                 }

@@ -498,28 +498,57 @@ fun LocationGridCell(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(verticalAlignment = Alignment.Top) {
-            if (emoji.isNotEmpty()) {
-                Text(text = emoji, fontSize = 18.sp)
-                Spacer(modifier = Modifier.width(6.dp))
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.Top) {
+                if (emoji.isNotEmpty()) {
+                    Text(text = emoji, fontSize = 18.sp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    text = cleanName,
+                    color = textColor,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    // Cap at 2 lines here (unlike the full-width row) so paired cells stay aligned.
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true,
+                    modifier = Modifier.weight(1f)
+                )
             }
-            Text(
-                text = cleanName,
-                color = textColor,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-                // Cap at 2 lines here (unlike the full-width row) so paired cells stay aligned.
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                softWrap = true,
-                modifier = Modifier.weight(1f)
-            )
+
+            // Subscription description (Happ meta.serverDescription) shown right under the name — the
+            // grid cell used to drop it entirely ("не видно описаний"). Falls back to the protocol/IP
+            // endpoint when there's no description (same rule as the full row).
+            val description = location.config?.description?.takeIf { it.isNotBlank() }
+            description?.let { desc ->
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = desc,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true
+                )
+            }
+            if (description == null || !LocalHideEndpointWhenDescription.current) {
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = locationSubtitle(location),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true
+                )
+            }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
