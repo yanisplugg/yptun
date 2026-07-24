@@ -138,6 +138,13 @@ object SingBoxConfig {
         // so a rooted device / router can redirect traffic through the core with no per-app proxy. The
         // SOCKS inbound is still emitted for coexistence. Requires root (IP_TRANSPARENT) to bind.
         tproxyPort: Int? = null,
+        // Resolve the `remote` DNS over TCP instead of UDP when it's a plain UDP resolver (bare IP /
+        // udp://). For a full UDP tunnel exposed as a local SOCKS (AmneziaWG via awgproxy), UDP DNS
+        // rides the SOCKS UDP-ASSOCIATE path, which is far less reliable than a plain TCP CONNECT; a
+        // flaky associate silently kills name resolution so the tunnel "only works with a 2nd proxy"
+        // (whose own protocol carries DNS). Forcing DNS over TCP makes it ride the proven CONNECT path.
+        // No-op for DoH/DoT/DoQ resolvers (already TCP/own transport) — only bare-IP/udp is rewritten.
+        preferTcpRemoteDns: Boolean = false,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
@@ -158,14 +165,14 @@ object SingBoxConfig {
                     // App traffic resolves through the proxy (no DNS leak).
                     addJsonObject {
                         put("tag", "remote")
-                        put("address", traffic.remoteDns)
+                        put("address", maybeTcpDns(traffic.remoteDns, preferTcpRemoteDns))
                         put("detour", PROXY_TAG)
                     }
                     // Optional second remote resolver (also via the proxy) — a fallback for "remote".
                     if (traffic.remoteDns2.isNotBlank()) {
                         addJsonObject {
                             put("tag", "remote2")
-                            put("address", traffic.remoteDns2)
+                            put("address", maybeTcpDns(traffic.remoteDns2, preferTcpRemoteDns))
                             put("detour", PROXY_TAG)
                         }
                     }
@@ -238,13 +245,10 @@ object SingBoxConfig {
                             }
                         }
                     }
-                    // Force the chosen IP family on a full UDP tunnel without rejecting: sniff the
-                    // domain, replace an IP-literal destination with it, and resolve to the family.
-                    if (sniffOverrideDestination) {
-                        put("sniff", true)
-                        put("sniff_override_destination", true)
-                        put("domain_strategy", effectiveStrategy)
-                    }
+                    // NOTE: legacy inbound fields sniff/sniff_override_destination/domain_strategy were
+                    // REMOVED in sing-box 1.13.0 (they crashed decode: "legacy inbound fields … removed").
+                    // Sniffing + the family override are now done via route-rule actions below
+                    // ({"action":"sniff"} + {"action":"resolve"}), keyed off [sniffOverrideDestination].
                 }
                 // Transparent-proxy inbound (root-only): TCP+UDP redirected traffic enters here. Sniff
                 // is enabled so routing/DNS rules still match on domain, exactly like the socks inbound.
@@ -255,11 +259,8 @@ object SingBoxConfig {
                         put("listen", listenHost)
                         put("listen_port", tproxyPort)
                         // network omitted → both TCP and UDP redirected traffic is accepted.
-                        put("sniff", true)
-                        if (sniffOverrideDestination) {
-                            put("sniff_override_destination", true)
-                            put("domain_strategy", effectiveStrategy)
-                        }
+                        // Sniff + family override handled by the route-rule actions below (the legacy
+                        // inbound sniff/sniff_override/domain_strategy fields were removed in 1.13.0).
                     }
                 }
             }
@@ -361,9 +362,18 @@ object SingBoxConfig {
                     val sbExpertStrategy = routingProfile
                         ?.takeIf { it.expertEnabled }?.singboxDomainStrategy?.takeIf { it.isNotBlank() }
                     // Sniff destination domain so domain rules match (advanced or expert can disable it).
-                    if (advanced?.sniff != false && (!sbExpert || routingProfile!!.singboxSniff)) {
+                    // A full UDP tunnel ([sniffOverrideDestination]) ALWAYS sniffs — the old code forced
+                    // sniff on the inbound there regardless of the advanced/expert toggle, and the resolve
+                    // action below needs the sniffed domain to override an IP-literal destination.
+                    if (sniffOverrideDestination ||
+                        (advanced?.sniff != false && (!sbExpert || routingProfile!!.singboxSniff))
+                    ) {
                         addJsonObject { put("action", "sniff") }
                     }
+                    // NOTE: the family override for full UDP tunnels (the old inbound
+                    // sniff_override_destination + domain_strategy) is already covered by the `resolve`
+                    // route action further down (gated on forceFamily / usesIpRules / …), so no extra
+                    // resolve is emitted here — that would double-resolve and reorder the rules.
                     // Block QUIC (HTTP/3) so clients fall back to TCP/HTTP2 through the proxy. A
                     // TCP-only transport (xhttp / reality / ws) can't carry UDP, so QUIC just dies
                     // with ERR_QUIC_PROTOCOL (Telemost, Wildberries, Google, …). Rejecting it forces
@@ -573,6 +583,23 @@ object SingBoxConfig {
     private fun parseJsonArray(raw: String): List<kotlinx.serialization.json.JsonElement> {
         if (raw.isBlank()) return emptyList()
         return runCatching { Json.parseToJsonElement(raw).jsonArray.toList() }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Rewrites a plain UDP DNS resolver address to its TCP form when [preferTcp] is set, so the query
+     * rides a SOCKS CONNECT instead of the flakier UDP-ASSOCIATE. DoH/DoT/DoQ and already-scheme'd
+     * addresses are left untouched; special keywords ("fakeip"/"local") too.
+     *   "8.8.8.8" → "tcp://8.8.8.8"  ·  "udp://1.1.1.1" → "tcp://1.1.1.1"  ·  "https://…" → unchanged
+     */
+    private fun maybeTcpDns(address: String, preferTcp: Boolean): String {
+        if (!preferTcp) return address
+        val a = address.trim()
+        if (a.isEmpty()) return address
+        if (a.lowercase().startsWith("udp://")) return "tcp://" + a.substring("udp://".length)
+        if (a.contains("://")) return address // explicit scheme (https/tls/quic/tcp/…) → leave as-is
+        // Bare resolver = UDP in sing-box; only rewrite something host-like, not keywords like "local".
+        if (!a.contains('.') && !a.contains(':')) return address
+        return "tcp://$a"
     }
 
     private fun buildProxyOutbound(
