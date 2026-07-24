@@ -82,6 +82,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.awt.awtEventOrNull
 import org.olcbox.app.desktop.GlobalHotkey
 import org.olcbox.app.desktop.HotkeyBinding
 import androidx.compose.ui.graphics.graphicsLayer
@@ -460,6 +461,21 @@ fun main(args: Array<String>) = application {
 
     val windowState = rememberWindowState(width = 430.dp, height = 780.dp)
 
+    // Ctrl+V (Cmd+V) imports a config link from the clipboard from anywhere in the app — the desktop
+    // equivalent of the "Вставить ссылку" button, which was the ONLY way in. Declared before the
+    // Window so the key handler can call it.
+    fun importFromClipboard() {
+        dependencies.homeViewModel.onPasteFromClipboard(
+            onComplete = {
+                dependencies.locationViewModel.loadLocations {
+                    dependencies.homeViewModel.loadCurrentConfig()
+                }
+                desktopNotice = if (trayRussian) "Ссылка импортирована" else "Link imported"
+            },
+            onError = { message -> desktopNotice = message }
+        )
+    }
+
     Window(
         title = "YPtun",
         icon = painterResource("LinuxIcon.png"),
@@ -467,6 +483,16 @@ fun main(args: Array<String>) = application {
         state = windowState,
         onCloseRequest = {
             isWindowVisible = false
+        },
+        // onKeyEvent (not onPreviewKeyEvent): a focused text field consumes Ctrl+V for its own paste
+        // first, so editing a config still works and the shortcut only fires when nothing else wants it.
+        onKeyEvent = { event ->
+            if (event.type == KeyEventType.KeyDown && isPasteShortcut(event)) {
+                importFromClipboard()
+                true
+            } else {
+                false
+            }
         },
     ) {
         window.minimumSize = Dimension(350, 600)
@@ -866,6 +892,21 @@ fun main(args: Array<String>) = application {
             }
         }
     }
+}
+
+/**
+ * True for Ctrl+V / Cmd+V.
+ *
+ * Matching on [Key.V] alone is not enough: Compose derives `Key` from the AWT key code, which under a
+ * non-Latin keyboard layout can be the code of the character the key produces rather than the Latin
+ * legend on it. So also accept the AWT extended key code, which stays VK_V for the physical key.
+ */
+private fun isPasteShortcut(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
+    if (!event.isCtrlPressed && !event.isMetaPressed) return false
+    if (event.key == Key.V) return true
+    val awt = event.awtEventOrNull ?: return false
+    return awt.keyCode == java.awt.event.KeyEvent.VK_V ||
+        awt.extendedKeyCode.toInt() == java.awt.event.KeyEvent.VK_V
 }
 
 /**
