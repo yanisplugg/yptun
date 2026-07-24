@@ -343,6 +343,11 @@ if (currentBuildOs.isLinux) {
 val ypTunCoreBuildTags = "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api"
 val coresRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("cores")
 
+// sing-box version embedded via ldflags (-X constant.Version); otherwise YpSbVersion() reports
+// "unknown" and the settings screen has to guess. Keep in sync with sharedUI's singboxVersion and
+// the sing-box version pinned in cores/go.mod.
+val ypTunCoreSingboxVersion = "1.13.14"
+
 fun registerYpTunCoreBuildTask(
     taskName: String,
     goos: String,
@@ -354,6 +359,7 @@ fun registerYpTunCoreBuildTask(
     inputs.dir(coresRepoDir.resolve("cmd"))
     inputs.file(coresRepoDir.resolve("go.mod"))
     inputs.property("tags", ypTunCoreBuildTags)
+    inputs.property("singboxVersion", ypTunCoreSingboxVersion)
     outputs.file(outputFile)
     workingDir = coresRepoDir
     environment("GOOS", goos)
@@ -367,7 +373,7 @@ fun registerYpTunCoreBuildTask(
         "-tags",
         ypTunCoreBuildTags,
         "-ldflags",
-        "-s -w",
+        "-X github.com/sagernet/sing-box/constant.Version=$ypTunCoreSingboxVersion -s -w",
         "-o",
         outputFile.get().asFile.absolutePath,
         "./cmd/yptuncore"

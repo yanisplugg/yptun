@@ -39,9 +39,6 @@ internal class DesktopEngineController(
     /** AmneziaWG's local SOCKS port (awgproxy). */
     private fun awgLocalPort(socksPort: Int) = socksPort + 2
 
-    /** Hysteria2's local SOCKS port (hysteria2proxy). */
-    private fun hy2LocalPort(socksPort: Int) = socksPort + 3
-
     val isSupported: Boolean get() = YpTunCore.isAvailable
 
     init {
@@ -220,11 +217,15 @@ internal class DesktopEngineController(
             log("olcRTC chain ready on 127.0.0.1:$chainPort")
         }
 
+        // AmneziaWG raises a local SOCKS (awgproxy) that sing-box routes through — a full UDP tunnel
+        // modeled as a socks outbound. Hysteria2 is a NATIVE sing-box outbound since the 1.13 upgrade
+        // (the old hysteria2proxy bridge and its YpHy2* exports are gone), so it is passed straight
+        // through; like AWG it carries UDP/QUIC itself, so QUIC stays unblocked.
         val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
         val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
         val effectiveProfile = when {
             isAwg -> prepareAmneziaWgProxy(profile, listenPort)
-            isHy2 -> prepareHysteria2Proxy(profile, listenPort)
+            isHy2 -> profile
             // Dial the proxy server by its host-resolved IP (keeping the original host as TLS SNI) so
             // sing-box never re-resolves the server domain per-connection through the bootstrap DNS.
             // That bootstrap (AliDNS 223.5.5.5) is slow/unreachable from RU on desktop → "lookup
@@ -595,41 +596,6 @@ internal class DesktopEngineController(
             "\"server_port\":$port,\"version\":\"5\"}"
         return ProxyProfile(
             tag = profile.tag.ifBlank { "AmneziaWG" },
-            type = "socks",
-            server = "127.0.0.1",
-            serverPort = port,
-            rawOutbound = raw,
-        )
-    }
-
-    private suspend fun prepareHysteria2Proxy(profile: ProxyProfile, socksPort: Int): ProxyProfile {
-        if (profile.type != ProxyProfile.TYPE_HYSTERIA2) return profile
-        runCatching { YpTunCore.hy2Stop() }
-        val cfg = buildJsonObject {
-            put("server", profile.server)
-            put("port", profile.serverPort)
-            if (profile.hy2Ports.isNotBlank()) put("ports", profile.hy2Ports)
-            put("auth", profile.password)
-            put("sni", profile.sni.ifBlank { profile.server })
-            put("insecure", profile.allowInsecure)
-            if (profile.hy2Obfs.isNotBlank()) {
-                put("obfs", profile.hy2Obfs)
-                put("obfsPassword", profile.hy2ObfsPassword)
-            }
-            if (profile.hy2UpMbps > 0) put("upMbps", profile.hy2UpMbps)
-            if (profile.hy2DownMbps > 0) put("downMbps", profile.hy2DownMbps)
-        }.toString()
-        val port = hy2LocalPort(socksPort)
-        val listen = "127.0.0.1:$port"
-        log("Starting Hysteria2 SOCKS on $listen")
-        YpTunCore.hy2Start(cfg, listen)
-        if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
-            throw IllegalStateException("Hysteria2 SOCKS port $port did not open")
-        }
-        val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
-            "\"server_port\":$port,\"version\":\"5\"}"
-        return ProxyProfile(
-            tag = profile.tag.ifBlank { "Hysteria2" },
             type = "socks",
             server = "127.0.0.1",
             serverPort = port,

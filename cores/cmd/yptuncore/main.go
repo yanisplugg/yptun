@@ -32,6 +32,7 @@ import (
 	"github.com/olc/awgproxy/awg"
 	"github.com/openlibrecommunity/olcrtc/mobile"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -108,6 +109,12 @@ var (
 	sbInstance *box.Box
 	sbCancel   context.CancelFunc
 )
+
+// YpSbVersion mirrors libbox.Version() on Android. constant.Version defaults to "unknown" and is
+// stamped at build time via -ldflags "-X .../constant.Version=…" (see desktopApp/build.gradle.kts).
+//
+//export YpSbVersion
+func YpSbVersion() *C.char { return cs(constant.Version) }
 
 //export YpSbStart
 func YpSbStart(configJSON *C.char) *C.char {
@@ -329,6 +336,9 @@ func YpAwgMeasureDelay(iniConfig, url, method *C.char, timeoutMs C.int) C.longlo
 // ---------------------------------------------------------------------------
 // VK-TURN (freeturn)
 
+//export YpFtVersion
+func YpFtVersion() *C.char { return cs(freeturn.Version()) }
+
 //export YpFtStart
 func YpFtStart(uri, listenAddr, vkLink *C.char, nStreams C.int) *C.char {
 	freeturn.SetLogWriter(tagWriter{"vkturn"})
@@ -351,6 +361,9 @@ func YpFtConnectedStreams() C.int { return C.int(freeturn.ConnectedStreams()) }
 
 // ---------------------------------------------------------------------------
 // olcrtc (Stealth engine)
+
+//export YpRtcVersion
+func YpRtcVersion() *C.char { return cs(mobile.Version()) }
 
 //export YpRtcSetTransport
 func YpRtcSetTransport(transport *C.char) { mobile.SetTransport(C.GoString(transport)) }

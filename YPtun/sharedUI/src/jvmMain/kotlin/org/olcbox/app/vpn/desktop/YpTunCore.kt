@@ -19,6 +19,7 @@ internal interface YpTunCoreLib : Library {
     fun YpFree(p: Pointer?)
     fun YpPollLog(timeoutMs: Int): Pointer?
 
+    fun YpSbVersion(): Pointer?
     fun YpSbStart(configJson: String): Pointer?
     fun YpSbStop()
     fun YpSbRunning(): Int
@@ -36,15 +37,13 @@ internal interface YpTunCoreLib : Library {
     fun YpAwgProbe(iniConfig: String): Long
     fun YpAwgMeasureDelay(iniConfig: String, url: String, method: String, timeoutMs: Int): Long
 
-    fun YpHy2Start(configJson: String, listenAddr: String): Pointer?
-    fun YpHy2Stop()
-    fun YpHy2Running(): Int
-
+    fun YpFtVersion(): Pointer?
     fun YpFtStart(uri: String, listenAddr: String, vkLink: String, nStreams: Int): Pointer?
     fun YpFtStop()
     fun YpFtRunning(): Int
     fun YpFtConnectedStreams(): Int
 
+    fun YpRtcVersion(): Pointer?
     fun YpRtcSetTransport(transport: String)
     fun YpRtcSetTelemostCookies(cookies: String)
     fun YpRtcSetDNS(dnsServer: String)
@@ -183,6 +182,7 @@ internal object YpTunCore {
     }
 
     // sing-box ------------------------------------------------------------------------------
+    fun sbVersion(): String = takeString(lib().YpSbVersion()).orEmpty()
     fun sbStart(configJson: String) = check(lib().YpSbStart(configJson), "sing-box start failed")
     fun sbStop() = lib().YpSbStop()
     fun sbRunning(): Boolean = libOrNull?.YpSbRunning() == 1
@@ -206,14 +206,8 @@ internal object YpTunCore {
     fun awgMeasureDelay(iniConfig: String, url: String, method: String, timeoutMs: Int): Long =
         lib().YpAwgMeasureDelay(iniConfig, url, method, timeoutMs)
 
-    // Hysteria2 -----------------------------------------------------------------------------
-    fun hy2Start(configJson: String, listenAddr: String) =
-        check(lib().YpHy2Start(configJson, listenAddr), "Hysteria2 start failed")
-
-    fun hy2Stop() = libOrNull?.YpHy2Stop() ?: Unit
-    fun hy2Running(): Boolean = libOrNull?.YpHy2Running() == 1
-
     // VK-TURN -------------------------------------------------------------------------------
+    fun ftVersion(): String = takeString(lib().YpFtVersion()).orEmpty()
     fun ftStart(uri: String, listenAddr: String, vkLink: String, nStreams: Int) =
         check(lib().YpFtStart(uri, listenAddr, vkLink, nStreams), "VK-TURN start failed")
 
@@ -222,6 +216,7 @@ internal object YpTunCore {
     fun ftConnectedStreams(): Int = libOrNull?.YpFtConnectedStreams() ?: 0
 
     // olcrtc --------------------------------------------------------------------------------
+    fun rtcVersion(): String = takeString(lib().YpRtcVersion()).orEmpty()
     fun rtcSetTransport(transport: String) = lib().YpRtcSetTransport(transport)
     fun rtcSetTelemostCookies(cookies: String) = lib().YpRtcSetTelemostCookies(cookies)
     fun rtcSetDns(dnsServer: String) = lib().YpRtcSetDNS(dnsServer)
@@ -261,7 +256,6 @@ internal object YpTunCore {
         runCatching { xrayStop() }
         runCatching { ftStop() }
         runCatching { awgStop() }
-        runCatching { hy2Stop() }
         runCatching { rtcStop() }
     }
 }

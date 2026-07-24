@@ -789,8 +789,14 @@ private fun AppSettingsHubContent(
                 showChevron = false
             )
             SettingsGroupDivider()
-            val xrayVer = remember { runCatching { org.olcbox.app.vpn.desktop.YpTunCore.xrayVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
-            val singboxVer = remember { runCatching { "1.12.25" }.getOrNull()?.ifBlank { null } ?: "—" }
+            // Every version comes from the running core (yptuncore), like libbox/xraybridge do on
+            // Android — the sing-box one used to be a hardcoded "1.12.25" that no longer matched the
+            // bundled core, which read as "the desktop ships an old sing-box".
+            val core = org.olcbox.app.vpn.desktop.YpTunCore
+            val xrayVer = remember { runCatching { core.xrayVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val singboxVer = remember { runCatching { core.sbVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val olcrtcVer = remember { runCatching { core.rtcVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val vkturnVer = remember { runCatching { core.ftVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
             SettingsGroupRow(
                 title = s.xrayVersion(xrayVer),
                 icon = Icons.Outlined.Tune,
@@ -800,6 +806,20 @@ private fun AppSettingsHubContent(
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.singboxVersion(singboxVer),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.olcrtcVersion(olcrtcVer),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.vkturnVersion(vkturnVer),
                 icon = Icons.Outlined.Tune,
                 enabled = true,
                 showChevron = false
