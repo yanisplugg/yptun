@@ -7,6 +7,10 @@
     <uses-sdk tools:overrideLibrary="com.adguard.trusttunnel" />
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Ask to be exempted from Doze/battery optimization so the VPN foreground service survives long
+         (24h+) screen-off sessions instead of being throttled/killed — the usual reason a tunnel drops
+         overnight. Requested from Settings, never silently. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />

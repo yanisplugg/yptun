@@ -3,6 +3,8 @@ package org.olcbox.app.ui.activities
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Toast
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
@@ -3429,6 +3431,52 @@ private fun RoutingToggleRow(
     }
 }
 
+/**
+ * Clickable row that requests exemption from Doze/battery optimization — the usual reason a VPN
+ * foreground service is throttled/killed over long (24h+) idle sessions while other apps (Happ)
+ * survive. Opens the system ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS dialog; once granted the row
+ * shows a done state and stops being clickable. Never changes anything silently.
+ */
+@Composable
+private fun BatteryOptimizationRow() {
+    val context = LocalContext.current
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val pm = remember { context.getSystemService(PowerManager::class.java) }
+    fun exempted(): Boolean = pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+    var ignoring by remember { mutableStateOf(exempted()) }
+    val launcher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { ignoring = exempted() }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(enabled = !ignoring) {
+                val req = Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:${context.packageName}")
+                )
+                // Some OEMs block the direct request; fall back to the general exemption list.
+                runCatching { launcher.launch(req) }.onFailure {
+                    runCatching { launcher.launch(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                }
+            }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(s.batteryOptTitle, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (ignoring) s.batteryOptDone else s.batteryOptSubtitle,
+                color = if (ignoring) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
 @Composable
 private fun TrafficSettingsContent(
     settings: TrafficSettings,
@@ -3652,6 +3700,8 @@ private fun ApplicationBehaviorContent(
             subtitle = s.energySaverSubtitle,
             checked = settings.energySaver
         ) { onChanged(settings.copy(energySaver = it)) }
+
+        BatteryOptimizationRow()
 
         RoutingToggleRow(
             title = s.confirmDeleteTitle,
