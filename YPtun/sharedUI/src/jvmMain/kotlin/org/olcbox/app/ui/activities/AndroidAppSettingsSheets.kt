@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.SingBoxRule
 import org.olcbox.app.data.model.TrafficSettings
@@ -39,6 +40,7 @@ import org.olcbox.app.ui.theme.ThemeState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -347,6 +349,8 @@ fun AppSettingsSheet(
                 AppSettingsRoute.ConnectionMode -> ConnectionModeSettingsContent(
                     selectedMode = selectedMode,
                     enabled = enabled,
+                    socksHost = proxySettings.host,
+                    socksPort = proxySettings.port,
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onModeSelected = onModeSelected
                 )
@@ -915,10 +919,13 @@ private fun ConnectionSettingsContent(
 private fun ConnectionModeSettingsContent(
     selectedMode: AndroidConnectionMode,
     enabled: Boolean,
+    socksHost: String,
+    socksPort: Int,
     onBack: () -> Unit,
     onModeSelected: (AndroidConnectionMode) -> Unit
 ) {
     val options = listOf(AndroidConnectionMode.Tun, AndroidConnectionMode.Proxy)
+    val s = LocalStrings.current
 
     Column(
         modifier = Modifier
@@ -942,6 +949,33 @@ private fun ConnectionModeSettingsContent(
                     enabled = enabled,
                     onClick = { onModeSelected(mode) }
                 )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // The local endpoint, right under the mode picker so the port to point apps at is always
+        // visible. In Proxy mode the "mixed" inbound also speaks HTTP on the same port, which is what
+        // the Windows system proxy is pointed at.
+        SelectionContainer {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = s.localSocksEndpoint,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "SOCKS5: $socksHost:$socksPort",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (selectedMode == AndroidConnectionMode.Proxy) {
+                    Text(
+                        text = "HTTP: $socksHost:$socksPort",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
     }
@@ -1622,12 +1656,40 @@ private fun SubscriptionShareRow(
                 overflow = TextOverflow.Ellipsis
             )
 
+            // Panel announcement (Remnawave/Happ `announce` header), shown verbatim to the user.
+            item.announce?.takeIf { it.isNotBlank() }?.let { announce ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Text(
+                        text = announce,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            val subUriHandler = LocalUriHandler.current
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onShareClick) {
                     Text(LocalStrings.current.qrShare)
                 }
                 TextButton(onClick = onRefreshClick) {
                     Text(LocalStrings.current.refresh)
+                }
+                // Panel-advertised links (Remnawave/Happ `profile-web-page-url` / `support-url`).
+                item.webPageUrl?.takeIf { it.isNotBlank() }?.let { web ->
+                    TextButton(onClick = { runCatching { subUriHandler.openUri(web) } }) {
+                        Text(LocalStrings.current.subscriptionWebPage)
+                    }
+                }
+                item.supportUrl?.takeIf { it.isNotBlank() }?.let { support ->
+                    TextButton(onClick = { runCatching { subUriHandler.openUri(support) } }) {
+                        Text(LocalStrings.current.subscriptionSupport)
+                    }
                 }
             }
         }
@@ -3174,6 +3236,7 @@ private fun TrafficSettingsContent(
     onTrafficChanged: (TrafficSettings) -> Unit
 ) {
     var remoteDns by remember(settings) { mutableStateOf(settings.remoteDns) }
+    var remoteDns2 by remember(settings) { mutableStateOf(settings.remoteDns2) }
     var directDns by remember(settings) { mutableStateOf(settings.directDns) }
     var strategy by remember(settings) { mutableStateOf(settings.domainStrategy) }
     var muxEnabled by remember(settings) { mutableStateOf(settings.muxEnabled) }
@@ -3213,6 +3276,14 @@ private fun TrafficSettingsContent(
             onValueChange = { remoteDns = it },
             label = { Text(s.remoteDnsLabel) },
             placeholder = { Text("8.8.8.8") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = remoteDns2,
+            onValueChange = { remoteDns2 = it },
+            label = { Text(s.remoteDns2Label) },
+            placeholder = { Text("1.1.1.1") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -3316,6 +3387,7 @@ private fun TrafficSettingsContent(
                 onTrafficChanged(
                     TrafficSettings(
                         remoteDns = remoteDns,
+                        remoteDns2 = remoteDns2,
                         directDns = directDns,
                         domainStrategy = strategy,
                         muxEnabled = muxEnabled,
@@ -3375,6 +3447,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
 
         RoutingToggleRow(
+            title = s.showAutoButtonTitle,
+            subtitle = s.showAutoButtonSubtitle,
+            checked = settings.showAutoButton
+        ) { onChanged(settings.copy(showAutoButton = it)) }
+
+        RoutingToggleRow(
             title = s.confirmDeleteTitle,
             subtitle = s.confirmDeleteSubtitle,
             checked = settings.confirmBeforeDelete
@@ -3387,10 +3465,57 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
         RoutingToggleRow(
+            title = s.speedOnHomeTitle,
+            subtitle = s.speedOnHomeSubtitle,
+            checked = settings.showSpeedOnHome
+        ) { onChanged(settings.copy(showSpeedOnHome = it)) }
+
+        RoutingToggleRow(
             title = s.showSubscriptionExpiryTitle,
             subtitle = s.showSubscriptionExpirySubtitle,
             checked = settings.showSubscriptionExpiry
         ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
+
+        RoutingToggleRow(
+            title = s.hideEndpointWhenDescriptionTitle,
+            subtitle = s.hideEndpointWhenDescriptionSubtitle,
+            checked = settings.hideEndpointWhenDescription
+        ) { onChanged(settings.copy(hideEndpointWhenDescription = it)) }
+
+        RoutingToggleRow(
+            title = s.twoColumnLayoutTitle,
+            subtitle = s.twoColumnLayoutSubtitle,
+            checked = settings.twoColumnLayout
+        ) { onChanged(settings.copy(twoColumnLayout = it)) }
+
+        RoutingToggleRow(
+            title = s.vpsAutoInstallTitle,
+            subtitle = s.vpsAutoInstallSubtitle,
+            checked = settings.allowVpsAutoInstall
+        ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
+
+        // App-wide engine for VLESS-like transports. Applies only when a server's own core is "Auto";
+        // an explicit per-server choice overrides it (xhttp/raw-Xray always force Xray regardless).
+        SettingsSectionLabel(s.globalEngineLabel)
+        Text(
+            text = s.globalEngineSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val engineOptions = listOf(
+                ProxyCore.Auto to s.globalEngineAuto,
+                ProxyCore.SingBox to "sing-box",
+                ProxyCore.Xray to "Xray",
+            )
+            engineOptions.forEach { (core, title) ->
+                FilterChip(
+                    selected = settings.globalProxyCore == core,
+                    onClick = { onChanged(settings.copy(globalProxyCore = core)) },
+                    label = { Text(title) }
+                )
+            }
+        }
 
         // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
         // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
@@ -3403,7 +3528,8 @@ private fun ApplicationBehaviorContent(
                 AppLanguage.System to "Авто / Auto",
                 AppLanguage.Russian to "🇷🇺 Русский",
                 AppLanguage.English to "🇺🇸 English",
-                AppLanguage.Persian to "🇮🇷 فارسی"
+                AppLanguage.Persian to "🇮🇷 فارسی",
+                AppLanguage.Chinese to "🇨🇳 中文"
             )
             options.forEach { (lang, title) ->
                 FilterChip(

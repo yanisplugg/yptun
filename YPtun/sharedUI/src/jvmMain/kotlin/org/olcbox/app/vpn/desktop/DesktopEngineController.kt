@@ -268,7 +268,10 @@ internal class DesktopEngineController(
             log("Routing: applying '${routingProfile.displayName()}'")
         }
 
-        activeProxyCore = if (isLocalUdpTunnel) ProxyCore.SingBox else config.resolvedCore()
+        // The app-wide engine choice applies only when this server's own core is "Auto"; an explicit
+        // per-server choice still wins (resolvedCore decides).
+        val globalCore = JvmVpnSettings.loadAppBehavior().globalProxyCore
+        activeProxyCore = if (isLocalUdpTunnel) ProxyCore.SingBox else config.resolvedCore(globalCore)
         val profileWantsXray = routingProfile != null && routingProfile.dnsHosts.isNotEmpty()
         if (!effectiveProfile.rawXrayConfig.isNullOrBlank()) {
             if (activeProxyCore != ProxyCore.Xray) log("Raw Xray config present → forcing Xray core")
