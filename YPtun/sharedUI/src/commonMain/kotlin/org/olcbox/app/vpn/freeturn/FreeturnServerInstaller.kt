@@ -12,7 +12,11 @@ data class FreeturnInstallOptions(
     val host: String,
     val sshPort: Int = 22,
     val login: String = "root",
-    val sshPassword: String,
+    val sshPassword: String = "",
+    /** PEM/OpenSSH private key for SSH publickey auth; when set it is used instead of [sshPassword]. */
+    val sshKey: String = "",
+    /** Passphrase for an encrypted [sshKey]; empty for an unencrypted key. */
+    val sshKeyPassphrase: String = "",
     /** Public UDP port the free-turn-proxy server binds (the freeturn:// peer port; default 56000). */
     val freeturnPort: Int = 56000,
     /** Wire obfuscation profile the server runs with (must match the client). */

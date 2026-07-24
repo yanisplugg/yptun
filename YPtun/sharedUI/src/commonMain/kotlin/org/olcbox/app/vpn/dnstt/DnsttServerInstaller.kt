@@ -13,7 +13,11 @@ data class DnsttInstallOptions(
     val host: String,
     val sshPort: Int = 22,
     val login: String = "root",
-    val sshPassword: String,
+    val sshPassword: String = "",
+    /** PEM/OpenSSH private key for SSH publickey auth; when set it is used instead of [sshPassword]. */
+    val sshKey: String = "",
+    /** Passphrase for an encrypted [sshKey]; empty for an unencrypted key. */
+    val sshKeyPassphrase: String = "",
     /** UDP port the dnstt-server binds for DNS-tunnel queries (the client's resolver port). */
     val udpPort: Int = DEFAULT_UDP_PORT,
     /** Tunnel domain — arbitrary in direct mode, but must match the client's domain. */

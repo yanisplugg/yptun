@@ -75,6 +75,12 @@ interface Strings {
     val groupAutoUpdate: String
     val refreshThisSubscription: String
     val visitSubscriptionPage: String
+    // VPS installer SSH auth (password vs key).
+    val sshAuthUseKey: String
+    val sshPasswordLabel: String
+    val sshKeyLabel: String
+    val sshKeyPassphraseLabel: String
+    val sshKeyLoadFromFile: String
     val telegramProxyTitle: String
     val telegramProxySubtitle: String
     val telegramProxyNotifActive: String
@@ -169,6 +175,9 @@ interface Strings {
     val autoConnectSubtitle: String
     val energySaverTitle: String
     val energySaverSubtitle: String
+    val batteryOptTitle: String
+    val batteryOptSubtitle: String
+    val batteryOptDone: String
     val confirmDeleteTitle: String
     val confirmDeleteSubtitle: String
     val language: String
@@ -693,6 +702,11 @@ object RuStrings : Strings {
     override val groupAutoUpdate = "Автообновление"
     override val refreshThisSubscription = "Обновить подписку"
     override val visitSubscriptionPage = "Посетить страницу подписки"
+    override val sshAuthUseKey = "Вход по SSH-ключу"
+    override val sshPasswordLabel = "Пароль SSH"
+    override val sshKeyLabel = "Приватный SSH-ключ"
+    override val sshKeyPassphraseLabel = "Пароль ключа (если есть)"
+    override val sshKeyLoadFromFile = "Загрузить из файла"
     override val telegramProxyTitle = "Прокси Telegram"
     override val telegramProxySubtitle = "Фоновый SOCKS5 для Telegram. При первом включении нужен интернет — затем пропишите адрес в настройках прокси Telegram (или нажмите «Открыть Telegram»)."
     override val telegramProxyNotifActive = "Прокси Telegram активен"
@@ -790,6 +804,9 @@ object RuStrings : Strings {
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
     override val energySaverTitle = "Режим энергоэффективности"
     override val energySaverSubtitle = "Меньше расход батареи: реже проверки соединения, без журнала. Может замедлить авто-восстановление; применяется при следующем подключении"
+    override val batteryOptTitle = "Отключить оптимизацию батареи"
+    override val batteryOptSubtitle = "Чтобы VPN не отваливался в фоне за часы простоя (как Happ). Открывает системный диалог"
+    override val batteryOptDone = "Оптимизация батареи уже отключена ✓"
     override val confirmDeleteTitle = "Подтверждение удаления"
     override val confirmDeleteSubtitle = "Запрашивать подтверждение перед удалением подписок и конфигураций"
     override val language = "Язык"
@@ -1266,6 +1283,11 @@ object EnStrings : Strings {
     override val groupAutoUpdate = "Auto-update"
     override val refreshThisSubscription = "Update subscription"
     override val visitSubscriptionPage = "Visit subscription page"
+    override val sshAuthUseKey = "Sign in with SSH key"
+    override val sshPasswordLabel = "SSH password"
+    override val sshKeyLabel = "Private SSH key"
+    override val sshKeyPassphraseLabel = "Key passphrase (if any)"
+    override val sshKeyLoadFromFile = "Load from file"
     override val telegramProxyTitle = "Telegram proxy"
     override val telegramProxySubtitle = "Background SOCKS5 for Telegram. First enable needs internet — then set the address in Telegram's proxy settings (or tap \"Open Telegram\")."
     override val telegramProxyNotifActive = "Telegram proxy active"
@@ -1363,6 +1385,9 @@ object EnStrings : Strings {
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
     override val energySaverTitle = "Energy-saver mode"
     override val energySaverSubtitle = "Lower battery use: less frequent health checks, no journal. May slow auto-recovery; applied on next connect"
+    override val batteryOptTitle = "Disable battery optimization"
+    override val batteryOptSubtitle = "Keeps the VPN alive in the background over long idle hours (like Happ). Opens the system dialog"
+    override val batteryOptDone = "Battery optimization already disabled ✓"
     override val confirmDeleteTitle = "Delete confirmation"
     override val confirmDeleteSubtitle = "Ask before deleting subscriptions and configs"
     override val language = "Language"
@@ -1839,6 +1864,11 @@ object FaStrings : Strings {
     override val groupAutoUpdate = "به‌روزرسانی خودکار"
     override val refreshThisSubscription = "به‌روزرسانی اشتراک"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
+    override val sshAuthUseKey = "ورود با کلید SSH"
+    override val sshPasswordLabel = "رمز SSH"
+    override val sshKeyLabel = "کلید خصوصی SSH"
+    override val sshKeyPassphraseLabel = "عبارت عبور کلید (در صورت وجود)"
+    override val sshKeyLoadFromFile = "بارگذاری از فایل"
     override val telegramProxyTitle = "پروکسی تلگرام"
     override val telegramProxySubtitle = "SOCKS5 پس‌زمینه برای تلگرام. اولین فعال‌سازی به اینترنت نیاز دارد — سپس آدرس را در تنظیمات پروکسی تلگرام وارد کنید (یا «باز کردن تلگرام» را بزنید)."
     override val telegramProxyNotifActive = "پروکسی تلگرام فعال است"
@@ -1936,6 +1966,9 @@ object FaStrings : Strings {
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
     override val energySaverTitle = "حالت صرفه‌جویی در انرژی"
     override val energySaverSubtitle = "مصرف باتری کمتر: بررسی‌های کمتر اتصال، بدون گزارش. ممکن است بازیابی خودکار را کند کند؛ در اتصال بعدی اعمال می‌شود"
+    override val batteryOptTitle = "غیرفعال‌کردن بهینه‌سازی باتری"
+    override val batteryOptSubtitle = "تا VPN در پس‌زمینه طی ساعت‌های بی‌کاری قطع نشود (مثل Happ). پنجره سیستمی را باز می‌کند"
+    override val batteryOptDone = "بهینه‌سازی باتری قبلاً غیرفعال شده ✓"
     override val confirmDeleteTitle = "تأیید حذف"
     override val confirmDeleteSubtitle = "پیش از حذف اشتراک‌ها و پیکربندی‌ها پرسیده شود"
     override val language = "زبان"
@@ -2412,6 +2445,11 @@ object ZhStrings : Strings {
     override val groupAutoUpdate = "自动更新"
     override val refreshThisSubscription = "更新订阅"
     override val visitSubscriptionPage = "打开订阅页面"
+    override val sshAuthUseKey = "使用 SSH 密钥登录"
+    override val sshPasswordLabel = "SSH 密码"
+    override val sshKeyLabel = "SSH 私钥"
+    override val sshKeyPassphraseLabel = "密钥口令（如有）"
+    override val sshKeyLoadFromFile = "从文件加载"
     override val telegramProxyTitle = "Telegram 代理"
     override val telegramProxySubtitle = "为 Telegram 提供后台 SOCKS5。首次启用需联网，随后在 Telegram 的代理设置中填入该地址（或点击“打开 Telegram”）。"
     override val telegramProxyNotifActive = "Telegram 代理已启用"
@@ -2509,6 +2547,9 @@ object ZhStrings : Strings {
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
     override val energySaverTitle = "省电模式"
     override val energySaverSubtitle = "降低电量消耗：减少健康检查频率、不记录日志。可能减慢自动恢复；下次连接时生效"
+    override val batteryOptTitle = "关闭电池优化"
+    override val batteryOptSubtitle = "让 VPN 在长时间空闲的后台不掉线（像 Happ 一样）。打开系统对话框"
+    override val batteryOptDone = "电池优化已关闭 ✓"
     override val confirmDeleteTitle = "删除确认"
     override val confirmDeleteSubtitle = "删除订阅和配置前先询问"
     override val language = "语言"

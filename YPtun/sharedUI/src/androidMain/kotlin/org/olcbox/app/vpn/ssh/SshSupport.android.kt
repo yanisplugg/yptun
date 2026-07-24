@@ -38,10 +38,15 @@ internal fun openSshSession(
     rawPassword: String,
     onLog: (String) -> Unit,
     logProgress: Boolean = true,
+    // When non-blank, authenticate with this PEM/OpenSSH private key (publickey) instead of a password;
+    // [privateKeyPassphrase] unlocks an encrypted key. Password auth is used only when this is blank.
+    privateKey: String = "",
+    privateKeyPassphrase: String = "",
 ): Session {
     val user = login.ifBlank { "root" }
+    val useKey = privateKey.isNotBlank()
     val password = rawPassword.trim()
-    if (logProgress && password.length != rawPassword.length) {
+    if (logProgress && !useKey && password.length != rawPassword.length) {
         onLog(
             "⚠ Пароль содержал пробелы/перевод строки по краям — убрал их " +
                 "(было ${rawPassword.length}, стало ${password.length} симв.). " +
@@ -60,34 +65,58 @@ internal fun openSshSession(
     })
 
     val jsch = JSch()
+    if (useKey) {
+        // Load the key into JSch. mwiede's fork parses PEM (RSA/EC/…) and the newer OpenSSH format.
+        // A bad/locked key surfaces below as an actionable message rather than a bare stack trace.
+        val passBytes = privateKeyPassphrase.takeIf { it.isNotEmpty() }?.toByteArray()
+        try {
+            jsch.addIdentity("olcbox-key", privateKey.trim().toByteArray(), null, passBytes)
+        } catch (e: Exception) {
+            throw RuntimeException(
+                "Не удалось прочитать SSH-ключ: ${e.message}. Убедись, что вставлен ПРИВАТНЫЙ ключ " +
+                    "целиком (строки BEGIN/END включительно). Если ключ с паролем — заполни поле «Пароль ключа»."
+            )
+        }
+    }
     val session = jsch.getSession(user, host, port)
-    session.setPassword(password)
+    if (!useKey) session.setPassword(password)
     session.setConfig(Properties().apply {
-        // VPSes rarely have a known host key on first contact; accept it (password auth still protects
+        // VPSes rarely have a known host key on first contact; accept it (the auth still protects
         // the channel).
         put("StrictHostKeyChecking", "no")
-        // Try both the plain "password" method and keyboard-interactive (some servers gate password
-        // auth through PAM/keyboard-interactive only). Skip publickey — we have no key to offer.
-        put("PreferredAuthentications", "password,keyboard-interactive")
+        // Key mode offers only publickey; password mode tries the plain "password" method and
+        // keyboard-interactive (some servers gate password auth through PAM/keyboard-interactive only).
+        put("PreferredAuthentications", if (useKey) "publickey" else "password,keyboard-interactive")
     })
-    session.userInfo = SshPasswordUserInfo(password)
+    session.userInfo = if (useKey) SshKeyUserInfo(privateKeyPassphrase) else SshPasswordUserInfo(password)
 
-    if (logProgress) onLog("Подключение к $host:$port (пользователь '$user', пароль ${password.length} симв.)…")
+    if (logProgress) {
+        val how = if (useKey) "ключ" else "пароль ${password.length} симв."
+        onLog("Подключение к $host:$port (пользователь '$user', $how)…")
+    }
     try {
         session.connect(SSH_CONNECT_TIMEOUT_MS)
     } catch (e: Exception) {
         val msg = e.message.orEmpty()
         if (msg.contains("Auth fail", ignoreCase = true) || msg.contains("Auth cancel", ignoreCase = true)) {
             // JSch names the methods the server actually offered (e.g. "...for methods
-            // 'publickey,password'") — surface that verbatim plus the two real causes, in order of
-            // likelihood: a hidden character in the password, then a server that blocks password login.
-            throw RuntimeException(
-                "Не удалось войти под '$user' ($msg). Проверь по порядку: " +
-                    "1) в пароле нет лишних пробелов/символов (поле скрывает их за точками); " +
-                    "2) на VPS в /etc/ssh/sshd_config заданы PermitRootLogin yes, " +
-                    "PasswordAuthentication yes и KbdInteractiveAuthentication yes, затем " +
-                    "systemctl restart ssh. Подробности SSH-согласования — в логе выше (строки 'ssh:')."
-            )
+            // 'publickey,password'") — surface that verbatim plus the real causes.
+            throw if (useKey) {
+                RuntimeException(
+                    "Не удалось войти под '$user' по ключу ($msg). Проверь: " +
+                        "1) публичная часть ключа добавлена в ~/.ssh/authorized_keys на VPS для '$user'; " +
+                        "2) вставлен ПРИВАТНЫЙ ключ целиком; 3) для ключа с паролем заполнено поле «Пароль ключа»; " +
+                        "4) на VPS PubkeyAuthentication yes. Детали — в логе выше (строки 'ssh:')."
+                )
+            } else {
+                RuntimeException(
+                    "Не удалось войти под '$user' ($msg). Проверь по порядку: " +
+                        "1) в пароле нет лишних пробелов/символов (поле скрывает их за точками); " +
+                        "2) на VPS в /etc/ssh/sshd_config заданы PermitRootLogin yes, " +
+                        "PasswordAuthentication yes и KbdInteractiveAuthentication yes, затем " +
+                        "systemctl restart ssh. Подробности SSH-согласования — в логе выше (строки 'ssh:')."
+                )
+            }
         }
         throw e
     }
@@ -140,6 +169,10 @@ internal data class SshTarget(
     val port: Int,
     val login: String,
     val password: String,
+    /** PEM/OpenSSH private key for publickey auth; when non-blank it takes precedence over [password]. */
+    val privateKey: String = "",
+    /** Passphrase unlocking an encrypted [privateKey]; empty for an unencrypted key. */
+    val passphrase: String = "",
 )
 
 /**
@@ -157,7 +190,10 @@ internal fun sshOneShot(
     onLog: (String) -> Unit,
     logProgress: Boolean = false,
 ): String {
-    val session = openSshSession(target.host, target.port, target.login, target.password, onLog, logProgress)
+    val session = openSshSession(
+        target.host, target.port, target.login, target.password, onLog, logProgress,
+        privateKey = target.privateKey, privateKeyPassphrase = target.passphrase,
+    )
     try {
         return sshExec(session, command)
     } finally {
@@ -232,6 +268,19 @@ internal fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "
  * prompt, and auto-accepts the unknown host key. Without the keyboard-interactive answer, servers that
  * gate password auth through PAM/keyboard-interactive fail with "Auth fail" even for a correct password.
  */
+/**
+ * JSch auth helper for publickey auth: supplies the key [passphrase] (JSch calls getPassphrase for an
+ * encrypted key) and auto-accepts the unknown host key. No password prompts are answered.
+ */
+private class SshKeyUserInfo(private val passphrase: String) : UserInfo {
+    override fun getPassphrase(): String? = passphrase.takeIf { it.isNotEmpty() }
+    override fun getPassword(): String? = null
+    override fun promptPassword(message: String?): Boolean = false
+    override fun promptPassphrase(message: String?): Boolean = passphrase.isNotEmpty()
+    override fun promptYesNo(message: String?): Boolean = true // accept host key
+    override fun showMessage(message: String?) {}
+}
+
 private class SshPasswordUserInfo(private val password: String) : UserInfo, UIKeyboardInteractive {
     // The "password" method is offered once (JSch also uses Session.setPassword for the first attempt).
     private var passwordOffered = false

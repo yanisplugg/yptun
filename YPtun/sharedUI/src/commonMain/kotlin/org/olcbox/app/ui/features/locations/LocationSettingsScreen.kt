@@ -77,6 +77,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontFamily
+import org.olcbox.app.ui.features.locations.components.SshAuthFields
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
 import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
 import org.olcbox.app.vpn.freeturn.FreeturnInstallOptions
@@ -1373,6 +1374,9 @@ private fun WdttInstallDialog(
     var sshPort by remember { mutableStateOf("22") }
     var login by remember { mutableStateOf("root") }
     var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
     // WDTT server params are editable here (prefilled from the location draft). On success they're
     // written back into the draft so the location and the server stay in sync — the WRAP key derives
     // from the password on both sides, so a mismatch silently fails to connect.
@@ -1432,14 +1436,16 @@ private fun WdttInstallDialog(
                         modifier = Modifier.width(96.dp)
                     )
                 }
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("Пароль SSH") },
-                    singleLine = true,
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
                     enabled = !running,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
                 )
                 HorizontalDivider()
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1498,7 +1504,8 @@ private fun WdttInstallDialog(
                 TextButton(onClick = onDismiss) { Text("Готово") }
             } else {
                 TextButton(
-                    enabled = !running && ip.isNotBlank() && password.isNotBlank() && wdttPass.isNotBlank(),
+                    enabled = !running && ip.isNotBlank() &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()) && wdttPass.isNotBlank(),
                     onClick = {
                         running = true
                         result = null
@@ -1519,7 +1526,9 @@ private fun WdttInstallDialog(
                                     host = ip.trim(),
                                     sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
                                     login = login.ifBlank { "root" },
-                                    sshPassword = password,
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
                                     wdttPort = port,
                                     wdttPassword = wdttPass,
                                     dns = dns.ifBlank { "1.1.1.1" },
@@ -1567,6 +1576,9 @@ private fun FreeturnInstallDialog(
     var sshPort by remember { mutableStateOf("22") }
     var login by remember { mutableStateOf("root") }
     var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
     // freeturn public listener port (the freeturn:// peer port); prefilled from the draft or 56000.
     var ftPortText by remember { mutableStateOf(draft.peerPort.ifBlank { "56000" }) }
     var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
@@ -1626,14 +1638,16 @@ private fun FreeturnInstallDialog(
                         modifier = Modifier.width(96.dp)
                     )
                 }
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("Пароль SSH") },
-                    singleLine = true,
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
                     enabled = !running,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
                 )
                 HorizontalDivider()
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1687,7 +1701,7 @@ private fun FreeturnInstallDialog(
                 TextButton(onClick = onDismiss) { Text("Готово") }
             } else {
                 TextButton(
-                    enabled = !running && ip.isNotBlank() && password.isNotBlank(),
+                    enabled = !running && ip.isNotBlank() && (if (useKey) sshKey.isNotBlank() else password.isNotBlank()),
                     onClick = {
                         running = true
                         result = null
@@ -1698,7 +1712,9 @@ private fun FreeturnInstallDialog(
                                     host = ip.trim(),
                                     sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
                                     login = login.ifBlank { "root" },
-                                    sshPassword = password,
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
                                     freeturnPort = port,
                                     obfProfile = obfProfile,
                                     dns = dns.ifBlank { "1.1.1.1" },
@@ -1763,6 +1779,9 @@ private fun DnsttInstallDialog(
     var sshPort by remember { mutableStateOf("22") }
     var login by remember { mutableStateOf("root") }
     var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
     var udpPortText by remember { mutableStateOf(DnsttInstallOptions.DEFAULT_UDP_PORT.toString()) }
     var domain by remember { mutableStateOf(config.domain.ifBlank { DnsttInstallOptions.DEFAULT_DOMAIN }) }
     var running by remember { mutableStateOf(false) }
@@ -1818,14 +1837,16 @@ private fun DnsttInstallDialog(
                         modifier = Modifier.width(96.dp)
                     )
                 }
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("Пароль SSH") },
-                    singleLine = true,
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
                     enabled = !running,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
                 )
                 HorizontalDivider()
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1869,7 +1890,8 @@ private fun DnsttInstallDialog(
                 TextButton(onClick = onDismiss) { Text("Готово") }
             } else {
                 TextButton(
-                    enabled = !running && ip.isNotBlank() && password.isNotBlank() && domain.isNotBlank(),
+                    enabled = !running && ip.isNotBlank() &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()) && domain.isNotBlank(),
                     onClick = {
                         running = true
                         result = null
@@ -1880,7 +1902,9 @@ private fun DnsttInstallDialog(
                                     host = ip.trim(),
                                     sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
                                     login = login.ifBlank { "root" },
-                                    sshPassword = password,
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
                                     udpPort = udpPort,
                                     domain = domain.trim(),
                                 )

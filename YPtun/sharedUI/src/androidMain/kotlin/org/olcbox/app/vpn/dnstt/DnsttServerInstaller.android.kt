@@ -36,12 +36,17 @@ internal class AndroidDnsttServerInstaller(private val context: Context) : Dnstt
     ): Result<DnsttInstallResult> = withContext(Dispatchers.IO) {
         runCatching {
             require(options.host.isNotBlank()) { "Не указан IP/хост VPS" }
-            require(options.sshPassword.isNotBlank()) { "Не указан пароль SSH" }
+            require(options.sshKey.isNotBlank() || options.sshPassword.isNotBlank()) {
+                "Укажи пароль SSH или SSH-ключ"
+            }
             require(options.domain.isNotBlank()) { "Не указан домен туннеля" }
 
             // This VPS resets the link the moment a 2nd channel is opened on a connection, so EVERY
             // step is its own fresh connection running one small command (the only thing that worked).
-            val target = SshTarget(options.host, options.sshPort, options.login, options.sshPassword)
+            val target = SshTarget(
+                options.host, options.sshPort, options.login, options.sshPassword,
+                privateKey = options.sshKey, passphrase = options.sshKeyPassphrase,
+            )
 
             onLog("Определяю архитектуру VPS…")
             val machine = sshOneShot(target, "uname -m", onLog, logProgress = true).trim()
