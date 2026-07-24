@@ -55,7 +55,11 @@ internal class DesktopEngineController(
      */
     private var tunRequest: TunRequest? = null
 
-    private data class TunRequest(val splitMode: String, val processes: List<String>)
+    private data class TunRequest(
+        val splitMode: String,
+        val processes: List<String>,
+        val excludeAddresses: List<String>,
+    )
 
     /** True after [start] when sing-box owns the TUN itself (no external tun2socks needed). */
     var tunHandledInCore: Boolean = false
@@ -81,8 +85,14 @@ internal class DesktopEngineController(
         tunViaSingBox: Boolean = false,
         splitTunnelMode: String = SingBoxConfig.SPLIT_TUNNEL_ALL,
         splitTunnelProcesses: List<String> = emptyList(),
+        // Upstream server IPs to carve out of the in-core TUN (see SingBoxConfig.tunExcludeAddresses).
+        tunExcludeAddresses: List<String> = emptyList(),
     ) {
-        tunRequest = if (tunViaSingBox) TunRequest(splitTunnelMode, splitTunnelProcesses) else null
+        tunRequest = if (tunViaSingBox) {
+            TunRequest(splitTunnelMode, splitTunnelProcesses, tunExcludeAddresses)
+        } else {
+            null
+        }
         tunHandledInCore = false
         val config = location.normalized()
         when (config.engine) {
@@ -346,6 +356,7 @@ internal class DesktopEngineController(
                 tunMode = requestedTun,
                 splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                 splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
                 // Desktop always fronts sing-box with a TUN (in-core or external tun2socks); the OS
                 // funnels all DNS into it, so sing-box must hijack & resolve DNS itself (see param doc).
                 hijackDns = true,
@@ -488,6 +499,7 @@ internal class DesktopEngineController(
                         tunMode = requestedTun,
                         splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                         splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                        tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
                     )
                 }
 
@@ -511,6 +523,7 @@ internal class DesktopEngineController(
                         tunMode = requestedTun,
                         splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                         splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                        tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
                     )
                 }
 
@@ -536,6 +549,7 @@ internal class DesktopEngineController(
                             tunMode = requestedTun,
                             splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                             splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                            tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
                         )
                     } else {
                         SingBoxConfig.build(
@@ -556,6 +570,7 @@ internal class DesktopEngineController(
                             tunMode = requestedTun,
                             splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                             splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                            tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
                         )
                     }
                 }

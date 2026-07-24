@@ -512,6 +512,14 @@ class DesktopVpnManager private constructor(
                 // tunneling rides the same in-core TUN for free (only the TUN owner can attribute apps).
                 val split = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadSplitTunnel()
                 val wantsInCoreTun = desktopMode == DesktopMode.WindowsTun
+                // Carve the engines' own upstreams out of the in-core TUN. auto_detect_interface only
+                // covers sing-box's OWN dials, so a sibling core in the same process — awgproxy's
+                // WireGuard endpoint above all — otherwise sends its UDP straight back into the tunnel
+                // it is supposed to provide, and AmneziaWG never comes up in TUN mode.
+                val tunExcludeAddresses = if (wantsInCoreTun) resolveBypassServerIps(location) else emptyList()
+                if (tunExcludeAddresses.isNotEmpty()) {
+                    addLog("Excluding ${tunExcludeAddresses.size} upstream address(es) from the in-core TUN")
+                }
                 engineController.start(
                     location = location,
                     listenHost = socksSettings.host,
@@ -526,6 +534,7 @@ class DesktopVpnManager private constructor(
                         "bypass_selected" -> split.bypassProcesses.toList()
                         else -> emptyList()
                     },
+                    tunExcludeAddresses = tunExcludeAddresses,
                 )
             } else {
                 process = startOlcRtcProcessWithFallback(
@@ -560,7 +569,9 @@ class DesktopVpnManager private constructor(
                     startWindowsTun(
                         socksPort = socksSettings.port,
                         requestGeneration = requestGeneration,
-                        bypassServerIps = if (useEngineController) resolveBypassServerIps(location) else emptyList()
+                        bypassServerIps = if (useEngineController) resolveBypassServerIps(location) else emptyList(),
+                        socksUsername = socksSettings.username,
+                        socksPassword = socksSettings.password
                     )
                 }
                 DesktopMode.SystemProxy -> startSystemProxy(socksSettings, requestGeneration)
@@ -635,10 +646,14 @@ class DesktopVpnManager private constructor(
     private suspend fun startWindowsTun(
         socksPort: Int,
         requestGeneration: Long,
-        bypassServerIps: List<String> = emptyList()
+        bypassServerIps: List<String> = emptyList(),
+        socksUsername: String = "",
+        socksPassword: String = ""
     ) {
         val tun2SocksBinary = DesktopNativeAssets.resolveWindowsTun2SocksBinary()
-        tunProcess = windowsTunController.start(tun2SocksBinary, socksPort, bypassServerIps)
+        tunProcess = windowsTunController.start(
+            tun2SocksBinary, socksPort, bypassServerIps, socksUsername, socksPassword
+        )
 
         if (requestGeneration != generation) {
             throw CancellationException("Desktop start superseded")

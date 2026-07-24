@@ -286,6 +286,19 @@ class DesktopProxyModeTest {
     }
 
     @Test
+    fun windowsTunCommandCarriesTheSocksInboundCredentials() {
+        // The core's SOCKS inbound requires auth; a credential-less bridge is rejected outright.
+        val command = WindowsTunController.tun2SocksCommand(
+            tun2SocksBinary = Path.of("C:/Olcbox/bin/tun2socks-windows-amd64.exe"),
+            socksPort = 10812,
+            socksUsername = "olcbox",
+            socksPassword = "p@ss word"
+        )
+
+        assertContains(command, "socks5://olcbox:p%40ss%20word@127.0.0.1:10812")
+    }
+
+    @Test
     fun windowsTunAdministratorRestartUsesRunAsAndPreservesArguments() {
         val script = WindowsTunController.restartAsAdministratorScript(
             command = "C:/Olc's/Olcbox.exe",

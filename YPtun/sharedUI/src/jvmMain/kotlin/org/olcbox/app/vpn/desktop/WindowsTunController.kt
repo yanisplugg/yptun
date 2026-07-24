@@ -20,11 +20,16 @@ internal class WindowsTunController(
         // traffic): they get host routes via the physical default gateway, the same trick Android
         // does with VpnService.protect. Without this every non-interface-binding engine (xray,
         // AmneziaWG, Hysteria2, freeturn) would loop its upstream through its own tunnel.
-        bypassServerIps: List<String> = emptyList()
+        bypassServerIps: List<String> = emptyList(),
+        // Credentials of the core's SOCKS inbound — see [tun2SocksCommand].
+        socksUsername: String = "",
+        socksPassword: String = ""
     ): Process {
         ensureAdministratorOrRequestRestart()
 
-        val process = ProcessBuilder(tun2SocksCommand(tun2SocksBinary, socksPort))
+        val process = ProcessBuilder(
+            tun2SocksCommand(tun2SocksBinary, socksPort, socksUsername, socksPassword)
+        )
             .directory(tun2SocksBinary.parent.toFile())
             .redirectErrorStream(true)
             .start()
@@ -254,20 +259,42 @@ internal class WindowsTunController(
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
         const val ELEVATED_START_ARGUMENT = "--olcbox-start-vpn-after-elevation"
 
+        /**
+         * The tun2socks bridge MUST authenticate against the core's SOCKS inbound. sing-box/xray are
+         * started with the per-session DesktopSocksProxySettings credentials, so a credential-less
+         * `socks5://host:port` here made the core reject every connection ("no matching auth method")
+         * — the tunnel came up and then carried nothing. That only bites on the external-bridge path,
+         * i.e. exactly when sing-box does NOT own the TUN itself: a routing profile or an xhttp
+         * cascade forces the Xray core, which is why "routing" and "cascade" looked broken in TUN mode
+         * while a plain sing-box connection worked.
+         */
         fun tun2SocksCommand(
             tun2SocksBinary: Path,
-            socksPort: Int = PacServer.LOCAL_SOCKS_PORT
-        ): List<String> = listOf(
-            tun2SocksBinary.toString(),
-            "--device",
-            TUN_NAME,
-            "--proxy",
-            "socks5://${PacServer.LOCAL_SOCKS_HOST}:$socksPort",
-            "--mtu",
-            TUN_MTU.toString(),
-            "--loglevel",
-            "warn"
-        )
+            socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
+            socksUsername: String = "",
+            socksPassword: String = ""
+        ): List<String> {
+            val credentials = if (socksUsername.isNotBlank()) {
+                "${socksUsername.urlEncoded()}:${socksPassword.urlEncoded()}@"
+            } else {
+                ""
+            }
+            return listOf(
+                tun2SocksBinary.toString(),
+                "--device",
+                TUN_NAME,
+                "--proxy",
+                "socks5://$credentials${PacServer.LOCAL_SOCKS_HOST}:$socksPort",
+                "--mtu",
+                TUN_MTU.toString(),
+                "--loglevel",
+                "warn"
+            )
+        }
+
+        /** tun2socks parses `--proxy` as a URL, so credentials need percent-encoding. */
+        private fun String.urlEncoded(): String =
+            java.net.URLEncoder.encode(this, Charsets.UTF_8).replace("+", "%20")
 
         fun restartAsAdministratorScript(
             command: String,

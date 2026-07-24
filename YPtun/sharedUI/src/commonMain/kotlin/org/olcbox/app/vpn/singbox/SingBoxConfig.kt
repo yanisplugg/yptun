@@ -150,6 +150,13 @@ object SingBoxConfig {
         // "bypass_selected" → listed processes go direct (everything else through the proxy).
         splitTunnelMode: String = SPLIT_TUNNEL_ALL,
         splitTunnelProcesses: List<String> = emptyList(),
+        // Desktop only, [tunMode] only: upstream server IPs carved OUT of the TUN's auto_route, so an
+        // engine's own traffic never loops through the tunnel it provides. Android does this with
+        // VpnService.protect(); desktop has no protect, and auto_detect_interface only binds sing-box's
+        // OWN dials — a sibling core inside the same process (awgproxy's WireGuard endpoint, freeturn's
+        // relay) is not covered, so its UDP went into the TUN and the tunnel deadlocked. The external
+        // tun2socks path solves the same problem with host routes (WindowsTunController).
+        tunExcludeAddresses: List<String> = emptyList(),
         // Desktop tun2socks path: sing-box runs as a plain SOCKS server (no [tunMode]) behind an
         // external tun2socks. The OS routes ALL DNS into the TUN, so the app's UDP DNS queries arrive
         // at the SOCKS inbound. Without hijack-dns they'd be relayed as raw UDP/53 to the proxy and
@@ -305,6 +312,15 @@ object SingBoxConfig {
                         put("auto_route", true)
                         put("strict_route", false)
                         put("stack", "mixed")
+                        // Host routes around the tunnel for the engines' own upstreams (see the param).
+                        val excluded = tunExcludeAddresses
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .map { if ('/' in it) it else if (':' in it) "$it/128" else "$it/32" }
+                            .distinct()
+                        if (excluded.isNotEmpty()) {
+                            putJsonArray("route_exclude_address") { excluded.forEach { add(it) } }
+                        }
                     }
                 }
                 addJsonObject {
