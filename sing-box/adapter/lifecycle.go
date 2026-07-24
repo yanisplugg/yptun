@@ -1,6 +1,14 @@
 package adapter
 
-import E "github.com/sagernet/sing/common/exceptions"
+import (
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/sagernet/sing-box/log"
+	E "github.com/sagernet/sing/common/exceptions"
+	F "github.com/sagernet/sing/common/format"
+)
 
 type SimpleLifecycle interface {
 	Start() error
@@ -48,9 +56,30 @@ type LifecycleService interface {
 	Lifecycle
 }
 
-func Start(stage StartStage, services ...Lifecycle) error {
+func getServiceName(service any) string {
+	if named, ok := service.(interface {
+		Type() string
+		Tag() string
+	}); ok {
+		tag := named.Tag()
+		if tag != "" {
+			return named.Type() + "[" + tag + "]"
+		}
+		return named.Type()
+	}
+	t := reflect.TypeOf(service)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return strings.ToLower(t.Name())
+}
+
+func Start(logger log.ContextLogger, stage StartStage, services ...Lifecycle) error {
 	for _, service := range services {
+		name := getServiceName(service)
+		done := LogElapsed(logger, stage, " ", name)
 		err := service.Start(stage)
+		done()
 		if err != nil {
 			return err
 		}
@@ -58,12 +87,28 @@ func Start(stage StartStage, services ...Lifecycle) error {
 	return nil
 }
 
-func StartNamed(stage StartStage, services []LifecycleService) error {
+func StartNamed(logger log.ContextLogger, stage StartStage, services []LifecycleService) error {
 	for _, service := range services {
+		done := LogElapsed(logger, stage, " ", service.Name())
 		err := service.Start(stage)
+		done()
 		if err != nil {
 			return E.Cause(err, stage.String(), " ", service.Name())
 		}
 	}
 	return nil
+}
+
+func LogElapsed(logger log.ContextLogger, description ...any) func() {
+	prefix := F.ToString(description...)
+	startTime := time.Now()
+	timer := time.AfterFunc(time.Second, func() {
+		logger.Trace(prefix, "...")
+	})
+	return func() {
+		if timer.Stop() {
+			return
+		}
+		logger.Trace(prefix, " completed (", F.Seconds(time.Since(startTime).Seconds()), "s)")
+	}
 }

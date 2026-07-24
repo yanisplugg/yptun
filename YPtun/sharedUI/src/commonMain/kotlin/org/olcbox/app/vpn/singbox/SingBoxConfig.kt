@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -38,6 +39,7 @@ object SingBoxConfig {
     private const val WG_BASE_TAG = "wireguard-base"
     private const val SOCKS_IN_TAG = "socks-in"
     private const val TUN_IN_TAG = "tun-in"
+    private const val TPROXY_IN_TAG = "tproxy-in"
 
     // Desktop per-process split tunneling modes (mirror AndroidSplitTunnelMode values).
     const val SPLIT_TUNNEL_ALL = "all_apps"
@@ -64,7 +66,7 @@ object SingBoxConfig {
     )
 
     /** Raw-outbound types that do not support sing-box smux and must not get a multiplex block. */
-    private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks")
+    private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks", "naive")
 
     private val json = Json { prettyPrint = true }
 
@@ -107,6 +109,19 @@ object SingBoxConfig {
         // ("err connection closed"). Domains then pass through to the tunnel to resolve, as they did
         // before the routing rework. IP-based rules (geoip/ip_cidr) still trigger a resolve regardless.
         forceFamilyResolve: Boolean = true,
+        // Whether the sniffed-domain `resolve` action may run. It resolves app destinations via the
+        // `remote` DNS server, whose detour is the proxy — i.e. a DNS lookup THROUGH the tunnel. On a
+        // very slow tunnel (dnstt: DNS TXT, tiny MTU) that adds a tunnel round-trip to EVERY connection
+        // and stalls browsing, so the dnstt-proxy path passes false: domains then go straight to the
+        // proxy (resolved server-side). Costs only IP-based geo rules (geoip:ru → direct); domain/geosite
+        // rules still match without a local IP, and the family is still pinned by the bridge's v6 drop.
+        allowLocalResolve: Boolean = true,
+        // VK-TURN / dnstt: the base tunnel (WireGuard / dnstt SOCKS) is the MANDATORY transport, so a
+        // routing rule's `direct` bucket must NOT leak to the real network — it should still exit through
+        // the base tunnel. When true, the `direct` outbound dials through the base detour (WG / olcRTC),
+        // so routing only chooses base-tunnel-exit (direct) vs second-proxy-exit (proxy); the tunnel is
+        // never bypassed.
+        directViaBase: Boolean = false,
         // Sniff the SNI/Host and OVERRIDE the connection destination with it before routing, then
         // resolve it to [dnsStrategyOverride]/[TrafficSettings.domainStrategy]. This is what lets a
         // v4-only full tunnel (AmneziaWG) stay IPv4-only WITHOUT rejecting traffic: an app's own-DoH
@@ -161,6 +176,17 @@ object SingBoxConfig {
         forceFakeDns: Boolean = false,
         // Desktop: use a "mixed" inbound (SOCKS + HTTP) so the OS system-proxy (HTTP) can use it.
         mixedInbound: Boolean = false,
+        // Transparent-proxy mode: when set, a `tproxy` inbound (TCP+UDP) is added on [listenHost]:this,
+        // so a rooted device / router can redirect traffic through the core with no per-app proxy. The
+        // SOCKS inbound is still emitted for coexistence. Requires root (IP_TRANSPARENT) to bind.
+        tproxyPort: Int? = null,
+        // Resolve the `remote` DNS over TCP instead of UDP when it's a plain UDP resolver (bare IP /
+        // udp://). For a full UDP tunnel exposed as a local SOCKS (AmneziaWG via awgproxy), UDP DNS
+        // rides the SOCKS UDP-ASSOCIATE path, which is far less reliable than a plain TCP CONNECT; a
+        // flaky associate silently kills name resolution so the tunnel "only works with a 2nd proxy"
+        // (whose own protocol carries DNS). Forcing DNS over TCP makes it ride the proven CONNECT path.
+        // No-op for DoH/DoT/DoQ resolvers (already TCP/own transport) — only bare-IP/udp is rewritten.
+        preferTcpRemoteDns: Boolean = false,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
@@ -194,9 +220,19 @@ object SingBoxConfig {
                         .takeIf { !fakeEnabled && (it == "ipv4_only" || it == "ipv6_only") }
                     addJsonObject {
                         put("tag", "remote")
-                        put("address", remoteDnsAddress)
+                        // Compose both: DoH-ify (desktop) THEN rewrite a bare-IP/udp resolver to TCP
+                        // (Beta). maybeTcpDns is a no-op for a `https://…` DoH address, so order is safe.
+                        put("address", maybeTcpDns(remoteDnsAddress, preferTcpRemoteDns))
                         put("detour", PROXY_TAG)
                         if (familyStrategy != null) put("strategy", familyStrategy)
+                    }
+                    // Optional second remote resolver (also via the proxy) — a fallback for "remote".
+                    if (traffic.remoteDns2.isNotBlank()) {
+                        addJsonObject {
+                            put("tag", "remote2")
+                            put("address", maybeTcpDns(traffic.remoteDns2, preferTcpRemoteDns))
+                            put("detour", PROXY_TAG)
+                        }
                     }
                     // Bootstrap: resolve the proxy server's own domain directly.
                     addJsonObject {
@@ -272,8 +308,10 @@ object SingBoxConfig {
                     }
                 }
                 addJsonObject {
-                    // "mixed" speaks BOTH SOCKS and HTTP on one port (desktop proxy mode points the
-                    // Windows system HTTP-proxy at it; SOCKS5 clients like tun2socks/hev still work).
+                    // Desktop: "mixed" speaks BOTH SOCKS and HTTP on one port (Windows system HTTP-proxy
+                    // points here; SOCKS5 clients like tun2socks/hev still work). Android passes
+                    // mixedInbound=false → plain "socks" (HTTP is provided by the HttpProxyBridge in
+                    // Proxy mode), so TUN mode keeps a purely internal SOCKS bridge with no HTTP listener.
                     put("type", if (mixedInbound) "mixed" else "socks")
                     put("tag", SOCKS_IN_TAG)
                     put("listen", listenHost)
@@ -286,20 +324,44 @@ object SingBoxConfig {
                             }
                         }
                     }
-                    // Force the chosen IP family on a full UDP tunnel without rejecting: sniff the
-                    // domain, replace an IP-literal destination with it, and resolve to the family.
-                    if (sniffOverrideDestination) {
-                        put("sniff", true)
-                        put("sniff_override_destination", true)
-                        put("domain_strategy", effectiveStrategy)
+                    // NOTE: legacy inbound fields sniff/sniff_override_destination/domain_strategy were
+                    // REMOVED in sing-box 1.13.0 (they crashed decode: "legacy inbound fields … removed").
+                    // Sniffing + the family override are now done via route-rule actions below
+                    // ({"action":"sniff"} + {"action":"resolve"}), keyed off [sniffOverrideDestination].
+                }
+                // Transparent-proxy inbound (root-only): TCP+UDP redirected traffic enters here. Sniff
+                // is enabled so routing/DNS rules still match on domain, exactly like the socks inbound.
+                if (tproxyPort != null) {
+                    addJsonObject {
+                        put("type", "tproxy")
+                        put("tag", TPROXY_IN_TAG)
+                        put("listen", listenHost)
+                        put("listen_port", tproxyPort)
+                        // network omitted → both TCP and UDP redirected traffic is accepted.
+                        // Sniff + family override handled by the route-rule actions below (the legacy
+                        // inbound sniff/sniff_override/domain_strategy fields were removed in 1.13.0).
                     }
                 }
             }
 
+            // WireGuard moved from an `outbound` (removed in sing-box 1.13.0) to a top-level
+            // `endpoints` entry, referenced by tag. Build them here so the outbounds below can detour
+            // to them and the endpoints array is emitted as a sibling of `outbounds`.
+            val wgBaseEndpoint = wireguardBase?.let { buildWireguardEndpoint(it, WG_BASE_TAG) }
+            val mainIsWireguard = profile.type == "wireguard"
+            val wgExitEndpoint = if (mainIsWireguard) buildWireguardEndpoint(profile, PROXY_TAG) else null
+
             putJsonArray("outbounds") {
-                val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
-                val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
+                val baseDetour = if (wgBaseEndpoint != null) WG_BASE_TAG else null
+                // Base tunnel exit tag (WG for VK-TURN, dnstt SOCKS for dnstt) — keeps `direct` traffic on
+                // the tunnel when [directViaBase].
+                val baseExitTag = when {
+                    wgBaseEndpoint != null -> WG_BASE_TAG
+                    olcrtcChainPort != null -> OLCRTC_TAG
+                    else -> null
+                }
+                val directDialsBase = directViaBase && baseExitTag != null
                 val second = secondProfile?.takeIf { it.isComplete() }
                 if (second != null) {
                     // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG), which dials THROUGH the
@@ -325,7 +387,7 @@ object SingBoxConfig {
                             tag = PROXY_TAG
                         )
                     )
-                } else {
+                } else if (!mainIsWireguard) {
                     // Single hop: the main proxy IS the exit (tag PROXY_TAG), dialing through olcRTC/WG.
                     add(
                         buildProxyOutbound(
@@ -338,9 +400,7 @@ object SingBoxConfig {
                         )
                     )
                 }
-                if (wgBaseOutbound != null) {
-                    add(wgBaseOutbound)
-                }
+                // else: the main IS WireGuard — its exit is the `endpoints` entry tagged PROXY_TAG.
                 // olcRTC chain detour: the main proxy dials through this local SOCKS.
                 if (olcrtcChainPort != null) {
                     add(olcrtcSocksOutbound(OLCRTC_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
@@ -348,6 +408,9 @@ object SingBoxConfig {
                 addJsonObject {
                     put("type", "direct")
                     put("tag", "direct")
+                    // VK-TURN / dnstt: route `direct` traffic THROUGH the base tunnel (dnstt-server / VK
+                    // exit) instead of the real interface, so routing never bypasses the tunnel.
+                    if (directDialsBase) put("detour", baseExitTag)
                     // IPv6-leak guard for HYBRID modes (prefer_ipv4/prefer_ipv6): the direct/bypass path
                     // (domain:ru → direct) would otherwise dial the user's REAL IPv6 for dual-stack sites,
                     // exposing it on a leak check ("domain:ru goes direct only over IPv4, IPv6 leaks").
@@ -362,6 +425,12 @@ object SingBoxConfig {
                 }
             }
 
+            // WireGuard endpoints (sing-box 1.13 replacement for the removed wireguard outbound).
+            val wgEndpoints = listOfNotNull(wgExitEndpoint, wgBaseEndpoint)
+            if (wgEndpoints.isNotEmpty()) {
+                putJsonArray("endpoints") { wgEndpoints.forEach { add(it) } }
+            }
+
             putJsonObject("route") {
                 put("final", if (routingProfile != null) SingBoxRouting.finalOutbound(routingProfile) else PROXY_TAG)
                 put("auto_detect_interface", autoDetectInterface)
@@ -372,7 +441,12 @@ object SingBoxConfig {
                     val sbExpertStrategy = routingProfile
                         ?.takeIf { it.expertEnabled }?.singboxDomainStrategy?.takeIf { it.isNotBlank() }
                     // Sniff destination domain so domain rules match (advanced or expert can disable it).
-                    if (advanced?.sniff != false && (!sbExpert || routingProfile!!.singboxSniff)) {
+                    // A full UDP tunnel ([sniffOverrideDestination]) ALWAYS sniffs — the old code forced
+                    // sniff on the inbound there regardless of the advanced/expert toggle, and the resolve
+                    // action below needs the sniffed domain to override an IP-literal destination.
+                    if (sniffOverrideDestination ||
+                        (advanced?.sniff != false && (!sbExpert || routingProfile!!.singboxSniff))
+                    ) {
                         addJsonObject { put("action", "sniff") }
                     }
                     if (tunMode || hijackDns) {
@@ -398,6 +472,10 @@ object SingBoxConfig {
                             }
                         }
                     }
+                    // NOTE: the family override for full UDP tunnels (the old inbound
+                    // sniff_override_destination + domain_strategy) is already covered by the `resolve`
+                    // route action further down (gated on forceFamily / usesIpRules / …), so no extra
+                    // resolve is emitted here — that would double-resolve and reorder the rules.
                     // Block QUIC (HTTP/3) so clients fall back to TCP/HTTP2 through the proxy. A
                     // TCP-only transport (xhttp / reality / ws) can't carry UDP, so QUIC just dies
                     // with ERR_QUIC_PROTOCOL (Telemost, Wildberries, Google, …). Rejecting it forces
@@ -473,8 +551,9 @@ object SingBoxConfig {
                     // v2rayNG-style manual rules that use IP/geoip selectors also need the sniffed
                     // domain resolved first, or `geoip:ru → direct` silently skips domain connections.
                     val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
-                    if (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
-                        manualRulesUseIp || (sbExpert && routingProfile!!.singboxResolve)
+                    if (allowLocalResolve &&
+                        (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
+                            manualRulesUseIp || (sbExpert && routingProfile!!.singboxResolve))
                     ) {
                         addJsonObject {
                             put("action", "resolve")
@@ -534,9 +613,12 @@ object SingBoxConfig {
                             put("action", "reject")
                         }
                     }
-                    // The selected routing profile's own buckets (ordered by its routeOrder).
+                    // The selected routing profile's own buckets (ordered by its routeOrder). In the
+                    // hybrid IPv6 modes, also reject IPv6 to the direct bucket so geosite:ru/domain:ru
+                    // sites never egress over the user's real IPv6 (proxied traffic keeps dual-stack).
                     if (routingProfile != null) {
-                        SingBoxRouting.rules(routingProfile).forEach { add(it) }
+                        val hideDirectV6 = effectiveStrategy == "prefer_ipv4" || effectiveStrategy == "prefer_ipv6"
+                        SingBoxRouting.rules(routingProfile, hideDirectIpv6 = hideDirectV6).forEach { add(it) }
                     }
                     // Direct conveniences last (a profile proxy rule above still wins on first match).
                     if (routing.directDomains.isNotEmpty()) {
@@ -603,6 +685,23 @@ object SingBoxConfig {
     private fun parseJsonArray(raw: String): List<kotlinx.serialization.json.JsonElement> {
         if (raw.isBlank()) return emptyList()
         return runCatching { Json.parseToJsonElement(raw).jsonArray.toList() }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Rewrites a plain UDP DNS resolver address to its TCP form when [preferTcp] is set, so the query
+     * rides a SOCKS CONNECT instead of the flakier UDP-ASSOCIATE. DoH/DoT/DoQ and already-scheme'd
+     * addresses are left untouched; special keywords ("fakeip"/"local") too.
+     *   "8.8.8.8" → "tcp://8.8.8.8"  ·  "udp://1.1.1.1" → "tcp://1.1.1.1"  ·  "https://…" → unchanged
+     */
+    private fun maybeTcpDns(address: String, preferTcp: Boolean): String {
+        if (!preferTcp) return address
+        val a = address.trim()
+        if (a.isEmpty()) return address
+        if (a.lowercase().startsWith("udp://")) return "tcp://" + a.substring("udp://".length)
+        if (a.contains("://")) return address // explicit scheme (https/tls/quic/tcp/…) → leave as-is
+        // Bare resolver = UDP in sing-box; only rewrite something host-like, not keywords like "local".
+        if (!a.contains('.') && !a.contains(':')) return address
+        return "tcp://$a"
     }
 
     private fun buildProxyOutbound(
@@ -672,19 +771,67 @@ object SingBoxConfig {
                     put("method", profile.method)
                     put("password", profile.password)
                 }
+
+                // Native since sing-box 1.13 in this build (with_quic no longer clashes with
+                // xray's quic fork) — replaces the old hysteria2proxy SOCKS bridge.
+                ProxyProfile.TYPE_HYSTERIA2 -> {
+                    put("password", profile.password)
+                    if (profile.hy2UpMbps > 0) put("up_mbps", profile.hy2UpMbps)
+                    if (profile.hy2DownMbps > 0) put("down_mbps", profile.hy2DownMbps)
+                    if (profile.hy2Obfs == "salamander" && profile.hy2ObfsPassword.isNotBlank()) {
+                        putJsonObject("obfs") {
+                            put("type", "salamander")
+                            put("password", profile.hy2ObfsPassword)
+                        }
+                    }
+                    // Port hopping: link `mport=443-2000,5000` → sing-box `server_ports` ranges
+                    // ("start:end"); a bare port becomes a one-port range.
+                    hy2ServerPorts(profile.hy2Ports).takeIf { it.isNotEmpty() }?.let { ranges ->
+                        putJsonArray("server_ports") { ranges.forEach { add(it) } }
+                    }
+                }
+
+                // NaïveProxy — native sing-box outbound (with_naive_outbound, cronet-based). TLS is
+                // mandatory and comes from buildTls below; QUIC flag from a naive+quic:// link.
+                ProxyProfile.TYPE_NAIVE -> {
+                    if (profile.username.isNotBlank()) put("username", profile.username)
+                    if (profile.password.isNotBlank()) put("password", profile.password)
+                    if (profile.naiveQuic) put("quic", true)
+                }
             }
 
-            // TLS/transport apply to vless/vmess/trojan; shadowsocks ignores them.
+            // TLS/transport apply to vless/vmess/trojan; shadowsocks ignores them. hysteria2 and
+            // naive carry their own protocol: TLS yes (mandatory), but no v2ray transport layer.
             if (profile.type != ProxyProfile.TYPE_SHADOWSOCKS) {
                 buildTls(profile)?.let { put("tls", it) }
-                buildTransport(profile)?.let { put("transport", it) }
+                if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE) {
+                    buildTransport(profile)?.let { put("transport", it) }
+                }
             }
 
             if (detourTag != null) put("detour", detourTag)
-            if (tfo) put("tcp_fast_open", true)
-            buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
+            // hysteria2/naive have no plain TCP leg and no smux support: skip tcp_fast_open + multiplex.
+            if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE) {
+                if (tfo) put("tcp_fast_open", true)
+                buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
+            }
         }
     }
+
+    /**
+     * Converts the link-style hysteria2 port-hopping spec ("443,2000-3000" / "2000-3000") into
+     * sing-box `server_ports` entries ("start:end"). Invalid chunks are dropped.
+     */
+    private fun hy2ServerPorts(spec: String): List<String> =
+        spec.split(',').mapNotNull { chunk ->
+            val part = chunk.trim()
+            if (part.isEmpty()) return@mapNotNull null
+            val bits = part.split('-', ':').map { it.trim() }
+            val start = bits.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+            val end = if (bits.size > 1) bits.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null else start
+            if (start !in 1..65535 || end !in 1..65535 || end < start) return@mapNotNull null
+            "$start:$end"
+        }
 
     /**
      * A SOCKS5 outbound pointing at olcRTC's local listener on [port]. Used as the chain detour
@@ -704,13 +851,40 @@ object SingBoxConfig {
             }
         }
 
-    /** A raw WireGuard outbound used as a chain base (tagged [WG_BASE_TAG], no mux/detour). */
-    private fun buildWireguardBaseOutbound(profile: ProxyProfile): JsonObject? {
+    /**
+     * Converts a legacy WireGuard *outbound* JSON (as stored in [ProxyProfile.rawOutbound]:
+     * `server`/`server_port`/`local_address`/`private_key`/`peer_public_key`/`mtu`) into a sing-box
+     * 1.13 WireGuard *endpoint* object (`address`/`private_key`/`peers[]`). The wireguard outbound was
+     * removed in sing-box 1.13.0, so VK-TURN / WDTT (which tunnel through a local WireGuard listener)
+     * must use an endpoint instead. Returns null if the raw JSON isn't a wireguard outbound.
+     */
+    private fun buildWireguardEndpoint(profile: ProxyProfile, tag: String): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
-        val rawObj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        if (obj["type"]?.jsonPrimitive?.contentOrNull != "wireguard") return null
+        val server = obj["server"]?.jsonPrimitive?.contentOrNull ?: "127.0.0.1"
+        val serverPort = obj["server_port"]?.jsonPrimitive?.intOrNull ?: return null
+        val privateKey = obj["private_key"]?.jsonPrimitive?.contentOrNull ?: return null
+        val peerPublicKey = obj["peer_public_key"]?.jsonPrimitive?.contentOrNull ?: return null
+        val localAddrs = obj["local_address"]?.jsonArray ?: buildJsonArray { }
+        val mtu = obj["mtu"]?.jsonPrimitive?.intOrNull
         return buildJsonObject {
-            rawObj.forEach { (k, v) -> if (k != "tag" && k != "detour") put(k, v) }
-            put("tag", WG_BASE_TAG)
+            put("type", "wireguard")
+            put("tag", tag)
+            // Userspace gVisor stack (the process is already bound to the upstream network).
+            put("system", false)
+            if (mtu != null && mtu > 0) put("mtu", mtu)
+            putJsonArray("address") { localAddrs.forEach { add(it) } }
+            put("private_key", privateKey)
+            putJsonArray("peers") {
+                addJsonObject {
+                    put("address", server)
+                    put("port", serverPort)
+                    put("public_key", peerPublicKey)
+                    // The local WG listener carries everything (VK-TURN tunnel is IPv4-only).
+                    putJsonArray("allowed_ips") { add("0.0.0.0/0") }
+                }
+            }
         }
     }
 

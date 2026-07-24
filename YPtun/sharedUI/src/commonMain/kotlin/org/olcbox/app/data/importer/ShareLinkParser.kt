@@ -20,12 +20,15 @@ object ShareLinkParser {
             trimmed.startsWith("trojan://", true) -> parseTrojan(trimmed)
             trimmed.startsWith("ss://", true) -> parseShadowsocks(trimmed)
             trimmed.startsWith("hysteria2://", true) || trimmed.startsWith("hy2://", true) -> parseHysteria2(trimmed)
+            trimmed.startsWith("naive+", true) || trimmed.startsWith("naive://", true) -> parseNaive(trimmed)
             // amneziawg://<base64url(wg-quick INI)> — the compact link form produced by sharing.
             trimmed.startsWith("amneziawg://", true) -> {
                 val payload = trimmed.substring("amneziawg://".length).substringBefore('#')
                 SubscriptionDecoder.decodeBase64Chunk(payload)?.let { AmneziaWgParser.parse(it) }
             }
             AmneziaWgParser.looksLikeAmneziaWg(trimmed) -> AmneziaWgParser.parse(trimmed)
+            // tt://<base64> — AdGuard Trust Tunnel deep-link (decoded natively at connect time).
+            TrustTunnelParser.looksLikeTrustTunnel(trimmed) -> TrustTunnelParser.parse(trimmed)
             else -> null
         }
     }
@@ -177,6 +180,47 @@ object ShareLinkParser {
             hy2UpMbps = mbps(params["up"]),
             hy2DownMbps = mbps(params["down"]),
             hy2Ports = (params["mport"] ?: params["ports"]).orEmpty(),
+        )
+    }
+
+    // --- naive+https://user:pass@host:port?sni=#name (NaïveProxy; naive+quic:// for QUIC) ---
+    private fun parseNaive(uri: String): ProxyProfile? {
+        val scheme = listOf("naive+https://", "naive+quic://", "naive://")
+            .firstOrNull { uri.startsWith(it, true) } ?: return null
+        val quic = scheme.equals("naive+quic://", true)
+        val withoutScheme = uri.substring(scheme.length)
+        val remark = withoutScheme.substringAfter('#', "").let(UriCodec::percentDecode)
+        val beforeFragment = withoutScheme.substringBefore('#')
+        val query = beforeFragment.substringAfter('?', "")
+        var authority = beforeFragment.substringBefore('?').trimEnd('/')
+
+        var user = ""
+        var pass = ""
+        val atIndex = authority.lastIndexOf('@')
+        if (atIndex >= 0) {
+            val userInfo = authority.substring(0, atIndex)
+            user = UriCodec.percentDecode(userInfo.substringBefore(':'))
+            pass = UriCodec.percentDecode(userInfo.substringAfter(':', ""))
+            authority = authority.substring(atIndex + 1)
+        }
+        val hostPort = UriCodec.splitHostPort(authority)
+        val host = hostPort?.first ?: authority.trim('[', ']')
+        val port = hostPort?.second ?: 443 // naive default (HTTPS)
+        if (host.isBlank()) return null
+
+        val params = UriCodec.parseQuery(query)
+        return ProxyProfile(
+            tag = remark,
+            type = ProxyProfile.TYPE_NAIVE,
+            server = host,
+            serverPort = port,
+            username = user,
+            password = pass,
+            // Naive IS HTTPS (or QUIC): TLS mandatory; the cronet outbound rejects insecure/alpn/utls,
+            // so only sni is carried over.
+            security = ProxyProfile.SECURITY_TLS,
+            sni = (params["sni"] ?: params["peer"]).orEmpty(),
+            naiveQuic = quic || params["network"]?.equals("quic", true) == true,
         )
     }
 

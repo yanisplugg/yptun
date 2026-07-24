@@ -10,7 +10,6 @@ import (
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	tlsclient "github.com/bogdanfinn/tls-client"
-	"github.com/bogdanfinn/tls-client/profiles"
 	"golang.org/x/net/proxy"
 )
 
@@ -49,23 +48,10 @@ func (d *splitDialer) DialContext(ctx context.Context, network, addr string) (ne
 	}, nil
 }
 
-// clientProfile выбирает TLS/HTTP2-профиль (JA3 + client hints) под браузер.
-// JA3 обязан совпадать с UA из browserprofile.ForKind, иначе рассинхрон = флаг.
-func (c *Client) clientProfile() profiles.ClientProfile {
-	if c.browser == browserprofile.Firefox {
-		return profiles.Firefox_147
-	}
-	return profiles.Chrome_146
-}
-
-// newTLSClient строит tls-client с Chrome-fingerprint и фрагментацией
-// ClientHello на всех исходящих control-plane TLS-соединениях. Базовый дилер -
-// c.dialer (несёт DNS-резолвер dnsdial); фабрика вызывается без proxyUrl, поэтому
-// CONNECT не используется - splitDialer работает как прямой транспорт.
-func (c *Client) newTLSClient(jar tlsclient.CookieJar) (tlsclient.HttpClient, error) {
+func (c *Client) newTLSClient(profile browserprofile.Profile, jar tlsclient.CookieJar) (tlsclient.HttpClient, error) {
 	return tlsclient.NewHttpClient(tlsclient.NewNoopLogger(),
 		tlsclient.WithTimeoutSeconds(20),
-		tlsclient.WithClientProfile(c.clientProfile()),
+		tlsclient.WithClientProfile(profile.ClientProfile()),
 		tlsclient.WithCookieJar(jar),
 		tlsclient.WithProxyDialerFactory(func(_ string, timeout time.Duration, localAddr *net.TCPAddr, _ fhttp.Header, _ tlsclient.Logger) (proxy.ContextDialer, error) {
 			base := c.dialer

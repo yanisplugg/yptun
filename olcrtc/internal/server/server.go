@@ -59,11 +59,26 @@ type HealthFunc func(control.Status)
 
 // Server handles incoming tunnel connections and proxies their traffic.
 type Server struct {
-	ln             transport.Transport
-	peerLn         transport.PeerTransport
-	cipher         *crypto.Cipher
-	conn           *muxconn.Conn
-	session        *smux.Session
+	// baseCtx is the long-lived server context established in bringUpLink. It
+	// is propagated to reconnect-time goroutines (acceptHandshake, control
+	// loops) instead of context.Background() so they observe shutdown.
+	baseCtx context.Context //nolint:containedctx // server-lifetime ctx for reconnect goroutines
+	ln      transport.Transport
+	peerLn  transport.PeerTransport
+	cipher  *crypto.Cipher
+	conn    *muxconn.Conn
+	// controlConn is wired to the transport's isolated control-plane channel
+	// (transport.ControlPlane). When non-nil, the smux control session runs
+	// over it so bulk data writes never block control ping/pong.
+	controlConn *muxconn.Conn
+	session     *smux.Session
+	// controlSess is the smux session that carries the handshake/control
+	// stream. For control-plane transports the handshake + liveness loop run
+	// on this session, which is distinct from the data session (and in
+	// peer-routing mode the data session is nil). reinstallSession compares
+	// the dying session against this so a control-session reinstall is not
+	// silently discarded by the s.session guard (issue #95).
+	controlSess    *smux.Session
 	controlStrm    *smux.Stream
 	controlStop    context.CancelFunc
 	sessMu         sync.RWMutex
@@ -101,10 +116,14 @@ type peerSession struct {
 	peerID      string
 	conn        *muxconn.Conn
 	session     *smux.Session
+	controlConn *muxconn.Conn
+	controlSess *smux.Session
 	controlStrm *smux.Stream
 	controlStop context.CancelFunc
 	sessionID   string
 	deviceID    string
+	// sessionReady is closed once sessionID is populated from acceptHandshake.
+	sessionReady chan struct{}
 }
 
 // ConnectRequest is a message from the client to establish a new connection.
@@ -130,6 +149,7 @@ type Config struct {
 	Engine           string
 	URL              string
 	Token            string
+	AuthToken        string
 	Liveness         control.Config
 	Traffic          transport.TrafficConfig
 
@@ -236,8 +256,24 @@ func (s *Server) setupResolver() {
 	}
 }
 
+// dataSmuxConfig returns the data-plane smux config for the server's
+// transport. It mirrors the client (buildSmuxClient -> runtime.SmuxConfigFor):
+// ControlPlane transports (vp8channel) get the relaxed keep-alive window so a
+// legitimately silent carrier (publisher-PC reconnect / SFU renegotiation) is
+// not torn down at the conservative 30s timeout. Keeping this in lockstep with
+// the client avoids the asymmetric teardown where the server drops its peer
+// data session first, surfacing as "closed pipe" on the client and a reconnect
+// storm (issue #95).
+func dataSmuxConfig(tr transport.Transport) *smux.Config {
+	return runtime.SmuxConfigFor(tr)
+}
+
 func smuxConfig(maxWirePayload int) *smux.Config {
 	return runtime.SmuxConfig(maxWirePayload)
+}
+
+func controlSmuxConfig(maxWirePayload int) *smux.Config {
+	return runtime.ControlSmuxConfig(maxWirePayload)
 }
 
 func linkMaxPayload(tr transport.Transport) int {
@@ -249,12 +285,14 @@ func (s *Server) bringUpLink(
 	cfg Config,
 	cancel context.CancelFunc,
 ) error {
+	s.baseCtx = ctx
 	ln, err := transport.New(ctx, cfg.Transport, transport.Config{
 		Carrier:    cfg.Carrier,
 		RoomURL:    cfg.RoomURL,
 		Engine:     cfg.Engine,
 		URL:        cfg.URL,
 		Token:      cfg.Token,
+		AuthToken:  cfg.AuthToken,
 		ChannelID:  cfg.ChannelID,
 		DeviceID:   "",
 		Name:       names.Generate(),
@@ -289,6 +327,13 @@ func (s *Server) bringUpLink(
 	logger.Infof("Connecting transport=%s carrier=%s ...", cfg.Transport, cfg.Carrier)
 	if s.peerLn == nil {
 		s.installSession()
+	} else {
+		// Peer-routing mode: installSession is skipped, but we still need to
+		// wire up the control-plane smux session so that liveness ping/pong
+		// works correctly over the isolated control track. Build the full
+		// control conn + smux session and launch acceptHandshake exactly as
+		// installSession does for the non-peer-routing path.
+		s.installControlSession()
 	}
 
 	if err := ln.Connect(ctx); err != nil {
@@ -307,15 +352,134 @@ func (s *Server) bringUpLink(
 
 func (s *Server) installSession() {
 	conn := muxconn.New(s.ln, s.cipher)
-	sess, err := smux.Server(conn, smuxConfig(linkMaxPayload(s.ln)))
+	sess, err := smux.Server(conn, dataSmuxConfig(s.ln))
 	if err != nil {
 		logger.Warnf("smux server init failed: %v", err)
 		return
 	}
+	// If the transport has an isolated control plane, build a dedicated
+	// control smux session over it and launch the handshake acceptor.
+	// For transports without a control plane, serveSingle drives the
+	// handshake in its own loop.
+	controlConn := muxconn.NewControl(s.ln, s.cipher)
+	var ctrlSess *smux.Session
+	if controlConn != nil {
+		controlSess, cerr := smux.Server(controlConn, controlSmuxConfig(linkMaxPayload(s.ln)))
+		if cerr != nil {
+			logger.Warnf("control smux server init failed: %v", cerr)
+			_ = controlConn.Close()
+			controlConn = nil
+		} else {
+			// Isolated control plane: handshake runs on the control session.
+			ctrlSess = controlSess
+			go s.acceptHandshake(s.baseCtx, controlSess)
+		}
+	}
 	s.sessMu.Lock()
 	s.conn = conn
+	s.controlConn = controlConn
+	s.controlSess = ctrlSess
 	s.session = sess
 	s.sessMu.Unlock()
+}
+
+// installControlSession wires up the per-peer control-plane routing for
+// transports that implement transport.PeerControlPlane. In peer-routing mode
+// each client gets its own control KCP (keyed by data epoch in the transport);
+// this function registers the callback that fires when a new peer's control
+// data arrives, creating a per-peer smux+handshake+liveness session on demand.
+// For transports with only transport.ControlPlane (no per-peer routing), it
+// falls back to the singleton control session so legacy non-peer-routing code
+// still works.
+func (s *Server) installControlSession() {
+	// Prefer per-peer control plane (PeerControlPlane) when available.
+	if pcp, ok := s.ln.(transport.PeerControlPlane); ok {
+		s.installPeerControlPlane(pcp)
+		return
+	}
+	// Fallback: singleton control plane (ControlPlane only).
+	controlConn := muxconn.NewControl(s.ln, s.cipher)
+	if controlConn == nil {
+		return
+	}
+	controlSess, err := smux.Server(controlConn, controlSmuxConfig(linkMaxPayload(s.ln)))
+	if err != nil {
+		logger.Warnf("control smux server init failed (peer-routing): %v", err)
+		_ = controlConn.Close()
+		return
+	}
+	s.sessMu.Lock()
+	s.controlConn = controlConn
+	s.controlSess = controlSess
+	s.sessMu.Unlock()
+	go s.acceptHandshake(s.baseCtx, controlSess)
+}
+
+// installPeerControlPlane registers the per-peer control callback on the
+// transport. When the transport delivers a control frame for a new peer ID, we
+// create a dedicated muxconn+smux session for that peer, run acceptHandshake
+// on it, and then start the liveness control loop — exactly what the singleton
+// path does, but one instance per client instead of shared.
+func (s *Server) installPeerControlPlane(pcp transport.PeerControlPlane) {
+	pcp.SetControlOnPeerData(func(peerID string, data []byte) {
+		s.onPeerControlData(peerID, data)
+	})
+}
+
+// onPeerControlData is the transport callback for per-peer control frames.
+// It routes the frame to the peer's control muxconn, creating one on demand.
+func (s *Server) onPeerControlData(peerID string, data []byte) {
+	ps := s.getOrCreatePeerControlSession(peerID)
+	if ps != nil && ps.controlConn != nil {
+		ps.controlConn.Push(data)
+	}
+}
+
+// getOrCreatePeerControlSession returns an existing peerSession for peerID, or
+// creates one with a fresh per-peer control muxconn+smux session and launches
+// acceptHandshake on it. The data smux session is created later by
+// getPeerSession when the first data frame arrives.
+func (s *Server) getOrCreatePeerControlSession(peerID string) *peerSession {
+	s.sessMu.Lock()
+	ps := s.peerSessions[peerID]
+	if ps != nil {
+		s.sessMu.Unlock()
+		return ps
+	}
+
+	if _, ok := s.ln.(transport.PeerControlPlane); !ok {
+		s.sessMu.Unlock()
+		return nil
+	}
+
+	controlConn := muxconn.NewPeerControl(s.ln, s.cipher, peerID)
+	if controlConn == nil {
+		s.sessMu.Unlock()
+		return nil
+	}
+	controlSess, err := smux.Server(controlConn, controlSmuxConfig(linkMaxPayload(s.ln)))
+	if err != nil {
+		logger.Warnf("control smux init failed for peer %s: %v", peerID, err)
+		_ = controlConn.Close()
+		s.sessMu.Unlock()
+		return nil
+	}
+	ps = &peerSession{
+		peerID:       peerID,
+		controlConn:  controlConn,
+		controlSess:  controlSess,
+		sessionReady: make(chan struct{}),
+	}
+	s.peerSessions[peerID] = ps
+	s.sessMu.Unlock()
+
+	logger.Infof("server: peer control session created peerID=%s", peerID)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.acceptPeerHandshake(s.baseCtx, ps)
+	}()
+	return ps
 }
 
 func (s *Server) handleReconnect() {
@@ -331,42 +495,115 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 	s.reinstallMu.Lock()
 	defer s.reinstallMu.Unlock()
 
-	// Close the old muxconn immediately so that any in-flight Push calls
+	// Close the old muxconns immediately so that any in-flight Push calls
 	// (from data arriving on a new bridge before this reinstall completes)
 	// are discarded rather than feeding stale frames into the dying smux
-	// session. Without this, a client that reconnects faster than the
-	// server can push new-session smux frames into the old muxconn,
-	// corrupting the old smux session's stream state (manifests as
-	// "frame too large" on the control stream).
+	// session.
 	s.sessMu.RLock()
 	if s.conn != nil {
 		_ = s.conn.Close()
 	}
+	if s.controlConn != nil {
+		_ = s.controlConn.Close()
+	}
 	s.sessMu.RUnlock()
 
 	// Pre-build the replacement so we can swap atomically below.
-	newConn := muxconn.New(s.ln, s.cipher)
-	newSess, err := smux.Server(newConn, smuxConfig(linkMaxPayload(s.ln)))
-	if err != nil {
-		logger.Warnf("smux server init failed: %v", err)
-		_ = newConn.Close()
+	r := s.buildReplacementSession()
+	if r == nil {
 		return
 	}
 
-	s.sessMu.Lock()
-	if s.session != dead {
-		// Someone else already reinstalled - discard our build.
-		s.sessMu.Unlock()
-		_ = newSess.Close()
-		_ = newConn.Close()
+	if !s.swapSession(dead, r) {
 		return
 	}
+
+	// Launch the handshake acceptor on the control session only when
+	// an isolated control plane exists. Without one, serveSingle drives
+	// the handshake in its own loop (same as before).
+	if r.controlSess != nil {
+		go s.acceptHandshake(s.baseCtx, r.controlSess)
+	}
+}
+
+// replacementSession holds a freshly-built data + (optional) control smux
+// session pair, prior to atomically swapping it into the live server.
+type replacementSession struct {
+	conn        *muxconn.Conn
+	sess        *smux.Session
+	controlConn *muxconn.Conn
+	controlSess *smux.Session
+}
+
+// buildReplacementSession constructs a fresh data + (optional) control smux
+// session over new muxconns. It returns nil when the data session could not be
+// built.
+func (s *Server) buildReplacementSession() *replacementSession {
+	conn := muxconn.New(s.ln, s.cipher)
+	sess, err := smux.Server(conn, dataSmuxConfig(s.ln))
+	if err != nil {
+		logger.Warnf("smux server init failed: %v", err)
+		_ = conn.Close()
+		return nil
+	}
+
+	r := &replacementSession{conn: conn, sess: sess}
+	r.controlConn = muxconn.NewControl(s.ln, s.cipher)
+	if r.controlConn != nil {
+		r.controlSess, err = smux.Server(r.controlConn, controlSmuxConfig(linkMaxPayload(s.ln)))
+		if err != nil {
+			logger.Warnf("control smux server init failed: %v", err)
+			_ = r.controlConn.Close()
+			r.controlConn = nil
+			r.controlSess = nil
+		}
+	}
+	return r
+}
+
+// staleReinstall reports whether a pre-built replacement must be discarded
+// because another reinstall already swapped in a fresh session - i.e. dead
+// matches neither the live data session nor the live control session. A nil
+// dead (carrier-triggered reconnect) always proceeds. The dying session may be
+// the data session (legacy/datachannel path) or the control session
+// (control-plane transports, where s.session is nil in peer-routing mode).
+// Matching against controlSess is what keeps a control-session reinstall from
+// being silently dropped; without it acceptHandshake was never re-armed and
+// every later reconnect hung forever in waitPeerHandshake (issue #95).
+func (s *Server) staleReinstall(dead *smux.Session) bool {
+	return dead != nil && dead != s.session && dead != s.controlSess
+}
+
+// discardReplacement tears down a replacement session that lost the reinstall
+// race.
+func discardReplacement(r *replacementSession) {
+	_ = r.sess.Close()
+	_ = r.conn.Close()
+	if r.controlConn != nil {
+		_ = r.controlSess.Close()
+		_ = r.controlConn.Close()
+	}
+}
+
+// swapSession atomically replaces the live session with the pre-built one and
+// tears down the old one. Returns false (discarding the new build) when another
+// reinstall already won the race.
+func (s *Server) swapSession(dead *smux.Session, r *replacementSession) bool {
+	s.sessMu.Lock()
+	if s.staleReinstall(dead) {
+		s.sessMu.Unlock()
+		discardReplacement(r)
+		return false
+	}
 	oldSess := s.session
+	oldCtrlSess := s.controlSess
 	oldControl := s.controlStrm
 	oldControlStop := s.controlStop
 	oldSID := s.sessionID
-	s.session = newSess
-	s.conn = newConn
+	s.session = r.sess
+	s.conn = r.conn
+	s.controlConn = r.controlConn
+	s.controlSess = r.controlSess
 	s.controlStrm = nil
 	s.controlStop = nil
 	s.sessionID = ""
@@ -379,6 +616,9 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 	if oldSess != nil {
 		_ = oldSess.Close()
 	}
+	if oldCtrlSess != nil && oldCtrlSess != oldSess {
+		_ = oldCtrlSess.Close()
+	}
 	if oldControl != nil {
 		_ = oldControl.Close()
 	}
@@ -386,18 +626,22 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 		s.onClose(oldSID, "reconnect")
 		s.trackPeerClose(oldSID, "reconnect")
 	}
+	return true
 }
 
 func (s *Server) closeSession() {
 	s.sessMu.Lock()
 	sess := s.session
 	conn := s.conn
+	ctrlConn := s.controlConn
 	control := s.controlStrm
 	controlStop := s.controlStop
 	peers := s.peerSessions
 	s.peerSessions = make(map[string]*peerSession)
 	s.session = nil
 	s.conn = nil
+	s.controlConn = nil
+	s.controlSess = nil
 	s.controlStrm = nil
 	s.controlStop = nil
 	oldSID := s.sessionID
@@ -414,6 +658,9 @@ func (s *Server) closeSession() {
 	}
 	if conn != nil {
 		_ = conn.Close()
+	}
+	if ctrlConn != nil {
+		_ = ctrlConn.Close()
 	}
 	if oldSID != "" {
 		s.onClose(oldSID, "closed")
@@ -439,6 +686,12 @@ func (s *Server) closePeerSession(ps *peerSession, reason string) {
 		ps.controlStop()
 	}
 	notifyControlClose(ps.controlStrm)
+	if ps.controlSess != nil {
+		_ = ps.controlSess.Close()
+	}
+	if ps.controlConn != nil {
+		_ = ps.controlConn.Close()
+	}
 	if ps.session != nil {
 		_ = ps.session.Close()
 	}
@@ -524,6 +777,8 @@ func (s *Server) onData(data []byte) {
 func (s *Server) onPeerData(peerID string, data []byte) {
 	ps := s.getPeerSession(peerID)
 	if ps == nil {
+		// Not in peer-routing mode: fall back to the single data conn.
+		s.onData(data)
 		return
 	}
 	ps.conn.Push(data)
@@ -533,22 +788,45 @@ func (s *Server) getPeerSession(peerID string) *peerSession {
 	if peerID == "" || s.peerLn == nil {
 		return nil
 	}
+	// In peer-routing mode with PeerControlPlane, the peerSession may already
+	// exist (created by getOrCreatePeerControlSession when the first control
+	// frame arrived). If so, just attach the data conn to it.
 	s.sessMu.Lock()
-	if ps := s.peerSessions[peerID]; ps != nil {
+	ps := s.peerSessions[peerID]
+	if ps != nil && ps.conn != nil {
+		// Data conn already wired; nothing to do.
 		s.sessMu.Unlock()
 		return ps
 	}
+	// Build the data smux session for this peer.
 	conn := muxconn.NewPeer(s.peerLn, s.cipher, peerID)
-	sess, err := smux.Server(conn, smuxConfig(linkMaxPayload(s.ln)))
+	sess, err := smux.Server(conn, dataSmuxConfig(s.ln))
 	if err != nil {
 		s.sessMu.Unlock()
 		logger.Warnf("smux server init failed for peer %s: %v", peerID, err)
 		_ = conn.Close()
 		return nil
 	}
-	ps := &peerSession{peerID: peerID, conn: conn, session: sess}
-	s.peerSessions[peerID] = ps
-	s.sessMu.Unlock()
+	if ps != nil {
+		// peerSession exists from per-peer control plane; attach data conn.
+		ps.conn = conn
+		ps.session = sess
+		s.sessMu.Unlock()
+	} else {
+		// No PeerControlPlane: create the peerSession with an empty
+		// sessionID (legacy path). servePeer uses an empty sessionID as
+		// the "needs handshake" flag; establishPeerSession fills in
+		// sessionID/deviceID after acceptHandshake succeeds. Seeding them
+		// from the singleton here would make a reconnecting peer reuse
+		// stale state and skip its handshake.
+		ps = &peerSession{
+			peerID:  peerID,
+			conn:    conn,
+			session: sess,
+		}
+		s.peerSessions[peerID] = ps
+		s.sessMu.Unlock()
+	}
 
 	s.wg.Add(1)
 	go func() {
@@ -587,15 +865,17 @@ func (s *Server) serveSingle(ctx context.Context) {
 			}
 		}
 
-		if !s.handshakeReady() {
-			if !s.acceptHandshake(ctx, sess) {
-				continue
-			}
+		ready, stop := s.waitHandshake(ctx, sess)
+		if stop {
+			return
+		}
+		if !ready {
+			continue
 		}
 
 		stream, err := sess.AcceptStream()
 		if err != nil {
-			if s.handleAcceptError(ctx, sess) {
+			if s.handleAcceptError(ctx, sess, err) {
 				return
 			}
 			continue
@@ -609,13 +889,48 @@ func (s *Server) serveSingle(ctx context.Context) {
 	}
 }
 
+// waitHandshake ensures the handshake has completed before data streams are
+// accepted. The first bool (ready) reports whether the caller may proceed to
+// AcceptStream; the second (stop) reports that the serve loop should exit. When
+// the handshake is not yet done it either drives it inline (legacy path) or
+// spin-waits for the control-plane goroutine, returning ready=false so the
+// caller re-loops.
+func (s *Server) waitHandshake(ctx context.Context, sess *smux.Session) (bool, bool) {
+	if s.handshakeReady() {
+		return true, false
+	}
+
+	// When the transport has an isolated control plane, the handshake
+	// goroutine (launched from installSession/reinstallSession) is
+	// responsible for acceptHandshake. We just wait here until it
+	// completes (sessionID != "") before accepting data streams.
+	s.sessMu.RLock()
+	hasControlConn := s.controlConn != nil
+	s.sessMu.RUnlock()
+	if !hasControlConn {
+		// Legacy path: drive handshake in this loop.
+		if !s.acceptHandshake(ctx, sess) {
+			return false, false
+		}
+		return true, false
+	}
+
+	// Control plane path: handshake goroutine is running; spin-wait.
+	select {
+	case <-ctx.Done():
+		return false, true
+	case <-time.After(10 * time.Millisecond):
+	}
+	return false, false
+}
+
 // handleAcceptError handles a failed AcceptStream. Returns true if the server should stop.
-func (s *Server) handleAcceptError(ctx context.Context, sess *smux.Session) bool {
+func (s *Server) handleAcceptError(ctx context.Context, sess *smux.Session, err error) bool {
 	if contextDone(ctx) {
 		return true
 	}
 	hadSession := s.handshakeReady()
-	logger.Debugf("AcceptStream returned error - reinstalling session")
+	logger.Infof("server: AcceptStream(data) error - reinstalling session: %v", err)
 	s.reinstallSession(sess)
 	if hadSession && s.ln != nil {
 		s.ln.Reconnect("liveness")
@@ -662,7 +977,7 @@ func (s *Server) acceptHandshake(ctx context.Context, sess *smux.Session) bool {
 				return false
 			default:
 			}
-			logger.Debugf("AcceptStream(control) returned %v - reinstalling session", err)
+			logger.Infof("server: AcceptStream(control) error - reinstalling session: %v", err)
 			s.resetLinkPeer()
 			s.reinstallSession(sess)
 			return false
@@ -695,9 +1010,109 @@ func (s *Server) acceptHandshake(ctx context.Context, sess *smux.Session) bool {
 	return false
 }
 
+// acceptPeerHandshake runs the handshake on the per-peer control smux session
+// and then starts the liveness control loop. It mirrors acceptHandshake but
+// writes sessionID/deviceID into the peerSession (not the shared server fields)
+// so multiple clients can complete their handshakes independently.
+func (s *Server) acceptPeerHandshake(ctx context.Context, ps *peerSession) {
+	const maxStaleRetries = 3
+	for retry := 0; retry <= maxStaleRetries; retry++ {
+		stream, err := ps.controlSess.AcceptStream()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			logger.Infof("server: AcceptStream(peer control=%s) error: %v", ps.peerID, err)
+			s.removePeerSession(ps.peerID, "handshake failed")
+			return
+		}
+		_ = stream.SetDeadline(time.Now().Add(handshake.DefaultTimeout))
+		hello, sid, err := handshake.Server(stream, s.authHook)
+		_ = stream.SetDeadline(time.Time{})
+		if err != nil {
+			_ = stream.Close()
+			if errors.Is(err, framing.ErrFrameTooLarge) && retry < maxStaleRetries {
+				logger.Debugf("handshake peer=%s: stale stream retry %d: %v", ps.peerID, retry+1, err)
+				continue
+			}
+			logger.Warnf("handshake peer=%s failed: %v", ps.peerID, err)
+			s.removePeerSession(ps.peerID, "handshake failed")
+			return
+		}
+		// Populate the peerSession and signal readiness so waitPeerHandshake unblocks.
+		s.sessMu.Lock()
+		ps.deviceID = hello.DeviceID
+		ps.sessionID = sid
+		s.sessMu.Unlock()
+		if ps.sessionReady != nil {
+			close(ps.sessionReady)
+		}
+		s.recordSession(sid)
+		s.onOpen(sid, hello.DeviceID, hello.Claims)
+		s.trackPeerOpen(sid, hello.DeviceID)
+		logger.Infof("peer session %s opened (peer=%s device=%s)", sid, ps.peerID, hello.DeviceID)
+		s.startPeerControlLoop(ctx, ps, stream)
+		return
+	}
+}
+
+// startPeerControlLoop launches the liveness ping/pong loop for a per-peer
+// control stream, mirroring startControlLoop for the singleton path.
+func (s *Server) startPeerControlLoop(ctx context.Context, ps *peerSession, stream *smux.Stream) {
+	controlCtx, stop := context.WithCancel(ctx)
+	s.sessMu.Lock()
+	ps.controlStrm = stream
+	ps.controlStop = stop
+	s.sessMu.Unlock()
+
+	liveness := s.liveness
+	if runtime.IsControlPlane(s.ln) && liveness.Timeout <= control.DefaultTimeout {
+		liveness.Timeout = runtime.LivenessTimeout(s.ln)
+	}
+	onPong := liveness.OnPong
+	onMissedPong := liveness.OnMissedPong
+	onUnhealthy := liveness.OnUnhealthy
+	liveness.OnPong = func(h control.Health) {
+		s.recordPong(h)
+		logger.Debugf("control alive peer=%s rtt=%v seq=%d", ps.peerID, h.RTT, h.Seq)
+		if onPong != nil {
+			onPong(h)
+		}
+	}
+	liveness.OnMissedPong = func(missed int) {
+		s.recordMissed(missed)
+		logger.Warnf("control missed pong peer=%s missed=%d", ps.peerID, missed)
+		if onMissedPong != nil {
+			onMissedPong(missed)
+		}
+	}
+	liveness.OnUnhealthy = func(missed int) {
+		s.recordUnhealthy(missed)
+		logger.Warnf("control unhealthy peer=%s missed=%d", ps.peerID, missed)
+		if onUnhealthy != nil {
+			onUnhealthy(missed)
+		}
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() { _ = stream.Close() }()
+		err := control.Run(controlCtx, stream, liveness)
+		if controlCtx.Err() != nil || ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			logger.Warnf("peer control stream ended peer=%s: %v", ps.peerID, err)
+		}
+		s.removePeerSession(ps.peerID, "liveness")
+	}()
+}
+
 func (s *Server) servePeer(ps *peerSession) {
-	if !s.acceptPeerHandshake(ps) {
-		s.removePeerSession(ps.peerID, "closed")
+	if ps.sessionID == "" && !s.establishPeerSession(ps) {
 		return
 	}
 	for {
@@ -709,7 +1124,7 @@ func (s *Server) servePeer(ps *peerSession) {
 			if s.stopping() {
 				return
 			}
-			logger.Debugf("AcceptStream(peer=%s) returned %v - closing peer session", ps.peerID, err)
+			logger.Infof("server: AcceptStream(peer=%s) error - closing peer session: %v", ps.peerID, err)
 			s.removePeerSession(ps.peerID, "closed")
 			return
 		}
@@ -721,39 +1136,49 @@ func (s *Server) servePeer(ps *peerSession) {
 	}
 }
 
-func (s *Server) acceptPeerHandshake(ps *peerSession) bool {
-	const maxStaleRetries = 3
-	for retry := 0; retry <= maxStaleRetries; retry++ {
-		stream, err := ps.session.AcceptStream()
-		if err != nil {
-			if !s.stopping() {
-				logger.Debugf("AcceptStream(control peer=%s) returned %v", ps.peerID, err)
-			}
-			return false
-		}
-		_ = stream.SetDeadline(time.Now().Add(handshake.DefaultTimeout))
-		hello, sid, err := handshake.Server(stream, s.authHook)
-		_ = stream.SetDeadline(time.Time{})
-		if err != nil {
-			_ = stream.Close()
-			if errors.Is(err, framing.ErrFrameTooLarge) && retry < maxStaleRetries {
-				logger.Debugf("handshake failed peer=%s: discarding stale stream (attempt %d): %v", ps.peerID, retry+1, err)
-				continue
-			}
-			logger.Warnf("handshake failed peer=%s: %v", ps.peerID, err)
-			return false
-		}
-		ps.controlStrm = stream
-		ps.deviceID = hello.DeviceID
-		ps.sessionID = sid
-		s.recordSession(sid)
-		s.onOpen(sid, hello.DeviceID, hello.Claims)
-		s.trackPeerOpen(sid, hello.DeviceID)
-		logger.Infof("session %s opened (device=%s peer=%s)", sid, hello.DeviceID, ps.peerID)
-		s.startPeerControlLoop(ps, stream)
-		return true
+// establishPeerSession ensures the per-peer handshake has completed. When a
+// per-peer control smux session was set up by getOrCreatePeerControlSession,
+// the sessionReady channel signals completion; otherwise the handshake runs
+// inline on the data smux session (legacy / datachannel path).
+func (s *Server) establishPeerSession(ps *peerSession) bool {
+	// Per-peer control plane path: sessionReady is closed by acceptPeerHandshake.
+	if ps.sessionReady != nil {
+		return s.waitPeerHandshake(ps)
 	}
-	return false
+	// No isolated control plane: drive the handshake inline.
+	if !s.acceptHandshake(s.baseCtx, ps.session) {
+		s.removePeerSession(ps.peerID, "handshake failed")
+		return false
+	}
+	s.sessMu.RLock()
+	ps.sessionID = s.sessionID
+	ps.deviceID = s.deviceID
+	s.sessMu.RUnlock()
+	return true
+}
+
+// waitPeerHandshake blocks until acceptPeerHandshake closes ps.sessionReady
+// (writing sessionID/deviceID into ps), or the server shuts down.
+func (s *Server) waitPeerHandshake(ps *peerSession) bool {
+	done := s.done
+	ready := ps.sessionReady
+	if ready == nil {
+		return false
+	}
+	select {
+	case <-ready:
+		s.sessMu.RLock()
+		sid := ps.sessionID
+		s.sessMu.RUnlock()
+		if sid == "" {
+			// acceptPeerHandshake failed (removed the peer session before signalling).
+			return false
+		}
+		return true
+	case <-done:
+		s.removePeerSession(ps.peerID, "closed")
+		return false
+	}
 }
 
 func (s *Server) resetLinkPeer() {
@@ -773,6 +1198,13 @@ func (s *Server) startControlLoop(ctx context.Context, sess *smux.Session, strea
 	s.sessMu.Unlock()
 
 	liveness := s.liveness
+	// Relax the pong timeout only for transports with an isolated control
+	// plane (vp8channel); conventional carriers keep the conservative default
+	// so dead links are detected and reconnected promptly. A user-set timeout
+	// larger than the default is left untouched.
+	if runtime.IsControlPlane(s.ln) && liveness.Timeout <= control.DefaultTimeout {
+		liveness.Timeout = runtime.LivenessTimeout(s.ln)
+	}
 	onPong := liveness.OnPong
 	onMissedPong := liveness.OnMissedPong
 	onUnhealthy := liveness.OnUnhealthy
@@ -823,54 +1255,6 @@ func (s *Server) startControlLoop(ctx context.Context, sess *smux.Session, strea
 		if s.ln != nil {
 			s.ln.Reconnect("liveness")
 		}
-	}()
-}
-
-func (s *Server) startPeerControlLoop(ps *peerSession, stream *smux.Stream) {
-	controlCtx, stop := context.WithCancel(context.Background())
-	ps.controlStop = stop
-
-	liveness := s.liveness
-	onPong := liveness.OnPong
-	onMissedPong := liveness.OnMissedPong
-	onUnhealthy := liveness.OnUnhealthy
-	liveness.OnPong = func(h control.Health) {
-		s.recordPong(h)
-		logger.Debugf("control alive session=%s peer=%s rtt=%v seq=%d", ps.sessionID, ps.peerID, h.RTT, h.Seq)
-		if onPong != nil {
-			onPong(h)
-		}
-	}
-	liveness.OnMissedPong = func(missed int) {
-		s.recordMissed(missed)
-		logger.Warnf("control missed pong on server: session=%s peer=%s missed_pongs=%d",
-			ps.sessionID, ps.peerID, missed)
-		if onMissedPong != nil {
-			onMissedPong(missed)
-		}
-	}
-	liveness.OnUnhealthy = func(missed int) {
-		s.recordUnhealthy(missed)
-		logger.Warnf("control stream unhealthy on server: session=%s peer=%s missed_pongs=%d",
-			ps.sessionID, ps.peerID, missed)
-		if onUnhealthy != nil {
-			onUnhealthy(missed)
-		}
-	}
-
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer func() { _ = stream.Close() }()
-		err := control.Run(controlCtx, stream, liveness)
-		if controlCtx.Err() != nil || s.stopping() {
-			return
-		}
-		if err != nil {
-			logger.Warnf("server control stream ended session=%s peer=%s: %v", ps.sessionID, ps.peerID, err)
-		}
-		s.recordReconnect()
-		s.removePeerSession(ps.peerID, "reconnect")
 	}()
 }
 

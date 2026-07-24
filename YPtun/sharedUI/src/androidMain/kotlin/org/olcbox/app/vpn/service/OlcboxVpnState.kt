@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import org.olcbox.app.ui.features.locations.components.SpeedSample
 import org.olcbox.app.vpn.VpnStatus
 
 object OlcboxVpnState {
@@ -24,6 +25,30 @@ object OlcboxVpnState {
     private val _connectedSinceMs = MutableStateFlow(0L)
     val connectedSinceMs = _connectedSinceMs.asStateFlow()
 
+    /**
+     * Live down/up throughput (bytes per second) of the current connection, published by the
+     * service's speed loop. Drives the optional Home-screen speed line. Reset to zero on disconnect.
+     */
+    private val _speed = MutableStateFlow(SpeedSample(0L, 0L))
+    val speed = _speed.asStateFlow()
+
+    fun setSpeed(downBytesPerSec: Long, upBytesPerSec: Long) {
+        _speed.value = SpeedSample(downBytesPerSec, upBytesPerSec)
+    }
+
+    /**
+     * Manual VK captcha page for a VK-TURN (freeturn) connect, served by the freeturn client on a
+     * localhost HTTP proxy. Non-null while the user has to solve it — the UI opens it in an in-app
+     * WebView; solving lets the TURN relay come up. Published by the service's CaptchaPresenter,
+     * cleared when the captcha is solved/cancelled or the session stops.
+     */
+    private val _vkCaptchaUrl = MutableStateFlow<String?>(null)
+    val vkCaptchaUrl = _vkCaptchaUrl.asStateFlow()
+
+    fun setVkCaptchaUrl(url: String?) {
+        _vkCaptchaUrl.value = url
+    }
+
     fun setStatus(status: VpnStatus) {
         _status.value = status
         _isConnected.value = status is VpnStatus.Connected
@@ -36,7 +61,10 @@ object OlcboxVpnState {
             // ping pass) — keep counting so the on-screen timer never resets mid-session. A genuine
             // fresh connect always passes through Disconnected/Stopping first (or the service clears the
             // persisted value), so the next Connected re-stamps from 0.
-            is VpnStatus.Disconnected, is VpnStatus.Stopping -> _connectedSinceMs.value = 0L
+            is VpnStatus.Disconnected, is VpnStatus.Stopping -> {
+                _connectedSinceMs.value = 0L
+                _speed.value = SpeedSample(0L, 0L)
+            }
             else -> { /* Connecting / Reconnecting / Error: keep the running clock */ }
         }
     }
@@ -54,7 +82,7 @@ object OlcboxVpnState {
 
     fun addLog(msg: String) {
         Log.d(TAG, msg)
-        _logs.update { (it + msg).takeLast(MAX_LOG_ENTRIES) }
+        _logs.update { (it + stripAnsi(msg)).takeLast(MAX_LOG_ENTRIES) }
     }
 
     /**
@@ -62,8 +90,18 @@ object OlcboxVpnState {
      * ([OlcboxVpnService] full-logs capture) so reading our own process log doesn't feed itself.
      */
     fun appendRaw(line: String) {
-        _logs.update { (it + line).takeLast(MAX_LOG_ENTRIES) }
+        _logs.update { (it + stripAnsi(line)).takeLast(MAX_LOG_ENTRIES) }
     }
+
+    /**
+     * Removes ANSI/VT100 colour & cursor escape sequences. sing-box/xray emit coloured levels like
+     * `[36mINFO[0m` and 256-colour tags `[38;5;181m…` — left in, they render as
+     * "[36m…[0m" garbage in the in-app journal. Cheap fast-path when there's no escape byte at all.
+     */
+    private fun stripAnsi(s: String): String =
+        if (s.indexOf('') < 0) s else ANSI_ESCAPE.replace(s, "")
+
+    private val ANSI_ESCAPE = Regex("\\[[0-9;]*[A-Za-z]")
 
     /**
      * The live local SOCKS5 endpoint of the running core (host/port + the per-session credentials,
@@ -81,5 +119,7 @@ object OlcboxVpnState {
     )
 
     private const val MAX_LOG_ENTRIES = 5_000
+    // MUST stay "OlcboxVpnService": the full-logs logcat tailer skips lines whose tag contains this
+    // string so our own addLog() output isn't re-captured from logcat and duplicated in the journal.
     private const val TAG = "OlcboxVpnService"
 }

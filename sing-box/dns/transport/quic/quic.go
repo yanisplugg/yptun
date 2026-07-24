@@ -3,10 +3,11 @@ package quic
 import (
 	"context"
 	"errors"
-	"sync"
+	"os"
 
 	"github.com/sagernet/quic-go"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
@@ -17,7 +18,6 @@ import (
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
-	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 
@@ -32,13 +32,12 @@ func RegisterTransport(registry *dns.TransportRegistry) {
 
 type Transport struct {
 	dns.TransportAdapter
-	ctx        context.Context
-	logger     logger.ContextLogger
+
 	dialer     N.Dialer
 	serverAddr M.Socksaddr
 	tlsConfig  tls.Config
-	access     sync.Mutex
-	connection quic.EarlyConnection
+
+	connection *transport.ConnPool[*quic.Conn]
 }
 
 func NewQUIC(ctx context.Context, logger log.ContextLogger, tag string, options option.RemoteTLSDNSServerOptions) (adapter.DNSTransport, error) {
@@ -48,7 +47,7 @@ func NewQUIC(ctx context.Context, logger log.ContextLogger, tag string, options 
 	}
 	tlsOptions := common.PtrValueOrDefault(options.TLS)
 	tlsOptions.Enabled = true
-	tlsConfig, err := tls.NewClient(ctx, options.Server, tlsOptions)
+	tlsConfig, err := tls.NewClient(ctx, logger, options.Server, tlsOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -62,99 +61,108 @@ func NewQUIC(ctx context.Context, logger log.ContextLogger, tag string, options 
 	if !serverAddr.IsValid() {
 		return nil, E.New("invalid server address: ", serverAddr)
 	}
+
 	return &Transport{
 		TransportAdapter: dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeQUIC, tag, options.RemoteDNSServerOptions),
-		ctx:              ctx,
-		logger:           logger,
 		dialer:           transportDialer,
 		serverAddr:       serverAddr,
 		tlsConfig:        tlsConfig,
+		connection: transport.NewConnPool(transport.ConnPoolOptions[*quic.Conn]{
+			Mode: transport.ConnPoolSingle,
+			IsAlive: func(conn *quic.Conn) bool {
+				return conn != nil && !common.Done(conn.Context())
+			},
+			Close: func(conn *quic.Conn, _ error) {
+				conn.CloseWithError(0, "")
+			},
+		}),
 	}, nil
 }
 
 func (t *Transport) Start(stage adapter.StartStage) error {
-	return nil
+	if stage != adapter.StartStateStart {
+		return nil
+	}
+	return dialer.InitializeDetour(t.dialer)
 }
 
 func (t *Transport) Close() error {
-	t.access.Lock()
-	defer t.access.Unlock()
-	connection := t.connection
-	if connection != nil {
-		connection.CloseWithError(0, "")
-	}
-	return nil
+	return t.connection.Close()
+}
+
+func (t *Transport) Reset() {
+	t.connection.Reset()
 }
 
 func (t *Transport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
 	var (
-		conn     quic.Connection
+		conn     *quic.Conn
 		err      error
 		response *mDNS.Msg
 	)
-	for i := 0; i < 2; i++ {
-		conn, err = t.openConnection()
+	for range 2 {
+		conn, _, err = t.connection.Acquire(ctx, func(ctx context.Context) (*quic.Conn, error) {
+			rawConn, err := t.dialer.DialContext(ctx, N.NetworkUDP, t.serverAddr)
+			if err != nil {
+				return nil, E.Cause(err, "dial UDP connection")
+			}
+			earlyConnection, err := sQUIC.DialEarly(
+				ctx,
+				bufio.NewUnbindPacketConn(rawConn),
+				t.serverAddr.UDPAddr(),
+				t.tlsConfig,
+				nil,
+			)
+			if err != nil {
+				rawConn.Close()
+				return nil, E.Cause(err, "establish QUIC connection")
+			}
+			return earlyConnection, nil
+		})
 		if err != nil {
 			return nil, err
 		}
 		response, err = t.exchange(ctx, message, conn)
 		if err == nil {
+			t.connection.Release(conn, true)
 			return response, nil
 		} else if !isQUICRetryError(err) {
+			t.connection.Release(conn, true)
 			return nil, err
 		} else {
-			conn.CloseWithError(quic.ApplicationErrorCode(0), "")
+			t.connection.Release(conn, true)
+			t.Reset()
 			continue
 		}
 	}
 	return nil, err
 }
 
-func (t *Transport) openConnection() (quic.EarlyConnection, error) {
-	connection := t.connection
-	if connection != nil && !common.Done(connection.Context()) {
-		return connection, nil
-	}
-	t.access.Lock()
-	defer t.access.Unlock()
-	connection = t.connection
-	if connection != nil && !common.Done(connection.Context()) {
-		return connection, nil
-	}
-	conn, err := t.dialer.DialContext(t.ctx, N.NetworkUDP, t.serverAddr)
-	if err != nil {
-		return nil, err
-	}
-	earlyConnection, err := sQUIC.DialEarly(
-		t.ctx,
-		bufio.NewUnbindPacketConn(conn),
-		t.serverAddr.UDPAddr(),
-		t.tlsConfig,
-		nil,
-	)
-	if err != nil {
-		return nil, err
-	}
-	t.connection = earlyConnection
-	return earlyConnection, nil
-}
-
-func (t *Transport) exchange(ctx context.Context, message *mDNS.Msg, conn quic.Connection) (*mDNS.Msg, error) {
+func (t *Transport) exchange(ctx context.Context, message *mDNS.Msg, conn *quic.Conn) (*mDNS.Msg, error) {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
-		return nil, err
+		return nil, E.Cause(err, "open stream")
 	}
+	defer stream.CancelRead(0)
 	err = transport.WriteMessage(stream, 0, message)
 	if err != nil {
 		stream.Close()
-		return nil, err
+		return nil, E.Cause(err, "write request")
 	}
 	stream.Close()
-	return transport.ReadMessage(stream)
+	response, err := transport.ReadMessage(stream)
+	if err != nil {
+		return nil, E.Cause(err, "read response")
+	}
+	return response, nil
 }
 
 // https://github.com/AdguardTeam/dnsproxy/blob/fd1868577652c639cce3da00e12ca548f421baf1/upstream/upstream_quic.go#L394
 func isQUICRetryError(err error) (ok bool) {
+	if errors.Is(err, os.ErrClosed) {
+		return true
+	}
+
 	var qAppErr *quic.ApplicationError
 	if errors.As(err, &qAppErr) && qAppErr.ErrorCode == 0 {
 		return true

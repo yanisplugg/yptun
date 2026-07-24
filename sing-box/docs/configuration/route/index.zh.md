@@ -12,7 +12,7 @@ icon: material/alert-decagram
 
 !!! quote "sing-box 1.11.0 中的更改"
 
-    :material-plus: [network_strategy](#network_strategy)  
+    :material-plus: [default_network_strategy](#default_network_strategy)  
     :material-plus: [default_network_type](#default_network_type)  
     :material-plus: [default_fallback_network_type](#default_fallback_network_type)  
     :material-plus: [default_fallback_delay](#default_fallback_delay)
@@ -62,7 +62,7 @@ icon: material/alert-decagram
 
 !!! question "自 sing-box 1.8.0 起"
 
-一组 [规则集](/configuration/rule-set/)。
+一组 [规则集](/zh/configuration/rule-set/)。
 
 #### final
 
@@ -110,7 +110,7 @@ icon: material/alert-decagram
 
 !!! question "自 sing-box 1.12.0 起"
 
-详情参阅 [拨号字段](/configuration/shared/dial/#domain_resolver)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#domain_resolver)。
 
 可以被 `outbound.domain_resolver` 覆盖。
 
@@ -118,7 +118,7 @@ icon: material/alert-decagram
 
 !!! question "自 sing-box 1.11.0 起"
 
-详情参阅 [拨号字段](/configuration/shared/dial/#network_strategy)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#network_strategy)。
 
 当 `outbound.bind_interface`, `outbound.inet4_bind_address` 或 `outbound.inet6_bind_address` 已设置时不生效。
 
@@ -130,16 +130,16 @@ icon: material/alert-decagram
 
 !!! question "自 sing-box 1.11.0 起"
 
-详情参阅 [拨号字段](/configuration/shared/dial/#default_network_type)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#default_network_type)。
 
 #### default_fallback_network_type
 
 !!! question "自 sing-box 1.11.0 起"
 
-详情参阅 [拨号字段](/configuration/shared/dial/#default_fallback_network_type)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#default_fallback_network_type)。
 
 #### default_fallback_delay
 
 !!! question "自 sing-box 1.11.0 起"
 
-详情参阅 [拨号字段](/configuration/shared/dial/#fallback_delay)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#fallback_delay)。

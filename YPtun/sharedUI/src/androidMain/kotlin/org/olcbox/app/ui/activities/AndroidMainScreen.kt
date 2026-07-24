@@ -93,10 +93,14 @@ fun AndroidMainScreen(
     val geoUpdateStatus by vpnManager.geoUpdateStatus.collectAsState()
     val trafficSettings by vpnManager.trafficSettings.collectAsState()
     val appBehavior by vpnManager.appBehavior.collectAsState()
+    val telegramProxyState by vpnManager.telegramProxyState.collectAsState()
     val language by vpnManager.language.collectAsState()
     val installedApps by vpnManager.installedApps.collectAsState()
     val homeState by viewModel.state.collectAsState()
     val logs by viewModel.logs.collectAsState()
+    // Live throughput for the optional Home speed line: shown only when the toggle is on AND connected.
+    val liveSpeed by org.olcbox.app.vpn.service.OlcboxVpnState.speed.collectAsState()
+    val isVpnConnected by org.olcbox.app.vpn.service.OlcboxVpnState.isConnected.collectAsState()
     val pendingLogSaveCallbacks = remember {
         mutableStateOf<Pair<(String) -> Unit, (String) -> Unit>?>(null)
     }
@@ -162,7 +166,10 @@ fun AndroidMainScreen(
                     ?: items.first().fullName,
                 updateIntervalHours = metadata?.updateIntervalHours,
                 lastRefreshAtEpochMs = metadata?.lastRefreshAtEpochMs,
-                locationCount = items.size
+                locationCount = items.size,
+                supportUrl = metadata?.supportUrl,
+                webPageUrl = metadata?.webPageUrl,
+                announce = metadata?.announce
             )
         }
 
@@ -262,7 +269,9 @@ fun AndroidMainScreen(
 
             updateDownloadProgress = 0f
             updateStatusText = s.downloadingAsset(info.asset.name)
-            val result = updateInstaller.download(info.asset) { progress ->
+            // Prefer a binary delta (small patch applied to the installed APK) when one is published;
+            // transparently falls back to a full download, and signature-verifies either way.
+            val result = updateInstaller.resolveUpdateApk(info) { progress ->
                 updateDownloadProgress = progress
             }
             val file = result.getOrElse { error ->
@@ -409,7 +418,10 @@ fun AndroidMainScreen(
     androidx.compose.runtime.CompositionLocalProvider(
         org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry,
-        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides appBehavior.showSubscriptionAliveCount
+        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides appBehavior.showSubscriptionAliveCount,
+        org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides appBehavior.hideEndpointWhenDescription,
+        org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides
+            (if (appBehavior.showSpeedOnHome && isVpnConnected) liveSpeed else null)
     ) {
     OlcboxAppContent(
         homeViewModel = viewModel,
@@ -463,6 +475,7 @@ fun AndroidMainScreen(
         showSplitTunnelingButton = false,
         canScanQr = true,
         confirmBeforeDelete = appBehavior.confirmBeforeDelete,
+        allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
         pingParallelism = appBehavior.effectivePingParallelism(),
         updateAvailable = updateAvailable != null,
         onUpdateClick = { updateAvailable?.let { updateOffer = it } },
@@ -473,6 +486,8 @@ fun AndroidMainScreen(
         pinnedCustomLocations = appBehavior.pinnedCustomLocations,
         customLocationsPingSorted = appBehavior.customLocationsPingSorted,
         customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
+        twoColumns = appBehavior.twoColumnLayout,
+        showAutoButton = appBehavior.showAutoButton,
         onToggleCustomLocationPinned = { id ->
             val current = appBehavior.pinnedCustomLocations
             val updated = if (id in current) current - id else current + id
@@ -591,6 +606,16 @@ fun AndroidMainScreen(
         )
     }
 
+    // Manual VK captcha for a VK-TURN connect: the service's CaptchaPresenter publishes the local
+    // captcha-proxy URL; solving it in this WebView lets the TURN relay come up.
+    val vkCaptchaUrl by org.olcbox.app.vpn.service.OlcboxVpnState.vkCaptchaUrl.collectAsState()
+    vkCaptchaUrl?.let { url ->
+        org.olcbox.app.ui.components.VkCaptchaDialog(
+            url = url,
+            onDismiss = { org.olcbox.app.vpn.service.OlcboxVpnState.setVkCaptchaUrl(null) }
+        )
+    }
+
     homeState.vkTurnLinkPrompt?.let { prompt ->
         VkTurnLinkPromptDialog(
             locationName = prompt.locationName,
@@ -640,6 +665,7 @@ fun AndroidMainScreen(
             trafficSettings = trafficSettings,
             onTrafficChanged = vpnManager::setTrafficSettings,
             appBehavior = appBehavior,
+            telegramProxyState = telegramProxyState,
             onAppBehaviorChanged = { newBehavior ->
                 val expiryJustEnabled = newBehavior.showSubscriptionExpiry &&
                     !appBehavior.showSubscriptionExpiry

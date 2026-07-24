@@ -34,10 +34,16 @@ const (
 	numPadding        = 3
 	numPaddingForPoll = 8
 
-	// Poll timing
-	initPollDelay       = 500 * time.Millisecond
-	maxPollDelay        = 10 * time.Second
-	pollDelayMultiplier = 2.0
+	// Poll timing. The client must POLL (send an empty query) to fetch downstream data the server has
+	// queued; between polls, queued downstream bytes just wait. The original 500ms→10s exponential
+	// backoff is fine for a bursty SOCKS exit, but it KILLS a proxy chained over the tunnel: after the
+	// client sends a TLS/vless ClientHello it has nothing more to send, so it backs off — and the
+	// ServerHello can sit unfetched for up to 10s. The peer's handshake then times out and RSTs the
+	// connection ("connection reset" on EVERY transport). Keep the tunnel responsive: start fast and
+	// cap the idle backoff low so a handshake's response is always picked up within ~1s.
+	initPollDelay       = 100 * time.Millisecond
+	maxPollDelay        = 1 * time.Second
+	pollDelayMultiplier = 1.5
 	pollLimit           = 16
 )
 

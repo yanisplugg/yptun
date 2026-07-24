@@ -7,11 +7,14 @@ package wire
 import (
 	"fmt"
 	"net"
+	"time"
 
 	dtlsnet "github.com/pion/dtls/v3/pkg/net"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus2"
+	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus3"
+	"github.com/samosvalishe/free-turn-proxy/internal/wire/shape"
 )
 
 // Имена wire-профилей; совпадают со значениями флага -obf-profile.
@@ -19,6 +22,7 @@ const (
 	ProfileNone     = "none"
 	ProfileRTPOpus  = "rtpopus"
 	ProfileRTPOpus2 = "rtpopus2"
+	ProfileRTPOpus3 = "rtpopus3"
 )
 
 // Codec - клиентский кодек wire-профиля: AEAD-обёртка payload с мимикрией.
@@ -45,6 +49,8 @@ func NewClientCodec(profile string, key []byte) (Codec, error) {
 		return rtpopus.NewConn(key, false)
 	case ProfileRTPOpus2:
 		return rtpopus2.NewConn(key, false)
+	case ProfileRTPOpus3:
+		return rtpopus3.NewConn(key, false)
 	default:
 		return nil, fmt.Errorf("wire: unknown obf profile %q", profile)
 	}
@@ -52,13 +58,27 @@ func NewClientCodec(profile string, key []byte) (Codec, error) {
 
 // Listen строит серверный PacketListener, AEAD-разворачивающий каждый принятый
 // PacketConn по профилю. Зовётся только при включённой обфускации.
-func Listen(profile string, addr *net.UDPAddr, key []byte) (dtlsnet.PacketListener, error) {
+// serverTiming добавляет pacing на отправку от сервера к клиенту (0 = без pacing).
+func Listen(profile string, addr *net.UDPAddr, key []byte, serverTiming ...time.Duration) (dtlsnet.PacketListener, error) {
+	var timing time.Duration
+	if len(serverTiming) > 0 {
+		timing = serverTiming[0]
+	}
+
+	var listener dtlsnet.PacketListener
+	var err error
 	switch profile {
 	case ProfileRTPOpus:
-		return rtpopus.Listen(addr, key)
+		listener, err = rtpopus.Listen(addr, key)
 	case ProfileRTPOpus2:
-		return rtpopus2.Listen(addr, key)
+		listener, err = rtpopus2.Listen(addr, key)
+	case ProfileRTPOpus3:
+		listener, err = rtpopus3.Listen(addr, key)
 	default:
 		return nil, fmt.Errorf("wire: profile %q has no server listener", profile)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return shape.WrapPacketListener(listener, timing), nil
 }

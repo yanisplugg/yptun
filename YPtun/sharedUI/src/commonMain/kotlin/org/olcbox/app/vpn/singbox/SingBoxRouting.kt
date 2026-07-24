@@ -43,8 +43,18 @@ object SingBoxRouting {
         val geoipTags: List<String>,
     )
 
-    /** The route rules for [profile], ordered by its routeOrder. Caller inserts these after `sniff`. */
-    fun rules(profile: RoutingProfile): JsonArray = buildJsonArray {
+    /**
+     * The route rules for [profile], ordered by its routeOrder. Caller inserts these after `sniff`.
+     *
+     * [hideDirectIpv6]: in the hybrid IPv6 modes (prefer_ipv4/prefer_ipv6) the user wants bypass/direct
+     * sites (geosite:ru / domain:ru) to NEVER egress over the real IPv6 — the direct outbound's
+     * `domain_strategy: ipv4_only` re-resolves sniffed domains to A, but a raw-IPv6 / app-own-DoH
+     * connection with no SNI can slip past it. When true, we prepend a REJECT for IPv6 connections to
+     * the direct bucket's matchers (ip_version 6), so direct sites are hard-pinned to IPv4 while
+     * proxied traffic keeps its dual-stack. (ipv4_only already rejects ::/0 globally; ipv6_only wants
+     * v6 — so the caller only sets this for the prefer_* hybrids.)
+     */
+    fun rules(profile: RoutingProfile, hideDirectIpv6: Boolean = false): JsonArray = buildJsonArray {
         val order = profile.routeOrder.split('-')
             .map { it.trim().lowercase() }
             .filter { it in RoutingProfile.DEFAULT_ORDER }
@@ -52,7 +62,14 @@ object SingBoxRouting {
         for (bucket in order) {
             when (bucket) {
                 "block" -> emitBucket(profile.blockSites, profile.blockIp, reject = true, outbound = null)
-                "direct" -> emitBucket(profile.directSites, profile.directIp, reject = false, outbound = DIRECT_TAG)
+                "direct" -> {
+                    // Reject IPv6 to the direct sites FIRST (so v6 never bypasses over real IPv6), then
+                    // route the (IPv4) direct connections out the direct outbound.
+                    if (hideDirectIpv6) {
+                        emitBucket(profile.directSites, profile.directIp, reject = true, outbound = null, ipVersion = 6)
+                    }
+                    emitBucket(profile.directSites, profile.directIp, reject = false, outbound = DIRECT_TAG)
+                }
                 "proxy" -> emitBucket(profile.proxySites, profile.proxyIp, reject = false, outbound = PROXY_TAG)
             }
         }
@@ -211,6 +228,9 @@ object SingBoxRouting {
         ips: List<String>,
         reject: Boolean,
         outbound: String?,
+        // When set, the emitted rules also match `ip_version` (e.g. 6) — used to reject IPv6 to the
+        // direct bucket while leaving the IPv4 direct rules untouched.
+        ipVersion: Int? = null,
     ) {
         val s = parse(sites)
         val i = parseIp(ips)
@@ -224,23 +244,25 @@ object SingBoxRouting {
 
         // Geo rule-sets (geosite + geoip) combined into one OR-matched rule (proven shipped form).
         if (geositeTags.isNotEmpty() || geoipTags.isNotEmpty()) {
-            add(matchRule(reject, outbound) {
+            add(matchRule(reject, outbound, ipVersion) {
                 putJsonArray("rule_set") {
                     geositeTags.forEach { add("geosite-$it") }
                     geoipTags.forEach { add("geoip-$it") }
                 }
             })
         }
-        if (domainSuffix.isNotEmpty()) add(matchRule(reject, outbound) { putJsonArray("domain_suffix") { domainSuffix.forEach { add(it) } } })
-        if (domainExact.isNotEmpty()) add(matchRule(reject, outbound) { putJsonArray("domain") { domainExact.forEach { add(it) } } })
-        if (domainKeyword.isNotEmpty()) add(matchRule(reject, outbound) { putJsonArray("domain_keyword") { domainKeyword.forEach { add(it) } } })
-        if (domainRegex.isNotEmpty()) add(matchRule(reject, outbound) { putJsonArray("domain_regex") { domainRegex.forEach { add(it) } } })
-        if (ipCidr.isNotEmpty()) add(matchRule(reject, outbound) { putJsonArray("ip_cidr") { ipCidr.forEach { add(it) } } })
+        if (domainSuffix.isNotEmpty()) add(matchRule(reject, outbound, ipVersion) { putJsonArray("domain_suffix") { domainSuffix.forEach { add(it) } } })
+        if (domainExact.isNotEmpty()) add(matchRule(reject, outbound, ipVersion) { putJsonArray("domain") { domainExact.forEach { add(it) } } })
+        if (domainKeyword.isNotEmpty()) add(matchRule(reject, outbound, ipVersion) { putJsonArray("domain_keyword") { domainKeyword.forEach { add(it) } } })
+        if (domainRegex.isNotEmpty()) add(matchRule(reject, outbound, ipVersion) { putJsonArray("domain_regex") { domainRegex.forEach { add(it) } } })
+        // An IPv6-reject pass over IPv4-only ip_cidr entries would never match; skip it to avoid noise.
+        if (ipCidr.isNotEmpty() && ipVersion == null) add(matchRule(reject, outbound, null) { putJsonArray("ip_cidr") { ipCidr.forEach { add(it) } } })
     }
 
-    private inline fun matchRule(reject: Boolean, outbound: String?, matcher: JsonObjectBuilder.() -> Unit): JsonObject =
+    private inline fun matchRule(reject: Boolean, outbound: String?, ipVersion: Int? = null, matcher: JsonObjectBuilder.() -> Unit): JsonObject =
         buildJsonObject {
             matcher()
+            if (ipVersion != null) put("ip_version", ipVersion)
             if (reject) put("action", "reject") else put("outbound", outbound ?: PROXY_TAG)
         }
 
@@ -281,6 +303,9 @@ object SingBoxRouting {
         when {
             v.startsWith("geoip:", true) -> sel(geoip = listOf(v.substringAfter(':').trim().lowercase()))
             v.startsWith("geosite:", true) -> sel(geosite = listOf(v.substringAfter(':').trim().lowercase()))
+            // `asn:` selectors are expanded to CIDRs before config build; ignore any that slipped
+            // through unresolved so they never become a malformed `ip_cidr` entry.
+            org.olcbox.app.data.model.Asn.isSelector(v) -> null
             else -> sel(cidr = listOf(toCidr(v)))
         }
     }

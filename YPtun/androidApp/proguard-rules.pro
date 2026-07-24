@@ -9,6 +9,23 @@
 -keep class xraybridge.** { *; }
 -keep class mobile.** { *; }
 
+# --- Trust Tunnel (AdGuard) client AAR — JNI bridge (native <-> Kotlin by class/method name) ---
+# libtrusttunnel_android.so calls back into VpnClient/DeepLink/VpnClientListener by name (native
+# methods + the listener callbacks), so renaming/stripping them breaks the bridge at runtime.
+-keep class com.adguard.trusttunnel.** { *; }
+# The AAR bundles a VpnServiceConfig.parseToml() that references ktoml — a transitive dependency we
+# don't pull in (we consume the AAR as a local file and never call parseToml; TOML is parsed natively
+# inside the client). Silence R8's missing-class error for that unused code path.
+-dontwarn com.akuleshov7.ktoml.**
+
+# --- JSch (mwiede fork) — VPS SSH installer (WDTT / DNSTT auto-install) ---
+# JSch instantiates its cipher/kex/MAC/random implementations by fully-qualified class name pulled
+# from an internal config map (reflection via Class.forName). R8 sees no static references to those
+# classes and strips them, so connecting throws ClassNotFoundException (e.g.
+# com.jcraft.jsch.jce.Random). Keep the whole package (and its optional agentproxy/jgss helpers).
+-keep class com.jcraft.jsch.** { *; }
+-dontwarn com.jcraft.jsch.**
+
 # --- kotlinx.serialization ---
 # Standard R8/ProGuard rules so @Serializable models keep their generated serializers.
 -keepattributes *Annotation*, InnerClasses

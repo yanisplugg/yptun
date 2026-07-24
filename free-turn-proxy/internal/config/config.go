@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcptun"
 	"github.com/samosvalishe/free-turn-proxy/internal/uri"
@@ -55,13 +56,15 @@ const (
 	ObfProfileNone     ObfProfile = "none"     // обфускация отключена
 	ObfProfileRTPOpus  ObfProfile = "rtpopus"  // RTP/opus + ChaCha20-Poly1305 AEAD
 	ObfProfileRTPOpus2 ObfProfile = "rtpopus2" // rtpopus + RTP header extension (мимикрия под современный WebRTC)
+	ObfProfileRTPOpus3 ObfProfile = "rtpopus3" // rtpopus2 + abs-send-time + VAD + loss simulation + variable ts
 )
 
 // ObfOpts - опции обфускации TURN-payload.
 type ObfOpts struct {
-	Profile ObfProfile // -obf-profile: none (default) | rtpopus | rtpopus2
-	Key     []byte     // -obf-key (декодированный): 32-байтовый общий ключ; nil если Profile=none
-	GenKey  bool       // -gen-obf-key: напечатать новый ключ и выйти
+	Profile ObfProfile    // -obf-profile: none (default) | rtpopus | rtpopus2
+	Key     []byte        // -obf-key (декодированный): 32-байтовый общий ключ; nil если Profile=none
+	GenKey  bool          // -gen-obf-key: напечатать новый ключ и выйти
+	Timing  time.Duration // -obf-timing: межпакетная задержка (RTP-мимикрия); 0=выкл
 }
 
 // Enabled возвращает true когда выбран реальный профиль обфускации.
@@ -75,22 +78,30 @@ type ProxyOpts struct {
 	Peer    string    // -peer: адрес серверного прокси, куда дозванивается клиент (только клиент)
 }
 
-// Browser выбирает браузерный профиль (UA + TLS JA3 + client hints) для
-// control-plane запросов VK-провайдера. firefox несёт меньше client hints
-// (sec-ch-ua* - Chromium-only), chrome даёт herd-cover.
+// Browser выбирает браузерный профиль для control-plane запросов VK-провайдера.
 type Browser string
 
 const (
 	BrowserChrome  Browser = "chrome"
 	BrowserFirefox Browser = "firefox"
+	BrowserSafari  Browser = "safari"
+)
+
+// Platform выбирает класс устройства персоны (мобильность UA/device/client hints).
+type Platform string
+
+const (
+	PlatformDesktop Platform = "desktop"
+	PlatformMobile  Platform = "mobile"
 )
 
 // VKOpts - опции VK-учёток и captcha (только клиент, провайдер "vk").
 type VKOpts struct {
-	Link           string  // -link (нормализован до join-кода)
-	StreamsPerCred int     // -streams-per-cred
-	ManualCaptcha  bool    // -manual-captcha
-	Browser        Browser // -browser: chrome | firefox
+	Links          []string // -links (нормализованные join-коды); несколько = больше стримов
+	StreamsPerCred int      // -streams-per-cred
+	ManualCaptcha  bool     // -manual-captcha
+	Browser        Browser  // -browser: chrome | firefox | safari
+	Platform       Platform // -platform: desktop | mobile
 }
 
 // ProviderOpts выбирает реализацию provider.Provider.
@@ -175,19 +186,22 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 	port := fs.String("port", "", "порт TURN-сервера; override creds провайдера")
 	listen := fs.String("listen", "127.0.0.1:9000", "локальный ip:port для WireGuard/Xray клиента")
 	provider := fs.String("provider", ProviderVK, "источник TURN-creds: vk")
-	link := fs.String("link", "", "ссылка VK Calls https://vk.ru/call/join/...; обязательно для -provider vk")
+	link := fs.String("link", "", "(устарел) одна ссылка VK Calls, используйте -links")
+	links := fs.String("links", "", "ссылки VK Calls через запятую: https://vk.ru/call/join/...,https://vk.ru/call/join/...")
 	peer := fs.String("peer", "", "адрес сервера на VPS, host:port; обязательно")
 	n := fs.Int("n", 10, "число параллельных TURN-потоков")
 	transport := fs.String("transport", "tcp", "транспорт до TURN-реле: tcp | udp")
 	mode := fs.String("mode", "udp", "режим туннеля: udp (WireGuard) | tcp (Xray/sing-box)")
 	bond := fs.Bool("bond", false, "страйпинг TCP по smux-сессиям; только с -mode tcp")
-	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus | rtpopus2; должен совпадать с сервером")
+	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus | rtpopus2 | rtpopus3; должен совпадать с сервером")
 	obfKey := fs.String("obf-key", "", "ключ для -obf-profile != none: 32 байта hex (64 символа)")
 	genObfKey := fs.Bool("gen-obf-key", false, "напечатать новый -obf-key и выйти")
+	obfTiming := fs.Duration("obf-timing", 0, "межпакетная задержка для RTP-мимикрии (напр. 20ms); 0=выкл")
 	streamsPerCred := fs.Int("streams-per-cred", defaultStreamsPerCache, "TURN-потоков на один кеш VK-creds; только -provider vk")
 	debug := fs.Bool("debug", false, "подробные debug-логи")
 	manualCaptcha := fs.Bool("manual-captcha", false, "ручная VK captcha в браузере вместо авто; только -provider vk")
-	browser := fs.String("browser", string(BrowserFirefox), "браузерный профиль VK-auth: chrome | firefox; только -provider vk")
+	browser := fs.String("browser", string(BrowserFirefox), "браузерный профиль VK-auth: chrome | firefox | safari; только -provider vk")
+	platform := fs.String("platform", string(PlatformDesktop), "класс устройства персоны VK-auth: desktop | mobile; только -provider vk")
 	dnsMode := fs.String("dns-mode", dnsModeAuto, "резолвер клиента: plain | doh | auto")
 	dnsServers := fs.String("dns-servers", "", "свои UDP/53 DNS через запятую: ip[:port][,ip[:port]...]")
 	clientID := fs.String("client-id", "", "уникальный ID клиента (автогенерация если не задан)")
@@ -207,6 +221,7 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 		Obf: ObfOpts{
 			Profile: ObfProfile(*obfProfile),
 			GenKey:  *genObfKey,
+			Timing:  *obfTiming,
 		},
 		Proxy: ProxyOpts{
 			Mode:   ClientProxyMode(*mode, *bond),
@@ -220,6 +235,7 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 			StreamsPerCred: *streamsPerCred,
 			ManualCaptcha:  *manualCaptcha,
 			Browser:        Browser(*browser),
+			Platform:       Platform(*platform),
 		},
 		DNS: DNSOpts{
 			Mode: *dnsMode,
@@ -323,23 +339,47 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 	}
 	switch c.Provider.Name {
 	case ProviderVK:
-		if *link == "" {
-			return nil, errors.New("need -link (required for -provider vk)")
+		if *links == "" && *link == "" {
+			return nil, errors.New("need -links (или -link) (required for -provider vk)")
 		}
 		if c.VK.StreamsPerCred <= 0 {
 			return nil, fmt.Errorf("-streams-per-cred must be positive")
 		}
 		switch c.VK.Browser {
-		case BrowserChrome, BrowserFirefox:
+		case BrowserChrome, BrowserFirefox, BrowserSafari:
 		default:
-			return nil, fmt.Errorf("invalid -browser value %q: must be %s | %s", c.VK.Browser, BrowserChrome, BrowserFirefox)
+			return nil, fmt.Errorf("invalid -browser value %q: must be %s | %s | %s", c.VK.Browser, BrowserChrome, BrowserFirefox, BrowserSafari)
 		}
-		parts := strings.Split(*link, "join/")
-		link := parts[len(parts)-1]
-		if idx := strings.IndexAny(link, "/?#"); idx != -1 {
-			link = link[:idx]
+		if c.VK.Platform == "" {
+			c.VK.Platform = PlatformDesktop
 		}
-		c.VK.Link = link
+		switch c.VK.Platform {
+		case PlatformDesktop, PlatformMobile:
+		default:
+			return nil, fmt.Errorf("invalid -platform value %q: must be %s | %s", c.VK.Platform, PlatformDesktop, PlatformMobile)
+		}
+		rawLinks := strings.Split(*links, ",")
+		if len(rawLinks) == 1 && rawLinks[0] == "" {
+			// -links не задан, используем -link (backward compat)
+			rawLinks = []string{*link}
+		}
+		for _, raw := range rawLinks {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			parts := strings.Split(raw, "join/")
+			normalized := parts[len(parts)-1]
+			if idx := strings.IndexAny(normalized, "/?#"); idx != -1 {
+				normalized = normalized[:idx]
+			}
+			if normalized != "" {
+				c.VK.Links = append(c.VK.Links, normalized)
+			}
+		}
+		if len(c.VK.Links) == 0 {
+			return nil, errors.New("need at least one valid VK link")
+		}
 	default:
 		return nil, fmt.Errorf("invalid -provider value %q: must be %s", c.Provider.Name, ProviderVK)
 	}
@@ -351,6 +391,9 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 		return nil, err
 	}
 	c.Obf.Key = key
+	if err := validateObfTiming(c.Obf, c.Proxy.Mode); err != nil {
+		return nil, err
+	}
 	if c.TURN.N <= 0 {
 		c.TURN.N = 10
 	}
@@ -368,9 +411,10 @@ func ParseServer(args []string, errOut io.Writer) (*Server, error) {
 	listen := fs.String("listen", "0.0.0.0:56000", "локальный адрес прослушивания ip:port")
 	connect := fs.String("connect", "", "локальный бэкенд host:port; обязательно: WG 127.0.0.1:51820 | Xray 127.0.0.1:443")
 	mode := fs.String("mode", "udp", "режим туннеля: udp (WireGuard) | tcp (Xray/sing-box; bond авто)")
-	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus | rtpopus2; должен совпадать с клиентом")
+	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus | rtpopus2 | rtpopus3; должен совпадать с клиентом")
 	obfKey := fs.String("obf-key", "", "ключ для -obf-profile != none: 32 байта hex (64 символа)")
 	genObfKey := fs.Bool("gen-obf-key", false, "напечатать новый -obf-key и выйти")
+	obfTiming := fs.Duration("obf-timing", 0, "межпакетная задержка для RTP-мимикрии (напр. 10ms); 0=выкл")
 	debug := fs.Bool("debug", false, "подробные debug-логи")
 	clientsFile := fs.String("clients-file", "", "путь к файлу clients.json для авторизации по Client ID")
 
@@ -382,6 +426,7 @@ func ParseServer(args []string, errOut io.Writer) (*Server, error) {
 		Obf: ObfOpts{
 			Profile: ObfProfile(*obfProfile),
 			GenKey:  *genObfKey,
+			Timing:  *obfTiming,
 		},
 		Proxy: ProxyOpts{
 			Mode:    serverProxyMode(*mode),
@@ -419,17 +464,35 @@ func ParseServer(args []string, errOut io.Writer) (*Server, error) {
 		return nil, err
 	}
 	s.Obf.Key = key
+	if err := validateObfTiming(s.Obf, s.Proxy.Mode); err != nil {
+		return nil, err
+	}
 
 	return s, nil
+}
+
+// validateObfTiming ограничивает -obf-timing UDP-релеем с включённой обфускацией:
+// без RTP-профиля паковать нечего, а в tcp-режиме pacing ломает RTT/конгешн KCP.
+func validateObfTiming(o ObfOpts, mode ProxyMode) error {
+	if o.Timing <= 0 {
+		return nil
+	}
+	if !o.Enabled() {
+		return errors.New("-obf-timing requires -obf-profile != none")
+	}
+	if mode != ProxyModeUDP {
+		return errors.New("-obf-timing supported only with -mode udp")
+	}
+	return nil
 }
 
 // validateObfProfile проверяет что -obf-profile содержит известное значение.
 func validateObfProfile(p ObfProfile) error {
 	switch p {
-	case ObfProfileNone, ObfProfileRTPOpus, ObfProfileRTPOpus2:
+	case ObfProfileNone, ObfProfileRTPOpus, ObfProfileRTPOpus2, ObfProfileRTPOpus3:
 		return nil
 	default:
-		return fmt.Errorf("invalid -obf-profile value %q: must be %s | %s | %s", p, ObfProfileNone, ObfProfileRTPOpus, ObfProfileRTPOpus2)
+		return fmt.Errorf("invalid -obf-profile value %q: must be %s | %s | %s | %s", p, ObfProfileNone, ObfProfileRTPOpus, ObfProfileRTPOpus2, ObfProfileRTPOpus3)
 	}
 }
 

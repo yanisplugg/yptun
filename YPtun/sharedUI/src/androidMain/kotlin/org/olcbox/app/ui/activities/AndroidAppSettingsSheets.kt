@@ -1,6 +1,11 @@
 package org.olcbox.app.ui.activities
 
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
+import android.widget.Toast
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import androidx.activity.compose.BackHandler
@@ -43,6 +48,7 @@ import org.olcbox.app.ui.theme.ThemeState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -65,6 +71,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -82,6 +89,8 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Public
@@ -141,6 +150,8 @@ import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.update.AppUpdateSettings
 import org.olcbox.app.ui.features.home.components.LogLines
 import org.olcbox.app.vpn.AndroidConnectionMode
+import org.olcbox.app.vpn.telegram.TelegramProxyService
+import org.olcbox.app.vpn.telegram.TelegramProxyState
 import org.olcbox.app.vpn.AndroidInstalledApp
 import org.olcbox.app.vpn.AndroidSocksProxySettings
 import org.olcbox.app.vpn.AndroidSplitTunnelList
@@ -174,6 +185,7 @@ internal fun AppSettingsSheet(
     onTrafficChanged: (TrafficSettings) -> Unit,
     appBehavior: AppBehaviorSettings,
     onAppBehaviorChanged: (AppBehaviorSettings) -> Unit,
+    telegramProxyState: TelegramProxyState,
     language: AppLanguage,
     onLanguageChanged: (AppLanguage) -> Unit,
     updateSettings: AppUpdateSettings,
@@ -343,6 +355,9 @@ internal fun AppSettingsSheet(
                     selectedMode = selectedMode,
                     proxySettings = proxySettings,
                     splitTunnelSettings = splitTunnelSettings,
+                    appBehavior = appBehavior,
+                    onAppBehaviorChanged = onAppBehaviorChanged,
+                    telegramProxyState = telegramProxyState,
                     enabled = enabled,
                     onBack = { route = AppSettingsRoute.Hub },
                     onConnectionModeClick = { route = AppSettingsRoute.ConnectionMode },
@@ -353,6 +368,8 @@ internal fun AppSettingsSheet(
                 AppSettingsRoute.ConnectionMode -> ConnectionModeSettingsContent(
                     selectedMode = selectedMode,
                     enabled = enabled,
+                    socksHost = proxySettings.host,
+                    socksPort = proxySettings.port,
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onModeSelected = onModeSelected
                 )
@@ -866,6 +883,9 @@ private fun ConnectionSettingsContent(
     selectedMode: AndroidConnectionMode,
     proxySettings: AndroidSocksProxySettings,
     splitTunnelSettings: AndroidSplitTunnelSettings,
+    appBehavior: AppBehaviorSettings,
+    onAppBehaviorChanged: (AppBehaviorSettings) -> Unit,
+    telegramProxyState: TelegramProxyState,
     enabled: Boolean,
     onBack: () -> Unit,
     onConnectionModeClick: () -> Unit,
@@ -876,7 +896,7 @@ private fun ConnectionSettingsContent(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 24.dp)
-            .padding(top = 16.dp, bottom = 32.dp)
+            .padding(top = 16.dp, bottom = 24.dp)
     ) {
         val s = LocalStrings.current
         SettingsDetailHeader(
@@ -909,6 +929,129 @@ private fun ConnectionSettingsContent(
                 enabled = enabled,
                 onClick = onSplitTunnelingClick
             )
+
+            RoutingToggleRow(
+                title = s.telegramProxyTitle,
+                subtitle = s.telegramProxySubtitle,
+                checked = appBehavior.telegramProxyEnabled
+            ) { onAppBehaviorChanged(appBehavior.copy(telegramProxyEnabled = it)) }
+
+            val tgStatus = when (val st = telegramProxyState) {
+                is TelegramProxyState.Generating -> s.telegramProxyGenerating
+                is TelegramProxyState.Running ->
+                    "${s.telegramProxyRunning}: SOCKS5 ${st.host}:${st.port}"
+                is TelegramProxyState.Error -> "${s.telegramProxyError}: ${st.message}"
+                is TelegramProxyState.Stopped -> if (appBehavior.telegramProxyEnabled) {
+                    "${s.telegramProxyRunning}: SOCKS5 ${TelegramProxyService.LISTEN_HOST}:${TelegramProxyService.LISTEN_PORT}"
+                } else {
+                    null
+                }
+            }
+            if (tgStatus != null) {
+                Text(
+                    text = tgStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (telegramProxyState is TelegramProxyState.Error) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+            // WARP-based: the proxy depends on Cloudflare WARP reachability, which is throttled/blocked
+            // on some networks — warn that it works mainly in Russia and not on every ISP.
+            if (appBehavior.telegramProxyEnabled) {
+                Text(
+                    text = s.telegramProxyRegionNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+            // Auto-generated SOCKS5 credentials — selectable so the user can copy them into Telegram.
+            (telegramProxyState as? TelegramProxyState.Running)
+                ?.takeIf { it.user.isNotBlank() }
+                ?.let { running ->
+                    SelectionContainer {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "${s.telegramProxyLogin}: ${running.user}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            Text(
+                                text = "${s.telegramProxyPassword}: ${running.pass}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
+                    }
+                    // One-tap copyable t.me/socks link: opening it in Telegram auto-fills the SOCKS5
+                    // proxy (server/port/user/pass), no manual entry. Works on-device (server=127.0.0.1).
+                    val clipboard = LocalClipboardManager.current
+                    val context = LocalContext.current
+                    val tgLink = remember(running) {
+                        "https://t.me/socks?server=${running.host}&port=${running.port}" +
+                            "&user=${running.user}&pass=${running.pass}"
+                    }
+                    // Side-by-side (equal weights) so BOTH actions fit on one row and are fully visible
+                    // without scrolling the sheet — stacked, they overflowed the bottom and the copy
+                    // button was clipped to a sliver of its outline. Compact labels + icon stay one line.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // One tap → opens Telegram straight on its "Enable proxy?" dialog (tg://socks
+                        // deep link, server/port/user/pass prefilled), falling back to the https link.
+                        Button(
+                            onClick = {
+                                val tgDeep = "tg://socks?server=${running.host}&port=${running.port}" +
+                                    "&user=${running.user}&pass=${running.pass}"
+                                val opened = runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(tgDeep))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }.isSuccess
+                                if (!opened) runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(tgLink))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Send,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                clipboard.setText(AnnotatedString(tgLink))
+                                Toast.makeText(context, s.telegramProxyLinkCopied, Toast.LENGTH_SHORT).show()
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.telegramProxyCopyLink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
         }
     }
 }
@@ -917,10 +1060,17 @@ private fun ConnectionSettingsContent(
 private fun ConnectionModeSettingsContent(
     selectedMode: AndroidConnectionMode,
     enabled: Boolean,
+    socksHost: String,
+    socksPort: Int,
     onBack: () -> Unit,
     onModeSelected: (AndroidConnectionMode) -> Unit
 ) {
-    val options = listOf(AndroidConnectionMode.Tun, AndroidConnectionMode.Proxy)
+    val options = listOf(
+        AndroidConnectionMode.Tun,
+        AndroidConnectionMode.Proxy,
+        AndroidConnectionMode.Tproxy,
+    )
+    val s = LocalStrings.current
 
     Column(
         modifier = Modifier
@@ -929,7 +1079,7 @@ private fun ConnectionModeSettingsContent(
             .padding(bottom = 32.dp)
     ) {
         SettingsDetailHeader(
-            title = LocalStrings.current.connectionMode,
+            title = s.connectionMode,
             subtitle = selectedMode.subtitle(),
             onBack = onBack
         )
@@ -944,6 +1094,32 @@ private fun ConnectionModeSettingsContent(
                     enabled = enabled,
                     onClick = { onModeSelected(mode) }
                 )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Local SOCKS5 endpoint, shown right under the mode picker so the user always sees the port to
+        // point apps at. In Proxy mode it's also reachable on the LAN IP + an HTTP port (socks+4).
+        SelectionContainer {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = s.localSocksEndpoint,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "SOCKS5: $socksHost:$socksPort",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (selectedMode == AndroidConnectionMode.Proxy) {
+                    Text(
+                        text = "HTTP: $socksHost:${socksPort + 4}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
     }
@@ -1116,6 +1292,10 @@ private fun SplitTunnelingAppListContent(
     onRussianBypassPresetEnabledChanged: (Boolean) -> Unit
 ) {
     var query by remember(list) { mutableStateOf("") }
+    // System/background apps (no launcher icon) are hidden by default so the list stays familiar;
+    // this reveals them so they can be included/excluded too. Already-selected ones stay visible.
+    var showSystemApps by remember { mutableStateOf(false) }
+    val hasSystemApps = remember(installedApps) { installedApps.any { it.isSystem } }
 
     // Не просто scrollToItem(0): keyed LazyColumn может успеть сохранить старый visible key
     // и слегка увести список к элементу, который переехал. Для bulk/search-сценариев
@@ -1168,11 +1348,16 @@ private fun SplitTunnelingAppListContent(
             )
         }
     }
-    val filteredApps = remember(appListEntries, normalizedQuery, sortSelectedPackages, sortAutoBypassPackages) {
+    val filteredApps = remember(appListEntries, normalizedQuery, sortSelectedPackages, sortAutoBypassPackages, showSystemApps, selectedPackages) {
+        val visible = appListEntries.filter { entry ->
+            // Hide system apps unless the toggle is on — but never hide one that's already selected,
+            // so the user can always see and remove their own choices.
+            showSystemApps || !entry.app.isSystem || entry.app.packageName in selectedPackages
+        }
         val apps = if (normalizedQuery.isBlank()) {
-            appListEntries
+            visible
         } else {
-            appListEntries.filter { entry ->
+            visible.filter { entry ->
                 entry.labelSortKey.contains(normalizedQuery) ||
                         entry.packageSortKey.contains(normalizedQuery)
             }
@@ -1242,6 +1427,35 @@ private fun SplitTunnelingAppListContent(
             label = { Text(LocalStrings.current.searchApps) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search)
         )
+
+        if (hasSystemApps) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = enabled) {
+                        showSystemApps = !showSystemApps
+                        resetListScrollToTop()
+                    }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = LocalStrings.current.showSystemApps,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = showSystemApps,
+                    onCheckedChange = {
+                        showSystemApps = it
+                        resetListScrollToTop()
+                    },
+                    enabled = enabled
+                )
+            }
+        }
 
         if (list == AndroidSplitTunnelList.Bypass) {
             Spacer(Modifier.height(10.dp))
@@ -1624,12 +1838,40 @@ private fun SubscriptionShareRow(
                 overflow = TextOverflow.Ellipsis
             )
 
+            // Panel announcement (Remnawave/Happ `announce` header), shown verbatim to the user.
+            item.announce?.takeIf { it.isNotBlank() }?.let { announce ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Text(
+                        text = announce,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            val subUriHandler = LocalUriHandler.current
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onShareClick) {
                     Text(LocalStrings.current.qrShare)
                 }
                 TextButton(onClick = onRefreshClick) {
                     Text(LocalStrings.current.refresh)
+                }
+                // Panel-advertised links (Remnawave/Happ `profile-web-page-url` / `support-url` headers).
+                item.webPageUrl?.takeIf { it.isNotBlank() }?.let { web ->
+                    TextButton(onClick = { runCatching { subUriHandler.openUri(web) } }) {
+                        Text(LocalStrings.current.subscriptionWebPage)
+                    }
+                }
+                item.supportUrl?.takeIf { it.isNotBlank() }?.let { support ->
+                    TextButton(onClick = { runCatching { subUriHandler.openUri(support) } }) {
+                        Text(LocalStrings.current.subscriptionSupport)
+                    }
                 }
             }
         }
@@ -3190,6 +3432,63 @@ private fun RoutingToggleRow(
     }
 }
 
+/**
+ * Clickable row that requests exemption from Doze/battery optimization — the usual reason a VPN
+ * foreground service is throttled/killed over long (24h+) idle sessions while other apps (Happ)
+ * survive. Opens the system ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS dialog; once granted the row
+ * shows a done state and stops being clickable. Never changes anything silently.
+ */
+@Composable
+private fun BatteryOptimizationRow() {
+    val context = LocalContext.current
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val pm = remember { context.getSystemService(PowerManager::class.java) }
+    fun exempted(): Boolean = pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+    var ignoring by remember { mutableStateOf(exempted()) }
+    val launcher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { ignoring = exempted() }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(enabled = !ignoring) {
+                val req = Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:${context.packageName}")
+                )
+                // Some OEMs block the direct request; fall back to the general exemption list.
+                runCatching { launcher.launch(req) }.onFailure {
+                    runCatching { launcher.launch(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                }
+            }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(s.batteryOptTitle, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (ignoring) s.batteryOptDone else s.batteryOptSubtitle,
+                color = if (ignoring) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        // "Opens elsewhere" affordance: tapping leaves the app for the system battery-optimization
+        // screen. Hidden once already exempted (nothing left to open).
+        if (!ignoring) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
 @Composable
 private fun TrafficSettingsContent(
     settings: TrafficSettings,
@@ -3198,6 +3497,7 @@ private fun TrafficSettingsContent(
     onTrafficChanged: (TrafficSettings) -> Unit
 ) {
     var remoteDns by remember(settings) { mutableStateOf(settings.remoteDns) }
+    var remoteDns2 by remember(settings) { mutableStateOf(settings.remoteDns2) }
     var directDns by remember(settings) { mutableStateOf(settings.directDns) }
     var strategy by remember(settings) { mutableStateOf(settings.domainStrategy) }
     var muxEnabled by remember(settings) { mutableStateOf(settings.muxEnabled) }
@@ -3237,6 +3537,14 @@ private fun TrafficSettingsContent(
             onValueChange = { remoteDns = it },
             label = { Text(s.remoteDnsLabel) },
             placeholder = { Text("8.8.8.8") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = remoteDns2,
+            onValueChange = { remoteDns2 = it },
+            label = { Text(s.remoteDns2Label) },
+            placeholder = { Text("1.1.1.1") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -3340,6 +3648,7 @@ private fun TrafficSettingsContent(
                 onTrafficChanged(
                     TrafficSettings(
                         remoteDns = remoteDns,
+                        remoteDns2 = remoteDns2,
                         directDns = directDns,
                         domainStrategy = strategy,
                         muxEnabled = muxEnabled,
@@ -3399,6 +3708,20 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
 
         RoutingToggleRow(
+            title = s.showAutoButtonTitle,
+            subtitle = s.showAutoButtonSubtitle,
+            checked = settings.showAutoButton
+        ) { onChanged(settings.copy(showAutoButton = it)) }
+
+        RoutingToggleRow(
+            title = s.energySaverTitle,
+            subtitle = s.energySaverSubtitle,
+            checked = settings.energySaver
+        ) { onChanged(settings.copy(energySaver = it)) }
+
+        BatteryOptimizationRow()
+
+        RoutingToggleRow(
             title = s.confirmDeleteTitle,
             subtitle = s.confirmDeleteSubtitle,
             checked = settings.confirmBeforeDelete
@@ -3411,8 +3734,14 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
         RoutingToggleRow(
-            title = "Комнаты в уведомлении",
-            subtitle = "Показывать «подключено/всего» комнат — только olcRTC и только при мультикомнате",
+            title = s.speedOnHomeTitle,
+            subtitle = s.speedOnHomeSubtitle,
+            checked = settings.showSpeedOnHome
+        ) { onChanged(settings.copy(showSpeedOnHome = it)) }
+
+        RoutingToggleRow(
+            title = s.roomsInNotifTitle,
+            subtitle = s.roomsInNotifSubtitle,
             checked = settings.showRoomsInNotification
         ) { onChanged(settings.copy(showRoomsInNotification = it)) }
 
@@ -3421,6 +3750,36 @@ private fun ApplicationBehaviorContent(
             subtitle = s.showSubscriptionExpirySubtitle,
             checked = settings.showSubscriptionExpiry
         ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
+
+        RoutingToggleRow(
+            title = s.hideEndpointWhenDescriptionTitle,
+            subtitle = s.hideEndpointWhenDescriptionSubtitle,
+            checked = settings.hideEndpointWhenDescription
+        ) { onChanged(settings.copy(hideEndpointWhenDescription = it)) }
+
+        RoutingToggleRow(
+            title = s.twoColumnLayoutTitle,
+            subtitle = s.twoColumnLayoutSubtitle,
+            checked = settings.twoColumnLayout
+        ) { onChanged(settings.copy(twoColumnLayout = it)) }
+
+        RoutingToggleRow(
+            title = s.notifySubExpiryTitle,
+            subtitle = s.notifySubExpirySubtitle,
+            checked = settings.notifySubscriptionExpiry
+        ) { onChanged(settings.copy(notifySubscriptionExpiry = it)) }
+
+        RoutingToggleRow(
+            title = s.panelAnnouncementsTitle,
+            subtitle = s.panelAnnouncementsSubtitle,
+            checked = settings.notifyPanelAnnouncements
+        ) { onChanged(settings.copy(notifyPanelAnnouncements = it)) }
+
+        RoutingToggleRow(
+            title = s.vpsAutoInstallTitle,
+            subtitle = s.vpsAutoInstallSubtitle,
+            checked = settings.allowVpsAutoInstall
+        ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
 
         // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
         // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
@@ -3456,7 +3815,8 @@ private fun ApplicationBehaviorContent(
                 AppLanguage.System to "Авто / Auto",
                 AppLanguage.Russian to "🇷🇺 Русский",
                 AppLanguage.English to "🇺🇸 English",
-                AppLanguage.Persian to "🇮🇷 فارسی"
+                AppLanguage.Persian to "🇮🇷 فارسی",
+                AppLanguage.Chinese to "🇨🇳 中文"
             )
             options.forEach { (lang, title) ->
                 FilterChip(
@@ -3900,6 +4260,7 @@ private fun AndroidConnectionMode.label(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> "TUN"
         AndroidConnectionMode.Proxy -> "Proxy"
+        AndroidConnectionMode.Tproxy -> "TProxy"
     }
 }
 
@@ -3929,6 +4290,7 @@ private fun AndroidConnectionMode.shortLabel(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> "TUN"
         AndroidConnectionMode.Proxy -> "SOCKS"
+        AndroidConnectionMode.Tproxy -> "TPROXY"
     }
 }
 
@@ -3937,6 +4299,7 @@ private fun AndroidConnectionMode.subtitle(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> s.fullTunnel
         AndroidConnectionMode.Proxy -> s.localSocksProxy
+        AndroidConnectionMode.Tproxy -> "Transparent proxy (root)"
     }
 }
 
@@ -3945,6 +4308,7 @@ private fun AndroidConnectionMode.settingsSummary(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> "TUN · ${s.fullTunnel}"
         AndroidConnectionMode.Proxy -> "SOCKS · ${s.localSocksProxy}"
+        AndroidConnectionMode.Tproxy -> "TPROXY · transparent proxy (root)"
     }
 }
 
@@ -3953,12 +4317,15 @@ private fun AndroidConnectionMode.description(): String {
     return when (this) {
         AndroidConnectionMode.Tun -> s.systemVpnInterface
         AndroidConnectionMode.Proxy -> s.localSocksEndpoint
+        AndroidConnectionMode.Tproxy ->
+            "Transparent-proxy inbound (TCP+UDP) on the LAN — redirect traffic here via iptables TPROXY. Requires root."
     }
 }
 
 private fun AndroidConnectionMode.icon() = when (this) {
     AndroidConnectionMode.Tun -> Icons.Outlined.Shield
     AndroidConnectionMode.Proxy -> Icons.Rounded.Public
+    AndroidConnectionMode.Tproxy -> Icons.Rounded.Public
 }
 
 private fun AndroidSplitTunnelSettings.settingsSummary(): String {
@@ -4086,7 +4453,7 @@ private fun splitTunnelStatusSubtitle(
 ): String {
     val s = stringsFor(LocalizationState.effective)
     return when {
-        selectedMode == AndroidConnectionMode.Proxy -> s.savedForTunMode
+        selectedMode != AndroidConnectionMode.Tun -> s.savedForTunMode
         isConnectionActive -> s.appliesWhenSettingsClose
         else -> s.tunModeRoutingRule
     }

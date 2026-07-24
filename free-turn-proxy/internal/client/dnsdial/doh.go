@@ -21,6 +21,7 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
+	"github.com/samosvalishe/free-turn-proxy/internal/netctl"
 
 	// встроенные Mozilla CA roots для CGO_ENABLED=0 сборок (Android).
 	_ "golang.org/x/crypto/x509roots/fallback"
@@ -98,7 +99,7 @@ func newBootstrapTransport(endpoints []DohEndpoint) *http.Transport {
 	for _, ep := range endpoints {
 		bootstrap[ep.Hostname] = ep.BootstrapIPs
 	}
-	dialer := &net.Dialer{Timeout: dohDialerTimeout, KeepAlive: dohDialerKeepAlive}
+	dialer := &net.Dialer{Timeout: dohDialerTimeout, KeepAlive: dohDialerKeepAlive, Control: netctl.Apply}
 
 	return &http.Transport{
 		MaxIdleConns:        8,
@@ -440,6 +441,7 @@ func newAppDialer(dial dialFunc) net.Dialer {
 		Timeout:   appDialerTimeout,
 		KeepAlive: appDialerKeepAlive,
 		Resolver:  &net.Resolver{PreferGo: true, Dial: dial},
+		Control:   netctl.Apply,
 	}
 }
 

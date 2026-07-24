@@ -23,7 +23,6 @@ type Config struct {
 	// Credentials для перебора по порядку. nil/empty -> DefaultCredentials.
 	Credentials []VKCredentials
 
-	// Dialer для HTTP-транспорта запросов к VK API.
 	Dialer net.Dialer
 
 	// ManualOnly форсирует ручной путь captcha с первой попытки.
@@ -46,18 +45,19 @@ type Config struct {
 	// Нулевое значение -> Chrome (исторический дефолт для прямых вызовов в тестах).
 	Browser browserprofile.Kind
 
+	// Platform - класс устройства персоны (desktop|mobile). Нулевое -> desktop.
+	Platform browserprofile.Platform
+
 	// Log - уровневый логгер. nil -> no-op.
 	Log logx.Logger
 }
 
-// Client - фасад VK-аутентификации и кэша реквизитов. Владеет кэшем группы
-// потоков, глобальным throttle запросов, таймером блокировки captcha и счётчиком
-// ошибок аутентификации для инвалидации устаревших TURN-реквизитов.
 type Client struct {
 	credentials []VKCredentials
 	dialer      net.Dialer
 	manualOnly  bool
 	browser     browserprofile.Kind
+	platform    browserprofile.Platform
 	streamsFn   func() int32
 	autoSolver  AutoSolveFunc
 	manualSolve ManualSolveFunc
@@ -86,6 +86,7 @@ func New(cfg Config) *Client {
 		dialer:      cfg.Dialer,
 		manualOnly:  cfg.ManualOnly,
 		browser:     cfg.Browser,
+		platform:    cfg.Platform,
 		streamsFn:   cfg.StreamsAlive,
 		autoSolver:  cfg.AutoSolver,
 		manualSolve: cfg.ManualSolver,
@@ -108,10 +109,8 @@ func New(cfg Config) *Client {
 	return c
 }
 
-// GetCredentials возвращает (username, password, server-addrs) для TURN-allocate,
-// обращаясь к VK (с throttle + кэшем) только при необходимости. Адреса отдаются
-// в порядке предпочтения для streamID (предпочтительный первым) - pipeline
-// пробует их по очереди при allocate.
+// GetCredentials -> (username, password, server-addrs); addrs ротированы под
+// streamID (предпочтительный первым, см. orderAddrs), fetch к VK только при промахе кэша.
 func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) (string, string, []string, error) {
 	cache := c.store.Get(streamID)
 	cacheID := c.store.CacheID(streamID)
@@ -165,9 +164,7 @@ func orderAddrs(addrs []string, streamID int) []string {
 	return out
 }
 
-// HandleAuthError увеличивает счётчик ошибок аутентификации кэша потока и
-// инвалидирует кэш при достижении порога внутри скользящего окна.
-// Возвращает true при инвалидации.
+// HandleAuthError инвалидирует кэш при MaxCacheErrors в окне ErrorWindow; true = инвалидирован.
 func (c *Client) HandleAuthError(streamID int) bool {
 	cache := c.store.Get(streamID)
 	cacheID := c.store.CacheID(streamID)
@@ -190,35 +187,29 @@ func (c *Client) HandleAuthError(streamID int) bool {
 	return false
 }
 
-// ResetErrors обнуляет счётчик ошибок аутентификации (вызывать при успешном allocate).
+// ResetErrors вызывать при успешном allocate.
 func (c *Client) ResetErrors(streamID int) {
 	c.store.Get(streamID).errorCount.Store(0)
 }
 
-// LockoutUntilUnix возвращает unix-секунду дедлайна глобальной блокировки captcha
-// или 0, если блокировки нет.
 func (c *Client) LockoutUntilUnix() int64 {
 	return c.lockout.Load()
 }
 
-// BackoffUntilUnix реализует provider.Provider - алиас LockoutUntilUnix.
-// vkauth-lockout глобальный (без per-stream), streamID-параметра в самом
-// методе нет; интерфейс provider.Provider определяет no-arg сигнатуру.
+// BackoffUntilUnix - алиас LockoutUntilUnix: lockout глобальный, а provider.Provider
+// требует no-arg сигнатуру (без streamID).
 func (c *Client) BackoffUntilUnix() int64 { return c.LockoutUntilUnix() }
 
-// Name реализует provider.Provider.
 func (*Client) Name() string { return "vk" }
 
-// IsAuthError оборачивает пакетный IsAuthError как метод для работы через интерфейс.
 func (*Client) IsAuthError(err error) bool { return IsAuthError(err) }
 
-// engageLockout устанавливает глобальную блокировку captcha на d с момента вызова.
 func (c *Client) engageLockout(d time.Duration) {
 	c.lockout.Store(time.Now().Add(d).Unix())
 }
 
-// fetchSerialized соблюдает интервал 3s+jitter между запросами, затем
-// выполняет перебор всех credentials.
+// fetchSerialized сериализует fetch и держит min-интервал между запросами (анти
+// rate-limit VK).
 func (c *Client) fetchSerialized(ctx context.Context, link string, streamID int) (string, string, []string, error) {
 	c.fetchMu.Lock()
 	defer c.fetchMu.Unlock()
@@ -238,7 +229,6 @@ func (c *Client) fetchSerialized(ctx context.Context, link string, streamID int)
 	return c.fetch(ctx, link, streamID)
 }
 
-// fetch перебирает c.credentials, возвращая первый успех или терминальную ошибку.
 func (c *Client) fetch(ctx context.Context, link string, streamID int) (string, string, []string, error) {
 	if time.Now().Unix() < c.lockout.Load() {
 		return "", "", nil, fmt.Errorf("%w: %w", ErrCaptchaWaitRequired, ErrLockoutActive)
@@ -257,7 +247,9 @@ func (c *Client) fetch(ctx context.Context, link string, streamID int) (string, 
 		lastErr = err
 		c.log.Warnf("[STREAM %d] [VK Auth] Failed with client_id=%s: %v", streamID, creds.ClientID, err)
 
-		if errors.Is(err, ErrCaptchaWaitRequired) || errors.Is(err, ErrFatalCaptchaNoStreams) {
+		if errors.Is(err, ErrCaptchaWaitRequired) || errors.Is(err, ErrFatalCaptchaNoStreams) ||
+			errors.Is(err, ErrInvalidJoinLink) || errors.Is(err, ErrAnonymousBlocked) ||
+			errors.Is(err, ErrCallFull) {
 			return "", "", nil, err
 		}
 		es := err.Error()

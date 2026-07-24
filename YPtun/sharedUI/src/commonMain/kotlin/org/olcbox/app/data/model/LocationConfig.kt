@@ -79,7 +79,33 @@ data class VkTurnConfig(
     /** WDTT worker count; 0 → core default. Clamped to [9,108] and rounded to a multiple of 9 in-core. */
     @SerialName("wdtt_workers")
     val wdttWorkers: Int = 0,
+    /**
+     * Master switch for multi-server freeturn. When off, only the primary [uri] is used (today's exact
+     * single-server behaviour) even if [extraFreeturnUris] is non-empty. When on, the extra servers
+     * run alongside the primary and traffic is load-balanced across them.
+     */
+    @SerialName("freeturn_multi_server")
+    val freeturnMultiServer: Boolean = false,
+    /**
+     * Additional freeturn:// servers (beyond the primary [uri]) to run AT THE SAME TIME for
+     * per-connection load-balancing — the servers' bandwidth aggregates. Each link is a full
+     * freeturn:// (carries its own peer/obf/embedded wg=). The location's VK call links are PARTITIONED
+     * across the servers (so each VPS handles a share, not all of them). Up to 5 extra (6 total). Only
+     * honoured for the freeturn core with a WireGuard exit (not WDTT / AmneziaWG / proxy exits).
+     */
+    @SerialName("extra_freeturn_uris")
+    val extraFreeturnUris: List<String> = emptyList(),
 ) {
+    /**
+     * All freeturn servers to front at once: the primary [uri] first, then the valid [extraFreeturnUris]
+     * — but ONLY when [freeturnMultiServer] is on. Off ⇒ just the primary, so the single-server path
+     * stays byte-identical.
+     */
+    fun allFreeturnUris(): List<String> {
+        val primary = listOf(uri)
+        val all = if (freeturnMultiServer) primary + extraFreeturnUris else primary
+        return all.map { it.trim() }.filter { it.startsWith("freeturn://", ignoreCase = true) }
+    }
     /** True when the WDTT transport core is selected (vs. the default freeturn core). */
     fun usesWdtt(): Boolean = core.equals(CORE_WDTT, ignoreCase = true)
 
@@ -188,15 +214,45 @@ data class DnsttConfig(
      */
     @SerialName("resolver")
     val resolver: String = "",
+    /**
+     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the dnstt tunnel: the proxy
+     * server is dialed THROUGH the dnstt local SOCKS, so the public exit is the proxy, not the
+     * dnstt-server. Blank = exit straight via the dnstt-server's own SOCKS5.
+     */
+    @SerialName("proxy_link")
+    val proxyLink: String = "",
+    /**
+     * Which core runs the over-dnstt proxy (same choice as the Standard engine). [ProxyCore.Auto]
+     * picks Xray for raw-Xray/xhttp transports, otherwise sing-box.
+     */
+    @SerialName("proxy_core")
+    val proxyCore: ProxyCore = ProxyCore.Auto,
 ) {
     /** True when the dnstt tunnel has everything it needs to connect. */
     fun isComplete(): Boolean =
         domain.isNotBlank() && pubKey.isNotBlank() && resolver.isNotBlank()
 
+    /** True when a proxy is chained on top of the dnstt tunnel. */
+    fun hasProxy(): Boolean = proxyLink.isNotBlank()
+
+    /** Resolves [proxyCore]==Auto to a concrete backend for the over-dnstt [profile]. Mirrors
+     *  [VkTurnConfig.resolvedProxyCore], but defaults to Xray: chaining the exit over the dnstt SOCKS
+     *  needs socket-level dialerProxy chaining (Xray) to keep a vless reality/xtls-vision transport
+     *  intact — proxySettings/other paths reset it. An explicit per-location or global core still wins. */
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
+        proxyCore != ProxyCore.Auto -> proxyCore
+        !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
+        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        globalCore != ProxyCore.Auto -> globalCore
+        else -> ProxyCore.Xray
+    }
+
     fun normalized(): DnsttConfig = DnsttConfig(
         domain = domain.trim(),
         pubKey = pubKey.trim(),
         resolver = resolver.trim(),
+        proxyLink = proxyLink.trim(),
+        proxyCore = proxyCore,
     )
 }
 
@@ -212,6 +268,12 @@ data class ExtraRoom(
 @Serializable
 data class LocationConfig(
     val name: String = "",
+    /**
+     * Optional human-readable description shown under the location name. Populated from a subscription
+     * when the source carries one (Happ-style configs put it in `meta.serverDescription`); blank when
+     * the source has none. Display-only — does not affect routing.
+     */
+    val description: String = "",
     val id: String = "",
     val key: String = "",
     @SerialName("bypass_provider")
@@ -309,6 +371,7 @@ data class LocationConfig(
         val normalizedTransport = normalizeTransport(transport, provider)
         return copy(
             name = name.trim(),
+            description = description.trim(),
             id = id.trim(),
             key = key.trim(),
             bypassProvider = provider,
@@ -659,7 +722,32 @@ data class SubscriptionMetadata(
      * subscriptions keep auto-updating.
      */
     @SerialName("auto_update_enabled")
-    val autoUpdateEnabled: Boolean = true
+    val autoUpdateEnabled: Boolean = true,
+    /**
+     * Support link the panel advertises (Remnawave `support-url` header). Shown as a "support"
+     * action on the subscription so the user can reach the panel operator. Null when absent.
+     */
+    @SerialName("support_url")
+    val supportUrl: String? = null,
+    /**
+     * The panel's subscription web page (Remnawave `profile-web-page-url` header) — the human page
+     * where the user manages the subscription / sees plans. Opened in a browser. Null when absent.
+     */
+    @SerialName("web_page_url")
+    val webPageUrl: String? = null,
+    /**
+     * Announcement / notice the panel broadcasts (Remnawave `announce` header, may be `base64:`).
+     * Shown to the user on the subscription. Null when absent.
+     */
+    @SerialName("announce")
+    val announce: String? = null,
+    /**
+     * Provider ID (Happ/Remnawave `providerid` response header) — a tracking identifier the panel
+     * attaches to the subscription. Stored and reported daily to the Happ provider-check endpoint, the
+     * same behaviour as Happ. Null when the panel doesn't set it.
+     */
+    @SerialName("provider_id")
+    val providerId: String? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -673,7 +761,11 @@ data class SubscriptionMetadata(
             updateIntervalHours = updateIntervalHours?.coerceIn(MIN_UPDATE_INTERVAL_HOURS, MAX_UPDATE_INTERVAL_HOURS),
             lastRefreshAtEpochMs = lastRefreshAtEpochMs?.takeIf { it > 0 },
             expiresAtEpochMs = expiresAtEpochMs?.takeIf { it > 0 },
-            lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 }
+            lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 },
+            supportUrl = supportUrl.cleanMetadataValue(),
+            webPageUrl = webPageUrl.cleanMetadataValue(),
+            announce = announce.cleanMetadataValue(),
+            providerId = providerId.cleanMetadataValue()
         )
     }
 
@@ -689,7 +781,11 @@ data class SubscriptionMetadata(
                 lastRefreshAtEpochMs == null &&
                 expiresAtEpochMs == null &&
                 lastAttemptAtEpochMs == null &&
-                autoUpdateEnabled
+                autoUpdateEnabled &&
+                supportUrl.isNullOrBlank() &&
+                webPageUrl.isNullOrBlank() &&
+                announce.isNullOrBlank() &&
+                providerId.isNullOrBlank()
     }
 
     companion object {
@@ -746,6 +842,8 @@ data class LocationEntry(
     @SerialName("storage_id")
     val storageId: String,
     val name: String = "",
+    /** Display-only description (e.g. subscription `meta.serverDescription`). See [LocationConfig.description]. */
+    val description: String = "",
     @SerialName("subscription_url")
     val subscriptionUrl: String? = null,
     val endpoint: LocationEndpointConfig? = null,
@@ -823,6 +921,7 @@ data class LocationEntry(
             val vp8Options = transportConfig.vp8
             return LocationConfig(
                 name = name,
+                description = description,
                 id = firstNotBlank(endpoint?.roomId, legacyId, legacyRoomId, legacyServer),
                 key = firstNotBlank(endpoint?.key, legacyKey, legacyPassword),
                 bypassProvider = provider,
@@ -860,6 +959,7 @@ data class LocationEntry(
         return LocationEntry(
             storageId = storageId.trim(),
             name = config.name,
+            description = config.description,
             subscriptionUrl = firstNotBlank(subscriptionUrl, legacySubscriptionUrl).ifBlank { null },
             endpoint = LocationEndpointConfig(
                 roomId = config.id,
@@ -898,6 +998,7 @@ data class LocationEntry(
             return LocationEntry(
                 storageId = storageId,
                 name = config.name,
+                description = config.description,
                 subscriptionUrl = subscriptionUrl,
                 endpoint = LocationEndpointConfig(
                     roomId = config.id,

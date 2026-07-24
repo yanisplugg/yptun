@@ -10,7 +10,9 @@ import kotlinx.serialization.json.Json
 import org.olcbox.app.data.ACTIVE_LOCATION_CONFIG_FILE_NAME
 import org.olcbox.app.data.LEGACY_LOCATIONS_BUNDLE_FILE_NAME
 import org.olcbox.app.data.LOCATIONS_BUNDLE_FILE_NAME
+import org.olcbox.app.data.LOCATIONS_VIEW_INDEX_FILE_NAME
 import org.olcbox.app.data.model.LocationBundleV4
+import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.vpn.data.KEY_IS_VPN_CONFIG_READY
 import org.olcbox.app.vpn.data.KEY_VPN_CONFIG_PATH
 import org.olcbox.app.vpn.data.vpnPrefDataStore
@@ -18,6 +20,9 @@ import java.io.File
 
 private val KEY_LEGACY_SELECTED_LOCATION_ID = stringPreferencesKey("selected_hysteria_id")
 private val KEY_DEVICE_IDENTITY = stringPreferencesKey("olcbox_device_identity")
+private val KEY_APP_INSTALL_ID = stringPreferencesKey("olcbox_app_install_id")
+private val KEY_TG_WARP_CONFIG = stringPreferencesKey("olcbox_tg_warp_config")
+private val KEY_PROVIDER_REPORT_STATE = stringPreferencesKey("olcbox_provider_report_state")
 
 class LocationsDataSourceImpl(
     private val context: Context
@@ -46,9 +51,23 @@ class LocationsDataSourceImpl(
             ?: File(context.filesDir, LEGACY_LOCATIONS_BUNDLE_FILE_NAME).takeIf { it.exists() }
             ?: return@withContext null
         if (!file.exists()) return@withContext null
-        runCatching {
-            json.decodeFromString(LocationBundleV4.serializer(), file.readText()).normalized()
+        // Raw decode only — the repository normalizes once on read (single funnel), so we don't pay a
+        // second normalize+filter+dedup pass over the whole bundle here on every cache miss.
+        val bundle = runCatching {
+            json.decodeFromString(LocationBundleV4.serializer(), file.readText())
         }.getOrNull()
+        // One-time backfill for existing installs upgraded to the indexed launch: if the bundle exists
+        // but its view index doesn't yet (no save since the upgrade), write it now so the NEXT launch is
+        // instant instead of waiting for the first mutation. Built from the NORMALIZED bundle so the
+        // index matches what the list shows. Best-effort.
+        if (bundle != null && !File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).exists()) {
+            runCatching {
+                File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).writeText(
+                    json.encodeToString(LocationViewIndex.serializer(), LocationViewIndex.from(bundle.normalized()))
+                )
+            }
+        }
+        bundle
     }
 
     override suspend fun saveLocationBundle(bundle: LocationBundleV4): Unit = withContext(Dispatchers.IO) {
@@ -56,7 +75,38 @@ class LocationsDataSourceImpl(
         File(context.filesDir, LOCATIONS_BUNDLE_FILE_NAME).writeText(
             json.encodeToString(LocationBundleV4.serializer(), normalized)
         )
+        // Rewrite the lightweight view index from the SAME normalized bundle so it never drifts: every
+        // mutation funnels through here, so the index always matches what's on disk. Best-effort — a
+        // write failure just means the next launch falls back to the full decode.
+        runCatching {
+            File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).writeText(
+                json.encodeToString(LocationViewIndex.serializer(), LocationViewIndex.from(normalized))
+            )
+        }
         updateActiveLocationConfig(normalized)
+        // Keep the home-screen widgets in sync with the active location (app ↔ widget both funnel here).
+        org.olcbox.app.widget.WidgetRefresh.ping(context)
+    }
+
+    override suspend fun loadLocationViewIndex(): LocationViewIndex? = withContext(Dispatchers.IO) {
+        val file = File(context.filesDir, LOCATIONS_VIEW_INDEX_FILE_NAME).takeIf { it.exists() }
+            ?: return@withContext null
+        runCatching {
+            json.decodeFromString(LocationViewIndex.serializer(), file.readText())
+        }.getOrNull()?.takeIf { it.items.isNotEmpty() }
+    }
+
+    /**
+     * Cheap change token for the repository's bundle cache: mtime ⊕ size of the file
+     * [loadLocationBundle] reads (main bundle, else the legacy file). Every save rewrites the main
+     * file and bumps its mtime/size, so a stale cache — including the VPN service's separate
+     * repository instance — is detected on the next read and reloaded. Null until a bundle exists.
+     */
+    override suspend fun bundleVersionToken(): Long? = withContext(Dispatchers.IO) {
+        val file = File(context.filesDir, LOCATIONS_BUNDLE_FILE_NAME).takeIf { it.exists() }
+            ?: File(context.filesDir, LEGACY_LOCATIONS_BUNDLE_FILE_NAME).takeIf { it.exists() }
+            ?: return@withContext null
+        file.lastModified() * 1_000_003L xor file.length()
     }
 
     override suspend fun loadLegacyLocations(): List<Pair<String, String>> = withContext(Dispatchers.IO) {
@@ -86,6 +136,36 @@ class LocationsDataSourceImpl(
     override suspend fun saveDeviceIdentity(value: String) {
         context.vpnPrefDataStore.edit {
             it[KEY_DEVICE_IDENTITY] = value
+        }
+    }
+
+    override suspend fun loadAppInstallId(): String? {
+        return context.vpnPrefDataStore.data.first()[KEY_APP_INSTALL_ID]?.ifBlank { null }
+    }
+
+    override suspend fun saveAppInstallId(value: String) {
+        context.vpnPrefDataStore.edit {
+            it[KEY_APP_INSTALL_ID] = value
+        }
+    }
+
+    override suspend fun loadTelegramWarpConfig(): String? {
+        return context.vpnPrefDataStore.data.first()[KEY_TG_WARP_CONFIG]?.ifBlank { null }
+    }
+
+    override suspend fun saveTelegramWarpConfig(value: String) {
+        context.vpnPrefDataStore.edit {
+            it[KEY_TG_WARP_CONFIG] = value
+        }
+    }
+
+    override suspend fun loadProviderReportState(): String? {
+        return context.vpnPrefDataStore.data.first()[KEY_PROVIDER_REPORT_STATE]?.ifBlank { null }
+    }
+
+    override suspend fun saveProviderReportState(value: String) {
+        context.vpnPrefDataStore.edit {
+            it[KEY_PROVIDER_REPORT_STATE] = value
         }
     }
 

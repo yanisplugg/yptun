@@ -5,22 +5,24 @@
 ![License](https://img.shields.io/badge/license-WTFPL-0D1117?style=flat-square&logo=open-source-initiative&logoColor=green&labelColor=0D1117)
 ![Golang](https://img.shields.io/badge/-Golang-0D1117?style=flat-square&logo=go&logoColor=00A7D0)
 
+[RU](manual.ru.md) / **EN**
+
 </div>
 
-# Мануальная сборка
+# Manual build
 
-> **Важно:** Обязательно проверяйте, есть ли сервис видеозвонков у вас в белых списках. Если его там нет - используйте другой. Список всех сервисов в белых списках скоро будет опубликован.
+> **Important:** always check whether the video call service you need is on the allow lists. If it is not there, use another one. A list of all allow-listed services will be published soon.
 
 
-Этот способ для тех кто хочет собрать нативный бинарник руками.
-Нужен Go 1.26+, mage, git.
+This way is for those who want to build the native binary by hand.
+You need Go 1.26+, mage, git.
 
 ---
 
 
-### swap (ОЗУ)
+### swap (RAM)
 
-Если у вас меньше 4ГБ оперативной памяти, сборка может вылетать. **Обязательно включите SWAP**:
+If you have less than 4 GB of RAM, the build may crash. **Be sure to enable SWAP**:
 
 ```bash
 sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
@@ -29,9 +31,9 @@ sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
 
 ---
 
-## Что нужно установить
+## What to install
 
-## Шаг 1: Установить git
+## Step 1: Install git
 
 ```sh
 apt install git       # Debian   / Ubuntu  / Mint
@@ -41,20 +43,20 @@ dnf install git       # Fedora / RHEL   / CentOS
 
 ---
 
-## Шаг 2: Установить Go 1.26+
+## Step 2: Install Go 1.26+
 
-### Arch / Fedora (всё просто)
+### Arch / Fedora (easy)
 
 ```sh
 pacman -S go    # Arch    / CachyOS / Manjaro
 dnf install go  # Fedora / RHEL   / CentOS
 ```
 
-### Debian / Ubuntu (системный пакет устаревший)
+### Debian / Ubuntu (the system package is outdated)
 
-На Debian/Ubuntu в репозитории обычно Go 1.19.
+On Debian/Ubuntu the repository usually has Go 1.19.
 
-На Debian 13 лучше через `testing` c `APT Pinning`, чтобы не засорять ОС:
+On Debian 13 it is better to go through `testing` with `APT Pinning`, so as not to pollute the OS:
 
 ```sh
 echo 'deb http://deb.debian.org/debian/ testing main non-free-firmware' | sudo tee /etc/apt/sources.list.d/testing.list
@@ -72,16 +74,16 @@ sudo update-alternatives --install /usr/bin/go go `which go` 10
 sudo update-alternatives --install /usr/bin/gofmt gofmt `which gofmt` 10
 ```
 
-Иначе через SDK:
+Otherwise via the SDK:
 
 ```sh
-apt install golang                         # ставим старый go - он нужен только чтобы скачать новый
-go install golang.org/dl/go1.26.0@latest   # скачиваем установщик go1.26
-~/go/bin/go1.26.0 download                 # скачиваем сам go1.26
-mv ~/go/bin/go1.26.0 /usr/local/bin/go     # заменяем системный go
+apt install golang                         # install the old go - it is only needed to download the new one
+go install golang.org/dl/go1.26.0@latest   # download the go1.26 installer
+~/go/bin/go1.26.0 download                 # download go1.26 itself
+mv ~/go/bin/go1.26.0 /usr/local/bin/go     # replace the system go
 ```
 
-### Проверка
+### Check
 
 ```sh
 go version
@@ -90,22 +92,22 @@ go version
 
 ---
 
-## Шаг 3: Установить mage
+## Step 3: Install mage
 
-mage - система сборки для Go-проектов, аналог make.
+mage is a build system for Go projects, similar to make.
 
 ```sh
 go install github.com/magefile/mage@latest
 ```
 
-Добавь `~/go/bin` в PATH:
+Add `~/go/bin` to PATH:
 
 ```sh
 echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-Проверка:
+Check:
 
 ```sh
 mage --version
@@ -114,7 +116,7 @@ mage --version
 
 ---
 
-## Шаг 4: Скачать репозиторий
+## Step 4: Clone the repository
 
 ```sh
 git clone https://github.com/openlibrecommunity/olcrtc
@@ -124,14 +126,14 @@ cd olcrtc
 
 ---
 
-## Шаг 5: Собрать
+## Step 5: Build
 
 ```sh
-mage build   # текущая платформа
-mage cross   # все платформы сразу (если собираешь для другой машины)
+mage build   # current platform
+mage cross   # all platforms at once (if you build for another machine)
 ```
 
-Результат в `build/`:
+The result is in `build/`:
 
 ```
 build/olcrtc-linux-amd64
@@ -139,28 +141,28 @@ build/olcrtc-linux-amd64
 
 ---
 
-## Шаг 6: Сгенерировать ключ шифрования
+## Step 6: Generate the encryption key
 
-Делается один раз на сервере. Ключ должен совпадать на сервере и клиенте.
+Done once on the server. The key must match on server and client.
 
 ```sh
 openssl rand -hex 32 
 # d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799
 ```
 
-Сохрани вывод - понадобится при запуске клиента.
+Save the output - you will need it when running the client.
 
 ---
 
-## Шаг 7: Запустить сервер
+## Step 7: Run the server
 
-На серверной машине (VPS и т.д.). Подбери нужную комбинацию auth provider + transport из матрицы в [settings.md](settings.md).
+On the server machine (VPS, etc.). Pick the right auth provider + transport combination from the matrix in [settings.md](settings.md).
 
-### jitsi + datachannel (рекомендуется)
+### jitsi + datachannel (recommended)
 
-Самый простой способ: используй любой self-hosted или публичный Jitsi Meet инстанс. Регистрация не нужна, имя комнаты выдумывается на лету. Доступные публичные серверы: `meet.small-dm.ru`, `meet1.arbitr.ru` и `meet.handyweb.org` - **обязательно проверь в браузере, какой из них работает в твоей сети**, и используй тот, который открывается. Также подойдёт любой другой (`meet.jit.si`, свой self-hosted и т.п.).
+The simplest way: use any self-hosted or public Jitsi Meet instance. No registration needed, the room name is made up on the fly. Available instances are listed in [`docs/examples/jitsi.instances.yaml`](./examples/jitsi.instances.yaml) - **be sure to check in a browser which one works in your network** and use the one that opens. Any other one will also do (`meet.jit.si`, your own self-hosted, etc.).
 
-Создай YAML конфиг:
+Create a YAML config:
 
 ```yaml
 # server.yaml
@@ -168,8 +170,8 @@ mode: srv
 auth:
   provider: jitsi
 room:
-  # Используйте meet.small-dm.ru, meet1.arbitr.ru или meet.handyweb.org - тот, что работает в вашей сети
-  id: "https://meet.small-dm.ru/myroom"
+  # Instances: see docs/examples/jitsi.instances.yaml
+  id: "https://meet.example.org/myroom"
 crypto:
   key: "d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799"
 net:
@@ -178,21 +180,21 @@ net:
 data: data
 ```
 
-Запусти:
+Run:
 
 ```sh
 ./build/olcrtc-linux-amd64 server.yaml
 ```
 
-Сервер сам присоединится к комнате (в качестве участника без камеры/микрофона) и будет ждать, пока клиент тоже зайдёт. Без второго участника Jicofo не выдаёт session-initiate - это особенность Jitsi.
+The server joins the room itself (as a participant without camera/microphone) and waits for the client to join too. Without a second participant Jicofo does not issue a session-initiate - that is a Jitsi quirk.
 
-### wbstream + vp8channel (альтернатива)
+### wbstream + vp8channel (alternative)
 
-Создай руму через сайт [wbstream](https://stream.wb.ru) и вставь её ID в `room.id`.
+Create a room through the [wbstream](https://stream.wb.ru) site and paste its ID into `room.id`.
 
-`wbstream + datachannel` **не работает** в обычном guest flow - WB Stream выдаёт токены с `canPublishData=false`, и DC не маршрутизирует данные. Для обычного использования выбирай `vp8channel`.
+`wbstream + datachannel` **does not work** in the normal guest flow - WB Stream issues tokens with `canPublishData=false`, and DC does not route data. For normal use pick `vp8channel`.
 
-Создай YAML конфиг:
+Create a YAML config:
 
 ```yaml
 # server.yaml
@@ -200,7 +202,7 @@ mode: srv
 auth:
   provider: wbstream
 room:
-  id: "<room-id-со-stream.wb.ru>"
+  id: "<room-id-from-stream.wb.ru>"
 crypto:
   key: "d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799"
 net:
@@ -209,17 +211,17 @@ net:
 data: data
 ```
 
-Запусти:
+Run:
 
 ```sh
 ./build/olcrtc-linux-amd64 server.yaml
 ```
 
-Room ID нужно передать клиенту.
+The Room ID must be passed to the client.
 
-### Добавить отладку
+### Add debug
 
-Добавь `debug: true` в YAML конфиг - увидишь каждое соединение:
+Add `debug: true` to the YAML config - you will see every connection:
 
 ```
 2026/05/03 08:05:23 Connecting link via direct/vp8channel/wbstream...
@@ -231,11 +233,11 @@ Room ID нужно передать клиенту.
 
 ---
 
-## Шаг 8: Запустить клиент
+## Step 8: Run the client
 
-На своей машине. `auth.provider`, `net.transport`, `room.id` и `crypto.key` должны совпадать с сервером.
+On your machine. `auth.provider`, `net.transport`, `room.id` and `crypto.key` must match the server.
 
-### jitsi + datachannel (рекомендуется)
+### jitsi + datachannel (recommended)
 
 ```yaml
 # client.yaml
@@ -243,10 +245,10 @@ mode: cnc
 auth:
   provider: jitsi
 room:
-  # Используйте meet.small-dm.ru, meet1.arbitr.ru или meet.handyweb.org - тот, что работает в вашей сети
-  id: "https://meet.small-dm.ru/myroom"
+  # Instances: see docs/examples/jitsi.instances.yaml
+  id: "https://meet.example.org/myroom"
 crypto:
-  key: "<hex-key-такой-же-как-на-сервере>"
+  key: "<hex-key-same-as-on-the-server>"
 net:
   transport: datachannel
   dns: "8.8.8.8:53"
@@ -260,9 +262,9 @@ data: data
 ./build/olcrtc-linux-amd64 client.yaml
 ```
 
-После запуска SOCKS5 будет слушать на `127.0.0.1:8808`. Используй любой клиент с поддержкой SOCKS5 (`curl --socks5 127.0.0.1:8808 ...`, браузер с переключателем прокси и т.п.).
+After it starts, SOCKS5 listens on `127.0.0.1:8808`. Use any client with SOCKS5 support (`curl --socks5 127.0.0.1:8808 ...`, a browser with a proxy switcher, etc.).
 
-### wbstream + vp8channel (альтернатива)
+### wbstream + vp8channel (alternative)
 
 ```yaml
 # client.yaml
@@ -286,13 +288,13 @@ data: data
 ./build/olcrtc-linux-amd64 client.yaml
 ```
 
-После старта в логах появится:
+After it starts the logs will show:
 
 ```
 SOCKS5 server listening on 127.0.0.1:8808
 ```
 
-Если нужно защитить прокси логином и паролем (например на машине с несколькими пользователями), добавь `socks.user` и `socks.pass` в конфиг:
+If you need to protect the proxy with a login and password (for example on a machine with multiple users), add `socks.user` and `socks.pass` to the config:
 
 ```yaml
 # client.yaml
@@ -314,124 +316,124 @@ socks:
 data: data
 ```
 
-Без этих полей аутентификация отключена - поведение прежнее.
+Without these fields authentication is disabled - the behavior is the same as before.
 
 ---
 
-## Шаг 9: Проверить
+## Step 9: Check
 
 ```sh
 curl --socks5-hostname 127.0.0.1:8808 https://icanhazip.com
 ```
 
-Должен вернуть IP сервера.
+It should return the server IP.
 
 
 ---
 
-## Обновить бинарник и уже запущенный инстанс
+## Update the binary and an already running instance
 
-Запущенный процесс сам не обновляется: он продолжает работать со старым бинарником, даже если репозиторий уже обновлён. Нужно скачать свежий код, пересобрать бинарник и перезапустить процесс или systemd-сервис.
+A running process does not update itself: it keeps working with the old binary even if the repository is already updated. You need to fetch fresh code, rebuild the binary and restart the process or systemd service.
 
-### 1. Обновить репозиторий
+### 1. Update the repository
 
 ```sh
 cd olcrtc
 git pull --recurse-submodules
 ```
 
-Если работаешь не с `master`, сначала переключись на нужную ветку:
+If you work not with `master`, switch to the needed branch first:
 
 ```sh
 git switch dev
 git pull --recurse-submodules
 ```
 
-### 2. Пересобрать бинарник
+### 2. Rebuild the binary
 
 ```sh
 mage build
 ```
 
-Для текущей Linux-машины результат обычно будет здесь:
+For the current Linux machine the result is usually here:
 
 ```sh
 build/olcrtc-linux-amd64
 ```
 
-Для другой архитектуры смотри имя файла в `build/` или собирай все платформы сразу:
+For another architecture see the file name in `build/` or build all platforms at once:
 
 ```sh
 mage cross
 ls build/
 ```
 
-### 3. Остановить старый процесс
+### 3. Stop the old process
 
-Если запускал вручную в терминале - останови его через `Ctrl+C`.
+If you started it manually in a terminal - stop it with `Ctrl+C`.
 
-Если процесс запущен в фоне, найди его:
+If the process runs in the background, find it:
 
 ```sh
 pgrep -af olcrtc
 ```
 
-И останови нужный PID:
+And stop the right PID:
 
 ```sh
 kill <pid>
 ```
 
-Если olcrtc запущен через systemd, останавливать руками не нужно - достаточно рестарта сервиса после обновления бинарника.
+If olcrtc runs through systemd, there is no need to stop it by hand - a service restart after updating the binary is enough.
 
-### 4. Заменить бинарник, если он лежит вне `build/`
+### 4. Replace the binary if it lives outside `build/`
 
-Если запускаешь прямо из `build/`, этот шаг не нужен.
+If you run straight from `build/`, this step is not needed.
 
-Если копировал бинарник в системный путь, обнови копию:
+If you copied the binary to a system path, update the copy:
 
 ```sh
 sudo install -m 0755 build/olcrtc-linux-amd64 /usr/local/bin/olcrtc
 ```
 
-Путь и имя файла могут отличаться, если машина не `linux/amd64`.
+The path and file name may differ if the machine is not `linux/amd64`.
 
-### 5. Запустить заново с тем же конфигом
+### 5. Start again with the same config
 
-Сервер:
+Server:
 
 ```sh
 ./build/olcrtc-linux-amd64 server.yaml
 ```
 
-Клиент:
+Client:
 
 ```sh
 ./build/olcrtc-linux-amd64 client.yaml
 ```
 
-Если используешь systemd:
+If you use systemd:
 
 ```sh
 sudo systemctl restart olcrtc-server
 sudo systemctl restart olcrtc-client
 ```
 
-Имена сервисов зависят от того, как ты их создавал. Конфиги менять не нужно, если `auth`, `transport`, `room ID`, ключ и SOCKS5-порт остаются прежними.
+Service names depend on how you created them. The configs do not need to change if `auth`, `transport`, `room ID`, the key and the SOCKS5 port stay the same.
 
 ---
 
-## Все mage таргеты
+## All mage targets
 
-### Сборка
+### Build
 ```sh
-mage build    # собрать для текущей платформы
-mage cross    # собрать для всех платформ
-mage mobile   # собрать Android AAR
-mage clean    # удалить build/
+mage build    # build for the current platform
+mage cross    # build for all platforms
+mage mobile   # build the Android AAR
+mage clean    # remove build/
 ```
 
-### Качество
+### Quality
 ```sh
 mage vet      # go vet
 mage lint     # golangci-lint
@@ -439,55 +441,55 @@ mage tidy     # go mod tidy && go mod verify
 mage deps     # go mod download
 ```
 
-### Тесты
+### Tests
 ```sh
-mage test       # юниты в -short, быстро
-mage testFull   # все юниты + локальные e2e с -race
-mage e2e        # smoke-матрица против реальных провайдеров
-mage stress     # stress-матрица (~6 ч)
-mage soak       # реальный soak (часами)
-mage localSoak  # in-memory soak (без сети)
+mage test       # units in -short, fast
+mage testFull   # all units + local e2e with -race
+mage e2e        # smoke matrix against real providers
+mage stress     # stress matrix (~6 h)
+mage soak       # real soak (hours)
+mage localSoak  # in-memory soak (no network)
 ```
 
-### Пайплайны
+### Pipelines
 ```sh
-mage check       # build + vet + lint + testFull (перед коммитом)
-mage all         # check + e2e (перед мерджем PR)
-mage nightly     # all + stress (ночной CI, ~6 ч)
-mage everything  # nightly + soak + localSoak (полная валидация, 12+ ч)
+mage check       # build + vet + lint + testFull (before a commit)
+mage all         # check + e2e (before merging a PR)
+mage nightly     # all + stress (nightly CI, ~6 h)
+mage everything  # nightly + soak + localSoak (full validation, 12+ h)
 ```
 
-### Прочее
+### Misc
 ```sh
-mage help     # список таргетов в стандартном стиле mage
-mage -l       # то же что mage help
-mage         # без аргументов = mage help
+mage help     # list targets in the standard mage style
+mage -l       # same as mage help
+mage         # no arguments = mage help
 ```
 
-Тонкая настройка прогона тестов через переменные окружения:
+Fine-tune the test runs through environment variables:
 
 ```sh
-# одиночный кейс stress
+# a single stress case
 E2E_CARRIERS=telemost E2E_TRANSPORTS=videochannel \
     STRESS_BULK_DURATION=0 STRESS_ECHO_DURATION=0 \
     STRESS_CASE_TIMEOUT=2m STRESS_TIMEOUT=3m mage stress
 
-# soak только jitsi на 30 минут
+# soak only jitsi for 30 minutes
 SOAK_CARRIERS=jitsi SOAK_DURATION=30m mage soak
 ```
 
-Полный список переменных:
+Full list of variables:
 - `E2E_CARRIERS`, `E2E_TRANSPORTS`, `E2E_TIMEOUT`, `E2E_STRESS`, `E2E_STRESS_DURATION`
 - `STRESS_BULK_DURATION`, `STRESS_ECHO_DURATION`, `STRESS_CASE_TIMEOUT`, `STRESS_TIMEOUT`
 - `SOAK_CARRIERS`, `SOAK_TRANSPORTS`, `SOAK_DURATION`, `SOAK_CHAOS`
 
 ---
 
-## Несколько инстансов на одном сервере
+## Multiple instances on one server
 
-Можно запустить несколько серверов olcrtc на одной машине - каждый со своим конфигом (разные провайдеры, комнаты, транспорты). Для этого создай отдельный YAML-файл для каждого инстанса и запусти каждый в отдельном процессе.
+You can run several olcrtc servers on one machine - each with its own config (different providers, rooms, transports). For this, create a separate YAML file for each instance and run each in its own process.
 
-### Пример: два сервера
+### Example: two servers
 
 ```yaml
 # server-jitsi.yaml
@@ -495,7 +497,7 @@ mode: srv
 auth:
   provider: jitsi
 room:
-  id: "https://meet1.arbitr.ru/room1"
+  id: "https://meet.example.org/room1"
 crypto:
   key: "aaaa...1111"
 net:
@@ -519,16 +521,16 @@ net:
 data: data
 ```
 
-Запусти каждый в отдельном терминале (или через `tmux` / `screen` / `systemd`):
+Run each in its own terminal (or via `tmux` / `screen` / `systemd`):
 
 ```sh
 ./build/olcrtc-linux-amd64 server-jitsi.yaml
 ./build/olcrtc-linux-amd64 server-wbstream.yaml
 ```
 
-### Клиенты
+### Clients
 
-На клиентской машине - по одному конфигу на каждый сервер, с **разными SOCKS5 портами**:
+On the client machine - one config per server, with **different SOCKS5 ports**:
 
 ```yaml
 # client-jitsi.yaml
@@ -536,7 +538,7 @@ mode: cnc
 auth:
   provider: jitsi
 room:
-  id: "https://meet1.arbitr.ru/room1"
+  id: "https://meet.example.org/room1"
 crypto:
   key: "aaaa...1111"
 net:
@@ -567,14 +569,14 @@ data: data
 ```
 
 ```sh
-./build/olcrtc-linux-amd64 client-jitsi.yaml      # SOCKS5 на :8808
-./build/olcrtc-linux-amd64 client-wbstream.yaml    # SOCKS5 на :8809
+./build/olcrtc-linux-amd64 client-jitsi.yaml      # SOCKS5 on :8808
+./build/olcrtc-linux-amd64 client-wbstream.yaml    # SOCKS5 on :8809
 ```
 
-Переключение между инстансами в olcbox - просто выбираешь нужный SOCKS5 порт.
+Switching between instances in olcbox is just picking the right SOCKS5 port.
 
 ---
 
-Нужен короткий путь без подробностей? -> [Быстрый старт](fast.md)
+Need a short path without the details? -> [Quick start](fast.md)
 
-Все настройки и матрица совместимости -> [settings.md](settings.md)
+All settings and the compatibility matrix -> [settings.md](settings.md)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pion/transport/v4"
+	"github.com/samosvalishe/free-turn-proxy/internal/netctl"
 )
 
 // DirectNet реализует transport.Net через стандартный net.
@@ -34,32 +35,84 @@ type directTCPListener struct {
 	*net.TCPListener
 }
 
+// All socket-creating methods route through a net.Dialer / net.ListenConfig
+// carrying netctl.Apply as Control so the host can protect each fd from the
+// VPN tunnel. (net.DialUDP / net.ListenUDP take no Control, so we go via
+// Dialer/ListenConfig and type-assert back to the concrete UDP/TCP conn.)
 func (DirectNet) ListenPacket(network string, address string) (net.PacketConn, error) {
-	return net.ListenPacket(network, address) //nolint:noctx
+	return (&net.ListenConfig{Control: netctl.Apply}).ListenPacket(context.Background(), network, address)
 }
 
 func (DirectNet) ListenUDP(network string, locAddr *net.UDPAddr) (transport.UDPConn, error) {
-	return net.ListenUDP(network, locAddr)
-}
-
-func (DirectNet) ListenTCP(network string, laddr *net.TCPAddr) (transport.TCPListener, error) {
-	listener, err := net.ListenTCP(network, laddr)
+	addr := ""
+	if locAddr != nil {
+		addr = locAddr.String()
+	}
+	pc, err := (&net.ListenConfig{Control: netctl.Apply}).ListenPacket(context.Background(), network, addr)
 	if err != nil {
 		return nil, err
 	}
-	return directTCPListener{listener}, nil
+	udp, ok := pc.(*net.UDPConn)
+	if !ok {
+		_ = pc.Close()
+		return nil, fmt.Errorf("netconn: expected *net.UDPConn, got %T", pc)
+	}
+	return udp, nil
+}
+
+func (DirectNet) ListenTCP(network string, laddr *net.TCPAddr) (transport.TCPListener, error) {
+	addr := ""
+	if laddr != nil {
+		addr = laddr.String()
+	}
+	l, err := (&net.ListenConfig{Control: netctl.Apply}).Listen(context.Background(), network, addr)
+	if err != nil {
+		return nil, err
+	}
+	tl, ok := l.(*net.TCPListener)
+	if !ok {
+		_ = l.Close()
+		return nil, fmt.Errorf("netconn: expected *net.TCPListener, got %T", l)
+	}
+	return directTCPListener{tl}, nil
 }
 
 func (DirectNet) Dial(network, address string) (net.Conn, error) {
-	return net.Dial(network, address) //nolint:noctx
+	return (&net.Dialer{Control: netctl.Apply}).Dial(network, address)
 }
 
 func (DirectNet) DialUDP(network string, laddr, raddr *net.UDPAddr) (transport.UDPConn, error) {
-	return net.DialUDP(network, laddr, raddr)
+	d := &net.Dialer{Control: netctl.Apply}
+	if laddr != nil {
+		d.LocalAddr = laddr
+	}
+	c, err := d.Dial(network, raddr.String())
+	if err != nil {
+		return nil, err
+	}
+	udp, ok := c.(*net.UDPConn)
+	if !ok {
+		_ = c.Close()
+		return nil, fmt.Errorf("netconn: expected *net.UDPConn, got %T", c)
+	}
+	return udp, nil
 }
 
 func (DirectNet) DialTCP(network string, laddr, raddr *net.TCPAddr) (transport.TCPConn, error) {
-	return net.DialTCP(network, laddr, raddr)
+	d := &net.Dialer{Control: netctl.Apply}
+	if laddr != nil {
+		d.LocalAddr = laddr
+	}
+	c, err := d.Dial(network, raddr.String())
+	if err != nil {
+		return nil, err
+	}
+	tcp, ok := c.(*net.TCPConn)
+	if !ok {
+		_ = c.Close()
+		return nil, fmt.Errorf("netconn: expected *net.TCPConn, got %T", c)
+	}
+	return tcp, nil
 }
 
 func (DirectNet) ResolveIPAddr(network, address string) (*net.IPAddr, error) {
@@ -87,10 +140,16 @@ func (DirectNet) InterfaceByName(name string) (*transport.Interface, error) {
 }
 
 func (DirectNet) CreateDialer(dialer *net.Dialer) transport.Dialer {
+	if dialer.Control == nil {
+		dialer.Control = netctl.Apply
+	}
 	return directDialer{Dialer: dialer}
 }
 
 func (DirectNet) CreateListenConfig(listenerConfig *net.ListenConfig) transport.ListenConfig {
+	if listenerConfig.Control == nil {
+		listenerConfig.Control = netctl.Apply
+	}
 	return directListenConfig{ListenConfig: listenerConfig}
 }
 

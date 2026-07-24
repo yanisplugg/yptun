@@ -30,8 +30,8 @@ const (
 	MinSmuxWirePayload = SmuxWireOverhead + 1
 
 	smuxMaxFrameSize     = 32 * 1024
-	smuxMaxReceiveBuffer = 8 * 1024 * 1024
-	smuxMaxStreamBuffer  = 512 * 1024
+	smuxMaxReceiveBuffer = 32 * 1024 * 1024
+	smuxMaxStreamBuffer  = 4 * 1024 * 1024
 )
 
 // ErrKeyRequired is returned when no encryption key is provided.
@@ -77,8 +77,85 @@ func SmuxConfig(maxWirePayload int) *smux.Config {
 	cfg.MaxReceiveBuffer = smuxMaxReceiveBuffer
 	cfg.MaxStreamBuffer = smuxMaxStreamBuffer
 	cfg.KeepAliveInterval = 10 * time.Second
-	cfg.KeepAliveTimeout = 30 * time.Second
+	cfg.KeepAliveTimeout = 120 * time.Second
 	return cfg
+}
+
+// ControlSmuxConfig returns a lean smux config for the isolated control-plane
+// session. The control session carries only tiny ping/pong frames so we use
+// small stream buffers and disable smux keepalives (the olcrtc control.Run
+// ping loop handles liveness itself).
+func ControlSmuxConfig(maxWirePayload int) *smux.Config {
+	cfg := smux.DefaultConfig()
+	cfg.Version = 2
+	cfg.MaxFrameSize = smuxMaxFrameSize
+	if maxWirePayload >= MinSmuxWirePayload {
+		maxFrameSize := maxWirePayload - SmuxWireOverhead
+		if maxFrameSize < cfg.MaxFrameSize {
+			cfg.MaxFrameSize = maxFrameSize
+		}
+	}
+	// Tiny buffers: control frames are at most a few hundred bytes.
+	cfg.MaxReceiveBuffer = 256 * 1024
+	cfg.MaxStreamBuffer = 32 * 1024
+	// Disable smux keepalive - control.Run runs its own ping/pong loop.
+	cfg.KeepAliveDisabled = true
+	return cfg
+}
+
+// SmuxConfigLong is SmuxConfig with a relaxed keep-alive timeout for
+// transports whose carrier can legitimately go silent for tens of seconds
+// (vp8channel/goolom publisher-PC reconnect + SFU renegotiation). A tight
+// timeout would tear down the smux session while the carrier is rebuilding
+// itself, forcing an unnecessary second reconnect. Only transports that
+// implement transport.ControlPlane use this; conventional carriers
+// (jitsi/datachannel) keep the conservative 30s timeout so a genuinely dead
+// link is detected and reconnected promptly.
+func SmuxConfigLong(maxWirePayload int) *smux.Config {
+	cfg := SmuxConfig(maxWirePayload)
+	cfg.KeepAliveTimeout = 120 * time.Second
+	return cfg
+}
+
+// IsControlPlane reports whether the transport routes control-plane traffic
+// on an isolated channel (transport.ControlPlane). The relaxed liveness/
+// keep-alive windows are scoped to these transports only.
+func IsControlPlane(tr transport.Transport) bool {
+	_, ok := tr.(transport.ControlPlane)
+	return ok
+}
+
+// SmuxConfigFor returns the data-plane smux config appropriate for the
+// transport: relaxed keep-alive for ControlPlane carriers, conservative
+// otherwise.
+func SmuxConfigFor(tr transport.Transport) *smux.Config {
+	maxWirePayload := MaxPayload(tr)
+	if IsControlPlane(tr) {
+		return SmuxConfigLong(maxWirePayload)
+	}
+	return SmuxConfig(maxWirePayload)
+}
+
+// LivenessTimeout returns the control-stream pong timeout for a transport:
+// a relaxed window for ControlPlane transports (KCP batching + frame pacing
+// can delay control packets under load), and the conservative default for
+// conventional carriers so dead links are detected quickly.
+func LivenessTimeout(tr transport.Transport) time.Duration {
+	if IsControlPlane(tr) {
+		return 45 * time.Second
+	}
+	return control.DefaultTimeout
+}
+
+// ConnectAckTimeout returns the tunnel CONNECT ack read deadline for a
+// transport. ControlPlane transports (SFU renegotiation) may take ~30s to
+// start forwarding data frames, so they get a generous window; conventional
+// carriers use the conservative default.
+func ConnectAckTimeout(tr transport.Transport) time.Duration {
+	if IsControlPlane(tr) {
+		return 90 * time.Second
+	}
+	return 15 * time.Second
 }
 
 // MaxPayload reports the transport's per-message payload limit. Returns 0

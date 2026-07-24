@@ -4,17 +4,20 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/process"
 	"github.com/sagernet/sing-box/common/taskmonitor"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/experimental/libbox/platform"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	R "github.com/sagernet/sing-box/route/rule"
+	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/task"
+	"github.com/sagernet/sing/contrab/freelru"
+	"github.com/sagernet/sing/contrab/maphash"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 )
@@ -35,10 +38,10 @@ type Router struct {
 	ruleSets          []adapter.RuleSet
 	ruleSetMap        map[string]adapter.RuleSet
 	processSearcher   process.Searcher
+	processCache      freelru.Cache[processCacheKey, processCacheEntry]
 	pauseManager      pause.Manager
 	trackers          []adapter.ConnectionTracker
-	platformInterface platform.Interface
-	needWIFIState     bool
+	platformInterface adapter.PlatformInterface
 	started           bool
 }
 
@@ -56,8 +59,7 @@ func NewRouter(ctx context.Context, logFactory log.Factory, options option.Route
 		ruleSetMap:        make(map[string]adapter.RuleSet),
 		needFindProcess:   hasRule(options.Rules, isProcessRule) || hasDNSRule(dnsOptions.Rules, isProcessDNSRule) || options.FindProcess,
 		pauseManager:      service.FromContext[pause.Manager](ctx),
-		platformInterface: service.FromContext[platform.Interface](ctx),
-		needWIFIState:     hasRule(options.Rules, isWIFIRule) || hasDNSRule(dnsOptions.Rules, isWIFIDNSRule),
+		platformInterface: service.FromContext[adapter.PlatformInterface](ctx),
 	}
 }
 
@@ -113,19 +115,21 @@ func (r *Router) Start(stage adapter.StartStage) error {
 		if cacheContext != nil {
 			cacheContext.Close()
 		}
+		r.network.Initialize(r.ruleSets)
 		needFindProcess := r.needFindProcess
 		for _, ruleSet := range r.ruleSets {
 			metadata := ruleSet.Metadata()
 			if metadata.ContainsProcessRule {
 				needFindProcess = true
 			}
-			if metadata.ContainsWIFIRule {
-				r.needWIFIState = true
-			}
 		}
+		if C.IsAndroid && r.platformInterface != nil {
+			needFindProcess = true
+		}
+		r.needFindProcess = needFindProcess
 		if needFindProcess {
-			if r.platformInterface != nil {
-				r.processSearcher = r.platformInterface
+			if r.platformInterface != nil && r.platformInterface.UsePlatformConnectionOwnerFinder() {
+				r.processSearcher = newPlatformSearcher(r.platformInterface)
 			} else {
 				monitor.Start("initialize process searcher")
 				searcher, err := process.NewSearcher(process.Config{
@@ -141,6 +145,11 @@ func (r *Router) Start(stage adapter.StartStage) error {
 					r.processSearcher = searcher
 				}
 			}
+		}
+		if r.processSearcher != nil {
+			processCache := common.Must1(freelru.NewSharded[processCacheKey, processCacheEntry](256, maphash.NewHasher[processCacheKey]().Hash32))
+			processCache.SetLifetime(200 * time.Millisecond)
+			r.processCache = processCache
 		}
 	case adapter.StartStatePostStart:
 		for i, rule := range r.rules {
@@ -187,6 +196,13 @@ func (r *Router) Close() error {
 		})
 		monitor.Finish()
 	}
+	if r.processSearcher != nil {
+		monitor.Start("close process searcher")
+		err = E.Append(err, r.processSearcher.Close(), func(err error) error {
+			return E.Cause(err, "close process searcher")
+		})
+		monitor.Finish()
+	}
 	return err
 }
 
@@ -195,16 +211,16 @@ func (r *Router) RuleSet(tag string) (adapter.RuleSet, bool) {
 	return ruleSet, loaded
 }
 
-func (r *Router) NeedWIFIState() bool {
-	return r.needWIFIState
-}
-
 func (r *Router) Rules() []adapter.Rule {
 	return r.rules
 }
 
 func (r *Router) AppendTracker(tracker adapter.ConnectionTracker) {
 	r.trackers = append(r.trackers, tracker)
+}
+
+func (r *Router) NeedFindProcess() bool {
+	return r.needFindProcess
 }
 
 func (r *Router) ResetNetwork() {

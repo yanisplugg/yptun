@@ -46,9 +46,12 @@ func (m *Manager) Start(stage adapter.StartStage) error {
 		return nil
 	}
 	for _, endpoint := range m.endpoints {
+		name := "endpoint/" + endpoint.Type() + "[" + endpoint.Tag() + "]"
+		done := adapter.LogElapsed(m.logger, stage, " ", name)
 		err := adapter.LegacyStart(endpoint, stage)
+		done()
 		if err != nil {
-			return E.Cause(err, stage, " endpoint/", endpoint.Type(), "[", endpoint.Tag(), "]")
+			return E.Cause(err, stage, " ", name)
 		}
 	}
 	return nil
@@ -66,11 +69,14 @@ func (m *Manager) Close() error {
 	monitor := taskmonitor.New(m.logger, C.StopTimeout)
 	var err error
 	for _, endpoint := range endpoints {
-		monitor.Start("close endpoint/", endpoint.Type(), "[", endpoint.Tag(), "]")
+		name := "endpoint/" + endpoint.Type() + "[" + endpoint.Tag() + "]"
+		done := adapter.LogElapsed(m.logger, "close ", name)
+		monitor.Start("close ", name)
 		err = E.Append(err, endpoint.Close(), func(err error) error {
-			return E.Cause(err, "close endpoint/", endpoint.Type(), "[", endpoint.Tag(), "]")
+			return E.Cause(err, "close ", name)
 		})
 		monitor.Finish()
+		done()
 	}
 	return nil
 }
@@ -119,10 +125,13 @@ func (m *Manager) Create(ctx context.Context, router adapter.Router, logger log.
 	m.access.Lock()
 	defer m.access.Unlock()
 	if m.started {
+		name := "endpoint/" + endpoint.Type() + "[" + endpoint.Tag() + "]"
 		for _, stage := range adapter.ListStartStages {
+			done := adapter.LogElapsed(m.logger, stage, " ", name)
 			err = adapter.LegacyStart(endpoint, stage)
+			done()
 			if err != nil {
-				return E.Cause(err, stage, " endpoint/", endpoint.Type(), "[", endpoint.Tag(), "]")
+				return E.Cause(err, stage, " ", name)
 			}
 		}
 	}

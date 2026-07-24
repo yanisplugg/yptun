@@ -16,6 +16,7 @@ package freeturn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -57,14 +58,29 @@ func (b logBridge) Write(p []byte) (int, error) {
 var (
 	mu      sync.Mutex
 	running atomic.Bool
-	cancel  context.CancelFunc
-	done    chan struct{}
+	// One relay can be started (Start) or several at once (StartMulti) to front multiple freeturn
+	// servers for per-connection load-balancing. Each relay has its own cancel + done; Stop cancels
+	// all and waits. run() is instance-local (provider/dialers/listener), so concurrent relays don't
+	// clash — the only shared state is [streams] (an aggregate readiness counter, fine for the gate).
+	cancels []context.CancelFunc
+	dones   []chan struct{}
 	debug   atomic.Bool
-	// streams tracks live TURN relay streams of the current session. >0 means the
-	// VK TURN path (DTLS + TURN allocation) is up, so the WireGuard outbound can be
-	// started against the local listener. Exposed via ConnectedStreams.
-	streams atomic.Int32
+	// relayStreams holds ONE live-stream counter per active relay (per freeturn server). A relay's
+	// counter >0 means its VK TURN path (DTLS + TURN allocation) is up. ConnectedStreams sums them
+	// (readiness gate); ActiveRelays counts how many servers are actually connected (for the
+	// "N/total servers" notification). Guarded by [mu].
+	relayStreams []*atomic.Int32
 )
+
+// relaySpec is one freeturn server to relay through: its freeturn:// uri, the local listen address the
+// WireGuard/Xray outbound dials, the VK call link(s), and the parallel TURN stream count. StartMulti
+// takes a JSON array of these.
+type relaySpec struct {
+	URI     string `json:"uri"`
+	Listen  string `json:"listenAddr"`
+	VKLink  string `json:"vkLink"`
+	Streams int    `json:"streams"`
+}
 
 // SetLogWriter routes the freeturn client logs (standard log package) to w.
 // Pass nil to restore the default destination.
@@ -78,7 +94,7 @@ func SetLogWriter(w LogWriter) {
 
 // freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
 // Bump it whenever the vendored core is updated; surfaced in the app's settings.
-const freeturnVersion = "1.3.2"
+const freeturnVersion = "1.8.0"
 
 // Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
 func Version() string { return freeturnVersion }
@@ -89,11 +105,41 @@ func SetDebug(enabled bool) { debug.Store(enabled) }
 // IsRunning reports whether a freeturn client is currently active.
 func IsRunning() bool { return running.Load() }
 
-// ConnectedStreams reports the number of live TURN relay streams. A value >0 means
-// the VK TURN path is established (DTLS handshake + TURN allocation succeeded), so
-// the WireGuard outbound dialling the local listener has a working uplink. Callers
-// poll this after Start to order WireGuard bring-up behind the relay.
-func ConnectedStreams() int { return int(streams.Load()) }
+// ConnectedStreams reports the total number of live TURN relay streams across ALL relays. A value
+// >0 means at least one VK TURN path is established (DTLS handshake + TURN allocation succeeded), so
+// the WireGuard outbound(s) dialling the local listener(s) have a working uplink. Callers poll this
+// after Start to order WireGuard bring-up behind the relay.
+func ConnectedStreams() int {
+	mu.Lock()
+	defer mu.Unlock()
+	total := 0
+	for _, s := range relayStreams {
+		total += int(s.Load())
+	}
+	return total
+}
+
+// ActiveRelays reports how many freeturn servers (relays) currently have at least one live TURN
+// stream — i.e. how many of the configured servers are actually connected. Used for the
+// "connected/total servers" notification when several servers are load-balanced.
+func ActiveRelays() int {
+	mu.Lock()
+	defer mu.Unlock()
+	n := 0
+	for _, s := range relayStreams {
+		if s.Load() > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// TotalRelays reports how many relays (freeturn servers) are in the current session.
+func TotalRelays() int {
+	mu.Lock()
+	defer mu.Unlock()
+	return len(relayStreams)
+}
 
 // Start launches the freeturn client described by uri (a freeturn://... share
 // link). listenAddr is the local ip:port the client raises (WireGuard/Xray
@@ -105,20 +151,83 @@ func ConnectedStreams() int { return int(streams.Load()) }
 // invalid configuration; runtime failures are logged and end the session
 // (observable via IsRunning).
 func Start(uri, listenAddr, vkLink string, nStreams int) error {
+	b, err := json.Marshal([]relaySpec{{URI: uri, Listen: listenAddr, VKLink: vkLink, Streams: nStreams}})
+	if err != nil {
+		return fmt.Errorf("freeturn spec: %w", err)
+	}
+	return StartMulti(string(b))
+}
+
+// StartMulti launches one freeturn relay per entry in specsJson (a JSON array of relaySpec) — each
+// fronting a different freeturn server on its own local listen address — and runs them concurrently
+// under a shared session. With a single entry it is identical to Start. The WireGuard/Xray outbounds
+// dial the per-relay listen addresses; a load-balancer spreads connections across them so the
+// servers' bandwidth aggregates. Returns an error only for invalid configuration; runtime failures
+// of an individual relay are logged and end that relay (observable via IsRunning/ConnectedStreams).
+func StartMulti(specsJson string) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if running.Load() {
 		return errors.New("freeturn already running")
 	}
 
-	// vkLink may carry several VK call links (newline/whitespace/comma separated). Each becomes
-	// an independent VK call so the tunnel's streams span multiple calls and aggregate past VK's
-	// per-call bandwidth cap. The first link satisfies config validation; all are used for creds.
-	links := splitLinks(vkLink)
+	var specs []relaySpec
+	if err := json.Unmarshal([]byte(specsJson), &specs); err != nil {
+		return fmt.Errorf("freeturn specs: %w", err)
+	}
+	if len(specs) == 0 {
+		return errors.New("freeturn: no servers in specs")
+	}
 
-	// Flags MUST precede the positional URI: Go's flag package stops parsing flags at
-	// the first non-flag argument, so a leading URI would swallow -listen/-link/-debug
-	// (ParseClient then fails with "need -link"). Keep the freeturn:// URI last.
+	newCancels := make([]context.CancelFunc, 0, len(specs))
+	newDones := make([]chan struct{}, 0, len(specs))
+	newStreams := make([]*atomic.Int32, 0, len(specs))
+	for _, s := range specs {
+		cfg, links, err := buildClientConfig(s.URI, s.Listen, s.VKLink, s.Streams)
+		if err != nil {
+			// Roll back any relays already started so we don't leak half a session.
+			for _, c := range newCancels {
+				c()
+			}
+			return fmt.Errorf("freeturn config (%s): %w", s.Listen, err)
+		}
+		ctx, cancelFn := context.WithCancel(context.Background())
+		doneCh := make(chan struct{})
+		st := &atomic.Int32{}
+		newCancels = append(newCancels, cancelFn)
+		newDones = append(newDones, doneCh)
+		newStreams = append(newStreams, st)
+		go func(rctx context.Context, c *config.Client, lks []string, d chan struct{}, counter *atomic.Int32) {
+			defer close(d)
+			// A panic inside a relay goroutine (provider/DTLS/TURN paths, VK API surprises) would
+			// otherwise abort the WHOLE process and crash the Android app. Contain it here: log it,
+			// zero this relay's stream counter (so ActiveRelays drops it), and let the other relays
+			// keep serving — "even if one server dies, the connection still works".
+			defer func() {
+				if r := recover(); r != nil {
+					counter.Store(0)
+					log.Printf("[freeturn] relay panic recovered (listen=%s): %v", c.Proxy.Listen, r)
+				}
+			}()
+			if rerr := run(rctx, c, lks, counter); rerr != nil && !errors.Is(rerr, context.Canceled) {
+				log.Printf("[freeturn] relay stopped: %v", rerr)
+			}
+		}(ctx, cfg, links, doneCh, st)
+	}
+	cancels = newCancels
+	dones = newDones
+	relayStreams = newStreams
+	running.Store(true)
+	return nil
+}
+
+// buildClientConfig assembles a parsed client config + the VK call links for one relay, mirroring the
+// CLI argument order (flags BEFORE the positional URI — Go's flag package stops at the first non-flag).
+func buildClientConfig(uri, listenAddr, vkLink string, nStreams int) (*config.Client, []string, error) {
+	// vkLink may carry several VK call links (newline/whitespace/comma separated). Each becomes an
+	// independent VK call so the tunnel's streams span multiple calls and aggregate past VK's
+	// per-call cap. The first link satisfies config validation; all are used for creds.
+	links := splitLinks(vkLink)
 	args := []string{"-listen", listenAddr}
 	if len(links) > 0 {
 		args = append(args, "-link", links[0])
@@ -133,47 +242,45 @@ func Start(uri, listenAddr, vkLink string, nStreams int) error {
 
 	cfg, err := config.ParseClient(args, io.Discard)
 	if err != nil {
-		return fmt.Errorf("freeturn config: %w", err)
+		return nil, nil, fmt.Errorf("freeturn config: %w", err)
 	}
-
-	ctx, cancelFn := context.WithCancel(context.Background())
-	doneCh := make(chan struct{})
-	cancel = cancelFn
-	done = doneCh
-	running.Store(true)
-
-	streams.Store(0)
-	go func() {
-		defer close(doneCh)
-		defer running.Store(false)
-		defer streams.Store(0)
-		if rerr := run(ctx, cfg, links); rerr != nil && !errors.Is(rerr, context.Canceled) {
-			log.Printf("[freeturn] stopped: %v", rerr)
-		}
-	}()
-	return nil
+	return cfg, links, nil
 }
 
-// Stop cancels the running client and waits (bounded) for it to unwind.
+// Stop cancels all running relays and waits (bounded) for them to unwind.
 func Stop() {
+	defer func() { _ = recover() }()
+	// Route any logging emitted by unwinding relay goroutines to Discard (pure Go) BEFORE we cancel:
+	// once the app is tearing VK-TURN down, a late WriteLog into the now-detaching Android/JNI log
+	// bridge could crash the process. The next Start re-registers the writer via SetLogWriter.
+	log.SetOutput(io.Discard)
 	mu.Lock()
-	c, d := cancel, done
-	cancel, done = nil, nil
+	cs, ds := cancels, dones
+	cancels, dones, relayStreams = nil, nil, nil
 	mu.Unlock()
-	if c != nil {
-		c()
+	for _, c := range cs {
+		if c != nil {
+			c()
+		}
 	}
-	if d != nil {
+	for _, d := range ds {
+		if d == nil {
+			continue
+		}
 		select {
 		case <-d:
 		case <-time.After(5 * time.Second):
 		}
 	}
+	captchaActive.Store(false)
+	running.Store(false)
 }
 
 // run mirrors cmd/client/main.go's runtime path with a cancelable context. links holds all VK
 // call links (>=1); when more than one, credentials are fanned across them via multiProvider.
-func run(ctx context.Context, cfg *config.Client, links []string) error {
+// connected is this relay's own live-stream counter (one per freeturn server) so ActiveRelays can
+// report how many servers are up independently.
+func run(ctx context.Context, cfg *config.Client, links []string, connected *atomic.Int32) error {
 	logger := logx.New(cfg.Log.Debug)
 	logger.Infof("freeturn client starting (listen=%s)", cfg.Proxy.Listen)
 	dnsdial.SetLogger(logger)
@@ -189,7 +296,7 @@ func run(ctx context.Context, cfg *config.Client, links []string) error {
 		return fmt.Errorf("resolve peer addr: %w", err)
 	}
 
-	connectedStreams := &streams
+	connectedStreams := connected
 	prov, err := buildProvider(cfg, links, appDialer, connectedStreams, logger)
 	if err != nil {
 		return fmt.Errorf("provider init: %w", err)
@@ -256,7 +363,17 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 	switch cfg.Provider.Name {
 	case config.ProviderVK:
 		if len(links) == 0 {
-			links = []string{cfg.VK.Link}
+			links = cfg.VK.Links
+		}
+		// Prefer the app-registered captcha presenter (in-app WebView) over DefaultManualSolver,
+		// whose localhost-browser flow is unreachable on Android. ProxyManualSolver serializes
+		// concurrent solves internally, so sharing one solver across links/relays is safe.
+		solver := vk.DefaultManualSolver
+		if p := currentCaptchaPresenter(); p != nil {
+			solver = vk.ProxyManualSolver(
+				func(url string) { captchaActive.Store(true); p.Show(url) },
+				func() { captchaActive.Store(false); p.Hide() },
+			)
 		}
 		provs := make([]provider.Provider, 0, len(links))
 		for _, link := range links {
@@ -271,7 +388,7 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 				StreamsAlive:    connected.Load,
 				Log:             logger,
 				Debug:           cfg.Log.Debug,
-			}, vk.DefaultManualSolver)
+			}, solver)
 			if err != nil {
 				return nil, err
 			}

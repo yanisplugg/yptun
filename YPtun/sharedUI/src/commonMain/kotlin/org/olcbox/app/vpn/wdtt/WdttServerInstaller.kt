@@ -12,7 +12,11 @@ data class WdttInstallOptions(
     val host: String,
     val sshPort: Int = 22,
     val login: String = "root",
-    val sshPassword: String,
+    val sshPassword: String = "",
+    /** PEM/OpenSSH private key for SSH publickey auth; when set it is used instead of [sshPassword]. */
+    val sshKey: String = "",
+    /** Passphrase for an encrypted [sshKey]; empty for an unencrypted key. */
+    val sshKeyPassphrase: String = "",
     /** DTLS listener port the server binds (the client's wdtt-server port; default 56000). */
     val wdttPort: Int = 56000,
     val wdttPassword: String,

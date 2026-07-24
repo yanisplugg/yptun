@@ -41,14 +41,27 @@ object SubscriptionUserAgentHolder {
 data class AppBehaviorSettings(
     /** Auto-connect the selected configuration when the app is launched. */
     val autoConnectOnLaunch: Boolean = false,
+    /** Show the round "Авто = fastest server" satellite button next to the connect button on Home. */
+    val showAutoButton: Boolean = true,
     /** Ask for confirmation before deleting subscriptions / configs. */
     val confirmBeforeDelete: Boolean = true,
     /** Show live download/upload speed in the foreground notification. */
     val showSpeedInNotification: Boolean = false,
+    /**
+     * Show a compact live download/upload speed line under the SELECTED configuration on the Home
+     * list (same byte counters that feed the notification speed). Off by default.
+     */
+    val showSpeedOnHome: Boolean = false,
     /** Show "connected/total rooms" in the notification (olcRTC multi-room only). */
     val showRoomsInNotification: Boolean = false,
     /** Hidden "Experimental" section unlocked by tapping the connection timer 5×. */
     val experimentalUnlocked: Boolean = false,
+    /**
+     * Show the one-tap "Автоустановка на VPS" buttons (WDTT / DNSTT server deploy over SSH) in the
+     * location editor. OFF by default — pushing a binary to a remote server over SSH is an advanced,
+     * potentially destructive action, so it stays hidden until the user opts in here.
+     */
+    val allowVpsAutoInstall: Boolean = false,
     /** Yandex auth cookie header for Telemost (e.g. "Session_id=…; yandexuid=…"). */
     val telemostCookies: String = "",
     /** Whether the stored Telemost cookies are applied on connect. */
@@ -120,12 +133,37 @@ data class AppBehaviorSettings(
      */
     val showSubscriptionExpiry: Boolean = false,
     /**
+     * Post a local notification when a subscription is about to expire (within
+     * [SUBSCRIPTION_EXPIRY_NOTIFY_DAYS] days). Driven by the panel's expiry header
+     * (`subscription-userinfo` `expire=` / Remnawave `user.expiresAt`), like Happ. Off by default —
+     * needs the user's opt-in and the POST_NOTIFICATIONS permission.
+     */
+    val notifySubscriptionExpiry: Boolean = false,
+    /**
+     * Post a system notification when the panel broadcasts an announcement (Remnawave `announce`
+     * header). De-duplicated by content so the same announcement is shown only once. Off by default —
+     * needs the user's opt-in and the POST_NOTIFICATIONS permission, like [notifySubscriptionExpiry].
+     */
+    val notifyPanelAnnouncements: Boolean = false,
+    /**
      * Show a "live/total" badge in each subscription header — how many of its servers responded to
      * the last ping pass out of the total. Off by default.
      */
     val showSubscriptionAliveCount: Boolean = false,
+    /**
+     * Hide the protocol + server IP (the "endpoint" line) on a location row WHEN that location has a
+     * description — so a subscription's human description is shown instead of the technical endpoint.
+     * Rows without a description always show the endpoint. On by default.
+     */
+    val hideEndpointWhenDescription: Boolean = true,
     /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
     val customGroups: List<CustomGroup> = emptyList(),
+    /**
+     * Render the configuration list on the Home screen as a 2-column grid of compact cards instead of
+     * the default single-column rows. Group/folder headers stay full-width; only the server/location
+     * cards pair up. Off by default.
+     */
+    val twoColumnLayout: Boolean = false,
     /**
      * Which User-Agent the app sends for the MAIN subscription fetch (names / title / links). Panels do
      * UA content-negotiation: [SUB_UA_YPTUN] (the app's own UA) usually yields clean base64 links with
@@ -143,6 +181,28 @@ data class AppBehaviorSettings(
      * (default) keeps the original behaviour: sing-box unless the transport forces Xray.
      */
     val globalProxyCore: ProxyCore = ProxyCore.Auto,
+    /**
+     * Energy-saver mode: trims the always-on background work the VPN does while connected to cut
+     * battery use — the in-app logcat journal capture is skipped, and the health watchdog polls far
+     * less often ([ENERGY_SAVER_WATCHDOG_INTERVAL_MS] instead of the default). The trade-off is slower
+     * automatic recovery after a network drop and an empty diagnostics journal; live calls / throughput
+     * are unaffected. Off by default. Applied on the next connect.
+     */
+    val energySaver: Boolean = false,
+    /**
+     * Telegram-over-WARP background proxy: when on, a lightweight foreground service raises an
+     * AmneziaWG (Cloudflare WARP) tunnel and exposes a local SOCKS5 the user points Telegram at. Runs
+     * independently of the main VPN. First enable requires internet (to generate + cache the WARP
+     * config); afterwards the same config is reused. Off by default.
+     */
+    val telegramProxyEnabled: Boolean = false,
+    /**
+     * Deprecated/vestigial. Previously hid the Telegram-proxy foreground-service notification; the toggle
+     * was removed and the proxy always uses the normal low-priority notification. Kept only so older saved
+     * settings still decode (default Json has no ignoreUnknownKeys — dropping the field would reset the
+     * whole AppBehaviorSettings to defaults on first load). Do not re-introduce a UI for it.
+     */
+    val hideTelegramProxyNotification: Boolean = false,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"
@@ -180,10 +240,22 @@ data class AppBehaviorSettings(
         /** The previous default; auto-migrated to [DEFAULT_PING_URL] so existing users get the fix. */
         const val LEGACY_PING_URL = "https://google.com"
 
+        /** How many days before expiry the subscription-expiry notification starts firing. */
+        const val SUBSCRIPTION_EXPIRY_NOTIFY_DAYS = 3
+
         /** Parallel ping streams: how many locations are probed at once. */
         const val DEFAULT_PING_PARALLELISM = 5
         const val MIN_PING_PARALLELISM = 1
-        const val MAX_PING_PARALLELISM = 20
+        // 30 (was 20): this one slider now also drives the Auto-connect probe pass, whose old
+        // hardcoded parallelism was 16 — give big subscription lists headroom to ping faster.
+        const val MAX_PING_PARALLELISM = 30
+
+        /**
+         * Health-watchdog poll interval used while [energySaver] is on (vs. the default 15s). Network
+         * switches are handled by the event-driven NetworkCallback, so this only delays detection of a
+         * silently-dead core / stalled traffic — a 60s backstop is a good power/recovery trade-off.
+         */
+        const val ENERGY_SAVER_WATCHDOG_INTERVAL_MS = 60_000L
     }
 
     /**

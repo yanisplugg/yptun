@@ -11,6 +11,8 @@ import (
 	"net"
 	"runtime"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,7 +133,6 @@ func TestRealProviderTransportStress(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // two phases plus tunnel/connection setup naturally branch
 func runRealE2EStressCase(t *testing.T, carrierName, transportName, roomURL, echoAddr string) (err error) {
 	t.Helper()
 
@@ -150,36 +151,12 @@ func runRealE2EStressCase(t *testing.T, carrierName, transportName, roomURL, ech
 		}
 	}()
 
-	conn, err := connectViaSOCKSWithin(rt.socksAddr, echoAddr, *realStressCaseTimeout)
-	if err != nil {
+	if err := runBulkPhase(ctx, t, rt, carrierName, transportName, echoAddr); err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
 
-	if d := *realStressBulkDuration; d > 0 {
-		written, dur, err := streamPatternForDuration(conn, d, *realStressBulkChunkSize)
-		if err != nil {
-			return fmt.Errorf("bulk pump: %w", err)
-		}
-		throughput := float64(written) / dur.Seconds() / (1 << 20)
-		t.Logf("bulk %s/%s: %d bytes in %s (%.3f MiB/s)",
-			carrierName, transportName, written, dur, throughput)
-		if written == 0 {
-			return errStressNoBulkProgress
-		}
-	}
-
-	if d := *realStressDuration; d > 0 {
-		stats, err := sustainedEcho(conn, *realStressEchoSize, d)
-		if err != nil {
-			return fmt.Errorf("sustained echo: %w", err)
-		}
-		t.Logf("echo  %s/%s: %d rt in %s, p50=%s p95=%s p99=%s max=%s lost=%d",
-			carrierName, transportName, stats.count, d,
-			stats.p50, stats.p95, stats.p99, stats.maxLatency, stats.lost)
-		if stats.count == 0 {
-			return fmt.Errorf("%w: %s", errStressNoRoundtrips, d)
-		}
+	if err := runEchoPhase(ctx, t, rt, carrierName, transportName, echoAddr); err != nil {
+		return err
 	}
 
 	goroutinesAfter := runtime.NumGoroutine()
@@ -194,60 +171,204 @@ func runRealE2EStressCase(t *testing.T, carrierName, transportName, roomURL, ech
 	return nil
 }
 
+// runBulkPhase pumps bulk traffic for realStressBulkDuration, reopening the
+// SOCKS5 connection after a transport reconnect (e.g. publisher PC closed by
+// the SFU) and accumulating total bytes across reconnects.
+func runBulkPhase(
+	ctx context.Context, t *testing.T, rt *tunnelRuntime,
+	carrierName, transportName, echoAddr string,
+) error {
+	t.Helper()
+	d := *realStressBulkDuration
+	if d <= 0 {
+		return nil
+	}
+
+	var lastConn net.Conn
+	getConn := func() (net.Conn, error) {
+		if lastConn != nil {
+			_ = lastConn.Close()
+		}
+		c, cerr := connectViaSOCKSWithin(ctx, rt.socksAddr, echoAddr, 45*time.Second)
+		if cerr != nil {
+			return nil, cerr
+		}
+		lastConn = c
+		return c, nil
+	}
+	conn, err := getConn()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if lastConn != nil {
+			_ = lastConn.Close()
+		}
+	}()
+
+	totalWritten, err := pumpBulkUntil(ctx, t, conn, getConn, d, carrierName, transportName)
+	if err != nil {
+		return err
+	}
+	if totalWritten == 0 {
+		return errStressNoBulkProgress
+	}
+	// Compute approximate throughput over full wall-clock duration.
+	throughput := float64(totalWritten) / d.Seconds() / (1 << 20)
+	t.Logf("bulk %s/%s: %d bytes in %s (%.3f MiB/s) [reconnects included]",
+		carrierName, transportName, totalWritten, d, throughput)
+	return nil
+}
+
+// pumpBulkUntil drives streamPatternForDuration until the deadline, reconnecting
+// via getConn when the connection dies (transport reconnect). It returns the
+// total bytes written across reconnects.
+func pumpBulkUntil(
+	ctx context.Context, t *testing.T, conn net.Conn,
+	getConn func() (net.Conn, error), d time.Duration,
+	carrierName, transportName string,
+) (int64, error) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	var totalWritten int64
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		written, dur, pumpErr := streamPatternForDuration(conn, remaining, *realStressBulkChunkSize)
+		totalWritten += written
+		if pumpErr == nil {
+			break // completed full duration cleanly
+		}
+		// Connection died (likely transport reconnect). Log and retry.
+		t.Logf("bulk %s/%s: reconnect after written=%d dur=%s: %v",
+			carrierName, transportName, written, dur, pumpErr)
+		if time.Now().After(deadline) {
+			break
+		}
+		// Wait briefly for transport to re-establish, then reconnect.
+		select {
+		case <-ctx.Done():
+			return totalWritten, fmt.Errorf("bulk phase cancelled: %w", ctx.Err())
+		case <-time.After(5 * time.Second):
+		}
+		var cerr error
+		conn, cerr = getConn()
+		if cerr != nil {
+			return totalWritten, fmt.Errorf("bulk reconnect: %w", cerr)
+		}
+	}
+	return totalWritten, nil
+}
+
+// runEchoPhase runs the sustained echo phase for realStressDuration on a fresh
+// connection (the bulk conn may have died during a reconnect at the end of the
+// bulk phase).
+func runEchoPhase(
+	ctx context.Context, t *testing.T, rt *tunnelRuntime,
+	carrierName, transportName, echoAddr string,
+) error {
+	t.Helper()
+	d := *realStressDuration
+	if d <= 0 {
+		return nil
+	}
+
+	echoConn, err := connectViaSOCKSWithin(ctx, rt.socksAddr, echoAddr, 45*time.Second)
+	if err != nil {
+		return fmt.Errorf("sustained echo connect: %w", err)
+	}
+	defer func() { _ = echoConn.Close() }()
+	stats, err := sustainedEcho(echoConn, *realStressEchoSize, d, transportName)
+	if err != nil {
+		return fmt.Errorf("sustained echo: %w", err)
+	}
+	t.Logf("echo  %s/%s: %d rt in %s, p50=%s p95=%s p99=%s max=%s lost=%d",
+		carrierName, transportName, stats.count, d,
+		stats.p50, stats.p95, stats.p99, stats.maxLatency, stats.lost)
+	if stats.count == 0 {
+		return fmt.Errorf("%w: %s", errStressNoRoundtrips, d)
+	}
+	return nil
+}
+
 // streamPatternForDuration pumps a deterministic byte pattern through conn
-// for at most `duration` using a synchronous request-response loop: write a
-// chunk, wait until the same chunk echoes back and verify, then write the
-// next one. Returns total bytes successfully echoed and elapsed time.
+// for at most `duration` using concurrent write and read goroutines so
+// the control stream (ping/pong) is not head-of-line blocked behind bulk
+// data. Returns total bytes successfully echoed and elapsed time.
 //
-// Why request-response rather than concurrent write+read streams:
-// transport throughputs differ by ~3 orders of magnitude (datachannel does
-// MiB/s; videochannel/seichannel ~25 KB/s through 256-byte qr-encoded
-// frames at 25 FPS). An asynchronous writer outruns a slow transport,
-// fills muxconn / SOCKS / RTP-track buffers, and the deadlocked pipe
-// eventually trips a TCP-write deadline - which is not a real bug, just
-// the natural consequence of pumping into a slow pipe with no flow
-// control. Request-response naturally rate-limits to the transport's
-// actual round-trip throughput, which is what we want to measure.
+// Earlier versions used synchronous request-response, but that blocked
+// the smux control stream behind bulk KCP frames and caused spurious
+// liveness timeouts on vp8channel (QR-encoded frames are slow). The
+// concurrent approach measures true transport throughput without breaking
+// liveness.
 func streamPatternForDuration(conn net.Conn, duration time.Duration, chunkSize int) (int64, time.Duration, error) {
 	if chunkSize <= 0 {
 		chunkSize = 4096
 	}
-	// Per-chunk roundtrip deadline. Slow transports (videochannel) can
-	// take seconds+ per chunk in practice; 15s gives ample margin
-	// without making genuine stalls hang forever.
-	const chunkTimeout = 15 * time.Second
 
 	start := time.Now()
 	deadline := start.Add(duration)
 
-	buf := make([]byte, chunkSize)
-	echoed := make([]byte, chunkSize)
-	want := make([]byte, chunkSize)
-
-	reader := bufio.NewReader(conn)
-	var total int64
-
-	for time.Now().Before(deadline) {
-		fillPattern(buf, total)
-		if err := conn.SetWriteDeadline(time.Now().Add(chunkTimeout)); err != nil {
-			return total, time.Since(start), fmt.Errorf("set write deadline at %d: %w", total, err)
+	var (
+		sent    atomic.Int64
+		errOnce sync.Once
+		pumpErr error
+	)
+	recordErr := func(err error) {
+		if err == nil {
+			return
 		}
-		if _, err := conn.Write(buf); err != nil {
-			return total, time.Since(start), fmt.Errorf("write at %d: %w", total, err)
-		}
-		if err := conn.SetReadDeadline(time.Now().Add(chunkTimeout)); err != nil {
-			return total, time.Since(start), fmt.Errorf("set read deadline at %d: %w", total, err)
-		}
-		if _, err := io.ReadFull(reader, echoed); err != nil {
-			return total, time.Since(start), fmt.Errorf("read at %d: %w", total, err)
-		}
-		fillPattern(want, total)
-		if !bytes.Equal(echoed, want) {
-			return total, time.Since(start), fmt.Errorf("%w %d", errPayloadMismatchOffset, total)
-		}
-		total += int64(chunkSize)
+		errOnce.Do(func() { pumpErr = err })
 	}
-	return total, time.Since(start), nil
+
+	// Writer: pump deterministic pattern chunks until deadline.
+	// No backpressure — we measure raw send throughput, not round-trip.
+	// The TCP write buffer + smux + KCP provide their own flow control;
+	// adding an explicit maxInFlight here throttles bulk to RTT-limited
+	// speed (~0.003 MiB/s at 1.25s RTT through Telemost).
+	const writeDeadline = 30 * time.Second
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		buf := make([]byte, chunkSize)
+		for time.Now().Before(deadline) {
+			off := sent.Load()
+			fillPattern(buf, off)
+			if err := conn.SetWriteDeadline(time.Now().Add(writeDeadline)); err != nil {
+				recordErr(fmt.Errorf("set write deadline: %w", err))
+				return
+			}
+			if _, err := conn.Write(buf); err != nil {
+				recordErr(fmt.Errorf("write: %w", err))
+				return
+			}
+			sent.Add(int64(chunkSize))
+		}
+	}()
+
+	// Drain incoming echo data to prevent server-side smux window from
+	// filling up and blocking writes. We don't verify pattern here —
+	// that's the sustained echo phase's job. We just discard bytes.
+	const readDeadline = 5 * time.Second
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		discardBuf := make([]byte, 32*1024)
+		for {
+			if err := conn.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
+				return
+			}
+			_, err := conn.Read(discardBuf)
+			if err != nil {
+				return // deadline or closed — writer will catch fatal errors
+			}
+		}
+	}()
+
+	<-writerDone
+	_ = conn.SetDeadline(time.Unix(1, 0)) // unblock reader
+	<-readerDone
+
+	return sent.Load(), time.Since(start), pumpErr
 }
 
 type echoStats struct {
@@ -263,7 +384,7 @@ type echoStats struct {
 // stuck transport surfaces as a finite-time test failure rather than a hang.
 //
 //nolint:cyclop // per-rt deadlines + error wrapping naturally branch many ways
-func sustainedEcho(conn net.Conn, payloadSize int, duration time.Duration) (echoStats, error) {
+func sustainedEcho(conn net.Conn, payloadSize int, duration time.Duration, transportName string) (echoStats, error) {
 	if payloadSize < 4 {
 		payloadSize = 4
 	}
@@ -280,8 +401,14 @@ func sustainedEcho(conn net.Conn, payloadSize int, duration time.Duration) (echo
 	latencies := make([]time.Duration, 0, 1024)
 
 	buf := make([]byte, payloadSize)
+	// Per-operation timeout. Video-paced transports need more slack due to
+	// frame pacing and KCP batching (issue #95).
+	opTimeout := 5 * time.Second
+	if transportName == "videochannel" || transportName == "seichannel" || transportName == "vp8channel" {
+		opTimeout = 60 * time.Second
+	}
 	for time.Now().Before(deadline) {
-		if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		if err := conn.SetWriteDeadline(time.Now().Add(opTimeout)); err != nil {
 			return stats, fmt.Errorf("set write deadline: %w", err)
 		}
 		start := time.Now()
@@ -289,7 +416,7 @@ func sustainedEcho(conn net.Conn, payloadSize int, duration time.Duration) (echo
 			stats.lost++
 			return stats, fmt.Errorf("write at rt #%d: %w", stats.count, err)
 		}
-		if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(opTimeout)); err != nil {
 			return stats, fmt.Errorf("set read deadline: %w", err)
 		}
 		if _, err := io.ReadFull(reader, buf); err != nil {

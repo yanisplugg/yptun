@@ -7,16 +7,21 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.dropWhile
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ui.features.locations.LocationItem
+import org.olcbox.app.vpn.ExpiringSubscriptionInfo
+import org.olcbox.app.vpn.PanelAnnouncementInfo
 import org.olcbox.app.vpn.VpnManager
 import org.olcbox.app.vpn.VpnStatus
 
@@ -166,6 +171,62 @@ class HomeScreenViewModel(
             } catch (e: Exception) {
                 _state.update { it.copy(isVpnLoading = false) }
             }
+        }
+    }
+
+    /**
+     * "Auto = fastest": connects to the first location in [orderedStorageIds] (already sorted
+     * fastest-first by the caller) that comes up, advancing to the next on failure/timeout. Pure
+     * app-level orchestration over the public [VpnManager] API ([startVpn]/[stopVpn]/[status]) — it
+     * never touches the running service's watchdog/recovery, so it can't destabilise a live tunnel.
+     * [onResult] gets the connected location's display name, or null if none of the candidates came up.
+     */
+    fun autoConnectInOrder(
+        orderedStorageIds: List<String>,
+        onResult: (connectedName: String?) -> Unit = {}
+    ) {
+        if (orderedStorageIds.isEmpty()) {
+            onResult(null)
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(isVpnLoading = true) }
+            // Start from a clean state so each attempt's status transition is unambiguous.
+            val s0 = vpnManager.status.value
+            if (s0 is VpnStatus.Connected || s0 is VpnStatus.Connecting || s0 is VpnStatus.Reconnecting) {
+                vpnManager.stopVpn()
+                withTimeoutOrNull(STOP_SETTLE_TIMEOUT_MS) {
+                    vpnManager.status.first { it is VpnStatus.Disconnected || it is VpnStatus.Error }
+                }
+            }
+
+            var connectedName: String? = null
+            for (id in orderedStorageIds.take(AUTO_CONNECT_MAX_ATTEMPTS)) {
+                val config = locationsRepository.loadLocation(id) ?: continue
+                if (!config.isComplete()) continue
+                locationsRepository.setActiveLocationId(id)
+                loadCurrentConfigNow()
+                vpnManager.startVpn()
+                // Wait for THIS attempt's terminal status: drop the stale pre-connect states, then take
+                // the first Connected (success) or a fresh Error (failure). Timeout = treat as failure.
+                val outcome = withTimeoutOrNull(AUTO_CONNECT_ATTEMPT_TIMEOUT_MS) {
+                    vpnManager.status
+                        .dropWhile { it is VpnStatus.Disconnected || it is VpnStatus.Error || it is VpnStatus.Stopping }
+                        .first { it is VpnStatus.Connected || it is VpnStatus.Error }
+                }
+                if (outcome is VpnStatus.Connected) {
+                    connectedName = config.displayName()
+                    break
+                }
+                // Failed/timeout → tear down before trying the next candidate.
+                vpnManager.stopVpn()
+                withTimeoutOrNull(STOP_SETTLE_TIMEOUT_MS) {
+                    vpnManager.status.first { it is VpnStatus.Disconnected || it is VpnStatus.Error }
+                }
+            }
+
+            if (connectedName == null) _state.update { it.copy(isVpnLoading = false) }
+            onResult(connectedName)
         }
     }
 
@@ -436,11 +497,72 @@ class HomeScreenViewModel(
             // Once per launch: retry overdue subscriptions even if they failed last time (keyed off the
             // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.
             refreshDueSubscriptionsIfNeeded(retryFailed = true)
+            notifyExpiringSubscriptions()
+            notifyPanelAnnouncements()
+            reportProviderUsage()
             while (true) {
                 delay(SUBSCRIPTION_AUTO_REFRESH_POLL_MS)
                 refreshDueSubscriptionsIfNeeded()
+                notifyExpiringSubscriptions()
+                notifyPanelAnnouncements()
+                reportProviderUsage()
             }
         }
+    }
+
+    /** Daily Happ-style provider-usage report for subscriptions carrying a `providerid` (best-effort). */
+    private suspend fun reportProviderUsage() {
+        runCatching {
+            withContext(Dispatchers.IO) { locationsRepository.reportProviderUsage() }
+        }
+    }
+
+    /**
+     * Hand every subscription's expiry to the platform so it can warn the user before it runs out
+     * (Happ-style, driven by the panel's expiry header). The platform applies the user's toggle, the
+     * day threshold and de-duplication — here we only collect one (name → expiry) per subscription.
+     */
+    private suspend fun notifyExpiringSubscriptions() {
+        val subs = runCatching {
+            withContext(Dispatchers.IO) {
+                locationsRepository.getBundle().locations
+                    .filter { !it.subscriptionUrl.isNullOrBlank() }
+                    .groupBy { it.subscriptionUrl!!.trim() }
+                    .mapNotNull { (url, entries) ->
+                        val meta = entries.firstNotNullOfOrNull { it.metadata?.subscription }
+                        val expiresAt = meta?.expiresAtEpochMs ?: return@mapNotNull null
+                        val name = meta.name?.takeIf { it.isNotBlank() }
+                            ?: entries.firstOrNull { it.name.isNotBlank() }?.name
+                            ?: url
+                        ExpiringSubscriptionInfo(name = name, expiresAtEpochMs = expiresAt)
+                    }
+            }
+        }.getOrDefault(emptyList())
+        if (subs.isNotEmpty()) vpnManager.notifyExpiringSubscriptions(subs)
+    }
+
+    /**
+     * Hand every subscription's panel announcement (Remnawave `announce` header) to the platform so it
+     * can push it to the user. The platform applies the user's toggle and de-duplicates by content —
+     * here we only collect one (name → announce) per subscription.
+     */
+    private suspend fun notifyPanelAnnouncements() {
+        val announcements = runCatching {
+            withContext(Dispatchers.IO) {
+                locationsRepository.getBundle().locations
+                    .filter { !it.subscriptionUrl.isNullOrBlank() }
+                    .groupBy { it.subscriptionUrl!!.trim() }
+                    .mapNotNull { (url, entries) ->
+                        val meta = entries.firstNotNullOfOrNull { it.metadata?.subscription }
+                        val announce = meta?.announce?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        val name = meta.name?.takeIf { it.isNotBlank() }
+                            ?: entries.firstOrNull { it.name.isNotBlank() }?.name
+                            ?: url
+                        PanelAnnouncementInfo(name = name, announce = announce)
+                    }
+            }
+        }.getOrDefault(emptyList())
+        if (announcements.isNotEmpty()) vpnManager.notifyPanelAnnouncements(announcements)
     }
 
     /**
@@ -526,3 +648,8 @@ data class VkTurnLinkPrompt(
 )
 
 private const val SUBSCRIPTION_AUTO_REFRESH_POLL_MS = 60L * 60L * 1_000L
+
+/** Auto-connect: how many candidates to try before giving up, and the per-attempt connect budget. */
+private const val AUTO_CONNECT_MAX_ATTEMPTS = 6
+private const val AUTO_CONNECT_ATTEMPT_TIMEOUT_MS = 15_000L
+private const val STOP_SETTLE_TIMEOUT_MS = 6_000L

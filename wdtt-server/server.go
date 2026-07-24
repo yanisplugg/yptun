@@ -1810,7 +1810,9 @@ func obfsIsRTPPacket(wire []byte) bool {
 		return false
 	}
 	pt := wire[1] & 0x7F
-	return pt == 111
+	// Accept both the audio (OPUS, 111) and video (96) payload types: the v1.2.4 client sends pt=96
+	// in "video" obfs mode. Mirrors the client's obfsIsRTPPacket so both obfs modes interoperate.
+	return pt == 111 || pt == 96
 }
 
 func listenWrapped(addr *net.UDPAddr, keys *wrapKeyStore) (dtlsnet.PacketListener, error) {

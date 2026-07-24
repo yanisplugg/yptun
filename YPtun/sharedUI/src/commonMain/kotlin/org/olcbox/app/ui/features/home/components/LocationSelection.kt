@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,10 +26,12 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.SyncDisabled
@@ -54,6 +57,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -81,6 +85,8 @@ fun LazyListScope.locationSelectorContent(
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
     hasLoaded: Boolean = true,
+    // Render server/location cards in a 2-column grid (headers stay full-width). App-settings toggle.
+    twoColumns: Boolean = false,
     locations: List<LocationItem>,
     selectedLocationId: String?,
     pingsState: PingsState,
@@ -89,6 +95,8 @@ fun LazyListScope.locationSelectorContent(
     onDeleteSubscription: (List<String>) -> Unit = {},
     // Toggle a single subscription's automatic refresh (keyed by its URL).
     onSetSubscriptionAutoUpdate: (subscriptionUrl: String, enabled: Boolean) -> Unit = { _, _ -> },
+    // Re-download a single subscription now (keyed by its URL), triggered from its overflow menu.
+    onRefreshSubscription: (subscriptionUrl: String) -> Unit = {},
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -124,6 +132,17 @@ fun LazyListScope.locationSelectorContent(
                     onAddSubscriptionClick = onAddSubscriptionClick,
                     onAddLocationClick = onAddLocationClick
                 )
+            }
+        } else {
+            // Initial async decode of the saved configs can take a moment when there are many of
+            // them; show a spinner so the list area doesn't sit blank (looking frozen) until it loads.
+            item(key = "locations-loading") {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
             }
         }
         return
@@ -230,6 +249,9 @@ fun LazyListScope.locationSelectorContent(
                         // Overflow menu: pin, sort-by-ping, auto-update, delete.
                         val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
                         val groupSubUrl = group.firstOrNull()?.subscriptionUrl
+                        val groupWebPageUrl = group.firstNotNullOfOrNull {
+                            it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                        }
                         SubscriptionGroupMenu(
                             isPinned = isPinned,
                             isPingSorted = isPingSorted,
@@ -240,8 +262,10 @@ fun LazyListScope.locationSelectorContent(
                             onToggleAutoUpdate = {
                                 groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
                             },
+                            onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
-                            onDelete = { onDeleteSubscription(groupIds) }
+                            onDelete = { onDeleteSubscription(groupIds) },
+                            subscriptionPageUrl = groupWebPageUrl
                         )
                     }
 
@@ -260,10 +284,7 @@ fun LazyListScope.locationSelectorContent(
                 group
             }
 
-            items(
-                items = orderedGroup,
-                key = { "row-${it.storageId}" }
-            ) { location ->
+            locationCards(orderedGroup, twoColumns, keyPrefix = "row") { location, cellModifier ->
                 LocationSelectorRow(
                     location = location,
                     selectedLocationId = selectedLocationId,
@@ -273,7 +294,9 @@ fun LazyListScope.locationSelectorContent(
                     selectionMode = selectionMode,
                     isChecked = location.storageId in selectedIds,
                     onToggleSelect = onToggleSelect,
-                    onStartSelection = onStartSelection
+                    onStartSelection = onStartSelection,
+                    twoColumns = twoColumns,
+                    modifier = cellModifier
                 )
             }
         }
@@ -375,6 +398,9 @@ fun LazyListScope.locationSelectorContent(
                                             )
                                             val mAutoUpdate = mGroup.none { it.metadata?.subscription?.autoUpdateEnabled == false }
                                             val mSubUrl = mGroup.firstOrNull()?.subscriptionUrl
+                                            val mWebPageUrl = mGroup.firstNotNullOfOrNull {
+                                                it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                                            }
                                             SubscriptionGroupMenu(
                                                 isPinned = mPinned,
                                                 isPingSorted = mPingSorted,
@@ -385,8 +411,10 @@ fun LazyListScope.locationSelectorContent(
                                                 onToggleAutoUpdate = {
                                                     mSubUrl?.let { onSetSubscriptionAutoUpdate(it, !mAutoUpdate) }
                                                 },
+                                                onRefreshSubscription = mSubUrl?.let { url -> { onRefreshSubscription(url) } },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
-                                                onDelete = { onDeleteSubscription(mIds) }
+                                                onDelete = { onDeleteSubscription(mIds) },
+                                                subscriptionPageUrl = mWebPageUrl
                                             )
                                         }
                                         if (!mCollapsed) {
@@ -397,7 +425,7 @@ fun LazyListScope.locationSelectorContent(
                                             } else {
                                                 mGroup
                                             }
-                                            ordered.forEach { location ->
+                                            LocationCardsColumn(ordered, twoColumns) { location, cellModifier ->
                                                 LocationSelectorRow(
                                                     location = location,
                                                     selectedLocationId = selectedLocationId,
@@ -407,7 +435,9 @@ fun LazyListScope.locationSelectorContent(
                                                     selectionMode = selectionMode,
                                                     isChecked = location.storageId in selectedIds,
                                                     onToggleSelect = onToggleSelect,
-                                                    onStartSelection = onStartSelection
+                                                    onStartSelection = onStartSelection,
+                                                    twoColumns = twoColumns,
+                                                    modifier = cellModifier
                                                 )
                                             }
                                         }
@@ -415,8 +445,15 @@ fun LazyListScope.locationSelectorContent(
                                 }
                             }
 
-                            // Member custom locations: rows directly on the folder fill.
-                            memberCustom.forEach { location ->
+                            // Member custom locations: rows directly on the folder fill. Pinned ones
+                            // float to the top of the folder (in pin order) — same rule as the
+                            // top-level "own locations" section. Without this the in-folder pin toggle
+                            // flipped the icon but never reordered the item ("закрепление внутри группы").
+                            val orderedMemberCustom = memberCustom.sortedBy { loc ->
+                                val pinIndex = pinnedCustomLocations.indexOf(loc.storageId)
+                                if (pinIndex >= 0) pinIndex else Int.MAX_VALUE
+                            }
+                            LocationCardsColumn(orderedMemberCustom, twoColumns) { location, cellModifier ->
                                 LocationSelectorRow(
                                     location = location,
                                     selectedLocationId = selectedLocationId,
@@ -428,7 +465,9 @@ fun LazyListScope.locationSelectorContent(
                                     selectionMode = selectionMode,
                                     isChecked = location.storageId in selectedIds,
                                     onToggleSelect = onToggleSelect,
-                                    onStartSelection = onStartSelection
+                                    onStartSelection = onStartSelection,
+                                    twoColumns = twoColumns,
+                                    modifier = cellModifier
                                 )
                             }
 
@@ -493,10 +532,7 @@ fun LazyListScope.locationSelectorContent(
             }
         }
 
-        items(
-            items = orderedCustom,
-            key = { "custom-row-${it.storageId}" }
-        ) { location ->
+        locationCards(orderedCustom, twoColumns, keyPrefix = "custom-row") { location, cellModifier ->
             LocationSelectorRow(
                 location = location,
                 selectedLocationId = selectedLocationId,
@@ -508,7 +544,9 @@ fun LazyListScope.locationSelectorContent(
                 selectionMode = selectionMode,
                 isChecked = location.storageId in selectedIds,
                 onToggleSelect = onToggleSelect,
-                onStartSelection = onStartSelection
+                onStartSelection = onStartSelection,
+                twoColumns = twoColumns,
+                modifier = cellModifier
             )
         }
     }
@@ -751,11 +789,15 @@ private fun SubscriptionGroupMenu(
     onTogglePin: () -> Unit,
     onTogglePingSort: () -> Unit,
     onToggleAutoUpdate: () -> Unit,
+    // Non-null only when this group is backed by a subscription URL we can re-download.
+    onRefreshSubscription: (() -> Unit)? = null,
     onMoveToFolder: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    subscriptionPageUrl: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -770,6 +812,28 @@ private fun SubscriptionGroupMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            // Remnawave `profile-web-page-url` — the panel's subscription/management page.
+            if (!subscriptionPageUrl.isNullOrBlank()) {
+                DropdownMenuItem(
+                    text = { Text(s.visitSubscriptionPage) },
+                    leadingIcon = { Icon(Icons.Outlined.OpenInNew, contentDescription = null) },
+                    onClick = {
+                        runCatching { uriHandler.openUri(subscriptionPageUrl) }
+                        expanded = false
+                    }
+                )
+            }
+            // Re-download just this subscription now (distinct from the ping RefreshButton next to it).
+            if (onRefreshSubscription != null) {
+                DropdownMenuItem(
+                    text = { Text(s.refreshThisSubscription) },
+                    leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
+                    onClick = {
+                        onRefreshSubscription()
+                        expanded = false
+                    }
+                )
+            }
             DropdownMenuItem(
                 text = { Text(if (isPinned) s.groupUnpinFromTop else s.groupPinToTop) },
                 leadingIcon = {
@@ -1157,6 +1221,80 @@ private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
     }
 }
 
+/**
+ * Lays out a list of location cards into the hosting [LazyListScope]: one lazy item per card in
+ * single-column mode, or one lazy item per PAIR (a Row of two half-width cells) in [twoColumns] mode.
+ * [keyPrefix] keeps the Compose item keys stable/unique across sections.
+ */
+private fun LazyListScope.locationCards(
+    items: List<LocationItem>,
+    twoColumns: Boolean,
+    keyPrefix: String,
+    cell: @Composable (LocationItem, Modifier) -> Unit
+) {
+    if (twoColumns) {
+        val pairs = items.chunked(2)
+        items(
+            items = pairs,
+            key = { pair -> "$keyPrefix-pair-${pair.first().storageId}" }
+        ) { pair ->
+            // height(IntrinsicSize.Max) + fillMaxHeight on the cells makes both tiles in the pair grow
+            // to the taller one's height, so paired tiles are always the same size ("плитки одинакового
+            // размера"). The lone-odd cell keeps its natural height (its Spacer partner has no content).
+            Row(
+                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    cell(pair[0], Modifier.fillMaxWidth().fillMaxHeight())
+                }
+                if (pair.size > 1) {
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        cell(pair[1], Modifier.fillMaxWidth().fillMaxHeight())
+                    }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    } else {
+        items(
+            items = items,
+            key = { "$keyPrefix-${it.storageId}" }
+        ) { location -> cell(location, Modifier.fillMaxWidth()) }
+    }
+}
+
+/** Non-lazy [locationCards] for cards that live inside a folder's [Column] (already a single item). */
+@Composable
+private fun LocationCardsColumn(
+    items: List<LocationItem>,
+    twoColumns: Boolean,
+    cell: @Composable (LocationItem, Modifier) -> Unit
+) {
+    if (twoColumns) {
+        items.chunked(2).forEach { pair ->
+            Row(
+                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    cell(pair[0], Modifier.fillMaxWidth().fillMaxHeight())
+                }
+                if (pair.size > 1) {
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        cell(pair[1], Modifier.fillMaxWidth().fillMaxHeight())
+                    }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    } else {
+        items.forEach { location -> cell(location, Modifier.fillMaxWidth()) }
+    }
+}
+
 @Composable
 private fun LocationSelectorRow(
     location: LocationItem,
@@ -1169,7 +1307,9 @@ private fun LocationSelectorRow(
     selectionMode: Boolean = false,
     isChecked: Boolean = false,
     onToggleSelect: (String) -> Unit = {},
-    onStartSelection: (String) -> Unit = {}
+    onStartSelection: (String) -> Unit = {},
+    twoColumns: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
     val pingMs = pingsState.pingFor(location.storageId)
     val isLoading = pingsState.isChecking(location.storageId)
@@ -1193,20 +1333,38 @@ private fun LocationSelectorRow(
         { if (selectionMode) latestToggle(location.storageId) else latestStart(location.storageId) }
     }
 
-    LocationRow(
-        location = location,
-        isSelected = selectedLocationId == location.storageId,
-        isLoading = isLoading,
-        isError = isOffline,
-        pingMs = pingMs,
-        selectionMode = selectionMode,
-        isChecked = isChecked,
-        onSettingsClick = onSettings,
-        onLongClick = onLongPress,
-        onClick = onClick,
-        isPinned = isPinned,
-        onTogglePinned = onTogglePinned
-    )
+    if (twoColumns) {
+        org.olcbox.app.ui.features.locations.components.LocationGridCell(
+            location = location,
+            isSelected = selectedLocationId == location.storageId,
+            isLoading = isLoading,
+            isError = isOffline,
+            pingMs = pingMs,
+            selectionMode = selectionMode,
+            isChecked = isChecked,
+            onSettingsClick = onSettings,
+            onLongClick = onLongPress,
+            onClick = onClick,
+            isPinned = isPinned,
+            onTogglePinned = onTogglePinned,
+            modifier = modifier
+        )
+    } else {
+        LocationRow(
+            location = location,
+            isSelected = selectedLocationId == location.storageId,
+            isLoading = isLoading,
+            isError = isOffline,
+            pingMs = pingMs,
+            selectionMode = selectionMode,
+            isChecked = isChecked,
+            onSettingsClick = onSettings,
+            onLongClick = onLongPress,
+            onClick = onClick,
+            isPinned = isPinned,
+            onTogglePinned = onTogglePinned
+        )
+    }
 }
 
 /**

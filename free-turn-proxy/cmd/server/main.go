@@ -99,7 +99,7 @@ func main() {
 	var listener net.Listener
 	if cfg.Obf.Enabled() {
 		logger.Infof("OBF profile=%s: listener only accepts clients with matching -obf-profile and -obf-key", cfg.Obf.Profile)
-		obfListener, oerr := wire.Listen(string(cfg.Obf.Profile), addr, cfg.Obf.Key)
+		obfListener, oerr := wire.Listen(string(cfg.Obf.Profile), addr, cfg.Obf.Key, cfg.Obf.Timing)
 		if oerr != nil {
 			logger.Errorf("obf listen: %v", oerr)
 			os.Exit(1)

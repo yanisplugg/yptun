@@ -74,6 +74,22 @@ data class RoutingProfile(
     fun usesIpRules(): Boolean =
         (blockIp + directIp + proxyIp).any { it.trim().isNotEmpty() }
 
+    /** The ASN numbers referenced by any IP bucket's `asn:` selectors (need network resolution to CIDRs). */
+    fun referencedAsns(): Set<String> = Asn.collect(blockIp + directIp + proxyIp)
+
+    /**
+     * A copy with every `asn:N` selector replaced by that ASN's CIDR list (from [cidrsByAsn]). Applied
+     * at config-build time so both cores see ordinary CIDRs. Unresolved ASNs contribute nothing.
+     */
+    fun expandAsn(cidrsByAsn: Map<String, List<String>>): RoutingProfile {
+        if (referencedAsns().isEmpty()) return this
+        return copy(
+            blockIp = Asn.expand(blockIp, cidrsByAsn),
+            directIp = Asn.expand(directIp, cidrsByAsn),
+            proxyIp = Asn.expand(proxyIp, cidrsByAsn),
+        )
+    }
+
     /** True if any bucket references a `geoip:`/`geosite:` selector (needs the .dat files). */
     fun needsGeoFiles(): Boolean =
         (blockSites + directSites + proxySites).any { it.startsWith("geosite:", ignoreCase = true) } ||

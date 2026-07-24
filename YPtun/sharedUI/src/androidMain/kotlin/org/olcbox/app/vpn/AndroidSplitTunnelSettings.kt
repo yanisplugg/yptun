@@ -25,5 +25,7 @@ enum class AndroidSplitTunnelList {
 
 data class AndroidInstalledApp(
     val packageName: String,
-    val label: String
+    val label: String,
+    /** True for apps with no launcher icon (system/background packages that still hold INTERNET). */
+    val isSystem: Boolean = false
 )

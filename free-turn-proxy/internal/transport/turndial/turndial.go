@@ -17,6 +17,7 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/turn/v5"
 	"github.com/samosvalishe/free-turn-proxy/internal/netconn"
+	"github.com/samosvalishe/free-turn-proxy/internal/netctl"
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 )
 
@@ -83,9 +84,14 @@ func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAdd
 		closeConn func() error
 	)
 	if cfg.TransportUDP {
-		c, derr := net.DialUDP("udp", nil, turnServerUDPAddr) //nolint:noctx
+		raw, derr := (&net.Dialer{Control: netctl.Apply}).Dial("udp", turnServerUDPAddr.String())
 		if derr != nil {
 			return nil, fmt.Errorf("dial TURN (udp): %w", derr)
+		}
+		c, ok := raw.(*net.UDPConn)
+		if !ok {
+			_ = raw.Close()
+			return nil, fmt.Errorf("turndial: expected *net.UDPConn, got %T", raw)
 		}
 		turnConn = &netconn.ConnectedUDPConn{UDPConn: c}
 		closeConn = c.Close

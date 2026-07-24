@@ -15,6 +15,7 @@ import (
 
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/common"
+	"github.com/samosvalishe/free-turn-proxy/internal/stats"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
 )
 
@@ -39,8 +40,10 @@ type Params struct {
 	TransportUDP bool
 	Profile      string
 	ObfKey       []byte
+	ObfTiming    time.Duration
 	GetCreds     GetCredsFunc
 	ClientID     string
+	TrafficStats *stats.Stats
 }
 
 // streamStartBarrier - максимум, который стримы 2..N ждут прогрева кэша
@@ -118,6 +121,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 	disp := newDispatcher()
 	wg := sync.WaitGroup{}
 	wg.Go(func() {
+		defer recoverRelay(deps, 0)
 		runListener(runCtx, listenConn, &activeLocalPeer, disp)
 	})
 	t := time.Tick(200 * time.Millisecond)
@@ -132,9 +136,11 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 	{
 		cchan := make(chan net.PacketConn)
 		wg.Go(func() {
+			defer recoverRelay(deps, 1)
 			DTLSLoop(runCtx, deps, params, peer, listenConn, disp, cchan, okchan, 1)
 		})
 		wg.Go(func() {
+			defer recoverRelay(deps, 1)
 			TURNLoop(runCtx, deps, params, peer, cchan, t, 1)
 		})
 	}
@@ -151,9 +157,11 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 		cchan := make(chan net.PacketConn)
 		streamID := i + 1
 		wg.Go(func() {
+			defer recoverRelay(deps, streamID)
 			DTLSLoop(runCtx, deps, params, peer, listenConn, disp, cchan, nil, streamID)
 		})
 		wg.Go(func() {
+			defer recoverRelay(deps, streamID)
 			TURNLoop(runCtx, deps, params, peer, cchan, t, streamID)
 		})
 	}
@@ -164,6 +172,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 	var fatalErr atomic.Pointer[error]
 	watcherDone := make(chan struct{})
 	go func() {
+		defer recoverRelay(deps, 0)
 		defer close(watcherDone)
 		select {
 		case err := <-fatalCh:

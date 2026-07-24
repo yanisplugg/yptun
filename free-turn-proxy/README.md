@@ -5,19 +5,19 @@
 ![License](https://img.shields.io/badge/license-Happy_Bunny-ff69b4?style=flat-square&logoColor=white&labelColor=0D1117)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white&labelColor=0D1117)
 ![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white&labelColor=0D1117)
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android-green?style=flat-square&labelColor=0D1117)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20iOS-green?style=flat-square&labelColor=0D1117)
 </div>
 
 ## О проекте
 
-**Free Turn Proxy** — универсальный прокси-туннель для инкапсуляции UDP/TCP трафика поверх протокола TURN. Клиент извлекает временные TURN-учётки из ссылок на WebRTC-звонки и прозрачно маршрутизирует ваш VPN-трафик (WireGuard, Xray/VLESS) до сервера на VPS, используя DTLS и мощные механизмы маскировки пакетов.
+**Free Turn Proxy** - универсальный прокси-туннель для инкапсуляции UDP/TCP трафика поверх протокола TURN. Клиент извлекает временные TURN-учётки из ссылок на WebRTC-звонки и прозрачно маршрутизирует ваш VPN-трафик (WireGuard, Xray/VLESS) до сервера на VPS, используя DTLS и мощные механизмы маскировки пакетов.
 
 ## Разработка
 
 ### Зависимости
 
-- **Go** ≥ 1.26 — `https://go.dev/dl/`
-- **Task** (runner) — `go install github.com/go-task/task/v3/cmd/task@v3.40.0` или `winget install Task.Task` / `brew install go-task`
+- **Go** ≥ 1.26 - `https://go.dev/dl/`
+- **Task** (runner) - `go install github.com/go-task/task/v3/cmd/task@v3.40.0` или `winget install Task.Task` / `brew install go-task`
 
 Остальные dev-инструменты (`golangci-lint`, `govulncheck`, `goimports`, `goreleaser`) ставит сам Task:
 
@@ -31,8 +31,10 @@ task tools:install
 task                # список доступных задач
 task build          # собрать client + server в dist/ для текущего хоста
 task build:all      # кросс-сборка всех target через goreleaser snapshot
+task build:ios      # сборка XCFramework для iOS в dist/Mobile.xcframework
+task build:android  # сборка AAR архива для Android в dist/mobile.aar
 task test           # go test -race
-task test:cover     # тесты + покрытие → cover.html
+task test:cover     # тесты + покрытие -> cover.html
 task lint           # golangci-lint
 task fmt            # gofmt + goimports (форматирование)
 task fmt:check      # проверить форматирование (используется в CI)
@@ -61,6 +63,7 @@ task clean          # удалить dist/, cover.out, cover.html
 - [@cacggghp](https://github.com/cacggghp)
 - [@Moroka8](https://github.com/Moroka8)
 - [@alxmcp](https://github.com/alxmcp)
+- [@TheAirBlow](https://github.com/TheAirBlow)
 
 ---
 

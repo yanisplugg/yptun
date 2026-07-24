@@ -85,8 +85,10 @@ data class ProxyProfile(
     val serverPort: Int = 0,
     /** VLESS/VMess user id. */
     val uuid: String = "",
-    /** Trojan/Shadowsocks password. */
+    /** Trojan/Shadowsocks/Naive password. */
     val password: String = "",
+    /** Naive (NaïveProxy) username; empty for the other protocols. */
+    val username: String = "",
     /** Shadowsocks method (cipher), e.g. "aes-128-gcm", "2022-blake3-aes-128-gcm". */
     val method: String = "",
     /** VMess alterId (0 for AEAD). */
@@ -134,6 +136,14 @@ data class ProxyProfile(
     @SerialName("awg_config")
     val awgConfig: String = "",
     /**
+     * Trust Tunnel ([TYPE_TRUSTTUNNEL]) `tt://` deep-link for the AdGuard TrustTunnel client. The
+     * vendored trusttunnel AAR decodes it (DeepLink.decode) into a `[endpoint]` TOML at connect time;
+     * the client raises a local SOCKS5 (VpnClient in SOCKS-only mode) that the proxy routes through,
+     * mirroring [awgConfig]/AmneziaWG. [server]/[serverPort]/[tag] are kept for display & dedup only.
+     */
+    @SerialName("tt_config")
+    val ttConfig: String = "",
+    /**
      * Hysteria2 ([TYPE_HYSTERIA2]) parameters. Auth uses [password]; server/[serverPort], [sni],
      * [alpn] and [allowInsecure] are reused. The hysteria2proxy module raises a local SOCKS5 from
      * these (like AmneziaWG). Obfs is Salamander when [hy2Obfs] == "salamander"; [hy2Ports] is an
@@ -149,10 +159,19 @@ data class ProxyProfile(
     val hy2DownMbps: Int = 0,
     @SerialName("hy2_ports")
     val hy2Ports: String = "",
+    /**
+     * Naive ([TYPE_NAIVE]) over QUIC instead of HTTPS/H2 — from a `naive+quic://` link. Auth uses
+     * [username]/[password]; TLS is mandatory (sni from the link), served natively by sing-box's
+     * cronet-based naive outbound (with_naive_outbound build).
+     */
+    @SerialName("naive_quic")
+    val naiveQuic: Boolean = false,
 ) {
     fun isComplete(): Boolean {
         if (type == TYPE_HYSTERIA2) return server.isNotBlank() && serverPort in 1..65535
+        if (type == TYPE_NAIVE) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_AMNEZIAWG) return awgConfig.isNotBlank()
+        if (type == TYPE_TRUSTTUNNEL) return ttConfig.isNotBlank()
         if (!rawXrayConfig.isNullOrBlank()) return true
         if (!rawOutbound.isNullOrBlank()) return true
         if (server.isBlank() || serverPort !in 1..65535) return false
@@ -182,13 +201,31 @@ data class ProxyProfile(
             .joinToString("\n")
     )
 
+    /**
+     * True when [other] points at the SAME node as this one — used to stop a user chaining their own
+     * main proxy into the second/cascade slot (a proxy-into-itself, which loops/can't work). Matches on
+     * any of: full dedup-equality (the same link pasted twice), an identical raw Xray/sing-box config,
+     * or the same server:port (the same endpoint reached via a differently-formatted link).
+     */
+    fun isSameNodeAs(other: ProxyProfile): Boolean {
+        if (dedupNormalized() == other.dedupNormalized()) return true
+        if (!rawXrayConfig.isNullOrBlank() && rawXrayConfig == other.rawXrayConfig) return true
+        if (!rawOutbound.isNullOrBlank() && rawOutbound == other.rawOutbound) return true
+        if (server.isNotBlank() && serverPort in 1..65535 &&
+            server.equals(other.server, ignoreCase = true) && serverPort == other.serverPort
+        ) return true
+        return false
+    }
+
     companion object {
         const val TYPE_VLESS = "vless"
         const val TYPE_VMESS = "vmess"
         const val TYPE_TROJAN = "trojan"
         const val TYPE_SHADOWSOCKS = "shadowsocks"
         const val TYPE_AMNEZIAWG = "amneziawg"
+        const val TYPE_TRUSTTUNNEL = "trusttunnel"
         const val TYPE_HYSTERIA2 = "hysteria2"
+        const val TYPE_NAIVE = "naive"
 
         const val NETWORK_TCP = "tcp"
         const val NETWORK_WS = "ws"

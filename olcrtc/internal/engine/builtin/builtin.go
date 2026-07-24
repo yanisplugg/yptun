@@ -44,6 +44,10 @@ type Config struct {
 	Engine string
 	URL    string
 	Token  string
+	// AuthToken is an optional pre-issued account token forwarded to the auth
+	// provider so it can act as that account instead of running its guest
+	// flow (e.g. a WB Stream account token). Empty uses the guest flow.
+	AuthToken string
 }
 
 // Factory creates an engine session for a given carrier.
@@ -116,6 +120,7 @@ func registerEngineAuth(name string, provider auth.Provider) {
 		authCfg := auth.Config{
 			RoomURL:   cfg.RoomURL,
 			Name:      cfg.Name,
+			Token:     cfg.AuthToken,
 			DNSServer: cfg.DNSServer,
 			ProxyAddr: cfg.ProxyAddr,
 			ProxyPort: cfg.ProxyPort,

@@ -1,14 +1,18 @@
 package wbstream
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openlibrecommunity/olcrtc/internal/auth"
+	"github.com/openlibrecommunity/olcrtc/internal/logger"
 )
 
 const (
@@ -110,6 +114,72 @@ func TestWBStreamIssue(t *testing.T) {
 	}
 	if creds.Extra["roomID"] != testRoomID {
 		t.Fatalf("creds.Extra[roomID] = %q", creds.Extra["roomID"])
+	}
+}
+
+func TestWBStreamIssueUsesSuppliedToken(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/api/v1/auth/user/guest-register", func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("guest-register must not be called when a token is supplied")
+	})
+	mux.HandleFunc("POST /api-room/api/v1/room/{id}/join", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+testAccessToken {
+			t.Fatalf("join Authorization = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /api-room-manager/v2/room/{id}/connection-details",
+		func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Authorization"); got != "Bearer "+testAccessToken {
+				t.Fatalf("connection-details Authorization = %q", got)
+			}
+			_ = json.NewEncoder(w).Encode(tokenResponse{RoomToken: testToken})
+		})
+
+	withWBAPIServer(t, mux)
+
+	creds, err := Provider{}.Issue(context.Background(), auth.Config{
+		RoomURL: testRoomID,
+		Name:    testPeerName,
+		Token:   testAccessToken,
+	})
+	if err != nil {
+		t.Fatalf("Issue() error = %v", err)
+	}
+	if creds.Token != testToken {
+		t.Fatalf("creds.Token = %q", creds.Token)
+	}
+}
+
+func TestWBStreamIssueSurfacesGuestToken(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/api/v1/auth/user/guest-register", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(guestRegisterResponse{AccessToken: testAccessToken}) //nolint:gosec
+	})
+	mux.HandleFunc("POST /api-room/api/v1/room/{id}/join", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /api-room-manager/v2/room/{id}/connection-details", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(tokenResponse{RoomToken: testToken})
+	})
+
+	withWBAPIServer(t, mux)
+
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	logger.SetVerbose(false)
+	t.Cleanup(func() { log.SetOutput(old) })
+
+	_, err := Provider{}.Issue(context.Background(), auth.Config{
+		RoomURL: testRoomID,
+		Name:    testPeerName,
+	})
+	if err != nil {
+		t.Fatalf("Issue() error = %v", err)
+	}
+	if !strings.Contains(buf.String(), testAccessToken) {
+		t.Fatalf("guest access token not surfaced in logs: %q", buf.String())
 	}
 }
 

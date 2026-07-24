@@ -38,6 +38,7 @@ fun OlcboxAppContent(
     onAppSettingsClick: () -> Unit,
     onSplitTunnelingClick: () -> Unit = {},
     confirmBeforeDelete: Boolean = true,
+    allowVpsAutoInstall: Boolean = false,
     pingParallelism: Int = AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
     updateAvailable: Boolean = false,
     onUpdateClick: () -> Unit = {},
@@ -49,6 +50,8 @@ fun OlcboxAppContent(
     pinnedCustomLocations: List<String> = emptyList(),
     customLocationsPingSorted: Boolean = false,
     customLocationsPingSortDescending: Boolean = false,
+    twoColumns: Boolean = false,
+    showAutoButton: Boolean = true,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {},
@@ -135,6 +138,8 @@ fun OlcboxAppContent(
                     pinnedCustomLocations = pinnedCustomLocations,
                     customLocationsPingSorted = customLocationsPingSorted,
                     customLocationsPingSortDescending = customLocationsPingSortDescending,
+                    twoColumns = twoColumns,
+                    showAutoButton = showAutoButton,
                     onToggleGroupCollapsed = onToggleGroupCollapsed,
                     onToggleGroupPinned = onToggleGroupPinned,
                     onToggleGroupPingSort = onToggleGroupPingSort,
@@ -157,6 +162,7 @@ fun OlcboxAppContent(
                 LocationSettingsScreen(
                     viewModel = locationViewModel,
                     homeViewModel = homeViewModel,
+                    allowVpsAutoInstall = allowVpsAutoInstall,
                     onShareLocationRequested = onShareLocationRequested,
                     onBack = {
                         homeViewModel.loadCurrentConfig()

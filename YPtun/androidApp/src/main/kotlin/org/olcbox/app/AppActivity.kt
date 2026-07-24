@@ -78,6 +78,35 @@ class AppActivity : ComponentActivity() {
         }
 
         handleDeepLink(intent)
+        maybeWarnUnofficialBuild()
+    }
+
+    /**
+     * One-time warning when the running build is NOT signed with the official YPtun release key —
+     * i.e. someone repackaged and re-signed the app (ad/spyware injection, "стырили сборку"). This is
+     * tamper-evident only: a repacker can patch this out. Shown once per install; acknowledged flag
+     * persisted. Official builds short-circuit immediately.
+     */
+    private fun maybeWarnUnofficialBuild() {
+        if (org.olcbox.app.security.IntegrityGuard.isOfficialInstalled(this)) return
+        val prefs = getSharedPreferences("yptun_integrity", MODE_PRIVATE)
+        if (prefs.getBoolean("unofficial_ack", false)) return
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("⚠ Неофициальная сборка / Unofficial build")
+            .setMessage(
+                "Эта копия YPtun подписана не ключом разработчика — она могла быть изменена " +
+                    "третьими лицами (реклама, слежка, вредонос). Скачайте оригинал:\n" +
+                    "github.com/yanisplugg/olcvpn-client\n\n" +
+                    "This YPtun build is NOT signed by the developer and may have been modified by a " +
+                    "third party. Get the official app from:\n" +
+                    "github.com/yanisplugg/olcvpn-client"
+            )
+            .setCancelable(false)
+            .setPositiveButton("OK") { dialog, _ ->
+                prefs.edit().putBoolean("unofficial_ack", true).apply()
+                dialog.dismiss()
+            }
+            .show()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -114,6 +143,9 @@ class AppActivity : ComponentActivity() {
                     "start" -> if (!viewModel.state.value.isVpnConnected) viewModel.ToggleVpn()
                     "stop" -> if (viewModel.state.value.isVpnConnected) viewModel.ToggleVpn()
                     "restart" -> viewModel.restartVpnIfRunning()
+                    // Widget "Auto" button: raise the signal the Home screen consumes to run the
+                    // fastest-server search (needs the app foreground to ping every node + show progress).
+                    "auto" -> org.olcbox.app.widget.WidgetAutoSignal.request()
                 }
             }
         }

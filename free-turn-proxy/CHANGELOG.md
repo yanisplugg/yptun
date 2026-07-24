@@ -1,5 +1,139 @@
 # Changelog
 
+## [1.8.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.7.3...v1.8.0) (2026-07-13)
+
+
+### Features
+
+* автопубликация телеграм анонса при релизе ([e678ee1](https://github.com/samosvalishe/free-turn-proxy/commit/e678ee1fd85c64eb42da3ba9ccc580fccbc79749))
+
+
+### Bug Fixes
+
+* **captcha:** persona-модель вместо захвата профиля браузера ([305754c](https://github.com/samosvalishe/free-turn-proxy/commit/305754cd6037fe3b4ec5558b826a89eefc64834b))
+
+## [1.7.3](https://github.com/samosvalishe/free-turn-proxy/compare/v1.7.2...v1.7.3) (2026-07-12)
+
+
+### Bug Fixes
+
+* **captcha:** адаптировать авторешение под SPA-капчу VK ([b4189f8](https://github.com/samosvalishe/free-turn-proxy/commit/b4189f8f4317b1c5c919ab8e0e183ebfb927d8be))
+* **deps:** обновить Go 1.26.4 -&gt; 1.26.5 ([ea410a0](https://github.com/samosvalishe/free-turn-proxy/commit/ea410a044ad1ebd3fbc14286f41213357a6732f4))
+
+## [1.7.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.7.1...v1.7.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* **captcha:** linter ([4c0bed1](https://github.com/samosvalishe/free-turn-proxy/commit/4c0bed17976a81301005a4a68d3c660847bf7313))
+
+
+### Refactoring
+
+* **captcha:** вынести inject.js из Go и убрать легаси image-капчу ([ea1cb93](https://github.com/samosvalishe/free-turn-proxy/commit/ea1cb930cc886471ec70567fe789cd807ff13da2))
+
+## [1.7.1](https://github.com/samosvalishe/free-turn-proxy/compare/v1.7.0...v1.7.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **captcha:** устойчивый разбор debug_info и сигнал дрейфа версии скрипта ([3b33d33](https://github.com/samosvalishe/free-turn-proxy/commit/3b33d33b9e3c2d8d459b479e8d8a94fc562f18cb))
+
+## [1.7.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.6.0...v1.7.0) (2026-07-02)
+
+
+### Features
+
+* **mobile:** add host socket protector (SetProtect) for tun/VPN hosts ([0a6bc0a](https://github.com/samosvalishe/free-turn-proxy/commit/0a6bc0ae4f38f03722855f99461cc91f4181e057))
+
+
+### Bug Fixes
+
+* **vkauth:** fast-fail on terminal call/link errors (9000/9008, anonymous-only, full) ([805228e](https://github.com/samosvalishe/free-turn-proxy/commit/805228e62a42f71ab6c0d345e2a510af5cae32c3))
+* **vkauth:** классификация terminal-ошибок по коду перед текстом ([b391d7b](https://github.com/samosvalishe/free-turn-proxy/commit/b391d7bf255e6f027d655c7e1a20a21ce04ab22a))
+
+## [1.6.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.5.2...v1.6.0) (2026-06-30)
+
+
+### Features
+
+* **vk:** улучшение браузерных отпечатков для captcha ([12161ae](https://github.com/samosvalishe/free-turn-proxy/commit/12161aed4ab582504785ff79f2f9f4f051ee0d9d))
+
+## [1.5.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.5.1...v1.5.2) (2026-06-25)
+
+
+### Bug Fixes
+
+* ci ([ab9c708](https://github.com/samosvalishe/free-turn-proxy/commit/ab9c708ef0bb36c0099fff01cfa2328cca066b54))
+
+## [1.5.1](https://github.com/samosvalishe/free-turn-proxy/compare/v1.5.0...v1.5.1) (2026-06-25)
+
+
+### Bug Fixes
+
+* ci ([7eb33da](https://github.com/samosvalishe/free-turn-proxy/commit/7eb33da28a3ea1b0773ed633b90fbdb12764b032))
+
+## [1.5.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.4...v1.5.0) (2026-06-25)
+
+
+### Features
+
+* **mobile:** переименование ios -&gt; mobile, универсальный движок для iOS/Android ([575f278](https://github.com/samosvalishe/free-turn-proxy/commit/575f278a9a8090b356e5315bb8c8b545a1be6f6b))
+
+
+### Bug Fixes
+
+* ci ([bfaabcd](https://github.com/samosvalishe/free-turn-proxy/commit/bfaabcdc80c3f50c6bf53b76f3d010278274049b))
+* ci ([b42924e](https://github.com/samosvalishe/free-turn-proxy/commit/b42924e3603d6327993bec7e9b9aac11aa9e9165))
+
+## [1.4.4](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.3...v1.4.4) (2026-06-24)
+
+
+### Bug Fixes
+
+* заменить устаревший token_type=messages на анонимные скоупы в VK авторизации ([384c350](https://github.com/samosvalishe/free-turn-proxy/commit/384c350e7d9f1fbefa643cbfc352975c5bd7d263))
+
+## [1.4.3](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.2...v1.4.3) (2026-06-22)
+
+
+### Bug Fixes
+
+* bump captcha ([b0c3e65](https://github.com/samosvalishe/free-turn-proxy/commit/b0c3e65c40bed7e09610d5a4a49d322fa6d55fea))
+* OBF_TIMING -&gt; docker ([d8f0e7e](https://github.com/samosvalishe/free-turn-proxy/commit/d8f0e7e99554372a4b6dd057e760509e8a65bece))
+
+## [1.4.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.1...v1.4.2) (2026-06-22)
+
+
+### Bug Fixes
+
+* captcha ([d73f426](https://github.com/samosvalishe/free-turn-proxy/commit/d73f42603aacefa3ec08d43771a073393ae0500b))
+
+## [1.4.1](https://github.com/samosvalishe/free-turn-proxy/compare/v1.4.0...v1.4.1) (2026-06-19)
+
+
+### Bug Fixes
+
+* оставлены только VK app_id с доступом к calls.getAnonymousToken ([ebb1f6b](https://github.com/samosvalishe/free-turn-proxy/commit/ebb1f6bf0702217aca2ae54ab8d2115d93f85a95))
+
+
+### Refactoring
+
+* единая константа версии VK API для calls.* ([b76e212](https://github.com/samosvalishe/free-turn-proxy/commit/b76e21266d3a8bb457ad40263da2404089a2b7d6))
+
+## [1.4.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.3.2...v1.4.0) (2026-06-19)
+
+
+### Features
+
+* мультиплексирование звонков ([#21](https://github.com/samosvalishe/free-turn-proxy/issues/21)) ([1c58325](https://github.com/samosvalishe/free-turn-proxy/commit/1c583258627f5b847fee62d403a50270ac9e1509))
+
+
+### Bug Fixes
+
+* -obf-timing допустим только с -mode udp и включённой обфускацией ([e50febc](https://github.com/samosvalishe/free-turn-proxy/commit/e50febc834544fcb47eb44cf7edc0f7930199066))
+* потокобезопасность send-состояния obf-кодеков rtpopus3 и shape ([9564f34](https://github.com/samosvalishe/free-turn-proxy/commit/9564f3475f5d5926ec75bcb9fd840613a52e404d))
+* устранены блокеры линтера в obf/multi ([bafdcdd](https://github.com/samosvalishe/free-turn-proxy/commit/bafdcdd027c29ee52f605af2d6d83acf9827855d))
+
 ## [1.3.2](https://github.com/samosvalishe/free-turn-proxy/compare/v1.3.1...v1.3.2) (2026-06-17)
 
 
@@ -139,7 +273,7 @@
 * **docker:** исправить сборку, добавить compose, убрать VLESS_BOND ([dfbfae2](https://github.com/samosvalishe/free-turn-proxy/commit/dfbfae29014b3cd246550589640e871ee424807e))
 * **dtlsdial:** Dial использует хелпер GenerateSelfSignedCert внутри ([21138fe](https://github.com/samosvalishe/free-turn-proxy/commit/21138fef26b61f8ba4b72f8e5389d3b90b7026b2))
 * **dtlsdial:** унифицировать генерацию self-signed сертификата ([ef549dc](https://github.com/samosvalishe/free-turn-proxy/commit/ef549dc2b8405a1e8378d9c81f2ae3871495121f))
-* **install:** переписать установщик сервера — TUI, надёжность, non-interactive ([1b154a2](https://github.com/samosvalishe/free-turn-proxy/commit/1b154a2e84057c07344a4d7308ca7d26f5f127ec))
+* **install:** переписать установщик сервера - TUI, надёжность, non-interactive ([1b154a2](https://github.com/samosvalishe/free-turn-proxy/commit/1b154a2e84057c07344a4d7308ca7d26f5f127ec))
 * **lint:** устранить замечания golangci-lint + переход на dockers_v2 ([dd82332](https://github.com/samosvalishe/free-turn-proxy/commit/dd8233208ccbe60ea17745ddc17df7a8e6c56872))
 * **routes:** починить установку маршрутов в routes.ps1 на Windows ([7b0a907](https://github.com/samosvalishe/free-turn-proxy/commit/7b0a9076380bbcdc2f83d6da63ca3800b5d68412))
 * **server:** ограниченное ожидание второго сигнала; предупреждение при выключенном -wrap ([fb711c1](https://github.com/samosvalishe/free-turn-proxy/commit/fb711c12f5e1f78ee037ceed434b6cdde5a961d8))
@@ -184,7 +318,7 @@
 * **tcpfwd:** заменить busy-loop poll пула на Ready-канал; тихий accept-цикл при shutdown ([2b24471](https://github.com/samosvalishe/free-turn-proxy/commit/2b24471553b7a9acb0c0117d7ce666bac758e97e))
 * **udprelay:** разбить на run/loop/listener ([d82258f](https://github.com/samosvalishe/free-turn-proxy/commit/d82258f844ef65ba06ba05aa7de4130c43f2c56e))
 * **vkauth:** разбить token.go на файлы по шагам ([0e2d42c](https://github.com/samosvalishe/free-turn-proxy/commit/0e2d42c9126505599db25d8c6f82956036c193be))
-* **wire:** переименовать srtpmimicry → rtpopus, заменить bool -obf на -obf-profile ([4bedd00](https://github.com/samosvalishe/free-turn-proxy/commit/4bedd00662bb75a5f2fdd8fc3cee9c8eb6d94e7c))
+* **wire:** переименовать srtpmimicry -> rtpopus, заменить bool -obf на -obf-profile ([4bedd00](https://github.com/samosvalishe/free-turn-proxy/commit/4bedd00662bb75a5f2fdd8fc3cee9c8eb6d94e7c))
 * **wrap:** заменить DTLS-мимикрию на noise-only AEAD ([e2dd09a](https://github.com/samosvalishe/free-turn-proxy/commit/e2dd09a7296f972285850786c6552d66006bf19d))
 * **wrap:** перейти на мимикрию под SRTP в обход content-фильтра VK TURN ([729557d](https://github.com/samosvalishe/free-turn-proxy/commit/729557d00d3f7b16e4d1d876adca23404eff738c))
 * **wrap:** переписать как мимикрию под DTLS 1.2 ApplicationData с AEAD ([39f95a8](https://github.com/samosvalishe/free-turn-proxy/commit/39f95a8e0c2ca3520c530e425aa55a5b586feadb))

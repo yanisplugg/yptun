@@ -1,4 +1,4 @@
-﻿# Мобильные устройства
+# Мобильные устройства
 
 ## Android (Termux / Приложения)
 
@@ -37,4 +37,20 @@ GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 ./client -listen 127.0.0.1:9000 -peer <vp
 
 ```bash
 cat /dev/location > /dev/null &
+```
+
+## Нативная сборка библиотек (gomobile)
+
+Для интеграции прокси-движка непосредственно в нативные мобильные приложения (iOS / Android) проект предоставляет пакет `mobile`, адаптированный для сборки через `gomobile bind`.
+
+### iOS
+Сборка универсального XCFramework (`dist/Mobile.xcframework`) с поддержкой iOS и симулятора:
+```bash
+task build:ios
+```
+
+### Android
+Сборка Android Archive (`dist/mobile.aar`) с готовыми JNI-обертками для Java/Kotlin:
+```bash
+task build:android
 ```

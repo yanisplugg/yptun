@@ -63,8 +63,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
@@ -75,15 +77,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontFamily
+import org.olcbox.app.ui.features.locations.components.SshAuthFields
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
 import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
+import org.olcbox.app.vpn.freeturn.FreeturnInstallOptions
+import org.olcbox.app.vpn.freeturn.rememberFreeturnServerInstaller
+import org.olcbox.app.vpn.dnstt.DnsttInstallOptions
+import org.olcbox.app.vpn.dnstt.rememberDnsttServerInstaller
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -146,6 +155,7 @@ fun LocationSettingsTopBar(
 fun LocationSettingsScreen(
     viewModel: LocationViewModel,
     homeViewModel: HomeScreenViewModel,
+    allowVpsAutoInstall: Boolean = false,
     onShareLocationRequested: (LocationConfig) -> Unit = {},
     onBack: () -> Unit
 ) {
@@ -164,7 +174,26 @@ fun LocationSettingsScreen(
     if (showWdttInstall) {
         WdttInstallDialog(
             draft = viewModel.editingVkTurn,
+            onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
             onDismiss = { showWdttInstall = false }
+        )
+    }
+
+    var showFreeturnInstall by remember { mutableStateOf(false) }
+    if (showFreeturnInstall) {
+        FreeturnInstallDialog(
+            draft = viewModel.editingVkTurn,
+            onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
+            onDismiss = { showFreeturnInstall = false }
+        )
+    }
+
+    var showDnsttInstall by remember { mutableStateOf(false) }
+    if (showDnsttInstall) {
+        DnsttInstallDialog(
+            config = viewModel.editingDnstt,
+            onApplyConfig = { update -> viewModel.updateDnstt(update) },
+            onDismiss = { showDnsttInstall = false }
         )
     }
 
@@ -311,8 +340,10 @@ fun LocationSettingsScreen(
                 vkTurnSection(
                     draft = viewModel.editingVkTurn,
                     enabled = !isSaving,
+                    showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateVkTurnDraft,
-                    onWdttAutoInstall = { showWdttInstall = true }
+                    onWdttAutoInstall = { showWdttInstall = true },
+                    onFreeturnAutoInstall = { showFreeturnInstall = true }
                 )
             }
 
@@ -320,7 +351,9 @@ fun LocationSettingsScreen(
                 dnsttSection(
                     config = viewModel.editingDnstt,
                     enabled = !isSaving,
-                    onChange = viewModel::updateDnstt
+                    showAutoInstall = allowVpsAutoInstall,
+                    onChange = viewModel::updateDnstt,
+                    onDnsttAutoInstall = { showDnsttInstall = true }
                 )
             }
 
@@ -727,7 +760,9 @@ private fun ProxyField(
 private fun LazyListScope.dnsttSection(
     config: DnsttConfig,
     enabled: Boolean,
-    onChange: ((DnsttConfig) -> DnsttConfig) -> Unit
+    showAutoInstall: Boolean,
+    onChange: ((DnsttConfig) -> DnsttConfig) -> Unit,
+    onDnsttAutoInstall: () -> Unit
 ) {
     item {
         Column(
@@ -761,6 +796,62 @@ private fun LazyListScope.dnsttSection(
                 enabled = enabled,
                 keyboardType = KeyboardType.Uri
             )
+            // Auto-install the dnstt-server on a VPS (direct mode: resolver→VPS:port). Hidden unless
+            // the user enabled "Автоустановка на VPS" in app settings (off by default).
+            if (showAutoInstall) {
+                OutlinedButton(
+                    onClick = onDnsttAutoInstall,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Автоустановка на VPS")
+                }
+            }
+        }
+    }
+
+    // Optional proxy chained ON TOP of the dnstt tunnel: traffic → dnstt → proxy → internet (the
+    // proxy server is dialled THROUGH the dnstt SOCKS), so the public exit is the proxy. Same idea as
+    // "proxy over VK-TURN".
+    item {
+        var proxyOn by remember(config.proxyLink.isNotBlank()) {
+            mutableStateOf(config.proxyLink.isNotBlank())
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "Прокси поверх DNSTT",
+                subtitle = "VLESS/Trojan/SS, который дозванивается ЧЕРЕЗ dnstt-туннель — выходной IP будет прокси, а не dnstt-сервер"
+            )
+            VkTurnSwitchRow(
+                label = "Прокси поверх DNSTT",
+                checked = proxyOn,
+                enabled = enabled,
+                onCheckedChange = { on ->
+                    proxyOn = on
+                    if (!on) onChange { it.copy(proxyLink = "") }
+                }
+            )
+            if (proxyOn) {
+                OutlinedTextField(
+                    value = config.proxyLink,
+                    onValueChange = { v -> onChange { it.copy(proxyLink = v) } },
+                    label = { Text(LocalStrings.current.proxyLink) },
+                    placeholder = { Text("vless://… / trojan://… / ss://…") },
+                    enabled = enabled,
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                CoreSelector(
+                    selected = config.proxyCore,
+                    enabled = enabled,
+                    onSelected = { v -> onChange { it.copy(proxyCore = v) } }
+                )
+            }
         }
     }
 }
@@ -772,8 +863,10 @@ private fun LazyListScope.dnsttSection(
 private fun LazyListScope.vkTurnSection(
     draft: VkTurnDraft,
     enabled: Boolean,
+    showAutoInstall: Boolean,
     onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit,
-    onWdttAutoInstall: () -> Unit
+    onWdttAutoInstall: () -> Unit,
+    onFreeturnAutoInstall: () -> Unit
 ) {
     item {
         VkTurnLinksField(
@@ -833,15 +926,18 @@ private fun LazyListScope.vkTurnSection(
                     placeholder = "ключ WRAP выводится из пароля",
                     enabled = enabled
                 )
-                // Auto-install the wdtt-server on a VPS (opens an SSH connect dialog: IP / login / password).
-                OutlinedButton(
-                    onClick = onWdttAutoInstall,
-                    enabled = enabled,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Автоустановка на VPS")
+                // Auto-install the wdtt-server on a VPS (opens an SSH connect dialog). Hidden unless the
+                // user enabled "Автоустановка на VPS" in app settings (off by default — SSH deploy is advanced).
+                if (showAutoInstall) {
+                    OutlinedButton(
+                        onClick = onWdttAutoInstall,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Автоустановка на VPS")
+                    }
                 }
                 SettingsDropdown(
                     label = "TLS-отпечаток (VK auth)",
@@ -901,6 +997,19 @@ private fun LazyListScope.vkTurnSection(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                // Auto-install the free-turn-proxy server (+ WireGuard) on a VPS and fill the peer/keys
+                // from the result. Gated on the same "Автоустановка на VPS" app setting as WDTT.
+                if (showAutoInstall) {
+                    OutlinedButton(
+                        onClick = onFreeturnAutoInstall,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Установить freeturn на VPS")
+                    }
+                }
                 SettingsDropdown(
                     label = LocalStrings.current.transportToRelay,
                     selectedValue = draft.transport.ifBlank { "tcp" },
@@ -939,13 +1048,12 @@ private fun LazyListScope.vkTurnSection(
                 SettingsDropdown(
                     label = LocalStrings.current.obfuscationProfile,
                     selectedValue = draft.obfProfile.ifBlank { "rtpopus" },
-                    // rtpopus2 (freeturn 1.3+): rtpopus + an RTP header extension that mimics modern WebRTC,
-                    // for better shaping evasion. The profile MUST match the server (panel) — pick it only
-                    // once the panel/VPS is also on a 1.3+ build that speaks rtpopus2, else the obf desyncs.
-                    options = listOf("none", "rtpopus", "rtpopus2"),
+                    // The obf profile MUST match the server (panel): rtpopus2 needs a freeturn 1.3+ server,
+                    // rtpopus3 a 1.4+ one — pick one the panel/VPS also speaks, else the obf desyncs.
+                    options = listOf("none", "rtpopus", "rtpopus2", "rtpopus3"),
                     enabled = enabled,
                     onValueSelected = { v -> onChange { it.copy(obfProfile = v) } },
-                    valueLabel = { if (it == "rtpopus2") "rtpopus2 (WebRTC mimicry · 1.3+)" else it }
+                    valueLabel = { it }
                 )
                 VkTurnField(
                     value = draft.obfKey,
@@ -962,6 +1070,39 @@ private fun LazyListScope.vkTurnSection(
                     enabled = enabled,
                     keyboardType = KeyboardType.Number
                 )
+                // Multi-server: a toggle enables running extra freeturn:// servers (one per line, up to
+                // 5) ALONGSIDE the primary, load-balanced per connection. WireGuard exit only. The VK
+                // call links are PARTITIONED across servers, so for a real speed gain add MORE VK call
+                // links above (each server takes a share); one shared call can't be split for more speed.
+                if (draft.outbound == VkTurnConfig.OUTBOUND_WIREGUARD) {
+                    VkTurnSwitchRow(
+                        label = "Несколько серверов (ускорение)",
+                        checked = draft.freeturnMultiServer,
+                        enabled = enabled,
+                        onCheckedChange = { v -> onChange { it.copy(freeturnMultiServer = v) } }
+                    )
+                    if (draft.freeturnMultiServer) {
+                        val extraLines = draft.extraFreeturnUris.split('\n')
+                            .map { it.trim() }.filter { it.startsWith("freeturn://", ignoreCase = true) }
+                        val overCap = extraLines.size > 5
+                        OutlinedTextField(
+                            value = draft.extraFreeturnUris,
+                            onValueChange = { v -> onChange { it.copy(extraFreeturnUris = v) } },
+                            label = { Text("Доп. серверы freeturn (до 5, по одной ссылке в строке)") },
+                            placeholder = { Text("freeturn://…") },
+                            enabled = enabled,
+                            minLines = 2,
+                            maxLines = 6,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            if (overCap) "Слишком много серверов — будут использованы первые 5 доп. (всего 6)."
+                            else "Всего серверов: ${extraLines.size + 1}. Для прироста скорости добавь больше VK-ссылок выше — они делятся между серверами.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (overCap) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
             // Bonding (TCP striping) is only valid for the proxy/tcp exit — freeturn rejects it in
             // udp mode. For WireGuard/AmneziaWG (udp), aggregation comes from "streams" + multiple
@@ -1170,6 +1311,51 @@ private fun LazyListScope.vkTurnSection(
 }
 
 /**
+ * Live install-log area shared by the WDTT and DNSTT installer dialogs. The lines are both
+ * hand-selectable (wrapped in a [SelectionContainer]) and copyable in one tap via the "Копировать"
+ * button — so the user can paste the full SSH log when reporting an install problem.
+ */
+@Composable
+private fun InstallLogView(log: List<String>, logScroll: ScrollState) {
+    if (log.isEmpty()) return
+    val clipboard = LocalClipboardManager.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "Лог установки",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        TextButton(onClick = { clipboard.setText(AnnotatedString(log.joinToString("\n"))) }) {
+            Text("Копировать")
+        }
+    }
+    SelectionContainer {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 160.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(8.dp)
+                .verticalScroll(logScroll)
+        ) {
+            log.forEach { line ->
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = LocalContentColor.current
+                )
+            }
+        }
+    }
+}
+
+/**
  * One-tap WDTT server installer. Collects SSH access to the VPS and, on confirm, connects over SSH,
  * uploads the bundled wdtt-server binary matching the VPS architecture and runs it as a systemd
  * service ([rememberWdttServerInstaller]). Progress is streamed live into a log area. The WDTT
@@ -1179,6 +1365,7 @@ private fun LazyListScope.vkTurnSection(
 @Composable
 private fun WdttInstallDialog(
     draft: VkTurnDraft,
+    onApplyDraft: (((VkTurnDraft) -> VkTurnDraft)) -> Unit,
     onDismiss: () -> Unit
 ) {
     val installer = rememberWdttServerInstaller()
@@ -1187,13 +1374,21 @@ private fun WdttInstallDialog(
     var sshPort by remember { mutableStateOf("22") }
     var login by remember { mutableStateOf("root") }
     var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    // WDTT server params are editable here (prefilled from the location draft). On success they're
+    // written back into the draft so the location and the server stay in sync — the WRAP key derives
+    // from the password on both sides, so a mismatch silently fails to connect.
+    var wdttPortText by remember { mutableStateOf(draft.wdttPort.ifBlank { "56000" }) }
+    var wdttPass by remember { mutableStateOf(draft.wdttPassword) }
+    var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Result<String>?>(null) }
     val log = remember { mutableStateListOf<String>() }
     val logScroll = rememberScrollState()
 
-    val port = draft.wdttPort.ifBlank { "56000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 56000
-    val wdttPass = draft.wdttPassword
+    val port = wdttPortText.ifBlank { "56000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 56000
     val succeeded = result?.isSuccess == true
 
     // Keep the log view pinned to the newest line as it streams in.
@@ -1205,19 +1400,15 @@ private fun WdttInstallDialog(
         onDismissRequest = { if (!running) onDismiss() },
         title = { Text("Автоустановка WDTT на VPS") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 Text(
                     "Подключусь к VPS по SSH, загружу и запущу wdtt-сервер на порту $port. " +
-                        "Пароль WDTT берётся из настроек локации.",
+                        "Порт, пароль и DNS можно изменить ниже — они сохранятся в настройки локации.",
                     style = MaterialTheme.typography.bodySmall
                 )
-                if (wdttPass.isBlank()) {
-                    Text(
-                        "Сначала укажи «Пароль WDTT» в настройках локации.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
                 OutlinedTextField(
                     value = ip,
                     onValueChange = { ip = it.trim() },
@@ -1245,35 +1436,53 @@ private fun WdttInstallDialog(
                         modifier = Modifier.width(96.dp)
                     )
                 }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = wdttPass,
+                        onValueChange = { wdttPass = it },
+                        label = { Text("Пароль WDTT") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(2f)
+                    )
+                    OutlinedTextField(
+                        value = wdttPortText,
+                        onValueChange = { v -> wdttPortText = v.filter(Char::isDigit) },
+                        label = { Text("Порт WDTT") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("Пароль SSH") },
+                    value = dns,
+                    onValueChange = { dns = it.trim() },
+                    label = { Text("DNS для клиента") },
                     singleLine = true,
                     enabled = !running,
-                    visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
-                if (log.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 160.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(8.dp)
-                            .verticalScroll(logScroll)
-                    ) {
-                        log.forEach { line ->
-                            Text(
-                                line,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = LocalContentColor.current
-                            )
-                        }
-                    }
+                if (wdttPass.isBlank()) {
+                    Text(
+                        "Укажи «Пароль WDTT» — он должен совпадать с паролем локации.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
+                InstallLogView(log, logScroll)
                 result?.exceptionOrNull()?.let { err ->
                     Text(
                         err.message ?: "Ошибка установки",
@@ -1295,22 +1504,38 @@ private fun WdttInstallDialog(
                 TextButton(onClick = onDismiss) { Text("Готово") }
             } else {
                 TextButton(
-                    enabled = !running && ip.isNotBlank() && password.isNotBlank() && wdttPass.isNotBlank(),
+                    enabled = !running && ip.isNotBlank() &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()) && wdttPass.isNotBlank(),
                     onClick = {
                         running = true
                         result = null
                         log.clear()
+                        // Persist the edited server params back into the location draft so the client
+                        // connects with the exact port/password/DNS the server was just launched with.
+                        onApplyDraft { d ->
+                            d.copy(
+                                wdttPeer = ip.trim(),
+                                wdttPort = port.toString(),
+                                wdttPassword = wdttPass,
+                                wgDns = dns.ifBlank { "1.1.1.1" }
+                            )
+                        }
                         scope.launch {
                             val res = installer.install(
                                 WdttInstallOptions(
                                     host = ip.trim(),
                                     sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
                                     login = login.ifBlank { "root" },
-                                    sshPassword = password,
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
                                     wdttPort = port,
                                     wdttPassword = wdttPass,
+                                    dns = dns.ifBlank { "1.1.1.1" },
                                 )
                             ) { line -> log.add(line) }
+                            // Fold the final error into the log too, so the copied log includes it.
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
                             result = res
                             running = false
                         }
@@ -1330,6 +1555,400 @@ private fun WdttInstallDialog(
             }
         }
     )
+}
+
+/**
+ * One-tap free-turn-proxy server installer. Collects SSH access to the VPS + the public freeturn
+ * port, and on confirm connects over SSH, uploads the bundled freeturn-server binary, provisions a
+ * persistent WireGuard exit and runs the server as a systemd service ([rememberFreeturnServerInstaller]).
+ * Progress streams live into a log area. On success the returned obf key + WireGuard keys are written
+ * straight into the location draft (peer/keys), so the freeturn:// link is rebuilt by the composer.
+ */
+@Composable
+private fun FreeturnInstallDialog(
+    draft: VkTurnDraft,
+    onApplyDraft: (((VkTurnDraft) -> VkTurnDraft)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberFreeturnServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf(draft.peerHost) }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    // freeturn public listener port (the freeturn:// peer port); prefilled from the draft or 56000.
+    var ftPortText by remember { mutableStateOf(draft.peerPort.ifBlank { "56000" }) }
+    var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<String>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+
+    val port = ftPortText.ifBlank { "56000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 56000
+    // Obfuscation profile the server is launched with — must match what the client uses. Editable;
+    // prefilled from the location draft (default rtpopus). rtpopus2/3 need a freeturn 1.3+/1.4+ server,
+    // which the bundled binary is, so all are installable.
+    var obfProfile by remember { mutableStateOf(draft.obfProfile.ifBlank { "rtpopus" }) }
+    val succeeded = result?.isSuccess == true
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Установка freeturn на VPS") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH, подниму WireGuard и запущу free-turn-proxy сервер на " +
+                        "порту $port (obf $obfProfile). Ключи и obf-key подставятся в локацию.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = ftPortText,
+                        onValueChange = { v -> ftPortText = v.filter(Char::isDigit) },
+                        label = { Text("Порт freeturn") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = dns,
+                        onValueChange = { dns = it.trim() },
+                        label = { Text("DNS клиента") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                // Обфускация: профиль, с которым стартует сервер (rtpopus / rtpopus2 / rtpopus3).
+                // Должен совпадать с клиентом — на успехе он подставляется в локацию.
+                SettingsDropdown(
+                    label = LocalStrings.current.obfuscationProfile,
+                    selectedValue = obfProfile,
+                    options = listOf("rtpopus", "rtpopus2", "rtpopus3"),
+                    enabled = !running,
+                    onValueSelected = { obfProfile = it },
+                    valueLabel = { it }
+                )
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull().orEmpty() + "\nКлючи подставлены в локацию.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() && (if (useKey) sshKey.isNotBlank() else password.isNotBlank()),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        scope.launch {
+                            val res = installer.install(
+                                FreeturnInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    freeturnPort = port,
+                                    obfProfile = obfProfile,
+                                    dns = dns.ifBlank { "1.1.1.1" },
+                                )
+                            ) { line -> log.add(line) }
+                            // On success, write the obf key + WireGuard keys into the draft; the composer
+                            // rebuilds the freeturn:// link + the WG outbound from these fields.
+                            res.getOrNull()?.let { ok ->
+                                onApplyDraft { d ->
+                                    d.copy(
+                                        outbound = VkTurnConfig.OUTBOUND_WIREGUARD,
+                                        mode = "udp",
+                                        obfProfile = obfProfile,
+                                        obfKey = ok.obfKey,
+                                        peerHost = ip.trim(),
+                                        peerPort = ok.freeturnPort.toString(),
+                                        wgPrivateKey = ok.clientWgPrivateKey,
+                                        wgPeerPublicKey = ok.serverWgPublicKey,
+                                        wgAddress = ok.clientWgAddress,
+                                        wgDns = dns.ifBlank { "1.1.1.1" },
+                                    )
+                                }
+                            }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = res.map { it.status }
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
+    )
+}
+
+/**
+ * One-tap dnstt-server installer. Collects SSH access to the VPS plus the dnstt UDP port + tunnel
+ * domain, and on confirm connects over SSH, uploads the bundled dnstt-server binary, generates a
+ * persistent Noise keypair and runs it (with its built-in SOCKS5 exit) as a systemd service
+ * ([rememberDnsttServerInstaller]). Progress streams live into a log area. On success the returned
+ * public key + domain + resolver (`host:port`, direct mode) are written straight into the location.
+ */
+@Composable
+private fun DnsttInstallDialog(
+    config: DnsttConfig,
+    onApplyConfig: (((DnsttConfig) -> DnsttConfig)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberDnsttServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf(deriveHost(config.resolver)) }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    var udpPortText by remember { mutableStateOf(DnsttInstallOptions.DEFAULT_UDP_PORT.toString()) }
+    var domain by remember { mutableStateOf(config.domain.ifBlank { DnsttInstallOptions.DEFAULT_DOMAIN }) }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.dnstt.DnsttInstallResult>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+
+    val udpPort = udpPortText.ifBlank { "5300" }.toIntOrNull()?.takeIf { it in 1..65535 }
+        ?: DnsttInstallOptions.DEFAULT_UDP_PORT
+    val succeeded = result?.isSuccess == true
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Автоустановка DNSTT на VPS") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH, загружу dnstt-сервер, сгенерирую ключ и запущу его на UDP-порту $udpPort " +
+                        "со встроенным SOCKS5-выходом. Публичный ключ, домен и резолвер ($ip:$udpPort) подставятся в локацию.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = domain,
+                        onValueChange = { domain = it.trim() },
+                        label = { Text("Домен туннеля") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(2f)
+                    )
+                    OutlinedTextField(
+                        value = udpPortText,
+                        onValueChange = { v -> udpPortText = v.filter(Char::isDigit) },
+                        label = { Text("UDP-порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull()?.message.orEmpty() + "\nКлюч и резолвер подставлены в локацию.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()) && domain.isNotBlank(),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        scope.launch {
+                            val res = installer.install(
+                                DnsttInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    udpPort = udpPort,
+                                    domain = domain.trim(),
+                                )
+                            ) { line -> log.add(line) }
+                            // On success, write the server's public key + domain + resolver into the
+                            // location so the dnstt client connects to the freshly installed server.
+                            res.getOrNull()?.let { ok ->
+                                onApplyConfig { c ->
+                                    c.copy(
+                                        domain = domain.trim(),
+                                        pubKey = ok.publicKey,
+                                        resolver = "${ip.trim()}:$udpPort"
+                                    )
+                                }
+                            }
+                            // Fold the final error into the log too, so the copied log includes it.
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
+    )
+}
+
+/** Extracts the host portion of a `host:port` resolver string (or returns it unchanged). */
+private fun deriveHost(resolver: String): String {
+    val trimmed = resolver.trim()
+    if (trimmed.isBlank()) return ""
+    val idx = trimmed.lastIndexOf(':')
+    return if (idx > 0) trimmed.substring(0, idx) else trimmed
 }
 
 /**
@@ -1592,7 +2211,9 @@ private fun engineProtocolLabel(type: String): String = when (type) {
     ProxyProfile.TYPE_TROJAN -> "Trojan"
     ProxyProfile.TYPE_SHADOWSOCKS -> "Shadowsocks"
     ProxyProfile.TYPE_AMNEZIAWG -> "AmneziaWG"
+    ProxyProfile.TYPE_TRUSTTUNNEL -> "Trust Tunnel"
     ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria2"
+    ProxyProfile.TYPE_NAIVE -> "Naive"
     else -> type.uppercase()
 }
 

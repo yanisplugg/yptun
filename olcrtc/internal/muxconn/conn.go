@@ -93,9 +93,10 @@ func releaseFrameBuf(bp *[]byte) {
 // buffer to decrypt into, ships it through the channel, and Read returns
 // the buffer to the pool once its caller has consumed all the bytes.
 type Conn struct {
-	ln     transport.Transport
-	send   func([]byte) error
-	cipher *crypto.Cipher
+	ln      transport.Transport
+	send    func([]byte) error
+	canSend func() bool // if nil, uses ln.CanSend
+	cipher  *crypto.Cipher
 
 	in        chan *[]byte
 	closeOnce sync.Once
@@ -121,6 +122,26 @@ func New(ln transport.Transport, cipher *crypto.Cipher) *Conn {
 	}
 }
 
+// NewControl wires a Conn that routes through the transport's isolated
+// control-plane channel (transport.ControlPlane). Returns nil if the
+// transport does not implement ControlPlane.
+func NewControl(ln transport.Transport, cipher *crypto.Cipher) *Conn {
+	cp, ok := ln.(transport.ControlPlane)
+	if !ok {
+		return nil
+	}
+	c := &Conn{
+		ln:      ln,
+		send:    cp.ControlSend,
+		canSend: cp.ControlCanSend,
+		cipher:  cipher,
+		in:      make(chan *[]byte, inboundQueue),
+		closeCh: make(chan struct{}),
+	}
+	cp.SetControlOnData(func(data []byte) { c.Push(data) })
+	return c
+}
+
 // NewPeer wires a Conn whose writes are addressed to a specific transport peer.
 func NewPeer(ln transport.PeerTransport, cipher *crypto.Cipher, peerID string) *Conn {
 	return &Conn{
@@ -132,6 +153,30 @@ func NewPeer(ln transport.PeerTransport, cipher *crypto.Cipher, peerID string) *
 		in:      make(chan *[]byte, inboundQueue),
 		closeCh: make(chan struct{}),
 	}
+}
+
+// NewPeerControl wires a Conn to the per-peer control plane of a
+// transport.PeerControlPlane. Returns nil if the transport does not implement
+// PeerControlPlane. The caller is responsible for registering a push callback
+// via cp.SetControlOnPeerData to drive this conn's Push.
+func NewPeerControl(ln transport.Transport, cipher *crypto.Cipher, peerID string) *Conn {
+	cp, ok := ln.(transport.PeerControlPlane)
+	if !ok {
+		return nil
+	}
+	c := &Conn{
+		ln: ln,
+		send: func(data []byte) error {
+			return cp.ControlSendTo(peerID, data)
+		},
+		canSend: func() bool {
+			return cp.ControlPeerCanSend(peerID)
+		},
+		cipher:  cipher,
+		in:      make(chan *[]byte, inboundQueue),
+		closeCh: make(chan struct{}),
+	}
+	return c
 }
 
 // Push hands an encrypted wire payload (one OnData event) to the conn.
@@ -146,7 +191,7 @@ func (c *Conn) Push(ciphertext []byte) {
 	pt, err := c.cipher.DecryptInto(*bufPtr, ciphertext)
 	if err != nil {
 		releaseFrameBuf(bufPtr)
-		logger.Debugf("muxconn: decrypt failed, dropping frame: %v", err)
+		logger.Infof("muxconn: decrypt failed len=%d: %v", len(ciphertext), err)
 		return
 	}
 	*bufPtr = pt
@@ -253,7 +298,11 @@ func (c *Conn) Write(p []byte) (int, error) {
 		if c.closed.Load() {
 			return 0, ErrClosed
 		}
-		if c.ln.CanSend() {
+		canSend := c.canSend
+		if canSend == nil {
+			canSend = c.ln.CanSend
+		}
+		if canSend() {
 			break
 		}
 		if attempt < fastSpinAttempts {

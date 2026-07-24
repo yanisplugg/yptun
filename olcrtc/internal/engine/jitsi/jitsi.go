@@ -24,6 +24,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,8 @@ import (
 
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
+	"github.com/pion/ice/v4"
 	pioninterceptor "github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -64,7 +67,11 @@ const (
 	// periodic XMPP ping IQ resets that idle timer end-to-end and works for
 	// the WebSocket transport too.
 	xmppKeepaliveInterval = 25 * time.Second
-	reconnectJoinTimeout  = 30 * time.Second
+	// xmppKeepaliveTimeout is the maximum time to wait for a pong reply.
+	// A half-open TCP connection lets Send() succeed while replies never
+	// arrive; waiting for the IQ result detects this and triggers reconnect.
+	xmppKeepaliveTimeout = 15 * time.Second
+	reconnectJoinTimeout = 30 * time.Second
 )
 
 // bridgeMagic tags every EndpointMessage produced by this engine. JVB broadcasts
@@ -378,13 +385,19 @@ func (s *Session) waitForJingle() {
 
 // completeJingleSetup opens the bridge and negotiates a PeerConnection only
 // when media or the SCTP bridge fallback needs one.
-func (s *Session) completeJingleSetup(ctx context.Context, jSess *j.Session) error {
+func (s *Session) completeJingleSetup( //nolint:cyclop // bridge logic is inherently branchy
+	ctx context.Context, jSess *j.Session,
+) error {
 	logger.Infof("jitsi: session-initiate received; colibri-ws=%s", jSess.ColibriWS)
 
 	needBridge := s.onData != nil || s.onPeerData != nil
-	sctpBridge := needBridge && jSess.ColibriWS == ""
+	// Video transports need the bridge for RequestVideo when colibri-ws
+	// is unavailable (SCTP fallback). Without it, JVB never forwards
+	// video to this endpoint.
+	wantVideo := s.shouldRequestVideo()
+	sctpBridge := (needBridge || wantVideo) && jSess.ColibriWS == ""
 
-	if needBridge && !sctpBridge {
+	if (needBridge || wantVideo) && !sctpBridge {
 		if err := s.openBridgeWS(ctx, jSess); err != nil {
 			return err
 		}
@@ -402,10 +415,55 @@ func (s *Session) completeJingleSetup(ctx context.Context, jSess *j.Session) err
 		}
 	}
 
+	// Now that the bridge is open (WebSocket or SCTP), tell JVB to
+	// forward video to this endpoint. Without this call JVB will NOT
+	// send any video RTP, so OnTrack never fires.
+	if wantVideo {
+		if err := jSess.RequestVideo(ctx, 720); err != nil {
+			logger.Debugf("jitsi: request video: %v", err)
+		}
+	}
+
 	// Restart recvLoop now that bridge is ready.
 	s.wg.Add(1)
 	go s.recvLoop()
+
+	// Announce our epoch immediately so the peer latches on the first RTT
+	// instead of waiting up to a full bridgeKeepalive tick (10s). Mirrors
+	// the reconnect paths, which already announce right after bridge ready.
+	s.wg.Add(1)
+	go s.announceEpoch(needBridge)
 	return nil
+}
+
+// announceEpoch broadcasts empty bridge frames until the peer latches (or a
+// short deadline elapses). A single announce can be dropped when the SCTP
+// receive side is not yet ready, which otherwise leaves the peer waiting for
+// the next bridgeKeepalive tick (10s). Retrying fast closes that gap.
+func (s *Session) announceEpoch(needBridge bool) {
+	defer s.wg.Done()
+	if !needBridge {
+		return
+	}
+	const (
+		interval = 200 * time.Millisecond
+		attempts = 25 // ~5s budget
+	)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range attempts {
+		if s.closed.Load() || s.peerEpoch.Load() != 0 {
+			return
+		}
+		if err := s.Send(nil); err != nil {
+			logger.Debugf("jitsi: epoch announce failed: %v", err)
+		}
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Session) openBridgeWS(ctx context.Context, jSess *j.Session) error {
@@ -464,6 +522,27 @@ func (s *Session) videoTrackHandler() func(*webrtc.TrackRemote, *webrtc.RTPRecei
 	return s.onVideoTrack
 }
 
+// newSettingEngine builds the pion SettingEngine for a conference PC. When a
+// socket protector is set or we are on Android, it routes Pion sockets through
+// ProtectedNet and disables mDNS. On Android 11+ SELinux denies
+// netlink_route_socket for untrusted apps (b/155595000), so ProtectedNet
+// (which uses getifaddrs instead of netlink) must be installed even without
+// a Protector. It fails closed instead of falling back to the default path.
+func newSettingEngine() (webrtc.SettingEngine, error) {
+	settings := webrtc.SettingEngine{}
+	settings.LoggerFactory = logger.NewPionLoggerFactory()
+	if protect.Protector == nil && runtime.GOOS != "android" {
+		return settings, nil
+	}
+	pnet, err := protect.NewProtectedNet()
+	if err != nil {
+		return settings, fmt.Errorf("protected net: %w", err)
+	}
+	settings.SetNet(pnet)
+	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	return settings, nil
+}
+
 // negotiatePC builds the pion PeerConnection, applies Jicofo's offer,
 // answers it and registers all the per-side wiring (DTLS state, ICE
 // callbacks, transceiver direction). It's branchy on purpose - Jingle
@@ -472,9 +551,13 @@ func (s *Session) videoTrackHandler() func(*webrtc.TrackRemote, *webrtc.RTPRecei
 // would obscure the wire order rather than clarify it.
 //
 //nolint:cyclop // sequential Jingle negotiation steps; refactoring would hide ordering
-func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge bool) error {
-	settings := webrtc.SettingEngine{}
-	settings.LoggerFactory = logger.NewPionLoggerFactory()
+func (s *Session) negotiatePC(
+	ctx context.Context, jSess *j.Session, sctpBridge bool,
+) error {
+	settings, err := newSettingEngine()
+	if err != nil {
+		return err
+	}
 
 	// pion auto-registers a default interceptor chain (sender reports,
 	// receiver reports, NACK, etc.) when none is supplied. Several of
@@ -494,6 +577,13 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge 
 	// the j library reference setup uses; source-add renegotiation drives
 	// reception of other participants' SSRCs on the same m=video section.
 	pcConfig := jSess.IceConfig()
+	// Some deployments advertise TURN/STUN services over XEP-0215 disco
+	// without a port or transport attribute; the resulting ICE URLs (e.g.
+	// "stun:host:") fail pion's validation inside NewPeerConnection with
+	// "invalid port" before any candidate is gathered. Normalise the list
+	// (default ports, canonical host:port, sane transport queries) so those
+	// relays stay usable, and drop only truly unsalvageable entries.
+	pcConfig.ICEServers = normaliseICEServers(pcConfig.ICEServers)
 	pcConfig.SDPSemantics = webrtc.SDPSemanticsPlanB
 
 	pc, err := api.NewPeerConnection(pcConfig)
@@ -514,9 +604,14 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge 
 
 	s.videoTrackMu.RLock()
 	hasLocalTracks := len(s.videoTracks) > 0
-	requestVideo := hasLocalTracks || s.onVideoTrack != nil
 	for _, track := range s.videoTracks {
-		if _, addErr := pc.AddTrack(track); addErr != nil {
+		dir := webrtc.RTPTransceiverDirectionSendonly
+		if s.wantsVideoReceive() {
+			dir = webrtc.RTPTransceiverDirectionSendrecv
+		}
+		if _, addErr := pc.AddTransceiverFromTrack(track,
+			webrtc.RTPTransceiverInit{Direction: dir},
+		); addErr != nil {
 			s.videoTrackMu.RUnlock()
 			_ = pc.Close()
 			return fmt.Errorf("add track: %w", addErr)
@@ -524,16 +619,10 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge 
 	}
 	s.videoTrackMu.RUnlock()
 
-	// When sending video, AddTrack already creates the video m-line (sendonly).
-	// When we have no local video we still need a video m-line; the choice
-	// matters for endpoint liveness on JVB (see addVideoOrKeepaliveTrack).
-	var kaTrack *webrtc.TrackLocalStaticSample
-	if !hasLocalTracks {
-		kaTrack, err = s.addVideoOrKeepaliveTrack(pc)
-		if err != nil {
-			_ = pc.Close()
-			return err
-		}
+	kaTrack, err := s.setupVideoMLine(pc, hasLocalTracks)
+	if err != nil {
+		_ = pc.Close()
+		return err
 	}
 
 	pc.OnTrack(func(track *webrtc.TrackRemote, recv *webrtc.RTPReceiver) {
@@ -589,7 +678,6 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge 
 		_ = pc.Close()
 		return fmt.Errorf("session-accept: %w", err)
 	}
-	logger.Debugf("jitsi: session-accept sent")
 
 	// Announce our SSRCs explicitly via source-add. Even though session-accept
 	// already carries them, Jicofo only propagates sources advertised via
@@ -600,12 +688,8 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session, sctpBridge 
 		}
 	}
 
-	if requestVideo {
-		// Tell JVB to forward video streams to this endpoint.
-		if err := jSess.RequestVideo(ctx, 720); err != nil {
-			logger.Debugf("jitsi: request video: %v", err)
-		}
-	}
+	// RequestVideo is called after the bridge opens in completeJingleSetup,
+	// because the SCTP bridge may not be ready yet at this point.
 
 	s.pcMu.Lock()
 	s.pc = pc
@@ -697,6 +781,19 @@ func (s *Session) rtpKeepalive(pcCtx context.Context, track *webrtc.TrackLocalSt
 	}
 }
 
+// setupVideoMLine ensures the PeerConnection has the right video m-line.
+// When no local tracks exist, delegates to addVideoOrKeepaliveTrack.
+// When local tracks exist, AddTransceiverFromTrack already created the
+// video m-line with the right direction (sendonly or sendrecv).
+func (s *Session) setupVideoMLine(
+	pc *webrtc.PeerConnection, hasLocalTracks bool,
+) (*webrtc.TrackLocalStaticSample, error) {
+	if !hasLocalTracks {
+		return s.addVideoOrKeepaliveTrack(pc)
+	}
+	return nil, nil //nolint:nilnil // no keepalive needed when local tracks exist
+}
+
 // addVideoOrKeepaliveTrack adds the appropriate video m-line when no local
 // tracks are present. For video-receiver paths it adds a recvonly transceiver;
 // for pure byte-stream paths it adds a sendonly VP8 keepalive track that pumps
@@ -753,7 +850,6 @@ func randomTrackSuffix() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
-
 
 // updates its endpoint lastActivity timestamp. Without this, JVB expires the
 // endpoint after its inactivity timeout (~30-60s) when the ICE/DTLS path is
@@ -838,15 +934,21 @@ func (s *Session) xmppKeepalive() {
 				continue
 			}
 			id := conn.NextID()
+			// Target the XMPP domain (from the bound JID), not the web
+			// host. On instances where the public web host differs from
+			// the XMPP virtualhost (e.g. host meet.mamba.group vs domain
+			// meet.jitsi) Prosody treats the web host as a remote domain
+			// and rejects the ping with not-allowed, leaving keepalive
+			// effectively dead.
 			ping := fmt.Sprintf(
 				`<iq type="get" to="%s" id="%s" xmlns="jabber:client"><ping xmlns="urn:xmpp:ping"/></iq>`,
-				conn.Host(), id,
+				xmppDomain(conn.JID(), conn.Host()), id,
 			)
-			if err := conn.Send(ping); err != nil {
+			if _, err := conn.SendIQWait(ping, id, xmppKeepaliveTimeout); err != nil {
 				if s.closed.Load() {
 					return
 				}
-				logger.Debugf("jitsi: xmpp keepalive send: %v", err)
+				logger.Debugf("jitsi: xmpp keepalive: %v", err)
 				// Avoid spamming the supervisor with identical
 				// requests during the reconnect; once a request
 				// is enqueued the channel is buffered to depth 1,
@@ -860,6 +962,24 @@ func (s *Session) xmppKeepalive() {
 			lastReconnectRequestErr = ""
 		}
 	}
+}
+
+// xmppDomain extracts the XMPP domain from a bound JID of the form
+// "node@domain/resource" (e.g. "uuid@meet.jitsi/res" -> "meet.jitsi"). It
+// returns fallback when jid has no domain part, so a malformed or empty JID
+// degrades to the previous web-host target instead of an empty to-address.
+func xmppDomain(jid, fallback string) string {
+	_, rest, ok := strings.Cut(jid, "@")
+	if !ok || rest == "" {
+		return fallback
+	}
+	if domain, _, found := strings.Cut(rest, "/"); found {
+		rest = domain
+	}
+	if rest == "" {
+		return fallback
+	}
+	return rest
 }
 
 // trickleDrainLoop reads the XMPP stanza channel and feeds any
@@ -1151,12 +1271,16 @@ func (s *Session) recvLoop() {
 
 	jSess := s.jSess.Load()
 	if jSess == nil || (s.onData == nil && s.onPeerData == nil) || !s.bridgeReady.Load() {
+		logger.Debugf("jitsi: recvLoop early exit jSess=%v onData=%v onPeerData=%v bridgeReady=%v",
+			jSess != nil, s.onData != nil, s.onPeerData != nil, s.bridgeReady.Load())
 		return
 	}
 	msgs := jSess.BridgeMessages()
 	if msgs == nil {
+		logger.Debugf("jitsi: recvLoop: BridgeMessages() returned nil, exiting")
 		return
 	}
+	logger.Debugf("jitsi: recvLoop started")
 	for {
 		select {
 		case <-s.done:
@@ -1262,10 +1386,30 @@ func (s *Session) acceptEpochFrame(payload []byte) ([]byte, bool) {
 			receiverEpoch, s.localEpoch.Load())
 		return nil, false
 	}
+	// Untargeted (broadcast) frame handling. A broadcast carries
+	// receiverEpoch==0 because the sender does not yet know our localEpoch.
+	//
+	// We MUST accept a broadcast while we are still unlatched (peerEpoch==0):
+	// the client blocks in WaitForPeer until peerEpoch latches, and that latch
+	// can only come from the peer's first frame. On both initial connect and
+	// after a reconnect (which resets peerEpoch to 0 and re-announces via a
+	// broadcast Send(nil)), that first frame is a broadcast - the sender has
+	// not learned our epoch yet. Dropping it here wedges WaitForPeer for its
+	// whole timeout and the link never comes up ("ping works, no connection").
+	//
+	// Once we ARE latched (peerEpoch!=0) we only accept broadcasts from that
+	// same latched sender; a broadcast from a different senderEpoch is a
+	// third-party olcrtc instance or a stale ghost in a polluted room and is
+	// dropped. A genuine peer reconnect arrives as a fresh-epoch broadcast
+	// only after peerEpoch was reset to 0, so it bootstraps via the unlatched
+	// branch above.
 	if s.requireTargetedPeer && s.onPeerData == nil && receiverEpoch != s.localEpoch.Load() {
-		logger.Debugf("jitsi: drop untargeted bridge frame senderEpoch=0x%08x localEpoch=0x%08x",
-			senderEpoch, s.localEpoch.Load())
-		return nil, false
+		knownPeerEpoch := s.peerEpoch.Load()
+		if knownPeerEpoch != 0 && senderEpoch != knownPeerEpoch {
+			logger.Debugf("jitsi: drop untargeted bridge frame senderEpoch=0x%08x localEpoch=0x%08x",
+				senderEpoch, s.localEpoch.Load())
+			return nil, false
+		}
 	}
 	// Update the peer-epoch latch and ALWAYS accept the frame.
 	//
@@ -1696,10 +1840,13 @@ func (s *Session) teardownPC() {
 
 // reinitiateBridge negotiates a new PeerConnection only when required and opens
 // the bridge channel.
-func (s *Session) reinitiateBridge(ctx context.Context, jSess *j.Session) error {
+func (s *Session) reinitiateBridge( //nolint:cyclop // bridge logic is inherently branchy
+	ctx context.Context, jSess *j.Session,
+) error {
 	needBridge := s.onData != nil || s.onPeerData != nil
-	sctpBridge := needBridge && jSess.ColibriWS == ""
-	if s.shouldNegotiatePC(needBridge) {
+	wantVideo := s.shouldRequestVideo()
+	sctpBridge := (needBridge || wantVideo) && jSess.ColibriWS == ""
+	if s.shouldNegotiatePC(needBridge) || wantVideo {
 		if err := s.negotiatePC(ctx, jSess, sctpBridge); err != nil {
 			logger.Warnf("jitsi: negotiate after reinitiate failed: %v - full reconnect", err)
 			return s.reconnectFull(ctx)
@@ -1710,7 +1857,7 @@ func (s *Session) reinitiateBridge(ctx context.Context, jSess *j.Session) error 
 			logger.Warnf("jitsi: bridge after reinitiate failed: %v - full reconnect", err)
 			return s.reconnectFull(ctx)
 		}
-	} else if needBridge {
+	} else if needBridge || wantVideo {
 		if err := s.openBridgeWS(ctx, jSess); err != nil {
 			logger.Warnf("jitsi: bridge after reinitiate failed: %v - full reconnect", err)
 			return s.reconnectFull(ctx)
@@ -1814,6 +1961,23 @@ func (s *Session) resetPeerEpochs() {
 	s.peerEpochMu.Unlock()
 }
 
+// WaitForPeer blocks until at least one remote participant has sent an epoch
+// frame (confirming their bridge is open), or ctx is cancelled.
+// Implements engine.PeerReadySession.
+func (s *Session) WaitForPeer(ctx context.Context) error {
+	const pollInterval = 50 * time.Millisecond
+	for {
+		if s.peerEpoch.Load() != 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for peer: %w", ctx.Err())
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
 // CanSend reports whether the session is ready to accept new data.
 func (s *Session) CanSend() bool {
 	if s.closed.Load() {
@@ -1828,6 +1992,9 @@ func (s *Session) CanSend() bool {
 	}
 	return s.bridgeReady.Load()
 }
+
+// SubscriberCanSend reports whether the subscriber path is ready to send.
+func (s *Session) SubscriberCanSend() bool { return s.CanSend() }
 
 // GetSendQueue exposes the outbound queue for upstream metrics.
 func (s *Session) GetSendQueue() chan []byte { return s.sendQueue }

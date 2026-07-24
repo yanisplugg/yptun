@@ -41,7 +41,6 @@ var lastNames = []string{
 	"Фёдоров", "Чайковский", "Черный", "Яковлев",
 }
 
-// convertToFemaleSurname handles Russian suffix rules
 func convertToFemaleSurname(surname string) string {
 	if strings.HasSuffix(surname, "ий") || strings.HasSuffix(surname, "ый") || strings.HasSuffix(surname, "ой") {
 		return surname[:len(surname)-4] + "ая"
@@ -62,7 +61,7 @@ func generateName() string {
 	} else {
 		fn = maleFirstNames[rand.Intn(len(maleFirstNames))]
 	}
-	// 70% chance to have a last name
+
 	if rand.Float32() < 0.3 {
 		return fn
 	}

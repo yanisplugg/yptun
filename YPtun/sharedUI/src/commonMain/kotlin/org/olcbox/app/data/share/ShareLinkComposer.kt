@@ -23,6 +23,11 @@ object ShareLinkComposer {
             val ini = profile.awgConfig.takeIf { it.isNotBlank() } ?: return null
             return "amneziawg://" + Base64.UrlSafe.encode(ini.encodeToByteArray()).trimEnd('=')
         }
+        // Trust Tunnel: the tt:// deep-link is stored verbatim — share it as-is (round-trips via
+        // ShareLinkParser/TrustTunnelParser).
+        if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
+            return profile.ttConfig.takeIf { it.isNotBlank() }
+        }
         // A full raw Xray config or a verbatim sing-box outbound: share the JSON as-is.
         profile.rawXrayConfig?.takeIf { it.isNotBlank() }?.let { return it }
 
@@ -32,8 +37,19 @@ object ShareLinkComposer {
             ProxyProfile.TYPE_SHADOWSOCKS -> composeShadowsocks(profile)
             ProxyProfile.TYPE_VMESS -> composeVmess(profile)
             ProxyProfile.TYPE_HYSTERIA2 -> composeHysteria2(profile)
+            ProxyProfile.TYPE_NAIVE -> composeNaive(profile)
             else -> profile.rawOutbound?.takeIf { it.isNotBlank() }
         }
+    }
+
+    private fun composeNaive(p: ProxyProfile): String = buildString {
+        append(if (p.naiveQuic) "naive+quic://" else "naive+https://")
+        if (p.username.isNotBlank() || p.password.isNotBlank()) {
+            append(percentEncode(p.username)).append(':').append(percentEncode(p.password)).append('@')
+        }
+        append(p.server).append(':').append(p.serverPort)
+        if (p.sni.isNotBlank()) append("?sni=").append(percentEncode(p.sni))
+        appendRemark(p.tag)
     }
 
     private fun composeHysteria2(p: ProxyProfile): String = buildString {

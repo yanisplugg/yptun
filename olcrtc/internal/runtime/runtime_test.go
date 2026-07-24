@@ -37,12 +37,19 @@ func TestSmuxConfigDefault(t *testing.T) {
 	if cfg.Version != 2 || cfg.MaxFrameSize != 32768 {
 		t.Fatalf("SmuxConfig(0) = %+v", cfg)
 	}
-	if cfg.MaxReceiveBuffer != 8*1024*1024 || cfg.MaxStreamBuffer != 512*1024 {
+	if cfg.MaxReceiveBuffer != 32*1024*1024 || cfg.MaxStreamBuffer != 4*1024*1024 {
 		t.Fatalf("SmuxConfig(0) buffers = %+v", cfg)
 	}
 	if cfg.KeepAliveDisabled || cfg.KeepAliveInterval != 10*time.Second ||
-		cfg.KeepAliveTimeout != 30*time.Second {
+		cfg.KeepAliveTimeout != 120*time.Second {
 		t.Fatalf("SmuxConfig(0) keepalive = %+v", cfg)
+	}
+}
+
+func TestSmuxConfigLong(t *testing.T) {
+	cfg := runtime.SmuxConfigLong(0)
+	if cfg.KeepAliveInterval != 10*time.Second || cfg.KeepAliveTimeout != 120*time.Second {
+		t.Fatalf("SmuxConfigLong(0) keepalive = %+v", cfg)
 	}
 }
 

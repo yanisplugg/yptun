@@ -14,8 +14,6 @@ import (
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// doRequest отправляет POST form-запрос по url через tls-клиент с браузерным
-// профилем и десериализует JSON-тело ответа.
 func (c *Client) doRequest(ctx context.Context, httpClient tlsclient.HttpClient, profile browserprofile.Profile, data, url string) (map[string]any, error) {
 	parsedURL, err := neturl.Parse(url)
 	if err != nil {
@@ -36,7 +34,9 @@ func (c *Client) doRequest(ctx context.Context, httpClient tlsclient.HttpClient,
 	req.Header.Set("Sec-Fetch-Site", "same-site")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
-	req.Header.Set("Priority", "u=1, i")
+	if browserprofile.Family(profile) != browserprofile.Firefox {
+		req.Header.Set("Priority", "u=1, i")
+	}
 
 	httpResp, err := httpClient.Do(req)
 	if err != nil {

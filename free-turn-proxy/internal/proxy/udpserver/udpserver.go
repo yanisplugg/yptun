@@ -4,13 +4,11 @@ package udpserver
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
-	"github.com/samosvalishe/free-turn-proxy/internal/stats"
 )
 
 const (
@@ -34,14 +32,6 @@ func Handle(ctx context.Context, logger logx.Logger, conn net.Conn, connectAddr 
 
 	ctx2, cancel := context.WithCancel(ctx)
 	defer cancel()
-	st := stats.New(logger.DebugEnabled())
-	go st.LogEvery(
-		ctx2,
-		logger.Debugf,
-		fmt.Sprintf("[DTLS %s]", conn.RemoteAddr()),
-		"dtls-to-backend",
-		"backend-to-dtls",
-	)
 
 	context.AfterFunc(ctx2, func() {
 		if err := conn.SetDeadline(time.Now()); err != nil {
@@ -55,18 +45,18 @@ func Handle(ctx context.Context, logger logx.Logger, conn net.Conn, connectAddr 
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		defer cancel()
-		copyOne(ctx2, logger, conn, serverConn, st.AddTx)
+		copyOne(ctx2, logger, conn, serverConn)
 	})
 	wg.Go(func() {
 		defer cancel()
-		copyOne(ctx2, logger, serverConn, conn, st.AddRx)
+		copyOne(ctx2, logger, serverConn, conn)
 	})
 	wg.Wait()
 }
 
 // copyOne читает из src и пишет в dst до отмены ctx или ошибки любой стороны.
 // Каждый read/write сбрасывает idle timeout - зависший конец закрывается, а не висит.
-func copyOne(ctx context.Context, logger logx.Logger, src, dst net.Conn, count func(int)) {
+func copyOne(ctx context.Context, logger logx.Logger, src, dst net.Conn) {
 	buf := make([]byte, udpRelayBufSize)
 	for {
 		select {
@@ -87,9 +77,7 @@ func copyOne(ctx context.Context, logger logx.Logger, src, dst net.Conn, count f
 			logger.Errorf("udpserver: set write deadline: %s", werr)
 			return
 		}
-		written, werr := dst.Write(buf[:n])
-		count(written)
-		if werr != nil {
+		if _, werr := dst.Write(buf[:n]); werr != nil {
 			logger.Debugf("udpserver: write: %s", werr)
 			return
 		}

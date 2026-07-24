@@ -31,6 +31,7 @@ import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
@@ -204,7 +205,7 @@ class LocationViewModel(
         }
 
     init {
-        loadLocations()
+        seedFromViewIndexThenLoad()
         viewModelScope.launch {
             locationsRepository.changes
                 .drop(1)
@@ -213,6 +214,51 @@ class LocationViewModel(
                 }
         }
     }
+
+    /**
+     * Paints the list INSTANTLY on a cold start: first reads the tiny [LocationViewIndex] (names +
+     * metadata only — decodes in a few ms) and shows it, then kicks off the authoritative full decode
+     * which swaps in the real configs (needed for pinging/connecting). The index items carry a
+     * display-only [LocationConfig] (no proxy/key), so they render the row label/engine but are not
+     * "complete" — pings stay idle for them until the full load replaces them a moment later.
+     *
+     * The seed is skipped if the full load has already populated the list (e.g. no index yet), so the
+     * authoritative data is never overwritten by a stale index.
+     */
+    private fun seedFromViewIndexThenLoad() {
+        viewModelScope.launch {
+            val index = withContext(Dispatchers.IO) {
+                runCatching { locationsRepository.getViewIndex() }.getOrNull()
+            }
+            if (index != null && !hasLoadedLocations && locations.isEmpty()) {
+                locations.clear()
+                locations.addAll(index.items.map { it.toDisplayLocationItem() })
+                selectedLocationId = index.activeLocationId
+                    ?: index.items.firstOrNull()?.storageId
+                hasLoadedLocations = true
+            }
+            loadLocations()
+        }
+    }
+
+    /** Builds a display-only [LocationItem] from a view-index entry (no connection payload). */
+    private fun LocationViewIndex.Item.toDisplayLocationItem(): LocationItem = LocationItem(
+        storageId = storageId,
+        fullName = name,
+        config = LocationConfig(
+            name = name,
+            engine = engine,
+            bypassProvider = authProvider,
+            transport = transport,
+            // Display-only proxy stub (type + server) so the subtitle reads "VLESS · host" on the
+            // seed instead of a bare "Proxy". Not connect-complete — the real payload swaps in on load.
+            proxy = if (proxyType.isNotBlank() || proxyServer.isNotBlank()) {
+                ProxyProfile(type = proxyType.ifBlank { ProxyProfile.TYPE_VLESS }, server = proxyServer)
+            } else null
+        ),
+        subscriptionUrl = subscriptionUrl,
+        metadata = metadata
+    )
 
     fun loadLocations(onComplete: () -> Unit = {}) {
         val requestId = ++loadLocationsRequest
@@ -284,7 +330,9 @@ class LocationViewModel(
     ) {
         // Probe up to [parallelism] locations at once (the ping-speed knob). A fresh semaphore per pass
         // so a changed setting takes effect immediately.
-        val semaphore = Semaphore(parallelism.coerceIn(1, 20))
+        val semaphore = Semaphore(
+            parallelism.coerceIn(1, org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM)
+        )
         val previousPings = currentPingsSnapshot()
         // Seed the live map with prior results so a targeted refresh doesn't drop other groups' pings.
         livePings.clear()
@@ -700,10 +748,21 @@ class LocationViewModel(
             if (isChainOrStd && editingConfig.proxy?.isComplete() != true) {
                 editingConfig = editingConfig.copy(proxy = profile)
                 editingProxyLink = trimmed
+                proxy2Error = null
             } else {
+                // Foolproofing: refuse the user's OWN main proxy as the cascade exit — chaining a node
+                // through itself loops / can't work (and is the usual mistake of pasting the same link).
+                val main = editingConfig.proxy
+                if (main != null && main.isComplete() && main.isSameNodeAs(profile)) {
+                    editingConfig = editingConfig.copy(proxy2 = null)
+                    proxy2Error = org.olcbox.app.ui.i18n.stringsFor(
+                        org.olcbox.app.ui.i18n.LocalizationState.effective
+                    ).secondProxySameAsMain
+                    return
+                }
                 editingConfig = editingConfig.copy(proxy2 = profile)
+                proxy2Error = null
             }
-            proxy2Error = null
         } else {
             editingConfig = editingConfig.copy(proxy2 = null)
             proxy2Error = "Unrecognized proxy link or sing-box config"
@@ -718,7 +777,9 @@ class LocationViewModel(
     private fun proxyFromAnyLink(trimmed: String): ProxyProfile? {
         ShareLinkParser.parse(trimmed)?.let { return it }
         rawOutboundProfile(trimmed)?.let { return it }
-        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy ?: config.proxy2 }
+        // When the pasted yptun://inbound is itself a 2-hop cascade, chain through its EXIT (proxy2)
+        // so my hop's public IP matches the shared location's exit; fall back to its main proxy.
+        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy2 ?: config.proxy }
         return null
     }
 

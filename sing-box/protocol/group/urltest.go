@@ -14,6 +14,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/batch"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -33,7 +34,6 @@ var _ adapter.OutboundGroup = (*URLTest)(nil)
 type URLTest struct {
 	outbound.Adapter
 	ctx                          context.Context
-	router                       adapter.Router
 	outbound                     adapter.OutboundManager
 	connection                   adapter.ConnectionManager
 	logger                       log.ContextLogger
@@ -50,7 +50,6 @@ func NewURLTest(ctx context.Context, router adapter.Router, logger log.ContextLo
 	outbound := &URLTest{
 		Adapter:                      outbound.NewAdapter(C.TypeURLTest, tag, []string{N.NetworkTCP, N.NetworkUDP}, options.Outbounds),
 		ctx:                          ctx,
-		router:                       router,
 		outbound:                     service.FromContext[adapter.OutboundManager](ctx),
 		connection:                   service.FromContext[adapter.ConnectionManager](ctx),
 		logger:                       logger,
@@ -170,9 +169,23 @@ func (s *URLTest) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 	s.connection.NewPacketConnection(ctx, s, conn, metadata, onClose)
 }
 
+func (s *URLTest) NewDirectRouteConnection(metadata adapter.InboundContext, routeContext tun.DirectRouteContext, timeout time.Duration) (tun.DirectRouteDestination, error) {
+	s.group.Touch()
+	selected := s.group.selectedOutboundTCP
+	if selected == nil {
+		selected, _ = s.group.Select(N.NetworkTCP)
+	}
+	if selected == nil {
+		return nil, E.New("missing supported outbound")
+	}
+	if !common.Contains(selected.Network(), metadata.Network) {
+		return nil, E.New(metadata.Network, " is not supported by outbound: ", selected.Tag())
+	}
+	return selected.(adapter.DirectRouteOutbound).NewDirectRouteConnection(metadata, routeContext, timeout)
+}
+
 type URLTestGroup struct {
 	ctx                          context.Context
-	router                       adapter.Router
 	outbound                     adapter.OutboundManager
 	pause                        pause.Manager
 	pauseCallback                *list.Element[pause.Callback]
@@ -251,9 +264,10 @@ func (g *URLTestGroup) Touch() {
 		g.lastActive.Store(time.Now())
 		return
 	}
-	g.ticker = time.NewTicker(g.interval)
-	go g.loopCheck()
-	g.pauseCallback = pause.RegisterTicker(g.pause, g.ticker, g.interval, nil)
+	ticker := time.NewTicker(g.interval)
+	g.ticker = ticker
+	g.pauseCallback = pause.RegisterTicker(g.pause, ticker, g.interval, nil)
+	go g.loopCheck(ticker, g.close)
 }
 
 func (g *URLTestGroup) Close() error {
@@ -263,7 +277,9 @@ func (g *URLTestGroup) Close() error {
 		return nil
 	}
 	g.ticker.Stop()
+	g.ticker = nil
 	g.pause.UnregisterCallback(g.pauseCallback)
+	g.pauseCallback = nil
 	close(g.close)
 	return nil
 }
@@ -312,23 +328,25 @@ func (g *URLTestGroup) Select(network string) (adapter.Outbound, bool) {
 	return minOutbound, true
 }
 
-func (g *URLTestGroup) loopCheck() {
+func (g *URLTestGroup) loopCheck(ticker *time.Ticker, closeChan <-chan struct{}) {
 	if time.Since(g.lastActive.Load()) > g.interval {
 		g.lastActive.Store(time.Now())
 		g.CheckOutbounds(false)
 	}
 	for {
 		select {
-		case <-g.close:
+		case <-closeChan:
 			return
-		case <-g.ticker.C:
+		case <-ticker.C:
 		}
 		if time.Since(g.lastActive.Load()) > g.idleTimeout {
 			g.access.Lock()
-			g.ticker.Stop()
-			g.ticker = nil
-			g.pause.UnregisterCallback(g.pauseCallback)
-			g.pauseCallback = nil
+			if g.ticker == ticker {
+				g.ticker.Stop()
+				g.ticker = nil
+				g.pause.UnregisterCallback(g.pauseCallback)
+				g.pauseCallback = nil
+			}
 			g.access.Unlock()
 			return
 		}

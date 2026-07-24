@@ -40,29 +40,30 @@ func getAEAD(key []byte) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-// ─── Configuration ───
-
-// ObfsConfig holds per-session obfuscation parameters.
 type ObfsConfig struct {
-	SSRC        uint32 // Synchronization Source — random per session
-	PayloadType uint8  // RTP payload type (111 = OPUS dynamic)
-	PaddingMax  int    // Max random padding bytes appended
+	SSRC        uint32
+	PayloadType uint8
+	PaddingMax  int
 }
 
-// NewObfsConfig creates a config with random SSRC and sane defaults.
-func NewObfsConfig() *ObfsConfig {
+func NewObfsConfig(mode string) *ObfsConfig {
 	var buf [4]byte
 	rand.Read(buf[:])
+
+	pt := uint8(111)
+	pad := 24
+	if mode == "video" {
+		pt = 96
+		pad = 60
+	}
+
 	return &ObfsConfig{
 		SSRC:        binary.BigEndian.Uint32(buf[:]),
-		PayloadType: 111, // dynamic PT for OPUS
-		PaddingMax:  24,
+		PayloadType: pt,
+		PaddingMax:  pad,
 	}
 }
 
-// ─── Per-direction state (sequence + timestamp counters) ───
-
-// ObfsState tracks monotonically increasing RTP sequence number and timestamp using a 48-bit packet counter.
 type ObfsState struct {
 	mu      sync.Mutex
 	initSeq uint16
@@ -70,7 +71,6 @@ type ObfsState struct {
 	count   uint64
 }
 
-// NewObfsState creates a state with random initial seq/ts and count=0.
 func NewObfsState() *ObfsState {
 	var buf [6]byte
 	rand.Read(buf[:])
@@ -81,26 +81,15 @@ func NewObfsState() *ObfsState {
 	}
 }
 
-// ─── Nonce derivation ───
-
-// obfsBuildNonce deterministically builds a 12-byte AEAD nonce from RTP fields.
-//
-//	[SSRC 4B][SeqNum 2B][0x00 0x00][Timestamp 4B]
 func obfsBuildNonce(ssrc uint32, seq uint16, ts uint32) []byte {
 	n := make([]byte, 12)
 	binary.BigEndian.PutUint32(n[0:4], ssrc)
 	binary.BigEndian.PutUint16(n[4:6], seq)
-	// n[6], n[7] = 0x00 — zero padding for unique nonce space
+
 	binary.BigEndian.PutUint32(n[8:12], ts)
 	return n
 }
 
-// ─── Wrap (encrypt + add RTP header) ───
-
-// obfsWrapPacket wraps a plaintext payload into an RTP-like packet with authenticated encryption.
-// The output looks like:
-//
-//	[V=2,P=1,X=0,CC=0 | PT | SeqNum | Timestamp | SSRC | encrypted_payload | padding | padLen]
 func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]byte, error) {
 	if len(key) != wrapKeyLen {
 		return nil, fmt.Errorf("obfs: key must be %d bytes (got %d)", wrapKeyLen, len(key))
@@ -117,24 +106,20 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	seq := state.initSeq + uint16(c)
 	ts := state.initTs + uint32(c)*960 + uint32(c>>16)
 
-	// Build nonce from RTP fields
 	nonce := obfsBuildNonce(cfg.SSRC, seq, ts)
 
-	// Determine padding
 	padRand := 0
 	if cfg.PaddingMax > 0 {
 		var rndBuf [1]byte
 		rand.Read(rndBuf[:])
 		padRand = int(rndBuf[0]) % cfg.PaddingMax
 	}
-	padTotal := padRand + 1 // +1 for the length byte itself
+	padTotal := padRand + 1
 
-	// Allocate output: 12 (header) + payload + AEAD tag + padTotal
 	outLen := 12 + len(payload) + chacha20poly1305.Overhead + padTotal
 	out := make([]byte, outLen)
 
-	// RTP Header (12 bytes)
-	out[0] = 0x80 | 0x20 // V=2, P=1 (padding present)
+	out[0] = 0x80 | 0x20
 	out[1] = cfg.PayloadType & 0x7F
 	binary.BigEndian.PutUint16(out[2:4], seq)
 	binary.BigEndian.PutUint32(out[4:8], ts)
@@ -146,41 +131,32 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	}
 	sealed := aead.Seal(out[12:12], nonce, payload, out[:12])
 
-	// Random padding bytes
 	padStart := 12 + len(sealed)
 	if padRand > 0 {
 		rand.Read(out[padStart : padStart+padRand])
 	}
 
-	// Last byte = total padding count (RFC 3550 §5.1)
 	out[outLen-1] = byte(padTotal)
 
 	return out, nil
 }
 
-// ─── Unwrap (strip RTP header + decrypt) ───
-
-// obfsUnwrapPacket strips the RTP header, removes padding, and decrypts the payload.
-// Returns number of plaintext bytes written to dst.
 func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	if len(key) != wrapKeyLen {
 		return 0, fmt.Errorf("obfs: key must be %d bytes (got %d)", wrapKeyLen, len(key))
 	}
-	if len(wire) < 13 { // 12 header + at least 1 byte
+	if len(wire) < 13 {
 		return 0, errors.New("obfs: packet too short")
 	}
 
-	// Validate RTP version
 	if (wire[0] >> 6) != 2 {
 		return 0, errors.New("obfs: not RTP v2")
 	}
 
-	// Extract RTP fields for nonce
 	seq := binary.BigEndian.Uint16(wire[2:4])
 	ts := binary.BigEndian.Uint32(wire[4:8])
 	ssrc := binary.BigEndian.Uint32(wire[8:12])
 
-	// Handle padding (P bit)
 	payloadEnd := len(wire)
 	if wire[0]&0x20 != 0 {
 		padLen := int(wire[len(wire)-1])
@@ -198,7 +174,6 @@ func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 		return 0, errors.New("obfs: dst buffer too small")
 	}
 
-	// Build nonce and decrypt
 	nonce := obfsBuildNonce(ssrc, seq, ts)
 	aead, err := getAEAD(key)
 	if err != nil {
@@ -212,19 +187,15 @@ func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	return len(plain), nil
 }
 
-// ─── Detection ───
-
-// obfsIsRTPPacket checks if a raw UDP packet looks like our obfuscated RTP.
-// Used by the server and client to reject non-obfuscated packets.
 func obfsIsRTPPacket(wire []byte) bool {
 	if len(wire) < 13 {
 		return false
 	}
-	// RTP version must be 2
+
 	if (wire[0] >> 6) != 2 {
 		return false
 	}
-	// Our payload type = 111
+
 	pt := wire[1] & 0x7F
-	return pt == 111
+	return pt == 111 || pt == 96
 }

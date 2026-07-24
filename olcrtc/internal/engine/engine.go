@@ -78,6 +78,9 @@ type Session interface {
 	SetEndedCallback(cb func(string))
 	WatchConnection(ctx context.Context)
 	CanSend() bool
+	// SubscriberCanSend reports whether the subscriber PC is connected.
+	// Unlike CanSend, it does not require the publisher PC to be ready.
+	SubscriberCanSend() bool
 	GetSendQueue() chan []byte
 	GetBufferedAmount() uint64
 	Capabilities() Capabilities
@@ -93,6 +96,13 @@ type Session interface {
 // specific remote endpoint and report the sender endpoint on receive.
 type PeerSession interface {
 	SendTo(peerID string, data []byte) error
+}
+
+// PeerReadySession is implemented by engines that can signal when a remote
+// peer has appeared in the shared room. WaitForPeer blocks until the first
+// epoch frame from a remote participant is received, or ctx is cancelled.
+type PeerReadySession interface {
+	WaitForPeer(ctx context.Context) error
 }
 
 // VideoTrackCapable is implemented by engines that can exchange video tracks.

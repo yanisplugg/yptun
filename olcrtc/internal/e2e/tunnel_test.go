@@ -21,6 +21,7 @@ import (
 
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
 	"github.com/openlibrecommunity/olcrtc/internal/client"
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/server"
@@ -43,7 +44,7 @@ const (
 	localDNSServer      = "127.0.0.1:53"
 	videoHWNone         = "none"
 	testClientDeviceID  = "client-1"
-	defaultJitsiRoomURL = "https://meet.handyweb.org/deadbeef"
+	defaultJitsiRoomURL = "https://meet.ffmuc.net"
 )
 
 var (
@@ -138,6 +139,7 @@ func (r *memoryRoom) connectedCount() int {
 	return count
 }
 
+//nolint:unparam // want is fixed at 1 today but kept for call-site clarity/future multi-peer rooms
 func (r *memoryRoom) waitConnected(t *testing.T, want int) {
 	t.Helper()
 
@@ -183,6 +185,25 @@ func (r *memoryRoom) triggerEnded(reason string) {
 	}
 }
 
+// enableBlackhole flips every stream in the room into the silent-dead-link
+// state: the carrier stays "connected" but no further frame is delivered.
+// Only the control-stream liveness timeout can detect this, so the time from
+// here to the first reconnect attempt measures the dead-link detection window.
+func (r *memoryRoom) enableBlackhole() {
+	r.mu.Lock()
+	streams := make([]*memoryStream, 0, len(r.streams))
+	for stream := range r.streams {
+		streams = append(streams, stream)
+	}
+	r.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.mu.Lock()
+		stream.blackhole = true
+		stream.mu.Unlock()
+	}
+}
+
 // peerOf returns the other stream in a 2-party room or nil if there is
 // no peer (yet). Video loopback relies on a single 1:1 partner so we
 // just pick the first non-self stream we see.
@@ -219,6 +240,13 @@ type memoryStream struct {
 	mu        sync.Mutex
 	connected bool
 	closed    bool
+	// blackhole simulates a silently dead link: the carrier stays
+	// "connected" (Send returns nil, the pipe is not closed) but no frame
+	// is ever delivered to the peer. This is the failure mode a real SFU
+	// produces when a peer leaves but the WebRTC PC has not yet torn down:
+	// only the control-stream liveness timeout can detect it. Used to prove
+	// the dead-link detection window is governed by the liveness timeout.
+	blackhole bool
 	reconnect func()
 	ended     func(string)
 	track     webrtc.TrackLocal
@@ -279,6 +307,12 @@ func (s *memoryStream) Send(data []byte) error {
 	if s.closed {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
+	}
+	// Silently dead link: pretend the send succeeded but deliver nothing.
+	// The carrier stays "up", so only control-stream liveness can detect it.
+	if s.blackhole {
+		s.mu.Unlock()
+		return nil
 	}
 	s.mu.Unlock()
 
@@ -351,9 +385,8 @@ func (s *memoryStream) SetEndedCallback(cb func(string)) {
 func (s *memoryStream) WatchConnection(ctx context.Context) {
 	<-ctx.Done()
 }
-func (s *memoryStream) CanSend() bool {
-	return s.isConnected()
-}
+func (s *memoryStream) CanSend() bool           { return s.isConnected() }
+func (s *memoryStream) SubscriberCanSend() bool { return s.isConnected() }
 func (s *memoryStream) GetSendQueue() chan []byte { return nil }
 func (s *memoryStream) GetBufferedAmount() uint64 { return 0 }
 func (s *memoryStream) Reconnect(string)          {}
@@ -684,6 +717,8 @@ func realE2ECaseExpectation(carrierName, transportName string) realE2EExpectatio
 		}
 		return realE2EExpectPass
 	case "jitsi":
+		// Jitsi supports all transports for tunnel traffic.
+		// videochannel and seichannel now stable after RTP keepalive fixes.
 		return realE2EExpectPass
 	default:
 		return realE2EExpectPass
@@ -706,7 +741,7 @@ func realE2EExpectationLabel(expectation realE2EExpectation) string {
 // logUnstableOutcome records the result of an Unstable matrix entry
 // without failing the test. Unstable combos exist to keep the matrix
 // honest about transports that flap against a particular carrier
-// (e.g. seichannel against meet.handyweb.org's bandwidth allocator)
+// (e.g. seichannel against meet.ffmuc.net's bandwidth allocator)
 // while still surfacing whether the run happened to pass or fail.
 func logUnstableOutcome(t *testing.T, label, carrierName, transportName string, err error) {
 	t.Helper()
@@ -842,14 +877,14 @@ func realRoomURL(ctx context.Context, t *testing.T, carrierName string) string {
 		return ""
 	case "jitsi":
 		// Jitsi has no notion of "creating" a room - names are conjured
-		// on first join. The default flag points at meet.handyweb.org
-		// by default. When the flag is left at its default value, a
-		// per-process random suffix is appended
-		// to the slug: two participants share a single room by design (one
-		// pair, one shared key), so any third participant - including another
-		// concurrent test process with the same shared key - would corrupt
-		// the wire protocol on both sides. Users overriding the flag are
-		// trusted to manage room uniqueness themselves.
+		// on first join. The default flag points at meet.ffmuc.net.
+		// When the flag is left at its default value, a per-process
+		// random 8-hex slug is appended: two participants share a single
+		// room by design (one pair, one shared key), so any third
+		// participant - including another concurrent test process with
+		// the same shared key - would corrupt the wire protocol on both
+		// sides. Users overriding the flag are trusted to manage room
+		// uniqueness themselves.
 		_ = ctx
 		room := *realE2EJitsiRoom
 		if room == "" {
@@ -870,18 +905,18 @@ var (
 )
 
 // defaultJitsiRoomWithSuffix returns the default Jitsi room URL with a random
-// 8-hex-char suffix appended to the slug. Computed once per test process and
-// cached so all sub-tests (server + client) land in the same MUC.
+// 8-hex-char slug. Computed once per test process and cached so all sub-tests
+// (server + client) land in the same MUC.
 func defaultJitsiRoomWithSuffix() string {
 	jitsiRoomOnce.Do(func() {
 		var b [4]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			// crypto/rand failing on a healthy host is exceptional; fall back
 			// to PID to keep tests usable rather than blowing up here.
-			jitsiRoomURL = fmt.Sprintf("%s-%d", defaultJitsiRoomURL, os.Getpid())
+			jitsiRoomURL = fmt.Sprintf("%s/%x", defaultJitsiRoomURL, os.Getpid())
 			return
 		}
-		jitsiRoomURL = defaultJitsiRoomURL + "-" + hex.EncodeToString(b[:])
+		jitsiRoomURL = defaultJitsiRoomURL + "/" + hex.EncodeToString(b[:])
 	})
 	return jitsiRoomURL
 }
@@ -1091,6 +1126,7 @@ func startRealTunnel(
 			KeyHex:           testKeyHex,
 			DNSServer:        localDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
+			Liveness:         control.Config{Interval: 10 * time.Second, Timeout: 60 * time.Second, Failures: 10},
 		})
 	}()
 
@@ -1120,6 +1156,7 @@ func startRealTunnel(
 			LocalAddr:        socksAddr,
 			DNSServer:        localDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
+			Liveness:         control.Config{Interval: 10 * time.Second, Timeout: 60 * time.Second, Failures: 10},
 		}, func() { close(ready) })
 	}()
 
@@ -1150,7 +1187,7 @@ func startRealTunnel(
 		cancel:    cancel,
 		serverErr: serverErr,
 		clientErr: clientErr,
-		stopWait:  20 * time.Second,
+		stopWait:  60 * time.Second,
 	}, nil
 }
 
@@ -1409,7 +1446,7 @@ func runRealE2ECase(t *testing.T, carrierName, transportName, roomURL, echoAddr 
 		}
 	}()
 
-	conn, err := connectViaSOCKSWithin(rt.socksAddr, echoAddr, *realE2ETimeout)
+	conn, err := connectViaSOCKSWithin(ctx, rt.socksAddr, echoAddr, *realE2ETimeout)
 	if err != nil {
 		return err
 	}
@@ -1662,19 +1699,21 @@ func eventuallyConnectViaSOCKS(t *testing.T, socksAddr, targetAddr string) net.C
 func eventuallyConnectViaSOCKSWithin(t *testing.T, socksAddr, targetAddr string, timeout time.Duration) net.Conn {
 	t.Helper()
 
-	conn, err := connectViaSOCKSWithin(socksAddr, targetAddr, timeout)
+	conn, err := connectViaSOCKSWithin(context.Background(), socksAddr, targetAddr, timeout)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return conn
 }
 
-func connectViaSOCKSWithin(socksAddr, targetAddr string, timeout time.Duration) (net.Conn, error) {
+func connectViaSOCKSWithin(
+	ctx context.Context, socksAddr, targetAddr string, timeout time.Duration,
+) (net.Conn, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	attempt := 0
 	for time.Now().Before(deadline) {
-		conn, err := tryConnectViaSOCKS(socksAddr, targetAddr)
+		conn, err := tryConnectViaSOCKS(ctx, socksAddr, targetAddr)
 		if err == nil {
 			return conn, nil
 		}
@@ -1689,9 +1728,9 @@ func connectViaSOCKSWithin(socksAddr, targetAddr string, timeout time.Duration) 
 	return nil, fmt.Errorf("connect via SOCKS failed after %s: %w", timeout, lastErr)
 }
 
-func tryConnectViaSOCKS(socksAddr, targetAddr string) (net.Conn, error) {
+func tryConnectViaSOCKS(ctx context.Context, socksAddr, targetAddr string) (net.Conn, error) {
 	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
-	conn, err := dialer.DialContext(context.Background(), "tcp4", socksAddr)
+	conn, err := dialer.DialContext(ctx, "tcp4", socksAddr)
 	if err != nil {
 		return nil, fmt.Errorf("dial socks: %w", err)
 	}

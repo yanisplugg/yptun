@@ -81,9 +81,9 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
 val olcrtcAndroidAarDependency = files(olcrtcAndroidAarFile).builtBy(buildOlcrtcAndroidAar)
 
 // --- sing-box (libbox) Android AAR, built from SINGBOX_REPO via gomobile ---
-// Mirrors the olcrtc build above. Clone github.com/SagerNet/sing-box (pinned v1.12.25,
-// see SingBoxEngine.kt which targets that PlatformInterface) next to this repo, or set
-// SINGBOX_REPO to its path.
+// Mirrors the olcrtc build above. Clone github.com/SagerNet/sing-box (pinned v1.13.14,
+// see SingBoxEngine.kt which targets that PlatformInterface/CommandServer) next to this repo,
+// or set SINGBOX_REPO to its path.
 val singboxRepoPath = providers.environmentVariable("SINGBOX_REPO")
     .orElse(rootProject.layout.projectDirectory.asFile.parentFile.resolve("sing-box").absolutePath)
 val singboxRepoDir = rootProject.file(singboxRepoPath.get())
@@ -92,16 +92,16 @@ val libboxAndroidAarFile = libboxAndroidAar.get().asFile
 
 // Build tags must include with_utls (uTLS fingerprints, e.g. fp=firefox) for the user's
 // VLESS profiles; the rest mirror sing-box's own mobile build.
-// NOTE: with_quic is intentionally OMITTED. xray-core pulls quic-go/qpack v0.5.x while
-// sagernet/quic-go (sing-box) needs the older qpack API (DecodeFull); compiling both is
-// impossible. Dropping with_quic excludes sing-box's QUIC code (hysteria2/tuic via sing-box)
-// so the two quic forks no longer clash. VLESS/VMess/Trojan/SS + Xray (incl. QUIC/xhttp) are
-// unaffected.
-val libboxBuildTags = "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api"
+// with_quic is ON since sing-box 1.13: sagernet/quic-go v0.59 moved to qpack v0.6, so it no
+// longer clashes with xray-core's apernet/quic-go — native hysteria2/TUIC via sing-box work.
+// with_naive_outbound adds the NaïveProxy client (matches upstream SFA); it statically links
+// Chromium cronet (libcronet.a, ~60 MB per ABI pre-strip) — drop the tag if size matters more.
+val libboxBuildTags =
+    "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic,with_naive_outbound"
 
 // sing-box version embedded into libbox via ldflags (-X constant.Version); otherwise libbox.Version()
-// reports "unknown". Keep in sync with the pinned sing-box checkout (v1.12.25, see comment above).
-val singboxVersion = "1.12.25"
+// reports "unknown". Keep in sync with the pinned sing-box checkout (v1.13.14, see comment above).
+val singboxVersion = "1.13.14"
 
 libboxAndroidAarFile.parentFile.mkdirs()
 
@@ -164,8 +164,8 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
     inputs.dir(coresRepoDir.resolve("../dnstt"))
     // AmneziaWG SOCKS bridge (sibling module) + its local amneziawg-go fork.
     inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
-    // Hysteria2 SOCKS bridge (sibling module on apernet/hysteria).
-    inputs.dir(coresRepoDir.resolve("../hysteria2proxy/hy2"))
+    // NOTE: the old hysteria2proxy SOCKS bridge is gone — hysteria2 is native in sing-box
+    // since the 1.13 upgrade (with_quic no longer clashes with xray's quic fork).
     // olcrtc (sibling replace module) bound packages — track so edits (e.g. telemost cookies)
     // re-trigger the bind.
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
@@ -194,7 +194,6 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         "wg-turn-client/wdttmobile",
         "www.bamsoftware.com/git/dnstt.git/dnsttmobile",
         "github.com/olc/awgproxy/awg",
-        "github.com/olc/hysteria2proxy/hy2",
         "kazcores/xraybridge"
     )
 }
@@ -296,6 +295,8 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.activityCompose)
             implementation(libs.androidx.core)
+            // Vendored Google archive-patcher (File-by-File v1 applier) for delta app updates.
+            implementation(project(":archivepatcher"))
             implementation(libs.androidx.camera.camera2)
             implementation(libs.androidx.camera.core)
             implementation(libs.androidx.camera.lifecycle)
@@ -308,6 +309,10 @@ kotlin {
             // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
             implementation("com.github.mwiede:jsch:0.2.21")
             implementation(coresAndroidAarDependency)
+            // Trust Tunnel (AdGuard) client — vendored prebuilt AAR (com.adguard.trusttunnel:
+            // trusttunnel-client-android:1.1.5-rc.1) carrying libtrusttunnel_android.so (all ABIs) +
+            // the VpnClient/DeepLink JNI adapter. Isolated engine; does NOT touch the Go cores AAR.
+            implementation(files("libs/trusttunnel-client-android-1.1.5-rc.1.aar"))
         }
 
         jvmMain.dependencies {

@@ -3,7 +3,7 @@
 !!! quote "sing-box 1.9.0 中的更改"
 
     :material-plus: [store_rdrc](#store_rdrc)  
-    :material-plus: [rdrc_timeout](#rdrc_timeout)  
+    :material-plus: [rdrc_timeout](#rdrc_timeout)
 
 ### 结构
 
@@ -42,7 +42,7 @@
 
 将拒绝的 DNS 响应缓存存储在缓存文件中。
 
-[地址筛选 DNS 规则项](/zh/configuration/dns/rule/#_3) 的检查结果将被缓存至过期。
+[地址筛选 DNS 规则项](/zh/configuration/dns/rule/#地址筛选字段) 的检查结果将被缓存至过期。
 
 #### rdrc_timeout
 

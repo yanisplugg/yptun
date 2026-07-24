@@ -67,6 +67,9 @@ class QuickSettingsTileService : TileService() {
             // VpnService.prepare() returns null when permission is already held.
             val prepIntent = VpnService.prepare(applicationContext)
             if (prepIntent == null) {
+                // Connect the active location in the background. After an "Auto = fastest" pick the
+                // active location IS the chosen fastest server, so the tile silently reconnects it —
+                // no app launch, no re-ping (re-running Auto is an in-app action).
                 startVpn()
             } else {
                 // Permission not yet granted — open the main app so the dialog can appear.

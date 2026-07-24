@@ -1,15 +1,15 @@
 <div align="center">
 
-# 🛡️ YPtun
+# YPtun
 
-### Fast, censorship-resistant VPN for Android
+### Fast censorship-resistant VPN · Android
 
-*VLESS · Reality · XHTTP over **Xray** & **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls — and, above all, sheer versatility: even **olcRTC** support that makes your traffic look like a video call.*
+*VLESS · Reality · XHTTP over **Xray** and **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **DNSTT** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, which disguises traffic as a video call.*
 
 <br>
 
 [![Latest release](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043)](https://github.com/yanisplugg/olcvpn-client/releases)
+[![Downloads](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/olcvpn-client/releases)
 [![Stars](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
 
 ![Platform](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
@@ -18,140 +18,130 @@
 
 <br>
 
-[**Русский**](README.md) · **🌍 English** · [**فارسی**](README.fa.md)
+[Русский](README.md) · **English** · [فارسی](README.fa.md) · [简体中文](README.zh.md)
 
 </div>
 
 ---
 
-## ✨ Why YPtun?
+## Why YPtun?
 
-Most VPN clients give you one engine and one way to connect. **YPtun gives you a toolbox.**
-It bundles **several circumvention engines** in one app, so when one method gets blocked, you switch and keep going.
+Most VPN clients give you one core and one way to connect. **YPtun gives you a toolbox.** Several censorship-bypass engines in a single app: when one method gets blocked, switch to another and keep going.
 
-> ⭐ **The standout is sheer versatility.** Xray and sing-box with every common protocol and transport, obfuscated WireGuard via **AmneziaWG**, tunneling through real calls (**VK-TURN** and **olcRTC**), import almost anything, and Happ-compatible routing profiles. Block one path and there are several more right next to it.
+> **The point is versatility.** Xray and sing-box with every common protocol and transport, obfuscated WireGuard via AmneziaWG, tunnelling through real calls (VK-TURN and olcRTC), the DNSTT DNS tunnel, import of basically anything, and Happ-compatible routing profiles. Kill one path — there are several more next to it.
 
-> Built for places where the internet fights back — for 🇷🇺 Russia, 🇮🇷 Iran and any country where sites vanish without notice. 🌐
+> Built for places where the internet fights back — Russia, Iran, and any country where sites vanish without warning.
 
-> 🖥️ **Desktop coming soon** — native **Windows** and **Linux** builds are in the works.
+> **Desktop is coming** — native Windows and Linux builds are in the works.
 
 ---
 
-## 🆕 What's new in 2.3
+## What's new in 3.0.0
 
 | | |
 |---|---|
-| 🚀 **Hysteria2 protocol** | Full **Hysteria2** (QUIC) support: import via `hysteria2://`/`hy2://` links and QR, **Salamander** obfuscation, port-hopping, bandwidth tuning. Share a config just like the other protocols. |
-| 🔗 **Second (cascade) proxy** | Chain two proxies: traffic exits via the second, dialing through the first. Works over **AmneziaWG** too (including an xhttp exit). |
-| 🔔 **Server name in the notification** | When connected, the shade shows the active server (and optional speed). |
-| 🗂️ **Sharper subscriptions** | **Per-subscription** auto-update toggle and a **reachable-server** counter ("live/total") from the last ping pass. |
-| 🎯 **Fewer false blocks** | Ad-blocking no longer takes down `google.com` and its infrastructure. |
-| 🐱 **Polish** | Black launch background, silhouette logo on the Quick Settings tile, correct tile long-press. |
+| **sing-box core upgraded to 1.13** | Latest fixes and compatibility. Most importantly, Hysteria2 and NaïveProxy now build **natively** inside sing-box, with no separate bridges. |
+| **Native Hysteria2** | Fully moved to sing-box's native outbound (auth, up/down, Salamander obfs, port hopping) — faster and more robust; the old external module is gone. |
+| **NaïveProxy** | A new protocol: it disguises traffic as ordinary Chrome HTTP/2 (Chromium cronet engine). Useful where connections are cut by signature (DPI). |
+| **Transparent proxy (tproxy)** | A new connection mode: kernel-level interception (TCP + UDP) with no TUN. Root only (needs `CAP_NET_ADMIN`). |
+| **Home-screen widgets** | Two themed widgets: a toggle, and a status widget with `↓/↑` speed, a `‹ ›` server switcher and an Auto button. They connect/switch straight from the service — **without opening the app**; the Auto button now runs in the background too and responds instantly. |
+| **Build protection + delta updates** | A warning if the APK was re-signed by someone else (repackaged/ad-injected build). Updates download as ~1 MB patches instead of the full APK. |
+| **VK-TURN cores updated** | freeturn 1.6.0 and WDTT — refreshed VK auth (`vkcalls` mode), captcha and fingerprints. |
 
 ---
 
-## 🆕 What's new in 2.0
+## Features
 
 | | |
 |---|---|
-| 🌀 **AmneziaWG engine** | Obfuscated WireGuard (AmneziaWG) — import `.conf`/QR, fine-tune obfuscation (Jc/Jmin/Jmax/S1/S2/H1–H4). Works as a standalone exit or as a link in a chain. |
-| 📞 **VK-TURN engine** | A tunnel over the TURN infrastructure of VK calls. Bonds several parallel "calls" for speed; pick the exit: WireGuard / AmneziaWG / proxy. |
-| 🧭 **Routing profiles** | Happ-compatible profiles (`happ://routing/add/…`): block/direct/proxy by `geoip:`/`geosite:`/domains/CIDR, a "route everything through proxy" switch, custom DNS and fakedns. Converted to both cores. |
-| 🗂️ **Better subscriptions** | Subscription groups can be **collapsed**, **pinned to the top**, and **sorted by ping** — state is remembered. Bulk-import a list of links in one paste. |
-| 🛡️ **Fewer leaks** | Unconditional QUIC blocking on transports that can't carry it, plus domain resolution for geoip rules — nothing slips past the tunnel anymore. |
-| 🔔 **Notification** | Colored logo and optional live up/down speed right in the shade. |
+| **Multiple engines** | Xray, sing-box, AmneziaWG, VK-TURN, DNSTT — the core is picked per protocol automatically or by hand. |
+| **Protocols** | VLESS · VMess · Trojan · Shadowsocks · Hysteria2 · WireGuard / AmneziaWG |
+| **Transports** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · uTLS fingerprints |
+| **DNSTT (DNS tunnel)** | A tunnel over DNS queries (KCP + Noise) — works where all other traffic is blocked but DNS still flows. One-tap server install on a VPS over SSH. |
+| **Telegram proxy over WARP** | A lightweight background service: a WARP tunnel + a local SOCKS5 for Telegram, independent of the main connection. |
+| **olcRTC** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport — traffic rides real video-call services (Jazz, Telemost, WB Stream, Jitsi); to DPI it looks like a live call, not a proxy. |
+| **Smart import** | vless/vmess/trojan/ss links, base64, JSON panels, **full raw Xray / sing-box configs** (applied as-is), AmneziaWG `.conf`/QR, olcRTC URIs, Happ profiles, bulk link-list import. |
+| **DNS & routing** | Happ-compatible routing profiles (block/direct/proxy by `geoip:`/`geosite:`/`asn:`/domains/CIDR), v2rayNG-style per-rule routing, a "block RU domains" toggle, custom DNS and fakedns. |
+| **Auto server pick** | One-tap connect to the fastest reachable node, with failover. |
+| **HTTP proxy** | A Happ-compatible local HTTP proxy on top of the active engine. |
+| **DPI evasion** | TLS fragmentation, multiplexing, AmneziaWG obfuscation, QUIC blocking where it would leak. |
+| **No leaks** | Captures both IPv4 and IPv6 — nothing slips past the tunnel. |
+| **Split tunneling** | Choose which apps go through the VPN. |
+| **Subscriptions** | Auto-update (toggle per subscription), reachable-server counter, server descriptions, traffic/quota, groups with collapse/pin/ping-sort, folders. |
 
 ---
 
-## 🚀 Features
+## Download
 
-| | |
-|---|---|
-| 🔀 **Multiple engines** | **Xray**, **sing-box**, **AmneziaWG** and **VK-TURN** — the core is auto-picked per protocol, or forced. |
-| 🧬 **Protocols** | VLESS · VMess · Trojan · Shadowsocks · **Hysteria2** · WireGuard / AmneziaWG |
-| 🚇 **Transports** | TCP · WS · gRPC · HTTPUpgrade · **XHTTP** · TLS · **Reality** · uTLS fingerprints |
-| 🎭 **olcRTC support** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport (by openlibrecommunity) — traffic rides real video-call services (Jazz, Telemost, WB Stream, Jitsi), so to DPI it's an ordinary call, not a proxy. |
-| 📥 **Smart import** | vless/vmess/trojan/ss links, base64 blobs, panel JSON, **full raw Xray / sing-box configs**, AmneziaWG `.conf`/QR, olcRTC URIs, and Happ profiles. |
-| 🧭 **DNS & routing** | Routing profiles, import a full Xray config (honored *verbatim*), or flip the built-in **"Block RU domains"** switch. |
-| 🧱 **DPI evasion** | TLS fragmentation, multiplexing, AmneziaWG obfuscation, QUIC blocking. |
-| 🔒 **Leak-safe** | Captures **both IPv4 and IPv6** — nothing escapes the tunnel. |
-| 📱 **Split tunneling** | Pick exactly which apps go through the VPN. |
-| 🗂️ **Subscriptions** | Auto-refresh (toggle it **per subscription**), reachable-server counter, traffic/usage display, groups with collapse/pin/sort-by-ping. |
+Grab the latest signed APK from the **[releases page](https://github.com/yanisplugg/olcvpn-client/releases/latest)**.
 
----
-
-## 📦 Download
-
-Grab the latest signed APK from the **[Releases page](https://github.com/yanisplugg/olcvpn-client/releases/latest)**.
-
-| Build | Best for |
-|-------|----------|
-| 🟢 **`arm64-v8a`** | Modern phones — **pick this if unsure** |
-| 🟡 `armeabi-v7a` | Older 32-bit devices |
-| 🔵 `x86_64` | Emulators / x86 tablets |
-| ⚪ `universal` | One file that runs on anything (largest) |
-
-> 💡 Not sure? Download **arm64-v8a** or **universal**.
+| Build | For |
+|-------|-----|
+| **`arm64-v8a`** | Modern phones — pick this if unsure |
+| `armeabi-v7a` | Older 32-bit devices |
+| `x86_64` | Emulators / x86 tablets |
+| `universal` | One file for everything (largest) |
 
 Minimum is **Android 6.0** (API 23).
 
 ---
 
-## 🧠 How it works
+## How it works
 
 ```
-┌─────────────┐   packets   ┌───────────────┐   SOCKS5   ┌────────────────────────────┐
-│  Your apps  │ ──────────▶ │  Android TUN  │ ─────────▶ │     Engine (one process)   │
-└─────────────┘             │  (IPv4+IPv6)  │            │  ┌──────────────────────┐  │
+┌──────────────┐  packets   ┌───────────────┐   SOCKS5   ┌────────────────────────────┐
+│     Apps     │ ─────────▶ │  Android TUN  │ ─────────▶ │     Engine (1 process)     │
+└──────────────┘            │  (IPv4+IPv6)  │            │  ┌──────────────────────┐  │
                             └───────────────┘            │  │  Xray / sing-box     │  │
                                                          │  │  AmneziaWG / VK-TURN │  │
-                                                         │  │  + olcRTC stealth    │  │
+                                                         │  │  DNSTT / olcRTC      │  │
                                                          │  └──────────────────────┘  │
                                                          └─────────────┬──────────────┘
                                                                        ▼
-                                                                🌍 the open internet
+                                                                 open internet
 ```
 
-All native cores are compiled into **one** `gomobile` library (a single Go runtime), so Xray, sing-box, AmneziaWG, VK-TURN and olcRTC coexist in one process without conflicts. The app just spins up a `VpnService`, feeds packets into the TUN, and wraps them into the chosen engine via a local SOCKS5.
+Every native core is built into **one** `gomobile` library (a single Go runtime), so Xray, sing-box, AmneziaWG, VK-TURN, DNSTT and olcRTC coexist in one process without conflicts. The app raises a `VpnService`, feeds packets into the TUN, and wraps them in the chosen engine through a local SOCKS5.
 
 ---
 
-## 🧩 Engines in plain words
+## Engines in plain words
 
-- **Xray / sing-box** — classic proxy cores. VLESS+Reality, XHTTP, WS+TLS, etc. The core is auto-picked per transport.
-- **AmneziaWG** — WireGuard with obfuscation: the handshake and packets don't look like "plain" WireGuard, which is often fingerprinted and dropped.
-- **Hysteria2** — a fast QUIC-based protocol with Salamander obfuscation and port-hopping; holds up well on lossy / unstable links.
-- **VK-TURN** — spins up a local WireGuard and routes it through the TURN servers of VK calls; several "calls" are bonded for throughput.
-- **olcRTC** — disguise as a video call: traffic rides genuine conferencing services, so to DPI it looks like a live call.
+- **Xray / sing-box** — classic proxy cores: VLESS+Reality, XHTTP, WS+TLS, etc. The core is chosen per transport automatically.
+- **AmneziaWG** — WireGuard with obfuscation: the handshake and packets don't look like "plain" WireGuard, which is often cut by signature.
+- **Hysteria2** — a fast QUIC-based protocol with Salamander obfuscation and port hopping; holds speed well on lossy links.
+- **VK-TURN** — raises a local WireGuard and pushes it through VK's call TURN servers; several "calls" are bonded for throughput.
+- **DNSTT** — a tunnel over DNS queries; works where only DNS is open.
+- **olcRTC** — video-call disguise: traffic rides real conferencing services and looks like a live call to DPI.
+- **Telegram proxy over WARP** — a standalone background proxy for Telegram on top of Cloudflare WARP.
 
 ---
 
-## 🛠️ Build from source
+## Build from source
 
-Everything you need is vendored here (`cores`, `olcrtc`, `sing-box`, `awgproxy`, `free-turn-proxy`, `amneziawg-go`). You'll need:
+Everything needed is already vendored (`cores`, `olcrtc`, `sing-box`, `awgproxy`, `hysteria2proxy`, `free-turn-proxy`, `dnstt`, `wdtt`, `amneziawg-go`). You'll need:
 
-- **JDK 17** (the one bundled with Android Studio is fine)
+- **JDK 17** (the one bundled with Android Studio works)
 - **Android SDK** (set `sdk.dir` in `YPtun/local.properties`) + **NDK `28.2.13676358`**
-- **Go** + [`gomobile`](https://pkg.go.dev/golang.org/x/mobile/cmd/gomobile) on your `PATH`
+- **Go** + [`gomobile`](https://pkg.go.dev/golang.org/x/mobile/cmd/gomobile) on `PATH`
 
-> ⚠️ `gomobile` shells out to `javac`, so make sure the JDK's `bin/` is on your `PATH` — not just `JAVA_HOME`.
+> `gomobile` invokes `javac`, so put the JDK's `bin/` on `PATH` — not just `JAVA_HOME`.
 
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=2.0.0 -Polcbox.versionCode=2
+  -Polcbox.version=3.0.0 -Polcbox.versionCode=287
 ```
 
 APKs land in `YPtun/androidApp/build/outputs/apk/release/`.
-Want a single-ABI build for your phone (faster)? Add `-Polcbox.android.abiFilters=arm64-v8a`.
+Want a faster, phone-only build? Add `-Polcbox.android.abiFilters=arm64-v8a`.
 
 <details>
-<summary>🔑 Signing your own release builds (optional, for maintainers)</summary>
+<summary>Signing your own release builds (optional, for maintainers)</summary>
 
 <br>
 
-By default Gradle builds debug-signed APKs. If you want to publish your **own** signed
-releases, create a keystore and point Gradle at it with `YPtun/keystore.properties`:
+By default Gradle produces debug-signed APKs. To publish your own signed releases, create a keystore and point `YPtun/keystore.properties` at it:
 
 ```properties
 storeFile=release.keystore
@@ -160,68 +150,65 @@ keyAlias=your-alias
 keyPassword=your-password
 ```
 
-This file (and the `.keystore` itself) is **gitignored and never committed** — it only lives
-on your machine. Keep your keystore safe: you need the same one to ship updates that install
-over previous versions.
+That file (and the `.keystore`) are git-ignored and never committed — they live only on your machine. Keep the keystore safe: updates are signed with the same key so they install over previous versions.
 
 </details>
 
 ---
 
-## 🧪 Development
+## Development
 
-YPtun is **Kotlin Multiplatform**: all the logic (import, config building, engines, UI state)
-lives in `commonMain`, with platform glue in `androidMain`. That means the same code already
-runs on the JVM desktop target.
+YPtun is **Kotlin Multiplatform**: all the logic (import, config building, engines, UI state) lives in `commonMain`, with platform bits in `androidMain`. The same code runs on the JVM desktop.
 
 - **UI** — Jetpack Compose, one design across platforms.
-- **Localization** — three languages (🇷🇺 Russian, 🇬🇧 English, 🇮🇷 فارسی) in a single strings file.
-- **Native cores** — Go, compiled into one gomobile AAR by the `buildCoresAndroidAar` task; core
-  inputs are tracked, so the AAR only rebuilds when Go code changes (Go's cache keeps it fast).
+- **Localization** — Russian, English, فارسی and 简体中文 in a single strings file.
+- **Native cores** — Go, built into one gomobile AAR by the `buildCoresAndroidAar` task; core inputs are tracked, so the AAR rebuilds only when Go code changes.
 - **Tests** — unit tests for the routing parsers/converters (`./gradlew :sharedUI:jvmTest`).
-- **Branches** — stable on `main`, active work on `Beta`; releases are tagged `vX.Y.Z`.
+- **Branches** — stable on `main`, active development on `Beta`; releases are tagged `vX.Y.Z`.
 
 Found a bug or want a feature? Open an issue or PR — see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 ---
 
-## 🗂️ Project layout
+## Project structure
 
 ```
-YPtun/            Kotlin Multiplatform app — Compose UI, Android VpnService, engine wiring
-cores/            Go glue: one gomobile AAR bundling sing-box + olcRTC + Xray + AmneziaWG + VK-TURN
+YPtun/            Kotlin Multiplatform app — Compose UI, Android VpnService, engines
+cores/            Go glue: one gomobile AAR from sing-box + olcRTC + Xray + AmneziaWG + VK-TURN + DNSTT
 olcrtc/           olcRTC — video-call disguise transport          (third-party, vendored)
-sing-box/         sing-box / libbox                               (vendored)
+sing-box/         sing-box / libbox                                (vendored)
 awgproxy/         AmneziaWG wrapper → local SOCKS5                 (Go module)
-hysteria2proxy/   Hysteria2 (apernet) wrapper → local SOCKS5        (Go module)
-free-turn-proxy/  VK-TURN — tunnel over VK calls                  (Go module)
-amneziawg-go/     AmneziaWG implementation                        (vendored)
+hysteria2proxy/   Hysteria2 (apernet) wrapper → local SOCKS5       (Go module)
+free-turn-proxy/  VK-TURN — tunnel through VK calls                (Go module)
+dnstt/            DNSTT — tunnel over DNS                           (client + server)
+wdtt/             WDTT — tunnel variant                            (client + server)
+amneziawg-go/     AmneziaWG implementation                         (vendored)
 ```
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 - [x] Android release
-- [x] AmneziaWG and VK-TURN engines
-- [x] Routing profiles (Happ-compatible)
-- [ ] 🪟 **Windows** desktop build — *coming soon*
-- [ ] 🐧 **Linux** desktop build — *coming soon*
+- [x] AmneziaWG, VK-TURN and DNSTT engines
+- [x] Routing profiles (Happ-compatible) + ASN
+- [ ] **Windows** build — *soon*
+- [ ] **Linux** build — *soon*
 
-> The shared engine already runs on the JVM (`desktopApp`), so desktop builds are next in line.
+> The shared engine already runs on the JVM (`desktopApp`), so desktop is next.
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
-PRs and issues are welcome. Before you start, have a look at:
+PRs and issues welcome. Before you start, see:
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — how to build, format and submit changes
-- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** — house rules
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** — community rules
 - **[SECURITY.md](SECURITY.md)** — how to report a vulnerability
 
 ---
 
-## 🙏 Credits
+## Credits
 
 Standing on the shoulders of giants:
 [Xray-core](https://github.com/XTLS/Xray-core) ·
@@ -229,12 +216,9 @@ Standing on the shoulders of giants:
 [olcRTC](https://github.com/openlibrecommunity/olcrtc) ·
 [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go).
 
-## 📄 License
+## License
 
-[GPL-3.0](LICENSE) — the app is distributed under the GNU GPL v3.0 because it bundles
-**sing-box** (also GPL-3.0); copyleft extends to the whole combined work. Vendored
-components keep their own licenses (`sing-box` — GPL-3.0, Xray — MPL-2.0,
-`amneziawg-go` — MIT, `olcrtc` — WTFPL).
+[GPL-3.0](LICENSE) — the app ships under the GNU GPL v3.0 because it bundles **sing-box** (also GPL-3.0): copyleft applies to the whole product. Vendored components keep their own licenses (`sing-box` — GPL-3.0, Xray — MPL-2.0, `amneziawg-go` — MIT, `olcrtc` — WTFPL).
 
 <div align="center">
 <br>
@@ -249,6 +233,6 @@ components keep their own licenses (`sing-box` — GPL-3.0, Xray — MPL-2.0,
 
 <br>
 
-<sub>Made for a freer internet. ⭐ the repo if it helps you.</sub>
+<sub>For a free internet</sub>
 
 </div>

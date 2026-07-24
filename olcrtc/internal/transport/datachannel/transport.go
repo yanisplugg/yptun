@@ -34,6 +34,7 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		Engine:              cfg.Engine,
 		URL:                 cfg.URL,
 		Token:               cfg.Token,
+		AuthToken:           cfg.AuthToken,
 		RequireTargetedPeer: cfg.RequireTargetedPeer,
 	})
 	if err != nil {
@@ -127,6 +128,19 @@ func (p *streamTransport) WatchConnection(ctx context.Context) {
 // CanSend reports whether transport is ready for sending.
 func (p *streamTransport) CanSend() bool {
 	return p.session.CanSend()
+}
+
+// WaitForPeer blocks until the remote peer is confirmed ready, or ctx expires.
+// Implements transport.PeerReadyTransport.
+func (p *streamTransport) WaitForPeer(ctx context.Context) error {
+	waiter, ok := p.session.(engine.PeerReadySession)
+	if !ok {
+		return nil
+	}
+	if err := waiter.WaitForPeer(ctx); err != nil {
+		return fmt.Errorf("wait for peer: %w", err)
+	}
+	return nil
 }
 
 // Features describes the current datachannel transport semantics.

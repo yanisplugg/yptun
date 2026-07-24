@@ -27,17 +27,16 @@ const (
 	// clamped. Stay below that with headroom for KCP overhead (24 bytes).
 	kcpMTU = 1400
 
-	// Send/receive window in segments, sized to the bandwidth-delay product
-	// of the policed video path (~1.2 MB/s wire cap, sub-second RTT), NOT to
-	// "as much as possible". A large send window let the upper layer dump
-	// megabytes into KCP instantly; with the wire paced to ~1.2 MB/s those
-	// segments then sat queued for SECONDS, so KCP's RTO fired and triggered
-	// a retransmit storm while control-plane pongs starved behind the same
-	// queue (-> missed pongs -> reconnect). A small send window bounds
-	// in-flight data to ~BDP, keeping queuing latency low. The receive
-	// window stays generous so the peer is never the bottleneck.
-	kcpSndWnd = 768
-	kcpRcvWnd = 1024
+	// Send/receive window in segments. Bulk data runs on its own KCP session,
+	// isolated from the control plane (ping/pong has a separate startKCP and is
+	// drained with priority by writerLoop), so a large data window no longer
+	// starves control liveness the way it did before that split (issue #95).
+	// One VP8 frame can carry many KCP segments and ACKs only trickle back at
+	// frame cadence, so a generous window is what keeps the policed path full
+	// and lets throughput reach the SFU's real ceiling (~10 Mbit on Telemost)
+	// instead of being clamped to a fraction of it.
+	kcpSndWnd = 4096
+	kcpRcvWnd = 4096
 
 	// Length prefix for our message framing on top of KCP stream mode.
 	// We use stream mode because UDPSession.Write fragments messages > MSS
@@ -76,13 +75,13 @@ func startKCP(out chan<- []byte, onData func([]byte), epochHdr [epochHdrLen]byte
 	}
 
 	// nodelay=1, interval=5ms, fast resend=2, congestion control OFF (nc=1).
-	// KCP does NOT regulate the send rate here - the writerLoop byte pacer
-	// does, fed at a fixed rate just under the carrier's policer knee. KCP's
-	// own loss-based congestion control is the wrong controller for a hard
-	// policer: with nc=0 the unavoidable ~4% drops collapsed cwnd and starved
-	// the wire to ~45 KiB/s. With nc=1 KCP just keeps the BDP-sized window
-	// full and retransmits the few losses; the pacer caps the rate so we
-	// never overdrive the policer into its collapse zone.
+	// The frame ticker already paces emission at the VP8 frame cadence, so the
+	// 5ms KCP tick just keeps scheduling latency low; a slower tick only adds
+	// dead time before retransmits and ACKs. nc=1 disables KCP's loss-based
+	// congestion control because the carrier is a hard policer, not a fair
+	// queue: with nc=0 the unavoidable ~4% drops collapsed cwnd and starved
+	// the wire. With nc=1 KCP keeps the window full and retransmits the few
+	// losses, letting throughput reach the SFU's real ceiling.
 	sess.SetNoDelay(1, 5, 2, 1)
 	sess.SetWindowSize(kcpSndWnd, kcpRcvWnd)
 	sess.SetMtu(kcpMTU)
@@ -116,9 +115,6 @@ func (r *kcpRuntime) readLoop(onData func([]byte)) {
 			continue
 		}
 		if size > kcpMaxMessage {
-			// Stream framing is now corrupted - there is no safe way to
-			// resync without a session reset. Bail and let the upper layer
-			// reconnect.
 			return
 		}
 		payload := make([]byte, size)
@@ -134,6 +130,12 @@ func (r *kcpRuntime) readLoop(onData func([]byte)) {
 // deliver hands a wire payload (already reassembled out of VP8 RTP) to KCP.
 func (r *kcpRuntime) deliver(payload []byte) {
 	r.conn.deliver(payload)
+}
+
+// setHeader re-points the outgoing frame header so subsequent KCP packets are
+// addressed to a specific destination epoch (see kcpConn.setHeader).
+func (r *kcpRuntime) setHeader(hdr [epochHdrLen]byte) {
+	r.conn.setHeader(hdr)
 }
 
 // send queues an application message for reliable delivery. The length

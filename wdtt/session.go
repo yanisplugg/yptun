@@ -14,41 +14,21 @@ import (
 	"github.com/cbeuw/connutil"
 	"github.com/pion/dtls/v3"
 	"github.com/pion/dtls/v3/pkg/crypto/selfsign"
-	"github.com/pion/logging"
+	"github.com/pion/transport/v4/stdnet"
 	"github.com/pion/turn/v5"
 )
 
 const (
 	workerSendBuf      = 128
-	sessionReadTimeout = 30 * time.Minute // Increased from 60s to 30min
+	sessionReadTimeout = 30 * time.Minute
 	readBufSize        = 1600
 	socketBufSize      = 625 * 1024
-	keepaliveByte      = 0xFF // DTLS-level keepalive marker
+	keepaliveByte      = 0xFF
 	keepaliveInterval  = 15 * time.Second
 )
 
-// Handshake semaphore: limit to 3 concurrent DTLS handshakes
 var handshakeSem = make(chan struct{}, 3)
 
-// NullLoggerFactory подавляет логи pion
-type NullLoggerFactory struct{}
-
-func (n *NullLoggerFactory) NewLogger(_ string) logging.LeveledLogger { return &NullLogger{} }
-
-type NullLogger struct{}
-
-func (n *NullLogger) Trace(_ string)                    {}
-func (n *NullLogger) Tracef(_ string, _ ...interface{}) {}
-func (n *NullLogger) Debug(_ string)                    {}
-func (n *NullLogger) Debugf(_ string, _ ...interface{}) {}
-func (n *NullLogger) Info(_ string)                     {}
-func (n *NullLogger) Infof(_ string, _ ...interface{})  {}
-func (n *NullLogger) Warn(_ string)                     {}
-func (n *NullLogger) Warnf(_ string, _ ...interface{})  {}
-func (n *NullLogger) Error(_ string)                    {}
-func (n *NullLogger) Errorf(_ string, _ ...interface{}) {}
-
-// connectedUDPConn — обёртка для connected UDP socket → PacketConn
 type connectedUDPConn struct{ *net.UDPConn }
 
 func (c *connectedUDPConn) WriteTo(p []byte, _ net.Addr) (int, error) { return c.Write(p) }
@@ -85,7 +65,6 @@ func RunSession(
 	}
 	turnAddr := net.JoinHostPort(urlhost, urlport)
 
-	// Транспорт: всегда UDP
 	resolved, err := net.ResolveUDPAddr("udp", turnAddr)
 	if err != nil {
 		return false, fmt.Errorf("резолв TURN: %w", err)
@@ -101,7 +80,6 @@ func RunSession(
 
 	log.Printf("[СЕССИЯ #%d] TURN UDP (%s)", sessionID, turnAddr)
 
-	// RequestedAddressFamily
 	var addrFamily turn.RequestedAddressFamily
 	if peer.IP.To4() != nil {
 		addrFamily = turn.RequestedAddressFamilyIPv4
@@ -109,11 +87,15 @@ func RunSession(
 		addrFamily = turn.RequestedAddressFamilyIPv6
 	}
 
-	// TURN Client (pion/turn/v5)
+	// Pion's default stdnet.NewNet enumerates network interfaces through
+	// NETLINK_ROUTE. Some Huawei/Honor ROMs deny that operation to apps.
+	// The zero-value stdnet.Net provides everything this UDP client uses
+	// without performing the unnecessary interface enumeration.
 	tc, err := turn.NewClient(&turn.ClientConfig{
 		STUNServerAddr:         turnAddr,
 		TURNServerAddr:         turnAddr,
 		Conn:                   turnConn,
+		Net:                    new(stdnet.Net),
 		Username:               creds.User,
 		Password:               creds.Pass,
 		RequestedAddressFamily: addrFamily,
@@ -141,18 +123,15 @@ func RunSession(
 	}
 	defer relay.Close()
 
-	// Reset error count on successful allocation
 	getStreamCache(creds.CacheStreamID).errorCount.Store(0)
 
 	log.Printf("[СЕССИЯ #%d] Relay: %s", sessionID, relay.LocalAddr())
 
-	// Pipe для DTLS ↔ TURN relay
 	pipeA, pipeB := connutil.AsyncPacketPipe()
 
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	defer sessCancel()
 
-	// Keepalive goroutine (TURN binding request)
 	var sessionWg sync.WaitGroup
 	sessionWg.Add(1)
 	go func() {
@@ -169,17 +148,15 @@ func RunSession(
 		}
 	}()
 
-	// Relay ↔ Pipe proxy (with RTP obfuscation)
 	var relayWg sync.WaitGroup
 	relayWg.Add(2)
 
 	useWrap := len(tp.WrapKey) == wrapKeyLen
 
-	// Initialize obfs config per session
 	var obfsCfg *ObfsConfig
 	var obfsWriteState *ObfsState
 	if useWrap {
-		obfsCfg = NewObfsConfig()
+		obfsCfg = NewObfsConfig(tp.ObfsMode)
 		obfsWriteState = NewObfsState()
 	}
 
@@ -189,11 +166,10 @@ func RunSession(
 	})
 	defer stopRelay()
 
-	// relay → pipeA (UNWRAP: strip RTP header + decrypt)
 	go func() {
 		defer relayWg.Done()
 		defer sessCancel()
-		// Max incoming: RTP header (12) + AEAD tag (16) + padding.
+
 		readBufLen := readBufSize + 80
 		buf := make([]byte, readBufLen)
 		plain := make([]byte, readBufSize)
@@ -221,7 +197,6 @@ func RunSession(
 		}
 	}()
 
-	// pipeA → relay (WRAP: add RTP header + encrypt)
 	go func() {
 		defer relayWg.Done()
 		defer sessCancel()
@@ -248,13 +223,11 @@ func RunSession(
 		}
 	}()
 
-	// DTLS с поддержкой Connection ID (без SNI)
 	cert, err := selfsign.GenerateSelfSigned()
 	if err != nil {
 		return false, fmt.Errorf("генерация сертификата: %w", err)
 	}
 
-	// Acquire handshake semaphore
 	select {
 	case handshakeSem <- struct{}{}:
 	case <-sessCtx.Done():
@@ -267,7 +240,6 @@ func RunSession(
 		ExtendedMasterSecret:  dtls.RequireExtendedMasterSecret,
 		CipherSuites:          []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 		ConnectionIDGenerator: dtls.OnlySendCIDGenerator(),
-		// No ServerName (SNI) — less detectable by DPI
 	}
 
 	dtlsConn, err := dtls.Client(pipeB, peer, dtlsCfg)
@@ -281,7 +253,7 @@ func RunSession(
 	log.Printf("[ВОРКЕР #%d] [DTLS] Рукопожатие (Handshake)...", sessionID)
 	err = dtlsConn.HandshakeContext(hctx)
 	hcancel()
-	<-handshakeSem // RELEASE SEMAPHORE IMMEDIATELY AFTER HANDSHAKE
+	<-handshakeSem
 
 	if err != nil {
 		if useWrap {
@@ -297,7 +269,6 @@ func RunSession(
 	atomic.AddInt32(&stats.ActiveConnections, 1)
 	defer atomic.AddInt32(&stats.ActiveConnections, -1)
 
-	// Запрос конфига
 	if getConfig && configCh != nil {
 		conf, confErr := RequestConfig(dtlsConn, localPort, deviceID, password)
 		if confErr != nil {
@@ -321,8 +292,8 @@ func RunSession(
 	}
 
 	log.Printf("[ВОРКЕР #%d] [READY] Туннель готов к работе ✓", sessionID)
+	emitReady()
 
-	// Регистрация в диспетчере
 	slot := &WorkerSlot{
 		ID:     sessionID,
 		SendCh: make(chan []byte, workerSendBuf),
@@ -330,16 +301,14 @@ func RunSession(
 	d.Register(slot)
 	defer d.Unregister(slot)
 
-	// Proxy DTLS ↔ Dispatcher
 	var proxyWg sync.WaitGroup
-	proxyWg.Add(3) // +1 for keepalive goroutine
+	proxyWg.Add(3)
 
 	stopDTLS := context.AfterFunc(sessCtx, func() {
 		_ = dtlsConn.SetDeadline(time.Now())
 	})
 	defer stopDTLS()
 
-	// DTLS Keepalive: prevents TURN allocation timeout and DTLS idle disconnect
 	go func() {
 		defer proxyWg.Done()
 		t := time.NewTicker(keepaliveInterval)
@@ -358,7 +327,6 @@ func RunSession(
 		}
 	}()
 
-	// Writer: dispatcher → DTLS
 	go func() {
 		defer proxyWg.Done()
 		defer sessCancel()
@@ -381,7 +349,6 @@ func RunSession(
 		}
 	}()
 
-	// Reader: DTLS → dispatcher
 	go func() {
 		defer proxyWg.Done()
 		defer sessCancel()
@@ -401,7 +368,6 @@ func RunSession(
 				return
 			}
 
-			// Skip keepalive pong from server
 			if n == 1 && pkt[0] == keepaliveByte {
 				putPktBuf(pkt)
 				continue

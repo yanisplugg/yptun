@@ -10,6 +10,8 @@ import kotlinx.serialization.Serializable
 data class TrafficSettings(
     /** DNS used for proxied traffic (resolved through the proxy, no leak). */
     val remoteDns: String = "8.8.8.8",
+    /** Optional SECOND remote DNS, also resolved through the proxy (fallback resolver). Blank = none. */
+    val remoteDns2: String = "",
     /** DNS used for direct/bootstrap lookups (e.g. resolving the proxy server domain). */
     val directDns: String = "223.5.5.5",
     /** sing-box DNS resolution strategy. One of [STRATEGIES]. */
@@ -48,6 +50,7 @@ data class TrafficSettings(
         // FakeDNS is per-config now (honored verbatim from the location's own raw config), never global.
         fakeDnsEnabled = false,
         remoteDns = remoteDns.trim().ifBlank { "8.8.8.8" },
+        remoteDns2 = remoteDns2.trim(),
         directDns = directDns.trim().ifBlank { "223.5.5.5" },
         domainStrategy = domainStrategy.takeIf { it in STRATEGIES } ?: "ipv4_only",
         muxProtocol = muxProtocol.takeIf { it in MUX_PROTOCOLS } ?: "h2mux",

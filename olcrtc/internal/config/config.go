@@ -79,6 +79,7 @@ type Failover struct {
 // Auth selects the auth provider.
 type Auth struct {
 	Provider string `yaml:"provider"` // telemost, wbstream, none
+	Token    string `yaml:"token"`    // optional pre-issued account token (wbstream)
 }
 
 // Room identifies the conference room.
@@ -250,6 +251,7 @@ func Apply(dst session.Config, f File) session.Config {
 	dst.Mode = pickString(dst.Mode, f.Mode)
 	dst.Transport = pickString(dst.Transport, f.Net.Transport)
 	dst.Auth = pickString(dst.Auth, f.Auth.Provider)
+	dst.AuthToken = pickString(dst.AuthToken, f.Auth.Token)
 	dst.Engine = pickString(dst.Engine, f.Engine.Name)
 	dst.URL = pickString(dst.URL, f.Engine.URL)
 	dst.Token = pickString(dst.Token, f.Engine.Token)
@@ -297,6 +299,7 @@ func ApplyProfile(base session.Config, p Profile) session.Config {
 	dst := base
 	dst.Transport = overlayString(dst.Transport, p.Net.Transport)
 	dst.Auth = overlayString(dst.Auth, p.Auth.Provider)
+	dst.AuthToken = overlayString(dst.AuthToken, p.Auth.Token)
 	dst.Engine = overlayString(dst.Engine, p.Engine.Name)
 	dst.URL = overlayString(dst.URL, p.Engine.URL)
 	dst.Token = overlayString(dst.Token, p.Engine.Token)

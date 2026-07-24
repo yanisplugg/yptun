@@ -52,88 +52,124 @@ func (r *abstractDefaultRule) Close() error {
 }
 
 func (r *abstractDefaultRule) Match(metadata *adapter.InboundContext) bool {
+	return !r.matchStates(metadata).isEmpty()
+}
+
+func (r *abstractDefaultRule) destinationIPCIDRMatchesSource(metadata *adapter.InboundContext) bool {
+	return !metadata.IgnoreDestinationIPCIDRMatch && metadata.IPCIDRMatchSource && len(r.destinationIPCIDRItems) > 0
+}
+
+func (r *abstractDefaultRule) destinationIPCIDRMatchesDestination(metadata *adapter.InboundContext) bool {
+	return !metadata.IgnoreDestinationIPCIDRMatch && !metadata.IPCIDRMatchSource && len(r.destinationIPCIDRItems) > 0
+}
+
+func (r *abstractDefaultRule) requiresSourceAddressMatch(metadata *adapter.InboundContext) bool {
+	return len(r.sourceAddressItems) > 0 || r.destinationIPCIDRMatchesSource(metadata)
+}
+
+func (r *abstractDefaultRule) requiresDestinationAddressMatch(metadata *adapter.InboundContext) bool {
+	return len(r.destinationAddressItems) > 0 || r.destinationIPCIDRMatchesDestination(metadata)
+}
+
+func (r *abstractDefaultRule) matchStates(metadata *adapter.InboundContext) ruleMatchStateSet {
+	return r.matchStatesWithBase(metadata, 0)
+}
+
+func (r *abstractDefaultRule) matchStatesWithBase(metadata *adapter.InboundContext, inheritedBase ruleMatchState) ruleMatchStateSet {
 	if len(r.allItems) == 0 {
-		return true
+		return emptyRuleMatchState().withBase(inheritedBase)
 	}
-
-	if len(r.sourceAddressItems) > 0 && !metadata.SourceAddressMatch {
+	evaluationBase := inheritedBase
+	if r.invert {
+		evaluationBase = 0
+	}
+	baseState := evaluationBase
+	if len(r.sourceAddressItems) > 0 {
 		metadata.DidMatch = true
-		for _, item := range r.sourceAddressItems {
-			if item.Match(metadata) {
-				metadata.SourceAddressMatch = true
-				break
-			}
+		if matchAnyItem(r.sourceAddressItems, metadata) {
+			baseState |= ruleMatchSourceAddress
 		}
 	}
-
-	if len(r.sourcePortItems) > 0 && !metadata.SourcePortMatch {
+	if r.destinationIPCIDRMatchesSource(metadata) && !baseState.has(ruleMatchSourceAddress) {
 		metadata.DidMatch = true
-		for _, item := range r.sourcePortItems {
-			if item.Match(metadata) {
-				metadata.SourcePortMatch = true
-				break
-			}
+		if matchAnyItem(r.destinationIPCIDRItems, metadata) {
+			baseState |= ruleMatchSourceAddress
+		}
+	} else if r.destinationIPCIDRMatchesSource(metadata) {
+		metadata.DidMatch = true
+	}
+	if len(r.sourcePortItems) > 0 {
+		metadata.DidMatch = true
+		if matchAnyItem(r.sourcePortItems, metadata) {
+			baseState |= ruleMatchSourcePort
 		}
 	}
-
-	if len(r.destinationAddressItems) > 0 && !metadata.DestinationAddressMatch {
+	if len(r.destinationAddressItems) > 0 {
 		metadata.DidMatch = true
-		for _, item := range r.destinationAddressItems {
-			if item.Match(metadata) {
-				metadata.DestinationAddressMatch = true
-				break
-			}
+		if matchAnyItem(r.destinationAddressItems, metadata) {
+			baseState |= ruleMatchDestinationAddress
 		}
 	}
-
-	if !metadata.IgnoreDestinationIPCIDRMatch && len(r.destinationIPCIDRItems) > 0 && !metadata.DestinationAddressMatch {
+	if r.destinationIPCIDRMatchesDestination(metadata) && !baseState.has(ruleMatchDestinationAddress) {
 		metadata.DidMatch = true
-		for _, item := range r.destinationIPCIDRItems {
-			if item.Match(metadata) {
-				metadata.DestinationAddressMatch = true
-				break
-			}
+		if matchAnyItem(r.destinationIPCIDRItems, metadata) {
+			baseState |= ruleMatchDestinationAddress
+		}
+	} else if r.destinationIPCIDRMatchesDestination(metadata) {
+		metadata.DidMatch = true
+	}
+	if len(r.destinationPortItems) > 0 {
+		metadata.DidMatch = true
+		if matchAnyItem(r.destinationPortItems, metadata) {
+			baseState |= ruleMatchDestinationPort
 		}
 	}
-
-	if len(r.destinationPortItems) > 0 && !metadata.DestinationPortMatch {
-		metadata.DidMatch = true
-		for _, item := range r.destinationPortItems {
-			if item.Match(metadata) {
-				metadata.DestinationPortMatch = true
-				break
-			}
-		}
-	}
-
 	for _, item := range r.items {
 		metadata.DidMatch = true
 		if !item.Match(metadata) {
-			return r.invert
+			return r.invertedFailure(inheritedBase)
 		}
 	}
-
-	if len(r.sourceAddressItems) > 0 && !metadata.SourceAddressMatch {
-		return r.invert
+	var stateSet ruleMatchStateSet
+	if r.ruleSetItem != nil {
+		metadata.DidMatch = true
+		stateSet = matchRuleItemStatesWithBase(r.ruleSetItem, metadata, baseState)
+	} else {
+		stateSet = singleRuleMatchState(baseState)
 	}
-
-	if len(r.sourcePortItems) > 0 && !metadata.SourcePortMatch {
-		return r.invert
-	}
-
-	if ((!metadata.IgnoreDestinationIPCIDRMatch && len(r.destinationIPCIDRItems) > 0) || len(r.destinationAddressItems) > 0) && !metadata.DestinationAddressMatch {
-		return r.invert
-	}
-
-	if len(r.destinationPortItems) > 0 && !metadata.DestinationPortMatch {
-		return r.invert
-	}
-
-	if !metadata.DidMatch {
+	stateSet = stateSet.filter(func(state ruleMatchState) bool {
+		if r.requiresSourceAddressMatch(metadata) && !state.has(ruleMatchSourceAddress) {
+			return false
+		}
+		if len(r.sourcePortItems) > 0 && !state.has(ruleMatchSourcePort) {
+			return false
+		}
+		if r.requiresDestinationAddressMatch(metadata) && !state.has(ruleMatchDestinationAddress) {
+			return false
+		}
+		if len(r.destinationPortItems) > 0 && !state.has(ruleMatchDestinationPort) {
+			return false
+		}
 		return true
+	})
+	if stateSet.isEmpty() {
+		return r.invertedFailure(inheritedBase)
 	}
+	if r.invert {
+		// DNS pre-lookup defers destination address-limit checks until the response phase.
+		if metadata.IgnoreDestinationIPCIDRMatch && stateSet == emptyRuleMatchState() && !metadata.DidMatch && len(r.destinationIPCIDRItems) > 0 {
+			return emptyRuleMatchState().withBase(inheritedBase)
+		}
+		return 0
+	}
+	return stateSet
+}
 
-	return !r.invert
+func (r *abstractDefaultRule) invertedFailure(base ruleMatchState) ruleMatchStateSet {
+	if r.invert {
+		return emptyRuleMatchState().withBase(base)
+	}
+	return 0
 }
 
 func (r *abstractDefaultRule) Action() adapter.RuleAction {
@@ -191,17 +227,50 @@ func (r *abstractLogicalRule) Close() error {
 }
 
 func (r *abstractLogicalRule) Match(metadata *adapter.InboundContext) bool {
-	if r.mode == C.LogicalTypeAnd {
-		return common.All(r.rules, func(it adapter.HeadlessRule) bool {
-			metadata.ResetRuleCache()
-			return it.Match(metadata)
-		}) != r.invert
-	} else {
-		return common.Any(r.rules, func(it adapter.HeadlessRule) bool {
-			metadata.ResetRuleCache()
-			return it.Match(metadata)
-		}) != r.invert
+	return !r.matchStates(metadata).isEmpty()
+}
+
+func (r *abstractLogicalRule) matchStates(metadata *adapter.InboundContext) ruleMatchStateSet {
+	return r.matchStatesWithBase(metadata, 0)
+}
+
+func (r *abstractLogicalRule) matchStatesWithBase(metadata *adapter.InboundContext, base ruleMatchState) ruleMatchStateSet {
+	evaluationBase := base
+	if r.invert {
+		evaluationBase = 0
 	}
+	var stateSet ruleMatchStateSet
+	if r.mode == C.LogicalTypeAnd {
+		stateSet = emptyRuleMatchState().withBase(evaluationBase)
+		for _, rule := range r.rules {
+			nestedMetadata := *metadata
+			nestedMetadata.ResetRuleCache()
+			nestedStateSet := matchHeadlessRuleStatesWithBase(rule, &nestedMetadata, evaluationBase)
+			if nestedStateSet.isEmpty() {
+				if r.invert {
+					return emptyRuleMatchState().withBase(base)
+				}
+				return 0
+			}
+			stateSet = stateSet.combine(nestedStateSet)
+		}
+	} else {
+		for _, rule := range r.rules {
+			nestedMetadata := *metadata
+			nestedMetadata.ResetRuleCache()
+			stateSet = stateSet.merge(matchHeadlessRuleStatesWithBase(rule, &nestedMetadata, evaluationBase))
+		}
+		if stateSet.isEmpty() {
+			if r.invert {
+				return emptyRuleMatchState().withBase(base)
+			}
+			return 0
+		}
+	}
+	if r.invert {
+		return 0
+	}
+	return stateSet
 }
 
 func (r *abstractLogicalRule) Action() adapter.RuleAction {
@@ -221,4 +290,14 @@ func (r *abstractLogicalRule) String() string {
 	} else {
 		return "!(" + strings.Join(F.MapToString(r.rules), " "+op+" ") + ")"
 	}
+}
+
+func matchAnyItem(items []RuleItem, metadata *adapter.InboundContext) bool {
+	return common.Any(items, func(it RuleItem) bool {
+		return it.Match(metadata)
+	})
+}
+
+func (s ruleMatchState) has(target ruleMatchState) bool {
+	return s&target != 0
 }

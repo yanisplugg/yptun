@@ -11,6 +11,8 @@ data class AndroidSocksProxySettings(
 
     companion object {
         const val DEFAULT_HOST = "127.0.0.1"
+        /** Bind on every interface (loopback + LAN). Used by Proxy mode so a PC on the same Wi-Fi can use the phone as a proxy. */
+        const val ALL_INTERFACES = "0.0.0.0"
         const val DEFAULT_PORT = 10808
         const val MAX_HOST_LENGTH = 255
         const val MIN_PORT = 1024

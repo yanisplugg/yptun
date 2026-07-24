@@ -27,6 +27,25 @@ tasks:
     cmds:
       - goreleaser release --snapshot --clean --skip=publish,sign
 
+  build:ios:
+    desc: Build iOS XCFramework to dist/Mobile.xcframework
+    platforms: [darwin]
+    cmds:
+      - rm -rf dist/Mobile.xcframework
+      - mkdir -p dist
+      - gomobile bind -target ios,iossimulator -ldflags "-checklinkname=0" -o dist/Mobile.xcframework ./mobile
+
+  build:android:
+    desc: Build Android Archive (AAR) to dist/mobile.aar
+    cmds:
+      - rm -rf dist/mobile.aar dist/mobile-sources.jar
+      - mkdir -p dist
+      - cmd: gomobile bind -target android -androidapi 21 -ldflags "-checklinkname=0" -o dist/mobile.aar ./mobile
+        platforms: [linux, darwin]
+      - cmd: |
+          powershell -NoProfile -Command '$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"; $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"; gomobile bind -target android -androidapi 21 -ldflags "-checklinkname=0" -o dist/mobile.aar ./mobile'
+        platforms: [windows]
+
   test:
     desc: Run unit tests with race detector
     cmds:

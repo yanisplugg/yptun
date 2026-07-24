@@ -2,7 +2,12 @@
 icon: material/new-box
 ---
 
-!!! quote "Changes in sing-box 1.12.0"
+!!! quote "sing-box 1.13.0 中的更改"
+
+    :material-plus: [disable_tcp_keep_alive](#disable_tcp_keep_alive)  
+    :material-alert: [tcp_keep_alive](#tcp_keep_alive)
+
+!!! quote "sing-box 1.12.0 中的更改"
 
     :material-plus: [netns](#netns)  
     :material-plus: [bind_interface](#bind_interface)  
@@ -29,6 +34,9 @@ icon: material/new-box
   "netns": "",
   "tcp_fast_open": false,
   "tcp_multi_path": false,
+  "disable_tcp_keep_alive": false,
+  "tcp_keep_alive": "",
+  "tcp_keep_alive_interval": "",
   "udp_fragment": false,
   "udp_timeout": "",
   "detour": "",
@@ -101,6 +109,28 @@ icon: material/new-box
 
 启用 TCP Multi Path。
 
+#### disable_tcp_keep_alive
+
+!!! question "自 sing-box 1.13.0 起"
+
+禁用 TCP keep alive。
+
+#### tcp_keep_alive
+
+!!! question "自 sing-box 1.13.0 起"
+
+    默认值从 `10m` 更改为 `5m`。
+
+TCP keep alive 初始周期。
+
+默认使用 `5m`。
+
+#### tcp_keep_alive_interval
+
+TCP keep alive 间隔。
+
+默认使用 `75s`。
+
 #### udp_fragment
 
 启用 UDP 分段。
@@ -115,13 +145,13 @@ UDP NAT 过期时间。
 
 如果设置，连接将被转发到指定的入站。
 
-需要目标入站支持，参阅 [注入支持](/zh/configuration/inbound/#_3)。
+需要目标入站支持，参阅 [注入支持](/zh/configuration/inbound/#字段)。
 
 #### sniff
 
 !!! failure "已在 sing-box 1.11.0 废弃"
 
-    入站字段已废弃且将在 sing-box 1.12.0 中被移除，参阅 [迁移指南](/migration/#migrate-legacy-inbound-fields-to-rule-actions).
+    入站字段已废弃且将在 sing-box 1.12.0 中被移除，参阅 [迁移指南](/zh/migration/#迁移旧的入站字段到规则动作).
 
 启用协议探测。
 
@@ -141,7 +171,7 @@ UDP NAT 过期时间。
 
 !!! failure "已在 sing-box 1.11.0 废弃"
 
-    入站字段已废弃且将在 sing-box 1.12.0 中被移除，参阅 [迁移指南](/migration/#migrate-legacy-inbound-fields-to-rule-actions).
+    入站字段已废弃且将在 sing-box 1.12.0 中被移除，参阅 [迁移指南](/zh/migration/#迁移旧的入站字段到规则动作).
 
 探测超时时间。
 
@@ -151,7 +181,7 @@ UDP NAT 过期时间。
 
 !!! failure "已在 sing-box 1.11.0 废弃"
 
-    入站字段已废弃且将在 sing-box 1.12.0 中被移除，参阅 [迁移指南](/migration/#migrate-legacy-inbound-fields-to-rule-actions).
+    入站字段已废弃且将在 sing-box 1.12.0 中被移除，参阅 [迁移指南](/zh/migration/#迁移旧的入站字段到规则动作).
 
 可选值： `prefer_ipv4` `prefer_ipv6` `ipv4_only` `ipv6_only`。
 
@@ -163,7 +193,7 @@ UDP NAT 过期时间。
 
 !!! failure "已在 sing-box 1.11.0 废弃"
 
-    入站字段已废弃且将在 sing-box 1.12.0 中被移除，参阅 [迁移指南](/migration/#migrate-legacy-inbound-fields-to-rule-actions).
+    入站字段已废弃且将在 sing-box 1.12.0 中被移除，参阅 [迁移指南](/zh/migration/#迁移旧的入站字段到规则动作).
 
 如果启用，对于地址为域的 UDP 代理请求，将在响应中发送原始包地址而不是映射的域。
 
