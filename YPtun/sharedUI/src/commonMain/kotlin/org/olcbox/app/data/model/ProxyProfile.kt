@@ -136,6 +136,14 @@ data class ProxyProfile(
     @SerialName("awg_config")
     val awgConfig: String = "",
     /**
+     * Trust Tunnel ([TYPE_TRUSTTUNNEL]) `tt://` deep-link for the AdGuard TrustTunnel client. The
+     * vendored trusttunnel AAR decodes it (DeepLink.decode) into a `[endpoint]` TOML at connect time;
+     * the client raises a local SOCKS5 (VpnClient in SOCKS-only mode) that the proxy routes through,
+     * mirroring [awgConfig]/AmneziaWG. [server]/[serverPort]/[tag] are kept for display & dedup only.
+     */
+    @SerialName("tt_config")
+    val ttConfig: String = "",
+    /**
      * Hysteria2 ([TYPE_HYSTERIA2]) parameters. Auth uses [password]; server/[serverPort], [sni],
      * [alpn] and [allowInsecure] are reused. The hysteria2proxy module raises a local SOCKS5 from
      * these (like AmneziaWG). Obfs is Salamander when [hy2Obfs] == "salamander"; [hy2Ports] is an
@@ -163,6 +171,7 @@ data class ProxyProfile(
         if (type == TYPE_HYSTERIA2) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_NAIVE) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_AMNEZIAWG) return awgConfig.isNotBlank()
+        if (type == TYPE_TRUSTTUNNEL) return ttConfig.isNotBlank()
         if (!rawXrayConfig.isNullOrBlank()) return true
         if (!rawOutbound.isNullOrBlank()) return true
         if (server.isBlank() || serverPort !in 1..65535) return false
@@ -214,6 +223,7 @@ data class ProxyProfile(
         const val TYPE_TROJAN = "trojan"
         const val TYPE_SHADOWSOCKS = "shadowsocks"
         const val TYPE_AMNEZIAWG = "amneziawg"
+        const val TYPE_TRUSTTUNNEL = "trusttunnel"
         const val TYPE_HYSTERIA2 = "hysteria2"
         const val TYPE_NAIVE = "naive"
 

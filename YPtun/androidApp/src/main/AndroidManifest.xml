@@ -2,6 +2,10 @@
 <manifest xmlns:tools="http://schemas.android.com/tools"
     xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Trust Tunnel AAR declares minSdk 26; the app stays minSdk 23. On API 23–25 the TrustTunnel
+         engine is unavailable (its native client needs 26+), but the rest of the app runs normally. -->
+    <uses-sdk tools:overrideLibrary="com.adguard.trusttunnel" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
