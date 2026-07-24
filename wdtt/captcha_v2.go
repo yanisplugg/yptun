@@ -589,7 +589,6 @@ func captchaV2StringifyAny(value any) string {
 	}
 }
 
-// applyBrowserProfileFhttp applies browser headers to fhttp requests
 func applyBrowserProfileFhttp(req *fhttp.Request, profile Profile) {
 	req.Header.Set("User-Agent", profile.UserAgent)
 	req.Header.Set("sec-ch-ua", profile.SecChUa)
@@ -599,7 +598,6 @@ func applyBrowserProfileFhttp(req *fhttp.Request, profile Profile) {
 	req.Header.Set("DNT", "1")
 }
 
-// VkCaptchaError represents a VK captcha challenge
 type VkCaptchaError struct {
 	ErrorCode      int
 	ErrorMsg       string

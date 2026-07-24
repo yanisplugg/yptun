@@ -94,7 +94,7 @@ func SetLogWriter(w LogWriter) {
 
 // freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
 // Bump it whenever the vendored core is updated; surfaced in the app's settings.
-const freeturnVersion = "1.6.0"
+const freeturnVersion = "1.8.0"
 
 // Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
 func Version() string { return freeturnVersion }
