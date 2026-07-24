@@ -249,7 +249,12 @@ class LocationViewModel(
             name = name,
             engine = engine,
             bypassProvider = authProvider,
-            transport = transport
+            transport = transport,
+            // Display-only proxy stub (type + server) so the subtitle reads "VLESS · host" on the
+            // seed instead of a bare "Proxy". Not connect-complete — the real payload swaps in on load.
+            proxy = if (proxyType.isNotBlank() || proxyServer.isNotBlank()) {
+                ProxyProfile(type = proxyType.ifBlank { ProxyProfile.TYPE_VLESS }, server = proxyServer)
+            } else null
         ),
         subscriptionUrl = subscriptionUrl,
         metadata = metadata

@@ -33,6 +33,13 @@ data class LocationViewIndex(
         @SerialName("auth_provider")
         val authProvider: String = "",
         val transport: String = "",
+        // Lightweight proxy display fields (type + server) so the cold-start seed paints the REAL
+        // subtitle ("VLESS · host") instead of a bare "Proxy" placeholder until the full decode lands.
+        // These are just short strings — NOT the heavy proxy payload (uuid/keys/raw configs).
+        @SerialName("proxy_type")
+        val proxyType: String = "",
+        @SerialName("proxy_server")
+        val proxyServer: String = "",
         val metadata: LocationMetadata? = null
     )
 
@@ -48,6 +55,8 @@ data class LocationViewIndex(
                     engine = entry.engine ?: EngineType.Stealth,
                     authProvider = entry.authProvider.orEmpty(),
                     transport = entry.transport?.type.orEmpty(),
+                    proxyType = entry.location.proxy?.type.orEmpty(),
+                    proxyServer = entry.location.proxy?.server.orEmpty(),
                     metadata = entry.metadata
                 )
             }
