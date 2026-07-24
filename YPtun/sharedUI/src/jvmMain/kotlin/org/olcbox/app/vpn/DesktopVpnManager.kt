@@ -382,7 +382,14 @@ class DesktopVpnManager private constructor(
             config.proxy2?.let { if (it.server.isNotBlank()) add(it.server) }
             config.vkturn?.let { vk ->
                 runCatching { java.net.URI(vk.uri).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
+                // WDTT dials the wdtt-server directly by address instead of through a freeturn URI.
+                if (vk.usesWdtt()) {
+                    vk.wdttPeer.takeIf { it.isNotBlank() }?.let { add(it) }
+                }
             }
+            // dnstt speaks plain UDP DNS to this resolver; looping that into the TUN deadlocks the
+            // tunnel it is carrying (Android protects the socket instead).
+            config.dnstt?.resolver?.substringBefore(':')?.takeIf { it.isNotBlank() }?.let { add(it) }
         }
         return hosts.distinct().flatMap { host ->
             runCatching {
@@ -559,22 +566,30 @@ class DesktopVpnManager private constructor(
                 throw CancellationException("Desktop start superseded")
             }
 
+            // A bare dnstt tunnel leaves a transparent forwarder — not a real SOCKS server — on the
+            // local port, so nothing downstream may send an auth handshake to it.
+            val bridgeSettings = if (useEngineController && engineController.localSocksNoAuth) {
+                socksSettings.copy(username = "", password = "")
+            } else {
+                socksSettings
+            }
+
             when (desktopMode) {
-                DesktopMode.LinuxTun -> startLinuxTun(socksSettings.port, requestGeneration)
+                DesktopMode.LinuxTun -> startLinuxTun(bridgeSettings.port, requestGeneration)
                 DesktopMode.WindowsTun -> if (engineController.tunHandledInCore) {
                     // sing-box raised the wintun adapter itself (per-process split tunneling);
                     // no external tun2socks needed.
                     addLog("Windows TUN owned by sing-box (per-process split tunneling active)")
                 } else {
                     startWindowsTun(
-                        socksPort = socksSettings.port,
+                        socksPort = bridgeSettings.port,
                         requestGeneration = requestGeneration,
                         bypassServerIps = if (useEngineController) resolveBypassServerIps(location) else emptyList(),
-                        socksUsername = socksSettings.username,
-                        socksPassword = socksSettings.password
+                        socksUsername = bridgeSettings.username,
+                        socksPassword = bridgeSettings.password
                     )
                 }
-                DesktopMode.SystemProxy -> startSystemProxy(socksSettings, requestGeneration)
+                DesktopMode.SystemProxy -> startSystemProxy(bridgeSettings, requestGeneration)
             }
 
             setStatus(VpnStatus.Connected)

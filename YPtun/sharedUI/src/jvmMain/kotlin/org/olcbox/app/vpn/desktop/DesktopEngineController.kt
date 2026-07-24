@@ -65,6 +65,15 @@ internal class DesktopEngineController(
     var tunHandledInCore: Boolean = false
         private set
 
+    /**
+     * True when the endpoint left on `listenHost:listenPort` accepts NO SOCKS credentials. Only the
+     * bare dnstt path sets it: that local port is a transparent forwarder to the dnstt-server's own
+     * SOCKS5, and a pipe cannot terminate an auth handshake. The TUN bridge / system proxy must then
+     * connect anonymously.
+     */
+    var localSocksNoAuth: Boolean = false
+        private set
+
     private val requestedTun: Boolean get() = tunRequest != null
 
     /**
@@ -94,16 +103,16 @@ internal class DesktopEngineController(
             null
         }
         tunHandledInCore = false
+        localSocksNoAuth = false
+        dnsttProxyActive = false
         val config = location.normalized()
         when (config.engine) {
             EngineType.Stealth -> startStealth(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.Standard,
             EngineType.Chain -> startSingBoxOrXray(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
-            EngineType.VkTurn -> startVkTurn(config, listenHost, listenPort, socksUsername, socksPassword)
-            // dnstt (DNS tunnel) is an Android-only gomobile module (dnsttmobile); it is not yet
-            // built into the desktop yptuncore C ABI. Surface a clear error instead of a crash.
-            EngineType.Dnstt -> throw UnsupportedOperationException(
-                "DNSTT engine is not yet supported on Windows desktop")
+            EngineType.VkTurn ->
+                startVkTurn(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
+            EngineType.Dnstt -> startDnstt(config, listenHost, listenPort, socksUsername, socksPassword)
         }
         if (requestedTun && !tunHandledInCore) {
             log("Per-process split tunneling unavailable (core is ${activeProxyCore}); falling back to tun2socks for all apps")
@@ -118,9 +127,13 @@ internal class DesktopEngineController(
         EngineType.Stealth -> YpTunCore.rtcRunning()
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> YpTunCore.rtcRunning() && proxyCoreRunning()
-        EngineType.VkTurn -> YpTunCore.ftRunning() && proxyCoreRunning()
-        EngineType.Dnstt -> false // not yet supported on desktop
+        EngineType.VkTurn -> (YpTunCore.ftRunning() || YpTunCore.wdttRunning()) && proxyCoreRunning()
+        // dnstt raises its own local forwarder; with a proxy-over-dnstt a proxy core fronts it.
+        EngineType.Dnstt -> YpTunCore.dnsttRunning() && (!dnsttProxyActive || proxyCoreRunning())
     }
+
+    /** True when the active dnstt engine also fronts a proxy core (proxy-over-dnstt). */
+    private var dnsttProxyActive: Boolean = false
 
     private fun proxyCoreRunning(): Boolean =
         if (activeProxyCore == ProxyCore.Xray) YpTunCore.xrayRunning() else YpTunCore.sbRunning()
@@ -388,6 +401,132 @@ internal class DesktopEngineController(
     }
 
     // ---------------------------------------------------------------------------------------
+    // dnstt (mirrors OlcboxVpnService.startDnsttCore)
+
+    /**
+     * dnstt (DNS tunnel): the client raises a transparent TCP forwarder on the local port; the
+     * dnstt-server relays each connection to its own upstream SOCKS5, so that port behaves as that
+     * SOCKS5 and the TUN bridge can consume it directly. The forwarder cannot terminate a SOCKS auth
+     * handshake, so without a proxy core in front the local endpoint must run no-auth — see
+     * [localSocksNoAuth]. With a proxy link, dnstt moves to the internal chain port and an Xray/
+     * sing-box core fronts it on [listenPort], keeping the credentials.
+     */
+    private suspend fun startDnstt(
+        config: LocationConfig,
+        listenHost: String,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+    ) {
+        val dnstt = config.dnstt
+        check(dnstt != null && dnstt.isComplete()) { "DNSTT not configured" }
+
+        val proxy = dnstt.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link)
+                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?.takeIf { it.isComplete() }
+        }
+        if (dnstt.proxyLink.isNotBlank() && proxy == null) {
+            log("DNSTT: proxy link present but could not be parsed — exiting via dnstt SOCKS directly (no proxy)")
+        }
+        val useProxy = proxy != null
+        dnsttProxyActive = useProxy
+        localSocksNoAuth = !useProxy
+        val dnsttPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
+
+        require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        if (useProxy) {
+            require(!isLocalSocksPortOpen(dnsttPort)) { "DNSTT internal port $dnsttPort is still in use" }
+        }
+
+        val dnsttAddr = "$listenHost:$dnsttPort"
+        log("Starting DNSTT on $dnsttAddr (domain=${dnstt.domain}, resolver=${dnstt.resolver})")
+        runCatching { YpTunCore.dnsttStop() }
+        YpTunCore.dnsttStart(dnstt.resolver, dnstt.domain, dnstt.pubKey, dnsttAddr)
+        if (!awaitSocksPortOpen(dnsttPort, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("DNSTT SOCKS port $dnsttPort did not open")
+        }
+        log("DNSTT ready on $dnsttAddr")
+        if (!useProxy) return
+
+        val traffic = JvmVpnSettings.loadTraffic()
+        val routing = JvmVpnSettings.loadRouting()
+        val profilesState = JvmVpnSettings.loadRoutingProfiles()
+        val routingProfile = profilesState.resolve(config.routingProfileId)
+        val globalCore = JvmVpnSettings.loadAppBehavior().globalProxyCore
+        val profileWantsXray = routingProfile != null &&
+            (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
+            proxy!!.type in XRAY_SUPPORTED_TYPES
+        val useXray = dnstt.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
+        log("DNSTT chaining proxy ${proxy!!.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+
+        if (useXray) {
+            val assetPath = ensureGeoAssetPath(routingProfile)
+            val xrayJson = XrayConfig.build(
+                profile = proxy,
+                listenPort = listenPort,
+                listenHost = listenHost,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                olcrtcChainPort = dnsttPort,
+                traffic = traffic,
+                routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                blockQuic = true,
+                // Resolving every destination over the DNS tunnel stalls all traffic; the family stays
+                // pinned by the bridge's v6 drop.
+                forceFamilyResolve = false,
+                // Chain at the SOCKET level, or a vless reality/xtls-vision exit loses its transport
+                // and the server resets it.
+                chainViaDialerProxy = true,
+                // Xray's default 4s handshake budget is far too short for SOCKS5→VPS→proxy→TLS over a
+                // DNS tunnel, and it killed every connection mid-handshake.
+                handshakeTimeoutSec = 30,
+                // A `direct` rule must still exit via the dnstt-server, never the real network.
+                directViaBase = true,
+            )
+            activeProxyCore = ProxyCore.Xray
+            if (assetPath.isNotEmpty()) YpTunCore.xraySetAssetPath(assetPath)
+            YpTunCore.xrayStart(xrayJson)
+        } else {
+            val json = SingBoxConfig.build(
+                profile = proxy,
+                listenPort = listenPort,
+                listenHost = listenHost,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                olcrtcChainPort = dnsttPort,
+                autoDetectInterface = true,
+                routing = routing,
+                traffic = traffic,
+                routingProfile = routingProfile,
+                singboxGeositeBase = profilesState.singboxGeositeBase,
+                singboxGeoipBase = profilesState.singboxGeoipBase,
+                blockQuic = true,
+                // Both resolve opt-outs: a per-connection DNS round-trip through the proxy through the
+                // DNS tunnel is fatal for throughput. See the Android path for the full reasoning.
+                forceFamilyResolve = false,
+                allowLocalResolve = false,
+                directViaBase = true,
+                mixedInbound = true,
+                hijackDns = true,
+                tunMode = requestedTun,
+                splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
+                splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                logFilePath = DesktopPaths.appDataDir().resolve("singbox.log").toString(),
+            )
+            activeProxyCore = ProxyCore.SingBox
+            YpTunCore.sbStart(json)
+            tunHandledInCore = requestedTun
+        }
+
+        if (!awaitSocksPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("DNSTT proxy SOCKS port $listenPort did not open")
+        }
+        log("DNSTT proxy ready on $listenHost:$listenPort")
+    }
+
+    // ---------------------------------------------------------------------------------------
     // VK-TURN (mirrors OlcboxVpnService.startVkTurnCore)
 
     private suspend fun startVkTurn(
@@ -396,14 +535,19 @@ internal class DesktopEngineController(
         listenPort: Int,
         socksUsername: String,
         socksPassword: String,
+        deviceId: String,
     ) {
         val vk = config.vkturn
-        val profile = config.proxy
+        var profile = config.proxy
+        val usesWdtt = vk?.usesWdtt() == true
         val outboundType = vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
             ?: VkTurnConfig.OUTBOUND_WIREGUARD
-        val outboundConfigured = when (outboundType) {
-            VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
-            VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
+        val outboundConfigured = when {
+            // WDTT fetches its WireGuard config FROM the server (GETCONF), so the user stores no WG
+            // keys and there is nothing to validate up front — see LocationViewModel's matching gate.
+            usesWdtt -> true
+            outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
+            outboundType == VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
                 profile.server.isNotBlank() && profile.serverPort in 1..65535
             else -> !profile?.rawOutbound.isNullOrBlank()
         }
@@ -412,15 +556,48 @@ internal class DesktopEngineController(
         require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
         val listenAddr = "127.0.0.1:${vk.listenPort}"
-        val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
-        else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
-        log("Starting VK-TURN freeturn listener on $listenAddr")
-        YpTunCore.ftStart(freeturnUri, listenAddr, vk.vkLink, vk.streams)
-
-        if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
-            log("VK-TURN relay up (${YpTunCore.ftConnectedStreams()} stream(s)); starting WireGuard")
+        if (usesWdtt) {
+            // WDTT core (wg-turn-client): dials the wdtt-server purely by IP[:port] over VK call links
+            // and hands back the WireGuard config we build the outbound from.
+            val peerAddr = vk.wdttPeerAddr()
+            log(
+                "Starting VK-TURN WDTT core on $listenAddr (peer=$peerAddr, " +
+                    "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"})"
+            )
+            YpTunCore.wdttStart(
+                peer = peerAddr,
+                vkHashes = vk.vkLink,
+                password = vk.wdttPassword,
+                listen = listenAddr,
+                numWorkers = vk.wdttWorkers,
+                deviceId = deviceId,
+                fingerprint = vk.wdttFingerprint.ifBlank { "chrome" },
+            )
+            // The config only arrives once the first worker has a VK TURN session up, so waiting on it
+            // doubles as the relay-ready gate (same as the Android OnConfig path).
+            val wgConf = YpTunCore.wdttWaitConfig(VKTURN_RELAY_READY_TIMEOUT_MS)
+            when {
+                wgConf != null -> {
+                    profile = buildWdttWgProfile(wgConf, vk.listenPort)
+                    log("VK-TURN WDTT relay up; WireGuard config from server applied")
+                }
+                !profile?.rawOutbound.isNullOrBlank() ->
+                    log("VK-TURN WDTT: no GETCONF — falling back to the stored WireGuard config")
+                else -> throw IllegalStateException(
+                    "WDTT: no WireGuard config from server (GETCONF) and none stored"
+                )
+            }
         } else {
-            log("VK-TURN relay not ready yet; starting outbound anyway (will retry)")
+            val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
+            else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+            log("Starting VK-TURN freeturn listener on $listenAddr")
+            YpTunCore.ftStart(freeturnUri, listenAddr, vk.vkLink, vk.streams)
+
+            if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
+                log("VK-TURN relay up (${YpTunCore.ftConnectedStreams()} stream(s)); starting WireGuard")
+            } else {
+                log("VK-TURN relay not ready yet; starting outbound anyway (will retry)")
+            }
         }
 
         activeProxyCore = ProxyCore.SingBox
@@ -583,6 +760,53 @@ internal class DesktopEngineController(
             throw IllegalStateException("VK-TURN SOCKS port $listenPort did not open")
         }
         log("VK-TURN ready on $listenHost:$listenPort")
+    }
+
+    /**
+     * WireGuard outbound over the local WDTT listener, built from the config the wdtt-server returns.
+     * Mirrors OlcboxVpnService.buildWdttWgProfile, including the MTU clamp: the server advertises 1280,
+     * but through VK TURN + DTLS + RTP-obf the real path MTU is well under that and 1280 black-holes
+     * large packets (uploads / TLS handshakes stall).
+     */
+    private fun buildWdttWgProfile(wgConf: String, listenPort: Int): ProxyProfile {
+        var priv = ""
+        var pub = ""
+        var addr = ""
+        var mtu = 0
+        for (raw in wgConf.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("[") || line.startsWith("#")) continue
+            val eq = line.indexOf('=')
+            if (eq <= 0) continue
+            val k = line.substring(0, eq).trim().lowercase()
+            val v = line.substring(eq + 1).trim()
+            when (k) {
+                "privatekey" -> priv = v
+                "publickey" -> pub = v
+                "address" -> if (addr.isEmpty()) addr = v.substringBefore(',').trim()
+                "mtu" -> mtu = v.toIntOrNull() ?: 0
+            }
+        }
+        val localAddr = if (addr.isNotEmpty()) "\"$addr\"" else ""
+        val effMtu = (if (mtu > 0) mtu else 1200).coerceAtMost(1200)
+        val json = buildString {
+            append("{")
+            append("\"type\":\"wireguard\",")
+            append("\"server\":\"127.0.0.1\",")
+            append("\"server_port\":$listenPort,")
+            append("\"local_address\":[$localAddr],")
+            append("\"private_key\":\"$priv\",")
+            append("\"peer_public_key\":\"$pub\",")
+            append("\"mtu\":$effMtu")
+            append("}")
+        }
+        return ProxyProfile(
+            tag = "WDTT",
+            type = "wireguard",
+            server = "127.0.0.1",
+            serverPort = listenPort,
+            rawOutbound = json,
+        )
     }
 
     private suspend fun awaitVkTurnRelayReady(timeoutMs: Int): Boolean {

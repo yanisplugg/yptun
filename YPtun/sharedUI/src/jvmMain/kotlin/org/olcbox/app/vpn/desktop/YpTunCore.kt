@@ -43,6 +43,26 @@ internal interface YpTunCoreLib : Library {
     fun YpFtRunning(): Int
     fun YpFtConnectedStreams(): Int
 
+    fun YpWdttStart(
+        peer: String,
+        vkHashes: String,
+        password: String,
+        listen: String,
+        numWorkers: Int,
+        deviceId: String,
+        fingerprint: String,
+        clientIds: String,
+    ): Pointer?
+
+    fun YpWdttWaitConfig(timeoutMs: Int): Pointer?
+    fun YpWdttStop()
+    fun YpWdttRunning(): Int
+    fun YpWdttPushCaptcha(token: String)
+
+    fun YpDnsttStart(resolver: String, domain: String, pubKeyHex: String, listenAddr: String): Pointer?
+    fun YpDnsttStop()
+    fun YpDnsttRunning(): Int
+
     fun YpRtcVersion(): Pointer?
     fun YpRtcSetTransport(transport: String)
     fun YpRtcSetTelemostCookies(cookies: String)
@@ -215,6 +235,36 @@ internal object YpTunCore {
     fun ftRunning(): Boolean = libOrNull?.YpFtRunning() == 1
     fun ftConnectedStreams(): Int = libOrNull?.YpFtConnectedStreams() ?: 0
 
+    // VK-TURN / WDTT core (wg-turn-client) --------------------------------------------------
+    fun wdttStart(
+        peer: String,
+        vkHashes: String,
+        password: String,
+        listen: String,
+        numWorkers: Int,
+        deviceId: String,
+        fingerprint: String,
+        clientIds: String = "",
+    ) = check(
+        lib().YpWdttStart(peer, vkHashes, password, listen, numWorkers, deviceId, fingerprint, clientIds),
+        "WDTT start failed"
+    )
+
+    /** The wdtt-server's WireGuard config (GETCONF), or null if it didn't arrive within [timeoutMs]. */
+    fun wdttWaitConfig(timeoutMs: Int): String? =
+        takeString(lib().YpWdttWaitConfig(timeoutMs))?.takeIf { it.isNotBlank() }
+
+    fun wdttStop() = libOrNull?.YpWdttStop() ?: Unit
+    fun wdttRunning(): Boolean = libOrNull?.YpWdttRunning() == 1
+    fun wdttPushCaptcha(token: String) = lib().YpWdttPushCaptcha(token)
+
+    // dnstt ---------------------------------------------------------------------------------
+    fun dnsttStart(resolver: String, domain: String, pubKeyHex: String, listenAddr: String) =
+        check(lib().YpDnsttStart(resolver, domain, pubKeyHex, listenAddr), "DNSTT start failed")
+
+    fun dnsttStop() = libOrNull?.YpDnsttStop() ?: Unit
+    fun dnsttRunning(): Boolean = libOrNull?.YpDnsttRunning() == 1
+
     // olcrtc --------------------------------------------------------------------------------
     fun rtcVersion(): String = takeString(lib().YpRtcVersion()).orEmpty()
     fun rtcSetTransport(transport: String) = lib().YpRtcSetTransport(transport)
@@ -255,6 +305,8 @@ internal object YpTunCore {
         runCatching { sbStop() }
         runCatching { xrayStop() }
         runCatching { ftStop() }
+        runCatching { wdttStop() }
+        runCatching { dnsttStop() }
         runCatching { awgStop() }
         runCatching { rtcStop() }
     }

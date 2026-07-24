@@ -31,6 +31,8 @@ import (
 
 	"github.com/olc/awgproxy/awg"
 	"github.com/openlibrecommunity/olcrtc/mobile"
+	"www.bamsoftware.com/git/dnstt.git/dnsttmobile"
+	"wg-turn-client/wdttmobile"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/include"
@@ -358,6 +360,134 @@ func YpFtRunning() C.int {
 
 //export YpFtConnectedStreams
 func YpFtConnectedStreams() C.int { return C.int(freeturn.ConnectedStreams()) }
+
+// ---------------------------------------------------------------------------
+// WDTT (wg-turn-client) — the alternative VK-TURN transport core.
+//
+// wdttmobile hands the server's WireGuard config back through a ConfigSink callback. A Go→C
+// callback would drag a JNA Callback and its threading rules into every caller, so the config is
+// parked in a buffered channel instead and the JVM blocks on YpWdttWaitConfig — the same
+// "wait for the relay, then build the WG outbound" gate the Android path gets from OnConfig.
+
+var (
+	wdttMu       sync.Mutex
+	wdttConfigCh chan string
+)
+
+type wdttSink struct{ ch chan string }
+
+func (s wdttSink) OnConfig(wgConf string) {
+	pushLog("wdtt", "server WG config received")
+	select {
+	case s.ch <- wgConf:
+	default: // a config is already parked; the first one wins
+	}
+}
+
+//export YpWdttStart
+func YpWdttStart(peer, vkHashes, password, listen *C.char, numWorkers C.int, deviceID, fingerprint, clientIDs *C.char) *C.char {
+	wdttMu.Lock()
+	ch := make(chan string, 1)
+	wdttConfigCh = ch
+	wdttMu.Unlock()
+	wdttmobile.Start(
+		C.GoString(peer), C.GoString(vkHashes), C.GoString(password), C.GoString(listen),
+		int(numWorkers), C.GoString(deviceID), C.GoString(fingerprint), C.GoString(clientIDs),
+		wdttSink{ch: ch},
+	)
+	return nil
+}
+
+// YpWdttWaitConfig blocks up to timeoutMs for the wdtt-server's WireGuard config (GETCONF).
+// Returns NULL on timeout, which the caller treats as "fall back to the stored WG config".
+//
+//export YpWdttWaitConfig
+func YpWdttWaitConfig(timeoutMs C.int) *C.char {
+	wdttMu.Lock()
+	ch := wdttConfigCh
+	wdttMu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case conf := <-ch:
+		return cs(conf)
+	case <-time.After(time.Duration(timeoutMs) * time.Millisecond):
+		return nil
+	}
+}
+
+//export YpWdttStop
+func YpWdttStop() {
+	wdttmobile.Stop()
+	wdttMu.Lock()
+	wdttConfigCh = nil
+	wdttMu.Unlock()
+}
+
+//export YpWdttRunning
+func YpWdttRunning() C.int {
+	if wdttmobile.IsRunning() {
+		return 1
+	}
+	return 0
+}
+
+//export YpWdttPushCaptcha
+func YpWdttPushCaptcha(token *C.char) { wdttmobile.PushCaptcha(C.GoString(token)) }
+
+// ---------------------------------------------------------------------------
+// dnstt (DNS tunnel): a transparent TCP forwarder on the local port; the dnstt-server relays each
+// connection to its own upstream SOCKS5, so the local port behaves as that SOCKS5. No socket
+// protector here — desktop has no VpnService, the TUN layer routes the DNS resolver around the
+// tunnel instead.
+
+var (
+	dnsttMu     sync.Mutex
+	dnsttClient *dnsttmobile.DnsttClient
+)
+
+//export YpDnsttStart
+func YpDnsttStart(resolver, domain, pubKeyHex, listenAddr *C.char) *C.char {
+	dnsttMu.Lock()
+	defer dnsttMu.Unlock()
+	if dnsttClient != nil {
+		return cs("dnstt already running")
+	}
+	client, err := dnsttmobile.NewClient(
+		C.GoString(resolver), C.GoString(domain), C.GoString(pubKeyHex), C.GoString(listenAddr))
+	if err != nil {
+		return errOut(err)
+	}
+	client.SetShareProxy(false)
+	if err := client.Start(); err != nil {
+		return errOut(err)
+	}
+	dnsttClient = client
+	pushLog("dnstt", "dnstt started on "+C.GoString(listenAddr))
+	return nil
+}
+
+//export YpDnsttStop
+func YpDnsttStop() {
+	dnsttMu.Lock()
+	defer dnsttMu.Unlock()
+	if dnsttClient != nil {
+		dnsttClient.Stop()
+		dnsttClient = nil
+		pushLog("dnstt", "dnstt stopped")
+	}
+}
+
+//export YpDnsttRunning
+func YpDnsttRunning() C.int {
+	dnsttMu.Lock()
+	defer dnsttMu.Unlock()
+	if dnsttClient != nil && dnsttClient.IsRunning() {
+		return 1
+	}
+	return 0
+}
 
 // ---------------------------------------------------------------------------
 // olcrtc (Stealth engine)
