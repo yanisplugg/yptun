@@ -107,6 +107,8 @@ fun HomeScreen(
     customLocationsPingSortDescending: Boolean = false,
     // Render the config list as a 2-column grid (app-settings toggle).
     twoColumns: Boolean = false,
+    // Show the round "Авто = fastest" satellite button next to the connect button (app-settings toggle).
+    showAutoButton: Boolean = true,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {},
@@ -355,7 +357,7 @@ fun HomeScreen(
                 // The main connect button, with a small round "Авто" satellite to its right that
                 // proxy-pings every server and (re)connects to the fastest. Always available while there
                 // are usable servers — tapping it while connected re-rolls onto the new fastest node.
-                val canAutoConnect = locations.any { it.config?.isComplete() == true }
+                val canAutoConnect = showAutoButton && locations.any { it.config?.isComplete() == true }
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     StartButton(
                         isActive = state.isVpnConnected,

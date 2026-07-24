@@ -173,6 +173,8 @@ interface Strings {
     // Application behavior
     val autoConnectTitle: String
     val autoConnectSubtitle: String
+    val showAutoButtonTitle: String
+    val showAutoButtonSubtitle: String
     val energySaverTitle: String
     val energySaverSubtitle: String
     val batteryOptTitle: String
@@ -802,10 +804,12 @@ object RuStrings : Strings {
     override val howToConnect = "Как подключиться?"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
+    override val showAutoButtonTitle = "Кнопка «Авто» на главном"
+    override val showAutoButtonSubtitle = "Круглая кнопка рядом с кнопкой подключения — пингует все серверы и подключает к самому быстрому"
     override val energySaverTitle = "Режим энергоэффективности"
     override val energySaverSubtitle = "Меньше расход батареи: реже проверки соединения, без журнала. Может замедлить авто-восстановление; применяется при следующем подключении"
     override val batteryOptTitle = "Отключить оптимизацию батареи"
-    override val batteryOptSubtitle = "Чтобы VPN не отваливался в фоне за часы простоя (как Happ). Открывает системный диалог"
+    override val batteryOptSubtitle = "Чтобы VPN не отваливался в фоне за часы простоя. Открывает системные настройки"
     override val batteryOptDone = "Оптимизация батареи уже отключена ✓"
     override val confirmDeleteTitle = "Подтверждение удаления"
     override val confirmDeleteSubtitle = "Запрашивать подтверждение перед удалением подписок и конфигураций"
@@ -1383,10 +1387,12 @@ object EnStrings : Strings {
     override val howToConnect = "How to connect?"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
+    override val showAutoButtonTitle = "\"Auto\" button on Home"
+    override val showAutoButtonSubtitle = "Round button next to Connect — pings all servers and connects to the fastest"
     override val energySaverTitle = "Energy-saver mode"
     override val energySaverSubtitle = "Lower battery use: less frequent health checks, no journal. May slow auto-recovery; applied on next connect"
     override val batteryOptTitle = "Disable battery optimization"
-    override val batteryOptSubtitle = "Keeps the VPN alive in the background over long idle hours (like Happ). Opens the system dialog"
+    override val batteryOptSubtitle = "Keeps the VPN alive in the background over long idle hours. Opens system settings"
     override val batteryOptDone = "Battery optimization already disabled ✓"
     override val confirmDeleteTitle = "Delete confirmation"
     override val confirmDeleteSubtitle = "Ask before deleting subscriptions and configs"
@@ -1964,10 +1970,12 @@ object FaStrings : Strings {
     override val howToConnect = "چگونه متصل شویم؟"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
+    override val showAutoButtonTitle = "دکمه «خودکار» در خانه"
+    override val showAutoButtonSubtitle = "دکمه گرد کنار دکمه اتصال — همه سرورها را پینگ می‌کند و به سریع‌ترین وصل می‌شود"
     override val energySaverTitle = "حالت صرفه‌جویی در انرژی"
     override val energySaverSubtitle = "مصرف باتری کمتر: بررسی‌های کمتر اتصال، بدون گزارش. ممکن است بازیابی خودکار را کند کند؛ در اتصال بعدی اعمال می‌شود"
     override val batteryOptTitle = "غیرفعال‌کردن بهینه‌سازی باتری"
-    override val batteryOptSubtitle = "تا VPN در پس‌زمینه طی ساعت‌های بی‌کاری قطع نشود (مثل Happ). پنجره سیستمی را باز می‌کند"
+    override val batteryOptSubtitle = "تا VPN در پس‌زمینه طی ساعت‌های بی‌کاری قطع نشود. تنظیمات سیستم را باز می‌کند"
     override val batteryOptDone = "بهینه‌سازی باتری قبلاً غیرفعال شده ✓"
     override val confirmDeleteTitle = "تأیید حذف"
     override val confirmDeleteSubtitle = "پیش از حذف اشتراک‌ها و پیکربندی‌ها پرسیده شود"
@@ -2545,10 +2553,12 @@ object ZhStrings : Strings {
     override val howToConnect = "如何连接？"
     override val autoConnectTitle = "启动时自动连接"
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
+    override val showAutoButtonTitle = "主屏“自动”按钮"
+    override val showAutoButtonSubtitle = "连接按钮旁的圆形按钮 — ping 所有服务器并连接到最快的"
     override val energySaverTitle = "省电模式"
     override val energySaverSubtitle = "降低电量消耗：减少健康检查频率、不记录日志。可能减慢自动恢复；下次连接时生效"
     override val batteryOptTitle = "关闭电池优化"
-    override val batteryOptSubtitle = "让 VPN 在长时间空闲的后台不掉线（像 Happ 一样）。打开系统对话框"
+    override val batteryOptSubtitle = "让 VPN 在长时间空闲的后台不掉线。打开系统设置"
     override val batteryOptDone = "电池优化已关闭 ✓"
     override val confirmDeleteTitle = "删除确认"
     override val confirmDeleteSubtitle = "删除订阅和配置前先询问"

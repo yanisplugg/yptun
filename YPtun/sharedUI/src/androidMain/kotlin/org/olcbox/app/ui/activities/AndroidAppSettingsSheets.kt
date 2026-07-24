@@ -71,6 +71,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -3474,6 +3475,17 @@ private fun BatteryOptimizationRow() {
                 style = MaterialTheme.typography.bodySmall
             )
         }
+        // "Opens elsewhere" affordance: tapping leaves the app for the system battery-optimization
+        // screen. Hidden once already exempted (nothing left to open).
+        if (!ignoring) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }
 
@@ -3694,6 +3706,12 @@ private fun ApplicationBehaviorContent(
             subtitle = s.autoConnectSubtitle,
             checked = settings.autoConnectOnLaunch
         ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
+
+        RoutingToggleRow(
+            title = s.showAutoButtonTitle,
+            subtitle = s.showAutoButtonSubtitle,
+            checked = settings.showAutoButton
+        ) { onChanged(settings.copy(showAutoButton = it)) }
 
         RoutingToggleRow(
             title = s.energySaverTitle,

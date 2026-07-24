@@ -41,6 +41,8 @@ object SubscriptionUserAgentHolder {
 data class AppBehaviorSettings(
     /** Auto-connect the selected configuration when the app is launched. */
     val autoConnectOnLaunch: Boolean = false,
+    /** Show the round "Авто = fastest server" satellite button next to the connect button on Home. */
+    val showAutoButton: Boolean = true,
     /** Ask for confirmation before deleting subscriptions / configs. */
     val confirmBeforeDelete: Boolean = true,
     /** Show live download/upload speed in the foreground notification. */
