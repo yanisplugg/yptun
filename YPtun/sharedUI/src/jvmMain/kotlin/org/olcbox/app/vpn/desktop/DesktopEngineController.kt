@@ -459,9 +459,9 @@ internal class DesktopEngineController(
         val globalCore = JvmVpnSettings.loadAppBehavior().globalProxyCore
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
-            proxy!!.type in XRAY_SUPPORTED_TYPES
+            proxy.type in XRAY_SUPPORTED_TYPES
         val useXray = dnstt.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
-        log("DNSTT chaining proxy ${proxy!!.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+        log("DNSTT chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
 
         if (useXray) {
             val assetPath = ensureGeoAssetPath(routingProfile)
