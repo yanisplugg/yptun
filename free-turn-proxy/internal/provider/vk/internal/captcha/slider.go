@@ -80,13 +80,8 @@ func (s *captchaSession) solveSliderCaptcha(
 	}
 	s.logger().Debugf("[Captcha] slider guesses ranked: total=%d limit=%d", len(guesses), limit)
 
-	deviceJSON := captchaDeviceInfo
-	deviceSource := "default"
-	if s.savedProfile != nil && strings.TrimSpace(s.savedProfile.DeviceJSON) != "" {
-		deviceJSON = s.savedProfile.DeviceJSON
-		deviceSource = "saved"
-	}
-	s.logger().Debugf("[Captcha] slider componentDone device_source=%s device_bytes=%d", deviceSource, len(deviceJSON))
+	deviceJSON := s.profile.DeviceJSON
+	s.logger().Debugf("[Captcha] slider componentDone device_bytes=%d", len(deviceJSON))
 	if _, err := s.captchaRequest("captchaNotRobot.componentDone", [][2]string{
 		{"session_token", sessionToken},
 		{"domain", s.domain},

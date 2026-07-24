@@ -128,7 +128,7 @@ func TestBatchSampleCarriesMultipleKCPPackets(t *testing.T) {
 	tr.outbound <- packet("three")
 	tr.outbound <- packet("four")
 
-	sample := tr.batchSample(packet("one"), defaultMaxPayloadSize)
+	sample := tr.batchSample(packet("one"))
 	if !bytes.Equal(sample[:epochHdrLen], hdr[:]) {
 		t.Fatalf("sample epoch header = %x, want %x", sample[:epochHdrLen], hdr[:])
 	}
@@ -164,9 +164,10 @@ func TestSplitKCPPayloadAcceptsLegacySinglePacket(t *testing.T) {
 func testEpochHdr(epoch uint32) [epochHdrLen]byte {
 	var hdr [epochHdrLen]byte
 	copy(hdr[:], vp8Keepalive)
-	binary.BigEndian.PutUint32(hdr[tokenOff:epochOff], bindingToken("test"))
-	binary.BigEndian.PutUint32(hdr[epochOff:crcOff], epoch)
-	binary.BigEndian.PutUint32(hdr[crcOff:epochHdrLen], epochCRC(bindingToken("test"), epoch))
+	binary.BigEndian.PutUint32(hdr[tokenOff:srcOff], bindingToken("test"))
+	binary.BigEndian.PutUint32(hdr[srcOff:dstOff], epoch)
+	binary.BigEndian.PutUint32(hdr[dstOff:crcOff], 0)
+	binary.BigEndian.PutUint32(hdr[crcOff:epochHdrLen], epochCRC(bindingToken("test"), epoch, 0))
 	return hdr
 }
 
@@ -182,9 +183,10 @@ func TestHandleIncomingFrameIgnoresLoopedBackLocalEpoch(t *testing.T) {
 
 	frame := make([]byte, epochHdrLen+4)
 	copy(frame, vp8Keepalive)
-	binary.BigEndian.PutUint32(frame[tokenOff:epochOff], tr.bindingToken)
-	binary.BigEndian.PutUint32(frame[epochOff:crcOff], tr.localEpoch)
-	binary.BigEndian.PutUint32(frame[crcOff:epochHdrLen], epochCRC(tr.bindingToken, tr.localEpoch))
+	binary.BigEndian.PutUint32(frame[tokenOff:srcOff], tr.bindingToken)
+	binary.BigEndian.PutUint32(frame[srcOff:dstOff], tr.localEpoch)
+	binary.BigEndian.PutUint32(frame[dstOff:crcOff], 0)
+	binary.BigEndian.PutUint32(frame[crcOff:epochHdrLen], epochCRC(tr.bindingToken, tr.localEpoch, 0))
 	copy(frame[epochHdrLen:], []byte{1, 2, 3, 4})
 
 	tr.handleIncomingFrame(frame)
@@ -213,9 +215,10 @@ func TestHandleIncomingFrameIgnoresForeignBindingToken(t *testing.T) {
 	frame := make([]byte, epochHdrLen+4)
 	copy(frame, vp8Keepalive)
 	otherToken := bindingToken("other-client")
-	binary.BigEndian.PutUint32(frame[tokenOff:epochOff], otherToken)
-	binary.BigEndian.PutUint32(frame[epochOff:crcOff], 999)
-	binary.BigEndian.PutUint32(frame[crcOff:epochHdrLen], epochCRC(otherToken, 999))
+	binary.BigEndian.PutUint32(frame[tokenOff:srcOff], otherToken)
+	binary.BigEndian.PutUint32(frame[srcOff:dstOff], 999)
+	binary.BigEndian.PutUint32(frame[dstOff:crcOff], 0)
+	binary.BigEndian.PutUint32(frame[crcOff:epochHdrLen], epochCRC(otherToken, 999, 0))
 	copy(frame[epochHdrLen:], []byte{1, 2, 3, 4})
 
 	tr.handleIncomingFrame(frame)

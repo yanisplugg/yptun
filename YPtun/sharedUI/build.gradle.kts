@@ -309,6 +309,10 @@ kotlin {
             // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
             implementation("com.github.mwiede:jsch:0.2.21")
             implementation(coresAndroidAarDependency)
+            // Trust Tunnel (AdGuard) client — vendored prebuilt AAR (com.adguard.trusttunnel:
+            // trusttunnel-client-android:1.1.5-rc.1) carrying libtrusttunnel_android.so (all ABIs) +
+            // the VpnClient/DeepLink JNI adapter. Isolated engine; does NOT touch the Go cores AAR.
+            implementation(files("libs/trusttunnel-client-android-1.1.5-rc.1.aar"))
         }
 
         jvmMain.dependencies {

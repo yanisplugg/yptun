@@ -45,6 +45,10 @@ type Config struct {
 	RoomURL string
 	// Name is the display name to register with.
 	Name string
+	// Token is an optional pre-issued account token. When set, a provider may
+	// skip its anonymous/guest auth flow and act as that account instead.
+	// Empty means the provider falls back to its default (guest) flow.
+	Token string
 	// DNSServer / ProxyAddr / ProxyPort are network knobs for outbound HTTP.
 	DNSServer string
 	ProxyAddr string

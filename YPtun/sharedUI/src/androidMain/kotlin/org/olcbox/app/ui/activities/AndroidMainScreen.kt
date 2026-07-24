@@ -486,6 +486,8 @@ fun AndroidMainScreen(
         pinnedCustomLocations = appBehavior.pinnedCustomLocations,
         customLocationsPingSorted = appBehavior.customLocationsPingSorted,
         customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
+        twoColumns = appBehavior.twoColumnLayout,
+        showAutoButton = appBehavior.showAutoButton,
         onToggleCustomLocationPinned = { id ->
             val current = appBehavior.pinnedCustomLocations
             val updated = if (id in current) current - id else current + id

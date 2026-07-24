@@ -10,7 +10,6 @@ import (
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	tlsclient "github.com/bogdanfinn/tls-client"
-	"github.com/bogdanfinn/tls-client/profiles"
 	"golang.org/x/net/proxy"
 )
 
@@ -49,25 +48,10 @@ func (d *splitDialer) DialContext(ctx context.Context, network, addr string) (ne
 	}, nil
 }
 
-// clientProfileForKind мапит семейство браузера в TLS/HTTP2-профиль.
-func clientProfileForKind(kind browserprofile.Kind) profiles.ClientProfile {
-	switch kind {
-	case browserprofile.Safari:
-		return profiles.Safari_16_0
-	case browserprofile.Firefox:
-		return profiles.Firefox_148
-	}
-	return profiles.Chrome_146
-}
-
-func (c *Client) newTLSClient(jar tlsclient.CookieJar) (tlsclient.HttpClient, error) {
-	return c.newTLSClientForKind(c.browser, jar)
-}
-
-func (c *Client) newTLSClientForKind(kind browserprofile.Kind, jar tlsclient.CookieJar) (tlsclient.HttpClient, error) {
+func (c *Client) newTLSClient(profile browserprofile.Profile, jar tlsclient.CookieJar) (tlsclient.HttpClient, error) {
 	return tlsclient.NewHttpClient(tlsclient.NewNoopLogger(),
 		tlsclient.WithTimeoutSeconds(20),
-		tlsclient.WithClientProfile(clientProfileForKind(kind)),
+		tlsclient.WithClientProfile(profile.ClientProfile()),
 		tlsclient.WithCookieJar(jar),
 		tlsclient.WithProxyDialerFactory(func(_ string, timeout time.Duration, localAddr *net.TCPAddr, _ fhttp.Header, _ tlsclient.Logger) (proxy.ContextDialer, error) {
 			base := c.dialer

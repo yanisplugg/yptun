@@ -11,14 +11,11 @@ import (
 	"time"
 )
 
-
 const (
 	workersPerGroup  = 9
 	defaultCycleSecs = 36000
 )
 
-// WorkerGroup:
-// Запускает 9 потоков с одними кредами. Ротации нет — работает до смерти воркеров.
 func WorkerGroup(
 	ctx context.Context,
 	groupID int,
@@ -33,14 +30,15 @@ func WorkerGroup(
 	pauseFlag *int32,
 	deviceID, password string,
 	stats *Stats,
-	waitReady <-chan struct{},
-	signalReady chan<- struct{},
+	waitCreds <-chan struct{},
+	signalCreds chan<- struct{},
+	waitSpawn <-chan struct{},
+	signalSpawn chan<- struct{},
 ) {
-	// Каскадный запуск: ждем свою очередь
-	if waitReady != nil {
-		log.Printf("[ГРУППА #%d] Ожидание сигнала от предыдущей группы...", groupID)
+
+	if waitCreds != nil {
 		select {
-		case <-waitReady:
+		case <-waitCreds:
 		case <-ctx.Done():
 			return
 		}
@@ -51,7 +49,6 @@ func WorkerGroup(
 		configSent = 1
 	}
 
-	// Doze-mode пауза
 	for atomic.LoadInt32(pauseFlag) != 0 {
 		if ctx.Err() != nil {
 			return
@@ -110,31 +107,26 @@ func WorkerGroup(
 		return true
 	}
 
-	// Сигнализируем следующей группе, что мы успешно запустились (креды получены + 2 сек форы)
-	if signalReady != nil {
+	if signalCreds != nil {
 		go func() {
-			time.Sleep(2000 * time.Millisecond)
-			close(signalReady)
-			log.Printf("[ГРУППА #%d] Успешный старт! Передача эстафеты следующей группе...", groupID)
+			time.Sleep(2 * time.Second)
+			close(signalCreds)
 		}()
 	}
 
-	for i, wid := range workerIDs {
+	if waitSpawn != nil {
+		select {
+		case <-waitSpawn:
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	for _, wid := range workerIDs {
 		wg.Add(1)
 
-		// Stagger: 500мс между воркерами
-		workerDelay := time.Duration(i) * 500 * time.Millisecond
-
-		go func(wid int, delay time.Duration) {
+		go func(wid int) {
 			defer wg.Done()
-
-			if delay > 0 {
-				select {
-				case <-time.After(delay):
-				case <-ctx.Done():
-					return
-				}
-			}
 
 			shouldGetConfig := getConfig
 			attempt := 0
@@ -211,7 +203,6 @@ func WorkerGroup(
 						log.Printf("[ВОРКЕР #%d] Ошибка (попытка %d): %s", wid, attempt, errStr)
 					}
 
-					// Если ошибка STUN (credentials invalid), воркер не сможет переподключиться. Завершаем.
 					isStunDeath := strings.Contains(errStrLower, "error 29") ||
 						strings.Contains(errStrLower, "cannot create socket")
 
@@ -232,14 +223,19 @@ func WorkerGroup(
 					return
 				}
 			}
-		}(wid, workerDelay)
+		}(wid)
+
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	if signalSpawn != nil {
+		close(signalSpawn)
 	}
 
 	wg.Wait()
 	log.Printf("[ГРУППА #%d] Все воркеры группы завершились.", groupID)
 }
 
-// ParseHashes — парсит строку хешей
 func ParseHashes(raw string) []string {
 	var result []string
 	seen := make(map[string]struct{})
@@ -277,20 +273,17 @@ func normalizeVKJoinHash(input string) string {
 	return strings.Trim(strings.TrimSpace(s), "/")
 }
 
-// TurnParams — конфигурация TURN
 type TurnParams struct {
-	Host    string
-	Port    string
-	Hashes  []string
-	WrapKey []byte // Password-derived WRAP key (32 bytes), nil = disabled
+	Host     string
+	Port     string
+	Hashes   []string
+	WrapKey  []byte
+	ObfsMode string
 }
 
-// Credentials — учетные данные TURN
 type Credentials struct {
 	User          string
 	Pass          string
 	TurnURLs      []string
 	CacheStreamID int
 }
-
-

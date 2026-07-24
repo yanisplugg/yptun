@@ -5,100 +5,99 @@
 ![License](https://img.shields.io/badge/license-WTFPL-0D1117?style=flat-square&logo=open-source-initiative&logoColor=green&labelColor=0D1117)
 ![Golang](https://img.shields.io/badge/-Golang-0D1117?style=flat-square&logo=go&logoColor=00A7D0)
 
+[RU](configuration.ru.md) / **EN**
+
 </div>
 
 
-# Настройка YAML
+# YAML configuration
 
-`olcrtc` читает runtime-настройки из одного YAML-файла. CLI принимает ровно один аргумент - путь к конфигу; отдельных CLI-флагов для режима, транспорта и провайдера больше нет.
+`olcrtc` reads runtime settings from a single YAML file. The CLI takes exactly one argument - the path to the config; there are no separate CLI flags for mode, transport and provider anymore.
 
 ```bash
 olcrtc /etc/olcrtc/server.yaml
 olcrtc /etc/olcrtc/client.yaml
 ```
 
-Готовые примеры:
+Ready-made examples:
 
-- [`server.jitsi.datachannel.yaml`](./examples/server.jitsi.datachannel.yaml) - jitsi + datachannel srv
-- [`client.jitsi.datachannel.yaml`](./examples/client.jitsi.datachannel.yaml) - jitsi + datachannel cnc
-- [`server.jitsi.videochannel.yaml`](./examples/server.jitsi.videochannel.yaml) - jitsi + videochannel srv
-- [`client.jitsi.videochannel.yaml`](./examples/client.jitsi.videochannel.yaml) - jitsi + videochannel cnc
-- [`server.jitsi.seichannel.yaml`](./examples/server.jitsi.seichannel.yaml) - jitsi + seichannel srv
-- [`client.jitsi.seichannel.yaml`](./examples/client.jitsi.seichannel.yaml) - jitsi + seichannel cnc
-- [`server.jitsi.vp8channel.yaml`](./examples/server.jitsi.vp8channel.yaml) - jitsi + vp8channel srv
-- [`client.jitsi.vp8channel.yaml`](./examples/client.jitsi.vp8channel.yaml) - jitsi + vp8channel cnc
-- [`server.telemost.datachannel.yaml`](./examples/server.telemost.datachannel.yaml) - telemost + datachannel srv
-- [`client.telemost.datachannel.yaml`](./examples/client.telemost.datachannel.yaml) - telemost + datachannel cnc
-- [`server.telemost.videochannel.yaml`](./examples/server.telemost.videochannel.yaml) - telemost + videochannel srv
-- [`client.telemost.videochannel.yaml`](./examples/client.telemost.videochannel.yaml) - telemost + videochannel cnc
-- [`server.telemost.seichannel.yaml`](./examples/server.telemost.seichannel.yaml) - telemost + seichannel srv
-- [`client.telemost.seichannel.yaml`](./examples/client.telemost.seichannel.yaml) - telemost + seichannel
-- [`server.telemost.vp8channel.yaml`](./examples/server.telemost.vp8channel.yaml) - telemost + vp8channel srv
-- [`client.telemost.vp8channel.yaml`](./examples/client.telemost.vp8channel.yaml) - telemost + vp8channel cnc
-- [`server.wbstream.datachannel.yaml`](./examples/server.wbstream.datachannel.yaml) - wbstream + datachannel srv
-- [`client.wbstream.datachannel.yaml`](./examples/client.wbstream.datachannel.yaml) - wbstream + datachannel cnc
-- [`server.wbstream.videochannel.yaml`](./examples/server.wbstream.videochannel.yaml) - wbstream + videochannel srv
-- [`client.wbstream.videochannel.yaml`](./examples/client.wbstream.videochannel.yaml) - wbstream + videochannel cnc
-- [`server.wbstream.seichannel.yaml`](./examples/server.wbstream.seichannel.yaml) - wbstream + seichannel srv
-- [`client.wbstream.seichannel.yaml`](./examples/client.wbstream.seichannel.yaml) - wbstream + seichannel cnc
-- [`server.wbstream.vp8channel.yaml`](./examples/server.wbstream.vp8channel.yaml) - wbstream + vp8channel srv
-- [`client.wbstream.vp8channel.yaml`](./examples/client.wbstream.vp8channel.yaml) - wbstream + vp8channel cnc
+- [`server.jitsi.datachannel.yaml`](./examples/server/server.jitsi.datachannel.yaml) - jitsi + datachannel srv
+- [`client.jitsi.datachannel.yaml`](./examples/client/client.jitsi.datachannel.yaml) - jitsi + datachannel cnc
+- [`server.jitsi.videochannel.yaml`](./examples/server/server.jitsi.videochannel.yaml) - jitsi + videochannel srv
+- [`client.jitsi.videochannel.yaml`](./examples/client/client.jitsi.videochannel.yaml) - jitsi + videochannel cnc
+- [`server.jitsi.seichannel.yaml`](./examples/server/server.jitsi.seichannel.yaml) - jitsi + seichannel srv
+- [`client.jitsi.seichannel.yaml`](./examples/client/client.jitsi.seichannel.yaml) - jitsi + seichannel cnc
+- [`server.jitsi.vp8channel.yaml`](./examples/server/server.jitsi.vp8channel.yaml) - jitsi + vp8channel srv
+- [`client.jitsi.vp8channel.yaml`](./examples/client/client.jitsi.vp8channel.yaml) - jitsi + vp8channel cnc
+- [`server.telemost.datachannel.yaml`](./examples/server/server.telemost.datachannel.yaml) - telemost + datachannel srv
+- [`client.telemost.datachannel.yaml`](./examples/client/client.telemost.datachannel.yaml) - telemost + datachannel cnc
+- [`server.telemost.videochannel.yaml`](./examples/server/server.telemost.videochannel.yaml) - telemost + videochannel srv
+- [`client.telemost.videochannel.yaml`](./examples/client/client.telemost.videochannel.yaml) - telemost + videochannel cnc
+- [`server.telemost.seichannel.yaml`](./examples/server/server.telemost.seichannel.yaml) - telemost + seichannel srv
+- [`client.telemost.seichannel.yaml`](./examples/client/client.telemost.seichannel.yaml) - telemost + seichannel
+- [`server.telemost.vp8channel.yaml`](./examples/server/server.telemost.vp8channel.yaml) - telemost + vp8channel srv
+- [`client.telemost.vp8channel.yaml`](./examples/client/client.telemost.vp8channel.yaml) - telemost + vp8channel cnc
+- [`server.wbstream.datachannel.yaml`](./examples/server/server.wbstream.datachannel.yaml) - wbstream + datachannel srv
+- [`client.wbstream.datachannel.yaml`](./examples/client/client.wbstream.datachannel.yaml) - wbstream + datachannel cnc
+- [`server.wbstream.videochannel.yaml`](./examples/server/server.wbstream.videochannel.yaml) - wbstream + videochannel srv
+- [`client.wbstream.videochannel.yaml`](./examples/client/client.wbstream.videochannel.yaml) - wbstream + videochannel cnc
+- [`server.wbstream.seichannel.yaml`](./examples/server/server.wbstream.seichannel.yaml) - wbstream + seichannel srv
+- [`client.wbstream.seichannel.yaml`](./examples/client/client.wbstream.seichannel.yaml) - wbstream + seichannel cnc
+- [`server.wbstream.vp8channel.yaml`](./examples/server/server.wbstream.vp8channel.yaml) - wbstream + vp8channel srv
+- [`client.wbstream.vp8channel.yaml`](./examples/client/client.wbstream.vp8channel.yaml) - wbstream + vp8channel cnc
 - [`failover.yaml`](./examples/failover.yaml) - failover
 
-## Схема
+## Schema
 
-| YAML path | Значение |
+| YAML path | Meaning |
 |---|---|
-| `mode` | `srv`, `cnc` или `gen` |
+| `mode` | `srv`, `cnc` or `gen` |
 | `auth.provider` | `jitsi`, `telemost`, `wbstream`, `none` |
-| `room.id` | ID/URL комнаты для выбранного auth-провайдера |
-| `room.channel` | необязательный ID канала для peer-routing сценариев |
-| `crypto.key` / `crypto.key_file` | общий ключ: 64 hex-символа, напрямую или из файла |
+| `room.id` | room ID/URL for the chosen auth provider |
+| `room.channel` | optional channel ID for peer-routing scenarios |
+| `crypto.key` / `crypto.key_file` | shared key: 64 hex chars, directly or from a file |
 | `net.transport` | `datachannel`, `vp8channel`, `seichannel`, `videochannel` |
-| `net.dns` | DNS resolver в формате `host:port` |
-| `socks.host` / `socks.port` | локальный SOCKS5 listener в `mode: cnc` |
-| `socks.user` / `socks.pass` | необязательная auth для входящих SOCKS5-подключений |
-| `socks.proxy_addr` / `socks.proxy_port` | исходящий SOCKS5-прокси на серверной стороне |
-| `socks.proxy_user` / `socks.proxy_pass` | необязательная auth для upstream-прокси (RFC 1929) |
-| `engine.name` / `engine.url` / `engine.token` | прямой engine-режим, только при `auth.provider: none` |
-| `video.*` | настройки `videochannel` |
-| `vp8.*` | настройки `vp8channel` |
-| `sei.*` | настройки `seichannel` |
-| `liveness.interval` | интервал ping по control stream, по умолчанию `10s` |
-| `liveness.timeout` | таймаут pong, по умолчанию `5s` |
-| `liveness.failures` | сколько pong можно пропустить до rebuild, по умолчанию `3` |
-| `lifecycle.max_session_duration` | плановый rebuild сессии, например `6h`; пусто = выключено |
-| `traffic.max_payload_size` | лимит зашифрованного wire-message; `0` = лимит транспорта |
-| `traffic.min_delay` / `traffic.max_delay` | необязательный pacing отправки, например `5ms` / `30ms` |
-| `gen.amount` | режим `gen`: сколько комнат создать |
-| `profiles[]` | список failover-профилей для `srv`/`cnc` |
-| `failover.retry_delay` | пауза перед следующим профилем, например `2s` |
-| `failover.max_cycles` | сколько полных проходов по профилям сделать; `0` = бесконечно |
-| `data` | путь к директории с runtime-данными (`names`, `surnames`) |
-| `debug` | подробное логирование |
-| `ffmpeg` | путь к бинарнику ffmpeg для `videochannel` |
+| `net.dns` | DNS resolver in `host:port` form |
+| `socks.host` / `socks.port` | local SOCKS5 listener in `mode: cnc` |
+| `socks.user` / `socks.pass` | optional auth for incoming SOCKS5 connections |
+| `socks.proxy_addr` / `socks.proxy_port` | outbound SOCKS5 proxy on the server side |
+| `socks.proxy_user` / `socks.proxy_pass` | optional auth for the upstream proxy (RFC 1929) |
+| `engine.name` / `engine.url` / `engine.token` | direct engine mode, only when `auth.provider: none` |
+| `video.*` | `videochannel` settings |
+| `vp8.*` | `vp8channel` settings |
+| `sei.*` | `seichannel` settings |
+| `liveness.interval` | ping interval over the control stream, default `10s` |
+| `liveness.timeout` | pong timeout, default `5s` |
+| `liveness.failures` | how many pongs may be missed before rebuild, default `3` |
+| `lifecycle.max_session_duration` | planned session rebuild, e.g. `6h`; empty = disabled |
+| `traffic.max_payload_size` | limit of the encrypted wire-message; `0` = transport limit |
+| `traffic.min_delay` / `traffic.max_delay` | optional send pacing, e.g. `5ms` / `30ms` |
+| `gen.amount` | `gen` mode: how many rooms to create |
+| `profiles[]` | list of failover profiles for `srv`/`cnc` |
+| `failover.retry_delay` | pause before the next profile, e.g. `2s` |
+| `failover.max_cycles` | how many full passes over the profiles to do; `0` = infinite |
+| `data` | path to the directory with runtime data (`names`, `surnames`) |
+| `debug` | verbose logging |
+| `ffmpeg` | path to the ffmpeg binary for `videochannel` |
 
-`crypto.key_file` читается относительно YAML-файла. Нельзя одновременно задавать `crypto.key` и `crypto.key_file`.
+`crypto.key_file` is read relative to the YAML file. You cannot set `crypto.key` and `crypto.key_file` at the same time.
 
-`mode: cnc` запрещает слушать не-loopback адрес (`0.0.0.0`, LAN IP и т.п.), если не заданы оба поля `socks.user` и `socks.pass`.
+`mode: cnc` forbids listening on a non-loopback address (`0.0.0.0`, LAN IP etc.) unless both `socks.user` and `socks.pass` are set.
 
-## Обязательный минимум
+## Required minimum
 
-### Сервер
+### Server
 
-> **Jitsi-провайдер:** используйте тот сервер, который доступен в вашей сети. Проверьте в браузере и выберите рабочий:
-> - `https://meet.small-dm.ru/`
-> - `https://meet1.arbitr.ru/` 
-> - `https://meet.handyweb.org/`
+> **Jitsi provider:** take instances from [`examples/jitsi.instances.yaml`](./examples/jitsi.instances.yaml), not from bare text. Check the host in the browser and pick a working one.
 
 ```yaml
 mode: srv
 auth:
   provider: jitsi
 room:
-  # Используйте тот Jitsi-сервер, который работает в вашей сети:
-  # https://meet.small-dm.ru/ROOM  или  https://meet1.arbitr.ru/ROOM  или  https://meet.handyweb.org/ROOM
-  id: "https://meet.small-dm.ru/REPLACE_ME_WITH_ROOM_ID"
+  # Take the host from docs/examples/jitsi.instances.yaml:
+  # https://HOST/ROOM
+  id: "https://REPLACE_ME_WITH_HOST/REPLACE_ME_WITH_ROOM_ID"
 crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS"
 net:
@@ -107,16 +106,16 @@ net:
 data: data
 ```
 
-### Клиент
+### Client
 
 ```yaml
 mode: cnc
 auth:
   provider: jitsi
 room:
-  # Используйте тот Jitsi-сервер, который работает в вашей сети:
-  # https://meet.small-dm.ru/ROOM  или  https://meet1.arbitr.ru/ROOM  или  https://meet.handyweb.org/ROOM
-  id: "https://meet.small-dm.ru/REPLACE_ME_WITH_ROOM_ID"
+  # Take the host from docs/examples/jitsi.instances.yaml:
+  # https://HOST/ROOM
+  id: "https://REPLACE_ME_WITH_HOST/REPLACE_ME_WITH_ROOM_ID"
 crypto:
   key: "REPLACE_ME_WITH_64_HEX_CHARS"
 net:
@@ -130,7 +129,7 @@ data: data
 
 ## Liveness
 
-После `CLIENT_HELLO` / `SERVER_WELCOME` первый smux stream остаётся открытым как зашифрованный control stream. По нему `olcrtc` отправляет `CONTROL_PING` / `CONTROL_PONG`, чтобы проверять именно рабочий путь туннеля, а не только статус WebRTC-соединения.
+After `CLIENT_HELLO` / `SERVER_WELCOME` the first smux stream stays open as an encrypted control stream. Over it `olcrtc` sends `CONTROL_PING` / `CONTROL_PONG` to check the actually working tunnel path, not just the status of the WebRTC connection.
 
 ```yaml
 liveness:
@@ -139,22 +138,22 @@ liveness:
   failures: 3
 ```
 
-Когда порог пропущенных pong достигнут, текущая smux-сессия пересоздаётся. В failover-режиме профиль, который завершился после неудачного reconnect, отдаёт управление supervisor, и тот пробует следующий профиль.
+When the threshold of missed pongs is reached, the current smux session is rebuilt. In failover mode the profile that finished after a failed reconnect hands control to the supervisor, and the supervisor tries the next profile.
 
 ## Lifecycle Rotation
 
-`lifecycle.max_session_duration` задаёт плановый верхний предел длительности одного звонка/сессии у провайдера. Когда время истекает, активная `srv` или `cnc` сессия закрывается и запускается заново с тем же конфигом.
+`lifecycle.max_session_duration` sets a planned upper bound on the duration of a single call/session at the provider. When the time runs out, the active `srv` or `cnc` session is closed and started again with the same config.
 
 ```yaml
 lifecycle:
   max_session_duration: 6h
 ```
 
-Поле необязательное. Формат - Go duration: `30m`, `2h`, `6h`. Ноль и отрицательные значения не принимаются.
+The field is optional. Format is Go duration: `30m`, `2h`, `6h`. Zero and negative values are not accepted.
 
 ## Traffic Shaping
 
-`traffic` добавляет общий wrapper вокруг выбранного транспорта. Он может ограничить размер зашифрованного сообщения и добавить небольшую задержку перед отправкой. Данные не обрезаются: если payload не помещается в эффективный лимит, отправка завершается явной ошибкой.
+`traffic` adds a common wrapper around the chosen transport. It can limit the size of the encrypted message and add a small delay before sending. Data is not truncated: if the payload does not fit the effective limit, the send fails with an explicit error.
 
 ```yaml
 traffic:
@@ -163,11 +162,11 @@ traffic:
   max_delay: 30ms
 ```
 
-Лимит сжимается до `MaxPayloadSize`, который заявляет выбранный транспорт. Клиент и сервер также уменьшают smux frame size с учётом crypto overhead. Значение `0` не добавляет лимит сверх лимита транспорта. Если задан только `min_delay`, задержка фиксированная. Используй одинаковые `traffic`-настройки на обеих сторонах.
+The limit is clamped to the `MaxPayloadSize` declared by the chosen transport. Client and server also reduce the smux frame size accounting for crypto overhead. A value of `0` adds no limit beyond the transport limit. If only `min_delay` is set, the delay is fixed. Use the same `traffic` settings on both sides.
 
 ## Failover Profiles
 
-`mode: srv` и `mode: cnc` могут задавать `profiles`. Верхнеуровневые поля становятся общими defaults, а каждый профиль переопределяет только то, что указано внутри него.
+`mode: srv` and `mode: cnc` can define `profiles`. Top-level fields become shared defaults, and each profile overrides only what is specified inside it.
 
 ```yaml
 mode: srv
@@ -199,11 +198,11 @@ failover:
   max_cycles: 0
 ```
 
-Порядок профилей и параметры комнаты должны быть совместимы на сервере и клиенте. Активные smux streams между профилями не мигрируют; новые подключения смогут восстановиться на следующем профиле.
+The order of profiles and the room parameters must be compatible on the server and the client. Active smux streams do not migrate between profiles; new connections can recover on the next profile.
 
 ## mode: gen
 
-`gen` оставлен для auth-провайдеров, которые реализуют создание комнат через API.
-Текущие встроенные провайдеры (`jitsi`, `telemost`, `wbstream`) не создают комнаты
-через `olcrtc`: для `telemost` и `wbstream` создай комнату на сайте сервиса и
-вставь её в `room.id`; для `jitsi` укажи URL комнаты.
+`gen` is kept for auth providers that implement room creation via an API.
+The current built-in providers (`jitsi`, `telemost`, `wbstream`) do not create rooms
+through `olcrtc`: for `telemost` and `wbstream` create the room on the service site and
+paste it into `room.id`; for `jitsi` specify the room URL.

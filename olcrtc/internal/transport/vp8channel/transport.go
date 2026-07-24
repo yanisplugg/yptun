@@ -37,7 +37,7 @@ const (
 	// to a couple of send windows so KCP's flush never blocks (a blocked
 	// WriteTo would stall KCP's update loop and delay ACKs); the paced writer
 	// keeps it drained so this depth is headroom, not standing latency.
-	outboundQueueSize        = 1536
+	outboundQueueSize = 1536
 	// controlOutboundQueueSize is the queue for the control-plane KCP.
 	// Control messages are tiny (ping/pong JSON frames), so a small queue
 	// suffices. We keep it separate from bulk data to guarantee forward
@@ -46,6 +46,12 @@ const (
 	inboundQueueSize         = 4096
 	canSendHighWatermark     = 90 // percent
 	keepaliveIdlePeriod      = 100 * time.Millisecond
+	// defaultPeerRestartGrace is how long the latched peer must be silent
+	// before a frame from a different epoch is read as a server restart. The
+	// server emits a decodable keepalive every ~2s, so a few missed beats is
+	// a confident "the latched peer is gone and a fresh one took its place"
+	// signal while staying clear of normal SFU jitter. See issue #105.
+	defaultPeerRestartGrace = 6 * time.Second
 )
 
 var (
@@ -68,14 +74,23 @@ var vp8Keepalive = []byte{ //nolint:gochecknoglobals // package-level state inte
 //
 //	[0..20]    = vp8Keepalive (valid VP8 keyframe, passes SFU inspection)
 //	[20..24]   = binding token derived from client-id (big-endian uint32)
-//	[24..28]   = sender's session epoch (big-endian uint32)
-//	[28..32]   = CRC32(token || epoch)
-//	[32..]     = raw KCP packet bytes
+//	[24..28]   = sender's session epoch (src, big-endian uint32)
+//	[28..32]   = destination epoch (dst, big-endian uint32; 0 = broadcast)
+//	[32..36]   = CRC32(token || src || dst)
+//	[36..]     = raw KCP packet bytes
+//
+// The dst field lets the server address downlink to one specific client even
+// though the SFU forwards every frame to every participant: a receiver drops
+// any frame whose dst is non-zero and not its own epoch. dst==0 is a broadcast
+// used before the sender has learned the receiver's epoch (CLIENT_HELLO and
+// the server's pre-latch frames). This mirrors the src+dst scheme the jitsi
+// engine already uses (internal/engine/jitsi).
 const (
 	tokenOff    = 20
-	epochOff    = 24
-	crcOff      = 28
-	epochHdrLen = 32
+	srcOff      = 24
+	dstOff      = 28
+	crcOff      = 32
+	epochHdrLen = 36
 	// controlEpochFlag marks an epoch as belonging to the control-plane
 	// KCP session. The high bit of the epoch uint32 is reserved for this
 	// purpose; data-plane epochs are generated with the high bit clear.
@@ -109,20 +124,20 @@ type videoSession interface {
 }
 
 type streamTransport struct {
-	stream        videoSession
-	track         *webrtc.TrackLocalStaticSample
+	stream videoSession
+	track  *webrtc.TrackLocalStaticSample
 	// writeMu serializes all track.WriteSample calls. pion's WriteSample is
 	// not safe for concurrent use (see writeSampleLocked); the server writes
 	// bulk data from per-peer pumps while writerLoop writes control frames
 	// and keepalives, so both paths must funnel through this lock.
-	writeMu       sync.Mutex
+	writeMu sync.Mutex
 	// sampleWriter, when set, replaces the real track.WriteSample call.
 	// Tests inject a writer here to observe the exact byte stream that
 	// reaches the track and to assert that writeSampleLocked serializes
 	// concurrent callers. Always invoked under writeMu.
-	sampleWriter  func([]byte) bool
-	onData        func([]byte)
-	onPeerData    func(peerID string, data []byte)
+	sampleWriter func([]byte) bool
+	onData       func([]byte)
+	onPeerData   func(peerID string, data []byte)
 	// onControlData is called with every reassembled message from the
 	// control-plane KCP session.
 	onControlData func([]byte)
@@ -131,16 +146,15 @@ type streamTransport struct {
 	// Frames here are drained with priority before bulk data frames so that
 	// handshake / liveness messages never wait behind large data writes.
 	controlOutbound chan []byte
-	closeCh       chan struct{}
-	writerDone    chan struct{}
-	closed        atomic.Bool
-	writerUp      atomic.Bool
-	writerOnce    sync.Once
-	kcpOnce       sync.Once
-	controlKCPOnce sync.Once
-	frameInterval time.Duration
-	batchSize     int
-	perTickBytes  int
+	closeCh         chan struct{}
+	writerDone      chan struct{}
+	closed          atomic.Bool
+	writerUp        atomic.Bool
+	writerOnce      sync.Once
+	kcpOnce         sync.Once
+	controlKCPOnce  sync.Once
+	frameInterval   time.Duration
+	batchSize       int
 
 	// localEpoch is stamped into every outgoing VP8 frame. Explicit
 	// upper-layer resets rotate it so the peer can reset its KCP state too.
@@ -150,21 +164,66 @@ type streamTransport struct {
 	localEpoch   uint32
 	peerEpoch    atomic.Uint32
 
-	kcp           *kcpRuntime
-	kcpMu         sync.RWMutex
+	// lastPeerFrameNano stamps the wall-clock time of the most recent frame
+	// from the latched peer epoch. peerRestarting guards the carrier rebuild
+	// from firing more than once per restart. peerRestartGrace is how long the
+	// latched peer must be silent before a frame from a different epoch is read
+	// as a restarted server rather than unrelated room noise. A restarted
+	// server rejoins the SFU with a fresh epoch and broadcasts decodable
+	// keepalives on it; spotting that lets us rebuild the carrier in seconds
+	// instead of waiting out the relaxed control-liveness window (~70s).
+	// See issue #105.
+	lastPeerFrameNano atomic.Int64
+	peerRestarting    atomic.Bool
+	peerRestartGrace  time.Duration
+
+	// ai-generated: new field, peer-restart-corroboration PR.
+	//
+	// linkUnhealthy corroborates the peer-restart heuristic with an
+	// independent signal from the client's control-plane liveness loop
+	// (pushed via NotifyLinkHealth). Zero-value false means "not known
+	// unhealthy" - maybePeerRestart stays inert until the control plane has
+	// actually confirmed trouble, so unrelated room participants (a second
+	// client's epoch broadcast) can never trip a false carrier rebuild.
+	linkUnhealthy atomic.Bool
+
+	kcp   *kcpRuntime
+	kcpMu sync.RWMutex
 	// controlKCP is the isolated KCP session for the control plane.
-	controlKCP    *kcpRuntime
-	controlKCPMu  sync.RWMutex
+	controlKCP      *kcpRuntime
+	controlKCPMu    sync.RWMutex
 	controlOnDataMu sync.RWMutex // guards onControlData reads/writes
-	reconnectMu   sync.Mutex
-	reconnectFn   func()
-	peerConfirmed atomic.Bool
+	reconnectMu     sync.Mutex
+	reconnectFn     func()
+	peerConfirmed   atomic.Bool
 
 	// Multi-peer support: when onPeerData is set, each remote epoch gets
 	// its own KCP runtime and data is routed via onPeerData(peerID, ...).
 	peersMu sync.RWMutex
-	peers   map[uint32]*kcpRuntime // epoch → KCP runtime
-	peerOut map[uint32]chan []byte // epoch → outbound queue
+	peers   map[uint32]*kcpRuntime // data epoch → KCP runtime
+	peerOut map[uint32]chan []byte // data epoch → outbound queue
+
+	// Per-peer control plane: keyed by data epoch (= controlEpoch &^ controlEpochFlag).
+	// Each entry owns its own KCP session so multiple clients get independent
+	// handshake/liveness streams. Guarded by ctrlPeersMu.
+	ctrlPeersMu sync.RWMutex
+	ctrlPeers   map[uint32]*peerControlKCP // data epoch → per-peer control KCP
+
+	// onPeerControlData is called when a control frame arrives for a specific
+	// peer. Set by SetControlOnPeerData.
+	onPeerControlData func(peerID string, data []byte)
+
+	// Connect eagerly starts both KCPs; the control KCP uses the current
+	// controlEpochValue() which is now derived live from localEpoch.
+	_ struct{} // zero-size sentinel — keeps the struct layout stable
+}
+
+// peerControlKCP holds the isolated KCP session for one remote peer's control
+// plane. The server creates one per data epoch; each gets its own KCP session
+// so that multiple clients can handshake and ping/pong independently.
+type peerControlKCP struct {
+	kcp *kcpRuntime
+	out chan []byte
 }
 
 // New creates a vp8channel transport backed by a carrier engine.
@@ -184,6 +243,7 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		Engine:    cfg.Engine,
 		URL:       cfg.URL,
 		Token:     cfg.Token,
+		AuthToken: cfg.AuthToken,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open engine session: %w", err)
@@ -234,34 +294,23 @@ func newStreamTransport(
 	if batchSize <= 0 {
 		batchSize = defaultBatchSize
 	}
-	byteRate := opts.MaxBytesPerSec
-	if byteRate <= 0 {
-		byteRate = defaultMaxBytesPerSec
-	}
-	// Bytes we may emit per frame tick to hold the wire under byteRate. The
-	// ticker already paces at fps, so a per-tick cap bounds the rate without
-	// any token bookkeeping. Floor at one epoch header so keepalives fit.
-	perTickBytes := byteRate / fps
-	if perTickBytes < epochHdrLen {
-		perTickBytes = epochHdrLen
-	}
-
 	tr := &streamTransport{
-		stream:            stream,
-		track:             track,
-		onData:            cfg.OnData,
-		onPeerData:        cfg.OnPeerData,
-		outbound:          make(chan []byte, outboundQueueSize),
-		controlOutbound:   make(chan []byte, controlOutboundQueueSize),
-		closeCh:           make(chan struct{}),
-		writerDone:        make(chan struct{}),
-		frameInterval:     time.Second / time.Duration(fps),
-		batchSize:         batchSize,
-		perTickBytes:      perTickBytes,
-		bindingToken:      bindingToken(cfg.RoomURL),
-		localEpoch:        randomEpoch(),
-		peers:             make(map[uint32]*kcpRuntime),
-		peerOut:           make(map[uint32]chan []byte),
+		stream:           stream,
+		track:            track,
+		onData:           cfg.OnData,
+		onPeerData:       cfg.OnPeerData,
+		outbound:         make(chan []byte, outboundQueueSize),
+		controlOutbound:  make(chan []byte, controlOutboundQueueSize),
+		closeCh:          make(chan struct{}),
+		writerDone:       make(chan struct{}),
+		frameInterval:    time.Second / time.Duration(fps),
+		batchSize:        batchSize,
+		bindingToken:     channelBindingToken(cfg),
+		localEpoch:       randomEpoch(),
+		peers:            make(map[uint32]*kcpRuntime),
+		peerOut:          make(map[uint32]chan []byte),
+		ctrlPeers:        make(map[uint32]*peerControlKCP),
+		peerRestartGrace: defaultPeerRestartGrace,
 	}
 
 	// In single-peer mode, confirm the peer epoch on first successful KCP
@@ -350,11 +399,16 @@ func (p *streamTransport) epochHeader() [epochHdrLen]byte {
 	return buildEpochHeader(p.bindingToken, epoch)
 }
 
-// controlEpochValue returns the current control-plane epoch (data epoch | controlEpochFlag).
+// controlEpochValue derives the control-plane epoch live from the current
+// data epoch. Control epoch = localEpoch | controlEpochFlag. The high bit
+// is set so the receiver can distinguish control frames from bulk data frames
+// on the same RTP stream, and the server can correlate a client's data and
+// control planes by arithmetic (controlEpoch &^ controlEpochFlag == dataEpoch).
+// This must stay live (not latched) so that data epoch rotations on reconnect
+// are visible to the server; with a latched control epoch the server could no
+// longer correlate a new data epoch to the same client's control stream.
 func (p *streamTransport) controlEpochValue() uint32 {
-	p.epochMu.RLock()
-	defer p.epochMu.RUnlock()
-	return p.localEpoch | controlEpochFlag
+	return p.localEpochValue() | controlEpochFlag
 }
 
 // controlEpochHeader builds the epoch header for the control-plane track.
@@ -364,12 +418,19 @@ func (p *streamTransport) controlEpochHeader() [epochHdrLen]byte {
 	return buildEpochHeader(p.bindingToken, p.controlEpochValue())
 }
 
-func buildEpochHeader(token, epoch uint32) [epochHdrLen]byte {
+func buildEpochHeader(token, src uint32) [epochHdrLen]byte {
+	return buildEpochHeaderTo(token, src, 0)
+}
+
+// buildEpochHeaderTo builds a frame header addressed to a specific destination
+// epoch. dst==0 means broadcast (every participant accepts it).
+func buildEpochHeaderTo(token, src, dst uint32) [epochHdrLen]byte {
 	var hdr [epochHdrLen]byte
 	copy(hdr[:], vp8Keepalive)
-	binary.BigEndian.PutUint32(hdr[tokenOff:epochOff], token)
-	binary.BigEndian.PutUint32(hdr[epochOff:crcOff], epoch)
-	binary.BigEndian.PutUint32(hdr[crcOff:epochHdrLen], epochCRC(token, epoch))
+	binary.BigEndian.PutUint32(hdr[tokenOff:srcOff], token)
+	binary.BigEndian.PutUint32(hdr[srcOff:dstOff], src)
+	binary.BigEndian.PutUint32(hdr[dstOff:crcOff], dst)
+	binary.BigEndian.PutUint32(hdr[crcOff:epochHdrLen], epochCRC(token, src, dst))
 	return hdr
 }
 
@@ -393,21 +454,25 @@ func (p *streamTransport) localEpochValue() uint32 {
 	return p.localEpoch
 }
 
-func epochCRC(token, epoch uint32) uint32 {
-	var buf [8]byte
+func epochCRC(token, src, dst uint32) uint32 {
+	var buf [12]byte
 	binary.BigEndian.PutUint32(buf[0:4], token)
-	binary.BigEndian.PutUint32(buf[4:8], epoch)
+	binary.BigEndian.PutUint32(buf[4:8], src)
+	binary.BigEndian.PutUint32(buf[8:12], dst)
 	return crc32.ChecksumIEEE(buf[:])
 }
 
-func parseEpochHeader(frame []byte) (uint32, uint32, bool) {
+// parseEpochHeader returns (token, src, dst, ok). ok is false when the frame is
+// too short or the CRC does not validate.
+func parseEpochHeader(frame []byte) (uint32, uint32, uint32, bool) {
 	if len(frame) < epochHdrLen {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	token := binary.BigEndian.Uint32(frame[tokenOff:epochOff])
-	epoch := binary.BigEndian.Uint32(frame[epochOff:crcOff])
+	token := binary.BigEndian.Uint32(frame[tokenOff:srcOff])
+	src := binary.BigEndian.Uint32(frame[srcOff:dstOff])
+	dst := binary.BigEndian.Uint32(frame[dstOff:crcOff])
 	gotCRC := binary.BigEndian.Uint32(frame[crcOff:epochHdrLen])
-	return token, epoch, gotCRC == epochCRC(token, epoch)
+	return token, src, dst, gotCRC == epochCRC(token, src, dst)
 }
 
 func bindingToken(clientID string) uint32 {
@@ -418,6 +483,18 @@ func bindingToken(clientID string) uint32 {
 		token = 1
 	}
 	return token
+}
+
+// channelBindingToken derives a per-session token so multiple olcrtc pairs
+// in the same SFU room (e.g. concurrent e2e runs or real multi-tenant usage)
+// do not accept each other's VP8/KCP frames. ChannelID is unique per process
+// when set; falling back to RoomURL preserves compatibility for deployments
+// that rely on room-level isolation.
+func channelBindingToken(cfg transport.Config) uint32 {
+	if cfg.ChannelID != "" {
+		return bindingToken(cfg.ChannelID)
+	}
+	return bindingToken(cfg.RoomURL)
 }
 
 func randomEpoch() uint32 {
@@ -504,6 +581,13 @@ func (p *streamTransport) Close() error {
 		p.peerOut = make(map[uint32]chan []byte)
 		p.peersMu.Unlock()
 
+		p.ctrlPeersMu.Lock()
+		for _, pcp := range p.ctrlPeers {
+			pcp.kcp.close()
+		}
+		p.ctrlPeers = make(map[uint32]*peerControlKCP)
+		p.ctrlPeersMu.Unlock()
+
 		if p.writerUp.Load() {
 			<-p.writerDone
 		}
@@ -541,11 +625,11 @@ func (p *streamTransport) drainControlOutbound() {
 func (p *streamTransport) ResetPeer() {
 	p.peerConfirmed.Store(false)
 	p.peerEpoch.Store(0)
-	// Preserve control epoch across reset to avoid breaking ping/pong routing.
-	// Control frames use a separate epoch path and must stay stable.
-	controlHdr := p.controlEpochHeader()
-	p.restartKCP(p.rotateEpochHeader())
-	p.restartControlKCPWithHeader(controlHdr)
+	// Rotate data epoch; controlEpochValue() derives live from the new data
+	// epoch so the control header automatically follows.
+	newHdr := p.rotateEpochHeader()
+	p.restartKCP(newHdr)
+	p.restartControlKCPWithHeader(p.controlEpochHeader())
 }
 
 // Reconnect forwards to the underlying engine session.
@@ -553,22 +637,29 @@ func (p *streamTransport) Reconnect(reason string) {
 	p.stream.Reconnect(reason)
 }
 
+// NotifyLinkHealth implements transport.LinkHealthObserver. The client
+// wires its control-plane liveness loop to this so maybePeerRestart can
+// require corroborating evidence before firing (a second client joining the
+// SFU room broadcasts its own epoch to everyone, which alone must not be
+// mistaken for "my server restarted").
+//
+// ai-generated: new method, peer-restart-corroboration PR.
+func (p *streamTransport) NotifyLinkHealth(unhealthy bool) {
+	p.linkUnhealthy.Store(unhealthy)
+}
+
 func (p *streamTransport) SetReconnectCallback(cb func()) {
 	p.reconnectMu.Lock()
 	p.reconnectFn = cb
 	p.reconnectMu.Unlock()
 	p.stream.SetReconnectCallback(func() {
-		// Reset the data KCP with a new epoch. The control KCP is restarted
-		// with the SAME epoch (no rotation): this drains accumulated KCP
-		// retransmit frames that piled up while WriteSample was failing, so
-		// pong/ping delivery resumes quickly after the new publisher PC is
-		// ready. Keeping the control epoch stable means the peer does not
-		// need a new handshake and liveness does not time out.
+		// Rotate the data epoch and restart both KCPs. controlEpochValue()
+		// derives live from the new data epoch so the control header follows
+		// automatically — the peer re-correlates data+control by arithmetic.
 		p.peerConfirmed.Store(false)
 		p.peerEpoch.Store(0)
-		controlHdr := p.controlEpochHeader() // snapshot BEFORE data epoch rotation
 		p.restartKCP(p.rotateEpochHeader())
-		p.restartControlKCPWithHeader(controlHdr)
+		p.restartControlKCPWithHeader(p.controlEpochHeader())
 		if cb != nil {
 			cb()
 		}
@@ -727,7 +818,7 @@ func (w *writerState) drainControl() bool {
 func (w *writerState) drainData() {
 	select {
 	case frame := <-w.p.outbound:
-		sample := w.p.batchSample(frame, w.p.perTickBytes)
+		sample := w.p.batchSample(frame)
 		w.idleTicks = 0
 		_ = w.writeSample(sample)
 	default:
@@ -769,18 +860,16 @@ func (p *streamTransport) writerLoop() {
 	}
 }
 
-func (p *streamTransport) batchSample(first []byte, maxBytes int) []byte {
-	return p.batchSampleFrom(p.outbound, first, maxBytes)
+func (p *streamTransport) batchSample(first []byte) []byte {
+	return p.batchSampleFrom(p.outbound, first)
 }
 
 // batchSampleFrom coalesces up to batchSize KCP frames drained from src into a
-// single VP8 sample, bounded by maxBytes. The shared writerLoop drains the
-// single-peer outbound queue; per-peer pumps drain their own queue through the
-// same batching so the server->client path is paced identically to the client.
-func (p *streamTransport) batchSampleFrom(src <-chan []byte, first []byte, maxBytes int) []byte {
-	if maxBytes <= 0 || maxBytes > defaultMaxPayloadSize {
-		maxBytes = defaultMaxPayloadSize
-	}
+// single VP8 sample, bounded by defaultMaxPayloadSize. The shared writerLoop
+// drains the single-peer outbound queue; per-peer pumps drain their own queue
+// through the same batching so the server->client path is built identically to
+// the client.
+func (p *streamTransport) batchSampleFrom(src <-chan []byte, first []byte) []byte {
 	if len(first) <= epochHdrLen || p.batchSize <= 1 {
 		return first
 	}
@@ -797,7 +886,7 @@ func (p *streamTransport) batchSampleFrom(src <-chan []byte, first []byte, maxBy
 				continue
 			}
 			payload := frame[epochHdrLen:]
-			if len(sample)+2+len(payload) > maxBytes {
+			if len(sample)+2+len(payload) > defaultMaxPayloadSize {
 				return sample
 			}
 			sample = appendBatchPacket(sample, payload)
@@ -1059,12 +1148,39 @@ func (p *streamTransport) readVP8Track(track *webrtc.TrackRemote) {
 func (p *streamTransport) handleFirstPeer(peerEpoch uint32) {
 	p.peerEpoch.Store(peerEpoch)
 	p.peerConfirmed.Store(true)
+	// Arm the restart watchdog against this fresh latch and clear any pending
+	// restart flag so a later silence can re-trigger detection (issue #105).
+	p.lastPeerFrameNano.Store(time.Now().UnixNano())
+	p.peerRestarting.Store(false)
+	// Re-point our data KCP at the server so subsequent uplink frames are
+	// addressed (dst=serverEpoch) instead of broadcast. The SFU forwards
+	// every frame to every participant, so without a dst the server cannot
+	// tell which client a frame belongs to and other clients would ingest
+	// our KCP packets (issue #95 multi-client cross-talk).
+	p.kcpMu.RLock()
+	rt := p.kcp
+	p.kcpMu.RUnlock()
+	if rt != nil {
+		rt.setHeader(buildEpochHeaderTo(p.bindingToken, p.localEpochValue(), peerEpoch))
+	}
 	logger.Infof("vp8channel: peer latched epoch=0x%08x", peerEpoch)
+}
+
+// acceptsDst reports whether a frame addressed to dst is for us. dst==0 is a
+// broadcast (accepted by everyone, used before the sender has learned our
+// epoch). Otherwise the frame must target either our data epoch or our
+// control epoch (data|controlEpochFlag).
+func (p *streamTransport) acceptsDst(dst uint32) bool {
+	if dst == 0 {
+		return true
+	}
+	le := p.localEpochValue()
+	return dst == le || dst == (le|controlEpochFlag)
 }
 
 // handleIncomingFrame parses the epoch header and delivers KCP payload.
 func (p *streamTransport) handleIncomingFrame(frame []byte) {
-	frameToken, peerEpoch, ok := parseEpochHeader(frame)
+	frameToken, src, dst, ok := parseEpochHeader(frame)
 	if !ok {
 		logger.Debugf("vp8channel: incoming frame bad header len=%d", len(frame))
 		return
@@ -1074,29 +1190,51 @@ func (p *streamTransport) handleIncomingFrame(frame []byte) {
 		return
 	}
 	kcpPayload := frame[epochHdrLen:]
-	if peerEpoch == p.localEpochValue() {
-		return // own loopback
+	if src == p.localEpochValue() || src == (p.localEpochValue()|controlEpochFlag) {
+		return // own loopback (data or control)
+	}
+	// Drop frames addressed to a different participant. dst==0 broadcasts are
+	// always accepted (bootstrap before the sender learns our epoch).
+	if !p.acceptsDst(dst) {
+		return
 	}
 
-	// Control-plane frames have the high bit set in the epoch field.
-	// Route them to the isolated control KCP and never mix them with
-	// bulk data traffic.
-	if peerEpoch&controlEpochFlag != 0 {
-		p.handleControlFrame(peerEpoch, kcpPayload)
+	// Control-plane frames have the high bit set in the src epoch field.
+	// Route them to the control plane and never mix them with bulk data.
+	if src&controlEpochFlag != 0 {
+		p.handleControlFrame(src, dst, kcpPayload)
 		return
 	}
 
 	// Multi-peer mode: route each epoch to its own KCP runtime.
 	if p.onPeerData != nil {
-		p.handlePeerFrame(peerEpoch, kcpPayload)
+		p.handlePeerFrame(src, kcpPayload)
 		return
 	}
 
-	// Single-peer mode: latch on first epoch seen, ignore all others.
-	if !p.peerConfirmed.Load() {
-		p.handleFirstPeer(peerEpoch)
-	} else if peerEpoch != p.peerEpoch.Load() {
+	p.handleSinglePeerData(src, kcpPayload)
+}
+
+// ai-generated: doc comment updated (last clause about corroboration),
+// peer-restart-corroboration PR; function body predates it.
+//
+// handleSinglePeerData delivers a data frame in single-peer (client) mode. It
+// latches the first peer epoch seen. When the latched peer has gone silent
+// past peerRestartGrace and a frame from a different epoch arrives, that is
+// read as a possible server restart (the server rejoins the SFU with a fresh
+// epoch) and triggers a full carrier rebuild instead of waiting out the
+// relaxed control-liveness window (issue #105) - but only once the
+// control-plane liveness loop has independently corroborated trouble, see
+// maybePeerRestart.
+func (p *streamTransport) handleSinglePeerData(src uint32, kcpPayload []byte) {
+	switch {
+	case !p.peerConfirmed.Load():
+		p.handleFirstPeer(src)
+	case src != p.peerEpoch.Load():
+		p.maybePeerRestart(src)
 		return
+	default:
+		p.lastPeerFrameNano.Store(time.Now().UnixNano())
 	}
 
 	if len(kcpPayload) == 0 {
@@ -1110,21 +1248,97 @@ func (p *streamTransport) handleIncomingFrame(frame []byte) {
 	}
 }
 
-// handleControlFrame routes a control-plane VP8 frame to the isolated control
-// KCP runtime. Loopback echoes of our own outbound frames and bare keepalives
-// are discarded.
-func (p *streamTransport) handleControlFrame(peerEpoch uint32, kcpPayload []byte) {
-	if peerEpoch == p.controlEpochValue() {
-		return // discard loopback: the SFU echoes our own outbound frames back
+// ai-generated: existing function, guard clause + doc comment update added
+// by the peer-restart-corroboration PR (linkUnhealthy check at the top of
+// the function body below is the new part; the rest of the function and
+// doc predates this change).
+//
+// maybePeerRestart reads a frame from a non-latched epoch as a possible
+// server restart once the latched peer has been silent longer than
+// peerRestartGrace. A live peer keeps the latch fresh by emitting a keepalive
+// every ~2s, so a different epoch arriving after a silence gap COULD mean the
+// old peer is gone and a fresh one (a restarted server) has taken its place -
+// but in an SFU room it just as easily means an unrelated participant (e.g. a
+// second olcbox client) joined or reconnected and its epoch is now being
+// broadcast to everyone, us included. Epoch churn alone cannot tell the two
+// apart.
+//
+// To avoid tearing down a perfectly healthy carrier over unrelated room
+// noise, we require independent corroboration: linkUnhealthy, pushed by
+// the client's own control-plane liveness loop (NotifyLinkHealth), must
+// already be true. A genuine server restart kills that liveness link almost
+// immediately (it's a session-specific channel to the actual server, not
+// affected by other peers), so real restarts still recover fast; a second
+// client's epoch alone, with our control-plane still healthy, is now ignored.
+//
+// Recovery drives the full carrier rebuild via stream.Reconnect - the same
+// path control-liveness loss uses - rather than a bare re-handshake over the
+// stale carrier. The restarted server rejoined the SFU as a fresh participant,
+// so re-handshaking on the old media path just times out; only a carrier
+// rebuild re-establishes a path the new server answers on. The carrier's
+// reconnect callback then rotates our epoch, resets the peer latch and drives
+// a fresh handshake. Firing this on the epoch change recovers in seconds
+// instead of waiting out the relaxed control-liveness window (~70s, issue
+// #105). We rebuild exactly once per restart; the flag clears when the next
+// peer latches in handleFirstPeer.
+func (p *streamTransport) maybePeerRestart(src uint32) {
+	if !p.linkUnhealthy.Load() {
+		return // no corroborating evidence our own control plane is down -
+		// likely unrelated room churn (another client's epoch), not a
+		// genuine server restart.
 	}
+	if p.peerRestartGrace <= 0 {
+		return
+	}
+	last := p.lastPeerFrameNano.Load()
+	if last == 0 || time.Since(time.Unix(0, last)) < p.peerRestartGrace {
+		return
+	}
+	if !p.peerRestarting.CompareAndSwap(false, true) {
+		return // a rebuild is already in flight
+	}
+	logger.Infof("vp8channel: peer restart detected old=0x%08x new=0x%08x - rebuilding carrier",
+		p.peerEpoch.Load(), src)
+	go p.stream.Reconnect("peer restart")
+}
+
+// handleControlFrame routes a control-plane VP8 frame. In multi-peer mode
+// (server) each data epoch gets its own per-peer control KCP created on demand.
+// In single-peer mode (client) the shared singleton control KCP is used.
+// src carries the peer's control epoch (high bit set), dst is our epoch (or 0
+// for broadcast). Loopback echoes of our own frames are discarded by the
+// caller (handleIncomingFrame) via the src == localControlEpoch check.
+func (p *streamTransport) handleControlFrame(src, dst uint32, kcpPayload []byte) {
 	if len(kcpPayload) == 0 {
 		return // control keepalive, nothing to deliver
 	}
+	// Multi-peer mode: route by data epoch (src &^ controlEpochFlag).
+	if p.onPeerData != nil {
+		dataEpoch := src &^ controlEpochFlag
+		pcp := p.getOrCreatePeerControlKCP(dataEpoch)
+		if pcp != nil {
+			deliverKCPPayload(pcp.kcp, kcpPayload)
+		}
+		return
+	}
+	// Single-peer mode (client): only accept control frames addressed
+	// specifically to our control epoch. Other clients sharing the same SFU
+	// room broadcast their handshake control frames with dst==0; the SFU
+	// forwards those to us too. Without this filter those foreign bytes would
+	// be fed into our singleton control KCP (which shares the static
+	// kcpConvID) and corrupt our own handshake/liveness stream, so neither
+	// client could complete its handshake (issue #95 multi-client). The
+	// server always addresses a client directly (dst==clientControlEpoch),
+	// so a non-targeted control frame is never legitimately ours.
+	if dst != p.controlEpochValue() {
+		return
+	}
+	// Single-peer mode: deliver to the singleton control KCP.
 	p.controlKCPMu.RLock()
 	crt := p.controlKCP
 	p.controlKCPMu.RUnlock()
 	if crt != nil {
-		crt.deliver(kcpPayload)
+		deliverKCPPayload(crt, kcpPayload)
 	}
 }
 
@@ -1162,7 +1376,9 @@ func (p *streamTransport) getOrCreatePeerKCP(epoch uint32) *kcpRuntime {
 
 	peerID := formatPeerID(epoch)
 	out := make(chan []byte, outboundQueueSize)
-	hdr := buildEpochHeader(p.bindingToken, p.localEpochValue())
+	// Address downlink frames to the specific client epoch so other clients
+	// do not ingest them (issue #95 multi-client cross-talk).
+	hdr := buildEpochHeaderTo(p.bindingToken, p.localEpochValue(), epoch)
 	rt, err := startKCP(out, func(data []byte) {
 		if p.onPeerData != nil {
 			p.onPeerData(peerID, data)
@@ -1183,13 +1399,12 @@ func (p *streamTransport) getOrCreatePeerKCP(epoch uint32) *kcpRuntime {
 }
 
 // peerWriterPump drains a peer's outbound KCP queue and writes frames to the
-// shared video track. It paces the server->client path on the same frame
-// ticker and per-tick byte budget as writerLoop drives the client->server
-// path. Without this, the pump emitted every KCP frame the instant it was
-// queued: with KCP congestion control off (nc=1) and a BDP-sized window, that
-// overran the SFU's policer, drove burst loss, and collapsed throughput to
-// zero within ~20-40s (issue #95). Stops when the channel is closed or the
-// transport shuts down.
+// shared video track on the same frame ticker writerLoop uses for the
+// client->server path, batching queued frames into one VP8 sample per tick.
+// Draining on the ticker (rather than emitting each frame the instant it is
+// queued) keeps the per-peer writes interleaved with the keyframe injection
+// below and lets batchSampleFrom coalesce segments into full samples. Stops
+// when the channel is closed or the transport shuts down.
 func (p *streamTransport) peerWriterPump(_ uint32, out chan []byte) {
 	ticker := time.NewTicker(p.frameInterval)
 	defer ticker.Stop()
@@ -1221,7 +1436,7 @@ func (p *streamTransport) peerWriterPump(_ uint32, out chan []byte) {
 				if !ok {
 					return
 				}
-				sample := p.batchSampleFrom(out, frame, p.perTickBytes)
+				sample := p.batchSampleFrom(out, frame)
 				_ = p.writeSampleLocked(sample)
 			default:
 			}
@@ -1293,6 +1508,89 @@ func (p *streamTransport) SetControlOnData(cb func([]byte)) {
 	p.controlOnDataMu.Lock()
 	p.onControlData = cb
 	p.controlOnDataMu.Unlock()
+}
+
+// getOrCreatePeerControlKCP returns the per-peer control KCP for a data epoch,
+// creating one on demand. Outbound frames go via the shared controlOutbound
+// queue so writerLoop drains them with higher priority than bulk data.
+func (p *streamTransport) getOrCreatePeerControlKCP(dataEpoch uint32) *peerControlKCP {
+	p.ctrlPeersMu.RLock()
+	pck := p.ctrlPeers[dataEpoch]
+	p.ctrlPeersMu.RUnlock()
+	if pck != nil {
+		return pck
+	}
+
+	p.ctrlPeersMu.Lock()
+	defer p.ctrlPeersMu.Unlock()
+	if pck = p.ctrlPeers[dataEpoch]; pck != nil {
+		return pck
+	}
+
+	peerID := formatPeerID(dataEpoch)
+	// src = server's control epoch; dst = client's control epoch so the
+	// client's loopback filter accepts it and other clients drop it.
+	srcEpoch := p.localEpochValue() | controlEpochFlag
+	dstEpoch := dataEpoch | controlEpochFlag
+	hdr := buildEpochHeaderTo(p.bindingToken, srcEpoch, dstEpoch)
+	cb := func(data []byte) {
+		p.controlOnDataMu.RLock()
+		onPeerCtrl := p.onPeerControlData
+		p.controlOnDataMu.RUnlock()
+		if onPeerCtrl != nil {
+			onPeerCtrl(peerID, data)
+		}
+	}
+	rt, err := startKCP(p.controlOutbound, cb, hdr)
+	if err != nil {
+		logger.Warnf("vp8channel: startKCP for peer control 0x%08x failed: %v", dataEpoch, err)
+		return nil
+	}
+	pck = &peerControlKCP{kcp: rt, out: p.controlOutbound}
+	p.ctrlPeers[dataEpoch] = pck
+	logger.Infof("vp8channel: per-peer control KCP created peerID=%s dstControlEpoch=0x%08x", peerID, dstEpoch)
+	return pck
+}
+
+// ControlSendTo sends data on the per-peer control KCP for peerID.
+// Implements transport.PeerControlPlane.
+func (p *streamTransport) ControlSendTo(peerID string, data []byte) error {
+	if p.closed.Load() {
+		return ErrTransportClosed
+	}
+	epoch, err := parsePeerID(peerID)
+	if err != nil {
+		return fmt.Errorf("vp8channel: invalid peerID %q: %w", peerID, err)
+	}
+	pck := p.getOrCreatePeerControlKCP(epoch)
+	if pck == nil {
+		return ErrTransportClosed
+	}
+	return pck.kcp.send(data)
+}
+
+// SetControlOnPeerData registers the callback for per-peer control frames.
+// Implements transport.PeerControlPlane.
+func (p *streamTransport) SetControlOnPeerData(cb func(peerID string, data []byte)) {
+	p.controlOnDataMu.Lock()
+	p.onPeerControlData = cb
+	p.controlOnDataMu.Unlock()
+}
+
+// ControlPeerCanSend reports whether the per-peer control KCP for peerID is ready.
+// Implements transport.PeerControlPlane.
+func (p *streamTransport) ControlPeerCanSend(peerID string) bool {
+	if p.closed.Load() {
+		return false
+	}
+	epoch, err := parsePeerID(peerID)
+	if err != nil {
+		return false
+	}
+	p.ctrlPeersMu.RLock()
+	pck := p.ctrlPeers[epoch]
+	p.ctrlPeersMu.RUnlock()
+	return pck != nil && p.stream.SubscriberCanSend()
 }
 
 /*

@@ -1,6 +1,8 @@
 package vkauth
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestCaptchaSolveModeForAttempt(t *testing.T) {
 	t.Parallel()

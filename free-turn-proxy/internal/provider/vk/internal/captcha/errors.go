@@ -11,7 +11,6 @@ type Error struct {
 	ErrorCode               int
 	ErrorMsg                string
 	CaptchaSid              string
-	CaptchaImg              string
 	RedirectURI             string
 	IsSoundCaptchaAvailable bool
 	SessionToken            string
@@ -39,17 +38,8 @@ func ParseError(errData map[string]any) *Error {
 	if !ok {
 		if sidNum, ok2 := errData["captcha_sid"].(float64); ok2 {
 			captchaSid = fmt.Sprintf("%.0f", sidNum)
-		} else {
-			// 1.4.3: a missing captcha_sid is no longer fatal — VK sometimes omits it on the
-			// smart-captcha path. Log at debug and continue (blank sid) so the challenge can
-			// still be solved instead of failing the whole auth.
-			Log.Debugf("[Captcha] missing captcha_sid in error data")
 		}
 	}
-
-	// 1.4.3: captcha_img may be absent on the smart-captcha (script) path; extract best-effort
-	// and continue rather than bailing out.
-	captchaImg, _ := errData["captcha_img"].(string)
 
 	errorMsg, ok := errData["error_msg"].(string)
 	if !ok {
@@ -95,7 +85,6 @@ func ParseError(errData map[string]any) *Error {
 		ErrorCode:               code,
 		ErrorMsg:                errorMsg,
 		CaptchaSid:              captchaSid,
-		CaptchaImg:              captchaImg,
 		RedirectURI:             redirectURI,
 		IsSoundCaptchaAvailable: isSound,
 		SessionToken:            sessionToken,

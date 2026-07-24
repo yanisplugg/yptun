@@ -23,6 +23,11 @@ object ShareLinkComposer {
             val ini = profile.awgConfig.takeIf { it.isNotBlank() } ?: return null
             return "amneziawg://" + Base64.UrlSafe.encode(ini.encodeToByteArray()).trimEnd('=')
         }
+        // Trust Tunnel: the tt:// deep-link is stored verbatim — share it as-is (round-trips via
+        // ShareLinkParser/TrustTunnelParser).
+        if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
+            return profile.ttConfig.takeIf { it.isNotBlank() }
+        }
         // A full raw Xray config or a verbatim sing-box outbound: share the JSON as-is.
         profile.rawXrayConfig?.takeIf { it.isNotBlank() }?.let { return it }
 

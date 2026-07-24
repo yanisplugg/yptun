@@ -27,6 +27,8 @@ object ShareLinkParser {
                 SubscriptionDecoder.decodeBase64Chunk(payload)?.let { AmneziaWgParser.parse(it) }
             }
             AmneziaWgParser.looksLikeAmneziaWg(trimmed) -> AmneziaWgParser.parse(trimmed)
+            // tt://<base64> — AdGuard Trust Tunnel deep-link (decoded natively at connect time).
+            TrustTunnelParser.looksLikeTrustTunnel(trimmed) -> TrustTunnelParser.parse(trimmed)
             else -> null
         }
     }

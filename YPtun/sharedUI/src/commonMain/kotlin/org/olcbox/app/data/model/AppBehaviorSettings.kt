@@ -41,6 +41,8 @@ object SubscriptionUserAgentHolder {
 data class AppBehaviorSettings(
     /** Auto-connect the selected configuration when the app is launched. */
     val autoConnectOnLaunch: Boolean = false,
+    /** Show the round "Авто = fastest server" satellite button next to the connect button on Home. */
+    val showAutoButton: Boolean = true,
     /** Ask for confirmation before deleting subscriptions / configs. */
     val confirmBeforeDelete: Boolean = true,
     /** Show live download/upload speed in the foreground notification. */
@@ -156,6 +158,12 @@ data class AppBehaviorSettings(
     val hideEndpointWhenDescription: Boolean = true,
     /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
     val customGroups: List<CustomGroup> = emptyList(),
+    /**
+     * Render the configuration list on the Home screen as a 2-column grid of compact cards instead of
+     * the default single-column rows. Group/folder headers stay full-width; only the server/location
+     * cards pair up. Off by default.
+     */
+    val twoColumnLayout: Boolean = false,
     /**
      * Which User-Agent the app sends for the MAIN subscription fetch (names / title / links). Panels do
      * UA content-negotiation: [SUB_UA_YPTUN] (the app's own UA) usually yields clean base64 links with

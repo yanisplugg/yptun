@@ -56,6 +56,9 @@ import wdttmobile.ConfigSink as WdttConfigSink
 import dnsttmobile.Dnsttmobile
 import dnsttmobile.DnsttClient
 import dnsttmobile.SocketProtector as DnsttSocketProtector
+import com.adguard.trusttunnel.DeepLink as TrustTunnelDeepLink
+import com.adguard.trusttunnel.VpnClient as TrustTunnelVpnClient
+import com.adguard.trusttunnel.VpnClientListener as TrustTunnelListener
 import mobile.LogWriter
 import mobile.Mobile
 import mobile.SocketProtector
@@ -190,6 +193,8 @@ class OlcboxVpnService : VpnService() {
     private var dnsttClient: DnsttClient? = null
     /** True when the active dnstt engine also fronts a proxy core (proxy-over-dnstt). */
     private var dnsttProxyActive: Boolean = false
+    /** Active Trust Tunnel client (SOCKS-only) for a [ProxyProfile.TYPE_TRUSTTUNNEL] proxy; null otherwise. */
+    private var trustTunnelClient: TrustTunnelVpnClient? = null
     private var tun2socksThread: Thread? = null
     @Volatile
     private var tun2socksStarted = false
@@ -1350,8 +1355,15 @@ class OlcboxVpnService : VpnService() {
             val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
             // Naive (NaïveProxy) is a native sing-box outbound (cronet) — xray has no equivalent.
             val isNaive = profile.type == ProxyProfile.TYPE_NAIVE
-            val effectiveProfile = if (isAwg) prepareAmneziaWgProxy(profile) else profile
-            val isLocalUdpTunnel = isAwg
+            // Trust Tunnel (AdGuard) — like AmneziaWG, raises a local SOCKS5 (its own native client in
+            // SOCKS-only mode) that the proxy routes through; a full TCP/UDP tunnel over HTTP2/QUIC.
+            val isTrustTunnel = profile.type == ProxyProfile.TYPE_TRUSTTUNNEL
+            val effectiveProfile = when {
+                isAwg -> prepareAmneziaWgProxy(profile)
+                isTrustTunnel -> prepareTrustTunnelProxy(profile)
+                else -> profile
+            }
+            val isLocalUdpTunnel = isAwg || isTrustTunnel
 
             // Happ-style routing profile (per-location override → global default), if any.
             val profilesState = loadRoutingProfilesState()
@@ -1566,6 +1578,11 @@ class OlcboxVpnService : VpnService() {
                     fakeDnsSpec = config.fakeDns,
                     // Transparent-proxy inbound (root-only) — only emitted in Tproxy mode.
                     tproxyPort = tproxyPortOrNull,
+                    // Standalone AmneziaWG (full UDP tunnel behind a local SOCKS): resolve the tunnel's
+                    // DNS over TCP (SOCKS CONNECT) instead of the flaky SOCKS UDP-ASSOCIATE, so name
+                    // resolution works WITHOUT needing a 2nd proxy to carry DNS. No-op with a 2nd proxy
+                    // (that proxy's own protocol carries DNS) or for DoH/DoT resolvers.
+                    preferTcpRemoteDns = isLocalUdpTunnel && secondProfile == null,
                 )
                 if (config.fakeDns != null) addLog("FakeDNS spec present → enabling sing-box fakeip (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -2855,6 +2872,9 @@ class OlcboxVpnService : VpnService() {
         dnsttClient = null
         dnsttProxyActive = false
         runCatching { Awg.stop() }
+        runCatching { trustTunnelClient?.stop() }
+        runCatching { trustTunnelClient?.close() }
+        trustTunnelClient = null
         val provider = lastMobileProvider
         val wasRunning = Mobile.isRunning()
         runCatching { Mobile.stop() }
@@ -2868,6 +2888,9 @@ class OlcboxVpnService : VpnService() {
 
     /** AmneziaWG's local SOCKS port (awgproxy) when a proxy uses the AmneziaWG transport. */
     private val awgLocalPort: Int get() = socksListenPort + 2
+
+    /** Trust Tunnel's local SOCKS port (native VpnClient, SOCKS-only mode) for TYPE_TRUSTTUNNEL. */
+    private val trustTunnelLocalPort: Int get() = socksListenPort + 5
 
     /** Transparent-proxy (tproxy) listen port; offset from the SOCKS port to avoid collisions. */
     private val tproxyPort: Int get() = socksListenPort + 4
@@ -2884,7 +2907,12 @@ class OlcboxVpnService : VpnService() {
     private suspend fun prepareAmneziaWgProxy(profile: ProxyProfile): ProxyProfile {
         if (profile.type != ProxyProfile.TYPE_AMNEZIAWG) return profile
         runCatching { Awg.stop() }
-        Awg.setDebug(false)
+        // Verbose AmneziaWG logging: routes the amneziawg-go device journal (handshake init/response,
+        // "handshake did not complete", peer errors) into the in-app log sheet via setLogWriter below.
+        // Standalone AWG "cannot connect" is otherwise invisible — with setDebug(false) the device only
+        // emits errors, so a stalled handshake (tunnel up, no data) logs nothing. AWG is a low-volume
+        // control path (handshakes aren't per-packet), so this doesn't spam the journal during transfer.
+        Awg.setDebug(true)
         Awg.setLogWriter(object : AwgLogWriter {
             override fun writeLog(line: String) {
                 val trimmed = line.trimEnd()
@@ -2905,6 +2933,63 @@ class OlcboxVpnService : VpnService() {
             type = "socks",
             server = "127.0.0.1",
             serverPort = awgLocalPort,
+            rawOutbound = raw,
+        )
+    }
+
+    /**
+     * If [profile] is Trust Tunnel, decode its `tt://` deep-link into a `[endpoint]` TOML (native
+     * DeepLink.decode), start the AdGuard client in SOCKS-only mode (VpnClient.start(null) — no TUN),
+     * and return a SOCKS proxy pointing at its local listener, so sing-box routes through the Trust
+     * Tunnel like it does through AmneziaWG. Otherwise returns [profile] unchanged.
+     */
+    private suspend fun prepareTrustTunnelProxy(profile: ProxyProfile): ProxyProfile {
+        if (profile.type != ProxyProfile.TYPE_TRUSTTUNNEL) return profile
+        runCatching { trustTunnelClient?.stop(); trustTunnelClient?.close() }
+        trustTunnelClient = null
+
+        val endpointToml = runCatching { TrustTunnelDeepLink.decode(profile.ttConfig) }
+            .getOrElse { throw IllegalStateException("Trust Tunnel: invalid tt:// link: ${it.message}") }
+        val port = trustTunnelLocalPort
+        // Top-level keys must precede any [table]; then the decoded [endpoint], then our SOCKS listener.
+        // No [listener.tun] → SOCKS-only. Kill switch off: our VpnService TUN owns routing, not the client.
+        val configToml = buildString {
+            append("loglevel = \"info\"\n")
+            append("killswitch_enabled = false\n\n")
+            append(endpointToml.trim()).append("\n\n")
+            append("[listener.socks]\n")
+            append("address = \"127.0.0.1:").append(port).append("\"\n")
+        }
+
+        val listener = object : TrustTunnelListener {
+            override fun protectSocket(socket: Int): Boolean {
+                if (connectionMode.isTunless) return true
+                return this@OlcboxVpnService.protect(socket)
+            }
+            // The endpoint certificate is embedded in the tt:// blob and pinned by the native client;
+            // this callback is the app-side hook — accept (the user configured this exact endpoint).
+            override fun verifyCertificate(certificate: ByteArray?, rawChain: List<ByteArray?>?): Boolean = true
+            override fun onStateChanged(state: Int) { addLog("trusttunnel: state=$state") }
+            override fun onConnectionInfo(info: String) { addLog("trusttunnel: $info") }
+        }
+
+        addLog("Starting Trust Tunnel SOCKS on 127.0.0.1:$port")
+        val client = TrustTunnelVpnClient(configToml, listener)
+        trustTunnelClient = client
+        if (!client.start(null)) {
+            trustTunnelClient = null
+            throw IllegalStateException("Trust Tunnel client failed to start")
+        }
+        if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("Trust Tunnel SOCKS port $port did not open")
+        }
+        val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
+            "\"server_port\":$port,\"version\":\"5\"}"
+        return ProxyProfile(
+            tag = profile.tag.ifBlank { "Trust Tunnel" },
+            type = "socks",
+            server = "127.0.0.1",
+            serverPort = port,
             rawOutbound = raw,
         )
     }

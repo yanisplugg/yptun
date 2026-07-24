@@ -87,12 +87,21 @@ const (
 	BrowserSafari  Browser = "safari"
 )
 
+// Platform выбирает класс устройства персоны (мобильность UA/device/client hints).
+type Platform string
+
+const (
+	PlatformDesktop Platform = "desktop"
+	PlatformMobile  Platform = "mobile"
+)
+
 // VKOpts - опции VK-учёток и captcha (только клиент, провайдер "vk").
 type VKOpts struct {
 	Links          []string // -links (нормализованные join-коды); несколько = больше стримов
 	StreamsPerCred int      // -streams-per-cred
 	ManualCaptcha  bool     // -manual-captcha
 	Browser        Browser  // -browser: chrome | firefox | safari
+	Platform       Platform // -platform: desktop | mobile
 }
 
 // ProviderOpts выбирает реализацию provider.Provider.
@@ -192,6 +201,7 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 	debug := fs.Bool("debug", false, "подробные debug-логи")
 	manualCaptcha := fs.Bool("manual-captcha", false, "ручная VK captcha в браузере вместо авто; только -provider vk")
 	browser := fs.String("browser", string(BrowserFirefox), "браузерный профиль VK-auth: chrome | firefox | safari; только -provider vk")
+	platform := fs.String("platform", string(PlatformDesktop), "класс устройства персоны VK-auth: desktop | mobile; только -provider vk")
 	dnsMode := fs.String("dns-mode", dnsModeAuto, "резолвер клиента: plain | doh | auto")
 	dnsServers := fs.String("dns-servers", "", "свои UDP/53 DNS через запятую: ip[:port][,ip[:port]...]")
 	clientID := fs.String("client-id", "", "уникальный ID клиента (автогенерация если не задан)")
@@ -225,6 +235,7 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 			StreamsPerCred: *streamsPerCred,
 			ManualCaptcha:  *manualCaptcha,
 			Browser:        Browser(*browser),
+			Platform:       Platform(*platform),
 		},
 		DNS: DNSOpts{
 			Mode: *dnsMode,
@@ -338,6 +349,14 @@ func ParseClient(args []string, errOut io.Writer) (*Client, error) {
 		case BrowserChrome, BrowserFirefox, BrowserSafari:
 		default:
 			return nil, fmt.Errorf("invalid -browser value %q: must be %s | %s | %s", c.VK.Browser, BrowserChrome, BrowserFirefox, BrowserSafari)
+		}
+		if c.VK.Platform == "" {
+			c.VK.Platform = PlatformDesktop
+		}
+		switch c.VK.Platform {
+		case PlatformDesktop, PlatformMobile:
+		default:
+			return nil, fmt.Errorf("invalid -platform value %q: must be %s | %s", c.VK.Platform, PlatformDesktop, PlatformMobile)
 		}
 		rawLinks := strings.Split(*links, ",")
 		if len(rawLinks) == 1 && rawLinks[0] == "" {

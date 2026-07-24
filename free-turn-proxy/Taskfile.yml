@@ -40,7 +40,11 @@ tasks:
     cmds:
       - rm -rf dist/mobile.aar dist/mobile-sources.jar
       - mkdir -p dist
-      - gomobile bind -target android -androidapi 21 -ldflags "-checklinkname=0" -o dist/mobile.aar ./mobile
+      - cmd: gomobile bind -target android -androidapi 21 -ldflags "-checklinkname=0" -o dist/mobile.aar ./mobile
+        platforms: [linux, darwin]
+      - cmd: |
+          powershell -NoProfile -Command '$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"; $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"; gomobile bind -target android -androidapi 21 -ldflags "-checklinkname=0" -o dist/mobile.aar ./mobile'
+        platforms: [windows]
 
   test:
     desc: Run unit tests with race detector

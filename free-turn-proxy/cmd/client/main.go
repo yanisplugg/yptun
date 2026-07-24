@@ -201,6 +201,7 @@ func buildProvider(cfg *config.Client, dialer net.Dialer, connected *atomic.Int3
 				Dialer:          dialer,
 				ManualOnly:      cfg.VK.ManualCaptcha,
 				Browser:         string(cfg.VK.Browser),
+				Platform:        string(cfg.VK.Platform),
 				StreamsPerCache: cfg.VK.StreamsPerCred,
 				StreamsAlive:    connected.Load,
 				Log:             logger,

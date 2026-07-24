@@ -21,7 +21,8 @@
 | `-gen-obf-key` | `false` | напечатать новый ключ и выйти |
 | `-manual-captcha` | `false` | сразу ручной режим captcha (только `-provider vk`) |
 | `-streams-per-cred` | `10` | потоков на один кеш VK-учёток (только `-provider vk`) |
-| `-browser` | `firefox` | браузерный профиль VK-auth (UA + TLS JA3 + client hints): `chrome` \| `firefox` (только `-provider vk`) |
+| `-browser` | `firefox` | семейство персоны VK-auth (UA + TLS JA3 + client hints): `chrome` \| `firefox` \| `safari` (только `-provider vk`) |
+| `-platform` | `desktop` | класс устройства персоны VK-auth (мобильность UA/device/client hints): `desktop` \| `mobile` (только `-provider vk`) |
 | `-dns-mode` | `auto` | `plain` (UDP/53) \| `doh` \| `auto` |
 | `-dns-servers` | пусто | свои UDP/53 резолверы, `ip[:port][,ip[:port]...]` |
 | `-client-id` | авто | уникальный ID клиента (автогенерация если не задан) |
@@ -45,7 +46,7 @@
 ## Управление Client ID (Команды Сервера)
 
 > [!NOTE]
-> **Про авторизацию:** клиент **всегда** отправляет свой Client ID первой записью после DTLS-handshake, сервер **всегда** его читает — wire-контракт симметричен. Флаг `-clients-file` на сервере включает **проверку** ID по allowlist (`clients.json`). Без `-clients-file` ID читается и игнорируется.
+> **Про авторизацию:** клиент **всегда** отправляет свой Client ID первой записью после DTLS-handshake, сервер **всегда** его читает - wire-контракт симметричен. Флаг `-clients-file` на сервере включает **проверку** ID по allowlist (`clients.json`). Без `-clients-file` ID читается и игнорируется.
 
 Сервер содержит встроенные команды для управления файлом `clients.json` (горячая перезагрузка поддерживается автоматически, перезапускать сервер после изменений не нужно).
 

@@ -105,6 +105,10 @@ fun HomeScreen(
     pinnedCustomLocations: List<String> = emptyList(),
     customLocationsPingSorted: Boolean = false,
     customLocationsPingSortDescending: Boolean = false,
+    // Render the config list as a 2-column grid (app-settings toggle).
+    twoColumns: Boolean = false,
+    // Show the round "Авто = fastest" satellite button next to the connect button (app-settings toggle).
+    showAutoButton: Boolean = true,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {},
@@ -173,6 +177,22 @@ fun HomeScreen(
                     s.subscriptionsUpdated
                 }
 
+                scope.launch {
+                    snackbarHostState.showSnackbar(message)
+                }
+            }
+        }
+    }
+
+    fun refreshOneSubscription(url: String) {
+        viewModel.refreshSubscription(url) { updatedCount ->
+            locationViewModel.loadLocations {
+                viewModel.restartVpnIfRunning()
+                val message = if (updatedCount > 0) {
+                    s.subscriptionsUpdatedCount(updatedCount)
+                } else {
+                    s.subscriptionsUpdated
+                }
                 scope.launch {
                     snackbarHostState.showSnackbar(message)
                 }
@@ -337,7 +357,7 @@ fun HomeScreen(
                 // The main connect button, with a small round "Авто" satellite to its right that
                 // proxy-pings every server and (re)connects to the fastest. Always available while there
                 // are usable servers — tapping it while connected re-rolls onto the new fastest node.
-                val canAutoConnect = locations.any { it.config?.isComplete() == true }
+                val canAutoConnect = showAutoButton && locations.any { it.config?.isComplete() == true }
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     StartButton(
                         isActive = state.isVpnConnected,
@@ -453,6 +473,7 @@ fun HomeScreen(
                     isAddSheetOpen = true
                 },
                 hasLoaded = locationViewModel.hasLoadedLocations,
+                twoColumns = twoColumns,
                 locations = locations,
                 selectedLocationId = locationViewModel.selectedLocationId,
                 pingsState = pingsState,
@@ -473,6 +494,9 @@ fun HomeScreen(
                 },
                 onSetSubscriptionAutoUpdate = { url, enabled ->
                     locationViewModel.setSubscriptionAutoUpdate(url, enabled)
+                },
+                onRefreshSubscription = { url ->
+                    refreshOneSubscription(url)
                 },
                 collapsedGroups = collapsedGroups,
                 pinnedGroups = pinnedGroups,

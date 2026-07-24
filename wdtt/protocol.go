@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// RequestConfig запрашивает WireGuard конфиг через DTLS-соединение.
 func RequestConfig(conn net.Conn, localPort, deviceID, password string) (string, error) {
 	payload := fmt.Sprintf("GETCONF:%s|%s|%s", localPort, deviceID, password)
 	if _, err := conn.Write([]byte(payload)); err != nil {
@@ -45,5 +44,3 @@ func RequestConfig(conn net.Conn, localPort, deviceID, password string) (string,
 
 	return resp, nil
 }
-
-

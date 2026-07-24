@@ -5,44 +5,46 @@
 ![License](https://img.shields.io/badge/license-WTFPL-0D1117?style=flat-square&logo=open-source-initiative&logoColor=green&labelColor=0D1117)
 ![Golang](https://img.shields.io/badge/-Golang-0D1117?style=flat-square&logo=go&logoColor=00A7D0)
 
+[RU](sub.ru.md) / **EN**
+
 </div>
 
-# Формат подписки `sub.md`
+# Subscription format `sub.md`
 
-`sub.md` это обычный текстовый файл, который хостится на сервере и отдаётся как plain text.
+`sub.md` is a plain text file hosted on a server and served as plain text.
 
-Пример URL:
+Example URL:
 
 ```text
 https://killpeople.freegore.xyz/sub
 ```
 
-Внутри файл содержит список `olcrtc`-URI из [uri.md](uri.md) и дополнительные технические поля для клиента.
+Inside, the file holds a list of `olcrtc` URIs from [uri.md](uri.md) plus extra technical fields for the client.
 
-Важно: это соглашение **для клиентских приложений**. Сам `olcrtc` такой файл не читает и не обрабатывает.
-
----
-
-## Назначение
-
-Формат нужен для клиентских подписок:
-
-- список серверов в одном файле
-- метаданные подписки для UI
-- метаданные отдельных серверов
-- информация для автообновления подписки
+Important: this is a convention **for client applications**. `olcrtc` itself does not read or process such a file.
 
 ---
 
-## Общая структура
+## Purpose
 
-Файл читается сверху вниз и состоит из:
+The format is meant for client subscriptions:
 
-1. глобальных полей подписки с префиксом `#`
-2. строк `olcrtc://...`
-3. локальных полей конкретного сервера с префиксом `##`
+- a list of servers in one file
+- subscription metadata for the UI
+- metadata for individual servers
+- info for auto-updating the subscription
 
-Базовая схема:
+---
+
+## Overall structure
+
+The file is read top to bottom and consists of:
+
+1. global subscription fields prefixed with `#`
+2. `olcrtc://...` lines
+3. local fields of a specific server prefixed with `##`
+
+Base schema:
 
 ```text
 #name: ...
@@ -69,68 +71,68 @@ olcrtc://...
 
 ---
 
-## Глобальные поля подписки
+## Global subscription fields
 
-Строки вида `#key: value` относятся ко всей подписке.
+Lines like `#key: value` apply to the whole subscription.
 
-| Поле | Значение |
+| Field | Meaning |
 |------|----------|
-| `#name:` | Имя подписки |
-| `#update:` | Время последнего обновления в Unix time |
-| `#refresh:` | Через какой интервал клиенту нужно обновлять подписку, например `5s`, `10m`, `6h` |
-| `#color:` | Цвет подписки. Поле только для UI |
-| `#icon:` | Иконка подписки. Поле только для UI |
-| `#used:` | Сколько уже использовано, например `10mb/10gb` |
-| `#available:` | Сколько доступно всего по подписке, например `1.1gb` |
+| `#name:` | Subscription name |
+| `#update:` | Time of the last update in Unix time |
+| `#refresh:` | How often the client should refresh the subscription, e.g. `5s`, `10m`, `6h` |
+| `#color:` | Subscription color. UI-only field |
+| `#icon:` | Subscription icon. UI-only field |
+| `#used:` | How much is already used, e.g. `10mb/10gb` |
+| `#available:` | How much is available in total under the subscription, e.g. `1.1gb` |
 
-`#available:` это именно значение на уровне всей подписки. Если клиент умеет считать остаток сам, он может использовать это поле как исходные данные или как отображаемую подсказку.
+`#available:` is the value at the level of the whole subscription. If the client can count the remainder itself, it may use this field as source data or as a displayed hint.
 
 ---
 
-## Строки серверов
+## Server lines
 
-Каждая строка сервера содержит один `olcrtc`-URI в формате из [uri.md](uri.md):
+Each server line holds one `olcrtc` URI in the format from [uri.md](uri.md):
 
 ```text
 olcrtc://<Auth>?<Transport>@<RoomID>#<EncryptionKey>$<MIMO>
 olcrtc://<Auth>?<Transport><key=value&key=value>@<RoomID>#<EncryptionKey>$<MIMO>
 ```
 
-Одна строка = один сервер/одна запись подписки.
+One line = one server / one subscription entry.
 
-Пустые строки между элементами допустимы.
+Empty lines between items are allowed.
 
 ---
 
-## Локальные поля сервера
+## Local server fields
 
-Строки вида `##key: value` относятся только к **последнему URI**, который был объявлен выше.
+Lines like `##key: value` apply only to the **last URI** declared above.
 
-То есть клиент должен привязывать блок `##...` к ближайшей предыдущей строке `olcrtc://...`.
+That is, the client must bind a `##...` block to the nearest preceding `olcrtc://...` line.
 
-| Поле | Значение |
+| Field | Meaning |
 |------|----------|
-| `##name:` | Имя сервера/узла |
-| `##color:` | Цвет для UI |
-| `##icon:` | Иконка для UI |
-| `##used:` | Использование для конкретного сервера, например `500mb/10gb` |
-| `##available:` | Доступный объём для конкретного сервера |
-| `##ip:` | IP-адрес сервера, если его нужно показать клиенту |
-| `##comment:` | Свободный комментарий |
+| `##name:` | Server/node name |
+| `##color:` | UI color |
+| `##icon:` | UI icon |
+| `##used:` | Usage for a specific server, e.g. `500mb/10gb` |
+| `##available:` | Available volume for a specific server |
+| `##ip:` | Server IP address, if it needs to be shown to the client |
+| `##comment:` | Free-form comment |
 
-Локальные поля почти повторяют глобальные, но без `refresh`, потому что период обновления задаётся на уровне всей подписки.
+Local fields almost duplicate the global ones, but without `refresh`, because the update period is set at the whole-subscription level.
 
-## Рекомендации по значениям
+## Value recommendations
 
-- Для `#update:` использовать Unix time в секундах.
-- Для `#refresh:` использовать короткие интервалы вида `5s`, `10m`, `6h`, `1d`.
-- Для `#color:` использовать один стабильный формат в рамках клиента, например `#RRGGBB`.
-- Для `#icon:` использовать строковый идентификатор или emoji.
-- Для `#used:` и `#available:` использовать человекочитаемые единицы `kb`, `mb`, `gb`, `tb`.
+- For `#update:` use Unix time in seconds.
+- For `#refresh:` use short intervals like `5s`, `10m`, `6h`, `1d`.
+- For `#color:` use one stable format within the client, e.g. `#RRGGBB`.
+- For `#icon:` use a string identifier or emoji.
+- For `#used:` and `#available:` use human-readable units `kb`, `mb`, `gb`, `tb`.
 
 ---
 
-## Полный пример
+## Full example
 
 ```text
 #name: Zarazaex Free RU
@@ -157,12 +159,12 @@ olcrtc://wbstream?datachannel@abc123xyz#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ##comment: reserve route, wbstream+datachannel does not work in guest flow
 ```
 
-## Имплементация клиента для подписок
+## Subscription client implementation
 
-На данный момент не существует единой реализации, но в скором времени они точно появятся даже в официальном репозитории.
+There is no single implementation yet, but they will surely appear soon, even in the official repository.
 
 ---
 
-URI-формат для отдельного сервера: [uri.md](uri.md)
+URI format for a single server: [uri.md](uri.md)
 
-Матрица совместимости auth + transport: [settings.md](settings.md)
+Compatibility matrix for auth + transport: [settings.md](settings.md)

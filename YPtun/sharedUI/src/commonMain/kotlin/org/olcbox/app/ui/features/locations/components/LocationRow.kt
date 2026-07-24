@@ -12,6 +12,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -190,8 +191,11 @@ fun LocationRow(
                 color = textColor,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Medium,
-                maxLines = 2,
-                overflow = TextOverflow.Visible,
+                // Show the FULL config name: no line cap, wrap onto as many lines as needed. The row
+                // is heightIn(min = 76.dp) and grows with its content, so a long name reflows tidily
+                // inside the weight(1f) column instead of overflowing (TextOverflow.Visible) and
+                // colliding with the row below.
+                overflow = TextOverflow.Clip,
                 softWrap = true
             )
 
@@ -217,7 +221,7 @@ fun LocationRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     maxLines = 2,
-                    overflow = TextOverflow.Visible,
+                    overflow = TextOverflow.Ellipsis,
                     softWrap = true
                 )
             }
@@ -252,6 +256,9 @@ fun LocationRow(
         // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),
         // so show a neutral dash instead of a ms value or a false "Offline".
         val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
+        // dnstt (DNS tunnel) can't be probed directly either: a NULL ping = "not measurable", not
+        // "offline". Show "—" instead of a red fail when there's no ms; a live end-to-end RTT still shows.
+        val isDnstt = location.config?.engine == org.olcbox.app.data.model.EngineType.Dnstt
         // "Значок" mode shows a check/cross instead of the raw latency (per user setting).
         val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
 
@@ -285,6 +292,15 @@ fun LocationRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            isDnstt -> {
+                Text(
+                    text = "—",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             isError -> {
@@ -423,6 +439,241 @@ private fun LocationSelectionIndicator(isSelected: Boolean) {
         ) {
             Box(modifier = Modifier.size(24.dp))
         }
+    }
+}
+
+/**
+ * Compact half-width card used when the "2-column layout" setting is on. Same selection/ping/settings
+ * behaviour as [LocationRow] but laid out vertically (name on top, ping + actions on the bottom) so two
+ * fit side-by-side. [modifier] carries the grid cell sizing (fills its half of the Row).
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun LocationGridCell(
+    location: LocationItem,
+    isSelected: Boolean,
+    isLoading: Boolean,
+    pingMs: Int?,
+    isError: Boolean = false,
+    settingsEnabled: Boolean = true,
+    selectionMode: Boolean = false,
+    isChecked: Boolean = false,
+    onSettingsClick: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
+    isPinned: Boolean = false,
+    onTogglePinned: (() -> Unit)? = null,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val bgColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        } else {
+            MaterialTheme.colorScheme.surfaceContainer
+        },
+        label = "gridCellContainer"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.outlineVariant
+        },
+        label = "gridCellBorder"
+    )
+    val borderWidth = if (isSelected) 2.dp else 1.dp
+    val textColor = MaterialTheme.colorScheme.onSurface
+
+    val metadata = location.metadata
+    val rawName = metadata?.name?.takeIf { it.isNotBlank() } ?: location.fullName
+    val fallbackIcon = metadata?.icon?.takeIf { it.isNotBlank() }
+        ?: metadata?.subscription?.icon?.takeIf { it.isNotBlank() }
+        ?: ""
+    val (emoji, parsedName) = parseEmojiAndName(rawName, fallbackIcon)
+    val cleanName = parsedName.ifBlank { location.config?.displayName().orEmpty() }
+
+    Column(
+        modifier = modifier
+            .heightIn(min = 96.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(bgColor)
+            .border(borderWidth, borderColor, RoundedCornerShape(16.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = {
+                    when {
+                        onLongClick != null -> onLongClick()
+                        settingsEnabled -> onSettingsClick()
+                    }
+                }
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.Top) {
+                if (emoji.isNotEmpty()) {
+                    Text(text = emoji, fontSize = 18.sp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    text = cleanName,
+                    color = textColor,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    // Cap at 2 lines here (unlike the full-width row) so paired cells stay aligned.
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Subscription description (Happ meta.serverDescription) shown right under the name — the
+            // grid cell used to drop it entirely ("не видно описаний"). Falls back to the protocol/IP
+            // endpoint when there's no description (same rule as the full row).
+            val description = location.config?.description?.takeIf { it.isNotBlank() }
+            description?.let { desc ->
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = desc,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true
+                )
+            }
+            if (description == null || !LocalHideEndpointWhenDescription.current) {
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = locationSubtitle(location),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            CompactPingIndicator(
+                location = location,
+                isLoading = isLoading,
+                pingMs = pingMs,
+                isError = isError
+            )
+
+            if (selectionMode) {
+                Checkbox(checked = isChecked, onCheckedChange = { onClick() })
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (onTogglePinned != null) {
+                        IconButton(onClick = onTogglePinned, modifier = Modifier.size(30.dp)) {
+                            Icon(
+                                imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                                contentDescription = "Pin",
+                                tint = if (isPinned) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    if (settingsEnabled) {
+                        IconButton(onClick = onSettingsClick, modifier = Modifier.size(30.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Settings",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    if (isSelected) {
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Icon(
+                            imageVector = Icons.Rounded.CheckCircle,
+                            contentDescription = "Selected location",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Compact ping readout for [LocationGridCell] — mirrors the full row's ping states in a smaller form. */
+@Composable
+private fun CompactPingIndicator(
+    location: LocationItem,
+    isLoading: Boolean,
+    pingMs: Int?,
+    isError: Boolean
+) {
+    val isVkTurn = location.config?.engine == EngineType.VkTurn
+    // dnstt is an obfuscated DNS tunnel: it has no directly-probeable endpoint, so a NULL ping means
+    // "not measurable" (disconnected), NOT "offline" — showing a red fail was wrong. Render "—" instead
+    // when there's no ping; a real end-to-end RTT (measured through the live tunnel) still shows as ms.
+    val isDnstt = location.config?.engine == EngineType.Dnstt
+    val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
+    when {
+        isVkTurn -> Text(
+            text = "—",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        isLoading -> ShimmeringPingSkeleton()
+
+        pingMs != null -> if (iconResult) {
+            Icon(
+                imageVector = Icons.Rounded.CheckCircle,
+                contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOnline,
+                tint = PingOkGreen,
+                modifier = Modifier.size(18.dp)
+            )
+        } else {
+            Text(
+                text = "$pingMs ms",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        isDnstt -> Text(
+            text = "—",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        isError -> if (iconResult) {
+            Icon(
+                imageVector = Icons.Rounded.Cancel,
+                contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp)
+            )
+        } else {
+            Text(
+                text = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        else -> Spacer(modifier = Modifier.size(1.dp))
     }
 }
 

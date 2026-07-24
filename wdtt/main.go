@@ -330,7 +330,7 @@ func Run(ctx context.Context, cfg Config) error {
 		go func(groupID int, isFirstGroup bool, configChan chan<- string, workerIds []int, startHashIndex int, waitR <-chan struct{}, sigR chan<- struct{}) {
 			defer wg.Done()
 			WorkerGroup(ctx, groupID, startHashIndex, tp, peer, disp, localPort,
-				isFirstGroup, configChan, workerIds, &pauseFlag, deviceID, cfg.Password, stats, waitR, sigR)
+				isFirstGroup, configChan, workerIds, &pauseFlag, deviceID, cfg.Password, stats, waitR, sigR, nil, nil)
 		}(g+1, isFirst, cc, ids, g, myWaitReady, mySignalReady)
 	}
 

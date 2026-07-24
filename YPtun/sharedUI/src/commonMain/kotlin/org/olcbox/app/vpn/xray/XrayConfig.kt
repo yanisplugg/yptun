@@ -826,11 +826,17 @@ object XrayConfig {
         val proxyOutbound = outbounds.firstOrNull {
             it["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in proxyProtocols
         } ?: return null
+        // Apply the SAME xhttp domain-fronting fix the real connection uses (see [liftXhttpExtraHostPath]):
+        // a fronted config carries the real host only in xhttpSettings.extra.host (top-level host=""),
+        // which xray overrides to empty → the probe sent an empty Host → the fronted backend answered
+        // HTTP 400 → the server showed a false "недоступен" in proxy GET/HEAD mode even though it works.
+        // The main build lifts extra.host/path up; the probe MUST too, or it dials a different (broken) path.
+        val liftedProxy = liftXhttpExtraHostPath(proxyOutbound)
         // Re-tag to "proxy" so it's unambiguously the sole exit; everything else is kept verbatim
         // (streamSettings carry the xhttp/splithttp/reality fronting the probe must reproduce).
         val pingOutbound = buildJsonObject {
             var taggedProxy = false
-            proxyOutbound.forEach { (k, v) ->
+            liftedProxy.forEach { (k, v) ->
                 if (k == "tag") { put("tag", PROXY_TAG); taggedProxy = true } else put(k, v)
             }
             if (!taggedProxy) put("tag", PROXY_TAG)
