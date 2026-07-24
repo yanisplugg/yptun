@@ -376,7 +376,9 @@ fun main(args: Array<String>) = application {
             resizable = false,
             alwaysOnTop = true,
             focusable = true,
-            state = rememberWindowState(size = DpSize(260.dp, 296.dp)),
+            state = rememberWindowState(
+                size = DpSize(TRAY_MENU_WIDTH, trayMenuHeight(hasLocationName = trayLocationName != null))
+            ),
         ) {
             LaunchedEffect(Unit) {
                 runCatching {
@@ -482,6 +484,10 @@ fun main(args: Array<String>) = application {
             val homeState by dependencies.homeViewModel.state.collectAsState()
             val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
             val mainConnectionMode by dependencies.settings.connectionMode.collectAsState()
+            // Drives the locations list exactly like AndroidMainScreen: collapsed/pinned/ping-sorted
+            // subscription groups, folders, two-column layout, the "Авто" button… Without it the
+            // desktop list silently ran on the parameter defaults (nothing ever collapsed).
+            val appBehavior by dependencies.settings.appBehavior.collectAsState()
             // Happ-style wide layout: with enough window width the locations move to a left pane.
             val isWideWindow = windowState.size.width >= 700.dp
 
@@ -541,6 +547,128 @@ fun main(args: Array<String>) = application {
                     canScanQr = false,
                     onAppSettingsClick = { showDesktopSettings = true },
                     onSplitTunnelingClick = {},
+                    confirmBeforeDelete = appBehavior.confirmBeforeDelete,
+                    allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
+                    pingParallelism = appBehavior.effectivePingParallelism(),
+                    collapsedGroups = appBehavior.collapsedSubscriptionGroups,
+                    pinnedGroups = appBehavior.pinnedSubscriptionGroups,
+                    pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,
+                    pingSortDescendingGroups = appBehavior.pingSortDescendingSubscriptionGroups,
+                    pinnedCustomLocations = appBehavior.pinnedCustomLocations,
+                    customLocationsPingSorted = appBehavior.customLocationsPingSorted,
+                    customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
+                    twoColumns = appBehavior.twoColumnLayout,
+                    showAutoButton = appBehavior.showAutoButton,
+                    onToggleGroupCollapsed = { key ->
+                        val current = appBehavior.collapsedSubscriptionGroups
+                        val updated = if (key in current) current - key else current + key
+                        dependencies.settings.setAppBehavior(
+                            appBehavior.copy(collapsedSubscriptionGroups = updated)
+                        )
+                    },
+                    onToggleGroupPinned = { key ->
+                        val current = appBehavior.pinnedSubscriptionGroups
+                        val updated = if (key in current) current - key else current + key
+                        dependencies.settings.setAppBehavior(
+                            appBehavior.copy(pinnedSubscriptionGroups = updated)
+                        )
+                    },
+                    onToggleGroupPingSort = { key ->
+                        // Cycle: off → ascending → descending → off (same as Android).
+                        val sorted = appBehavior.pingSortedSubscriptionGroups
+                        val desc = appBehavior.pingSortDescendingSubscriptionGroups
+                        dependencies.settings.setAppBehavior(
+                            when {
+                                key !in sorted -> appBehavior.copy(
+                                    pingSortedSubscriptionGroups = sorted + key,
+                                    pingSortDescendingSubscriptionGroups = desc - key,
+                                )
+                                key !in desc -> appBehavior.copy(
+                                    pingSortDescendingSubscriptionGroups = desc + key
+                                )
+                                else -> appBehavior.copy(
+                                    pingSortedSubscriptionGroups = sorted - key,
+                                    pingSortDescendingSubscriptionGroups = desc - key,
+                                )
+                            }
+                        )
+                    },
+                    onToggleCustomLocationPinned = { id ->
+                        val current = appBehavior.pinnedCustomLocations
+                        val updated = if (id in current) current - id else current + id
+                        dependencies.settings.setAppBehavior(
+                            appBehavior.copy(pinnedCustomLocations = updated)
+                        )
+                    },
+                    onToggleCustomLocationsPingSort = {
+                        dependencies.settings.setAppBehavior(
+                            when {
+                                !appBehavior.customLocationsPingSorted -> appBehavior.copy(
+                                    customLocationsPingSorted = true,
+                                    customLocationsPingSortDescending = false,
+                                )
+                                !appBehavior.customLocationsPingSortDescending ->
+                                    appBehavior.copy(customLocationsPingSortDescending = true)
+                                else -> appBehavior.copy(
+                                    customLocationsPingSorted = false,
+                                    customLocationsPingSortDescending = false,
+                                )
+                            }
+                        )
+                    },
+                    customGroups = appBehavior.customGroups,
+                    onCreateFolder = { name, memberKeys ->
+                        val folder = org.olcbox.app.data.model.CustomGroup(
+                            id = "folder_${kotlin.random.Random.nextInt(100_000, 999_999)}",
+                            name = name,
+                            members = memberKeys
+                        )
+                        // Keep each item in only one folder.
+                        val cleaned = appBehavior.customGroups.map { g ->
+                            g.copy(members = g.members - memberKeys.toSet())
+                        }
+                        dependencies.settings.setAppBehavior(
+                            appBehavior.copy(customGroups = cleaned + folder)
+                        )
+                    },
+                    onRenameFolder = { id, name ->
+                        val updated = appBehavior.customGroups.map {
+                            if (it.id == id) it.copy(name = name) else it
+                        }
+                        dependencies.settings.setAppBehavior(appBehavior.copy(customGroups = updated))
+                    },
+                    onDeleteFolder = { id ->
+                        dependencies.settings.setAppBehavior(
+                            appBehavior.copy(customGroups = appBehavior.customGroups.filterNot { it.id == id })
+                        )
+                    },
+                    onAddToFolder = { id, memberKeys ->
+                        val keySet = memberKeys.toSet()
+                        val updated = appBehavior.customGroups.map { g ->
+                            when (g.id) {
+                                id -> g.copy(members = (g.members + memberKeys).distinct())
+                                else -> g.copy(members = g.members - keySet)
+                            }
+                        }
+                        dependencies.settings.setAppBehavior(appBehavior.copy(customGroups = updated))
+                    },
+                    onRemoveFromFolder = { memberKeys ->
+                        val keySet = memberKeys.toSet()
+                        val updated = appBehavior.customGroups.map { it.copy(members = it.members - keySet) }
+                        dependencies.settings.setAppBehavior(appBehavior.copy(customGroups = updated))
+                    },
+                    onToggleFolderPinned = { id ->
+                        val updated = appBehavior.customGroups.map {
+                            if (it.id == id) it.copy(pinned = !it.pinned) else it
+                        }
+                        dependencies.settings.setAppBehavior(appBehavior.copy(customGroups = updated))
+                    },
+                    onToggleFolderCollapsed = { id ->
+                        val updated = appBehavior.customGroups.map {
+                            if (it.id == id) it.copy(collapsed = !it.collapsed) else it
+                        }
+                        dependencies.settings.setAppBehavior(appBehavior.copy(customGroups = updated))
+                    },
                     wideLayout = isWideWindow,
                     extraConnectContent = {
                         DesktopModeSwitch(
@@ -561,7 +689,6 @@ fun main(args: Array<String>) = application {
                     val routing by dependencies.settings.routing.collectAsState()
                     val routingProfilesState by dependencies.settings.routingProfiles.collectAsState()
                     val trafficSettings by dependencies.settings.traffic.collectAsState()
-                    val appBehavior by dependencies.settings.appBehavior.collectAsState()
                     val geoUpdateStatus by dependencies.settings.geoUpdateStatus.collectAsState()
                     val language by dependencies.settings.language.collectAsState()
                     val connectionMode by dependencies.settings.connectionMode.collectAsState()
@@ -1016,6 +1143,27 @@ private fun chooseSaveFile(owner: Frame, defaultName: String): File? {
 
 // ---------------------------------------------------------------------------------------
 // Custom Steam-style system-tray menu (rendered in our own undecorated Compose window).
+
+private val TRAY_MENU_WIDTH = 260.dp
+
+/** Row height of a [TrayMenuItem]: 1.dp outer + 9.dp inner padding on each side around an 18.dp icon. */
+private val TRAY_MENU_ITEM_HEIGHT = 38.dp
+
+/**
+ * Exact height of [TrayMenu]'s content. The window is undecorated and fixed-size, so a value that
+ * is too small silently CLIPS the bottom row — which is what cut the «Выход» item in half whenever
+ * a location name made the status header two lines tall. Derived from the same paddings [TrayMenu]
+ * uses, so adding a row here is a one-line change instead of a new magic number.
+ */
+private fun trayMenuHeight(hasLocationName: Boolean): androidx.compose.ui.unit.Dp {
+    val itemCount = 5 // Open, Connect/Disconnect, My IP, Hotkey, Settings
+    val header = 20.dp + if (hasLocationName) 34.dp else 19.dp // vertical padding + 1 or 2 text lines
+    val rows = TRAY_MENU_ITEM_HEIGHT * (itemCount + 1) // + the Quit row below the second divider
+    val dividers = 2.dp
+    val columnPadding = 12.dp
+    val surfaceInset = 16.dp // the Surface's own 8.dp padding, top + bottom
+    return header + rows + dividers + columnPadding + surfaceInset
+}
 
 @Composable
 private fun TrayMenu(
