@@ -30,7 +30,6 @@ import (
 	"unsafe"
 
 	"github.com/olc/awgproxy/awg"
-	"github.com/olc/hysteria2proxy/hy2"
 	"github.com/openlibrecommunity/olcrtc/mobile"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/include"
@@ -323,24 +322,9 @@ func YpAwgMeasureDelay(iniConfig, url, method *C.char, timeoutMs C.int) C.longlo
 }
 
 // ---------------------------------------------------------------------------
-// Hysteria2 (hysteria2proxy)
-
-//export YpHy2Start
-func YpHy2Start(configJSON, listenAddr *C.char) *C.char {
-	hy2.SetLogWriter(tagWriter{"hy2"})
-	return errOut(hy2.Start(C.GoString(configJSON), C.GoString(listenAddr)))
-}
-
-//export YpHy2Stop
-func YpHy2Stop() { hy2.Stop() }
-
-//export YpHy2Running
-func YpHy2Running() C.int {
-	if hy2.IsRunning() {
-		return 1
-	}
-	return 0
-}
+// Hysteria2 is now a NATIVE sing-box outbound (since the 1.13 upgrade), so the standalone
+// hysteria2proxy bridge was removed upstream. The old YpHy2Start/Stop/Running exports are gone —
+// desktop hy2 rides sing-box like every other proxy transport.
 
 // ---------------------------------------------------------------------------
 // VK-TURN (freeturn)
