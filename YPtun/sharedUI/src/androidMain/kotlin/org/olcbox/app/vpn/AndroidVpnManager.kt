@@ -761,12 +761,20 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         // now the default) but this location has no proxy, fall through to the engine-default probe
         // instead of reporting a false "Offline".
         val hasProxy = locationConfig.proxy != null
-        when (behavior.pingMode) {
-            AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
-            AppBehaviorSettings.PING_ICMP -> if (hasProxy) return icmpPing(server)
-            AppBehaviorSettings.PING_PROXY_GET -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "GET")
-            AppBehaviorSettings.PING_PROXY_HEAD -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "HEAD")
-            else -> { /* PING_AUTO → fall through to the engine-specific default below */ }
+        // VK-TURN / dnstt are obfuscated tunnels with no directly-probeable endpoint: a TCP/ICMP hit or
+        // an xray proxy-URL test can't reach them (xray can't build a throwaway outbound for a DNS
+        // tunnel, so proxy GET/HEAD failed INSTANTLY). They ONLY measure end-to-end through the live
+        // tunnel, so ignore the manual ping-mode override and fall through to the tunnelPing branch below.
+        val tunnelOnlyEngine =
+            locationConfig.engine == EngineType.VkTurn || locationConfig.engine == EngineType.Dnstt
+        if (!tunnelOnlyEngine) {
+            when (behavior.pingMode) {
+                AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
+                AppBehaviorSettings.PING_ICMP -> if (hasProxy) return icmpPing(server)
+                AppBehaviorSettings.PING_PROXY_GET -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "GET")
+                AppBehaviorSettings.PING_PROXY_HEAD -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "HEAD")
+                else -> { /* PING_AUTO → fall through to the engine-specific default below */ }
+            }
         }
         val proxyType = locationConfig.proxy?.type
         return when {

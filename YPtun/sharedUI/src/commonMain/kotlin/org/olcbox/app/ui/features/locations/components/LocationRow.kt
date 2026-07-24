@@ -256,6 +256,9 @@ fun LocationRow(
         // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),
         // so show a neutral dash instead of a ms value or a false "Offline".
         val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
+        // dnstt (DNS tunnel) can't be probed directly either: a NULL ping = "not measurable", not
+        // "offline". Show "—" instead of a red fail when there's no ms; a live end-to-end RTT still shows.
+        val isDnstt = location.config?.engine == org.olcbox.app.data.model.EngineType.Dnstt
         // "Значок" mode shows a check/cross instead of the raw latency (per user setting).
         val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
 
@@ -289,6 +292,15 @@ fun LocationRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            isDnstt -> {
+                Text(
+                    text = "—",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             isError -> {
@@ -607,6 +619,10 @@ private fun CompactPingIndicator(
     isError: Boolean
 ) {
     val isVkTurn = location.config?.engine == EngineType.VkTurn
+    // dnstt is an obfuscated DNS tunnel: it has no directly-probeable endpoint, so a NULL ping means
+    // "not measurable" (disconnected), NOT "offline" — showing a red fail was wrong. Render "—" instead
+    // when there's no ping; a real end-to-end RTT (measured through the live tunnel) still shows as ms.
+    val isDnstt = location.config?.engine == EngineType.Dnstt
     val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
     when {
         isVkTurn -> Text(
@@ -633,6 +649,13 @@ private fun CompactPingIndicator(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
+        isDnstt -> Text(
+            text = "—",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         isError -> if (iconResult) {
             Icon(
