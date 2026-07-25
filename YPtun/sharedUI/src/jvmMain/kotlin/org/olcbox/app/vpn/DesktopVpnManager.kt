@@ -590,7 +590,12 @@ class DesktopVpnManager private constructor(
             }
 
             when (desktopMode) {
-                DesktopMode.LinuxTun -> startLinuxTun(bridgeSettings.port, requestGeneration)
+                DesktopMode.LinuxTun -> startLinuxTun(
+                    socksPort = bridgeSettings.port,
+                    requestGeneration = requestGeneration,
+                    socksUsername = bridgeSettings.username,
+                    socksPassword = bridgeSettings.password
+                )
                 DesktopMode.WindowsTun -> if (engineController.tunHandledInCore) {
                     // sing-box raised the wintun adapter itself (per-process split tunneling);
                     // no external tun2socks needed.
@@ -662,9 +667,14 @@ class DesktopVpnManager private constructor(
         }
     }
 
-    private suspend fun startLinuxTun(socksPort: Int, requestGeneration: Long) {
+    private suspend fun startLinuxTun(
+        socksPort: Int,
+        requestGeneration: Long,
+        socksUsername: String = "",
+        socksPassword: String = ""
+    ) {
         val hevBinary = DesktopNativeAssets.resolveHevSocks5TunnelBinary()
-        tunProcess = linuxTunController.start(hevBinary, socksPort)
+        tunProcess = linuxTunController.start(hevBinary, socksPort, socksUsername, socksPassword)
 
         if (requestGeneration != generation) {
             throw CancellationException("Desktop start superseded")

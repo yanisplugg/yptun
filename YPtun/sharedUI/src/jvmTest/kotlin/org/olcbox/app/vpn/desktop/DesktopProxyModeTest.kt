@@ -6,6 +6,9 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopProxyModeTest {
@@ -152,6 +155,61 @@ class DesktopProxyModeTest {
         assertContains(config, "port: 10810")
         assertContains(config, "post-up-script: /tmp/olcbox-up.sh")
         assertContains(config, "pre-down-script: /tmp/olcbox-down.sh")
+    }
+
+    @Test
+    fun linuxTunConfigCarriesSocksCredentialsWhenSet() {
+        // The core's SOCKS inbound is started with these; without them in the yaml it rejects every
+        // connection from hev-socks5-tunnel and TUN mode looks dead.
+        val config = LinuxTunController.configContent(
+            socksPort = 10810,
+            socksUsername = "user",
+            socksPassword = "it's-secret"
+        )
+
+        assertContains(config, "username: 'user'")
+        // YAML single-quoted scalars escape a quote by doubling it.
+        assertContains(config, "password: 'it''s-secret'")
+    }
+
+    @Test
+    fun linuxTunConfigOmitsSocksCredentialsWhenUnset() {
+        val config = LinuxTunController.configContent(socksPort = 10810)
+
+        assertFalse(config.contains("username:"))
+        assertFalse(config.contains("password:"))
+    }
+
+    @Test
+    fun trustTunnelKeepsOnlyTheEndpointTableFromTheWizardDocument() {
+        // The wizard defaults to a TUN listener; keeping it would make the client create an
+        // interface and demand root, so everything after [endpoint] has to be dropped.
+        val document = """
+            loglevel = "info"
+
+            # a comment
+            [endpoint]
+            hostname = "vpn.example.com"
+            addresses = ["1.2.3.4:443", "[2001:db8::1]:443"]
+            certificate = ""
+
+            [listener]
+            [listener.tun]
+            mtu_size = 1350
+        """.trimIndent()
+
+        val endpoint = DesktopTrustTunnel.extractEndpointTable(document)
+
+        assertNotNull(endpoint)
+        assertTrue(endpoint.startsWith("[endpoint]"))
+        assertContains(endpoint, "hostname = \"vpn.example.com\"")
+        assertFalse(endpoint.contains("listener"))
+        assertFalse(endpoint.contains("mtu_size"))
+    }
+
+    @Test
+    fun trustTunnelReportsNoEndpointTableWhenAbsent() {
+        assertNull(DesktopTrustTunnel.extractEndpointTable("loglevel = \"info\"\n"))
     }
 
     @Test

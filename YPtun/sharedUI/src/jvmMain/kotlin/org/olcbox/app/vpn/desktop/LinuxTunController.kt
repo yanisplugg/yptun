@@ -17,11 +17,13 @@ internal class LinuxTunController(
 
     suspend fun start(
         hevBinary: Path,
-        socksPort: Int = PacServer.LOCAL_SOCKS_PORT
+        socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
+        socksUsername: String = "",
+        socksPassword: String = ""
     ): Process {
         val upScript = writeUpScript()
         val downScript = writeDownScript()
-        val config = writeConfig(socksPort, upScript, downScript)
+        val config = writeConfig(socksPort, upScript, downScript, socksUsername, socksPassword)
         val process = startPrivilegedProcess(listOf(hevBinary.toString(), config.toString()))
         try {
             waitForTunReady(process)
@@ -47,14 +49,22 @@ internal class LinuxTunController(
         }
     }
 
-    private fun writeConfig(socksPort: Int, upScript: Path, downScript: Path): Path {
+    private fun writeConfig(
+        socksPort: Int,
+        upScript: Path,
+        downScript: Path,
+        socksUsername: String,
+        socksPassword: String
+    ): Path {
         val config = DesktopPaths.appDataDir().resolve("linux-tun.yml")
         Files.writeString(
             config,
             configContent(
                 socksPort = socksPort,
                 postUpScript = upScript.toString(),
-                preDownScript = downScript.toString()
+                preDownScript = downScript.toString(),
+                socksUsername = socksUsername,
+                socksPassword = socksPassword
             )
         )
         return config
@@ -184,10 +194,18 @@ internal class LinuxTunController(
         const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
 
+        /**
+         * hev-socks5-tunnel bridges the TUN into the core's local SOCKS inbound. That inbound is
+         * started WITH [DesktopSocksProxySettings] credentials whenever the user sets them, so the
+         * yaml has to carry them too — otherwise the core rejects every connection and TUN mode looks
+         * dead. Same bug that broke routing/cascade on Windows (see WindowsTunController).
+         */
         fun configContent(
             socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
             postUpScript: String? = null,
-            preDownScript: String? = null
+            preDownScript: String? = null,
+            socksUsername: String = "",
+            socksPassword: String = ""
         ): String {
             return buildString {
                 appendLine("tunnel:")
@@ -207,6 +225,10 @@ internal class LinuxTunController(
                 appendLine("  port: $socksPort")
                 appendLine("  udp: 'tcp'")
                 appendLine("  pipeline: false")
+                if (socksUsername.isNotBlank()) {
+                    appendLine("  username: ${yamlQuoted(socksUsername)}")
+                    appendLine("  password: ${yamlQuoted(socksPassword)}")
+                }
                 appendLine()
                 appendLine("mapdns:")
                 appendLine("  address: $MAPDNS_ADDRESS")
@@ -226,6 +248,9 @@ internal class LinuxTunController(
                 appendLine("  log-level: warn")
             }.trimEnd()
         }
+
+        /** YAML single-quoted scalar: the only escape inside is a doubled quote. */
+        private fun yamlQuoted(value: String): String = "'" + value.replace("'", "''") + "'"
 
         fun upScriptContent(): String {
             return """
