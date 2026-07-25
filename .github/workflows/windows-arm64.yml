@@ -126,16 +126,25 @@ jobs:
       - name: Verify the app image is really ARM64
         shell: pwsh
         run: |
-          $dll = Get-ChildItem "YPtun\desktopApp\build\compose\binaries\main\app\YPtun" -Recurse -Filter "yptuncore-windows-*.dll" |
-            Select-Object -First 1
-          if (-not $dll) { throw "yptuncore dll missing from the app image" }
-          if ($dll.Name -ne "yptuncore-windows-arm64.dll") { throw "expected an arm64 core, got $($dll.Name)" }
-          # PE machine type: 0xAA64 = ARM64. Catches a core that was silently built for the wrong arch.
-          $bytes = [IO.File]::ReadAllBytes($dll.FullName)
-          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
-          $machine = [BitConverter]::ToUInt16($bytes, $peOff + 4)
-          if ($machine -ne 0xAA64) { throw ("core machine type is 0x{0:X4}, expected 0xAA64 (ARM64)" -f $machine) }
-          Write-Host "OK: $($dll.Name) is ARM64"
+          # PE machine type 0xAA64 = ARM64. Catches a binary silently built for the wrong arch, which
+          # would otherwise only surface at runtime (a JNA load failure, or a launcher that won't run).
+          function Assert-Arm64($path, $label) {
+            if (-not (Test-Path $path)) { throw "$label missing: $path" }
+            $bytes = [IO.File]::ReadAllBytes($path)
+            $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOff + 4)
+            if ($machine -ne 0xAA64) { throw ("{0} machine type is 0x{1:X4}, expected 0xAA64 (ARM64)" -f $label, $machine) }
+            Write-Host "OK: $label is ARM64"
+          }
+          # The cores ship inside the desktopApp jar, so check them where the build emits them.
+          $native = "YPtun\desktopApp\build\generated\desktopNativeResources\native"
+          Assert-Arm64 "$native\yptuncore-windows-arm64.dll" "yptuncore"
+          Assert-Arm64 "$native\olcrtc-windows-arm64.dll" "olcrtc lib"
+          Assert-Arm64 "$native\olcrtc-windows-arm64.exe" "olcrtc binary"
+          Assert-Arm64 "$native\tun2socks-windows-arm64.exe" "tun2socks"
+          Assert-Arm64 "$native\wintun.dll" "wintun"
+          # And the jpackage launcher, which proves the runtime image is native too.
+          Assert-Arm64 "YPtun\desktopApp\build\compose\binaries\main\app\YPtun\YPtun.exe" "launcher"
 
       - name: Build installer (en/ru/zh/fa)
         shell: pwsh

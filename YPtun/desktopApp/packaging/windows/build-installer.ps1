@@ -31,12 +31,15 @@ if (-not $Arch) {
 }
 if ($Arch -ne "amd64" -and $Arch -ne "arm64") { throw "Unsupported -Arch '$Arch' (amd64|arm64)" }
 
-# Guard against shipping an app image built for the other architecture: the bundled core .dll is the
-# arch-specific part, and a mismatch only shows up at runtime as a JNA load failure.
-if (-not (Test-Path (Join-Path $AppDir "app\resources\native\yptuncore-windows-$Arch.dll"))) {
-    $found = Get-ChildItem (Join-Path $AppDir "app") -Recurse -Filter "yptuncore-windows-*.dll" -ErrorAction SilentlyContinue |
-        Select-Object -First 1 -ExpandProperty Name
-    if ($found) { Write-Warning "App image carries '$found' but -Arch is '$Arch'" }
+# Guard against shipping an app image built for the other architecture: a mismatch only shows up at
+# runtime. The cores live inside the desktopApp jar, so check the launcher's PE machine type instead
+# (0xAA64 = ARM64, 0x8664 = x64).
+$launcher = [IO.File]::ReadAllBytes((Join-Path $AppDir "YPtun.exe"))
+$peOff = [BitConverter]::ToInt32($launcher, 0x3C)
+$machine = [BitConverter]::ToUInt16($launcher, $peOff + 4)
+$expected = if ($Arch -eq "arm64") { 0xAA64 } else { 0x8664 }
+if ($machine -ne $expected) {
+    throw ("App image is 0x{0:X4} but -Arch is '{1}' (expected 0x{2:X4})" -f $machine, $Arch, $expected)
 }
 
 if (-not (Test-Path (Join-Path $AppDir "YPtun.exe"))) {
