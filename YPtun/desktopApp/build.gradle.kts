@@ -448,19 +448,19 @@ if (currentBuildOs.isLinux) {
 // fork; sing-box 1.13 moved to sagernet/quic-go v0.59 (qpack v0.6) and the clash is gone, which is
 // why sharedUI already ships it.
 //
-// with_naive_outbound (NaïveProxy) is Linux-only for now. cronet ships per platform as either a
-// static archive or a shared library, and only the static form is self-contained: linux_amd64/arm64
-// have libcronet.a and link straight in, but the windows_* modules carry ONLY libcronet.dll and are
-// additionally gated behind `with_purego`, whose loader looks for the DLL next to the running
-// executable or on PATH. Enabling it on Windows therefore also means shipping libcronet.dll into the
-// jpackage app-image root (our natives live inside the jar, which that loader cannot see), so it is
-// left off until that packaging step exists.
-val ypTunCoreBaseBuildTags =
+// with_naive_outbound (NaïveProxy) is deliberately NOT set on desktop. Both platforms block it, for
+// different reasons, and both were confirmed by building:
+//   - Windows: the cronet windows_* modules ship ONLY libcronet.dll and are gated behind an extra
+//     `with_purego` tag, whose loader searches the running executable's directory and PATH. Our
+//     natives live inside the app jar, which that loader cannot see, so it would also need
+//     libcronet.dll placed in the jpackage app-image root.
+//   - Linux: libcronet.a is built with CREL relocations (`.crel.text`), which the GNU ld on
+//     ubuntu-22.04 (binutils 2.38) rejects outright - "unknown type [0x40000014]". Fixing it means
+//     either a newer LLD or a newer runner, and a newer runner would raise the glibc floor from 2.35
+//     to 2.39, dropping Ubuntu 22.04 and Debian 12. The compatibility floor wins.
+// Android is unaffected: it links cronet's android_* archives with the NDK toolchain.
+val ypTunCoreBuildTags =
     "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic"
-val ypTunCoreBuildTags = when {
-    currentBuildOs.isLinux -> "$ypTunCoreBaseBuildTags,with_naive_outbound"
-    else -> ypTunCoreBaseBuildTags
-}
 val coresRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("cores")
 
 // sing-box version embedded via ldflags (-X constant.Version); otherwise YpSbVersion() reports
