@@ -89,6 +89,34 @@ internal object DesktopNativeAssets {
         return binary
     }
 
+    /** AdGuard Trust Tunnel CLI, run in SOCKS-only mode as the desktop stand-in for the Android AAR. */
+    fun resolveTrustTunnelClientBinary(): Path {
+        val fileName = trustTunnelFileName("client")
+        return resolveBinary(
+            fileName = fileName,
+            resourceName = "native/$fileName",
+            candidates = emptyList()
+        )
+    }
+
+    /** Trust Tunnel's setup_wizard, used only to turn a `tt://` deep link into an `[endpoint]` TOML. */
+    fun resolveTrustTunnelWizardBinary(): Path {
+        val fileName = trustTunnelFileName("wizard")
+        return resolveBinary(
+            fileName = fileName,
+            resourceName = "native/$fileName",
+            candidates = emptyList()
+        )
+    }
+
+    private fun trustTunnelFileName(kind: String): String {
+        return when (DesktopPaths.os) {
+            DesktopOs.Linux -> "trusttunnel-$kind-linux-${desktopArch()}"
+            DesktopOs.Windows -> "trusttunnel-$kind-windows-${desktopArch()}.exe"
+            else -> error("Trust Tunnel is not bundled for ${DesktopPaths.os}")
+        }
+    }
+
     private fun resolveBinary(
         fileName: String,
         resourceName: String,

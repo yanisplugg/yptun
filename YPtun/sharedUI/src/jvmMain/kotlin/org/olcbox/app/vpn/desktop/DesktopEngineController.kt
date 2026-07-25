@@ -39,6 +39,11 @@ internal class DesktopEngineController(
     /** AmneziaWG's local SOCKS port (awgproxy). */
     private fun awgLocalPort(socksPort: Int) = socksPort + 2
 
+    /** Trust Tunnel's local SOCKS port (AdGuard client, SOCKS-only mode). Matches Android's offset. */
+    private fun trustTunnelLocalPort(socksPort: Int) = socksPort + 5
+
+    private val trustTunnel = DesktopTrustTunnel(log)
+
     val isSupported: Boolean get() = YpTunCore.isAvailable
 
     init {
@@ -120,6 +125,7 @@ internal class DesktopEngineController(
     }
 
     fun stopAll() {
+        trustTunnel.stop()
         YpTunCore.stopAll()
     }
 
@@ -246,8 +252,12 @@ internal class DesktopEngineController(
         // through; like AWG it carries UDP/QUIC itself, so QUIC stays unblocked.
         val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
         val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
+        // Trust Tunnel (AdGuard) — like AmneziaWG, raises a local SOCKS5 (its own client, SOCKS-only)
+        // that the proxy routes through; a full TCP/UDP tunnel over HTTP2/QUIC.
+        val isTrustTunnel = profile.type == ProxyProfile.TYPE_TRUSTTUNNEL
         val effectiveProfile = when {
             isAwg -> prepareAmneziaWgProxy(profile, listenPort)
+            isTrustTunnel -> prepareTrustTunnelProxy(profile, listenPort)
             isHy2 -> profile
             // Dial the proxy server by its host-resolved IP (keeping the original host as TLS SNI) so
             // sing-box never re-resolves the server domain per-connection through the bootstrap DNS.
@@ -256,7 +266,7 @@ internal class DesktopEngineController(
             // (Telegram) survived. The host OS resolver does this once, reliably.
             else -> dialByServerIp(profile)
         }
-        val isLocalUdpTunnel = isAwg || isHy2
+        val isLocalUdpTunnel = isAwg || isHy2 || isTrustTunnel
 
         val traffic = JvmVpnSettings.loadTraffic()
         val routing = JvmVpnSettings.loadRouting()
@@ -838,6 +848,30 @@ internal class DesktopEngineController(
             "\"server_port\":$port,\"version\":\"5\"}"
         return ProxyProfile(
             tag = profile.tag.ifBlank { "AmneziaWG" },
+            type = "socks",
+            server = "127.0.0.1",
+            serverPort = port,
+            rawOutbound = raw,
+        )
+    }
+
+    /**
+     * Starts the AdGuard Trust Tunnel client from the profile's `tt://` deep link and returns a SOCKS
+     * proxy pointing at its local listener, so the proxy core routes through it exactly like it does
+     * through AmneziaWG. Mirrors prepareTrustTunnelProxy on Android (which uses the in-process AAR).
+     */
+    private suspend fun prepareTrustTunnelProxy(profile: ProxyProfile, socksPort: Int): ProxyProfile {
+        if (profile.type != ProxyProfile.TYPE_TRUSTTUNNEL) return profile
+        val port = trustTunnelLocalPort(socksPort)
+        trustTunnel.start(profile.ttConfig, port)
+        if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
+            trustTunnel.stop()
+            throw IllegalStateException("Trust Tunnel SOCKS port $port did not open")
+        }
+        val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
+            "\"server_port\":$port,\"version\":\"5\"}"
+        return ProxyProfile(
+            tag = profile.tag.ifBlank { "Trust Tunnel" },
             type = "socks",
             server = "127.0.0.1",
             serverPort = port,

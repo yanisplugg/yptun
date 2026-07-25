@@ -14,6 +14,7 @@ import org.gradle.internal.os.OperatingSystem
 import org.gradle.api.tasks.bundling.Zip
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import java.net.URI
+import java.util.zip.GZIPInputStream
 import java.util.zip.ZipFile
 
 plugins {
@@ -86,6 +87,70 @@ abstract class ExtractZipEntryTask : DefaultTask() {
     }
 }
 
+/**
+ * Pulls one entry out of a .tar.gz. The JDK has gzip but no tar, and the build script has no
+ * commons-compress on its classpath, so the (trivial) tar header is read by hand: 512-byte header
+ * blocks, name at 0, size as octal at 124, payload padded up to the next 512-byte boundary. Good
+ * enough for the release archives we consume, which are flat and use short paths (no GNU longname).
+ */
+abstract class ExtractTarGzEntryTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val tarGzFile: RegularFileProperty
+
+    @get:Input
+    abstract val entrySuffix: Property<String>
+
+    @get:OutputFile
+    abstract val outputFile: RegularFileProperty
+
+    @TaskAction
+    fun extract() {
+        val archive = tarGzFile.get().asFile
+        val output = outputFile.get().asFile
+        output.parentFile.mkdirs()
+
+        GZIPInputStream(archive.inputStream().buffered()).use { input ->
+            val header = ByteArray(512)
+            while (true) {
+                if (input.readNBytes(header, 0, 512) != 512) break
+                // Two consecutive zero blocks terminate the archive; one is enough to stop here.
+                if (header.all { it == 0.toByte() }) break
+
+                val name = String(header, 0, 100, Charsets.UTF_8).substringBefore('\u0000')
+                val size = String(header, 124, 12, Charsets.UTF_8)
+                    .trim('\u0000', ' ')
+                    .ifEmpty { "0" }
+                    .toLong(8)
+
+                if (name.endsWith(entrySuffix.get())) {
+                    output.outputStream().use { out ->
+                        var remaining = size
+                        val buffer = ByteArray(64 * 1024)
+                        while (remaining > 0) {
+                            val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                            if (read <= 0) error("Truncated archive: ${archive.absolutePath}")
+                            out.write(buffer, 0, read)
+                            remaining -= read
+                        }
+                    }
+                    return
+                }
+
+                // Skip the payload plus its padding to land on the next header.
+                var toSkip = size + ((512 - size % 512) % 512)
+                while (toSkip > 0) {
+                    val skipped = input.skip(toSkip)
+                    if (skipped <= 0) error("Truncated archive: ${archive.absolutePath}")
+                    toSkip -= skipped
+                }
+            }
+        }
+
+        error("${entrySuffix.get()} entry was not found in ${archive.absolutePath}")
+    }
+}
+
 abstract class VerifyNativeResourcesTask : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -121,6 +186,7 @@ val desktopPackageName = "YPtun"
 val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("1.0.0").get()
 val tun2SocksVersion = "2.6.0"
 val wintunVersion = "0.14.1"
+
 val currentBuildTargetFormats = when {
     currentBuildOs.isMacOsX -> arrayOf(TargetFormat.Dmg)
     currentBuildOs.isWindows -> arrayOf(TargetFormat.Exe, TargetFormat.Msi)
@@ -139,6 +205,18 @@ fun desktopArchName(arch: String): String = when (arch.lowercase()) {
 fun shellQuote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
 
 val hostDesktopArch = desktopArchName(System.getProperty("os.arch"))
+
+// AdGuard Trust Tunnel CLI client. Android links the prebuilt AAR (libtrusttunnel_android.so), which
+// is Android-only, so desktop uses the official release binaries instead and drives them as a
+// subprocess in SOCKS-only mode — the same shape as the olcrtc/hev-socks5-tunnel assets. The archive
+// also carries setup_wizard, which is how a tt:// deep link gets decoded without the AAR's
+// DeepLink.decode. Releases name architectures the GNU way, hence the mapping below.
+val trustTunnelVersion = "1.0.49"
+val trustTunnelArch = when (hostDesktopArch) {
+    "amd64" -> "x86_64"
+    "arm64" -> "aarch64"
+    else -> error("Unsupported desktop architecture for Trust Tunnel: $hostDesktopArch")
+}
 
 fun registerOlcRtcBuildTask(
     taskName: String,
@@ -420,6 +498,33 @@ if (currentBuildOs.isLinux) {
     )
     desktopNativeAssetTasks.add(buildYpTunCoreLinux)
     hostDesktopNativeAssetTasks.add(buildYpTunCoreLinux)
+
+    val downloadTrustTunnelLinux = tasks.register<DownloadFileTask>("downloadTrustTunnelLinux") {
+        sourceUrl.set(
+            "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/" +
+                "v$trustTunnelVersion/trusttunnel_client-v$trustTunnelVersion-linux-$trustTunnelArch.tar.gz"
+        )
+        outputFile.set(
+            layout.buildDirectory.file("tmp/trusttunnel/trusttunnel-linux-$trustTunnelArch-$trustTunnelVersion.tar.gz")
+        )
+    }
+
+    val extractTrustTunnelClientLinux = tasks.register<ExtractTarGzEntryTask>("extractTrustTunnelClientLinux") {
+        tarGzFile.set(downloadTrustTunnelLinux.flatMap { it.outputFile })
+        entrySuffix.set("/trusttunnel_client")
+        outputFile.set(generatedNativeResources.map { it.file("native/trusttunnel-client-linux-$hostDesktopArch") })
+    }
+
+    val extractTrustTunnelWizardLinux = tasks.register<ExtractTarGzEntryTask>("extractTrustTunnelWizardLinux") {
+        tarGzFile.set(downloadTrustTunnelLinux.flatMap { it.outputFile })
+        entrySuffix.set("/setup_wizard")
+        outputFile.set(generatedNativeResources.map { it.file("native/trusttunnel-wizard-linux-$hostDesktopArch") })
+    }
+
+    desktopNativeAssetTasks.add(extractTrustTunnelClientLinux)
+    desktopNativeAssetTasks.add(extractTrustTunnelWizardLinux)
+    hostDesktopNativeAssetTasks.add(extractTrustTunnelClientLinux)
+    hostDesktopNativeAssetTasks.add(extractTrustTunnelWizardLinux)
 }
 
 // Windows natives are built/downloaded for the HOST arch only: the cores are CGo (a c-shared .dll),
@@ -465,10 +570,41 @@ if (currentBuildOs.isWindows) {
         outputFile.set(wintunWindowsOutput)
     }
 
+    val downloadTrustTunnelWindows = tasks.register<DownloadFileTask>("downloadTrustTunnelWindows") {
+        sourceUrl.set(
+            "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/" +
+                "v$trustTunnelVersion/trusttunnel_client-v$trustTunnelVersion-windows-$trustTunnelArch.zip"
+        )
+        outputFile.set(
+            layout.buildDirectory.file("tmp/trusttunnel/trusttunnel-windows-$trustTunnelArch-$trustTunnelVersion.zip")
+        )
+    }
+
+    val extractTrustTunnelClientWindows = tasks.register<ExtractZipEntryTask>("extractTrustTunnelClientWindows") {
+        zipFile.set(downloadTrustTunnelWindows.flatMap { it.outputFile })
+        // The Windows archive is flat, unlike the Linux tarball which nests everything one level deep.
+        entrySuffix.set("trusttunnel_client.exe")
+        outputFile.set(
+            generatedNativeResources.map { it.file("native/trusttunnel-client-windows-$hostDesktopArch.exe") }
+        )
+    }
+
+    val extractTrustTunnelWizardWindows = tasks.register<ExtractZipEntryTask>("extractTrustTunnelWizardWindows") {
+        zipFile.set(downloadTrustTunnelWindows.flatMap { it.outputFile })
+        entrySuffix.set("setup_wizard.exe")
+        outputFile.set(
+            generatedNativeResources.map { it.file("native/trusttunnel-wizard-windows-$hostDesktopArch.exe") }
+        )
+    }
+
     desktopNativeAssetTasks.add(extractTun2SocksWindows)
     desktopNativeAssetTasks.add(extractWintunWindows)
+    desktopNativeAssetTasks.add(extractTrustTunnelClientWindows)
+    desktopNativeAssetTasks.add(extractTrustTunnelWizardWindows)
     hostDesktopNativeAssetTasks.add(extractTun2SocksWindows)
     hostDesktopNativeAssetTasks.add(extractWintunWindows)
+    hostDesktopNativeAssetTasks.add(extractTrustTunnelClientWindows)
+    hostDesktopNativeAssetTasks.add(extractTrustTunnelWizardWindows)
 }
 
 fun requiredHostNativeResourcePaths(): List<String> = buildList {
@@ -485,12 +621,16 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/tun2socks-windows-$hostDesktopArch.exe")
             add("native/wintun.dll")
             add("native/yptuncore-windows-$hostDesktopArch.dll")
+            add("native/trusttunnel-client-windows-$hostDesktopArch.exe")
+            add("native/trusttunnel-wizard-windows-$hostDesktopArch.exe")
         }
         currentBuildOs.isLinux -> {
             add("native/olcrtc-linux-$hostDesktopArch")
             add("native/libolcrtc-linux-$hostDesktopArch.so")
             add("native/hev-socks5-tunnel-linux-$hostDesktopArch")
             add("native/yptuncore-linux-$hostDesktopArch.so")
+            add("native/trusttunnel-client-linux-$hostDesktopArch")
+            add("native/trusttunnel-wizard-linux-$hostDesktopArch")
         }
     }
 }

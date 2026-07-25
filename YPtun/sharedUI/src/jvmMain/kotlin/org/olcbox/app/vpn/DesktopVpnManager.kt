@@ -376,7 +376,14 @@ class DesktopVpnManager private constructor(
         val config = location.normalized()
         val hosts = buildList {
             config.proxy?.let { profile ->
-                if (profile.server.isNotBlank() && profile.server != "127.0.0.1") add(profile.server)
+                if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
+                    // The real endpoints live inside the tt:// blob (profile.server is a placeholder),
+                    // so they come from the decoded [endpoint] table. The client dials them from its
+                    // own subprocess, which has no VpnService.protect() equivalent here.
+                    addAll(org.olcbox.app.vpn.desktop.DesktopTrustTunnel.endpointHosts(profile.ttConfig))
+                } else if (profile.server.isNotBlank() && profile.server != "127.0.0.1") {
+                    add(profile.server)
+                }
                 awgEndpointHost(profile)?.let { add(it) }
             }
             config.proxy2?.let { if (it.server.isNotBlank()) add(it.server) }
