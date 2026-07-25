@@ -84,7 +84,12 @@ jobs:
         working-directory: YPtun
         env:
           CGO_ENABLED: "1"
-        run: ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseDeb --stacktrace
+        # The repo is maintained from Windows, so gradlew is committed as mode 100644 and is not
+        # executable on checkout. Set the bit here rather than changing the recorded mode, which would
+        # also land on the Android branches when this one is merged.
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseDeb --stacktrace
 
       - name: Verify the package
         run: |
