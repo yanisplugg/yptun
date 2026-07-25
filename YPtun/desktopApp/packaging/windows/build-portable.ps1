@@ -7,6 +7,10 @@
 # the app icon patched in with rcedit, because a bare 7z.sfx shows a generic icon and warp-packer
 # (the earlier attempt) produced a console window with no icon at all.
 #
+# The stub is x86 on every architecture - 7-Zip ships only an x86 7z.sfx, even in its x64 and ARM64
+# packages. So on ARM64 the self-extractor runs emulated for the second it takes to unpack, and the
+# app it then launches is fully native. The payload arch is what -Arch controls.
+#
 # Kept strictly ASCII: Windows PowerShell 5.1 reads a BOM-less .ps1 as ANSI.
 #
 #   powershell -File build-portable.ps1 [-Version 3.1.1] [-Arch amd64|arm64]

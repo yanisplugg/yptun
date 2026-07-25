@@ -90,8 +90,10 @@ jobs:
             Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe" -OutFile "$env:RUNNER_TEMP\is.exe"
             Start-Process "$env:RUNNER_TEMP\is.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
           }
-          # Install the ARM64 build deliberately: the portable is that install's 7z.sfx stub with the
-          # payload appended, so an x86 stub would make the outer wrapper emulated on a native machine.
+          # ARM64 build so the compressor itself runs native. NOTE: 7-Zip ships 7z.sfx as x86 in every
+          # distribution, so the portable's outer self-extractor is emulated regardless - only the
+          # ~200 KB extractor, for the second it takes to unpack; the app it launches is native ARM64.
+          # Inno Setup likewise only emits an x86 Setup stub. Both are unavoidable with these tools.
           if (-not (Test-Path "$env:ProgramFiles\7-Zip\7z.sfx")) {
             Invoke-WebRequest "https://www.7-zip.org/a/7z2501-arm64.exe" -OutFile "$env:RUNNER_TEMP\7z.exe"
             Start-Process "$env:RUNNER_TEMP\7z.exe" -ArgumentList "/S" -Wait
