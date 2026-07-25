@@ -36,6 +36,11 @@ internal interface YpTunCoreLib : Library {
     fun YpAwgRunning(): Int
     fun YpAwgProbe(iniConfig: String): Long
     fun YpAwgMeasureDelay(iniConfig: String, url: String, method: String, timeoutMs: Int): Long
+    fun YpAwgGenerateKeyPair(): Pointer?
+
+    fun YpTgAwgStart(iniConfig: String, listenAddr: String, user: String, pass: String): Pointer?
+    fun YpTgAwgStop()
+    fun YpTgAwgRunning(): Int
 
     fun YpFtVersion(): Pointer?
     fun YpFtStart(uri: String, listenAddr: String, vkLink: String, nStreams: Int): Pointer?
@@ -225,6 +230,16 @@ internal object YpTunCore {
     fun awgProbe(iniConfig: String): Long = lib().YpAwgProbe(iniConfig)
     fun awgMeasureDelay(iniConfig: String, url: String, method: String, timeoutMs: Int): Long =
         lib().YpAwgMeasureDelay(iniConfig, url, method, timeoutMs)
+
+    /** "privateKey|publicKey", base64 — for the WARP generator's direct-registration fallback. */
+    fun awgGenerateKeyPair(): String = takeString(lib().YpAwgGenerateKeyPair()).orEmpty()
+
+    // Telegram-over-WARP proxy (its OWN AmneziaWG instance, never the main transport's) ----------
+    fun tgAwgStart(iniConfig: String, listenAddr: String, user: String, pass: String) =
+        check(lib().YpTgAwgStart(iniConfig, listenAddr, user, pass), "Telegram WARP start failed")
+
+    fun tgAwgStop() = libOrNull?.YpTgAwgStop() ?: Unit
+    fun tgAwgRunning(): Boolean = libOrNull?.YpTgAwgRunning() == 1
 
     // VK-TURN -------------------------------------------------------------------------------
     fun ftVersion(): String = takeString(lib().YpFtVersion()).orEmpty()

@@ -330,6 +330,69 @@ func YpAwgMeasureDelay(iniConfig, url, method *C.char, timeoutMs C.int) C.longlo
 	return C.longlong(awg.MeasureDelay(C.GoString(iniConfig), C.GoString(url), C.GoString(method), int(timeoutMs)))
 }
 
+// YpAwgGenerateKeyPair returns "privateKey|publicKey" (base64), used by the WARP config generator's
+// direct-Cloudflare-registration fallback.
+//
+//export YpAwgGenerateKeyPair
+func YpAwgGenerateKeyPair() *C.char { return cs(awg.GenerateKeyPair()) }
+
+// ---------------------------------------------------------------------------
+// Telegram-over-WARP proxy: a SECOND, independent AmneziaWG tunnel exposing its own authenticated
+// SOCKS5. It must not disturb the package-level awg used by the main AmneziaWG transport, so it runs
+// on its own awg.Instance (the same thing TelegramProxyService does on Android). Only one is ever
+// needed, so a single dedicated slot beats a general handle table.
+
+var (
+	tgAwgMu       sync.Mutex
+	tgAwgInstance *awg.Instance
+)
+
+//export YpTgAwgStart
+func YpTgAwgStart(iniConfig, listenAddr, user, pass *C.char) *C.char {
+	tgAwgMu.Lock()
+	defer tgAwgMu.Unlock()
+	if tgAwgInstance != nil {
+		tgAwgInstance.Stop()
+		tgAwgInstance = nil
+	}
+	inst := awg.NewInstance()
+	inst.SetDebug(false)
+	inst.SetLogWriter(tagWriter{"tgwarp"})
+	// RFC 1929 credentials so no other local app can quietly ride the WARP proxy.
+	if u := C.GoString(user); u != "" {
+		inst.SetAuth(u, C.GoString(pass))
+	}
+	// No SetSplitCIDRs: full tunnel, every connection the SOCKS accepts rides WARP. A Telegram-only
+	// split sent the non-DC parts (and DNS) out over the blocked network, which is why the same WARP
+	// config "worked in TUN but not as a proxy".
+	if err := inst.Start(C.GoString(iniConfig), C.GoString(listenAddr)); err != nil {
+		inst.Stop()
+		return errOut(err)
+	}
+	tgAwgInstance = inst
+	return nil
+}
+
+//export YpTgAwgStop
+func YpTgAwgStop() {
+	tgAwgMu.Lock()
+	defer tgAwgMu.Unlock()
+	if tgAwgInstance != nil {
+		tgAwgInstance.Stop()
+		tgAwgInstance = nil
+	}
+}
+
+//export YpTgAwgRunning
+func YpTgAwgRunning() C.int {
+	tgAwgMu.Lock()
+	defer tgAwgMu.Unlock()
+	if tgAwgInstance != nil && tgAwgInstance.IsRunning() {
+		return 1
+	}
+	return 0
+}
+
 // ---------------------------------------------------------------------------
 // Hysteria2 is now a NATIVE sing-box outbound (since the 1.13 upgrade), so the standalone
 // hysteria2proxy bridge was removed upstream. The old YpHy2Start/Stop/Running exports are gone —

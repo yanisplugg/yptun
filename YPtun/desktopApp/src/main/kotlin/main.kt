@@ -157,6 +157,14 @@ private class DesktopAppDependencies {
         manager.connectionModeProvider = { settings.connectionMode.value }
     }
 
+    /**
+     * Telegram-over-WARP proxy: its own AmneziaWG tunnel + local SOCKS5, independent of the main VPN
+     * (so it keeps working whether or not the tunnel is up). Logs land in the same in-app journal.
+     */
+    val telegramProxy = org.olcbox.app.vpn.telegram.DesktopTelegramProxy { line ->
+        vpnManager.appendLog(line)
+    }
+
     val homeViewModel = HomeScreenViewModel(
         vpnManager = vpnManager,
         locationsRepository = locationsRepository,
@@ -167,6 +175,7 @@ private class DesktopAppDependencies {
     val locationViewModel = LocationViewModel(locationsRepository)
 
     fun close() {
+        telegramProxy.close()
         vpnManager.close()
     }
 }
@@ -514,6 +523,16 @@ fun main(args: Array<String>) = application {
             // subscription groups, folders, two-column layout, the "Авто" button… Without it the
             // desktop list silently ran on the parameter defaults (nothing ever collapsed).
             val appBehavior by dependencies.settings.appBehavior.collectAsState()
+            val telegramProxyState by dependencies.telegramProxy.state.collectAsState()
+            // The Telegram-over-WARP proxy follows its toggle, including across restarts (it is
+            // deliberately independent of the VPN connection state).
+            LaunchedEffect(appBehavior.telegramProxyEnabled) {
+                if (appBehavior.telegramProxyEnabled) {
+                    dependencies.telegramProxy.start()
+                } else {
+                    dependencies.telegramProxy.stop()
+                }
+            }
             // Happ-style wide layout: with enough window width the locations move to a left pane.
             val isWideWindow = windowState.size.width >= 700.dp
 
@@ -752,6 +771,7 @@ fun main(args: Array<String>) = application {
                         onTrafficChanged = dependencies.settings::setTrafficSettings,
                         appBehavior = appBehavior,
                         onAppBehaviorChanged = dependencies.settings::setAppBehavior,
+                        telegramProxyState = telegramProxyState,
                         language = language,
                         onLanguageChanged = dependencies.settings::setLanguage,
                         updateSettings = updateSettings,

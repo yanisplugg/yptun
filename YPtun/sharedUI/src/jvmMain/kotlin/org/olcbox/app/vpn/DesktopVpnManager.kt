@@ -390,6 +390,14 @@ class DesktopVpnManager private constructor(
             // dnstt speaks plain UDP DNS to this resolver; looping that into the TUN deadlocks the
             // tunnel it is carrying (Android protects the socket instead).
             config.dnstt?.resolver?.substringBefore(':')?.takeIf { it.isNotBlank() }?.let { add(it) }
+            // The Telegram-over-WARP proxy is a SECOND tunnel living in this same process. Android
+            // keeps its UDP off the VPN with VpnService.protect(); desktop has no protect, so route
+            // WARP around the TUN instead — otherwise enabling the main VPN kills the Telegram proxy.
+            // The endpoint is only known after the proxy's sweep picks one (and it rotates), so carve
+            // out every candidate rather than just the live one.
+            if (org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior().telegramProxyEnabled) {
+                addAll(org.olcbox.app.vpn.telegram.DesktopTelegramProxy.candidateEndpointHosts())
+            }
         }
         return hosts.distinct().flatMap { host ->
             runCatching {
@@ -1104,6 +1112,12 @@ class DesktopVpnManager private constructor(
             (it + message).takeLast(MAX_LOG_ENTRIES)
         }
     }
+
+    /**
+     * Lets an independent component (the Telegram-over-WARP proxy, which runs outside the VPN
+     * lifecycle) write into the same in-app journal the user exports with "Save logs".
+     */
+    fun appendLog(message: String) = addLog(message)
 
     private companion object {
         const val MAX_LOG_ENTRIES = 5_000
