@@ -40,7 +40,12 @@ internal object DesktopNativeAssets {
                 "olcrtc-darwin-${desktopArch()}",
                 "olcrtc-darwin-${desktopArchFallback()}"
             ).distinct()
-            DesktopOs.Windows -> listOf("olcrtc-windows-amd64.exe")
+            // arm64 first, amd64 as the fallback: an arm64 build carries the native binary, but an
+            // x64 build running under Windows-on-ARM emulation must still find its amd64 one.
+            DesktopOs.Windows -> listOf(
+                "olcrtc-windows-${desktopArch()}.exe",
+                "olcrtc-windows-${desktopArchFallback()}.exe"
+            ).distinct()
             DesktopOs.Linux -> listOf("olcrtc-linux-${desktopArch()}")
             DesktopOs.Other -> error("Olcbox desktop supports macOS, Windows and Linux")
         }
@@ -138,7 +143,7 @@ internal object DesktopNativeAssets {
 
     fun windowsTun2SocksFileName(): String {
         return when (DesktopPaths.os) {
-            DesktopOs.Windows -> "tun2socks-windows-amd64.exe"
+            DesktopOs.Windows -> "tun2socks-windows-${desktopArch()}.exe"
             else -> error("tun2socks desktop binary is only used for Windows TUN mode")
         }
     }

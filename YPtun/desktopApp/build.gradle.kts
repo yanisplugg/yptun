@@ -218,6 +218,13 @@ val buildOlcRtcWindowsAmd64 = registerOlcRtcBuildTask(
     outputName = "olcrtc-windows-amd64.exe"
 )
 
+val buildOlcRtcWindowsArm64 = registerOlcRtcBuildTask(
+    taskName = "buildOlcRtcWindowsArm64",
+    goos = "windows",
+    goarch = "arm64",
+    outputName = "olcrtc-windows-arm64.exe"
+)
+
 val buildOlcRtcLinuxAmd64 = registerOlcRtcBuildTask(
     taskName = "buildOlcRtcLinuxAmd64",
     goos = "linux",
@@ -267,6 +274,13 @@ val buildOlcRtcLibWindowsAmd64 = registerOlcRtcLibraryBuildTask(
     outputName = "olcrtc-windows-amd64.dll"
 )
 
+val buildOlcRtcLibWindowsArm64 = registerOlcRtcLibraryBuildTask(
+    taskName = "buildOlcRtcLibWindowsArm64",
+    goos = "windows",
+    goarch = "arm64",
+    outputName = "olcrtc-windows-arm64.dll"
+)
+
 val copyOlcRtcDataAssets = tasks.register<Copy>("copyOlcRtcDataAssets") {
     from(olcrtcRepoDir.map { it.resolve("data") }) {
         include("names", "surnames")
@@ -278,6 +292,7 @@ val desktopNativeAssetTasks = mutableListOf<Any>(
     buildOlcRtcDarwinArm64,
     buildOlcRtcDarwinAmd64,
     buildOlcRtcWindowsAmd64,
+    buildOlcRtcWindowsArm64,
     buildOlcRtcLinuxAmd64,
     buildOlcRtcLinuxArm64,
     buildOlcRtcLibDarwinArm64,
@@ -285,6 +300,7 @@ val desktopNativeAssetTasks = mutableListOf<Any>(
     buildOlcRtcLibLinuxAmd64,
     buildOlcRtcLibLinuxArm64,
     buildOlcRtcLibWindowsAmd64,
+    buildOlcRtcLibWindowsArm64,
     copyOlcRtcDataAssets
 )
 val hostDesktopNativeAssetTasks = mutableListOf<Any>(
@@ -302,9 +318,15 @@ when {
             hostDesktopNativeAssetTasks.add(buildOlcRtcLibDarwinArm64)
         }
     }
-    currentBuildOs.isWindows -> {
-        hostDesktopNativeAssetTasks.add(buildOlcRtcWindowsAmd64)
-        hostDesktopNativeAssetTasks.add(buildOlcRtcLibWindowsAmd64)
+    currentBuildOs.isWindows -> when (hostDesktopArch) {
+        "amd64" -> {
+            hostDesktopNativeAssetTasks.add(buildOlcRtcWindowsAmd64)
+            hostDesktopNativeAssetTasks.add(buildOlcRtcLibWindowsAmd64)
+        }
+        "arm64" -> {
+            hostDesktopNativeAssetTasks.add(buildOlcRtcWindowsArm64)
+            hostDesktopNativeAssetTasks.add(buildOlcRtcLibWindowsArm64)
+        }
     }
     currentBuildOs.isLinux -> when (hostDesktopArch) {
         "amd64" -> {
@@ -384,51 +406,53 @@ fun registerYpTunCoreBuildTask(
     }
 }
 
+// Windows natives are built/downloaded for the HOST arch only: the cores are CGo (a c-shared .dll),
+// so cross-building them needs a full cross C toolchain. amd64 comes off a normal runner, arm64 off a
+// native windows-11-arm runner (see .github/workflows/windows-arm64.yml).
 if (currentBuildOs.isWindows) {
-    val buildYpTunCoreWindowsAmd64 = registerYpTunCoreBuildTask(
-        taskName = "buildYpTunCoreWindowsAmd64",
+    val buildYpTunCoreWindows = registerYpTunCoreBuildTask(
+        taskName = "buildYpTunCoreWindows${hostDesktopArch.replaceFirstChar { it.uppercase() }}",
         goos = "windows",
-        goarch = "amd64",
-        outputName = "yptuncore-windows-amd64.dll"
+        goarch = hostDesktopArch,
+        outputName = "yptuncore-windows-$hostDesktopArch.dll"
     )
-    desktopNativeAssetTasks.add(buildYpTunCoreWindowsAmd64)
-    hostDesktopNativeAssetTasks.add(buildYpTunCoreWindowsAmd64)
-}
+    desktopNativeAssetTasks.add(buildYpTunCoreWindows)
+    hostDesktopNativeAssetTasks.add(buildYpTunCoreWindows)
 
-if (currentBuildOs.isWindows) {
     val tun2SocksWindowsOutput = generatedNativeResources.map {
-        it.file("native/tun2socks-windows-amd64.exe")
+        it.file("native/tun2socks-windows-$hostDesktopArch.exe")
     }
     val wintunWindowsOutput = generatedNativeResources.map {
         it.file("native/wintun.dll")
     }
 
-    val downloadTun2SocksWindowsAmd64 = tasks.register<DownloadFileTask>("downloadTun2SocksWindowsAmd64") {
-        sourceUrl.set("https://github.com/xjasonlyu/tun2socks/releases/download/v$tun2SocksVersion/tun2socks-windows-amd64.zip")
-        outputFile.set(layout.buildDirectory.file("tmp/tun2socks/tun2socks-windows-amd64-$tun2SocksVersion.zip"))
+    val downloadTun2SocksWindows = tasks.register<DownloadFileTask>("downloadTun2SocksWindows") {
+        sourceUrl.set("https://github.com/xjasonlyu/tun2socks/releases/download/v$tun2SocksVersion/tun2socks-windows-$hostDesktopArch.zip")
+        outputFile.set(layout.buildDirectory.file("tmp/tun2socks/tun2socks-windows-$hostDesktopArch-$tun2SocksVersion.zip"))
     }
 
-    val extractTun2SocksWindowsAmd64 = tasks.register<ExtractZipEntryTask>("extractTun2SocksWindowsAmd64") {
-        zipFile.set(downloadTun2SocksWindowsAmd64.flatMap { it.outputFile })
-        entrySuffix.set("tun2socks-windows-amd64.exe")
+    val extractTun2SocksWindows = tasks.register<ExtractZipEntryTask>("extractTun2SocksWindows") {
+        zipFile.set(downloadTun2SocksWindows.flatMap { it.outputFile })
+        entrySuffix.set("tun2socks-windows-$hostDesktopArch.exe")
         outputFile.set(tun2SocksWindowsOutput)
     }
 
-    val downloadWintunWindowsAmd64 = tasks.register<DownloadFileTask>("downloadWintunWindowsAmd64") {
+    val downloadWintunWindows = tasks.register<DownloadFileTask>("downloadWintunWindows") {
         sourceUrl.set("https://www.wintun.net/builds/wintun-$wintunVersion.zip")
         outputFile.set(layout.buildDirectory.file("tmp/wintun/wintun-$wintunVersion.zip"))
     }
 
-    val extractWintunWindowsAmd64 = tasks.register<ExtractZipEntryTask>("extractWintunWindowsAmd64") {
-        zipFile.set(downloadWintunWindowsAmd64.flatMap { it.outputFile })
-        entrySuffix.set("/bin/amd64/wintun.dll")
+    val extractWintunWindows = tasks.register<ExtractZipEntryTask>("extractWintunWindows") {
+        zipFile.set(downloadWintunWindows.flatMap { it.outputFile })
+        // The wintun archive ships one DLL per arch; pick the host's.
+        entrySuffix.set("/bin/$hostDesktopArch/wintun.dll")
         outputFile.set(wintunWindowsOutput)
     }
 
-    desktopNativeAssetTasks.add(extractTun2SocksWindowsAmd64)
-    desktopNativeAssetTasks.add(extractWintunWindowsAmd64)
-    hostDesktopNativeAssetTasks.add(extractTun2SocksWindowsAmd64)
-    hostDesktopNativeAssetTasks.add(extractWintunWindowsAmd64)
+    desktopNativeAssetTasks.add(extractTun2SocksWindows)
+    desktopNativeAssetTasks.add(extractWintunWindows)
+    hostDesktopNativeAssetTasks.add(extractTun2SocksWindows)
+    hostDesktopNativeAssetTasks.add(extractWintunWindows)
 }
 
 fun requiredHostNativeResourcePaths(): List<String> = buildList {
@@ -440,11 +464,11 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/libolcrtc-darwin-$hostDesktopArch.dylib")
         }
         currentBuildOs.isWindows -> {
-            add("native/olcrtc-windows-amd64.exe")
-            add("native/olcrtc-windows-amd64.dll")
-            add("native/tun2socks-windows-amd64.exe")
+            add("native/olcrtc-windows-$hostDesktopArch.exe")
+            add("native/olcrtc-windows-$hostDesktopArch.dll")
+            add("native/tun2socks-windows-$hostDesktopArch.exe")
             add("native/wintun.dll")
-            add("native/yptuncore-windows-amd64.dll")
+            add("native/yptuncore-windows-$hostDesktopArch.dll")
         }
         currentBuildOs.isLinux -> {
             add("native/olcrtc-linux-$hostDesktopArch")
@@ -481,7 +505,7 @@ if (currentBuildOs.isWindows) {
 
         dependsOn("createReleaseDistributable")
         from(jpackageAppRootDir)
-        archiveFileName.set("$desktopPackageName-$desktopPackageVersion-windows-amd64-portable.zip")
+        archiveFileName.set("$desktopPackageName-$desktopPackageVersion-windows-$hostDesktopArch-portable.zip")
         destinationDirectory.set(layout.buildDirectory.dir("compose/binaries/main-release/portable"))
 
         doFirst {

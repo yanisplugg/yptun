@@ -11,7 +11,9 @@
 param(
     [string]$Version = "",
     [string]$AppDir  = "",
-    [string]$OutDir  = ""
+    [string]$OutDir  = "",
+    # amd64 | arm64. Defaults to the machine building it, which is what createDistributable produced.
+    [string]$Arch    = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +26,18 @@ if (-not $Version) {
 }
 if (-not $AppDir) { $AppDir = Join-Path $desktopApp "build\compose\binaries\main\app\YPtun" }
 if (-not $OutDir) { $OutDir = Join-Path $desktopApp "build\compose\binaries\main\exe" }
+if (-not $Arch) {
+    $Arch = if ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') { "arm64" } else { "amd64" }
+}
+if ($Arch -ne "amd64" -and $Arch -ne "arm64") { throw "Unsupported -Arch '$Arch' (amd64|arm64)" }
+
+# Guard against shipping an app image built for the other architecture: the bundled core .dll is the
+# arch-specific part, and a mismatch only shows up at runtime as a JNA load failure.
+if (-not (Test-Path (Join-Path $AppDir "app\resources\native\yptuncore-windows-$Arch.dll"))) {
+    $found = Get-ChildItem (Join-Path $AppDir "app") -Recurse -Filter "yptuncore-windows-*.dll" -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty Name
+    if ($found) { Write-Warning "App image carries '$found' but -Arch is '$Arch'" }
+}
 
 if (-not (Test-Path (Join-Path $AppDir "YPtun.exe"))) {
     throw "App image not found at $AppDir - run :desktopApp:createDistributable first"
@@ -37,8 +51,9 @@ $iscc = @(
 if (-not $iscc) { throw "ISCC.exe not found - install Inno Setup 6 (winget install JRSoftware.InnoSetup)" }
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-Write-Host "Building YPtun $Version installer from $AppDir"
-& $iscc "/DAppVersion=$Version" "/DAppDir=$AppDir" "/DOutDir=$OutDir" (Join-Path $here "yptun.iss")
+Write-Host "Building YPtun $Version $Arch installer from $AppDir"
+& $iscc "/DAppVersion=$Version" "/DAppDir=$AppDir" "/DOutDir=$OutDir" "/DAppArch=$Arch" (Join-Path $here "yptun.iss")
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
-Write-Host "Installer: $(Join-Path $OutDir ("YPtun-$Version-x64-installer.exe"))"
+$suffix = if ($Arch -eq "arm64") { "arm64" } else { "x64" }
+Write-Host "Installer: $(Join-Path $OutDir ("YPtun-$Version-$suffix-installer.exe"))"

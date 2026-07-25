@@ -24,6 +24,11 @@
 #ifndef IslDir
   #define IslDir "lang"
 #endif
+; "amd64" or "arm64" - the architecture of the app image being packaged. The bundled JRE and the
+; native cores are arch-specific, so the installer must refuse to install the wrong one.
+#ifndef AppArch
+  #define AppArch "amd64"
+#endif
 
 #define AppName "YPtun"
 #define AppExe "YPtun.exe"
@@ -42,15 +47,26 @@ DefaultGroupName={#AppName}
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir={#OutDir}
-OutputBaseFilename={#AppName}-{#AppVersion}-x64-installer
+#if AppArch == "arm64"
+  #define ArchSuffix "arm64"
+  ; arm64 build: native ARM64 only, no emulation fallback.
+  #define ArchAllowed "arm64"
+  #define ArchIn64Bit "arm64"
+#else
+  #define ArchSuffix "x64"
+  ; x64 build: also allowed on Windows-on-ARM, where it runs under the x64 emulation layer.
+  #define ArchAllowed "x64compatible"
+  #define ArchIn64Bit "x64compatible"
+#endif
+
+OutputBaseFilename={#AppName}-{#AppVersion}-{#ArchSuffix}-installer
 SetupIconFile={#SourcePath}\..\..\appIcons\WindowsIcon.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; The app bundles its own x64 JRE and x64 native cores, so it must install as 64-bit. (It still runs
-; on Windows-on-ARM through the x64 emulation layer.)
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+; The app bundles its own JRE and native cores, so the installer must match the machine.
+ArchitecturesAllowed={#ArchAllowed}
+ArchitecturesInstallIn64BitMode={#ArchIn64Bit}
 PrivilegesRequired=admin
 ; Always offer the picker, even when the OS language matches one we ship.
 ShowLanguageDialog=yes

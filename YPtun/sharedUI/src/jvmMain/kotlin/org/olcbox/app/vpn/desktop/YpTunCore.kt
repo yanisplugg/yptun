@@ -161,7 +161,7 @@ internal object YpTunCore {
             else -> return null
         }
         return when {
-            "win" in os && arch == "amd64" -> "yptuncore-windows-amd64.dll"
+            "win" in os -> "yptuncore-windows-$arch.dll"
             "linux" in os -> "yptuncore-linux-$arch.so"
             "mac" in os || "darwin" in os -> "yptuncore-darwin-$arch.dylib"
             else -> null
