@@ -72,6 +72,14 @@ jobs:
           echo "CC=$bin\aarch64-w64-mingw32-clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CXX=$bin\aarch64-w64-mingw32-clang++.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      # Gradle configures every project in the build, including the Android modules, so AGP demands a
+      # valid SDK location even though only :desktopApp is built here. Only the platform is needed -
+      # no Android task ever runs, so build-tools and the NDK are deliberately skipped.
+      - name: Set up Android SDK (needed only to configure the Android modules)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-37"
+
       - name: Install packaging tools
         shell: pwsh
         run: |
