@@ -1,0 +1,117 @@
+# Debian/Ubuntu .deb packages for the desktop client, x64 and arm64.
+#
+# Built on ubuntu-22.04 (glibc 2.35) deliberately: a binary linked against a newer glibc will not
+# start on an older distro, so the OLDEST runner still available sets the compatibility floor. 2.35
+# covers Ubuntu 22.04+ and Debian 12 (bookworm, glibc 2.36) and later. Debian 11 (2.31) is out.
+#
+# The Go cores are CGo, so each arch is built on its own native runner - arm64 Linux runners are free
+# for public repositories, same as the Windows ARM64 one.
+
+name: Linux .deb desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - pc-client-beta
+    paths:
+      - ".github/workflows/linux-deb.yml"
+      - "YPtun/desktopApp/**"
+      - "YPtun/sharedUI/src/jvmMain/**"
+      - "YPtun/gradle.properties"
+      - "cores/**"
+      - "olcrtc/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.arch }} .deb
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cores/go.mod
+          cache: false
+
+      # fakeroot + dpkg-dev are what jpackage shells out to for --type deb. The X/GTK dev headers are
+      # not needed to build (skiko ships prebuilt natives), only at runtime on the user's machine.
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fakeroot dpkg-dev binutils
+
+      # Gradle configures every project including the Android modules, and AGP refuses to configure
+      # without a valid SDK location. Nothing is installed - no Android task runs here.
+      - name: Set up Android SDK (only to satisfy AGP's SDK-location check)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+
+      - name: Report toolchain
+        run: |
+          java -version
+          go version
+          gcc --version | head -1
+          ldd --version | head -1
+          uname -m
+
+      # --no-daemon --max-workers=1: the Exec tasks shell out to `go build` and must inherit this
+      # environment, which a reused daemon does not pick up.
+      - name: Build .deb
+        working-directory: YPtun
+        env:
+          CGO_ENABLED: "1"
+        run: ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseDeb --stacktrace
+
+      - name: Verify the package
+        run: |
+          set -eu
+          deb=$(find YPtun/desktopApp/build/compose/binaries -name '*.deb' | head -1)
+          [ -n "$deb" ] || { echo "no .deb produced"; exit 1; }
+          echo "== $deb =="
+          dpkg-deb --info "$deb"
+          # The core .so is the arch-specific part; confirm it is really this architecture.
+          dpkg-deb --fsys-tarfile "$deb" | tar -tf - | grep -E 'yptuncore-linux|\.jar$' | head -5
+          expected="${{ matrix.arch }}"
+          got=$(dpkg-deb --field "$deb" Architecture)
+          [ "$got" = "$expected" ] || { echo "deb Architecture=$got, expected $expected"; exit 1; }
+          echo "OK: $expected"
+
+      - name: Rename for release
+        run: |
+          set -eu
+          deb=$(find YPtun/desktopApp/build/compose/binaries -name '*.deb' | head -1)
+          ver=$(grep '^olcbox.version=' YPtun/gradle.properties | cut -d= -f2)
+          mkdir -p dist
+          cp "$deb" "dist/YPtun-${ver}-${{ matrix.arch }}.deb"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yptun-linux-${{ matrix.arch }}-deb
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 30

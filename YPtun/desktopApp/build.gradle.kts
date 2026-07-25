@@ -124,7 +124,9 @@ val wintunVersion = "0.14.1"
 val currentBuildTargetFormats = when {
     currentBuildOs.isMacOsX -> arrayOf(TargetFormat.Dmg)
     currentBuildOs.isWindows -> arrayOf(TargetFormat.Exe, TargetFormat.Msi)
-    currentBuildOs.isLinux -> arrayOf(TargetFormat.AppImage)
+    // Deb is the shipped Linux installer (Debian + Ubuntu). AppImage stays for the existing
+    // packageReleaseLinuxAppImage path so nothing that relied on it breaks.
+    currentBuildOs.isLinux -> arrayOf(TargetFormat.Deb, TargetFormat.AppImage)
     else -> emptyArray()
 }
 
@@ -406,6 +408,20 @@ fun registerYpTunCoreBuildTask(
     }
 }
 
+// Linux: the same one-runtime core as Windows, as a c-shared .so. Without it YpTunCore.isAvailable
+// is false, so DesktopEngineController reports isSupported=false and every engine falls back to the
+// olcrtc subprocess - i.e. no sing-box/Xray/AmneziaWG/VK-TURN at all. Host arch only (CGo).
+if (currentBuildOs.isLinux) {
+    val buildYpTunCoreLinux = registerYpTunCoreBuildTask(
+        taskName = "buildYpTunCoreLinux${hostDesktopArch.replaceFirstChar { it.uppercase() }}",
+        goos = "linux",
+        goarch = hostDesktopArch,
+        outputName = "yptuncore-linux-$hostDesktopArch.so"
+    )
+    desktopNativeAssetTasks.add(buildYpTunCoreLinux)
+    hostDesktopNativeAssetTasks.add(buildYpTunCoreLinux)
+}
+
 // Windows natives are built/downloaded for the HOST arch only: the cores are CGo (a c-shared .dll),
 // so cross-building them needs a full cross C toolchain. amd64 comes off a normal runner, arm64 off a
 // native windows-11-arm runner (see .github/workflows/windows-arm64.yml).
@@ -474,6 +490,7 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/olcrtc-linux-$hostDesktopArch")
             add("native/libolcrtc-linux-$hostDesktopArch.so")
             add("native/hev-socks5-tunnel-linux-$hostDesktopArch")
+            add("native/yptuncore-linux-$hostDesktopArch.so")
         }
     }
 }
@@ -530,7 +547,9 @@ listOf(
     "packageReleaseMsi",
     "packageReleaseDmg",
     "packageReleaseAppImage",
-    "packageReleasePortableZip"
+    "packageReleasePortableZip",
+    "packageDeb",
+    "packageReleaseDeb"
 ).forEach { taskName ->
     tasks.matching { it.name == taskName }.configureEach {
         dependsOn(verifyDesktopNativeResources)
@@ -553,6 +572,14 @@ compose.desktop {
 
             linux {
                 iconFile.set(project.file("appIcons/LinuxIcon.png"))
+                // packageName is deliberately NOT overridden: it would also rename the jpackage app
+                // image directory and break prepareReleaseLinuxAppDir. jpackage already lowercases the
+                // app name for the .deb package name ("YPtun" -> "yptun"), which is what dpkg requires.
+                debMaintainer = "yptun@users.noreply.github.com"
+                appCategory = "net"
+                menuGroup = "Network"
+                appRelease = "1"
+                shortcut = true
             }
             windows {
                 iconFile.set(project.file("appIcons/WindowsIcon.ico"))
