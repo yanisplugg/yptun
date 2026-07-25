@@ -442,7 +442,25 @@ if (currentBuildOs.isLinux) {
 // yptuncore: every proxy core (sing-box, xray, AmneziaWG, Hysteria2, VK-TURN, olcrtc) compiled
 // into ONE c-shared library from cores/cmd/yptuncore, consumed from jvmMain via JNA. Mirrors the
 // Android gomobile AAR (one shared Go runtime). Same build tags as the Android libbox build.
-val ypTunCoreBuildTags = "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api"
+// with_quic is NOT an optional extra: without it sing-box still registers hysteria/hysteria2/TUIC,
+// but as stubs that fail every dial with ErrQUICNotIncluded (see sing-box include/quic_stub.go), and
+// DNS-over-QUIC/HTTP3 go with them. It was dropped here back when it clashed with xray-core's quic
+// fork; sing-box 1.13 moved to sagernet/quic-go v0.59 (qpack v0.6) and the clash is gone, which is
+// why sharedUI already ships it.
+//
+// with_naive_outbound (NaïveProxy) is Linux-only for now. cronet ships per platform as either a
+// static archive or a shared library, and only the static form is self-contained: linux_amd64/arm64
+// have libcronet.a and link straight in, but the windows_* modules carry ONLY libcronet.dll and are
+// additionally gated behind `with_purego`, whose loader looks for the DLL next to the running
+// executable or on PATH. Enabling it on Windows therefore also means shipping libcronet.dll into the
+// jpackage app-image root (our natives live inside the jar, which that loader cannot see), so it is
+// left off until that packaging step exists.
+val ypTunCoreBaseBuildTags =
+    "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic"
+val ypTunCoreBuildTags = when {
+    currentBuildOs.isLinux -> "$ypTunCoreBaseBuildTags,with_naive_outbound"
+    else -> ypTunCoreBaseBuildTags
+}
 val coresRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("cores")
 
 // sing-box version embedded via ldflags (-X constant.Version); otherwise YpSbVersion() reports
