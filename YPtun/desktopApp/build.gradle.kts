@@ -466,7 +466,7 @@ val coresRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve
 // sing-box version embedded via ldflags (-X constant.Version); otherwise YpSbVersion() reports
 // "unknown" and the settings screen has to guess. Keep in sync with sharedUI's singboxVersion and
 // the sing-box version pinned in cores/go.mod.
-val ypTunCoreSingboxVersion = "1.13.14"
+val ypTunCoreSingboxVersion = "1.13.18"
 
 fun registerYpTunCoreBuildTask(
     taskName: String,

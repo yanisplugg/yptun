@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,9 +27,10 @@ import (
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/common/dialer"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing-box/route/rule"
+	R "github.com/sagernet/sing-box/route/rule"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing-tun/ping"
 	"github.com/sagernet/sing/common"
@@ -61,6 +61,7 @@ import (
 	"github.com/sagernet/tailscale/wgengine/router"
 	"github.com/sagernet/tailscale/wgengine/wgcfg"
 
+	mDNS "github.com/miekg/dns"
 	"go4.org/netipx"
 )
 
@@ -71,7 +72,7 @@ var (
 )
 
 func init() {
-	version.SetVersion(tailscaleroot.VersionDotTxt + " (sing-box " + C.Version + ")")
+	version.SetVersion(strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-0-(sing-box " + C.Version + ")")
 }
 
 func RegisterEndpoint(registry *endpoint.Registry) {
@@ -83,6 +84,7 @@ type Endpoint struct {
 	ctx               context.Context
 	router            adapter.Router
 	logger            logger.ContextLogger
+	queryOptions      adapter.DNSQueryOptions
 	dnsRouter         adapter.DNSRouter
 	network           adapter.NetworkManager
 	platformInterface adapter.PlatformInterface
@@ -93,8 +95,10 @@ type Endpoint struct {
 	onReconfigHook    wgengine.ReconfigListener
 
 	cfg           *wgcfg.Config
+	routerCfg     *router.Config
 	dnsCfg        *tsDNS.Config
 	routeDomains  common.TypedValue[map[string]bool]
+	searchDomains atomic.Bool
 	routePrefixes atomic.Pointer[netipx.IPSet]
 
 	acceptRoutes               bool
@@ -188,27 +192,17 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	} else {
 		udpTimeout = C.UDPTimeout
 	}
-	var remoteIsDomain bool
-	if options.ControlURL != "" {
-		controlURL, err := url.Parse(options.ControlURL)
-		if err != nil {
-			return nil, E.Cause(err, "parse control URL")
-		}
-		remoteIsDomain = M.ParseSocksaddr(controlURL.Hostname()).IsDomain()
-	} else {
-		// controlplane.tailscale.com
-		remoteIsDomain = true
-	}
 	outboundDialer, err := dialer.NewWithOptions(dialer.Options{
 		Context:          ctx,
 		Options:          options.DialerOptions,
-		RemoteIsDomain:   remoteIsDomain,
+		RemoteIsDomain:   true,
 		ResolverOnDetour: true,
 		NewDialer:        true,
 	})
 	if err != nil {
 		return nil, err
 	}
+	dialerQueryOptions := outboundDialer.(dialer.ResolveDialer).QueryOptions()
 	dnsRouter := service.FromContext[adapter.DNSRouter](ctx)
 	server := &tsnet.Server{
 		Dir:      stateDirectory,
@@ -225,7 +219,7 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		AdvertiseTags: options.AdvertiseTags,
 		Dialer:        &endpointDialer{Dialer: outboundDialer, logger: logger},
 		LookupHook: func(ctx context.Context, host string) ([]netip.Addr, error) {
-			return dnsRouter.Lookup(ctx, host, outboundDialer.(dialer.ResolveDialer).QueryOptions())
+			return dnsRouter.Lookup(ctx, host, dialerQueryOptions)
 		},
 		DNS: &dnsConfigurtor{},
 		HTTPClient: &http.Client{
@@ -242,10 +236,11 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		},
 	}
 	return &Endpoint{
-		Adapter:                    endpoint.NewAdapter(C.TypeTailscale, tag, []string{N.NetworkTCP, N.NetworkUDP, N.NetworkICMP}, nil),
+		Adapter:                    endpoint.NewAdapterWithDialerOptions(C.TypeTailscale, tag, []string{N.NetworkTCP, N.NetworkUDP, N.NetworkICMP}, options.DialerOptions),
 		ctx:                        ctx,
 		router:                     router,
 		logger:                     logger,
+		queryOptions:               dialerQueryOptions,
 		dnsRouter:                  dnsRouter,
 		network:                    service.FromContext[adapter.NetworkManager](ctx),
 		platformInterface:          service.FromContext[adapter.PlatformInterface](ctx),
@@ -268,6 +263,8 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 
 func (t *Endpoint) Start(stage adapter.StartStage) error {
 	switch stage {
+	case adapter.StartStateInitialize:
+		t.server.PeerDNSQueryHandler = (*peerDNSQueryHandler)(t)
 	case adapter.StartStateStart:
 		return t.start()
 	case adapter.StartStatePostStart:
@@ -686,9 +683,9 @@ func (t *Endpoint) PrepareConnection(network string, source M.Socksaddr, destina
 	}, routeContext, timeout, false)
 	if err != nil {
 		switch {
-		case rule.IsBypassed(err):
+		case R.IsBypassed(err):
 			err = nil
-		case rule.IsRejected(err):
+		case R.IsRejected(err):
 			t.logger.Trace("reject ", network, " connection from ", source.AddrString(), " to ", destination.AddrString())
 		default:
 			if network == N.NetworkICMP {
@@ -704,12 +701,17 @@ func (t *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.
 	metadata.Inbound = t.Tag()
 	metadata.InboundType = t.Type()
 	metadata.Source = source
-	addr4, addr6 := t.server.TailscaleIPs()
-	switch destination.Addr {
-	case addr4:
-		destination.Addr = netip.AddrFrom4([4]uint8{127, 0, 0, 1})
-	case addr6:
-		destination.Addr = netip.IPv6Loopback()
+	destinationAddress := tsaddr.UnmapVia(destination.Addr)
+	if destinationAddress != destination.Addr {
+		destination.Addr = destinationAddress
+	} else {
+		addr4, addr6 := t.server.TailscaleIPs()
+		switch destination.Addr {
+		case addr4:
+			destination.Addr = netip.AddrFrom4([4]uint8{127, 0, 0, 1})
+		case addr6:
+			destination.Addr = netip.IPv6Loopback()
+		}
 	}
 	metadata.Destination = destination
 	t.logger.InfoContext(ctx, "inbound connection from ", source)
@@ -722,16 +724,22 @@ func (t *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	metadata.Inbound = t.Tag()
 	metadata.InboundType = t.Type()
 	metadata.Source = source
-	addr4, addr6 := t.server.TailscaleIPs()
-	switch destination.Addr {
-	case addr4:
-		metadata.OriginDestination = destination
-		destination.Addr = netip.AddrFrom4([4]uint8{127, 0, 0, 1})
-		conn = bufio.NewNATPacketConn(bufio.NewNetPacketConn(conn), metadata.OriginDestination, destination)
-	case addr6:
-		metadata.OriginDestination = destination
-		destination.Addr = netip.IPv6Loopback()
-		conn = bufio.NewNATPacketConn(bufio.NewNetPacketConn(conn), metadata.OriginDestination, destination)
+	originDestination := destination
+	destinationAddress := tsaddr.UnmapVia(destination.Addr)
+	if destinationAddress != destination.Addr {
+		destination.Addr = destinationAddress
+	} else {
+		addr4, addr6 := t.server.TailscaleIPs()
+		switch destination.Addr {
+		case addr4:
+			destination.Addr = netip.AddrFrom4([4]uint8{127, 0, 0, 1})
+		case addr6:
+			destination.Addr = netip.IPv6Loopback()
+		}
+	}
+	if destination != originDestination {
+		metadata.OriginDestination = originDestination
+		conn = bufio.NewNATPacketConn(bufio.NewNetPacketConn(conn), originDestination, destination)
 	}
 	metadata.Destination = destination
 	t.logger.InfoContext(ctx, "inbound packet connection from ", source)
@@ -778,7 +786,11 @@ func (t *Endpoint) PreferredDomain(domain string) bool {
 	if routeDomains == nil {
 		return false
 	}
-	return routeDomains[strings.ToLower(domain)]
+	domain = strings.ToLower(domain)
+	if routeDomains[domain] {
+		return true
+	}
+	return !strings.Contains(domain, ".") && t.searchDomains.Load()
 }
 
 func (t *Endpoint) PreferredAddress(address netip.Addr) bool {
@@ -797,7 +809,9 @@ func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 	if cfg == nil || dnsCfg == nil {
 		return
 	}
-	if (t.cfg != nil && reflect.DeepEqual(t.cfg, cfg)) && (t.dnsCfg != nil && reflect.DeepEqual(t.dnsCfg, dnsCfg)) {
+	if t.cfg != nil && reflect.DeepEqual(t.cfg, cfg) &&
+		t.routerCfg != nil && reflect.DeepEqual(t.routerCfg, routerCfg) &&
+		t.dnsCfg != nil && reflect.DeepEqual(t.dnsCfg, dnsCfg) {
 		return
 	}
 	var inet4Address, inet6Address netip.Addr
@@ -810,6 +824,7 @@ func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 	}
 	t.icmpForwarder.SetLocalAddresses(inet4Address, inet6Address)
 	t.cfg = cfg
+	t.routerCfg = routerCfg
 	t.dnsCfg = dnsCfg
 
 	routeDomains := make(map[string]bool)
@@ -820,10 +835,14 @@ func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 		routeDomains[fqdn.WithoutTrailingDot()] = true
 	}
 	t.routeDomains.Store(routeDomains)
+	t.searchDomains.Store(len(dnsCfg.SearchDomains) > 0)
 
 	var builder netipx.IPSetBuilder
 	for _, peer := range cfg.Peers {
 		for _, allowedIP := range peer.AllowedIPs {
+			if allowedIP.Bits() == 0 {
+				continue
+			}
 			builder.AddPrefix(allowedIP)
 		}
 	}
@@ -881,4 +900,31 @@ func (c *dnsConfigurtor) GetBaseConfig() (tsDNS.OSConfig, error) {
 
 func (c *dnsConfigurtor) Close() error {
 	return nil
+}
+
+type peerDNSQueryHandler Endpoint
+
+func (t *peerDNSQueryHandler) HandlePeerDNSQuery(ctx context.Context, query []byte, sourceAddress netip.AddrPort, allowName func(name string) bool) ([]byte, error) {
+	var message mDNS.Msg
+	err := message.Unpack(query)
+	if err != nil {
+		return nil, err
+	}
+	for _, question := range message.Question {
+		if allowName != nil && !allowName(question.Name) {
+			return dns.FixedResponseStatus(&message, mDNS.RcodeRefused).Pack()
+		}
+	}
+	var metadata adapter.InboundContext
+	metadata.Inbound = t.Tag()
+	metadata.InboundType = t.Type()
+	metadata.Source = M.SocksaddrFromNetIP(sourceAddress)
+	response, err := t.dnsRouter.Exchange(adapter.WithContext(ctx, &metadata), &message, adapter.DNSQueryOptions{})
+	if err != nil {
+		if !R.IsRejected(err) && !E.IsClosedOrCanceled(err) {
+			t.logger.ErrorContext(ctx, E.Cause(err, "process peer DNS query"))
+		}
+		return nil, err
+	}
+	return response.Pack()
 }
