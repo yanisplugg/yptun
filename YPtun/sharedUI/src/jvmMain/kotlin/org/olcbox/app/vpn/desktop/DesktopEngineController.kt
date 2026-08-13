@@ -124,6 +124,14 @@ internal class DesktopEngineController(
         }
     }
 
+    /**
+     * Path of sing-box's fakeip cache (see [SingBoxConfig.build]'s `cacheFilePath`). Only one sing-box
+     * ever runs in-process (YpTunCore is a single global), so every tunnel shares the one db — which is
+     * what keeps a synthetic IP bound to its domain when the user switches locations or reconnects.
+     */
+    private fun singBoxCachePath(): String =
+        DesktopPaths.appDataDir().resolve("singbox-cache.db").toString()
+
     fun stopAll() {
         trustTunnel.stop()
         YpTunCore.stopAll()
@@ -400,6 +408,7 @@ internal class DesktopEngineController(
                 // SOCKS+HTTP inbound so desktop proxy mode can point the Windows system HTTP-proxy at it.
                 mixedInbound = true,
                 logFilePath = DesktopPaths.appDataDir().resolve("singbox.log").toString(),
+                cacheFilePath = singBoxCachePath(),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}" +
                 if (requestedTun) " (in-core TUN + per-process rules)" else "")
@@ -527,6 +536,7 @@ internal class DesktopEngineController(
                 splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                 tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
                 logFilePath = DesktopPaths.appDataDir().resolve("singbox.log").toString(),
+                cacheFilePath = singBoxCachePath(),
             )
             activeProxyCore = ProxyCore.SingBox
             YpTunCore.sbStart(json)
@@ -690,6 +700,7 @@ internal class DesktopEngineController(
                         splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                         splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                         tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                        cacheFilePath = singBoxCachePath(),
                     )
                 }
 
@@ -714,6 +725,7 @@ internal class DesktopEngineController(
                         splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                         splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                         tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                        cacheFilePath = singBoxCachePath(),
                     )
                 }
 
@@ -740,6 +752,7 @@ internal class DesktopEngineController(
                             splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                             splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                             tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                            cacheFilePath = singBoxCachePath(),
                         )
                     } else {
                         SingBoxConfig.build(
@@ -761,6 +774,7 @@ internal class DesktopEngineController(
                             splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                             splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                             tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                            cacheFilePath = singBoxCachePath(),
                         )
                     }
                 }

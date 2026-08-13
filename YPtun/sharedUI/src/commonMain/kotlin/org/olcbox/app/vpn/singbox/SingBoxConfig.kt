@@ -194,6 +194,19 @@ object SingBoxConfig {
         // (whose own protocol carries DNS). Forcing DNS over TCP makes it ride the proven CONNECT path.
         // No-op for DoH/DoT/DoQ resolvers (already TCP/own transport) — only bare-IP/udp is rewritten.
         preferTcpRemoteDns: Boolean = false,
+        // Absolute path of sing-box's `experimental.cache_file` (bbolt db). Only used when FakeDNS is
+        // active, and ONLY to persist the fakeip domain↔synthetic-IP table across restarts.
+        //
+        // WHY THIS MATTERS: without a cache file sing-box keeps the fakeip table in memory only, so
+        // every reconnect restarts the pool at 198.18.0.1 and hands the SAME synthetic IPs out to
+        // WHATEVER domain happens to be looked up first this session. Apps that cache DNS answers for
+        // a long time (anything on OkHttp/JVM — ChatGPT, banking apps — unlike browsers, which
+        // re-resolve) then dial a fake IP they learned BEFORE the reconnect, sing-box maps it to a
+        // DIFFERENT domain, and the TLS handshake completes against the wrong host: the app reports
+        // "this network uses an untrusted SSL certificate". Persisting the table keeps a fake IP
+        // bound to its domain forever, so a stale app-side cache entry still resolves correctly.
+        // Null (or FakeDNS off) → no `experimental` block at all, i.e. unchanged behaviour.
+        cacheFilePath: String? = null,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
@@ -691,6 +704,19 @@ object SingBoxConfig {
                 }.associateBy { it["tag"]?.jsonPrimitive?.contentOrNull ?: it.toString() }.values
                 if (mergedRuleSets.isNotEmpty()) {
                     putJsonArray("rule_set") { mergedRuleSets.forEach { add(it) } }
+                }
+            }
+
+            // Persist the fakeip table so a synthetic IP keeps meaning the SAME domain across
+            // reconnects (see [cacheFilePath]). Emitted ONLY with FakeDNS on, and only `store_fakeip`
+            // is set — no selector/mode/RDRC state is cached, so nothing else changes behaviour.
+            if (fakeEnabled && !cacheFilePath.isNullOrBlank()) {
+                putJsonObject("experimental") {
+                    putJsonObject("cache_file") {
+                        put("enabled", true)
+                        put("path", cacheFilePath)
+                        put("store_fakeip", true)
+                    }
                 }
             }
         }
