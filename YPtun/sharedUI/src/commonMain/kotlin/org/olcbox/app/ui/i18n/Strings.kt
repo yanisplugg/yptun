@@ -535,6 +535,8 @@ interface Strings {
     val configCopied: String
     val copied: String
     val qrTooLarge: String
+    val shareScanOrCopy: String
+    val closeAction: String
 
     // VK call link dialog
     val vkCallLink: String
@@ -1135,6 +1137,8 @@ object RuStrings : Strings {
     override val configCopied = "Конфигурация скопирована"
     override val copied = "Скопировано"
     override val qrTooLarge = "Конфигурация слишком большая для QR-кода. Используйте «Копировать» или «Поделиться»."
+    override val shareScanOrCopy = "Отсканируйте QR-код или скопируйте ссылку"
+    override val closeAction = "Закрыть"
     override val vkCallLink = "Ссылка на звонок VK"
     override fun vkCallLinkBody(name: String) =
         "Вставьте ссылку-приглашение VK Звонков для «$name». Можно вставить несколько ссылок " +
@@ -1719,6 +1723,8 @@ object EnStrings : Strings {
     override val configCopied = "Config copied"
     override val copied = "Copied"
     override val qrTooLarge = "Config is too large for a QR code. Use Copy or Share instead."
+    override val shareScanOrCopy = "Scan the QR code or copy the link"
+    override val closeAction = "Close"
     override val vkCallLink = "VK call link"
     override fun vkCallLinkBody(name: String) =
         "Paste your VK Calls join link for \"$name\". You can paste several links " +
@@ -2303,6 +2309,8 @@ object FaStrings : Strings {
     override val configCopied = "پیکربندی رونوشت شد"
     override val copied = "رونوشت شد"
     override val qrTooLarge = "پیکربندی برای کد QR بیش از حد بزرگ است. از «رونوشت» یا «هم‌رسانی» استفاده کنید."
+    override val shareScanOrCopy = "کد QR را پویش کنید یا پیوند را رونوشت بگیرید"
+    override val closeAction = "بستن"
     override val vkCallLink = "پیوند تماس VK"
     override fun vkCallLinkBody(name: String) =
         "پیوند پیوستن VK Calls خود را برای «$name» بچسبانید. می‌توانید چند پیوند " +
@@ -2887,6 +2895,8 @@ object ZhStrings : Strings {
     override val configCopied = "配置已复制"
     override val copied = "已复制"
     override val qrTooLarge = "配置过大，无法生成二维码。请改用复制或分享。"
+    override val shareScanOrCopy = "扫描二维码或复制链接"
+    override val closeAction = "关闭"
     override val vkCallLink = "VK 通话链接"
     override fun vkCallLinkBody(name: String) =
         "为“$name”粘贴你的 VK Calls 加入链接。可以粘贴多个链接 " +

@@ -76,6 +76,15 @@ class DesktopSettingsController {
     val dynamicTheme: StateFlow<Boolean> = _dynamicTheme.asStateFlow()
 
     init {
+        // What «Системный» resolves to on this machine. Without this the desktop kept the
+        // LocalizationState default (Russian), so an English/Chinese/Persian Windows still got a
+        // Russian UI unless the language was picked by hand. Mirrors AndroidVpnManager.init.
+        LocalizationState.systemLanguage = when (java.util.Locale.getDefault().language) {
+            "ru" -> AppLanguage.Russian
+            "fa" -> AppLanguage.Persian
+            "zh" -> AppLanguage.Chinese
+            else -> AppLanguage.English
+        }
         val ui = loadUi()
         _language.value = AppLanguage.fromId(ui.language)
         LocalizationState.language = _language.value

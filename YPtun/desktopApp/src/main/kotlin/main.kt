@@ -129,6 +129,7 @@ import org.olcbox.app.ui.theme.AppTheme
 import org.olcbox.app.update.AppUpdateInfo
 import org.olcbox.app.update.AppUpdateSettings
 import org.olcbox.app.update.AppUpdateService
+import org.olcbox.app.update.DesktopUpdateOutcome
 import org.olcbox.app.update.JvmUpdateInstaller
 import org.olcbox.app.update.JvmUpdateSettingsStore
 import org.olcbox.app.update.identity
@@ -267,13 +268,21 @@ fun main(args: Array<String>) = application {
     fun downloadUpdate(info: AppUpdateInfo) {
         scope.launch {
             updateProgress = 0f
-            updateMessage = "Downloading ${info.asset.name}..."
-            val result = dependencies.updateInstaller.downloadAndOpen(info.asset) { progress ->
+            // With a delta published for this hop only a few MB are fetched and the installed jar is
+            // patched in place; without one this is the full installer, as before.
+            updateMessage = "Downloading ${(info.deltaAsset ?: info.asset).name}..."
+            val result = dependencies.updateInstaller.install(info) { progress ->
                 updateProgress = progress
             }
-            updateMessage = result.getOrElse { error ->
-                "Download failed: ${error.message ?: "unknown error"}"
-            }
+            updateMessage = result.fold(
+                onSuccess = { outcome ->
+                    when (outcome) {
+                        is DesktopUpdateOutcome.InstallerOpened -> outcome.message
+                        is DesktopUpdateOutcome.RestartRequired -> outcome.message
+                    }
+                },
+                onFailure = { error -> "Download failed: ${error.message ?: "unknown error"}" }
+            )
             if (result.isSuccess) {
                 saveUpdateSettings(
                     updateSettings.copy(
@@ -284,6 +293,12 @@ fun main(args: Array<String>) = application {
                 updateOffer = null
             }
             updateProgress = null
+            // A staged delta only lands once this process is gone (it holds its own jar open), and
+            // the swapper is already waiting on our PID — so shut down the way «Выход» does.
+            if (result.getOrNull() is DesktopUpdateOutcome.RestartRequired) {
+                dependencies.close()
+                exitApplication()
+            }
         }
     }
 
@@ -1001,6 +1016,7 @@ private fun DesktopConfigShareOverlay(
     onCopy: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
     var copied by remember(payload) { mutableStateOf(false) }
     val qrMatrix = remember(payload) {
         runCatching {
@@ -1048,7 +1064,7 @@ private fun DesktopConfigShareOverlay(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = if (copied) "Copied to clipboard" else "Scan QR or copy the link",
+                            text = if (copied) s.copied else s.shareScanOrCopy,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp
                         )
@@ -1093,7 +1109,7 @@ private fun DesktopConfigShareOverlay(
                         horizontalArrangement = Arrangement.End
                     ) {
                         TextButton(onClick = onDismiss) {
-                            Text("Close")
+                            Text(s.closeAction)
                         }
                         Spacer(Modifier.width(8.dp))
                         Button(
@@ -1102,7 +1118,7 @@ private fun DesktopConfigShareOverlay(
                                 copied = true
                             }
                         ) {
-                            Text("Copy")
+                            Text(s.copy)
                         }
                     }
                 }
