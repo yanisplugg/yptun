@@ -3267,7 +3267,8 @@ private fun SingBoxRuleCard(
                 value = draft.packageNames,
                 onValueChange = { onChange(draft.copy(packageNames = it)) },
                 label = { Text(s.routingRuleApps) },
-                placeholder = { Text("com.google.android.youtube") },
+                // Desktop matches apps by EXE name (sing-box `process_name`), not Android packages.
+                placeholder = { Text("chrome.exe, Telegram.exe") },
                 minLines = 1,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -3275,7 +3276,7 @@ private fun SingBoxRuleCard(
                 value = draft.packageRegex,
                 onValueChange = { onChange(draft.copy(packageRegex = it)) },
                 label = { Text(s.routingRulePackageRegex) },
-                placeholder = { Text("^com\\.google\\..*") },
+                placeholder = { Text("^chrome.*") },
                 minLines = 1,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -3295,10 +3296,11 @@ private fun SingBoxRuleCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall
             )
+            // No "cellular" chip and no metered switch here: sing-box fills both from the mobile
+            // network capabilities, so on a PC they are rules that can never match.
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(
                     "wifi" to s.netTypeWifi,
-                    "cellular" to s.netTypeCellular,
                     "ethernet" to s.netTypeEthernet,
                     "other" to s.netTypeOther,
                 ).forEach { (value, label) ->
@@ -3312,18 +3314,6 @@ private fun SingBoxRuleCard(
                         label = { Text(label) }
                     )
                 }
-            }
-            // Metered (expensive) network match → network_is_expensive.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    s.routingRuleMetered,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
-                )
-                Switch(
-                    checked = draft.networkIsExpensive,
-                    onCheckedChange = { onChange(draft.copy(networkIsExpensive = it)) }
-                )
             }
         }
     }

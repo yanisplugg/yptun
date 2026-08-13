@@ -136,7 +136,7 @@ object SingBoxRouting {
      * are combined into a single object (sing-box ANDs the fields), mirroring v2rayNG semantics.
      * Caller inserts these into `route.rules`.
      */
-    fun manualRules(rules: List<SingBoxRule>): JsonArray = buildJsonArray {
+    fun manualRules(rules: List<SingBoxRule>, matchAppsByProcess: Boolean = false): JsonArray = buildJsonArray {
         rules.filter { it.enabled && it.hasMatcher() }.forEach { rule ->
             val s = parse(rule.domains)
             val i = parseIp(rule.ip)
@@ -173,7 +173,13 @@ object SingBoxRouting {
                 if (rule.client.isNotEmpty()) putJsonArray("client") { rule.client.forEach { add(it) } }
                 if (rule.networkIsExpensive) put("network_is_expensive", true)
                 if (rule.clashMode.isNotBlank()) put("clash_mode", rule.clashMode)
-                if (rule.packageNames.isNotEmpty()) putJsonArray("package_name") { rule.packageNames.forEach { add(it) } }
+                // sing-box's `package_name` resolves an Android UID and can never match on desktop;
+                // there the same "which app" intent is expressed as `process_name` (an exe name).
+                if (rule.packageNames.isNotEmpty()) {
+                    putJsonArray(if (matchAppsByProcess) "process_name" else "package_name") {
+                        rule.packageNames.forEach { add(it) }
+                    }
+                }
                 when (rule.action) {
                     SingBoxRule.ACTION_REJECT -> put("action", "reject")
                     SingBoxRule.ACTION_HIJACK_DNS -> put("action", "hijack-dns")

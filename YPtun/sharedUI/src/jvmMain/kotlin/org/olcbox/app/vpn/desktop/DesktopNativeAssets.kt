@@ -89,6 +89,27 @@ internal object DesktopNativeAssets {
         return binary
     }
 
+    /**
+     * Unpacks cronet (NaïveProxy's HTTP/2+QUIC engine) next to the other natives and returns the
+     * directory, which the core adds to its PATH so the `with_purego` loader can find it by name.
+     *
+     * Best-effort: a build without the library simply has no NaïveProxy support, and every other
+     * protocol is unaffected — so a missing resource returns the directory rather than throwing.
+     */
+    fun resolveCronetLibraryDir(): Path {
+        val target = DesktopPaths.appDataDir().resolve("bin")
+        Files.createDirectories(target)
+        runCatching { copyRuntimeAsset(cronetFileName()) }
+        return target
+    }
+
+    private fun cronetFileName(): String = when (DesktopPaths.os) {
+        DesktopOs.Windows -> "libcronet.dll"
+        DesktopOs.Linux -> "libcronet.so"
+        DesktopOs.MacOS -> "libcronet.dylib"
+        DesktopOs.Other -> "libcronet.so"
+    }
+
     /** AdGuard Trust Tunnel CLI, run in SOCKS-only mode as the desktop stand-in for the Android AAR. */
     fun resolveTrustTunnelClientBinary(): Path {
         val fileName = trustTunnelFileName("client")

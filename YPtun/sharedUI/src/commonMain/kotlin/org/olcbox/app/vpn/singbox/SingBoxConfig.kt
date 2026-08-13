@@ -183,6 +183,10 @@ object SingBoxConfig {
         forceFakeDns: Boolean = false,
         // Desktop: use a "mixed" inbound (SOCKS + HTTP) so the OS system-proxy (HTTP) can use it.
         mixedInbound: Boolean = false,
+        // Desktop: a routing rule's app list holds EXE names, matched with sing-box `process_name`.
+        // On Android the same field holds package names and matches with `package_name`, which
+        // resolves a UID and therefore can never match anything on a PC.
+        matchAppsByProcess: Boolean = false,
         // Transparent-proxy mode: when set, a `tproxy` inbound (TCP+UDP) is added on [listenHost]:this,
         // so a rooted device / router can redirect traffic through the core with no per-app proxy. The
         // SOCKS inbound is still emitted for coexistence. Requires root (IP_TRANSPARENT) to bind.
@@ -617,7 +621,7 @@ object SingBoxConfig {
                     // Advanced verbatim user rules (highest precedence).
                     parseJsonArray(routing.customRulesJson).forEach { add(it) }
                     // Structured v2rayNG-style rules (in user-defined order, after verbatim JSON).
-                    SingBoxRouting.manualRules(routing.rules).forEach { add(it) }
+                    SingBoxRouting.manualRules(routing.rules, matchAppsByProcess).forEach { add(it) }
                     // Blocking toggles first so ads/blocked domains die even if a profile bucket would proxy them.
                     if (routing.blockDomains.isNotEmpty()) {
                         addJsonObject {
