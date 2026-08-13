@@ -435,6 +435,7 @@ internal class DesktopEngineController(
                 olcrtcChainPass = if (chained) socksPassword else "",
                 autoDetectInterface = true,
                 routing = routing,
+                matchAppsByProcess = true,
                 traffic = traffic,
                 advanced = config.advanced,
                 routingProfile = routingProfile,
@@ -576,6 +577,7 @@ internal class DesktopEngineController(
                 olcrtcChainPort = dnsttPort,
                 autoDetectInterface = true,
                 routing = routing,
+                matchAppsByProcess = true,
                 traffic = traffic,
                 routingProfile = routingProfile,
                 singboxGeositeBase = profilesState.singboxGeositeBase,
@@ -746,6 +748,7 @@ internal class DesktopEngineController(
                         socksPassword = socksPassword,
                         autoDetectInterface = true,
                         routing = routing,
+                        matchAppsByProcess = true,
                         traffic = traffic,
                         routingProfile = routingProfile,
                         singboxGeositeBase = profilesState.singboxGeositeBase,
@@ -771,6 +774,7 @@ internal class DesktopEngineController(
                         socksPassword = socksPassword,
                         autoDetectInterface = true,
                         routing = routing,
+                        matchAppsByProcess = true,
                         traffic = traffic,
                         routingProfile = routingProfile,
                         singboxGeositeBase = profilesState.singboxGeositeBase,
@@ -798,6 +802,7 @@ internal class DesktopEngineController(
                             socksPassword = socksPassword,
                             autoDetectInterface = true,
                             routing = routing,
+                            matchAppsByProcess = true,
                             traffic = traffic,
                             routingProfile = routingProfile,
                             singboxGeositeBase = profilesState.singboxGeositeBase,
@@ -820,6 +825,7 @@ internal class DesktopEngineController(
                             socksPassword = socksPassword,
                             autoDetectInterface = true,
                             routing = routing,
+                            matchAppsByProcess = true,
                             traffic = traffic,
                             routingProfile = routingProfile,
                             singboxGeositeBase = profilesState.singboxGeositeBase,
@@ -988,14 +994,34 @@ internal class DesktopEngineController(
         return profile.expandAsn(cidrs)
     }
 
-    /** [JvmVpnSettings.loadRouting] with the manual rules' `asn:` selectors expanded, as on Android. */
+    /**
+     * [JvmVpnSettings.loadRouting] with the manual rules' `asn:` selectors and app regexes expanded,
+     * as on Android. The app list is EXE names here (matched with sing-box `process_name`), so the
+     * regex is resolved against running processes instead of installed packages.
+     */
     private suspend fun loadRoutingExpandingAsn(): org.olcbox.app.data.model.RoutingRules {
         val routing = JvmVpnSettings.loadRouting()
         val asns = org.olcbox.app.data.model.Asn.collect(routing.rules.flatMap { it.ip })
-        if (asns.isEmpty()) return routing
-        val cidrs = runCatching { JvmAsnResolver.ensure(asns) }.getOrDefault(emptyMap())
-        return routing.copy(rules = org.olcbox.app.data.model.SingBoxRule.expandAsn(routing.rules, cidrs))
+        var rules = routing.rules
+        if (asns.isNotEmpty()) {
+            val cidrs = runCatching { JvmAsnResolver.ensure(asns) }.getOrDefault(emptyMap())
+            rules = org.olcbox.app.data.model.SingBoxRule.expandAsn(rules, cidrs)
+        }
+        if (rules.any { it.packageRegex.isNotEmpty() }) {
+            rules = org.olcbox.app.data.model.SingBoxRule.expandPackageRegex(rules, runningProcessNames())
+        }
+        return if (rules === routing.rules) routing else routing.copy(rules = rules)
     }
+
+    /** Distinct executable names of every process we can see — the desktop "installed apps" list. */
+    private fun runningProcessNames(): List<String> = runCatching {
+        ProcessHandle.allProcesses()
+            .map { it.info().command().orElse("") }
+            .filter { it.isNotBlank() }
+            .map { it.substringAfterLast('\\').substringAfterLast('/') }
+            .distinct()
+            .toList()
+    }.getOrDefault(emptyList())
 
     private fun xrayRoutingProfile(profile: RoutingProfile?, assetPath: String): RoutingProfile? {
         if (profile == null) return null
@@ -1017,7 +1043,9 @@ internal class DesktopEngineController(
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (isLocalSocksPortOpen(port)) return true
-            delay(200)
+            // A core is usually listening within a few dozen ms; the old 200 ms grid added a quarter
+            // of a second of dead time to every connect for nothing.
+            delay(PORT_POLL_INTERVAL_MS)
         }
         return false
     }
@@ -1025,6 +1053,9 @@ internal class DesktopEngineController(
     private companion object {
         const val MOBILE_READY_TIMEOUT_MS = 25_000
         const val VKTURN_RELAY_READY_TIMEOUT_MS = 20_000
+
+        /** How often [awaitSocksPortOpen] probes the core's local port. */
+        const val PORT_POLL_INTERVAL_MS = 30L
 
         /** Size past which singbox.log is dropped at start instead of appended to (see singBoxLogPath). */
         const val MAX_SINGBOX_LOG_BYTES = 32L * 1024 * 1024

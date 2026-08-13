@@ -1,11 +1,23 @@
 package org.olcbox.app.vpn.desktop
 
+import com.sun.jna.Native
+import com.sun.jna.win32.StdCallLibrary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
+
+/** `shell32!IsUserAnAdmin` — the cheapest elevation check there is (see [WindowsTunController]). */
+private interface Shell32Ext : StdCallLibrary {
+    fun IsUserAnAdmin(): Boolean
+
+    companion object {
+        val INSTANCE: Shell32Ext by lazy { Native.load("shell32", Shell32Ext::class.java) }
+    }
+}
 
 internal class WindowsTunController(
     private val addLog: (String) -> Unit
@@ -37,32 +49,31 @@ internal class WindowsTunController(
         try {
             waitForAdapter(process)
             bypassIps = bypassServerIps.distinct()
+            // ONE PowerShell invocation for the whole route setup. Each spawn costs the better part
+            // of a second on Windows, and this used to be two of them on top of a per-poll spawn in
+            // waitForAdapter — several seconds of the "connecting" spinner were just process starts.
+            installRoutes(bypassIps)
             if (bypassIps.isNotEmpty()) {
-                installBypassRoutes(bypassIps)
                 addLog("Installed ${bypassIps.size} bypass route(s) for proxy server(s)")
             }
-            installRoutes()
             routesInstalled = true
             addLog("Windows TUN connected on $TUN_NAME")
             return process
         } catch (e: Exception) {
-            runCatching { removeRoutes() }
+            runCatching { removeRoutes(bypassIps) }
                 .onFailure { addLog("Windows TUN partial route cleanup failed: ${it.message}") }
             routesInstalled = false
+            bypassIps = emptyList()
             stopProcess(process)
             throw e
         }
     }
 
     suspend fun stop(process: Process?) {
-        if (routesInstalled) {
-            runCatching { removeRoutes() }
+        if (routesInstalled || bypassIps.isNotEmpty()) {
+            runCatching { removeRoutes(bypassIps) }
                 .onFailure { addLog("Windows TUN route cleanup failed: ${it.message}") }
             routesInstalled = false
-        }
-        if (bypassIps.isNotEmpty()) {
-            runCatching { removeBypassRoutes(bypassIps) }
-                .onFailure { addLog("Windows TUN bypass route cleanup failed: ${it.message}") }
             bypassIps = emptyList()
         }
 
@@ -77,16 +88,25 @@ internal class WindowsTunController(
         exitProcess(0)
     }
 
+    /**
+     * Elevation state of THIS process. `shell32!IsUserAnAdmin` answers instantly; the PowerShell
+     * equivalent it replaced cost ~1s of the connect path every single time. Cached because a
+     * process cannot gain or lose elevation while it runs.
+     */
     private suspend fun isAdministrator(): Boolean {
-        val isAdmin = runPowerShell(
+        cachedIsAdministrator?.let { return it }
+        val viaWin32 = runCatching { Shell32Ext.INSTANCE.IsUserAnAdmin() }.getOrNull()
+        val result = viaWin32 ?: runPowerShell(
             """
             ${'$'}principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
             if (${'$'}principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'true' } else { 'false' }
             """.trimIndent()
         ).trim().equals("true", ignoreCase = true)
-
-        return isAdmin
+        cachedIsAdministrator = result
+        return result
     }
+
+    private var cachedIsAdministrator: Boolean? = null
 
     private suspend fun requestAdministratorRestart() {
         val processInfo = ProcessHandle.current().info()
@@ -128,21 +148,51 @@ internal class WindowsTunController(
         error("$TUN_NAME adapter was not created")
     }
 
-    private suspend fun adapterExists(): Boolean {
-        return runCatching {
-            runPowerShell(
-                """
-                ${'$'}adapter = Get-NetAdapter -Name '$TUN_NAME' -ErrorAction SilentlyContinue
-                if (${'$'}null -ne ${'$'}adapter) { 'true' } else { 'false' }
-                """.trimIndent()
-            ).trim().equals("true", ignoreCase = true)
-        }.getOrDefault(false)
-    }
+    /**
+     * Whether wintun has published the adapter yet. Answered from the JVM's own interface list
+     * instead of `Get-NetAdapter`: this is polled every [TUN_READY_POLL_MS], and one PowerShell
+     * per poll dominated the connect time all by itself.
+     */
+    private fun adapterExists(): Boolean = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().toList().any { nic ->
+            listOfNotNull(nic.name, nic.displayName).any { it.equals(TUN_NAME, ignoreCase = true) }
+        }
+    }.getOrDefault(false)
 
-    private suspend fun installRoutes() {
+    /**
+     * The whole TUN route setup in ONE PowerShell run: the tunnel's own address + `0.0.0.0/1` and
+     * `128.0.0.0/1` default capture + DNS, plus a host/prefix route via the PHYSICAL gateway for
+     * every entry in [bypassPrefixes].
+     *
+     * Those bypass routes carry the engines' own upstream traffic around the capture. Windows has no
+     * VpnService.protect(), so they are the only thing keeping a transport core's sockets off the
+     * tunnel it is carrying. Entries may be a bare address (routed as /32) or a CIDR — VK-TURN needs
+     * whole prefixes, since its TURN relays are picked at runtime and can't be listed up front.
+     */
+    private suspend fun installRoutes(bypassPrefixes: List<String>) {
+        val bypassCommands = bypassPrefixes.map(::toDestinationPrefix).joinToString("\n") { prefix ->
+            """
+            Get-NetRoute -DestinationPrefix '$prefix' -ErrorAction SilentlyContinue |
+              Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
+            New-NetRoute -InterfaceIndex ${'$'}physIfIndex -DestinationPrefix '$prefix' -NextHop ${'$'}gateway -RouteMetric 1 | Out-Null
+            """.trimIndent()
+        }
+        val bypassBlock = if (bypassPrefixes.isEmpty()) "" else """
+            ${'$'}default = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
+              Where-Object { ${'$'}_.InterfaceAlias -ne '$TUN_NAME' -and ${'$'}_.NextHop -ne '0.0.0.0' } |
+              Sort-Object RouteMetric, InterfaceMetric |
+              Select-Object -First 1
+            if (${'$'}null -eq ${'$'}default) { throw 'No physical default gateway found' }
+            ${'$'}gateway = ${'$'}default.NextHop
+            ${'$'}physIfIndex = ${'$'}default.InterfaceIndex
+            $bypassCommands
+        """.trimIndent()
+
         runPowerShell(
             """
             ${'$'}ErrorActionPreference = 'Stop'
+            $bypassBlock
+
             ${'$'}adapter = Get-NetAdapter -Name '$TUN_NAME' -ErrorAction Stop
             ${'$'}ifIndex = ${'$'}adapter.ifIndex
 
@@ -164,55 +214,21 @@ internal class WindowsTunController(
         )
     }
 
-    /**
-     * Routes for the engines' upstream traffic via the physical default gateway, so it escapes the
-     * TUN's `0.0.0.0/1` + `128.0.0.0/1` capture. Windows has no VpnService.protect(), so these routes
-     * are the ONLY thing keeping a transport core's own sockets off the tunnel it is carrying.
-     *
-     * Entries may be a bare address (routed as /32) or a CIDR. VK-TURN needs whole prefixes: it relays
-     * through VK's TURN servers, whose addresses are chosen at runtime and can't be listed up front.
-     */
-    private suspend fun installBypassRoutes(prefixes: List<String>) {
-        val routeCommands = prefixes.map(::toDestinationPrefix).joinToString("\n") { prefix ->
-            """
-            Get-NetRoute -DestinationPrefix '$prefix' -ErrorAction SilentlyContinue |
-              Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
-            New-NetRoute -InterfaceIndex ${'$'}physIfIndex -DestinationPrefix '$prefix' -NextHop ${'$'}gateway -RouteMetric 1 | Out-Null
-            """.trimIndent()
-        }
-        runPowerShell(
-            """
-            ${'$'}ErrorActionPreference = 'Stop'
-            ${'$'}default = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
-              Where-Object { ${'$'}_.InterfaceAlias -ne '$TUN_NAME' -and ${'$'}_.NextHop -ne '0.0.0.0' } |
-              Sort-Object RouteMetric, InterfaceMetric |
-              Select-Object -First 1
-            if (${'$'}null -eq ${'$'}default) { throw 'No physical default gateway found' }
-            ${'$'}gateway = ${'$'}default.NextHop
-            ${'$'}physIfIndex = ${'$'}default.InterfaceIndex
-            $routeCommands
-            """.trimIndent()
-        )
-    }
-
-    private suspend fun removeBypassRoutes(prefixes: List<String>) {
-        runPowerShell(
-            prefixes.map(::toDestinationPrefix).joinToString("\n") { prefix ->
-                """
-                Get-NetRoute -DestinationPrefix '$prefix' -ErrorAction SilentlyContinue |
-                  Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
-                """.trimIndent()
-            }
-        )
-    }
-
     /** A bare address becomes a host route; anything already carrying a prefix length is kept as-is. */
     private fun toDestinationPrefix(entry: String): String =
         entry.trim().let { if (it.contains('/')) it else "$it/32" }
 
-    private suspend fun removeRoutes() {
+    /** Undoes [installRoutes] — tunnel address, capture routes, DNS and every bypass route. */
+    private suspend fun removeRoutes(bypassPrefixes: List<String>) {
+        val bypassCommands = bypassPrefixes.map(::toDestinationPrefix).joinToString("\n") { prefix ->
+            """
+            Get-NetRoute -DestinationPrefix '$prefix' -ErrorAction SilentlyContinue |
+              Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
+            """.trimIndent()
+        }
         runPowerShell(
             """
+            $bypassCommands
             ${'$'}adapter = Get-NetAdapter -Name '$TUN_NAME' -ErrorAction SilentlyContinue
             if (${'$'}null -eq ${'$'}adapter) { exit 0 }
             ${'$'}ifIndex = ${'$'}adapter.ifIndex
@@ -228,23 +244,37 @@ internal class WindowsTunController(
         )
     }
 
+    /**
+     * Runs [script] via a temp .ps1 rather than `-Command`.
+     *
+     * A VK-TURN session carves ~120 VK/OK prefixes out of the tunnel, and the resulting inline
+     * script blew past the 32 767-char Windows command line: `CreateProcess error=206, the filename
+     * or extension is too long` — the connection then failed outright. A file has no such limit.
+     */
     private suspend fun runPowerShell(script: String): String = withContext(Dispatchers.IO) {
-        val process = ProcessBuilder(
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script
-        )
-            .redirectErrorStream(true)
-            .start()
-        val output = process.inputStream.bufferedReader().use { it.readText() }
-        val exitCode = process.waitFor()
-        if (exitCode != 0) {
-            error("PowerShell failed with code $exitCode: $output")
+        val scriptFile = Files.createTempFile("yptun-tun-", ".ps1")
+        try {
+            Files.writeString(scriptFile, script)
+            val process = ProcessBuilder(
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                scriptFile.toAbsolutePath().toString()
+            )
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val exitCode = process.waitFor()
+            if (exitCode != 0) {
+                error("PowerShell failed with code $exitCode: $output")
+            }
+            output
+        } finally {
+            runCatching { Files.deleteIfExists(scriptFile) }
         }
-        output
     }
 
     private fun stopProcess(process: Process?) {
