@@ -572,12 +572,39 @@ class DesktopVpnManager private constructor(
 
             if (desktopMode == DesktopMode.WindowsTun) {
                 windowsTunController.ensureAdministratorOrRequestRestart()
+                // Pin Xray's sockets to the physical adapter BEFORE anything is started — Windows
+                // has no VpnService.protect(), and a `direct`-routed dial that follows the routing
+                // table lands back in our own TUN and loops (see PhysicalInterface). sing-box needs
+                // none of this: it has auto_detect_interface.
+                val physIndex = org.olcbox.app.vpn.desktop.PhysicalInterface.index()
+                // VK-TURN's Xray exit reaches its WireGuard hop over UDP on 127.0.0.1, and Xray
+                // hands the controller the bind address for UDP, so a pinned UDP socket would cut it.
+                val pinUdp = location.engine != EngineType.VkTurn
+                if (physIndex > 0) {
+                    org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(physIndex, pinUdp)
+                    addLog("Pinning Xray sockets to network interface #$physIndex (keeps direct traffic out of the TUN)")
+                } else {
+                    org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0, pinUdp)
+                    addLog("Could not identify the physical network interface; direct-routed traffic may loop through the TUN")
+                }
+            } else {
+                org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0, true)
             }
 
             // Non-Stealth engines (sing-box/xray/AmneziaWG/Hysteria2/VK-TURN/Chain) run in-process
             // via the yptuncore library — the desktop port of the Android engine stack. Stealth
             // keeps the proven olcrtc subprocess (incl. the privileged Linux TUN path).
             val useEngineController = location.engine != EngineType.Stealth && engineController.isSupported
+
+            // Resolved ONCE per connect: this does DNS lookups and, for VK-TURN, an ASN→CIDR fetch.
+            // It used to be computed twice on the Windows-TUN + external-bridge path (in-core TUN
+            // exclusions, then again for the bypass routes), paying the whole cost twice.
+            val bypassServerIps =
+                if (useEngineController && desktopMode == DesktopMode.WindowsTun) {
+                    resolveBypassServerIps(location)
+                } else {
+                    emptyList()
+                }
 
             if (useEngineController) {
                 engineLocation = location
@@ -593,7 +620,7 @@ class DesktopVpnManager private constructor(
                 // covers sing-box's OWN dials, so a sibling core in the same process — awgproxy's
                 // WireGuard endpoint above all — otherwise sends its UDP straight back into the tunnel
                 // it is supposed to provide, and AmneziaWG never comes up in TUN mode.
-                val tunExcludeAddresses = if (wantsInCoreTun) resolveBypassServerIps(location) else emptyList()
+                val tunExcludeAddresses = if (wantsInCoreTun) bypassServerIps else emptyList()
                 if (tunExcludeAddresses.isNotEmpty()) {
                     addLog("Excluding ${tunExcludeAddresses.size} upstream address(es) from the in-core TUN")
                 }
@@ -659,7 +686,7 @@ class DesktopVpnManager private constructor(
                     startWindowsTun(
                         socksPort = bridgeSettings.port,
                         requestGeneration = requestGeneration,
-                        bypassServerIps = if (useEngineController) resolveBypassServerIps(location) else emptyList(),
+                        bypassServerIps = bypassServerIps,
                         socksUsername = bridgeSettings.username,
                         socksPassword = bridgeSettings.password
                     )
@@ -711,6 +738,7 @@ class DesktopVpnManager private constructor(
 
             pacServer.stop()
             runCatching { engineController.stopAll() }
+            runCatching { org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0) }
             engineLocation = null
             stopProcess(process)
             process = null
@@ -867,6 +895,9 @@ class DesktopVpnManager private constructor(
 
         // Stop the in-process engines (no-op when the olcrtc subprocess path was used).
         runCatching { engineController.stopAll() }
+        // Release the interface pin so the next session (or a ping probe) re-resolves it — the
+        // adapter index changes with the network the machine is on.
+        runCatching { org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0) }
         engineLocation = null
 
         stopProcess(process)

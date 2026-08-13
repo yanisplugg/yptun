@@ -24,6 +24,9 @@ internal interface YpTunCoreLib : Library {
     fun YpSbStop()
     fun YpSbRunning(): Int
 
+    fun YpBindOutboundInterface(index: Int, pinUdp: Int)
+    fun YpAddNativeSearchPath(dir: String)
+
     fun YpXraySetAssetPath(dir: String)
     fun YpXrayVersion(): Pointer?
     fun YpXrayStart(configJson: String): Pointer?
@@ -144,6 +147,11 @@ internal object YpTunCore {
             input.use { Files.copy(it, tempFile, StandardCopyOption.REPLACE_EXISTING) }
             val lib = Native.load(tempFile.toAbsolutePath().toString(), YpTunCoreLib::class.java)
             startLogPump(lib)
+            // NaïveProxy's cronet library is loaded lazily, by name, from PATH — point the core at
+            // the directory we unpack the bundled natives into (see DesktopNativeAssets).
+            runCatching {
+                lib.YpAddNativeSearchPath(DesktopNativeAssets.resolveCronetLibraryDir().toString())
+            }
             lib
         } catch (e: Throwable) {
             println("YpTunCore: failed to load native library: ${e.message}")
@@ -212,6 +220,18 @@ internal object YpTunCore {
     fun sbStart(configJson: String) = check(lib().YpSbStart(configJson), "sing-box start failed")
     fun sbStop() = lib().YpSbStop()
     fun sbRunning(): Boolean = libOrNull?.YpSbRunning() == 1
+
+    /**
+     * Pins the sockets xray opens to the physical adapter [index] (0 = off). The Windows stand-in
+     * for VpnService.protect(): without it xray's `direct` outbound is swallowed by our own TUN and
+     * loops, which is what made routing profiles and cascades look dead in TUN mode.
+     *
+     * [pinUdp] must be false for a config whose UDP goes to a local hop (the VK-TURN
+     * WireGuard-over-Xray exit) — see the Go doc on YpBindOutboundInterface.
+     */
+    fun bindOutboundInterface(index: Int, pinUdp: Boolean = true) {
+        runCatching { libOrNull?.YpBindOutboundInterface(index, if (pinUdp) 1 else 0) }
+    }
 
     // xray ----------------------------------------------------------------------------------
     fun xraySetAssetPath(dir: String) = lib().YpXraySetAssetPath(dir)

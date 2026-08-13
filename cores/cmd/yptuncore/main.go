@@ -3,9 +3,10 @@
 //
 // It mirrors what the gomobile AAR provides on Android — sing-box, xray, AmneziaWG,
 // Hysteria2, VK-TURN (freeturn) and olcrtc in ONE shared Go runtime — but with plain C
-// functions instead of gomobile bindings. On desktop there is no VpnService, so no socket
-// protectors are installed: the TUN bridge (tun2socks/wintun) adds a host route for the
-// proxy server instead, and sing-box uses its native auto_detect_interface support.
+// functions instead of gomobile bindings. On desktop there is no VpnService.protect(), so a core's
+// own sockets are kept off the tunnel three ways: sing-box uses its native auto_detect_interface,
+// the TUN bridge adds host routes for known upstreams, and xray is pinned to the physical adapter
+// with YpBindOutboundInterface (which is also what keeps `direct`-routed traffic from looping).
 //
 // Memory contract: every *C.char returned by an exported function is allocated with
 // C.CString and MUST be released by the caller via YpFree. Returned error strings are
@@ -26,6 +27,8 @@ import "C"
 import (
 	"context"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -42,12 +45,14 @@ import (
 	"github.com/xtls/xray-core/core"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"github.com/xtls/xray-core/infra/conf/serial"
+	"github.com/xtls/xray-core/transport/internet"
 
 	"bytes"
 	"errors"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	xnet "github.com/xtls/xray-core/common/net"
 )
@@ -180,6 +185,107 @@ var (
 	xrayMu       sync.Mutex
 	xrayInstance *core.Instance
 )
+
+// Interface every xray socket is pinned to, or 0 for "don't pin" (see YpBindOutboundInterface).
+var (
+	bindIfIndex      atomic.Uint32
+	bindIfUdp        atomic.Bool
+	bindIfControlSet sync.Once
+)
+
+// YpBindOutboundInterface pins the sockets xray opens to network interface [index] — the desktop
+// stand-in for Android's VpnService.protect(), which does not exist on Windows.
+//
+// Without it, xray's `direct`/freedom outbound dials through the OS routing table, where the TUN's
+// 0.0.0.0/1 + 128.0.0.0/1 sit at metric 1. Anything a routing profile sends direct therefore came
+// back IN through tun2socks, was handed to xray again, dialed direct again… a hard loop that ate
+// the ephemeral port range within seconds ("Only one usage of each socket address…" in the tun log)
+// and made both routing profiles and cascades look dead in TUN mode. sing-box was never affected —
+// it has auto_detect_interface.
+//
+// [pinUdp] must be 0 for a config whose UDP goes to a LOCAL hop: xray hands the controller the
+// socket's BIND address (0.0.0.0:0) for UDP, not the destination, so a pinned UDP socket can no
+// longer reach 127.0.0.1 — which is exactly how the VK-TURN WireGuard-over-Xray exit talks to the
+// relay. Everything else (Standard/Chain/dnstt) wants 1, so direct DNS escapes the tunnel too.
+//
+// Pass the PHYSICAL interface index before starting the core, and 0 after stopping it.
+//
+//export YpBindOutboundInterface
+func YpBindOutboundInterface(index C.int, pinUdp C.int) {
+	if index < 0 {
+		index = 0
+	}
+	bindIfIndex.Store(uint32(index))
+	bindIfUdp.Store(pinUdp != 0)
+	// Registered once and kept: the controller is a no-op while the index is 0, so installing it
+	// unconditionally avoids racing a re-registration against a live dial.
+	bindIfControlSet.Do(func() {
+		internet.RegisterDialerController(func(network, address string, conn syscall.RawConn) error {
+			idx := bindIfIndex.Load()
+			if idx == 0 || !shouldPinSocket(network, address) {
+				return nil
+			}
+			return bindSocketToInterface(conn, idx)
+		})
+	})
+}
+
+// shouldPinSocket decides whether one dial gets pinned to the physical interface.
+//
+// IPv4 only (the desktop TUN captures IPv4 only), never loopback (every internal hop — the olcRTC
+// chain port, awgproxy, dnstt, the VK-TURN listener — lives there).
+func shouldPinSocket(network, address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() == nil || ip.IsLoopback() {
+		return false
+	}
+	if ip.IsUnspecified() {
+		// xray's UDP path is a ListenPacket, so [address] is the bind address rather than the
+		// destination and we cannot tell a local hop from a remote one — the caller does.
+		return strings.HasPrefix(network, "udp") && bindIfUdp.Load()
+	}
+	return true
+}
+
+// YpAddNativeSearchPath adds [dir] to the library search paths this process looks in.
+//
+// It exists for NaïveProxy: cronet ships as a shared library (libcronet.dll / .so / .dylib) that the
+// `with_purego` loader finds by NAME, scanning the executable's directory plus PATH (Windows) or
+// LD_LIBRARY_PATH / DYLD_LIBRARY_PATH (Unix). On desktop our natives are unpacked out of the app jar
+// into the YPtun data dir, which none of those cover, so the app points us at that directory. The
+// loader reads these through os.Getenv, so setting them in-process is enough.
+//
+// Harmless when NaïveProxy is unused — nothing loads cronet until a naive outbound is dialed.
+//
+//export YpAddNativeSearchPath
+func YpAddNativeSearchPath(dir *C.char) {
+	d := C.GoString(dir)
+	if d == "" {
+		return
+	}
+	for _, name := range []string{"PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"} {
+		prependSearchPath(name, d)
+	}
+}
+
+func prependSearchPath(name, dir string) {
+	sep := string(os.PathListSeparator)
+	current := os.Getenv(name)
+	if current == "" {
+		_ = os.Setenv(name, dir)
+		return
+	}
+	for _, entry := range strings.Split(current, sep) {
+		if entry == dir {
+			return
+		}
+	}
+	_ = os.Setenv(name, dir+sep+current)
+}
 
 //export YpXraySetAssetPath
 func YpXraySetAssetPath(dir *C.char) {
