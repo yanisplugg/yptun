@@ -151,6 +151,46 @@ abstract class ExtractTarGzEntryTask : DefaultTask() {
     }
 }
 
+/**
+ * Copies one file out of a Go module in the local module cache.
+ *
+ * Used for cronet's shared library (NaïveProxy): it is published as a per-platform Go module whose
+ * only real content is the binary, and `go list -m -f {{.Dir}}` is the supported way to ask where
+ * the cache put it.
+ */
+abstract class CopyGoModuleFileTask : DefaultTask() {
+    @get:Input
+    abstract val moduleName: Property<String>
+
+    @get:Input
+    abstract val fileName: Property<String>
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val goModFile: RegularFileProperty
+
+    @get:OutputFile
+    abstract val outputFile: RegularFileProperty
+
+    @TaskAction
+    fun copy() {
+        val workDir = goModFile.get().asFile.parentFile
+        val process = ProcessBuilder("go", "list", "-m", "-f", "{{.Dir}}", moduleName.get())
+            .directory(workDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        check(process.waitFor() == 0 && output.isNotEmpty()) {
+            "go list -m ${moduleName.get()} failed: $output"
+        }
+        val source = File(output.lines().last().trim(), fileName.get())
+        check(source.isFile) { "${source.absolutePath} not found in the Go module cache" }
+        val target = outputFile.get().asFile
+        target.parentFile.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+}
+
 abstract class VerifyNativeResourcesTask : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -448,25 +488,40 @@ if (currentBuildOs.isLinux) {
 // fork; sing-box 1.13 moved to sagernet/quic-go v0.59 (qpack v0.6) and the clash is gone, which is
 // why sharedUI already ships it.
 //
-// with_naive_outbound (NaïveProxy) is deliberately NOT set on desktop. Both platforms block it, for
-// different reasons, and both were confirmed by building:
-//   - Windows: the cronet windows_* modules ship ONLY libcronet.dll and are gated behind an extra
-//     `with_purego` tag, whose loader searches the running executable's directory and PATH. Our
-//     natives live inside the app jar, which that loader cannot see, so it would also need
-//     libcronet.dll placed in the jpackage app-image root.
-//   - Linux: libcronet.a is built with CREL relocations (`.crel.text`), which the GNU ld on
-//     ubuntu-22.04 (binutils 2.38) rejects outright - "unknown type [0x40000014]". Fixing it means
-//     either a newer LLD or a newer runner, and a newer runner would raise the glibc floor from 2.35
-//     to 2.39, dropping Ubuntu 22.04 and Debian 12. The compatibility floor wins.
+// with_naive_outbound (NaïveProxy) rides on with_purego, which is what makes it work on desktop at
+// all. The earlier attempt used the default cgo path and was blocked on BOTH targets: on Windows the
+// cronet windows_* modules ship no static archive, and on Linux libcronet.a is built with CREL
+// relocations (`.crel.text`) that the GNU ld on ubuntu-22.04 (binutils 2.38) rejects outright.
+// with_purego sidesteps both: cronet is then a SHARED library (libcronet.dll / libcronet.so) loaded
+// at runtime, so nothing is statically linked. Its loader finds the library by name in the exe
+// directory / PATH / LD_LIBRARY_PATH, none of which reach inside our app jar — so the library is
+// bundled as a native resource, unpacked next to the other natives, and the core is pointed at that
+// directory via YpAddNativeSearchPath (see copyCronet* below and DesktopNativeAssets).
+//
 // Android is unaffected: it links cronet's android_* archives with the NDK toolchain.
 val ypTunCoreBuildTags =
-    "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic"
+    "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic," +
+        "with_naive_outbound,with_purego"
 val coresRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("cores")
 
 // sing-box version embedded via ldflags (-X constant.Version); otherwise YpSbVersion() reports
 // "unknown" and the settings screen has to guess. Keep in sync with sharedUI's singboxVersion and
 // the sing-box version pinned in cores/go.mod.
 val ypTunCoreSingboxVersion = "1.13.18"
+
+/**
+ * cronet, NaïveProxy's engine, taken from the Go module cache and shipped as a native resource.
+ * The core's `with_purego` loader opens it by name at dial time (see ypTunCoreBuildTags).
+ */
+fun registerCronetCopyTask(goos: String, goarch: String, fileName: String) =
+    tasks.register<CopyGoModuleFileTask>(
+        "copyCronet${goos.replaceFirstChar { it.uppercase() }}${goarch.replaceFirstChar { it.uppercase() }}"
+    ) {
+        moduleName.set("github.com/sagernet/cronet-go/lib/${goos}_$goarch")
+        this.fileName.set(fileName)
+        goModFile.set(layout.file(provider { coresRepoDir.resolve("go.mod") }))
+        outputFile.set(generatedNativeResources.map { it.file("native/$fileName") })
+    }
 
 fun registerYpTunCoreBuildTask(
     taskName: String,
@@ -517,6 +572,10 @@ if (currentBuildOs.isLinux) {
     desktopNativeAssetTasks.add(buildYpTunCoreLinux)
     hostDesktopNativeAssetTasks.add(buildYpTunCoreLinux)
 
+    val copyCronetLinux = registerCronetCopyTask("linux", hostDesktopArch, "libcronet.so")
+    desktopNativeAssetTasks.add(copyCronetLinux)
+    hostDesktopNativeAssetTasks.add(copyCronetLinux)
+
     val downloadTrustTunnelLinux = tasks.register<DownloadFileTask>("downloadTrustTunnelLinux") {
         sourceUrl.set(
             "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/" +
@@ -557,6 +616,10 @@ if (currentBuildOs.isWindows) {
     )
     desktopNativeAssetTasks.add(buildYpTunCoreWindows)
     hostDesktopNativeAssetTasks.add(buildYpTunCoreWindows)
+
+    val copyCronetWindows = registerCronetCopyTask("windows", hostDesktopArch, "libcronet.dll")
+    desktopNativeAssetTasks.add(copyCronetWindows)
+    hostDesktopNativeAssetTasks.add(copyCronetWindows)
 
     val tun2SocksWindowsOutput = generatedNativeResources.map {
         it.file("native/tun2socks-windows-$hostDesktopArch.exe")
