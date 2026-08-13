@@ -6,6 +6,7 @@ import (
 
 	"github.com/openlibrecommunity/olcrtc/internal/auth"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 )
 
 // Provider produces LiveKit credentials for the WB Stream service.
@@ -27,10 +28,14 @@ func (Provider) Issue(ctx context.Context, cfg auth.Config) (auth.Credentials, e
 	if cfg.RoomURL == "" || cfg.RoomURL == "any" {
 		return auth.Credentials{}, auth.ErrRoomIDRequired
 	}
+	resolver := cfg.Resolver
+	if resolver == nil {
+		resolver = protect.NewResolver(cfg.DNSServer)
+	}
 
 	accessToken := cfg.Token
 	if accessToken == "" {
-		guest, err := registerGuest(ctx, cfg.Name)
+		guest, err := registerGuest(ctx, cfg.Name, resolver)
 		if err != nil {
 			return auth.Credentials{}, fmt.Errorf("register guest: %w", err)
 		}
@@ -39,11 +44,11 @@ func (Provider) Issue(ctx context.Context, cfg auth.Config) (auth.Credentials, e
 	}
 
 	roomID := cfg.RoomURL
-	if err := joinRoom(ctx, accessToken, roomID); err != nil {
+	if err := joinRoom(ctx, accessToken, roomID, resolver); err != nil {
 		return auth.Credentials{}, fmt.Errorf("join room: %w", err)
 	}
 
-	tok, err := getToken(ctx, accessToken, roomID, cfg.Name)
+	tok, err := getToken(ctx, accessToken, roomID, cfg.Name, resolver)
 	if err != nil {
 		return auth.Credentials{}, fmt.Errorf("get token: %w", err)
 	}

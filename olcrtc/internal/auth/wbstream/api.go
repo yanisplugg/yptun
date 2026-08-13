@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 
 	"github.com/openlibrecommunity/olcrtc/internal/protect"
@@ -43,7 +44,7 @@ type tokenResponse struct {
 	ServerURL string `json:"serverUrl"`
 }
 
-func registerGuest(ctx context.Context, displayName string) (string, error) {
+func registerGuest(ctx context.Context, displayName string, resolvers ...*net.Resolver) (string, error) {
 	u := apiBase + "/auth/api/v1/auth/user/guest-register"
 	reqBody := guestRegisterRequest{
 		DisplayName: displayName,
@@ -64,7 +65,7 @@ func registerGuest(ctx context.Context, displayName string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux x86_64)")
 
-	client := protect.NewHTTPClient()
+	client := protect.NewHTTPClient(resolvers...)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("do request: %w", err)
@@ -82,7 +83,7 @@ func registerGuest(ctx context.Context, displayName string) (string, error) {
 	return res.AccessToken, nil
 }
 
-func joinRoom(ctx context.Context, accessToken, roomID string) error {
+func joinRoom(ctx context.Context, accessToken, roomID string, resolvers ...*net.Resolver) error {
 	u := fmt.Sprintf("%s/api-room/api/v1/room/%s/join", apiBase, roomID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader([]byte("{}")))
 	if err != nil {
@@ -92,7 +93,7 @@ func joinRoom(ctx context.Context, accessToken, roomID string) error {
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux x86_64)")
 
-	client := protect.NewHTTPClient()
+	client := protect.NewHTTPClient(resolvers...)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("do request: %w", err)
@@ -105,7 +106,9 @@ func joinRoom(ctx context.Context, accessToken, roomID string) error {
 	return nil
 }
 
-func getToken(ctx context.Context, accessToken, roomID, displayName string) (tokenResponse, error) {
+func getToken(
+	ctx context.Context, accessToken, roomID, displayName string, resolvers ...*net.Resolver,
+) (tokenResponse, error) {
 	u := fmt.Sprintf("%s/api-room-manager/v2/room/%s/connection-details", apiBase, roomID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -120,7 +123,7 @@ func getToken(ctx context.Context, accessToken, roomID, displayName string) (tok
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux x86_64)")
 
-	client := protect.NewHTTPClient()
+	client := protect.NewHTTPClient(resolvers...)
 	resp, err := client.Do(req)
 	if err != nil {
 		return tokenResponse{}, fmt.Errorf("do request: %w", err)

@@ -101,6 +101,110 @@ func TestControlFuncProtects(t *testing.T) {
 	}
 }
 
+func TestCreateDialerUsesResolver(t *testing.T) {
+	resolver := &net.Resolver{PreferGo: true}
+	n := &ProtectedNet{resolver: resolver}
+	dialer, ok := n.CreateDialer(nil).(*protectedDialer)
+	if !ok {
+		t.Fatalf("CreateDialer() type = %T, want *protectedDialer", n.CreateDialer(nil))
+	}
+	if dialer.dialer.Resolver != resolver {
+		t.Fatalf("CreateDialer().Resolver = %p, want %p", dialer.dialer.Resolver, resolver)
+	}
+}
+
+//nolint:cyclop // covers related address forms together
+func TestResolveAddrUsesInjectedResolverSemantics(t *testing.T) {
+	t.Parallel()
+
+	n := &ProtectedNet{resolver: &net.Resolver{PreferGo: true}}
+
+	tcp, err := n.ResolveTCPAddr("tcp", "127.0.0.1:http")
+	if err != nil {
+		t.Fatalf("ResolveTCPAddr service: %v", err)
+	}
+	if !tcp.IP.Equal(net.IPv4(127, 0, 0, 1)) || tcp.Port != 80 {
+		t.Errorf("ResolveTCPAddr service = %v, want 127.0.0.1:80", tcp)
+	}
+
+	udp, err := n.ResolveUDPAddr("udp6", "[fe80::1%test-zone]:domain")
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr zone: %v", err)
+	}
+	if !udp.IP.Equal(net.ParseIP("fe80::1")) || udp.Port != 53 || udp.Zone != "test-zone" {
+		t.Errorf("ResolveUDPAddr zone = %#v, want [fe80::1%%test-zone]:53", udp)
+	}
+
+	ip, err := n.ResolveIPAddr(ipNetwork6, "fe80::2%test-zone")
+	if err != nil {
+		t.Fatalf("ResolveIPAddr zone: %v", err)
+	}
+	if !ip.IP.Equal(net.ParseIP("fe80::2")) || ip.Zone != "test-zone" {
+		t.Errorf("ResolveIPAddr zone = %#v, want fe80::2%%test-zone", ip)
+	}
+
+	empty, err := n.ResolveTCPAddr("", "")
+	if err != nil {
+		t.Fatalf("ResolveTCPAddr empty address: %v", err)
+	}
+	if empty.IP != nil || empty.Port != 0 || empty.Zone != "" {
+		t.Errorf("ResolveTCPAddr empty address = %#v, want zero TCPAddr", empty)
+	}
+
+	emptyHost, err := n.ResolveUDPAddr("udp", ":53")
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr empty host: %v", err)
+	}
+	if emptyHost.IP != nil || emptyHost.Port != 53 || emptyHost.Zone != "" {
+		t.Errorf("ResolveUDPAddr empty host = %#v, want :53", emptyHost)
+	}
+}
+
+func TestResolveAddrRejectsInvalidPortAndFamily(t *testing.T) {
+	t.Parallel()
+
+	n := &ProtectedNet{resolver: &net.Resolver{PreferGo: true}}
+	for _, address := range []string{"127.0.0.1:-1", "127.0.0.1:65536"} {
+		if _, err := n.ResolveTCPAddr("tcp", address); err == nil {
+			t.Errorf("ResolveTCPAddr(%q) unexpectedly succeeded", address)
+		}
+	}
+	if _, err := n.ResolveTCPAddr("tcp4", "[::1]:80"); err == nil {
+		t.Error("ResolveTCPAddr tcp4 IPv6 literal unexpectedly succeeded")
+	}
+	if _, err := n.ResolveUDPAddr("udp6", "127.0.0.1:53"); err == nil {
+		t.Error("ResolveUDPAddr udp6 IPv4 literal unexpectedly succeeded")
+	}
+	if _, err := n.ResolveIPAddr(ipNetwork4, "::1"); err == nil {
+		t.Error("ResolveIPAddr ip4 IPv6 literal unexpectedly succeeded")
+	}
+}
+
+func TestLookupIPAddrSelection(t *testing.T) {
+	t.Parallel()
+
+	ips := []net.IPAddr{
+		{IP: net.ParseIP("2001:db8::1")},
+		{IP: net.IPv4(192, 0, 2, 1)},
+	}
+	for _, tc := range []struct {
+		network string
+		want    net.IP
+	}{
+		{network: "ip", want: net.IPv4(192, 0, 2, 1)},
+		{network: ipNetwork4, want: net.IPv4(192, 0, 2, 1)},
+		{network: ipNetwork6, want: net.ParseIP("2001:db8::1")},
+	} {
+		got, err := selectIPAddr(ips, tc.network, "example.test")
+		if err != nil {
+			t.Fatalf("selectIPAddr(%q): %v", tc.network, err)
+		}
+		if !got.IP.Equal(tc.want) {
+			t.Errorf("selectIPAddr(%q) = %v, want %v", tc.network, got.IP, tc.want)
+		}
+	}
+}
+
 // TestCreateDialerProtectsAndChains verifies that CreateDialer copies the
 // caller's Dialer and keeps the caller's Control hook.
 func TestCreateDialerProtectsAndChains(t *testing.T) {

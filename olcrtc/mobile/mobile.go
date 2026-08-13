@@ -87,6 +87,7 @@ var (
 type mobileConfig struct {
 	transport        string
 	dnsServer        string
+	resolver         *net.Resolver
 	socksListenHost  string
 	authToken        string
 	vp8FPS           int
@@ -117,7 +118,7 @@ func SetLogWriter(w LogWriter) {
 
 // olcrtcVersion identifies the vendored olcRTC core build (upstream commit + update date). Bump it
 // whenever the core is re-synced from upstream; surfaced in the app's settings.
-const olcrtcVersion = "2026.07.23-2f2db04"
+const olcrtcVersion = "2026.08.13-3339cd3"
 
 // Version returns the olcRTC core version for display in the app.
 func Version() string { return olcrtcVersion }
@@ -148,6 +149,15 @@ func SetDNS(dnsServer string) {
 	defer mu.Unlock()
 	ensureDefaultConfigLocked()
 	defaults.dnsServer = dnsServer
+	defaults.resolver = protect.NewResolver(dnsServer)
+}
+
+// SetCustomResolver sets the resolver used by outbound olcrtc connections.
+func SetCustomResolver(resolver *net.Resolver) {
+	mu.Lock()
+	defer mu.Unlock()
+	ensureDefaultConfigLocked()
+	defaults.resolver = resolver
 }
 
 // SetWBToken sets the pre-issued wbstream account token (auth.token).
@@ -279,7 +289,8 @@ func Check(
 				KeyHex:    keyHex,
 				DeviceID:  clientID,
 				LocalAddr: socksListenAddr(cfg.socksListenHost, socksPort),
-				DNSServer: defaultDNSServer,
+				DNSServer: cfg.dnsServer,
+				Resolver:  cfg.resolver,
 				AuthToken: cfg.authToken,
 				TransportOptions: vp8channel.Options{
 					FPS:       clampAtLeastOne(vp8FPS, 120),
@@ -370,7 +381,8 @@ func Ping(
 				KeyHex:    keyHex,
 				DeviceID:  clientID,
 				LocalAddr: socksListenAddr(cfg.socksListenHost, socksPort),
-				DNSServer: defaultDNSServer,
+				DNSServer: cfg.dnsServer,
+				Resolver:  cfg.resolver,
 				AuthToken: cfg.authToken,
 				TransportOptions: vp8channel.Options{
 					FPS:       clampAtLeastOne(vp8FPS, 120),
@@ -597,7 +609,6 @@ func startWithConfig(
 	}
 
 	roomURL := buildRoomURL(carrierName, roomID)
-
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	cancel = cancelFunc
 	done = make(chan struct{})
@@ -619,6 +630,7 @@ func startWithConfig(
 				DeviceID:  clientID,
 				LocalAddr: socksListenAddr(cfg.socksListenHost, socksPort),
 				DNSServer: cfg.dnsServer,
+				Resolver:  cfg.resolver,
 				AuthToken: cfg.authToken,
 				SOCKSUser: socksUser,
 				SOCKSPass: socksPass,
@@ -739,6 +751,7 @@ func ensureDefaultConfigLocked() {
 		defaults = mobileConfig{
 			transport:        defaultTransport,
 			dnsServer:        defaultDNSServer,
+			resolver:         protect.NewResolver(defaultDNSServer),
 			socksListenHost:  defaultSocksHost,
 			vp8FPS:           30,
 			vp8BatchSize:     8,

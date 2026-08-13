@@ -228,6 +228,8 @@ uri: olcrtc://jitsi?datachannel@https://meet.example.org/olcrtc-xxxxxxxx#<key>$o
 
 На своей машине (домашний ПК, ноутбук):
 
+> Хочешь готовый Android-клиент? Возьми [owenewans/owenclave](https://github.com/owenewans/owenclave) ([src.owenewans.org/owenrtc](https://src.owenewans.org/owenrtc)) - он читает URI `olcrtc://` и подписки напрямую, без бинарника. Ниже - запуск нативного бинарника `cnc` (только SOCKS5).
+
 ```sh
 git clone https://github.com/openlibrecommunity/olcrtc --recurse-submodules
 cd olcrtc

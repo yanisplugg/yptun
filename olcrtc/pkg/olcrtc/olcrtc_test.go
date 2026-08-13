@@ -3,6 +3,7 @@ package olcrtc_test
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -38,8 +39,10 @@ func (s *stubSession) CanSend() bool                                    { return
 func (s *stubSession) GetSendQueue() chan []byte                        { return nil }
 func (s *stubSession) GetBufferedAmount() uint64                        { return 0 }
 func (s *stubSession) Reconnect(_ string)                               {}
-func (s *stubSession) Capabilities() engine.Capabilities               { return engine.Capabilities{ByteStream: true} }
-func (s *stubSession) SubscriberCanSend() bool                          { return s.connected }
+func (s *stubSession) Capabilities() engine.Capabilities {
+	return engine.Capabilities{ByteStream: true}
+}
+func (s *stubSession) SubscriberCanSend() bool { return s.connected }
 
 // Compile-time check: stubSession must satisfy engine.Session.
 var _ engine.Session = (*stubSession)(nil)
@@ -144,6 +147,35 @@ func TestNewDirect_OK(t *testing.T) {
 	}
 	if err := sess.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestNewDirectKeepsResolverSessionScoped(t *testing.T) {
+	const engineName = "stub-resolver"
+	var configs []engine.Config
+	engine.Register(engineName, func(_ context.Context, cfg engine.Config) (engine.Session, error) {
+		configs = append(configs, cfg)
+		return newStubSession(), nil
+	})
+
+	resolverA := &net.Resolver{PreferGo: true}
+	resolverB := &net.Resolver{StrictErrors: true}
+	for _, resolver := range []*net.Resolver{resolverA, resolverB} {
+		sess, err := olcrtc.New(context.Background(), olcrtc.Config{
+			Engine: engineName, URL: stubURL, Token: stubToken, Resolver: resolver,
+		})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		_ = sess.Close()
+	}
+
+	if len(configs) != 2 {
+		t.Fatalf("engine configs = %d, want 2", len(configs))
+	}
+	if configs[0].Resolver != resolverA || configs[1].Resolver != resolverB {
+		t.Fatalf("resolvers = [%p, %p], want [%p, %p]",
+			configs[0].Resolver, configs[1].Resolver, resolverA, resolverB)
 	}
 }
 

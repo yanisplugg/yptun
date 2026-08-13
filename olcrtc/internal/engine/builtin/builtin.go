@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/openlibrecommunity/olcrtc/internal/auth"
 	authJitsi "github.com/openlibrecommunity/olcrtc/internal/auth/jitsi"
@@ -36,6 +37,7 @@ type Config struct {
 	OnData              func([]byte)
 	OnPeerData          func(peerID string, data []byte)
 	DNSServer           string
+	Resolver            *net.Resolver
 	ProxyAddr           string
 	ProxyPort           int
 	RequireTargetedPeer bool
@@ -102,6 +104,7 @@ func registerDirect(name string) {
 			OnData:              cfg.OnData,
 			OnPeerData:          cfg.OnPeerData,
 			DNSServer:           cfg.DNSServer,
+			Resolver:            cfg.Resolver,
 			ProxyAddr:           cfg.ProxyAddr,
 			ProxyPort:           cfg.ProxyPort,
 			RequireTargetedPeer: cfg.RequireTargetedPeer,
@@ -122,6 +125,7 @@ func registerEngineAuth(name string, provider auth.Provider) {
 			Name:      cfg.Name,
 			Token:     cfg.AuthToken,
 			DNSServer: cfg.DNSServer,
+			Resolver:  cfg.Resolver,
 			ProxyAddr: cfg.ProxyAddr,
 			ProxyPort: cfg.ProxyPort,
 		}
@@ -137,6 +141,7 @@ func registerEngineAuth(name string, provider auth.Provider) {
 			OnData:              cfg.OnData,
 			OnPeerData:          cfg.OnPeerData,
 			DNSServer:           cfg.DNSServer,
+			Resolver:            cfg.Resolver,
 			ProxyAddr:           cfg.ProxyAddr,
 			ProxyPort:           cfg.ProxyPort,
 			RequireTargetedPeer: cfg.RequireTargetedPeer,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -105,6 +106,34 @@ func TestDefaultsAndSetters(t *testing.T) {
 	SetDebug(false)
 	if logger.IsVerbose() {
 		t.Fatal("SetDebug(false) did not disable verbose")
+	}
+}
+
+func TestDNSSettersDoNotMutateDefaultResolver(t *testing.T) {
+	resetMobileGlobals(t)
+	defaultResolver := net.DefaultResolver
+	custom := &net.Resolver{PreferGo: true}
+
+	SetDNS("9.9.9.9:53")
+	if net.DefaultResolver != defaultResolver {
+		t.Fatal("SetDNS() mutated net.DefaultResolver")
+	}
+	mu.Lock()
+	dnsResolver := defaults.resolver
+	mu.Unlock()
+	if dnsResolver == nil || dnsResolver == net.DefaultResolver {
+		t.Fatal("SetDNS() did not store a local resolver")
+	}
+
+	SetCustomResolver(custom)
+	if net.DefaultResolver != defaultResolver {
+		t.Fatal("SetCustomResolver() mutated net.DefaultResolver")
+	}
+	mu.Lock()
+	got := defaults.resolver
+	mu.Unlock()
+	if got != custom {
+		t.Fatal("SetCustomResolver() did not install the supplied resolver")
 	}
 }
 

@@ -37,6 +37,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/auth"
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 )
 
 var (
@@ -70,6 +71,8 @@ type Config struct {
 	Name string
 	// DNSServer is an optional custom DNS resolver (e.g. "8.8.8.8:53").
 	DNSServer string
+	// Resolver overrides DNSServer for outbound DNS lookups.
+	Resolver *net.Resolver
 	// ProxyAddr / ProxyPort configure an outbound SOCKS5 proxy.
 	ProxyAddr string
 	ProxyPort int
@@ -95,10 +98,18 @@ func RegisterDefaults() {
 // New creates a Session from cfg. The session is not connected yet; call
 // [Session.Connect] when ready.
 func New(ctx context.Context, cfg Config) (*Session, error) {
+	cfg.Resolver = resolverFor(cfg)
 	if cfg.Auth != "" {
 		return newWithAuth(ctx, cfg)
 	}
 	return newDirect(ctx, cfg)
+}
+
+func resolverFor(cfg Config) *net.Resolver {
+	if cfg.Resolver != nil {
+		return cfg.Resolver
+	}
+	return protect.NewResolver(cfg.DNSServer)
 }
 
 func newWithAuth(ctx context.Context, cfg Config) (*Session, error) {
@@ -111,6 +122,7 @@ func newWithAuth(ctx context.Context, cfg Config) (*Session, error) {
 		RoomURL:   cfg.RoomID,
 		Name:      cfg.Name,
 		DNSServer: cfg.DNSServer,
+		Resolver:  cfg.Resolver,
 		ProxyAddr: cfg.ProxyAddr,
 		ProxyPort: cfg.ProxyPort,
 	}
@@ -129,6 +141,7 @@ func newWithAuth(ctx context.Context, cfg Config) (*Session, error) {
 		Extra:     creds.Extra,
 		OnData:    func(data []byte) { _, _ = pw.Write(data) },
 		DNSServer: cfg.DNSServer,
+		Resolver:  cfg.Resolver,
 		ProxyAddr: cfg.ProxyAddr,
 		ProxyPort: cfg.ProxyPort,
 		Refresh: func(rCtx context.Context) (engine.Credentials, error) {
@@ -167,6 +180,7 @@ func newDirect(ctx context.Context, cfg Config) (*Session, error) {
 		Name:      cfg.Name,
 		OnData:    func(data []byte) { _, _ = pw.Write(data) },
 		DNSServer: cfg.DNSServer,
+		Resolver:  cfg.Resolver,
 		ProxyAddr: cfg.ProxyAddr,
 		ProxyPort: cfg.ProxyPort,
 	})

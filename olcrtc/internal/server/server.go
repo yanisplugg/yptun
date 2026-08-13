@@ -22,6 +22,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/xtaci/smux"
@@ -141,6 +142,7 @@ type Config struct {
 	ChannelID        string
 	KeyHex           string
 	DNSServer        string
+	Resolver         *net.Resolver
 	SOCKSProxyAddr   string
 	SOCKSProxyPort   int
 	SOCKSProxyUser   string
@@ -200,6 +202,7 @@ func Run(ctx context.Context, cfg Config) error {
 		onClose:        onClose,
 		onTraffic:      onTraffic,
 		dnsServer:      cfg.DNSServer,
+		resolver:       cfg.Resolver,
 		socksProxyAddr: cfg.SOCKSProxyAddr,
 		socksProxyPort: cfg.SOCKSProxyPort,
 		socksProxyUser: cfg.SOCKSProxyUser,
@@ -247,12 +250,8 @@ func setupCipher(keyHex string) (*crypto.Cipher, error) {
 }
 
 func (s *Server) setupResolver() {
-	s.resolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 3 * time.Second}
-			return d.DialContext(ctx, network, s.dnsServer)
-		},
+	if s.resolver == nil {
+		s.resolver = protect.NewResolver(s.dnsServer)
 	}
 }
 
@@ -299,6 +298,7 @@ func (s *Server) bringUpLink(
 		OnData:     s.onData,
 		OnPeerData: s.onPeerData,
 		DNSServer:  s.dnsServer,
+		Resolver:   s.resolver,
 		ProxyAddr:  s.socksProxyAddr,
 		ProxyPort:  s.socksProxyPort,
 		Options:    cfg.TransportOptions,
@@ -1398,6 +1398,7 @@ func (s *Server) dial(req ConnectRequest) (net.Conn, error) {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
 		KeepAlive: 30 * time.Second,
+		Resolver:  s.resolver,
 	}
 	conn, err := dialer.Dial("tcp4", proxyAddr)
 	if err != nil {

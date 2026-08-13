@@ -15,6 +15,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"net"
 )
 
 var (
@@ -51,6 +52,7 @@ type Config struct {
 	Token string
 	// DNSServer / ProxyAddr / ProxyPort are network knobs for outbound HTTP.
 	DNSServer string
+	Resolver  *net.Resolver
 	ProxyAddr string
 	ProxyPort int
 }

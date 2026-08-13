@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 )
 
@@ -139,6 +140,7 @@ type Config struct {
 	OnData     func([]byte)
 	OnPeerData func(peerID string, data []byte)
 	DNSServer  string
+	Resolver   *net.Resolver
 	ProxyAddr  string
 	ProxyPort  int
 

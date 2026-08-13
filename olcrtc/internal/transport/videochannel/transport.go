@@ -102,6 +102,7 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		Name:      cfg.Name,
 		OnData:    nil,
 		DNSServer: cfg.DNSServer,
+		Resolver:  cfg.Resolver,
 		ProxyAddr: cfg.ProxyAddr,
 		ProxyPort: cfg.ProxyPort,
 		Engine:    cfg.Engine,

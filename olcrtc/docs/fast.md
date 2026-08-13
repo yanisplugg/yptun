@@ -228,6 +228,8 @@ uri: olcrtc://jitsi?datachannel@https://meet.example.org/olcrtc-xxxxxxxx#<key>$o
 
 On your machine (home PC, laptop):
 
+> Prefer a ready-made Android client? Use [owenewans/owenclave](https://github.com/owenewans/owenclave) ([src.owenewans.org/owenrtc](https://src.owenewans.org/owenrtc)) - it reads the `olcrtc://` URI and subscriptions directly, no binary needed. The steps below run the native `cnc` binary (SOCKS5 only).
+
 ```sh
 git clone https://github.com/openlibrecommunity/olcrtc --recurse-submodules
 cd olcrtc

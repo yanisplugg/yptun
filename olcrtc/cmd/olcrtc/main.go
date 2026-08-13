@@ -19,12 +19,12 @@ import (
 	"time"
 
 	protoLogger "github.com/livekit/protocol/logger"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
 	configpkg "github.com/openlibrecommunity/olcrtc/internal/config"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
 	"github.com/openlibrecommunity/olcrtc/internal/supervisor"
+	lksdk "github.com/owenewans/owenlivekit/v2"
 )
 
 const modeGen = "gen"
@@ -46,11 +46,11 @@ var runGen = execGen
 
 // loadedConfig bundles the parsed YAML file and the derived session config.
 type loadedConfig struct {
-	scfg       session.Config
-	profiles   []supervisor.Profile
-	failover   failoverConfig
-	dataDir    string
-	debug      bool
+	scfg     session.Config
+	profiles []supervisor.Profile
+	failover failoverConfig
+	dataDir  string
+	debug    bool
 }
 
 type failoverConfig struct {
@@ -108,11 +108,11 @@ func loadConfig(path string) (loadedConfig, error) {
 		return loadedConfig{}, err
 	}
 	return loadedConfig{
-		scfg:       base,
-		profiles:   profiles,
-		failover:   failover,
-		dataDir:    f.Data,
-		debug:      f.Debug,
+		scfg:     base,
+		profiles: profiles,
+		failover: failover,
+		dataDir:  f.Data,
+		debug:    f.Debug,
 	}, nil
 }
 
