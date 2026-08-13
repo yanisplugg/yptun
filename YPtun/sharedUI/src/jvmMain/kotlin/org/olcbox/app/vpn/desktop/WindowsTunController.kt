@@ -164,13 +164,20 @@ internal class WindowsTunController(
         )
     }
 
-    /** Host routes for the engines' upstream servers via the physical default gateway. */
-    private suspend fun installBypassRoutes(ips: List<String>) {
-        val routeCommands = ips.joinToString("\n") { ip ->
+    /**
+     * Routes for the engines' upstream traffic via the physical default gateway, so it escapes the
+     * TUN's `0.0.0.0/1` + `128.0.0.0/1` capture. Windows has no VpnService.protect(), so these routes
+     * are the ONLY thing keeping a transport core's own sockets off the tunnel it is carrying.
+     *
+     * Entries may be a bare address (routed as /32) or a CIDR. VK-TURN needs whole prefixes: it relays
+     * through VK's TURN servers, whose addresses are chosen at runtime and can't be listed up front.
+     */
+    private suspend fun installBypassRoutes(prefixes: List<String>) {
+        val routeCommands = prefixes.map(::toDestinationPrefix).joinToString("\n") { prefix ->
             """
-            Get-NetRoute -DestinationPrefix '$ip/32' -ErrorAction SilentlyContinue |
+            Get-NetRoute -DestinationPrefix '$prefix' -ErrorAction SilentlyContinue |
               Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
-            New-NetRoute -InterfaceIndex ${'$'}physIfIndex -DestinationPrefix '$ip/32' -NextHop ${'$'}gateway -RouteMetric 1 | Out-Null
+            New-NetRoute -InterfaceIndex ${'$'}physIfIndex -DestinationPrefix '$prefix' -NextHop ${'$'}gateway -RouteMetric 1 | Out-Null
             """.trimIndent()
         }
         runPowerShell(
@@ -188,16 +195,20 @@ internal class WindowsTunController(
         )
     }
 
-    private suspend fun removeBypassRoutes(ips: List<String>) {
+    private suspend fun removeBypassRoutes(prefixes: List<String>) {
         runPowerShell(
-            ips.joinToString("\n") { ip ->
+            prefixes.map(::toDestinationPrefix).joinToString("\n") { prefix ->
                 """
-                Get-NetRoute -DestinationPrefix '$ip/32' -ErrorAction SilentlyContinue |
+                Get-NetRoute -DestinationPrefix '$prefix' -ErrorAction SilentlyContinue |
                   Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
                 """.trimIndent()
             }
         )
     }
+
+    /** A bare address becomes a host route; anything already carrying a prefix length is kept as-is. */
+    private fun toDestinationPrefix(entry: String): String =
+        entry.trim().let { if (it.contains('/')) it else "$it/32" }
 
     private suspend fun removeRoutes() {
         runPowerShell(

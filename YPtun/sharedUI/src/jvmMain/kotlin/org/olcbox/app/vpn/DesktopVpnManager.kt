@@ -29,6 +29,7 @@ import org.olcbox.app.vpn.desktop.DesktopEngineController
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopProxyController
 import org.olcbox.app.vpn.desktop.DesktopTrafficStats
+import org.olcbox.app.vpn.desktop.JvmAsnResolver
 import org.olcbox.app.vpn.desktop.LinuxPrivilege
 import org.olcbox.app.vpn.desktop.LinuxTunController
 import org.olcbox.app.vpn.desktop.OlcRtcCommand
@@ -391,7 +392,7 @@ class DesktopVpnManager private constructor(
      * IPv4 addresses of the engines' upstream servers for [location] — routed around the Windows
      * TUN so the engines' own traffic doesn't loop through the tunnel they provide.
      */
-    private fun resolveBypassServerIps(location: LocationConfig): List<String> {
+    private suspend fun resolveBypassServerIps(location: LocationConfig): List<String> {
         val config = location.normalized()
         val hosts = buildList {
             config.proxy?.let { profile ->
@@ -415,6 +416,9 @@ class DesktopVpnManager private constructor(
                 if (vk.usesWdtt()) {
                     vk.wdttPeer.takeIf { it.isNotBlank() }?.let { add(it) }
                 }
+                // The freeturn/WDTT core keeps talking to VK's control plane for the anonymous call
+                // token it re-authenticates with; carve those out too or the relay dies mid-session.
+                addAll(VK_TURN_CONTROL_HOSTS)
             }
             // dnstt speaks plain UDP DNS to this resolver; looping that into the TUN deadlocks the
             // tunnel it is carrying (Android protects the socket instead).
@@ -428,7 +432,7 @@ class DesktopVpnManager private constructor(
                 addAll(org.olcbox.app.vpn.telegram.DesktopTelegramProxy.candidateEndpointHosts())
             }
         }
-        return hosts.distinct().flatMap { host ->
+        val resolved = hosts.distinct().flatMap { host ->
             runCatching {
                 java.net.InetAddress.getAllByName(host)
                     .filterIsInstance<java.net.Inet4Address>()
@@ -437,7 +441,36 @@ class DesktopVpnManager private constructor(
                 addLog("Could not resolve $host for TUN bypass route: ${it.message}")
                 emptyList()
             }
-        }.distinct().filter { it != "127.0.0.1" }
+        }
+        return (resolved + vkTurnMediaPrefixes(config)).distinct().filter { it != "127.0.0.1" }
+    }
+
+    /**
+     * VK/OK network prefixes to keep OUT of the tunnel while a VK-TURN location is up.
+     *
+     * VK-TURN relays through VK's own TURN servers, and the provider picks those endpoints at runtime
+     * — there is no address to carve out up front. On Android that doesn't matter, because the whole
+     * process is bound to the upstream network; on Windows the TUN's 0.0.0.0/1 + 128.0.0.0/1 capture
+     * swallows the relay's own sockets, so the transport ends up carried by the tunnel it is carrying.
+     * That is why VK-TURN "connects" (the relay comes up before the TUN) and then moves no traffic.
+     *
+     * Since single addresses can't be enumerated, the whole VK/Mail.ru media plane leaves the tunnel.
+     * That is not a leak of anything the user wanted tunnelled: VK-TURN's entire premise is that this
+     * traffic rides VK. Unresolvable ASNs are simply dropped.
+     */
+    private suspend fun vkTurnMediaPrefixes(config: LocationConfig): List<String> {
+        if (config.vkturn == null) return emptyList()
+        val cidrs = runCatching { JvmAsnResolver.ensure(VK_TURN_ASNS) }.getOrDefault(emptyMap())
+        val prefixes = cidrs.values.flatten()
+            .filter { it.contains('.') } // IPv4 only: the TUN capture we escape is IPv4
+            .distinct()
+            .take(MAX_VK_TURN_BYPASS_PREFIXES)
+        if (prefixes.isEmpty()) {
+            addLog("VK-TURN: could not resolve VK/OK prefixes — the relay may be captured by the TUN")
+        } else {
+            addLog("VK-TURN: routing ${prefixes.size} VK/OK prefix(es) around the TUN so the relay keeps its own path")
+        }
+        return prefixes
     }
 
     /** The `Endpoint = host:port` of an AmneziaWG INI config, if any. */
@@ -1246,6 +1279,20 @@ class DesktopVpnManager private constructor(
         const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
+
+        /**
+         * VK / Mail.ru autonomous systems, whose prefixes carry the TURN relays VK-TURN rides.
+         * AS47541 is VKontakte, AS47764 is Mail.ru / OK (calls.okcdn.ru). See [vkTurnMediaPrefixes].
+         */
+        val VK_TURN_ASNS = setOf("47541", "47764")
+
+        /** VK/OK control plane the freeturn provider keeps using for anonymous call tokens. */
+        val VK_TURN_CONTROL_HOSTS = listOf(
+            "login.vk.ru", "api.vk.ru", "id.vk.ru", "vk.ru", "calls.okcdn.ru", "ok.ru",
+        )
+
+        /** Ceiling on the VK/OK carve-out so a surprising ASN answer can't install thousands of routes. */
+        const val MAX_VK_TURN_BYPASS_PREFIXES = 400
 
         // Ping probes (same values as AndroidVpnManager).
         const val TCP_PING_ATTEMPTS = 2
