@@ -3587,11 +3587,9 @@ private fun ApplicationBehaviorContent(
             checked = settings.confirmBeforeDelete
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
-        RoutingToggleRow(
-            title = s.notifSpeed,
-            subtitle = s.notifSpeedSubtitle,
-            checked = settings.showSpeedInNotification
-        ) { onChanged(settings.copy(showSpeedInNotification = it)) }
+        // NOTE: no "speed in the notification" row here — the desktop build has no notifications,
+        // so the toggle had nothing to drive. AppBehaviorSettings.showSpeedInNotification stays in
+        // the model for Android, which does show it.
 
         RoutingToggleRow(
             title = s.speedOnHomeTitle,
