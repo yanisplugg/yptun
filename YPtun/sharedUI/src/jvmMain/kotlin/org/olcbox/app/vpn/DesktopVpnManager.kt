@@ -405,7 +405,10 @@ class DesktopVpnManager private constructor(
                 }
                 awgEndpointHost(profile)?.let { add(it) }
             }
-            config.proxy2?.let { if (it.server.isNotBlank()) add(it.server) }
+            // NOTE: config.proxy2 (the cascade exit) deliberately gets NO bypass route. Nothing on this
+            // machine ever dials it — it is reached by the MAIN proxy, from the exit server — so a host
+            // route only pins its address outside the tunnel, which is the opposite of what a cascade
+            // wants. Only hops we open a local socket to belong here.
             config.vkturn?.let { vk ->
                 runCatching { java.net.URI(vk.uri).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
                 // WDTT dials the wdtt-server directly by address instead of through a freeturn URI.

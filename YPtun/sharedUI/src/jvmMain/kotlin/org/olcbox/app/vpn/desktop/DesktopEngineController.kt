@@ -249,9 +249,26 @@ internal class DesktopEngineController(
 
         val chained = config.engine == EngineType.Chain
         val chainPort = chainOlcrtcPort(listenPort)
-        // Cascade exit: dial the 2nd-hop server by IP too (same bootstrap-DNS stall fix as the main
-        // hop), or the cascade fails to connect on desktop.
-        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { dialByServerIp(it) }
+        // Optional SECOND/cascade proxy: traffic exits via it, dialing THROUGH the main.
+        //
+        // Deliberately NOT run through [dialByServerIp]. That fix exists for the MAIN hop, whose
+        // socket really is opened here — but the second hop is dialed BY THE MAIN PROXY, from the exit
+        // server's vantage point, so pinning it to an address resolved on this machine is wrong twice
+        // over: a censored/poisoned local resolver hands the exit a blackhole IP (TCP connects, TLS
+        // completes against nothing, no traffic ever flows — the reported symptom), and even a healthy
+        // local answer can be the wrong endpoint for geo-routed DNS. Leaving the domain in place lets
+        // the main proxy resolve it, which is what Android does and what the cascade expects.
+        //
+        // Foolproofing (ported from Android): drop a 2nd proxy that points at the SAME node as the
+        // main — a proxy into itself cannot work, and a bad import/subscription can produce one.
+        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
+            if (profile.isComplete() && profile.isSameNodeAs(second)) {
+                log("2nd (cascade) proxy is the same node as the main — a cascade into itself is impossible; ignoring it (exit via the main)")
+                null
+            } else {
+                second
+            }
+        }
 
         require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
@@ -337,6 +354,25 @@ internal class DesktopEngineController(
         if (secondProfile?.network == ProxyProfile.NETWORK_XHTTP && activeProxyCore != ProxyCore.Xray) {
             activeProxyCore = ProxyCore.Xray
             log("Second (cascade) proxy uses xhttp → forcing Xray core")
+        }
+
+        // Say out loud what the cascade ended up doing — "the 2nd proxy does nothing" is otherwise
+        // indistinguishable from "the 2nd proxy was silently dropped". Mirrors the Android messages.
+        // A tunnel-type 2nd hop (AmneziaWG/WireGuard/Hysteria2) is a CLIENT tunnel, not an Xray exit
+        // outbound, so it cannot be chained over a verbatim Xray config at all.
+        val secondChainableOnRaw = secondProfile?.type in setOf(
+            ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS,
+            ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS,
+        )
+        when {
+            secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() && !secondChainableOnRaw ->
+                log("WARNING: the 2nd proxy is a '${secondProfile.type}' CLIENT TUNNEL, not an Xray exit outbound — it cannot cascade over a custom Xray config and is ignored. Use vless/vmess/trojan/ss for that.")
+            secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() ->
+                log("Cascade: exit via 2nd proxy '${secondProfile.displayName()}' over the custom Xray config")
+            secondProfile != null ->
+                log("Cascade: exit via 2nd proxy '${secondProfile.displayName()}' over main '${effectiveProfile.displayName()}'")
+            config.proxy2 != null ->
+                log("Cascade: a 2nd proxy IS set but its link is incomplete/unparsed — dropped, exit via the 1st proxy")
         }
 
         if (activeProxyCore == ProxyCore.Xray) {
