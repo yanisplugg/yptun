@@ -33,8 +33,19 @@ type SessionPool struct {
 	counter     atomic.Uint64
 	connCounter atomic.Uint64
 
+	// active - зеркало числа живых сессий для наблюдателей вне пакета
+	// (watchdog и счётчик стримов в UI). nil, если хост его не просил.
+	active *atomic.Int32
+
 	readyOnce sync.Once
 	ready     chan struct{}
+}
+
+// publishActive обновляет внешнее зеркало. Вызывать под p.mu.
+func (p *SessionPool) publishActive() {
+	if p.active != nil {
+		p.active.Store(int32(len(p.sessions))) //nolint:gosec // сессий десятки, int32 не переполнить
+	}
 }
 
 // Ready возвращает канал, закрытый при первом появлении сессии в пуле.
@@ -53,6 +64,7 @@ func (p *SessionPool) Add(id int, s *smux.Session) *PooledSession {
 	ps := &PooledSession{ID: id, Sess: s}
 	p.mu.Lock()
 	p.sessions = append(p.sessions, ps)
+	p.publishActive()
 	if p.ready == nil {
 		p.ready = make(chan struct{})
 	}
@@ -71,6 +83,7 @@ func (p *SessionPool) Remove(ps *PooledSession) {
 			break
 		}
 	}
+	p.publishActive()
 	p.mu.Unlock()
 }
 

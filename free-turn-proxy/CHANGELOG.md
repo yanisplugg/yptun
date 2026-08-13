@@ -1,5 +1,70 @@
 # Changelog
 
+## [2.1.1](https://github.com/samosvalishe/free-turn-proxy/compare/v2.1.0...v2.1.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **captcha:** блокировать рекламные хосты в ручном режиме ([4174f29](https://github.com/samosvalishe/free-turn-proxy/commit/4174f29c63c0d5c7ffa645de9b0717a60d6849cb))
+* **captcha:** линтер в трассировке запросов ([59a8c84](https://github.com/samosvalishe/free-turn-proxy/commit/59a8c84157750be7b6219d57891c120eb2393230))
+* **captcha:** не жечь персону на эскалации checkbox -&gt; slider ([ee13563](https://github.com/samosvalishe/free-turn-proxy/commit/ee1356308bb2a1b67b48c11d841a330d61a1b0cd))
+* **captcha:** обновить пин debug_info под виджет 1.1.1388 ([ea477a3](https://github.com/samosvalishe/free-turn-proxy/commit/ea477a3bc21d7fd0b8dedfe6ae201b6950fda301))
+* **captcha:** привести запросы к поведению живого виджета 1.1.1388 ([4fa7810](https://github.com/samosvalishe/free-turn-proxy/commit/4fa7810afa35bd086f30b66e3e0660df702ba3fe))
+* **captcha:** разносить попытки слайдера по дорожке ([8eb3873](https://github.com/samosvalishe/free-turn-proxy/commit/8eb3873d27ffb679eddc2a2f230b5a58f9d6708a))
+* **captcha:** убрать reverse-скор из ранжирования slider-кандидатов ([d9a0554](https://github.com/samosvalishe/free-turn-proxy/commit/d9a05544891e8f7354758bfbc06b0e5e9ea7eba7))
+
+
+### Refactoring
+
+* **captcha:** убрать трассировку запросов ([1ca3451](https://github.com/samosvalishe/free-turn-proxy/commit/1ca3451b7690179e4d00f318f471251062a9ee65))
+
+## [2.1.0](https://github.com/samosvalishe/free-turn-proxy/compare/v2.0.2...v2.1.0) (2026-08-01)
+
+
+### Features
+
+* **proxy:** встроенное управление маршрутами к TURN-серверам ([a7798cd](https://github.com/samosvalishe/free-turn-proxy/commit/a7798cd851ab7091526a6131e71bf8e5c37a1ff2))
+
+
+### Bug Fixes
+
+* **routes:** linter ([cdc7ee8](https://github.com/samosvalishe/free-turn-proxy/commit/cdc7ee8d3d71b9d04a6a1b238bbf2d5263f2603e))
+
+
+### Refactoring
+
+* перенос логики сессии в internal/session и обновление mobile-фасада ([1f86fda](https://github.com/samosvalishe/free-turn-proxy/commit/1f86fda104b09f4b61e065c4b0bda97cec4c04bd))
+
+## [2.0.2](https://github.com/samosvalishe/free-turn-proxy/compare/v2.0.1...v2.0.2) (2026-07-30)
+
+
+### Bug Fixes
+
+* **captcha:** адаптация под новую версию виджета ([7c28498](https://github.com/samosvalishe/free-turn-proxy/commit/7c28498f2336967008e41542389f29c5637b6795))
+
+## [2.0.1](https://github.com/samosvalishe/free-turn-proxy/compare/v2.0.0...v2.0.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* **captcha:** дожимать эскалацию checkbox -&gt; slider в той же сессии ([d1b769a](https://github.com/samosvalishe/free-turn-proxy/commit/d1b769a0625a6d706e1cda8f6df6ab80871df856))
+
+## [2.0.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.8.0...v2.0.0) (2026-07-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **captcha:** флаг -browser убран, семейство персоны всегда Chrome - только Chromium даёт NetworkInformation и Generic Sensors, без которых телеметрия captcha неполна. Класс устройства по-прежнему за -platform.
+
+### Features
+
+* **captcha:** телеметрия виджета и одна Chrome-персона на установку ([3211ed9](https://github.com/samosvalishe/free-turn-proxy/commit/3211ed9ad56b5e6ed6cfe679e000da197e17437d))
+
+
+### Bug Fixes
+
+* update deps for vuln pass ([34746e2](https://github.com/samosvalishe/free-turn-proxy/commit/34746e27e03a31ccdcdb8f481414b7e6a6177b55))
+
 ## [1.8.0](https://github.com/samosvalishe/free-turn-proxy/compare/v1.7.3...v1.8.0) (2026-07-13)
 
 

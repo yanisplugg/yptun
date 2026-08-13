@@ -28,7 +28,7 @@ func (c *Client) fetchCallToken(
 	data := fmt.Sprintf("vk_join_link=https://vk.ru/call/join/%s&name=%s&access_token=%s",
 		link, escapedName, token1)
 
-	for attempt := 0; ; attempt++ {
+	for {
 		resp, err := c.doRequest(ctx, httpClient, profile, data, urlAddr)
 		if err != nil {
 			return "", err
@@ -37,7 +37,7 @@ func (c *Client) fetchCallToken(
 		if errObj, hasErr := resp["error"].(map[string]any); hasErr {
 			captchaErr := captcha.ParseError(errObj)
 			if captchaErr != nil && captchaErr.IsCaptcha() {
-				retryData, err := c.solveCaptcha(ctx, httpClient, profile, streamID, attempt, link, escapedName, token1, captchaErr)
+				retryData, err := c.solveCaptcha(ctx, httpClient, profile, streamID, link, escapedName, token1, captchaErr)
 				if err != nil {
 					return "", err
 				}
@@ -63,15 +63,9 @@ func (c *Client) fetchCallToken(
 	}
 }
 
-// classifyLinkError распознаёт ТЕРМИНАЛЬНЫЕ ответы VK в join-флоу и возвращает
-// соответствующий sentinel (или nil, если ошибку можно ретраить дальше по
-// client_id). Терминал = ни client_id, ни captcha не помогут, поэтому fast-fail
-// вместо бесконечного цикла "решить captcha -> ошибка -> следующий client_id".
-//
-// Порядок важен: сначала явные коды (терминальные и транзиентные), и только для
-// неизвестного кода - матч по тексту error_msg. Так текстовый матч не может
-// перекрыть транзиентный код (5 auth-failed, 6/9/29 rate/flood, 14 captcha) и
-// убить рабочее подключение из-за подстроки в сообщении.
+// classifyLinkError возвращает sentinel для терминальных ответов VK (nil - можно
+// ретраить по client_id). Сначала явные коды, текстовый матч по error_msg - только
+// для неизвестного кода (иначе подстрока может перекрыть транзиентный код).
 func classifyLinkError(errObj map[string]any) error {
 	code := 0
 	if f, ok := errObj["error_code"].(float64); ok {
@@ -111,13 +105,17 @@ func (c *Client) solveCaptcha(
 	ctx context.Context,
 	httpClient tlsclient.HttpClient,
 	profile browserprofile.Profile,
-	streamID, attempt int,
+	streamID int,
 	link, escapedName, token1 string,
 	captchaErr *captcha.Error,
 ) (retryData string, err error) {
+	attempt := c.captchaAttempt
+	c.captchaAttempt++
+
 	solveMode, hasSolveMode := CaptchaSolveModeForAttempt(attempt, c.manualOnly)
 	if !hasSolveMode {
 		c.log.Warnf("[STREAM %d] [Captcha] No more solve modes available (attempt %d)", streamID, attempt+1)
+		c.burnPersona(streamID)
 		c.engageLockout(60 * time.Second)
 		if c.streamsFn() == 0 {
 			c.log.Errorf("[STREAM %d] [Captcha] FATAL: 0 connected streams and solve modes exhausted", streamID)
@@ -161,7 +159,7 @@ func (c *Client) solveCaptcha(
 		}
 		resCh := make(chan manualRes, 1)
 		go func() {
-			t, e := c.manualSolve(manualCtx, captchaErr, c.dialer)
+			t, e := c.manualSolve(manualCtx, captchaErr, c.dialer, profile)
 			resCh <- manualRes{t, e}
 		}()
 
@@ -193,10 +191,14 @@ func (c *Client) solveCaptcha(
 			streamID, CaptchaSolveModeLabel(solveMode), attempt+1, solveErr)
 		nextSolveMode, hasNextSolveMode := CaptchaSolveModeForAttempt(attempt+1, c.manualOnly)
 		if hasNextSolveMode {
-			c.log.Infof("[STREAM %d] [Captcha] Falling back to %s",
+			// Отпечаток отвергнут - следующий режим получает свежую личность и
+			// свою сессию, а не доигрывает сожжённую.
+			c.log.Infof("[STREAM %d] [Captcha] Falling back to %s with a new persona",
 				streamID, CaptchaSolveModeLabel(nextSolveMode))
-			return buildCaptchaRetryData(link, escapedName, token1, captchaErr, ""), nil
+			c.burnPersona(streamID)
+			return "", ErrPersonaBurned
 		}
+		c.burnPersona(streamID)
 		c.engageLockout(60 * time.Second)
 		if c.streamsFn() == 0 {
 			c.log.Errorf("[STREAM %d] [Captcha] FATAL: 0 connected streams and manual captcha failed/timed out", streamID)

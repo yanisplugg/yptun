@@ -1,16 +1,22 @@
 package browserprofile
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"strconv"
+
 	fhttp "github.com/bogdanfinn/fhttp"
 	"github.com/bogdanfinn/tls-client/profiles"
 )
 
-type Kind string
-
 const (
-	Chrome  Kind = "chrome"
-	Firefox Kind = "firefox"
-	Safari  Kind = "safari"
+	chromeSecChUa = `"Google Chrome";v="146", "Chromium";v="146", "Not)A;Brand";v="24"`
+
+	uaWindows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+	uaMac     = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+	uaAndroid = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36"
 )
 
 type Platform string
@@ -19,18 +25,6 @@ const (
 	Desktop Platform = "desktop"
 	Mobile  Platform = "mobile"
 )
-
-// KindFromString мапит строку флага -browser в Kind. Пустое/неизвестное - Firefox
-// (дефолт продукта).
-func KindFromString(s string) Kind {
-	switch s {
-	case string(Chrome):
-		return Chrome
-	case string(Safari):
-		return Safari
-	}
-	return Firefox
-}
 
 // PlatformFromString мапит строку флага -platform в Platform. Пустое/неизвестное -
 // Desktop.
@@ -42,139 +36,211 @@ func PlatformFromString(s string) Platform {
 }
 
 // Profile - самосогласованная браузерная личность: единственный источник UA,
-// client hints, device-fingerprint и accept-language для VK control-plane и captcha.
-// Строится один раз из (Family, Platform); не мутируется в рантайме.
+// client hints, device-fingerprint, порядка заголовков и набора JS-возможностей
+// для VK control-plane и captcha. Строится один раз из Platform и Identity; не
+// мутируется в рантайме. Семейство всегда Chrome: только Chromium даёт NetworkInformation и
+// Generic Sensors, без которых телеметрия captcha неполна.
 type Profile struct {
-	Family          Kind
 	Platform        Platform
 	UserAgent       string
-	SecChUa         string // пусто для не-Chromium (Chromium-only client hint)
+	SecChUa         string
 	SecChUaMobile   string
 	SecChUaPlatform string
 	AcceptLanguage  string
-	// DeviceJSON - navigator/screen fingerprint для captcha componentDone.
-	// Согласован с Family/Platform (Chromium-only поля есть только у Chrome).
+	// Viewport - innerWidth/innerHeight персоны; из него же считаются координаты
+	// указателя в телеметрии captcha.
+	Viewport Size
+	// DeviceJSON - navigator/screen fingerprint для captcha componentDone,
+	// сериализованный из того же device, что дал Viewport.
 	DeviceJSON string
+	// VisitorID - идентификатор FingerprintJS этой личности.
+	VisitorID string
 }
 
-const (
-	deviceChromeDesktop  = `{"screenWidth":1920,"screenHeight":1080,"screenAvailWidth":1920,"screenAvailHeight":1032,"innerWidth":1147,"innerHeight":945,"devicePixelRatio":1,"language":"ru-RU","languages":["ru-RU"],"webdriver":false,"hardwareConcurrency":8,"deviceMemory":16,"connectionEffectiveType":"4g","notificationsPermission":"denied"}`
-	deviceChromeMobile   = `{"screenWidth":393,"screenHeight":852,"screenAvailWidth":393,"screenAvailHeight":852,"innerWidth":393,"innerHeight":659,"devicePixelRatio":3,"language":"ru-RU","languages":["ru-RU"],"webdriver":false,"hardwareConcurrency":8,"deviceMemory":8,"connectionEffectiveType":"4g","notificationsPermission":"denied"}`
-	deviceFirefoxDesktop = `{"screenWidth":1920,"screenHeight":1080,"screenAvailWidth":1920,"screenAvailHeight":1032,"innerWidth":1147,"innerHeight":945,"devicePixelRatio":1,"language":"ru-RU","languages":["ru-RU","ru"],"webdriver":false,"hardwareConcurrency":8,"notificationsPermission":"denied"}`
-	deviceFirefoxMobile  = `{"screenWidth":393,"screenHeight":852,"screenAvailWidth":393,"screenAvailHeight":852,"innerWidth":393,"innerHeight":659,"devicePixelRatio":3,"language":"ru-RU","languages":["ru-RU","ru"],"webdriver":false,"hardwareConcurrency":8,"notificationsPermission":"denied"}`
-	deviceSafariDesktop  = `{"screenWidth":1512,"screenHeight":982,"screenAvailWidth":1512,"screenAvailHeight":944,"innerWidth":1147,"innerHeight":870,"devicePixelRatio":2,"language":"ru-RU","languages":["ru-RU"],"webdriver":false,"hardwareConcurrency":8,"notificationsPermission":"denied"}`
-	deviceSafariMobile   = `{"screenWidth":393,"screenHeight":852,"screenAvailWidth":393,"screenAvailHeight":852,"innerWidth":393,"innerHeight":659,"devicePixelRatio":3,"language":"ru-RU","languages":["ru-RU"],"webdriver":false,"hardwareConcurrency":4,"notificationsPermission":"denied"}`
-)
+type Size struct {
+	W int
+	H int
+}
 
-// For строит канонический профиль для (family, platform). Неизвестный family -> Chrome.
-func For(k Kind, p Platform) Profile {
-	if p != Mobile {
+func (p Profile) IsMobile() bool { return p.Platform == Mobile }
+
+// Touch - ввод пальцем вместо мыши: определяет, какой массив телеметрии captcha
+// (taps против cursor) вообще может быть непустым.
+func (p Profile) Touch() bool { return p.IsMobile() }
+
+// Accelerometer - даст ли window.Accelerometer (Generic Sensor API) реальные
+// показания: на десктопе сенсора нет.
+func (p Profile) Accelerometer() bool { return p.IsMobile() }
+
+// device - то, что виджет captcha собирает из navigator/screen. Порядок полей
+// повторяет порядок ключей в объекте виджета, отсутствующие в браузере поля
+// выпадают из JSON так же, как undefined выпадает у JSON.stringify.
+type device struct {
+	ScreenWidth             int      `json:"screenWidth"`
+	ScreenHeight            int      `json:"screenHeight"`
+	ScreenAvailWidth        int      `json:"screenAvailWidth"`
+	ScreenAvailHeight       int      `json:"screenAvailHeight"`
+	InnerWidth              int      `json:"innerWidth"`
+	InnerHeight             int      `json:"innerHeight"`
+	DevicePixelRatio        float64  `json:"devicePixelRatio"`
+	Language                string   `json:"language"`
+	Languages               []string `json:"languages"`
+	Webdriver               bool     `json:"webdriver"`
+	HardwareConcurrency     int      `json:"hardwareConcurrency"`
+	DeviceMemory            *int     `json:"deviceMemory,omitempty"`
+	ConnectionEffectiveType string   `json:"connectionEffectiveType,omitempty"`
+	// NotificationsPermission - состояние permissions.query({name:"notifications"}).
+	// Дефолт живого браузера - prompt; denied означало бы явный отказ пользователя.
+	NotificationsPermission string `json:"notificationsPermission"`
+}
+
+// Порядок заголовков h2. Отсутствующие в запросе имена fhttp пропускает, поэтому
+// один список покрывает и навигацию (upgrade-insecure-requests, sec-fetch-user),
+// и fetch/XHR (origin, content-type).
+var chromeHeaderOrder = []string{
+	"content-length",
+	"sec-ch-ua-platform",
+	"user-agent",
+	"sec-ch-ua",
+	"content-type",
+	"sec-ch-ua-mobile",
+	"upgrade-insecure-requests",
+	"accept",
+	"origin",
+	"sec-fetch-site",
+	"sec-fetch-mode",
+	"sec-fetch-user",
+	"sec-fetch-dest",
+	"referer",
+	"accept-encoding",
+	"accept-language",
+	"cookie",
+	"priority",
+}
+
+// spec - варьируемая часть персоны: всё, чем реально различаются машины одной
+// платформы. Остальное (Chrome-версия, язык, порядок заголовков) общее.
+type spec struct {
+	userAgent  string
+	chPlatform string
+	dev        device
+}
+
+var desktopSpecs = []spec{
+	{userAgent: uaWindows, chPlatform: `"Windows"`, dev: newDevice(1920, 1080, 1032, 1147, 945, 1, 16, 8)},
+	{userAgent: uaWindows, chPlatform: `"Windows"`, dev: newDevice(1536, 864, 816, 1229, 738, 1.25, 8, 8)},
+	{userAgent: uaWindows, chPlatform: `"Windows"`, dev: newDevice(2560, 1440, 1392, 1512, 1237, 1, 12, 8)},
+	{userAgent: uaMac, chPlatform: `"macOS"`, dev: newDevice(1512, 982, 944, 1147, 870, 2, 10, 8)},
+}
+
+// Chrome морозит мобильный UA до "Android 10; K" на всех устройствах, поэтому
+// персоны различаются только железом.
+var mobileSpecs = []spec{
+	{userAgent: uaAndroid, chPlatform: `"Android"`, dev: newDevice(393, 852, 852, 393, 659, 3, 8, 8)},
+	{userAgent: uaAndroid, chPlatform: `"Android"`, dev: newDevice(412, 915, 915, 412, 724, 2.625, 8, 4)},
+	{userAgent: uaAndroid, chPlatform: `"Android"`, dev: newDevice(360, 800, 800, 360, 612, 3, 8, 4)},
+	{userAgent: uaAndroid, chPlatform: `"Android"`, dev: newDevice(384, 832, 832, 384, 644, 2.75, 8, 8)},
+}
+
+// Identity - семя личности: одна и та же Identity всегда даёт один и тот же
+// Profile, включая VisitorID.
+type Identity struct {
+	// Seed - стабильная строка установки: личность переживает перезапуск.
+	Seed string
+	// Gen растёт при сжигании персоны: отвергнутый captcha отпечаток не
+	// переиспользуется, но и не меняется в середине сессии.
+	Gen int
+}
+
+func (id Identity) String() string { return id.Seed + "|" + strconv.Itoa(id.Gen) }
+
+// For строит персону для platform и identity. Неизвестная platform -> Desktop.
+func For(p Platform, id Identity) Profile {
+	specs := desktopSpecs
+	if p == Mobile {
+		specs = mobileSpecs
+	} else {
 		p = Desktop
 	}
-	switch k {
-	case Safari:
-		return safariProfile(p)
-	case Firefox:
-		return firefoxProfile(p)
-	default:
-		return chromeProfile(p)
-	}
-}
 
-func chromeProfile(p Platform) Profile {
-	if p == Mobile {
-		return Profile{
-			Family:          Chrome,
-			Platform:        Mobile,
-			UserAgent:       "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36",
-			SecChUa:         `"Google Chrome";v="146", "Chromium";v="146", "Not)A;Brand";v="24"`,
-			SecChUaMobile:   "?1",
-			SecChUaPlatform: `"Android"`,
-			AcceptLanguage:  "ru-RU,ru;q=0.9",
-			DeviceJSON:      deviceChromeMobile,
-		}
-	}
-	return Profile{
-		Family:          Chrome,
-		Platform:        Desktop,
-		UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-		SecChUa:         `"Google Chrome";v="146", "Chromium";v="146", "Not)A;Brand";v="24"`,
+	sum := sha256.Sum256([]byte(id.String()))
+	s := specs[binary.BigEndian.Uint64(sum[:8])%uint64(len(specs))]
+
+	profile := Profile{
+		Platform:        p,
+		SecChUa:         chromeSecChUa,
 		SecChUaMobile:   "?0",
-		SecChUaPlatform: `"Windows"`,
+		SecChUaPlatform: s.chPlatform,
 		AcceptLanguage:  "ru-RU,ru;q=0.9",
-		DeviceJSON:      deviceChromeDesktop,
+		UserAgent:       s.userAgent,
 	}
-}
-
-func firefoxProfile(p Platform) Profile {
 	if p == Mobile {
-		return Profile{
-			Family:         Firefox,
-			Platform:       Mobile,
-			UserAgent:      "Mozilla/5.0 (Android 14; Mobile; rv:148.0) Gecko/148.0 Firefox/148.0",
-			AcceptLanguage: "ru-RU,ru;q=0.9",
-			DeviceJSON:     deviceFirefoxMobile,
-		}
+		profile.SecChUaMobile = "?1"
 	}
-	return Profile{
-		Family:         Firefox,
-		Platform:       Desktop,
-		UserAgent:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
-		AcceptLanguage: "ru-RU,ru;q=0.9",
-		DeviceJSON:     deviceFirefoxDesktop,
+
+	profile = withDevice(profile, s.dev)
+	profile.VisitorID = visitorID(id, profile)
+	return profile
+}
+
+// newDevice дополняет варьируемые поля общими для всех персон.
+func newDevice(screenW, screenH, availH, innerW, innerH int, dpr float64, cores, memGB int) device {
+	memory := memGB
+	return device{
+		ScreenWidth: screenW, ScreenHeight: screenH,
+		ScreenAvailWidth: screenW, ScreenAvailHeight: availH,
+		InnerWidth: innerW, InnerHeight: innerH,
+		DevicePixelRatio:    dpr,
+		Language:            "ru-RU",
+		Languages:           []string{"ru-RU"},
+		HardwareConcurrency: cores,
+		DeviceMemory:        &memory,
+		// Сеть репортится как 4g и на Wi-Fi: NetworkInformation огрубляет тип до
+		// класса скорости.
+		ConnectionEffectiveType: "4g",
+		NotificationsPermission: "prompt",
 	}
 }
 
-func safariProfile(p Platform) Profile {
-	if p == Mobile {
-		return Profile{
-			Family:         Safari,
-			Platform:       Mobile,
-			UserAgent:      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-			AcceptLanguage: "ru-RU,ru;q=0.9",
-			DeviceJSON:     deviceSafariMobile,
-		}
-	}
-	return Profile{
-		Family:         Safari,
-		Platform:       Desktop,
-		UserAgent:      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
-		AcceptLanguage: "ru-RU,ru;q=0.9",
-		DeviceJSON:     deviceSafariDesktop,
-	}
+// visitorID - слот FingerprintJS: у живого посетителя стабилен между визитами,
+// поэтому выводится из личности целиком, а не генерится на попытку.
+func visitorID(id Identity, p Profile) string {
+	sum := sha256.Sum256([]byte(id.String() + "|" + p.UserAgent + "|" + p.DeviceJSON))
+	return hex.EncodeToString(sum[:16])
 }
 
-func Family(p Profile) Kind { return p.Family }
-
-func IsMobile(p Profile) bool { return p.Platform == Mobile }
-
-// ClientProfile - TLS/HTTP2-отпечаток персоны (JA3 + ALPN + h2 settings).
-// Chrome/Firefox используют один TLS-стек на всех платформах, поэтому platform на
-// них не влияет; Safari desktop и iOS различаются в ClientHello.
-func (p Profile) ClientProfile() profiles.ClientProfile {
-	switch p.Family {
-	case Safari:
-		if p.Platform == Mobile {
-			return profiles.Safari_IOS_17_0
-		}
-		return profiles.Safari_16_0
-	case Firefox:
-		return profiles.Firefox_148
-	default:
-		return profiles.Chrome_146
+func withDevice(p Profile, d device) Profile {
+	data, err := json.Marshal(d)
+	if err != nil {
+		return p
 	}
+	p.Viewport = Size{W: d.InnerWidth, H: d.InnerHeight}
+	p.DeviceJSON = string(data)
+	return p
+}
+
+// ClientProfile - TLS/HTTP2-отпечаток персоны (JA3 + ALPN + h2 settings + порядок
+// псевдозаголовков). Chrome использует один TLS-стек на всех платформах, поэтому
+// platform на него не влияет.
+func (Profile) ClientProfile() profiles.ClientProfile {
+	return profiles.Chrome_146
 }
 
 func ApplyFhttp(req *fhttp.Request, profile Profile) {
 	req.Header.Set("User-Agent", profile.UserAgent)
-	if profile.SecChUa != "" {
-		req.Header.Set("sec-ch-ua", profile.SecChUa)
-		req.Header.Set("sec-ch-ua-mobile", profile.SecChUaMobile)
-		req.Header.Set("sec-ch-ua-platform", profile.SecChUaPlatform)
+	req.Header.Set("sec-ch-ua", profile.SecChUa)
+	req.Header.Set("sec-ch-ua-mobile", profile.SecChUaMobile)
+	req.Header.Set("sec-ch-ua-platform", profile.SecChUaPlatform)
+	req.Header.Set("Accept-Language", profile.AcceptLanguage)
+	// Навигация документа идёт с нулевым приоритетом, u=1 - профиль fetch/XHR.
+	if req.Header.Get("Sec-Fetch-Dest") == "document" {
+		req.Header.Set("Priority", "u=0, i")
+	} else {
+		req.Header.Set("Priority", "u=1, i")
 	}
-	acceptLang := profile.AcceptLanguage
-	if acceptLang == "" {
-		acceptLang = "ru-RU,ru;q=0.9"
-	}
-	req.Header.Set("Accept-Language", acceptLang)
+	req.Header[fhttp.HeaderOrderKey] = chromeHeaderOrder
+}
+
+func ApplyProxyFhttp(req *fhttp.Request) {
+	req.Header[fhttp.HeaderOrderKey] = chromeHeaderOrder
 }

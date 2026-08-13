@@ -14,5 +14,4 @@ VK Calls API. Перебирает встроенные `app_id/app_secret`, п�
 **Опциональные:**
 - `-streams-per-cred` (default 10) - сколько TURN-стримов делят один кеш креденшалов.
 - `-manual-captcha` - пропустить auto-solver, сразу открыть браузер.
-- `-browser` (default `firefox`) - семейство персоны auth (UA + TLS JA3 + client hints + device): `chrome` \| `firefox` \| `safari`.
-- `-platform` (default `desktop`) - класс устройства персоны: `desktop` \| `mobile`.
+- `-platform` (default `desktop`) - класс устройства персоны auth (UA + TLS JA3 + client hints + device; семейство всегда Chrome): `desktop` \| `mobile`.

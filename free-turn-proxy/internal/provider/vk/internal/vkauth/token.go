@@ -5,7 +5,6 @@ import (
 	"fmt"
 	neturl "net/url"
 
-	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/browserprofile"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/namegen"
 
 	tlsclient "github.com/bogdanfinn/tls-client"
@@ -15,7 +14,7 @@ import (
 // и возвращает тройку TURN-allocate. Ошибки captcha запускают настроенную цепочку
 // auto/manual solver.
 func (c *Client) getTokenChain(ctx context.Context, link string, streamID int, creds VKCredentials, jar tlsclient.CookieJar) (string, string, []string, error) {
-	profile := browserprofile.For(c.browser, c.platform)
+	profile := c.currentPersona()
 
 	httpClient, err := c.newTLSClient(profile, jar)
 	if err != nil {

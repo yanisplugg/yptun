@@ -21,6 +21,8 @@ import (
 
 	"github.com/samosvalishe/free-turn-proxy/internal/client/ish"
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
+	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/browserprofile"
+	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/personanet"
 )
 
 // Debug включает логирование проксируемого браузерного трафика.
@@ -66,7 +68,22 @@ func localCaptchaHosts() []string {
 	}
 }
 
+// blockedProxyHosts - реклама и внешняя телеметрия. Всё, что не в allowed, и так
+// не проксируется; список нужен для хостов под доменами VK, которые иначе прошли
+// бы по суффиксу. Captcha без них решается: adFp тогда пустой, ровно как у
+// браузера с блокировщиком.
+var blockedProxyHosts = []string{
+	"ads.vk.com", "ads.vk.ru",
+	"top-fwz1.mail.ru", "r0.mradx.net",
+	"sdk-api.apptracer.ru", "stats.vk-portal.net",
+}
+
 func isAllowedProxyHost(hostname string) bool {
+	for _, blocked := range blockedProxyHosts {
+		if strings.EqualFold(hostname, blocked) {
+			return false
+		}
+	}
 	allowed := []string{
 		".vk.com", ".vk.ru", ".vkontakte.ru",
 		".userapi.com", ".okcdn.ru", ".mycdn.me",
@@ -312,18 +329,6 @@ func rewriteCaptchaHTML(html string, targetURL *neturl.URL) string {
 	}
 }
 
-func newCaptchaProxyTransport(dialer net.Dialer) *http.Transport {
-	return &http.Transport{
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     false,
-		DialContext:           dialer.DialContext,
-	}
-}
-
 func startCaptchaServer(srv *http.Server, logPrefix string) error {
 	var listenErrs []string
 	var listening bool
@@ -428,19 +433,19 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // SolveViaProxy проксирует VK redirect_uri через локальный HTTP-сервер,
 // переписывая абсолютные URL так, чтобы браузер всё время оставался на
 // 127.0.0.1:8765; возвращает результирующий auth-токен.
-func SolveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer) (string, error) {
-	return solveViaProxy(ctx, redirectURI, dialer, openBrowser)
+func SolveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer, profile browserprofile.Profile) (string, error) {
+	return solveViaProxy(ctx, redirectURI, dialer, profile, openBrowser)
 }
 
 // SolveViaProxyWithPresenter передаёт URL вызывающему после запуска сервера.
-func SolveViaProxyWithPresenter(ctx context.Context, redirectURI string, dialer net.Dialer, present func(string)) (string, error) {
+func SolveViaProxyWithPresenter(ctx context.Context, redirectURI string, dialer net.Dialer, profile browserprofile.Profile, present func(string)) (string, error) {
 	if present == nil {
 		present = func(string) {}
 	}
-	return solveViaProxy(ctx, redirectURI, dialer, present)
+	return solveViaProxy(ctx, redirectURI, dialer, profile, present)
 }
 
-func solveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer, present func(string)) (string, error) {
+func solveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer, profile browserprofile.Profile, present func(string)) (string, error) {
 	keyCh := make(chan string, 1)
 
 	targetURL, err := neturl.Parse(redirectURI)
@@ -448,7 +453,13 @@ func solveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer, p
 		return "", fmt.Errorf("invalid redirect URI: %v", err)
 	}
 
-	transport := &loggingTransport{rt: newCaptchaProxyTransport(dialer)}
+	// Апстрим уходит с TLS-отпечатком персоны: браузерный UA поверх Go-JA3 сам по
+	// себе выдавал бы автоматизацию.
+	client, err := personanet.NewClient(profile, dialer, nil, personanet.NoFollowRedirects())
+	if err != nil {
+		return "", fmt.Errorf("captcha proxy client: %w", err)
+	}
+	transport := &loggingTransport{rt: personanet.ProxyRoundTripper(client)}
 
 	proxy := &httputil.ReverseProxy{
 		Transport: transport,
@@ -529,9 +540,11 @@ func solveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer, p
 				}
 
 				bodyBytes = []byte(rewriteCaptchaHTML(string(bodyBytes), targetURL))
-				res.Header.Del("Content-Encoding")
 			}
 
+			// Тело отдаём разжатым независимо от типа: для JSON-ответа check
+			// оставшийся Content-Encoding ломал декодирование в браузере.
+			res.Header.Del("Content-Encoding")
 			res.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			res.ContentLength = int64(len(bodyBytes))
 			res.Header.Set("Content-Length", fmt.Sprint(len(bodyBytes)))
