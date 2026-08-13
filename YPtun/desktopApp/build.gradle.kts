@@ -718,6 +718,22 @@ compose.desktop {
     application {
         mainClass = "MainKt"
 
+        // Without an explicit cap the JVM sizes its heap at 1/4 of physical RAM (2 GB on an 8 GB box,
+        // 4 GB on a 16 GB one) and simply never collects until it gets there — which is what the
+        // "YPtun eats 3 GB" reports actually were. The app's live set is a Compose window plus a
+        // bounded log buffer, so 512 MB is generous; the cap makes the GC keep the footprint honest.
+        // MaxMetaspaceSize bounds the other half (Compose/Kotlin generate a lot of classes).
+        jvmArgs += listOf(
+            "-Xmx512m",
+            "-XX:MaxMetaspaceSize=256m",
+            // Hand freed pages back to the OS instead of holding the high-water mark forever, so the
+            // number the user sees in Task Manager falls again after a burst.
+            "-XX:+UseG1GC",
+            "-XX:G1PeriodicGCInterval=30000",
+            "-XX:MinHeapFreeRatio=10",
+            "-XX:MaxHeapFreeRatio=25",
+        )
+
         buildTypes.release.proguard {
             isEnabled.set(false)
         }

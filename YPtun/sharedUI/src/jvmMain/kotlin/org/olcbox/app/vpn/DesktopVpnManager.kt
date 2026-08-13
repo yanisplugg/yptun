@@ -11,7 +11,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -63,6 +62,10 @@ class DesktopVpnManager private constructor(
 
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     override val logs: StateFlow<List<String>> = _logs.asStateFlow()
+
+    /** Ring buffer behind [logs]; see [addLog]. Guarded by itself. */
+    private val logBuffer = ArrayDeque<String>(MAX_LOG_ENTRIES)
+    private val logFlushPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val _status = MutableStateFlow<VpnStatus>(VpnStatus.Disconnected)
     override val status: StateFlow<VpnStatus> = _status.asStateFlow()
@@ -1124,9 +1127,35 @@ class DesktopVpnManager private constructor(
         else process?.isAlive == true
     }
 
+    /**
+     * Appends one line to the in-app journal.
+     *
+     * This is a HOT path: the chatty cores (vkturn/freeturn, awg, olcrtc, tgwarp) push through
+     * YpTunCore's log bus at hundreds of lines per second. The old body was
+     * `_logs.update { (it + message).takeLast(MAX_LOG_ENTRIES) }`, which allocated a fresh
+     * 5000-element list AND performed a Compose snapshot write PER LINE — the app's dominant source
+     * of garbage (heap grew until the JVM's default max, ~1/4 of RAM) and of UI stalls.
+     *
+     * Now the line lands in a bounded deque in O(1), and the immutable snapshot the UI observes is
+     * published at most once per [LOG_FLUSH_INTERVAL_MS]. Same visible content, ~1/1000th the churn.
+     */
     private fun addLog(message: String) {
-        _logs.update {
-            (it + message).takeLast(MAX_LOG_ENTRIES)
+        synchronized(logBuffer) {
+            if (logBuffer.size >= MAX_LOG_ENTRIES) logBuffer.removeFirst()
+            logBuffer.addLast(message)
+        }
+        scheduleLogFlush()
+    }
+
+    /** Publishes the buffer to [_logs] on a timer; coalesces a burst of lines into one emission. */
+    private fun scheduleLogFlush() {
+        if (!logFlushPending.compareAndSet(false, true)) return
+        scope.launch {
+            delay(LOG_FLUSH_INTERVAL_MS)
+            // Cleared BEFORE the snapshot: a line arriving during the copy schedules the next flush
+            // instead of being stranded until the following one.
+            logFlushPending.set(false)
+            _logs.value = synchronized(logBuffer) { logBuffer.toList() }
         }
     }
 
@@ -1138,6 +1167,12 @@ class DesktopVpnManager private constructor(
 
     private companion object {
         const val MAX_LOG_ENTRIES = 5_000
+
+        /**
+         * How long a burst of log lines is coalesced before the UI sees them. Long enough to turn a
+         * per-line snapshot write into ~4/s, short enough that the log view still reads as live.
+         */
+        const val LOG_FLUSH_INTERVAL_MS = 250L
         const val WATCHDOG_GRACE_MS = 8_000L
         const val WATCHDOG_INTERVAL_MS = 5_000L
         const val OLC_READY_TIMEOUT_MS = 25_000L

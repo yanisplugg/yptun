@@ -132,6 +132,24 @@ internal class DesktopEngineController(
     private fun singBoxCachePath(): String =
         DesktopPaths.appDataDir().resolve("singbox-cache.db").toString()
 
+    /**
+     * sing-box's log file. sing-box opens it O_APPEND and never rotates it, and the desktop configs
+     * run at `debug` — left alone the file grows without bound (hundreds of MB after a few sessions,
+     * with the disk writes showing up as UI stutter). Drop it at start once it is past
+     * [MAX_SINGBOX_LOG_BYTES]; the current session is what diagnostics actually need.
+     */
+    private fun singBoxLogPath(): String {
+        val path = DesktopPaths.appDataDir().resolve("singbox.log")
+        runCatching {
+            if (java.nio.file.Files.exists(path) &&
+                java.nio.file.Files.size(path) > MAX_SINGBOX_LOG_BYTES
+            ) {
+                java.nio.file.Files.delete(path)
+            }
+        }
+        return path.toString()
+    }
+
     fun stopAll() {
         trustTunnel.stop()
         YpTunCore.stopAll()
@@ -407,7 +425,7 @@ internal class DesktopEngineController(
                 forceFamilyResolve = false,
                 // SOCKS+HTTP inbound so desktop proxy mode can point the Windows system HTTP-proxy at it.
                 mixedInbound = true,
-                logFilePath = DesktopPaths.appDataDir().resolve("singbox.log").toString(),
+                logFilePath = singBoxLogPath(),
                 cacheFilePath = singBoxCachePath(),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}" +
@@ -535,7 +553,7 @@ internal class DesktopEngineController(
                 splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                 splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                 tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
-                logFilePath = DesktopPaths.appDataDir().resolve("singbox.log").toString(),
+                logFilePath = singBoxLogPath(),
                 cacheFilePath = singBoxCachePath(),
             )
             activeProxyCore = ProxyCore.SingBox
@@ -939,6 +957,9 @@ internal class DesktopEngineController(
     private companion object {
         const val MOBILE_READY_TIMEOUT_MS = 25_000
         const val VKTURN_RELAY_READY_TIMEOUT_MS = 20_000
+
+        /** Size past which singbox.log is dropped at start instead of appended to (see singBoxLogPath). */
+        const val MAX_SINGBOX_LOG_BYTES = 32L * 1024 * 1024
 
         // Proxy types xray-core can serve from typed fields (same as Android).
         val XRAY_SUPPORTED_TYPES = setOf(
