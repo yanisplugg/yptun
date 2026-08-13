@@ -323,6 +323,9 @@ kotlin {
             implementation(libs.jna)
             // IPHlpAPI.GetIfEntry2 — the tunnel adapter's byte counters for the Home speed line.
             implementation(libs.jna.platform)
+            // Vendored Google archive-patcher (File-by-File v1 applier): desktop delta updates
+            // patch the installed app jar instead of re-downloading the ~160 MB installer.
+            implementation(project(":archivepatcher"))
         }
 
         iosMain.dependencies {
