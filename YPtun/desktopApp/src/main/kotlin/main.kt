@@ -155,6 +155,9 @@ private class DesktopAppDependencies {
 
     val vpnManager = DesktopVpnManager(locationsRepository).also { manager ->
         manager.connectionModeProvider = { settings.connectionMode.value }
+        // Gate the 2s tunnel-counter sampling on the "speed on home" setting, so the default-off
+        // toggle costs nothing and flipping it mid-session takes effect on the next tick.
+        manager.speedSamplingProvider = { settings.appBehavior.value.showSpeedOnHome }
     }
 
     /**
@@ -542,6 +545,24 @@ fun main(args: Array<String>) = application {
                 }
             }
 
+            // The locations list reads these appearance settings through CompositionLocals, exactly
+            // like AndroidMainScreen provides them. Desktop never did, so every one of them silently
+            // ran on the CompositionLocal default: "speed on home", "subscription expiry", "alive
+            // count", "hide endpoint when a description exists" and the ping-result format were all
+            // dead toggles (the ping default even disagreed with AppBehaviorSettings').
+            val liveSpeed by dependencies.vpnManager.speed.collectAsState()
+            androidx.compose.runtime.CompositionLocalProvider(
+                org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides
+                    appBehavior.pingResultDisplay,
+                org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides
+                    appBehavior.showSubscriptionExpiry,
+                org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides
+                    appBehavior.showSubscriptionAliveCount,
+                org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides
+                    appBehavior.hideEndpointWhenDescription,
+                org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides
+                    (if (appBehavior.showSpeedOnHome && homeState.isVpnConnected) liveSpeed else null),
+            ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 OlcboxAppContent(
                     homeViewModel = dependencies.homeViewModel,
@@ -910,6 +931,7 @@ fun main(args: Array<String>) = application {
                     )
                 }
             }
+            } // CompositionLocalProvider (locations-list appearance settings)
         }
     }
 }

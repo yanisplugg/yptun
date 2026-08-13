@@ -321,6 +321,8 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.kstore.file)
             implementation(libs.jna)
+            // IPHlpAPI.GetIfEntry2 — the tunnel adapter's byte counters for the Home speed line.
+            implementation(libs.jna.platform)
         }
 
         iosMain.dependencies {

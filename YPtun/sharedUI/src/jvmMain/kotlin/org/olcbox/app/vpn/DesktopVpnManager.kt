@@ -24,9 +24,11 @@ import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
+import org.olcbox.app.ui.features.locations.components.SpeedSample
 import org.olcbox.app.vpn.desktop.DesktopEngineController
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopProxyController
+import org.olcbox.app.vpn.desktop.DesktopTrafficStats
 import org.olcbox.app.vpn.desktop.LinuxPrivilege
 import org.olcbox.app.vpn.desktop.LinuxTunController
 import org.olcbox.app.vpn.desktop.OlcRtcCommand
@@ -79,10 +81,24 @@ class DesktopVpnManager private constructor(
     private val _socksProxySettings = MutableStateFlow(DesktopSocksProxySettings())
     val socksProxySettings: StateFlow<DesktopSocksProxySettings> = _socksProxySettings.asStateFlow()
 
+    /**
+     * Live down/up throughput of the active tunnel, mirroring Android's `OlcboxVpnState.speed`. Drives
+     * the optional Home-screen speed line; zero when not connected or when the toggle is off.
+     */
+    private val _speed = MutableStateFlow(SpeedSample(0L, 0L))
+    val speed: StateFlow<SpeedSample> = _speed.asStateFlow()
+
+    /**
+     * Set by the UI layer: true while the "show speed on home" setting is on. Sampling is gated on it
+     * exactly like Android gates its speed loop, so the default-off setting costs no periodic wake-up.
+     */
+    var speedSamplingProvider: () -> Boolean = { false }
+
     private var operationJob: Job? = null
     private var logJob: Job? = null
     private var tunLogJob: Job? = null
     private var watchdogJob: Job? = null
+    private var speedJob: Job? = null
     private var process: Process? = null
     private var tunProcess: Process? = null
     private var olcRtcConfigPath: Path? = null
@@ -1084,10 +1100,51 @@ class DesktopVpnManager private constructor(
         }
     }
 
+    /**
+     * Samples the tunnel adapter's byte counters and publishes a down/up rate, the desktop twin of
+     * OlcboxVpnService.startSpeedUpdater(). Only runs while connected AND the user asked for the Home
+     * speed line; re-reads [speedSamplingProvider] every tick so toggling it mid-session takes effect.
+     * Proxy mode has no TUN, so [DesktopTrafficStats] returns null there and the rate stays zero.
+     */
+    private fun startSpeedUpdater() {
+        speedJob?.cancel()
+        speedJob = scope.launch {
+            var previous: DesktopTrafficStats.Counters? = null
+            while (isActive && _isConnected.value) {
+                if (!speedSamplingProvider()) {
+                    previous = null
+                    if (_speed.value != ZERO_SPEED) _speed.value = ZERO_SPEED
+                    delay(SPEED_INTERVAL_MS)
+                    continue
+                }
+                val current = DesktopTrafficStats.readTunnelCounters()
+                val last = previous
+                if (current != null && last != null) {
+                    val seconds = SPEED_INTERVAL_MS / 1000.0
+                    // Counters reset when the adapter is recreated across a reconnect; a negative delta
+                    // is that, not a rate, so floor it at zero rather than reporting garbage.
+                    val down = ((current.rxBytes - last.rxBytes).coerceAtLeast(0L) / seconds).toLong()
+                    val up = ((current.txBytes - last.txBytes).coerceAtLeast(0L) / seconds).toLong()
+                    _speed.value = SpeedSample(downBytesPerSec = down, upBytesPerSec = up)
+                }
+                previous = current
+                delay(SPEED_INTERVAL_MS)
+            }
+            _speed.value = ZERO_SPEED
+        }
+    }
+
     private fun setStatus(status: VpnStatus) {
         _status.value = status
         val connected = status is VpnStatus.Connected
         _isConnected.value = connected
+        if (connected) {
+            if (speedJob?.isActive != true) startSpeedUpdater()
+        } else {
+            speedJob?.cancel()
+            speedJob = null
+            _speed.value = ZERO_SPEED
+        }
         // Drive the home-screen uptime timer: stamp the real connection start once, clear on any
         // non-connected state. Keep an existing stamp across redundant Connected updates so the timer
         // doesn't reset mid-session.
@@ -1173,6 +1230,10 @@ class DesktopVpnManager private constructor(
          * per-line snapshot write into ~4/s, short enough that the log view still reads as live.
          */
         const val LOG_FLUSH_INTERVAL_MS = 250L
+
+        /** Sampling cadence of the Home speed line (matches Android's SPEED_INTERVAL_MS). */
+        const val SPEED_INTERVAL_MS = 2_000L
+        val ZERO_SPEED = SpeedSample(0L, 0L)
         const val WATCHDOG_GRACE_MS = 8_000L
         const val WATCHDOG_INTERVAL_MS = 5_000L
         const val OLC_READY_TIMEOUT_MS = 25_000L
