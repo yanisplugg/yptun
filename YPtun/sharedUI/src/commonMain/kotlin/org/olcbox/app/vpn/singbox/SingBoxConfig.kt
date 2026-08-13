@@ -682,7 +682,7 @@ object SingBoxConfig {
                             put("tag", "geosite-ads")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs")
-                            put("download_detour", "direct")
+                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
                         })
                     }
                     if (routing.bypassRussia) {
@@ -691,14 +691,14 @@ object SingBoxConfig {
                             put("tag", "geoip-ru")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs")
-                            put("download_detour", "direct")
+                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
                         })
                         add(buildJsonObject {
                             put("type", "remote")
                             put("tag", "geosite-ru")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs")
-                            put("download_detour", "direct")
+                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
                         })
                     }
                 }.associateBy { it["tag"]?.jsonPrimitive?.contentOrNull ?: it.toString() }.values
@@ -707,15 +707,20 @@ object SingBoxConfig {
                 }
             }
 
-            // Persist the fakeip table so a synthetic IP keeps meaning the SAME domain across
-            // reconnects (see [cacheFilePath]). Emitted ONLY with FakeDNS on, and only `store_fakeip`
-            // is set — no selector/mode/RDRC state is cached, so nothing else changes behaviour.
-            if (fakeEnabled && !cacheFilePath.isNullOrBlank()) {
+            // The cache file earns its place twice over:
+            //  - it persists FETCHED RULE-SETS. sing-box's RemoteRuleSet.StartContext only skips the
+            //    initial download when the cache has the set, and a failed initial download aborts
+            //    THE WHOLE CORE ("initial rule-set: <tag>"). With the cache, routing survives a start
+            //    with no working network instead of taking the connection down with it.
+            //  - with FakeDNS on it persists the fakeip table, so a synthetic IP keeps meaning the
+            //    same domain across reconnects (see [cacheFilePath]).
+            // Nothing else is cached (no selector/mode/RDRC state), so behaviour is otherwise identical.
+            if (!cacheFilePath.isNullOrBlank()) {
                 putJsonObject("experimental") {
                     putJsonObject("cache_file") {
                         put("enabled", true)
                         put("path", cacheFilePath)
-                        put("store_fakeip", true)
+                        if (fakeEnabled) put("store_fakeip", true)
                     }
                 }
             }

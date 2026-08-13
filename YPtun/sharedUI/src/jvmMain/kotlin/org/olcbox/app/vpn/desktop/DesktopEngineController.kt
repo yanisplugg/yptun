@@ -295,9 +295,9 @@ internal class DesktopEngineController(
         val isLocalUdpTunnel = isAwg || isHy2 || isTrustTunnel
 
         val traffic = JvmVpnSettings.loadTraffic()
-        val routing = JvmVpnSettings.loadRouting()
+        val routing = loadRoutingExpandingAsn()
         val profilesState = JvmVpnSettings.loadRoutingProfiles()
-        val routingProfile = profilesState.resolve(config.routingProfileId)
+        val routingProfile = resolveProfileExpandingAsn(profilesState, config.routingProfileId)
         if (routingProfile == null) {
             log("Routing: NO profile applied — all traffic via proxy")
         } else {
@@ -377,6 +377,9 @@ internal class DesktopEngineController(
                     },
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     secondProfile = secondProfile,
+                    // The "Обход LAN" toggle. Android passes it; desktop did not, so on the Xray core
+                    // LAN bypass silently ran on the default no matter what the user set.
+                    bypassLan = routing.bypassLan,
                 )
             }
             log("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -490,9 +493,9 @@ internal class DesktopEngineController(
         if (!useProxy) return
 
         val traffic = JvmVpnSettings.loadTraffic()
-        val routing = JvmVpnSettings.loadRouting()
+        val routing = loadRoutingExpandingAsn()
         val profilesState = JvmVpnSettings.loadRoutingProfiles()
-        val routingProfile = profilesState.resolve(config.routingProfileId)
+        val routingProfile = resolveProfileExpandingAsn(profilesState, config.routingProfileId)
         val globalCore = JvmVpnSettings.loadAppBehavior().globalProxyCore
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
@@ -643,7 +646,7 @@ internal class DesktopEngineController(
 
         activeProxyCore = ProxyCore.SingBox
         val exitProfile = requireNotNull(profile)
-        val routing = JvmVpnSettings.loadRouting()
+        val routing = loadRoutingExpandingAsn()
         // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
         val traffic = JvmVpnSettings.loadTraffic().copy(domainStrategy = "ipv4_only")
         val profilesState = JvmVpnSettings.loadRoutingProfiles()
@@ -927,6 +930,35 @@ internal class DesktopEngineController(
             log("Geo databases unavailable; profile geo rules will be skipped on Xray")
             ""
         }
+    }
+
+    /**
+     * The routing profile for [locationProfileId] with its `asn:N` selectors replaced by the
+     * operator's CIDRs — the desktop twin of OlcboxVpnService.resolveProfileExpandingAsn.
+     *
+     * Both cores DROP selectors they can't parse, so without this every `asn:` rule silently did
+     * nothing on desktop and the profile looked half-applied. Unresolvable ASNs are still dropped,
+     * but the rest of the profile is unaffected.
+     */
+    private suspend fun resolveProfileExpandingAsn(
+        state: org.olcbox.app.data.model.RoutingProfilesState,
+        locationProfileId: String?,
+    ): RoutingProfile? {
+        val profile = state.resolve(locationProfileId) ?: return null
+        val asns = profile.referencedAsns()
+        if (asns.isEmpty()) return profile
+        val cidrs = runCatching { JvmAsnResolver.ensure(asns) }.getOrDefault(emptyMap())
+        log("Routing: expanded ${cidrs.size}/${asns.size} ASN selector(s) to CIDRs")
+        return profile.expandAsn(cidrs)
+    }
+
+    /** [JvmVpnSettings.loadRouting] with the manual rules' `asn:` selectors expanded, as on Android. */
+    private suspend fun loadRoutingExpandingAsn(): org.olcbox.app.data.model.RoutingRules {
+        val routing = JvmVpnSettings.loadRouting()
+        val asns = org.olcbox.app.data.model.Asn.collect(routing.rules.flatMap { it.ip })
+        if (asns.isEmpty()) return routing
+        val cidrs = runCatching { JvmAsnResolver.ensure(asns) }.getOrDefault(emptyMap())
+        return routing.copy(rules = org.olcbox.app.data.model.SingBoxRule.expandAsn(routing.rules, cidrs))
     }
 
     private fun xrayRoutingProfile(profile: RoutingProfile?, assetPath: String): RoutingProfile? {

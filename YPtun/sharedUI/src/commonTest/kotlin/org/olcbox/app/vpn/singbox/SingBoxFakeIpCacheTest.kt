@@ -55,9 +55,17 @@ class SingBoxFakeIpCacheTest {
         assertTrue(root["dns"]!!.jsonObject["fakeip"] != null)
     }
 
+    /**
+     * Without FakeDNS the cache file is still enabled — it is what persists downloaded rule-sets, and
+     * a rule-set that has to be re-fetched on a censored network aborts the whole core — but it must
+     * not claim to store a fakeip table that this config does not have.
+     */
     @Test
-    fun noCacheFileWithoutFakeDns() {
-        assertNull(build(fakeDns = null, cachePath = "/data/singbox/cache.db")["experimental"])
+    fun cacheFileWithoutFakeDnsDoesNotStoreFakeIp() {
+        val cache = build(fakeDns = null, cachePath = "/data/singbox/cache.db")["experimental"]!!
+            .jsonObject["cache_file"]!!.jsonObject
+        assertEquals(true, cache["enabled"]!!.jsonPrimitive.content.toBoolean())
+        assertNull(cache["store_fakeip"])
     }
 
     @Test

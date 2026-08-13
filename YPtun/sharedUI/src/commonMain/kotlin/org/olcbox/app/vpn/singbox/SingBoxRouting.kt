@@ -29,6 +29,18 @@ object SingBoxRouting {
     const val PROXY_TAG = "proxy"
     const val DIRECT_TAG = "direct"
 
+    /**
+     * Outbound used to fetch remote `.srs` rule-sets — the PROXY, not `direct`.
+     *
+     * The sets live on raw.githubusercontent.com, which is blocked in exactly the places this app is
+     * used. And a failed initial fetch is not a soft failure: sing-box's RemoteRuleSet.StartContext
+     * returns `initial rule-set: <tag>` and the WHOLE CORE REFUSES TO START, so a profile with any
+     * geosite:/geoip: selector could take the connection down with it. Downloading through the tunnel
+     * removes the dependency on the censored path; combined with experimental.cache_file (which
+     * persists fetched rule-sets) later starts need no network for this at all.
+     */
+    const val RULE_SET_DOWNLOAD_TAG = PROXY_TAG
+
     const val DEFAULT_GEOSITE_BASE = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/"
     const val DEFAULT_GEOIP_BASE = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/"
 
@@ -102,7 +114,7 @@ object SingBoxRouting {
                     put("tag", "geosite-$tag")
                     put("format", "binary")
                     put("url", "${siteBase}geosite-$tag.srs")
-                    put("download_detour", DIRECT_TAG)
+                    put("download_detour", RULE_SET_DOWNLOAD_TAG)
                 }
             }
             geoipTags.forEach { tag ->
@@ -111,7 +123,7 @@ object SingBoxRouting {
                     put("tag", "geoip-$tag")
                     put("format", "binary")
                     put("url", "${ipBase}geoip-$tag.srs")
-                    put("download_detour", DIRECT_TAG)
+                    put("download_detour", RULE_SET_DOWNLOAD_TAG)
                 }
             }
         }
@@ -195,13 +207,13 @@ object SingBoxRouting {
             geositeTags.forEach { tag ->
                 addJsonObject {
                     put("type", "remote"); put("tag", "geosite-$tag"); put("format", "binary")
-                    put("url", "${siteBase}geosite-$tag.srs"); put("download_detour", DIRECT_TAG)
+                    put("url", "${siteBase}geosite-$tag.srs"); put("download_detour", RULE_SET_DOWNLOAD_TAG)
                 }
             }
             geoipTags.forEach { tag ->
                 addJsonObject {
                     put("type", "remote"); put("tag", "geoip-$tag"); put("format", "binary")
-                    put("url", "${ipBase}geoip-$tag.srs"); put("download_detour", DIRECT_TAG)
+                    put("url", "${ipBase}geoip-$tag.srs"); put("download_detour", RULE_SET_DOWNLOAD_TAG)
                 }
             }
         }
