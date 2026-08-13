@@ -24,6 +24,15 @@ var (
 	cancel context.CancelFunc
 )
 
+// wdttVersion identifies the vendored WDTT core build (upstream commit + vendor date). Upstream
+// amurcanov/proxy-turn-vk-android was ARCHIVED on 2026-08-04 with 51057cc as its last commit to
+// app/src/main/assets/android-client, so this is the final upstream state; bump the date only if
+// we advance the vendored copy ourselves.
+const wdttVersion = "2026.08.13-51057cc"
+
+// Version returns the WDTT (VK-TURN) core version for display in the app's settings.
+func Version() string { return wdttVersion }
+
 // Start launches the WDTT core in the background and returns immediately. peer is
 // the wdtt-server "host:port", vkHashes the VK call hashes (comma/space/newline
 // separated), password the tunnel password. listen is the local UDP address

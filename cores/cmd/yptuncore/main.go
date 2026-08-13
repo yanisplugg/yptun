@@ -499,6 +499,9 @@ func YpWdttRunning() C.int {
 //export YpWdttPushCaptcha
 func YpWdttPushCaptcha(token *C.char) { wdttmobile.PushCaptcha(C.GoString(token)) }
 
+//export YpWdttVersion
+func YpWdttVersion() *C.char { return cs(wdttmobile.Version()) }
+
 // ---------------------------------------------------------------------------
 // dnstt (DNS tunnel): a transparent TCP forwarder on the local port; the dnstt-server relays each
 // connection to its own upstream SOCKS5, so the local port behaves as that SOCKS5. No socket

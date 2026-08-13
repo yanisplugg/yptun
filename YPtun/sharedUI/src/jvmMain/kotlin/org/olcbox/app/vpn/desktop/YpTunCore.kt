@@ -63,6 +63,7 @@ internal interface YpTunCoreLib : Library {
     fun YpWdttStop()
     fun YpWdttRunning(): Int
     fun YpWdttPushCaptcha(token: String)
+    fun YpWdttVersion(): Pointer?
 
     fun YpDnsttStart(resolver: String, domain: String, pubKeyHex: String, listenAddr: String): Pointer?
     fun YpDnsttStop()
@@ -272,6 +273,8 @@ internal object YpTunCore {
     fun wdttStop() = libOrNull?.YpWdttStop() ?: Unit
     fun wdttRunning(): Boolean = libOrNull?.YpWdttRunning() == 1
     fun wdttPushCaptcha(token: String) = lib().YpWdttPushCaptcha(token)
+
+    fun wdttVersion(): String = takeString(lib().YpWdttVersion()).orEmpty()
 
     // dnstt ---------------------------------------------------------------------------------
     fun dnsttStart(resolver: String, domain: String, pubKeyHex: String, listenAddr: String) =

@@ -163,6 +163,7 @@ interface Strings {
     fun xrayVersion(v: String): String
     fun singboxVersion(v: String): String
     fun vkturnVersion(v: String): String
+    fun wdttVersion(v: String): String
     fun olcrtcVersion(v: String): String
     /** Localized label for a TrafficSettings domain strategy (prefer_ipv4/prefer_ipv6/ipv4_only/ipv6_only). */
     fun domainStrategyName(v: String): String
@@ -791,6 +792,7 @@ object RuStrings : Strings {
     override fun xrayVersion(v: String) = "Xray: $v"
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
+    override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "Предпочитать IPv4"
@@ -1374,6 +1376,7 @@ object EnStrings : Strings {
     override fun xrayVersion(v: String) = "Xray: $v"
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
+    override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "Prefer IPv4"
@@ -1964,6 +1967,7 @@ object FaStrings : Strings {
     override fun xrayVersion(v: String) = "Xray: $v"
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
+    override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun hwid(v: String) = "HWID: $v"
     override val community = "انجمن"
@@ -2540,6 +2544,7 @@ object ZhStrings : Strings {
     override fun xrayVersion(v: String) = "Xray：$v"
     override fun singboxVersion(v: String) = "sing-box：$v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn)：$v"
+    override fun wdttVersion(v: String) = "VK-TURN (WDTT)：$v"
     override fun olcrtcVersion(v: String) = "OLCRTC：$v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "优先 IPv4"
