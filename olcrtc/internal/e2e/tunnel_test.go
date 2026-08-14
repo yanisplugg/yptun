@@ -100,6 +100,11 @@ var (
 		90*time.Second,
 		"timeout per real e2e provider/transport case",
 	)
+	realE2EDNSServer = flag.String( //nolint:gochecknoglobals // package-level state intentional
+		"olcrtc.real-dns-server",
+		"1.1.1.1:53",
+		"DNS server used by real provider e2e sessions",
+	)
 )
 
 type realE2EExpectation int
@@ -385,8 +390,8 @@ func (s *memoryStream) SetEndedCallback(cb func(string)) {
 func (s *memoryStream) WatchConnection(ctx context.Context) {
 	<-ctx.Done()
 }
-func (s *memoryStream) CanSend() bool           { return s.isConnected() }
-func (s *memoryStream) SubscriberCanSend() bool { return s.isConnected() }
+func (s *memoryStream) CanSend() bool             { return s.isConnected() }
+func (s *memoryStream) SubscriberCanSend() bool   { return s.isConnected() }
 func (s *memoryStream) GetSendQueue() chan []byte { return nil }
 func (s *memoryStream) GetBufferedAmount() uint64 { return 0 }
 func (s *memoryStream) Reconnect(string)          {}
@@ -1124,7 +1129,7 @@ func startRealTunnel(
 			RoomURL:          roomURL,
 			ChannelID:        channelID,
 			KeyHex:           testKeyHex,
-			DNSServer:        localDNSServer,
+			DNSServer:        *realE2EDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
 			Liveness:         control.Config{Interval: 10 * time.Second, Timeout: 60 * time.Second, Failures: 10},
 		})
@@ -1154,7 +1159,7 @@ func startRealTunnel(
 			KeyHex:           testKeyHex,
 			DeviceID:         clientDeviceID,
 			LocalAddr:        socksAddr,
-			DNSServer:        localDNSServer,
+			DNSServer:        *realE2EDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
 			Liveness:         control.Config{Interval: 10 * time.Second, Timeout: 60 * time.Second, Failures: 10},
 		}, func() { close(ready) })

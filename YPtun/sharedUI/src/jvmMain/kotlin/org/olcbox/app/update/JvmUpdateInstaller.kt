@@ -9,15 +9,48 @@ import java.net.URI
 import java.net.URL
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.deleteIfExists
 import kotlin.io.path.outputStream
+
+/** What [JvmUpdateInstaller.install] actually did, so the caller knows whether to restart. */
+sealed interface DesktopUpdateOutcome {
+    /** The full installer was downloaded and handed to the OS; the user drives it from here. */
+    data class InstallerOpened(val message: String) : DesktopUpdateOutcome
+
+    /** A delta was applied and staged. The app must shut down cleanly and exit for it to land. */
+    data class RestartRequired(val message: String) : DesktopUpdateOutcome
+}
 
 class JvmUpdateInstaller(
     private val directory: Path = DesktopPaths.appDataDir().resolve("updates")
 ) {
+    /**
+     * Installs [info], preferring a binary delta.
+     *
+     * The delta path downloads a few-MB bundle and rebuilds the changed files of the installed app
+     * image locally instead of pulling the ~160 MB installer. It is refused unless the installation
+     * is exactly the one the bundle was built against AND every rebuilt file matches the published
+     * one byte for byte (see [DesktopDeltaPatch]), so any mismatch, any I/O failure and any
+     * non-app-image run simply falls through to the full download below.
+     */
+    suspend fun install(
+        info: AppUpdateInfo,
+        onProgress: (Float) -> Unit = {}
+    ): Result<DesktopUpdateOutcome> = runCatching {
+        info.deltaAsset?.let { delta ->
+            val staged = runCatching { applyDelta(delta, onProgress) }.getOrNull()
+            if (staged != null) return@runCatching staged
+        }
+        DesktopUpdateOutcome.InstallerOpened(openInstaller(info.asset, onProgress))
+    }
+
+    /** Downloads [asset] and hands it to the OS (the pre-delta behaviour, kept for the full path). */
     suspend fun downloadAndOpen(
         asset: AppUpdateAsset,
         onProgress: (Float) -> Unit = {}
-    ): Result<String> = runCatching {
+    ): Result<String> = runCatching { openInstaller(asset, onProgress) }
+
+    private suspend fun openInstaller(asset: AppUpdateAsset, onProgress: (Float) -> Unit): String {
         val file = download(asset, onProgress)
         val desktop = if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null
         when {
@@ -25,7 +58,33 @@ class JvmUpdateInstaller(
             desktop?.isSupported(Desktop.Action.BROWSE) == true -> desktop.browse(URI(asset.downloadUrl))
             else -> error("No system file handler available for ${asset.name}")
         }
-        "Opening ${asset.name}"
+        return "Opening ${asset.name}"
+    }
+
+    private suspend fun applyDelta(
+        delta: AppUpdateAsset,
+        onProgress: (Float) -> Unit
+    ): DesktopUpdateOutcome.RestartRequired? = withContext(Dispatchers.IO) {
+        val appDir = DesktopAppImage.appDir() ?: return@withContext null
+        val bundle = download(delta, onProgress)
+        // Staged INSIDE the app directory so every commit is a rename on the same volume.
+        val stagingDir = appDir.resolve(".yptun-update")
+        val plan = try {
+            DesktopDeltaPatch.stage(
+                appDir = appDir,
+                bundle = bundle,
+                stagingDir = stagingDir,
+                tempDir = directory.resolve("patch-tmp")
+            )
+        } catch (e: Exception) {
+            runCatching { stagingDir.toFile().deleteRecursively() }
+            throw e
+        } finally {
+            bundle.deleteIfExists()
+            runCatching { directory.resolve("patch-tmp").toFile().deleteRecursively() }
+        }
+        DesktopSelfUpdate.scheduleSwap(plan)
+        DesktopUpdateOutcome.RestartRequired("Update ready — restarting YPtun")
     }
 
     private suspend fun download(

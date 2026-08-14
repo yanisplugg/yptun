@@ -29,6 +29,7 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		OnData:              cfg.OnData,
 		OnPeerData:          cfg.OnPeerData,
 		DNSServer:           cfg.DNSServer,
+		Resolver:            cfg.Resolver,
 		ProxyAddr:           cfg.ProxyAddr,
 		ProxyPort:           cfg.ProxyPort,
 		Engine:              cfg.Engine,

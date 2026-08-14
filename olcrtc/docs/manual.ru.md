@@ -237,6 +237,8 @@ Room ID нужно передать клиенту.
 
 На своей машине. `auth.provider`, `net.transport`, `room.id` и `crypto.key` должны совпадать с сервером.
 
+> Хочешь готовый Android-клиент вместо YAML-конфига? Возьми [owenewans/owenclave](https://github.com/owenewans/owenclave) ([src.owenewans.org/owenrtc](https://src.owenewans.org/owenrtc)) - он читает URI `olcrtc://` и подписки напрямую. Ниже - запуск нативного бинарника `cnc` (только SOCKS5).
+
 ### jitsi + datachannel (рекомендуется)
 
 ```yaml

@@ -171,10 +171,15 @@ class AppUpdateService(
         }
 
         /**
-         * Finds the binary-delta patch that upgrades [fromVersion]→[toVersion] for the device ABI.
-         * Convention: assets are named `YPtun-delta-<from>-<to>-<abi>.patch.gz` (raw File-by-File v1
-         * patch, gzip-compressed for transport). The ABI is taken from the already-chosen full
-         * [fullAssetName] so the patch matches exactly what's installed. Android only.
+         * Finds the binary-delta patch that upgrades [fromVersion]→[toVersion] for this build.
+         *
+         * Convention: `YPtun-delta-<from>-<to>-<target>.patch[.gz]`, where `<target>` is the device
+         * ABI on Android (`arm64-v8a`, …) and `<os>-<arch>` on desktop (`windows-amd64`, …). The
+         * token is taken from the already-chosen full [fullAssetName] so the patch always matches
+         * what is actually installed.
+         *
+         * Android patches an APK, desktop patches the installed application jar; both degrade to the
+         * full download when no patch matches or the local base isn't the one it was built against.
          */
         fun selectDeltaAsset(
             assets: List<GithubReleaseAsset>,
@@ -183,18 +188,23 @@ class AppUpdateService(
             toVersion: String,
             fullAssetName: String
         ): AppUpdateAsset? {
-            if (platform.os != "android") return null
             val from = fromVersion.removePrefix("v")
             val to = toVersion.removePrefix("v")
             if (from.isBlank() || to.isBlank() || from == to) return null
             val fullName = fullAssetName.lowercase()
-            val abi = platform.androidArchTokens.firstOrNull { it in fullName }
+            val target = if (platform.os == "android") {
+                platform.androidArchTokens.firstOrNull { it in fullName }
+            } else {
+                platform.assetToken.joinToString("-").takeIf { token ->
+                    platform.assetToken.all { it in fullName }
+                }
+            }
             val candidates = assets.filter { asset ->
                 val name = asset.name.lowercase()
                 (name.endsWith(".patch.gz") || name.endsWith(".patch")) &&
                     "delta" in name && from in name && to in name
             }
-            val chosen = if (abi != null) candidates.firstOrNull { abi in it.name.lowercase() }
+            val chosen = if (target != null) candidates.firstOrNull { target in it.name.lowercase() }
             else candidates.firstOrNull()
             return chosen?.let {
                 AppUpdateAsset(

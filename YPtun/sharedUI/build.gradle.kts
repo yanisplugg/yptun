@@ -81,7 +81,7 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
 val olcrtcAndroidAarDependency = files(olcrtcAndroidAarFile).builtBy(buildOlcrtcAndroidAar)
 
 // --- sing-box (libbox) Android AAR, built from SINGBOX_REPO via gomobile ---
-// Mirrors the olcrtc build above. Clone github.com/SagerNet/sing-box (pinned v1.13.14,
+// Mirrors the olcrtc build above. Clone github.com/SagerNet/sing-box (pinned v1.13.18,
 // see SingBoxEngine.kt which targets that PlatformInterface/CommandServer) next to this repo,
 // or set SINGBOX_REPO to its path.
 val singboxRepoPath = providers.environmentVariable("SINGBOX_REPO")
@@ -100,8 +100,8 @@ val libboxBuildTags =
     "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic,with_naive_outbound"
 
 // sing-box version embedded into libbox via ldflags (-X constant.Version); otherwise libbox.Version()
-// reports "unknown". Keep in sync with the pinned sing-box checkout (v1.13.14, see comment above).
-val singboxVersion = "1.13.14"
+// reports "unknown". Keep in sync with the pinned sing-box checkout (v1.13.18, see comment above).
+val singboxVersion = "1.13.18"
 
 libboxAndroidAarFile.parentFile.mkdirs()
 
@@ -321,6 +321,11 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.kstore.file)
             implementation(libs.jna)
+            // IPHlpAPI.GetIfEntry2 — the tunnel adapter's byte counters for the Home speed line.
+            implementation(libs.jna.platform)
+            // Vendored Google archive-patcher (File-by-File v1 applier): desktop delta updates
+            // patch the installed app jar instead of re-downloading the ~160 MB installer.
+            implementation(project(":archivepatcher"))
         }
 
         iosMain.dependencies {

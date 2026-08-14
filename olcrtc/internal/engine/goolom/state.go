@@ -170,7 +170,7 @@ func (s *Session) sendTelemetry(ctx context.Context, endpoint, event string) {
 	req.Header.Set("X-Telemost-Client-Version", "187.1.0")
 	req.Header.Set("Idempotency-Key", uuid.New().String())
 
-	client := protect.NewHTTPClient()
+	client := protect.NewHTTPClient(s.resolver)
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.Verbosef("Telemetry send error: %v", err)

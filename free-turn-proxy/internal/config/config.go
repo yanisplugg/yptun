@@ -1,31 +1,26 @@
-// Package config парсит CLI-флаги клиента и сервера.
+// Package config описывает опции клиента и сервера и превращает в них любой
+// источник настроек.
 //
-// Функции Parse* без побочных эффектов: валидируют ввод и декодируют wrap-ключ,
-// но не трогают сеть, DNS и состояние процесса. Подключение этих эффектов -
-// ответственность main() после возврата Parse*.
+// Раскладка пакета:
+//
+//   - config.go   - типы опций (этот файл);
+//   - defaults.go - все литералы дефолтов, единственное их место;
+//   - raw.go      - сырые значения источника и сборка raw -> Client;
+//   - validate.go - смысловые правила поверх собранного Client;
+//   - cliflags.go - парсер CLI-флагов, тонкая обёртка над raw/assemble.
+//
+// Сборка и валидация без побочных эффектов: сеть, DNS и состояние процесса не
+// трогаются - это ответственность вызывающего.
 //
 // Опции сгруппированы по доменам (TURN, Obf, Proxy, VK, DNS, Log) - структура
 // зеркалит концептуальные слои прокси.
 package config
 
 import (
-	"errors"
-	"flag"
-	"fmt"
-	"io"
-	"strings"
 	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcptun"
-	"github.com/samosvalishe/free-turn-proxy/internal/uri"
-	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
-)
-
-const (
-	dnsModePlain           = "plain"
-	dnsModeDoH             = "doh"
-	dnsModeAuto            = "auto"
-	defaultStreamsPerCache = 10
+	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 )
 
 // ProxyMode выбирает payload прикладного уровня, который идёт через TURN-туннель.
@@ -61,7 +56,7 @@ const (
 
 // ObfOpts - опции обфускации TURN-payload.
 type ObfOpts struct {
-	Profile ObfProfile    // -obf-profile: none (default) | rtpopus | rtpopus2
+	Profile ObfProfile    // -obf-profile: none (default) | rtpopus | rtpopus2 | rtpopus3
 	Key     []byte        // -obf-key (декодированный): 32-байтовый общий ключ; nil если Profile=none
 	GenKey  bool          // -gen-obf-key: напечатать новый ключ и выйти
 	Timing  time.Duration // -obf-timing: межпакетная задержка (RTP-мимикрия); 0=выкл
@@ -78,15 +73,6 @@ type ProxyOpts struct {
 	Peer    string    // -peer: адрес серверного прокси, куда дозванивается клиент (только клиент)
 }
 
-// Browser выбирает браузерный профиль для control-plane запросов VK-провайдера.
-type Browser string
-
-const (
-	BrowserChrome  Browser = "chrome"
-	BrowserFirefox Browser = "firefox"
-	BrowserSafari  Browser = "safari"
-)
-
 // Platform выбирает класс устройства персоны (мобильность UA/device/client hints).
 type Platform string
 
@@ -100,7 +86,6 @@ type VKOpts struct {
 	Links          []string // -links (нормализованные join-коды); несколько = больше стримов
 	StreamsPerCred int      // -streams-per-cred
 	ManualCaptcha  bool     // -manual-captcha
-	Browser        Browser  // -browser: chrome | firefox | safari
 	Platform       Platform // -platform: desktop | mobile
 }
 
@@ -131,7 +116,21 @@ type KCPOpts struct {
 	FEC     kcptun.FEC
 }
 
-// Client - разобранные и провалидированные CLI-опции клиента.
+// TunnelOpts - userspace WireGuard/AmneziaWG поверх сессии. Опции хоста, у CLI
+// эквивалента нет: там туннель поднимает внешний клиент, ходящий на Proxy.Listen.
+//
+// Config хранится текстом и разбирается в tunnel/wgconf на стороне хоста -
+// config не смотрит внутрь и не зависит от реализации туннеля.
+type TunnelOpts struct {
+	Mode   tunnel.Mode // none (default) | wg | awg
+	Config string      // конфиг в формате wg-quick
+	MTU    int
+}
+
+// Enabled сообщает, что хост просит поднять туннель внутри процесса.
+func (t TunnelOpts) Enabled() bool { return t.Mode != "" && t.Mode != tunnel.ModeNone }
+
+// Client - собранные и провалидированные опции клиента.
 type Client struct {
 	TURN     TURNOpts
 	Obf      ObfOpts
@@ -141,375 +140,17 @@ type Client struct {
 	DNS      DNSOpts
 	Log      LogOpts
 	KCP      KCPOpts
+	Tunnel   TunnelOpts
 	ClientID string
 	SubURL   string
+	Routes   bool // -routes: автоматическое управление маршрутами к TURN-серверам
 }
 
-// Server - разобранные и провалидированные CLI-опции сервера.
+// Server - собранные и провалидированные опции сервера.
 type Server struct {
 	Obf         ObfOpts
 	Proxy       ProxyOpts
 	Log         LogOpts
 	KCP         KCPOpts
 	ClientsFile string // -clients-file
-}
-
-// PeekSubURL вытаскивает значение -sub из сырых args без полного парсинга.
-// Нужно до ParseClient: подписка отдаёт peer, без которого ParseClient падает
-// на валидации. Вызывающий тянет подписку и подсовывает URI ноды позиционным
-// аргументом - дальше применение идёт общим путём в ParseClient.
-func PeekSubURL(args []string) string {
-	for i := range args {
-		a := args[i]
-		if v, ok := strings.CutPrefix(a, "-sub="); ok {
-			return v
-		}
-		if v, ok := strings.CutPrefix(a, "--sub="); ok {
-			return v
-		}
-		if (a == "-sub" || a == "--sub") && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	return ""
-}
-
-// ParseClient разбирает args (без имени программы) в Client.
-// При flag.ErrHelp возвращает (nil, flag.ErrHelp) - вызывающий выходит штатно.
-func ParseClient(args []string, errOut io.Writer) (*Client, error) {
-	fs := flag.NewFlagSet("client", flag.ContinueOnError)
-	if errOut != nil {
-		fs.SetOutput(errOut)
-	}
-
-	turn := fs.String("turn", "", "IP TURN-сервера; override creds провайдера")
-	port := fs.String("port", "", "порт TURN-сервера; override creds провайдера")
-	listen := fs.String("listen", "127.0.0.1:9000", "локальный ip:port для WireGuard/Xray клиента")
-	provider := fs.String("provider", ProviderVK, "источник TURN-creds: vk")
-	link := fs.String("link", "", "(устарел) одна ссылка VK Calls, используйте -links")
-	links := fs.String("links", "", "ссылки VK Calls через запятую: https://vk.ru/call/join/...,https://vk.ru/call/join/...")
-	peer := fs.String("peer", "", "адрес сервера на VPS, host:port; обязательно")
-	n := fs.Int("n", 10, "число параллельных TURN-потоков")
-	transport := fs.String("transport", "tcp", "транспорт до TURN-реле: tcp | udp")
-	mode := fs.String("mode", "udp", "режим туннеля: udp (WireGuard) | tcp (Xray/sing-box)")
-	bond := fs.Bool("bond", false, "страйпинг TCP по smux-сессиям; только с -mode tcp")
-	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus | rtpopus2 | rtpopus3; должен совпадать с сервером")
-	obfKey := fs.String("obf-key", "", "ключ для -obf-profile != none: 32 байта hex (64 символа)")
-	genObfKey := fs.Bool("gen-obf-key", false, "напечатать новый -obf-key и выйти")
-	obfTiming := fs.Duration("obf-timing", 0, "межпакетная задержка для RTP-мимикрии (напр. 20ms); 0=выкл")
-	streamsPerCred := fs.Int("streams-per-cred", defaultStreamsPerCache, "TURN-потоков на один кеш VK-creds; только -provider vk")
-	debug := fs.Bool("debug", false, "подробные debug-логи")
-	manualCaptcha := fs.Bool("manual-captcha", false, "ручная VK captcha в браузере вместо авто; только -provider vk")
-	browser := fs.String("browser", string(BrowserFirefox), "браузерный профиль VK-auth: chrome | firefox | safari; только -provider vk")
-	platform := fs.String("platform", string(PlatformDesktop), "класс устройства персоны VK-auth: desktop | mobile; только -provider vk")
-	dnsMode := fs.String("dns-mode", dnsModeAuto, "резолвер клиента: plain | doh | auto")
-	dnsServers := fs.String("dns-servers", "", "свои UDP/53 DNS через запятую: ip[:port][,ip[:port]...]")
-	clientID := fs.String("client-id", "", "уникальный ID клиента (автогенерация если не задан)")
-	subURL := fs.String("sub", "", "URL подписки (sub.md) для получения списка серверов")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
-	}
-
-	c := &Client{
-		TURN: TURNOpts{
-			Host:         *turn,
-			Port:         *port,
-			TransportUDP: *transport == "udp",
-			N:            *n,
-		},
-		Obf: ObfOpts{
-			Profile: ObfProfile(*obfProfile),
-			GenKey:  *genObfKey,
-			Timing:  *obfTiming,
-		},
-		Proxy: ProxyOpts{
-			Mode:   ClientProxyMode(*mode, *bond),
-			Listen: *listen,
-			Peer:   *peer,
-		},
-		Provider: ProviderOpts{
-			Name: *provider,
-		},
-		VK: VKOpts{
-			StreamsPerCred: *streamsPerCred,
-			ManualCaptcha:  *manualCaptcha,
-			Browser:        Browser(*browser),
-			Platform:       Platform(*platform),
-		},
-		DNS: DNSOpts{
-			Mode: *dnsMode,
-		},
-		Log: LogOpts{
-			Debug: *debug,
-		},
-		KCP: KCPOpts{
-			Profile: kcptun.DefaultProfile(),
-			FEC:     kcptun.FEC{},
-		},
-		ClientID: *clientID,
-		SubURL:   *subURL,
-	}
-
-	// Обработка позиционного аргумента URI
-	if fs.NArg() > 0 {
-		arg := fs.Arg(0)
-		if strings.HasPrefix(arg, "freeturn://") {
-			ucfg, err := uri.Parse(arg)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse freeturn:// URI: %w", err)
-			}
-			if ucfg.Provider != "" {
-				c.Provider.Name = ucfg.Provider
-			}
-			if ucfg.Transport != "" {
-				*transport = ucfg.Transport
-			}
-			if ucfg.Mode != "" {
-				*mode = ucfg.Mode
-			}
-			if ucfg.Bond {
-				*bond = true
-			}
-			if ucfg.N > 0 {
-				c.TURN.N = ucfg.N
-			}
-			if ucfg.StreamsPerCred > 0 {
-				c.VK.StreamsPerCred = ucfg.StreamsPerCred
-			}
-			if ucfg.ObfProfile != "" {
-				c.Obf.Profile = ObfProfile(ucfg.ObfProfile)
-			}
-			if ucfg.ObfKey != "" {
-				*obfKey = ucfg.ObfKey
-			}
-			if ucfg.Peer != "" {
-				c.Proxy.Peer = ucfg.Peer
-			}
-			if ucfg.ClientID != "" {
-				c.ClientID = ucfg.ClientID
-			}
-			if ucfg.Listen != "" {
-				c.Proxy.Listen = ucfg.Listen
-			}
-			if ucfg.DNSMode != "" {
-				c.DNS.Mode = ucfg.DNSMode
-			}
-			if ucfg.DNSServers != "" {
-				*dnsServers = ucfg.DNSServers
-			}
-			if ucfg.ManualCaptcha {
-				c.VK.ManualCaptcha = true
-			}
-		}
-	}
-
-	// Пересчитываем после возможного изменения из URI
-	c.Proxy.Mode = ClientProxyMode(*mode, *bond)
-	c.TURN.TransportUDP = *transport == "udp"
-
-	switch *transport {
-	case "tcp", "udp":
-	default:
-		return nil, fmt.Errorf("invalid -transport value %q: must be tcp | udp", *transport)
-	}
-	switch *mode {
-	case "udp", "tcp":
-	default:
-		return nil, fmt.Errorf("invalid -mode value %q: must be udp | tcp", *mode)
-	}
-	if *bond && *mode != "tcp" {
-		return nil, fmt.Errorf("-bond requires -mode tcp")
-	}
-	switch c.DNS.Mode {
-	case dnsModePlain, dnsModeDoH, dnsModeAuto:
-	default:
-		return nil, fmt.Errorf("invalid -dns-mode value %q: must be plain | doh | auto", c.DNS.Mode)
-	}
-	if *dnsServers != "" {
-		c.DNS.Servers = strings.Split(*dnsServers, ",")
-	}
-
-	if c.Obf.GenKey {
-		return c, nil
-	}
-
-	if c.Proxy.Peer == "" {
-		return nil, errors.New("need peer address")
-	}
-	switch c.Provider.Name {
-	case ProviderVK:
-		if *links == "" && *link == "" {
-			return nil, errors.New("need -links (или -link) (required for -provider vk)")
-		}
-		if c.VK.StreamsPerCred <= 0 {
-			return nil, fmt.Errorf("-streams-per-cred must be positive")
-		}
-		switch c.VK.Browser {
-		case BrowserChrome, BrowserFirefox, BrowserSafari:
-		default:
-			return nil, fmt.Errorf("invalid -browser value %q: must be %s | %s | %s", c.VK.Browser, BrowserChrome, BrowserFirefox, BrowserSafari)
-		}
-		if c.VK.Platform == "" {
-			c.VK.Platform = PlatformDesktop
-		}
-		switch c.VK.Platform {
-		case PlatformDesktop, PlatformMobile:
-		default:
-			return nil, fmt.Errorf("invalid -platform value %q: must be %s | %s", c.VK.Platform, PlatformDesktop, PlatformMobile)
-		}
-		rawLinks := strings.Split(*links, ",")
-		if len(rawLinks) == 1 && rawLinks[0] == "" {
-			// -links не задан, используем -link (backward compat)
-			rawLinks = []string{*link}
-		}
-		for _, raw := range rawLinks {
-			raw = strings.TrimSpace(raw)
-			if raw == "" {
-				continue
-			}
-			parts := strings.Split(raw, "join/")
-			normalized := parts[len(parts)-1]
-			if idx := strings.IndexAny(normalized, "/?#"); idx != -1 {
-				normalized = normalized[:idx]
-			}
-			if normalized != "" {
-				c.VK.Links = append(c.VK.Links, normalized)
-			}
-		}
-		if len(c.VK.Links) == 0 {
-			return nil, errors.New("need at least one valid VK link")
-		}
-	default:
-		return nil, fmt.Errorf("invalid -provider value %q: must be %s", c.Provider.Name, ProviderVK)
-	}
-	if err := validateObfProfile(c.Obf.Profile); err != nil {
-		return nil, err
-	}
-	key, err := rtpopus.DecodeKey(c.Obf.Enabled(), *obfKey)
-	if err != nil {
-		return nil, err
-	}
-	c.Obf.Key = key
-	if err := validateObfTiming(c.Obf, c.Proxy.Mode); err != nil {
-		return nil, err
-	}
-	if c.TURN.N <= 0 {
-		c.TURN.N = 10
-	}
-
-	return c, nil
-}
-
-// ParseServer разбирает args (без имени программы) в Server.
-func ParseServer(args []string, errOut io.Writer) (*Server, error) {
-	fs := flag.NewFlagSet("server", flag.ContinueOnError)
-	if errOut != nil {
-		fs.SetOutput(errOut)
-	}
-
-	listen := fs.String("listen", "0.0.0.0:56000", "локальный адрес прослушивания ip:port")
-	connect := fs.String("connect", "", "локальный бэкенд host:port; обязательно: WG 127.0.0.1:51820 | Xray 127.0.0.1:443")
-	mode := fs.String("mode", "udp", "режим туннеля: udp (WireGuard) | tcp (Xray/sing-box; bond авто)")
-	obfProfile := fs.String("obf-profile", string(ObfProfileNone), "wire-профиль обфускации: none | rtpopus | rtpopus2 | rtpopus3; должен совпадать с клиентом")
-	obfKey := fs.String("obf-key", "", "ключ для -obf-profile != none: 32 байта hex (64 символа)")
-	genObfKey := fs.Bool("gen-obf-key", false, "напечатать новый -obf-key и выйти")
-	obfTiming := fs.Duration("obf-timing", 0, "межпакетная задержка для RTP-мимикрии (напр. 10ms); 0=выкл")
-	debug := fs.Bool("debug", false, "подробные debug-логи")
-	clientsFile := fs.String("clients-file", "", "путь к файлу clients.json для авторизации по Client ID")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
-	}
-
-	s := &Server{
-		Obf: ObfOpts{
-			Profile: ObfProfile(*obfProfile),
-			GenKey:  *genObfKey,
-			Timing:  *obfTiming,
-		},
-		Proxy: ProxyOpts{
-			Mode:    serverProxyMode(*mode),
-			Listen:  *listen,
-			Connect: *connect,
-		},
-		Log: LogOpts{
-			Debug: *debug,
-		},
-		KCP: KCPOpts{
-			Profile: kcptun.DefaultProfile(),
-			FEC:     kcptun.FEC{},
-		},
-		ClientsFile: *clientsFile,
-	}
-
-	switch *mode {
-	case "udp", "tcp":
-	default:
-		return nil, fmt.Errorf("invalid -mode value %q: must be udp | tcp", *mode)
-	}
-
-	if s.Obf.GenKey {
-		return s, nil
-	}
-
-	if s.Proxy.Connect == "" {
-		return nil, fmt.Errorf("server address is required")
-	}
-	if err := validateObfProfile(s.Obf.Profile); err != nil {
-		return nil, err
-	}
-	key, err := rtpopus.DecodeKey(s.Obf.Enabled(), *obfKey)
-	if err != nil {
-		return nil, err
-	}
-	s.Obf.Key = key
-	if err := validateObfTiming(s.Obf, s.Proxy.Mode); err != nil {
-		return nil, err
-	}
-
-	return s, nil
-}
-
-// validateObfTiming ограничивает -obf-timing UDP-релеем с включённой обфускацией:
-// без RTP-профиля паковать нечего, а в tcp-режиме pacing ломает RTT/конгешн KCP.
-func validateObfTiming(o ObfOpts, mode ProxyMode) error {
-	if o.Timing <= 0 {
-		return nil
-	}
-	if !o.Enabled() {
-		return errors.New("-obf-timing requires -obf-profile != none")
-	}
-	if mode != ProxyModeUDP {
-		return errors.New("-obf-timing supported only with -mode udp")
-	}
-	return nil
-}
-
-// validateObfProfile проверяет что -obf-profile содержит известное значение.
-func validateObfProfile(p ObfProfile) error {
-	switch p {
-	case ObfProfileNone, ObfProfileRTPOpus, ObfProfileRTPOpus2, ObfProfileRTPOpus3:
-		return nil
-	default:
-		return fmt.Errorf("invalid -obf-profile value %q: must be %s | %s | %s | %s", p, ObfProfileNone, ObfProfileRTPOpus, ObfProfileRTPOpus2, ObfProfileRTPOpus3)
-	}
-}
-
-func ClientProxyMode(mode string, bond bool) ProxyMode {
-	switch {
-	case mode == "tcp" && bond:
-		return ProxyModeTCPFwdBond
-	case mode == "tcp":
-		return ProxyModeTCPFwd
-	default:
-		return ProxyModeUDP
-	}
-}
-
-func serverProxyMode(mode string) ProxyMode {
-	if mode == "tcp" {
-		return ProxyModeTCPFwd
-	}
-	return ProxyModeUDP
 }

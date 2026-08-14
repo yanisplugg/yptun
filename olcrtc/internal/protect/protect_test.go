@@ -1,9 +1,11 @@
 package protect
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -11,6 +13,10 @@ import (
 	"testing"
 	"time"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 var errProtectBoom = errors.New("boom")
 
@@ -99,6 +105,51 @@ func TestNewDialerAndHTTPClient(t *testing.T) {
 		tr.IdleConnTimeout != 30*time.Second || tr.TLSHandshakeTimeout != 10*time.Second ||
 		tr.ResponseHeaderTimeout != 10*time.Second || client.Timeout != 30*time.Second {
 		t.Fatalf("transport = %+v", tr)
+	}
+}
+
+func TestCustomResolverInjection(t *testing.T) {
+	resolver := &net.Resolver{PreferGo: true}
+
+	if got := NewDialerWithResolver(resolver).Resolver; got != resolver {
+		t.Fatalf("NewDialerWithResolver().Resolver = %p, want %p", got, resolver)
+	}
+	if got := NewDialerWithResolver(nil).Resolver; got != nil {
+		t.Fatalf("NewDialerWithResolver(nil).Resolver = %p, want nil", got)
+	}
+	if got := NewProxyDialer(resolver).resolver; got != resolver {
+		t.Fatalf("NewProxyDialer().resolver = %p, want %p", got, resolver)
+	}
+}
+
+func TestRetryTransportReplaysRequestBody(t *testing.T) {
+	const payload = "<body rid=\"42\">test</body>"
+	var bodies []string
+	transport := &retryTransport{base: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		_ = req.Body.Close()
+		bodies = append(bodies, string(body))
+		if len(bodies) == 1 {
+			return nil, &net.DNSError{Name: "bosh.test", Err: "temporary"}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
+	})}
+	req, err := http.NewRequestWithContext(
+		context.Background(), http.MethodPost, "https://bosh.test/http-bind", bytes.NewBufferString(payload),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	_ = resp.Body.Close()
+	if len(bodies) != 2 || bodies[0] != payload || bodies[1] != payload {
+		t.Fatalf("request bodies = %q, want two copies of %q", bodies, payload)
 	}
 }
 

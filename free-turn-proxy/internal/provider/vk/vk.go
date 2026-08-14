@@ -22,10 +22,6 @@ type Config struct {
 	// ManualOnly форсирует ручной путь captcha с первой попытки.
 	ManualOnly bool
 
-	// Browser - браузерный профиль control-plane: "chrome" | "firefox" | "safari".
-	// Пустое -> firefox
-	Browser string
-
 	// Platform - класс устройства персоны: "desktop" | "mobile". Пустое -> desktop.
 	Platform string
 
@@ -38,6 +34,10 @@ type Config struct {
 
 	// Credentials - VK app_id/secret пары; nil -> vkauth.DefaultCredentials.
 	Credentials []vkauth.VKCredentials
+
+	// FingerprintSeed - стабильный идентификатор установки; пустой -> личность
+	// случайная на запуск. Не сеять от Link: раздаваемая ссылка общая для всех.
+	FingerprintSeed string
 
 	// Log - уровневый логгер. nil -> no-op.
 	Log logx.Logger
@@ -69,11 +69,11 @@ func New(cfg Config, solver ManualSolverFunc) (*Provider, error) {
 		Credentials:     cfg.Credentials,
 		Dialer:          cfg.Dialer,
 		ManualOnly:      cfg.ManualOnly,
-		Browser:         browserprofile.KindFromString(cfg.Browser),
 		Platform:        browserprofile.PlatformFromString(cfg.Platform),
 		StreamsPerCache: cfg.StreamsPerCache,
 		StreamsAlive:    cfg.StreamsAlive,
 		ManualSolver:    solver,
+		FingerprintSeed: cfg.FingerprintSeed,
 		Log:             cfg.Log,
 	})
 	return &Provider{link: cfg.Link, auth: auth}, nil
@@ -97,9 +97,9 @@ func (p *Provider) BackoffUntilUnix() int64 { return p.auth.BackoffUntilUnix() }
 
 func (*Provider) Name() string { return "vk" }
 
-func DefaultManualSolver(ctx context.Context, e *captcha.Error, d net.Dialer) (string, error) {
+func DefaultManualSolver(ctx context.Context, e *captcha.Error, d net.Dialer, p browserprofile.Profile) (string, error) {
 	if e.RedirectURI == "" {
 		return "", fmt.Errorf("no redirect_uri")
 	}
-	return manualcaptcha.SolveViaProxy(ctx, e.RedirectURI, d)
+	return manualcaptcha.SolveViaProxy(ctx, e.RedirectURI, d, p)
 }

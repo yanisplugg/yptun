@@ -150,7 +150,8 @@ release:
   draft: false
   name_template: "{{ .ProjectName }} {{ .Version }}"
   extra_files:
-    - glob: mobile-dist/mobile.aar
+    - glob: mobile-dist/freeturn.aar
+    - glob: mobile-dist/freeturn-sources.jar
     - glob: mobile-dist/Mobile.xcframework.zip
 
 dockers_v2:

@@ -29,6 +29,18 @@ object SingBoxRouting {
     const val PROXY_TAG = "proxy"
     const val DIRECT_TAG = "direct"
 
+    /**
+     * Outbound used to fetch remote `.srs` rule-sets — the PROXY, not `direct`.
+     *
+     * The sets live on raw.githubusercontent.com, which is blocked in exactly the places this app is
+     * used. And a failed initial fetch is not a soft failure: sing-box's RemoteRuleSet.StartContext
+     * returns `initial rule-set: <tag>` and the WHOLE CORE REFUSES TO START, so a profile with any
+     * geosite:/geoip: selector could take the connection down with it. Downloading through the tunnel
+     * removes the dependency on the censored path; combined with experimental.cache_file (which
+     * persists fetched rule-sets) later starts need no network for this at all.
+     */
+    const val RULE_SET_DOWNLOAD_TAG = PROXY_TAG
+
     const val DEFAULT_GEOSITE_BASE = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/"
     const val DEFAULT_GEOIP_BASE = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/"
 
@@ -102,7 +114,7 @@ object SingBoxRouting {
                     put("tag", "geosite-$tag")
                     put("format", "binary")
                     put("url", "${siteBase}geosite-$tag.srs")
-                    put("download_detour", DIRECT_TAG)
+                    put("download_detour", RULE_SET_DOWNLOAD_TAG)
                 }
             }
             geoipTags.forEach { tag ->
@@ -111,7 +123,7 @@ object SingBoxRouting {
                     put("tag", "geoip-$tag")
                     put("format", "binary")
                     put("url", "${ipBase}geoip-$tag.srs")
-                    put("download_detour", DIRECT_TAG)
+                    put("download_detour", RULE_SET_DOWNLOAD_TAG)
                 }
             }
         }
@@ -124,7 +136,7 @@ object SingBoxRouting {
      * are combined into a single object (sing-box ANDs the fields), mirroring v2rayNG semantics.
      * Caller inserts these into `route.rules`.
      */
-    fun manualRules(rules: List<SingBoxRule>): JsonArray = buildJsonArray {
+    fun manualRules(rules: List<SingBoxRule>, matchAppsByProcess: Boolean = false): JsonArray = buildJsonArray {
         rules.filter { it.enabled && it.hasMatcher() }.forEach { rule ->
             val s = parse(rule.domains)
             val i = parseIp(rule.ip)
@@ -161,7 +173,13 @@ object SingBoxRouting {
                 if (rule.client.isNotEmpty()) putJsonArray("client") { rule.client.forEach { add(it) } }
                 if (rule.networkIsExpensive) put("network_is_expensive", true)
                 if (rule.clashMode.isNotBlank()) put("clash_mode", rule.clashMode)
-                if (rule.packageNames.isNotEmpty()) putJsonArray("package_name") { rule.packageNames.forEach { add(it) } }
+                // sing-box's `package_name` resolves an Android UID and can never match on desktop;
+                // there the same "which app" intent is expressed as `process_name` (an exe name).
+                if (rule.packageNames.isNotEmpty()) {
+                    putJsonArray(if (matchAppsByProcess) "process_name" else "package_name") {
+                        rule.packageNames.forEach { add(it) }
+                    }
+                }
                 when (rule.action) {
                     SingBoxRule.ACTION_REJECT -> put("action", "reject")
                     SingBoxRule.ACTION_HIJACK_DNS -> put("action", "hijack-dns")
@@ -195,13 +213,13 @@ object SingBoxRouting {
             geositeTags.forEach { tag ->
                 addJsonObject {
                     put("type", "remote"); put("tag", "geosite-$tag"); put("format", "binary")
-                    put("url", "${siteBase}geosite-$tag.srs"); put("download_detour", DIRECT_TAG)
+                    put("url", "${siteBase}geosite-$tag.srs"); put("download_detour", RULE_SET_DOWNLOAD_TAG)
                 }
             }
             geoipTags.forEach { tag ->
                 addJsonObject {
                     put("type", "remote"); put("tag", "geoip-$tag"); put("format", "binary")
-                    put("url", "${ipBase}geoip-$tag.srs"); put("download_detour", DIRECT_TAG)
+                    put("url", "${ipBase}geoip-$tag.srs"); put("download_detour", RULE_SET_DOWNLOAD_TAG)
                 }
             }
         }

@@ -45,6 +45,13 @@ object XrayConfig {
     // FakeDNS synthetic-IP pool (matches the v2rayNG/Happ default).
     private const val FAKEDNS_SERVER = "fakedns"
     private const val FAKEDNS_POOL = "198.18.0.0/15"
+
+    /**
+     * The IPv6 fake pool. Our own [fakeDnsPool] is IPv4-only, but a user's verbatim config (or a
+     * subscription's) can define one, and it is the same range sing-box uses — so the "never route a
+     * synthetic address direct" rule covers both.
+     */
+    private const val FAKEDNS_POOL6 = "fc00::/18"
     private const val FAKEDNS_POOL_SIZE = 65535
 
     private val json = Json { prettyPrint = true }
@@ -338,11 +345,20 @@ object XrayConfig {
                             traffic = traffic,
                             detourTagOverride = baseDetour,
                             tag = PROXY_BASE_TAG,
-                            // Pack the loopback's many per-flow connections onto few main H2 tunnels...
+                            // Pack the loopback's many per-flow connections onto few main H2 tunnels.
+                            //
+                            // Mux.Cool is deliberately NOT forced on here any more. It killed the whole
+                            // cascade outright: reproduced against the user's own two servers with a
+                            // standalone xray-core running this exact config —
+                            //   proxy/vless/outbound: tunneling request to tcp:v1.mux.cool:9527 via <main>
+                            //   common/mux: failed to read metadata > io: read/write on closed pipe
+                            //   transport/internet/splithttp: failed to POST https://<main>/… > EOF
+                            // and every request after it EOF'd instantly. Drop the mux block and the inner
+                            // hop establishes ("tunneling request to tcp:<2nd server>:443 via <main>").
+                            // xhttp already multiplexes at the transport layer, so xmux above is enough.
                             xhttpHighConcurrency = cascadeLoopActive,
-                            // ...AND multiplex them into a few vless sessions so the main server sees only
-                            // a handful of logical streams (else the inner hop stalls under load).
-                            forceMuxConcurrency = if (cascadeLoopActive) 8 else null,
+                            // …and keep the global "Mux" traffic toggle off this hop for the same reason.
+                            suppressMux = cascadeLoopActive,
                         )
                     )
                     // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
@@ -460,6 +476,23 @@ object XrayConfig {
                 putJsonArray("inboundTag") { add(CASCADE_LOOP_IN_TAG) }
                 put("outboundTag", PROXY_BASE_TAG)
             } else null
+            // A FakeDNS address is SYNTHETIC - it stands for the domain we handed the app and can
+            // never be dialled for real, so it must reach the proxy whatever comes after. It goes
+            // ahead of the LAN bypass AND of the profile's own rules, because a Happ routing profile
+            // routinely carries `geoip:private -> direct`, and geoip's private list contains both fake
+            // pools (198.18.0.0/15 is reserved-benchmark, fc00::/18 sits inside unique-local fc00::/7).
+            // Matching there sent the connection DIRECT, out of the tunnel, and the user saw the ISP's
+            // interception of the real destination as "недоверенный SSL-сертификат". Normally the
+            // sniffed SNI replaces the fake address first; when sniffing cannot see it (ECH, or
+            // anything that is not TLS/HTTP) the fake address is all the router has to go on.
+            val fakeDnsProxyRule = if (traffic.fakeDnsEnabled) buildJsonObject {
+                put("type", "field")
+                putJsonArray("ip") {
+                    add(FAKEDNS_POOL)
+                    add(FAKEDNS_POOL6)
+                }
+                put("outboundTag", if (directViaBase) PROXY_BASE_TAG else PROXY_TAG)
+            } else null
             val lanBypassRule = if (bypassLan && !directViaBase) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
@@ -480,6 +513,7 @@ object XrayConfig {
                         cascadeLoopRule?.let { add(it) }
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
                         dnsOutRules.forEach { add(it) }
+                        fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
@@ -491,6 +525,7 @@ object XrayConfig {
                     putJsonArray("rules") {
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
+                        fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
@@ -1265,12 +1300,12 @@ object XrayConfig {
         // Cascade base (xhttp main): give its xhttp transport a high-concurrency xmux so the loopback's
         // per-app-flow connections collapse onto a couple of H2 tunnels (see buildStreamSettings).
         xhttpHighConcurrency: Boolean = false,
-        // Cascade base (xhttp main): force vless mux.cool with this concurrency so the loopback's MANY
-        // tunnel streams collapse into a FEW multiplexed vless sessions to the main — the main server then
-        // sees ~handful of logical streams instead of dozens (the inner-hop stall / broken-pipe under
-        // load). The main isn't Vision (xhttp can't be), so mux is safe here; Xray vless inbounds demux
-        // natively. Mirrors how an xhttp 2nd proxy's own mux keeps the main's stream count tiny.
-        forceMuxConcurrency: Int? = null,
+        // Cascade base (xhttp main): never wrap this hop in Mux.Cool, whatever the global traffic
+        // toggle says. Verified against the user's own servers with a standalone xray-core: with mux
+        // the chain dies at the first request ("common/mux: failed to read metadata > io: read/write
+        // on closed pipe", then the main's xhttp POST EOFs and every later request EOFs instantly);
+        // without it the inner hop establishes. xhttp multiplexes at the transport layer anyway.
+        suppressMux: Boolean = false,
     ) = buildJsonObject {
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", tag)
@@ -1382,13 +1417,7 @@ object XrayConfig {
             putJsonObject("proxySettings") { put("tag", detourTag) }
         }
 
-        if (forceMuxConcurrency != null && !isLocalSocks) {
-            // Cascade base: collapse the loopback's many tunnel streams into few vless sessions.
-            putJsonObject("mux") {
-                put("enabled", true)
-                put("concurrency", forceMuxConcurrency)
-            }
-        } else if (traffic.muxEnabled && !isLocalSocks) {
+        if (traffic.muxEnabled && !isLocalSocks && !suppressMux) {
             putJsonObject("mux") {
                 put("enabled", true)
                 put("concurrency", traffic.muxMaxConnections)
@@ -1472,7 +1501,12 @@ object XrayConfig {
                 if (xhttpHighConcurrency) putJsonObject("xmux") {
                     put("maxConnections", "4-8")
                     put("cMaxReuseTimes", "64-128")
-                    put("cMaxLifetimeMs", 0)
+                    // Xray only applies its own xmux defaults when the WHOLE block is absent, so an
+                    // override silently zeroed these two and every H2 connection was then reused
+                    // forever (`cMaxLifetimeMs`, which used to sit here, is not even a field of
+                    // XmuxConfig — it was dropped on parse). Restate Xray's defaults explicitly.
+                    put("hMaxRequestTimes", "600-900")
+                    put("hMaxReusableSecs", "1800-3000")
                 }
             }
 

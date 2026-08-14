@@ -237,6 +237,8 @@ Add `debug: true` to the YAML config - you will see every connection:
 
 On your machine. `auth.provider`, `net.transport`, `room.id` and `crypto.key` must match the server.
 
+> Prefer a ready-made Android client instead of a YAML config? Use [owenewans/owenclave](https://github.com/owenewans/owenclave) ([src.owenewans.org/owenrtc](https://src.owenewans.org/owenrtc)) - it reads the `olcrtc://` URI and subscriptions directly. The steps below run the native `cnc` binary (SOCKS5 only).
+
 ### jitsi + datachannel (recommended)
 
 ```yaml

@@ -64,10 +64,18 @@ fun OlcboxAppContent(
     onAddToFolder: (id: String, memberKeys: List<String>) -> Unit = { _, _ -> },
     onRemoveFromFolder: (memberKeys: List<String>) -> Unit = {},
     onToggleFolderPinned: (String) -> Unit = {},
-    onToggleFolderCollapsed: (String) -> Unit = {}
+    onToggleFolderCollapsed: (String) -> Unit = {},
+    // Desktop wide-window layout (locations list in a left pane) + the desktop mode switch slot.
+    wideLayout: Boolean = false,
+    extraConnectContent: (@Composable () -> Unit)? = null
 ) {
     val homeScrollState = rememberLazyListState()
 
+    // A crossfade only looks like a crossfade if BOTH halves are on screen at the same time and
+    // something opaque is behind them. The old spec faded the outgoing screen out over 160 ms while
+    // the incoming one did not even start for 30 ms, so for a moment neither was opaque — on desktop
+    // that is a bare (white) window showing through, the "белое на секунду" when entering any menu.
+    // Callers additionally paint the app background behind this (Compose Desktop windows have none).
     AnimatedContent(
         targetState = currentScreen,
         label = "app_screen_transition",
@@ -75,14 +83,14 @@ fun OlcboxAppContent(
             ContentTransform(
                 targetContentEnter = fadeIn(
                     animationSpec = tween(
-                        durationMillis = 240,
-                        delayMillis = 30,
+                        durationMillis = 220,
                         easing = LinearOutSlowInEasing
                     )
                 ),
+                // Outlasts the incoming fade so the two overlap for the whole transition.
                 initialContentExit = fadeOut(
                     animationSpec = tween(
-                        durationMillis = 160,
+                        durationMillis = 220,
                         easing = LinearOutSlowInEasing
                     )
                 ),
@@ -149,7 +157,9 @@ fun OlcboxAppContent(
                     onAddToFolder = onAddToFolder,
                     onRemoveFromFolder = onRemoveFromFolder,
                     onToggleFolderPinned = onToggleFolderPinned,
-                    onToggleFolderCollapsed = onToggleFolderCollapsed
+                    onToggleFolderCollapsed = onToggleFolderCollapsed,
+                    wideLayout = wideLayout,
+                    extraConnectContent = extraConnectContent
                 )
             }
 

@@ -26,7 +26,6 @@ func (c *Client) doRequest(ctx context.Context, httpClient tlsclient.HttpClient,
 		return nil, err
 	}
 	req.Host = domain
-	browserprofile.ApplyFhttp(req, profile)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Origin", "https://vk.ru")
@@ -34,9 +33,8 @@ func (c *Client) doRequest(ctx context.Context, httpClient tlsclient.HttpClient,
 	req.Header.Set("Sec-Fetch-Site", "same-site")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
-	if browserprofile.Family(profile) != browserprofile.Firefox {
-		req.Header.Set("Priority", "u=1, i")
-	}
+	// Последним: персона снимает свои невозможные заголовки и задаёт порядок.
+	browserprofile.ApplyFhttp(req, profile)
 
 	httpResp, err := httpClient.Do(req)
 	if err != nil {

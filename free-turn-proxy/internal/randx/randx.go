@@ -7,6 +7,7 @@ package randx
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"math/big"
 )
 
@@ -24,6 +25,15 @@ func IntN(n int) int {
 
 // Intn - алиас IntN для совместимости с math/rand.
 func Intn(n int) int { return IntN(n) }
+
+// Hex возвращает n случайных байт в hex (строка длиной 2n).
+func Hex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
 
 // Float64 возвращает число из [0.0, 1.0) с 53 битами мантиссы.
 func Float64() float64 {

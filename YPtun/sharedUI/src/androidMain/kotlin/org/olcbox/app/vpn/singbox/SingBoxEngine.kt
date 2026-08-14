@@ -25,7 +25,7 @@ import java.net.NetworkInterface as JavaNetworkInterface
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Wrapper around sing-box's gomobile `libbox` binding (pinned to v1.13.14).
+ * Wrapper around sing-box's gomobile `libbox` binding (pinned to v1.13.18).
  *
  * sing-box runs as a userspace proxy: the config exposes a SOCKS5 inbound (consumed by the
  * TUN bridge) and the proxy outbound. `route.auto_detect_interface = true`, so sing-box binds

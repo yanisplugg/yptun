@@ -18,7 +18,7 @@ func (*Client) defaultAutoSolve(
 	profile browserprofile.Profile,
 ) (string, error) {
 	log := captcha.Log
-	log.Infof("[STREAM %d] [Captcha] Solving captcha (family=%s platform=%s)...", streamID, profile.Family, profile.Platform)
+	log.Infof("[STREAM %d] [Captcha] Solving captcha (platform=%s)...", streamID, profile.Platform)
 
 	if captchaErr.SessionToken == "" {
 		return "", fmt.Errorf("no session_token in redirect_uri for auto-solve")

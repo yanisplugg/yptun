@@ -148,7 +148,10 @@ fun LogLines(
 ) {
     val listState = rememberLazyListState()
 
-    LaunchedEffect(logs.size) {
+    // Keyed on the LAST line, not on the size: the journal is a bounded ring, so once it is full the
+    // size stops changing and a size-keyed effect would never fire again — auto-scroll used to die
+    // exactly when the log got long enough to need it.
+    LaunchedEffect(logs.lastOrNull(), logs.size) {
         if (logs.isNotEmpty()) {
             listState.scrollToItem(logs.lastIndex)
         }
@@ -159,10 +162,10 @@ fun LogLines(
         modifier = modifier,
         contentPadding = contentPadding
     ) {
-        itemsIndexed(
-            items = logs,
-            key = { index, log -> "$index:$log" }
-        ) { _, log ->
+        // Deliberately unkeyed (index identity). A "$index:$log" key changes for EVERY row as soon as
+        // the ring drops its head, so LazyColumn threw away and rebuilt every visible item on each
+        // new line instead of scrolling.
+        itemsIndexed(items = logs) { _, log ->
             Text(
                 text = log,
                 fontSize = 12.sp,

@@ -16,6 +16,8 @@ This document describes a **convention for developers of client applications** t
 
 The current `olcrtc` does not parse such a URI automatically. If a client application wants to use this notation, it must parse the string itself and pass the resulting fields into the `olcrtc` YAML config.
 
+The main client that consumes this URI format is [owenewans/owenclave](https://github.com/owenewans/owenclave) ([src.owenewans.org/owenrtc](https://src.owenewans.org/owenrtc)) - an Android proxy client (fork of exclave) supporting all common protocols (vless, hysteria2, mieru, trojan, vmess, tuic, shadowsocks, socks ...) plus `olcrtc` and subscriptions.
+
 ---
 
 ## Format

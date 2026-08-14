@@ -40,13 +40,20 @@ const (
 	ErrorWindow        = 10 * time.Second
 
 	DefaultStreamsPerCache = 10
+
+	// maxPersonaBurns ограничивает рестарты цепочки внутри одного fetch: режимов
+	// решения captcha всё равно два (auto, manual).
+	maxPersonaBurns = 2
 )
 
 var (
 	ErrCaptchaWaitRequired   = errors.Join(provider.ErrBackoffActive, errors.New("CAPTCHA_WAIT_REQUIRED"))
 	ErrFatalCaptchaNoStreams = errors.Join(provider.ErrFatalNoStreams, errors.New("FATAL_CAPTCHA_FAILED_NO_STREAMS"))
 	ErrLockoutActive         = errors.New("global lockout active")
-	ErrInvalidJoinLink       = errors.Join(provider.ErrFatalNoStreams, errors.New("INVALID_JOIN_LINK"))
-	ErrAnonymousBlocked      = errors.Join(provider.ErrFatalNoStreams, errors.New("ANON_BLOCKED"))
-	ErrCallFull              = errors.Join(provider.ErrFatalNoStreams, errors.New("CALL_FULL"))
+	// ErrPersonaBurned - внутренний сигнал fetch: цепочку надо пройти заново уже
+	// новой личностью. Наружу провайдера не выходит.
+	ErrPersonaBurned    = errors.New("persona burned")
+	ErrInvalidJoinLink  = errors.Join(provider.ErrFatalNoStreams, errors.New("INVALID_JOIN_LINK"))
+	ErrAnonymousBlocked = errors.Join(provider.ErrFatalNoStreams, errors.New("ANON_BLOCKED"))
+	ErrCallFull         = errors.Join(provider.ErrFatalNoStreams, errors.New("CALL_FULL"))
 )

@@ -163,12 +163,16 @@ interface Strings {
     fun xrayVersion(v: String): String
     fun singboxVersion(v: String): String
     fun vkturnVersion(v: String): String
+    fun wdttVersion(v: String): String
     fun olcrtcVersion(v: String): String
     /** Localized label for a TrafficSettings domain strategy (prefer_ipv4/prefer_ipv6/ipv4_only/ipv6_only). */
     fun domainStrategyName(v: String): String
     fun hwid(v: String): String
     val community: String
     val howToConnect: String
+    val donate: String
+    val donateSubtitle: String
+    val donateAddressCopied: String
 
     // Application behavior
     val autoConnectTitle: String
@@ -534,6 +538,17 @@ interface Strings {
     val configCopied: String
     val copied: String
     val qrTooLarge: String
+    val shareScanOrCopy: String
+    val closeAction: String
+
+    // Desktop: administrator rights for TUN mode, and a conflicting VPN client
+    val adminRightsTitle: String
+    val tunNeedsAdminBody: String
+    val restartAsAdmin: String
+    val otherVpnDetectedTitle: String
+    fun otherVpnDetectedBody(names: String): String
+    val closeOtherVpn: String
+    val connectAnyway: String
 
     // VK call link dialog
     val vkCallLink: String
@@ -791,6 +806,7 @@ object RuStrings : Strings {
     override fun xrayVersion(v: String) = "Xray: $v"
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
+    override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "Предпочитать IPv4"
@@ -802,6 +818,9 @@ object RuStrings : Strings {
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Сообщество"
     override val howToConnect = "Как подключиться?"
+    override val donate = "Поддержать проект"
+    override val donateSubtitle = "USDT · TON · GRAM — нажмите, чтобы скопировать адрес"
+    override val donateAddressCopied = "Адрес кошелька скопирован"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
     override val showAutoButtonTitle = "Кнопка «Авто» на главном"
@@ -1133,6 +1152,16 @@ object RuStrings : Strings {
     override val configCopied = "Конфигурация скопирована"
     override val copied = "Скопировано"
     override val qrTooLarge = "Конфигурация слишком большая для QR-кода. Используйте «Копировать» или «Поделиться»."
+    override val shareScanOrCopy = "Отсканируйте QR-код или скопируйте ссылку"
+    override val closeAction = "Закрыть"
+    override val adminRightsTitle = "Права администратора"
+    override val tunNeedsAdminBody = "Режим «Туннель» создаёт сетевой адаптер и меняет таблицу маршрутов — для этого нужны права администратора. YPtun перезапустится и запросит их. Режим «Прокси» работает без них."
+    override val restartAsAdmin = "Перезапустить"
+    override val otherVpnDetectedTitle = "Запущен другой VPN"
+    override fun otherVpnDetectedBody(names: String) =
+        "Похоже, уже работает другой VPN-клиент ($names). Он занимает сетевой адаптер и может помешать подключению. Завершить его?"
+    override val closeOtherVpn = "Завершить и подключиться"
+    override val connectAnyway = "Подключиться всё равно"
     override val vkCallLink = "Ссылка на звонок VK"
     override fun vkCallLinkBody(name: String) =
         "Вставьте ссылку-приглашение VK Звонков для «$name». Можно вставить несколько ссылок " +
@@ -1374,6 +1403,7 @@ object EnStrings : Strings {
     override fun xrayVersion(v: String) = "Xray: $v"
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
+    override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "Prefer IPv4"
@@ -1385,6 +1415,9 @@ object EnStrings : Strings {
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Community"
     override val howToConnect = "How to connect?"
+    override val donate = "Support the project"
+    override val donateSubtitle = "USDT · TON · GRAM — tap to copy the address"
+    override val donateAddressCopied = "Wallet address copied"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
     override val showAutoButtonTitle = "\"Auto\" button on Home"
@@ -1716,6 +1749,16 @@ object EnStrings : Strings {
     override val configCopied = "Config copied"
     override val copied = "Copied"
     override val qrTooLarge = "Config is too large for a QR code. Use Copy or Share instead."
+    override val shareScanOrCopy = "Scan the QR code or copy the link"
+    override val closeAction = "Close"
+    override val adminRightsTitle = "Administrator rights"
+    override val tunNeedsAdminBody = "Tunnel mode creates a network adapter and rewrites the routing table, which needs administrator rights. YPtun will restart and ask for them. Proxy mode works without them."
+    override val restartAsAdmin = "Restart"
+    override val otherVpnDetectedTitle = "Another VPN is running"
+    override fun otherVpnDetectedBody(names: String) =
+        "Another VPN client already seems to be running ($names). It holds the network adapter and can keep this connection from starting. Close it?"
+    override val closeOtherVpn = "Close it and connect"
+    override val connectAnyway = "Connect anyway"
     override val vkCallLink = "VK call link"
     override fun vkCallLinkBody(name: String) =
         "Paste your VK Calls join link for \"$name\". You can paste several links " +
@@ -1964,10 +2007,14 @@ object FaStrings : Strings {
     override fun xrayVersion(v: String) = "Xray: $v"
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
+    override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun hwid(v: String) = "HWID: $v"
     override val community = "انجمن"
     override val howToConnect = "چگونه متصل شویم؟"
+    override val donate = "حمایت از پروژه"
+    override val donateSubtitle = "USDT · TON · GRAM — برای کپی آدرس ضربه بزنید"
+    override val donateAddressCopied = "آدرس کیف پول کپی شد"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
     override val showAutoButtonTitle = "دکمه «خودکار» در خانه"
@@ -2299,6 +2346,16 @@ object FaStrings : Strings {
     override val configCopied = "پیکربندی رونوشت شد"
     override val copied = "رونوشت شد"
     override val qrTooLarge = "پیکربندی برای کد QR بیش از حد بزرگ است. از «رونوشت» یا «هم‌رسانی» استفاده کنید."
+    override val shareScanOrCopy = "کد QR را پویش کنید یا پیوند را رونوشت بگیرید"
+    override val closeAction = "بستن"
+    override val adminRightsTitle = "دسترسی مدیر"
+    override val tunNeedsAdminBody = "حالت تونل یک کارت شبکه می‌سازد و جدول مسیریابی را تغییر می‌دهد و به دسترسی مدیر نیاز دارد. YPtun دوباره اجرا می‌شود و آن را درخواست می‌کند. حالت پراکسی بدون آن کار می‌کند."
+    override val restartAsAdmin = "راه‌اندازی مجدد"
+    override val otherVpnDetectedTitle = "یک VPN دیگر در حال اجراست"
+    override fun otherVpnDetectedBody(names: String) =
+        "به نظر می‌رسد کلاینت VPN دیگری در حال اجراست ($names). آن کارت شبکه را در اختیار دارد و می‌تواند مانع برقراری این اتصال شود. بسته شود؟"
+    override val closeOtherVpn = "بستن و اتصال"
+    override val connectAnyway = "به هر حال متصل شو"
     override val vkCallLink = "پیوند تماس VK"
     override fun vkCallLinkBody(name: String) =
         "پیوند پیوستن VK Calls خود را برای «$name» بچسبانید. می‌توانید چند پیوند " +
@@ -2540,6 +2597,7 @@ object ZhStrings : Strings {
     override fun xrayVersion(v: String) = "Xray：$v"
     override fun singboxVersion(v: String) = "sing-box：$v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn)：$v"
+    override fun wdttVersion(v: String) = "VK-TURN (WDTT)：$v"
     override fun olcrtcVersion(v: String) = "OLCRTC：$v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "优先 IPv4"
@@ -2551,6 +2609,9 @@ object ZhStrings : Strings {
     override fun hwid(v: String) = "HWID：$v"
     override val community = "社区"
     override val howToConnect = "如何连接？"
+    override val donate = "支持项目"
+    override val donateSubtitle = "USDT · TON · GRAM — 点按复制地址"
+    override val donateAddressCopied = "钱包地址已复制"
     override val autoConnectTitle = "启动时自动连接"
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
     override val showAutoButtonTitle = "主屏“自动”按钮"
@@ -2882,6 +2943,16 @@ object ZhStrings : Strings {
     override val configCopied = "配置已复制"
     override val copied = "已复制"
     override val qrTooLarge = "配置过大，无法生成二维码。请改用复制或分享。"
+    override val shareScanOrCopy = "扫描二维码或复制链接"
+    override val closeAction = "关闭"
+    override val adminRightsTitle = "管理员权限"
+    override val tunNeedsAdminBody = "隧道模式会创建网络适配器并修改路由表，需要管理员权限。YPtun 将重新启动并请求权限。代理模式无需权限。"
+    override val restartAsAdmin = "重新启动"
+    override val otherVpnDetectedTitle = "检测到其他 VPN"
+    override fun otherVpnDetectedBody(names: String) =
+        "似乎已有其他 VPN 客户端正在运行（$names）。它占用网络适配器，可能导致本次连接无法建立。要结束它吗？"
+    override val closeOtherVpn = "结束并连接"
+    override val connectAnyway = "仍然连接"
     override val vkCallLink = "VK 通话链接"
     override fun vkCallLinkBody(name: String) =
         "为“$name”粘贴你的 VK Calls 加入链接。可以粘贴多个链接 " +

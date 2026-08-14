@@ -391,8 +391,12 @@ class PrepareRawXhttpTest {
             "4-8",
             base["streamSettings"]!!.jsonObject["xhttpSettings"]!!.jsonObject["xmux"]!!.jsonObject["maxConnections"]!!.jsonPrimitive.content
         )
-        // ...and vless mux collapses the loopback's many streams into a few sessions to the main.
-        assertEquals(true, base["mux"]!!.jsonObject["enabled"]!!.jsonPrimitive.content.toBoolean())
+        // ...and Mux.Cool is NOT wrapped around it. Forcing it there used to be this test's
+        // expectation; a standalone xray-core running this very config against the user's servers
+        // showed it kills the cascade on the first request ("common/mux: failed to read metadata >
+        // io: read/write on closed pipe", then the main's xhttp POST EOFs and everything after it
+        // EOFs instantly). xhttp already multiplexes at the transport layer.
+        assertTrue(base["mux"] == null)
         // The relay inbound listens on the loopback port.
         val loopIn = root["inbounds"]!!.jsonArray.map { it.jsonObject }
             .first { it["tag"]?.jsonPrimitive?.content == "cascade-loop-in" }

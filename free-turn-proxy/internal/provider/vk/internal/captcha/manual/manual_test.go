@@ -95,3 +95,33 @@ func TestRewriteProxyRedirectLocation(t *testing.T) {
 		})
 	}
 }
+
+func TestIsAllowedProxyHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		hostname string
+		want     bool
+	}{
+		{"id.vk.ru", true},
+		{"api.vk.com", true},
+		{"vk.com", true},
+		{"sun9-1.userapi.com", true},
+		{"ads.vk.com", false},
+		{"ads.vk.ru", false},
+		{"top-fwz1.mail.ru", false},
+		{"sdk-api.apptracer.ru", false},
+		{"stats.vk-portal.net", false},
+		{"evil.com", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.hostname, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isAllowedProxyHost(tc.hostname); got != tc.want {
+				t.Fatalf("isAllowedProxyHost(%q) = %v, want %v", tc.hostname, got, tc.want)
+			}
+		})
+	}
+}

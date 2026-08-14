@@ -85,7 +85,7 @@ func (s *Session) waitForMediaReady(ctx context.Context, timeout time.Duration) 
 }
 
 func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
-	api, err := newWebRTCAPI()
+	api, err := newWebRTCAPI(s.resolver)
 	if err != nil {
 		return err
 	}
@@ -113,15 +113,15 @@ func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
 // engine + interceptors. On Android 11+ SELinux denies netlink_route_socket
 // for untrusted apps (b/155595000), so ProtectedNet (getifaddrs-based) must
 // be installed even without a Protector.
-func newWebRTCAPI() (*webrtc.API, error) {
+func newWebRTCAPI(resolver *net.Resolver) (*webrtc.API, error) {
 	settingEngine := webrtc.SettingEngine{}
-	if protect.Protector != nil || runtime.GOOS == "android" {
-		pnet, err := protect.NewProtectedNet()
+	if protect.Protector != nil || resolver != nil || runtime.GOOS == "android" {
+		pnet, err := protect.NewProtectedNet(resolver)
 		if err != nil {
 			return nil, fmt.Errorf("protected net: %w", err)
 		}
 		settingEngine.SetNet(pnet)
-		settingEngine.SetICEProxyDialer(protect.NewProxyDialer())
+		settingEngine.SetICEProxyDialer(protect.NewProxyDialer(resolver))
 		settingEngine.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	}
 	settingEngine.LoggerFactory = logger.NewPionLoggerFactory()
@@ -182,7 +182,7 @@ func (s *Session) onSubscriberTrack(track *webrtc.TrackRemote, receiver *webrtc.
 }
 
 func (s *Session) dialWebSocket() error {
-	wsDialer := protect.NewWebSocketDialer(wsHandshakeTimeout)
+	wsDialer := protect.NewWebSocketDialer(wsHandshakeTimeout, s.resolver)
 	ws, resp, err := wsDialer.Dial(s.mediaServerURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial ws: %w", err)

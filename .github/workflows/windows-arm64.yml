@@ -1,0 +1,167 @@
+# Native Windows ARM64 build of the desktop client.
+#
+# This CANNOT be built from an x64 machine: jpackage/jlink emit a launcher for the host architecture
+# only, the Go cores are CGo (a c-shared .dll) so they need a real aarch64 C toolchain, and Windows
+# emulation only runs x64 ON arm64, never the reverse. So it runs on a native `windows-11-arm`
+# runner, which is free for public repositories.
+#
+# Note this workflow lives at the REPO ROOT. There is a similar matrix under YPtun/.github/, but
+# GitHub only reads workflows from the repository root, so that one never ran.
+
+name: Windows ARM64 desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp (defaults to olcbox.version in gradle.properties)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+    # workflow_dispatch only works once the file is on the default branch, so the desktop branch also
+    # builds on push - narrowed to the paths that can actually change the arm64 output.
+    branches:
+      - pc-client-beta
+    paths:
+      - ".github/workflows/windows-arm64.yml"
+      - "YPtun/desktopApp/**"
+      - "YPtun/sharedUI/src/jvmMain/**"
+      - "YPtun/sharedUI/src/commonMain/**"
+      - "YPtun/gradle.properties"
+      - "cores/**"
+      - "olcrtc/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build arm64 installer + portable
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (aarch64)
+        uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: "21"
+          architecture: aarch64
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cores/go.mod
+          cache: false
+
+      # CGo needs a real aarch64-targeting C compiler; MSVC is not cgo-compatible. llvm-mingw ships a
+      # native ARM64-host toolchain, so nothing is emulated here.
+      - name: Install llvm-mingw (aarch64 C toolchain)
+        shell: pwsh
+        run: |
+          $ver = "20260616"
+          $pkg = "llvm-mingw-$ver-ucrt-aarch64"
+          Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$ver/$pkg.zip" -OutFile "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Expand-Archive "$env:RUNNER_TEMP\llvm-mingw.zip" -DestinationPath "C:\" -Force
+          $bin = "C:\$pkg\bin"
+          if (-not (Test-Path "$bin\aarch64-w64-mingw32-clang.exe")) { throw "llvm-mingw layout unexpected: $bin" }
+          echo $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CC=$bin\aarch64-w64-mingw32-clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "CXX=$bin\aarch64-w64-mingw32-clang++.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Gradle configures every project in the build, including the Android modules, so AGP demands a
+      # valid SDK *location* even though only :desktopApp is built here. Nothing else is installed:
+      # no Android task ever runs, and compileSdk 37 is not in the stable SDK channel yet anyway.
+      - name: Set up Android SDK (only to satisfy AGP's SDK-location check)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+
+      - name: Install packaging tools
+        shell: pwsh
+        run: |
+          # Inno Setup builds the multilingual installer; 7-Zip's SFX module builds the portable.
+          # Both are x86 binaries that run fine under the ARM64 emulation layer.
+          if (-not (Test-Path "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe" -OutFile "$env:RUNNER_TEMP\is.exe"
+            Start-Process "$env:RUNNER_TEMP\is.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          }
+          # ARM64 build so the compressor itself runs native. NOTE: 7-Zip ships 7z.sfx as x86 in every
+          # distribution, so the portable's outer self-extractor is emulated regardless - only the
+          # ~200 KB extractor, for the second it takes to unpack; the app it launches is native ARM64.
+          # Inno Setup likewise only emits an x86 Setup stub. Both are unavoidable with these tools.
+          if (-not (Test-Path "$env:ProgramFiles\7-Zip\7z.sfx")) {
+            Invoke-WebRequest "https://www.7-zip.org/a/7z2501-arm64.exe" -OutFile "$env:RUNNER_TEMP\7z.exe"
+            Start-Process "$env:RUNNER_TEMP\7z.exe" -ArgumentList "/S" -Wait
+          }
+          if (-not (Test-Path "$env:ProgramFiles\7-Zip\7z.sfx")) { throw "7-Zip SFX module missing after install" }
+
+      - name: Report toolchain
+        shell: pwsh
+        run: |
+          java -version
+          go version
+          & $env:CC --version
+          Write-Host "os.arch = $(java -XshowSettings:properties -version 2>&1 | Select-String 'os.arch')"
+
+      - name: Override version
+        if: inputs.version != ''
+        shell: pwsh
+        working-directory: YPtun
+        run: |
+          (Get-Content gradle.properties) -replace '^olcbox\.version=.*', "olcbox.version=${{ inputs.version }}" |
+            Set-Content gradle.properties
+
+      # --max-workers=1 and no daemon: the Exec tasks that shell out to `go build` must inherit the
+      # CC/PATH set above, which a reused daemon does not pick up (learned the hard way on amd64).
+      - name: Build app image
+        shell: pwsh
+        working-directory: YPtun
+        env:
+          CGO_ENABLED: "1"
+        run: .\gradlew.bat --no-daemon --max-workers=1 :desktopApp:createDistributable --stacktrace
+
+      - name: Verify the app image is really ARM64
+        shell: pwsh
+        run: |
+          # PE machine type 0xAA64 = ARM64. Catches a binary silently built for the wrong arch, which
+          # would otherwise only surface at runtime (a JNA load failure, or a launcher that won't run).
+          function Assert-Arm64($path, $label) {
+            if (-not (Test-Path $path)) { throw "$label missing: $path" }
+            $bytes = [IO.File]::ReadAllBytes($path)
+            $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOff + 4)
+            if ($machine -ne 0xAA64) { throw ("{0} machine type is 0x{1:X4}, expected 0xAA64 (ARM64)" -f $label, $machine) }
+            Write-Host "OK: $label is ARM64"
+          }
+          # The cores ship inside the desktopApp jar, so check them where the build emits them.
+          $native = "YPtun\desktopApp\build\generated\desktopNativeResources\native"
+          Assert-Arm64 "$native\yptuncore-windows-arm64.dll" "yptuncore"
+          Assert-Arm64 "$native\olcrtc-windows-arm64.dll" "olcrtc lib"
+          Assert-Arm64 "$native\olcrtc-windows-arm64.exe" "olcrtc binary"
+          Assert-Arm64 "$native\tun2socks-windows-arm64.exe" "tun2socks"
+          Assert-Arm64 "$native\wintun.dll" "wintun"
+          # And the jpackage launcher, which proves the runtime image is native too.
+          Assert-Arm64 "YPtun\desktopApp\build\compose\binaries\main\app\YPtun\YPtun.exe" "launcher"
+
+      - name: Build installer (en/ru/zh/fa)
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File YPtun\desktopApp\packaging\windows\build-installer.ps1 -Arch arm64
+
+      - name: Build portable
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File YPtun\desktopApp\packaging\windows\build-portable.ps1 -Arch arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yptun-windows-arm64
+          path: |
+            YPtun/desktopApp/build/compose/binaries/main/exe/YPtun-*-arm64-installer.exe
+            YPtun/desktopApp/build/compose/binaries/main/exe/YPtun-*-arm64-portable.exe
+          if-no-files-found: error
+          retention-days: 30

@@ -23,6 +23,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/xtaci/smux"
@@ -101,6 +102,7 @@ type Config struct {
 	KeyHex           string
 	LocalAddr        string
 	DNSServer        string
+	Resolver         *net.Resolver
 	SOCKSUser        string
 	SOCKSPass        string
 	TransportOptions transport.Options
@@ -209,6 +211,7 @@ func (c *Client) bringUpLink(
 		Name:                names.Generate(),
 		OnData:              c.onData,
 		DNSServer:           cfg.DNSServer,
+		Resolver:            resolverFor(cfg.Resolver, cfg.DNSServer),
 		RequireTargetedPeer: true,
 		Options:             cfg.TransportOptions,
 		Traffic:             cfg.Traffic,
@@ -279,6 +282,13 @@ func (c *Client) bringUpLink(
 
 	go ln.WatchConnection(ctx)
 	return nil
+}
+
+func resolverFor(resolver *net.Resolver, dnsServer string) *net.Resolver {
+	if resolver != nil {
+		return resolver
+	}
+	return protect.NewResolver(dnsServer)
 }
 
 // peerWaitTimeout bounds how long bringUpLink/tryReopenSession will block

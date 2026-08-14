@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 
@@ -44,7 +45,9 @@ type ConnectionInfo struct {
 }
 
 // GetConnectionInfo fetches connection metadata for the given Telemost room URL.
-func GetConnectionInfo(ctx context.Context, roomURL, displayName string) (*ConnectionInfo, error) {
+func GetConnectionInfo(
+	ctx context.Context, roomURL, displayName string, resolvers ...*net.Resolver,
+) (*ConnectionInfo, error) {
 	u := fmt.Sprintf("%s/conferences/%s/connection", apiBase, url.QueryEscape(roomURL))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -70,7 +73,7 @@ func GetConnectionInfo(ctx context.Context, roomURL, displayName string) (*Conne
 		req.Header.Set("Cookie", cookies)
 	}
 
-	client := protect.NewHTTPClient()
+	client := protect.NewHTTPClient(resolvers...)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to do request: %w", err)

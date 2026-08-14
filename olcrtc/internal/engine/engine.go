@@ -11,6 +11,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"net"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -55,6 +56,7 @@ type Config struct {
 	OnData     func([]byte)
 	OnPeerData func(peerID string, data []byte)
 	DNSServer  string
+	Resolver   *net.Resolver
 	ProxyAddr  string
 	ProxyPort  int
 	// RequireTargetedPeer asks engines that multiplex room-wide messages to

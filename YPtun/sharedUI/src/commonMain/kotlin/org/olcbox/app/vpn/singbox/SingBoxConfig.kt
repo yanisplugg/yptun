@@ -38,7 +38,13 @@ object SingBoxConfig {
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
     private const val SOCKS_IN_TAG = "socks-in"
+    private const val TUN_IN_TAG = "tun-in"
     private const val TPROXY_IN_TAG = "tproxy-in"
+
+    // Desktop per-process split tunneling modes (mirror AndroidSplitTunnelMode values).
+    const val SPLIT_TUNNEL_ALL = "all_apps"
+    const val SPLIT_TUNNEL_PROXY = "proxy_selected"
+    const val SPLIT_TUNNEL_BYPASS = "bypass_selected"
 
     /**
      * Well-known DNS-over-HTTPS/TLS endpoints that browsers & apps dial directly (often over IPv6),
@@ -134,6 +140,53 @@ object SingBoxConfig {
         // blackhole domains become `domain_regex → reject` route rules — so FakeDNS works on sing-box
         // too, not only xray-core. Overrides the (now per-config) [TrafficSettings.fakeDnsEnabled].
         fakeDnsSpec: FakeDnsSpec? = null,
+        // Desktop only: sing-box owns the system TUN itself (wintun on Windows) with auto_route,
+        // instead of an external tun2socks. Required for per-process split tunneling — only the
+        // TUN owner can attribute connections to processes. Needs admin/root.
+        tunMode: Boolean = false,
+        // Per-process split tunneling (desktop analog of Android's per-app VPN): exe names matched
+        // with sing-box `process_name` rules. Only effective with [tunMode].
+        // "proxy_selected" → ONLY listed processes go through the proxy (everything else direct);
+        // "bypass_selected" → listed processes go direct (everything else through the proxy).
+        splitTunnelMode: String = SPLIT_TUNNEL_ALL,
+        splitTunnelProcesses: List<String> = emptyList(),
+        // Desktop only, [tunMode] only: upstream server IPs carved OUT of the TUN's auto_route, so an
+        // engine's own traffic never loops through the tunnel it provides. Android does this with
+        // VpnService.protect(); desktop has no protect, and auto_detect_interface only binds sing-box's
+        // OWN dials — a sibling core inside the same process (awgproxy's WireGuard endpoint, freeturn's
+        // relay) is not covered, so its UDP went into the TUN and the tunnel deadlocked. The external
+        // tun2socks path solves the same problem with host routes (WindowsTunController).
+        tunExcludeAddresses: List<String> = emptyList(),
+        // Desktop tun2socks path: sing-box runs as a plain SOCKS server (no [tunMode]) behind an
+        // external tun2socks. The OS routes ALL DNS into the TUN, so the app's UDP DNS queries arrive
+        // at the SOCKS inbound. Without hijack-dns they'd be relayed as raw UDP/53 to the proxy and
+        // die on TCP-only transports → total DNS outage. Hijacking makes sing-box answer them with its
+        // own DNS servers (resolved over the proxy), exactly like the in-core TUN does. Harmless when
+        // [tunMode] already enables hijack.
+        hijackDns: Boolean = false,
+        // Optional file for sing-box's own debug logs. The core is a c-shared lib inside the JVM, so
+        // its default stderr output is lost; pointing log.output at a file lets the desktop surface
+        // real route/DNS diagnostics. Null keeps the default (stderr).
+        logFilePath: String? = null,
+        // Resolve the remote DNS over DoH (DNS-over-HTTPS) instead of plain UDP. Many proxy servers
+        // (vless with vision/reality or HTTP-based transports) carry TCP fine but drop or stall UDP,
+        // so a UDP DNS query through the proxy times out → "strategy rejected" → nothing resolves.
+        // DoH rides the proven TCP path AND multiplexes over HTTP/2, so the dozens of concurrent
+        // lookups a page triggers don't head-of-line-block behind one another (plain DoT serialized
+        // them → 5-16s stalls). The app's own UDP (QUIC) is already blocked, so DNS is the only thing
+        // that needed UDP here.
+        remoteDnsOverHttps: Boolean = false,
+        // Force FakeDNS on (desktop): hand the app an instant synthetic IP and let the exit server
+        // resolve the real domain from the sniffed SNI. Eliminates the per-domain DNS round-trip
+        // through the proxy entirely — the UDP-over-vless DNS path stalled 5-6s on desktop, which is
+        // why only Telegram (connects by IP, no DNS) worked.
+        forceFakeDns: Boolean = false,
+        // Desktop: use a "mixed" inbound (SOCKS + HTTP) so the OS system-proxy (HTTP) can use it.
+        mixedInbound: Boolean = false,
+        // Desktop: a routing rule's app list holds EXE names, matched with sing-box `process_name`.
+        // On Android the same field holds package names and matches with `package_name`, which
+        // resolves a UID and therefore can never match anything on a PC.
+        matchAppsByProcess: Boolean = false,
         // Transparent-proxy mode: when set, a `tproxy` inbound (TCP+UDP) is added on [listenHost]:this,
         // so a rooted device / router can redirect traffic through the core with no per-app proxy. The
         // SOCKS inbound is still emitted for coexistence. Requires root (IP_TRANSPARENT) to bind.
@@ -145,28 +198,57 @@ object SingBoxConfig {
         // (whose own protocol carries DNS). Forcing DNS over TCP makes it ride the proven CONNECT path.
         // No-op for DoH/DoT/DoQ resolvers (already TCP/own transport) — only bare-IP/udp is rewritten.
         preferTcpRemoteDns: Boolean = false,
+        // Absolute path of sing-box's `experimental.cache_file` (bbolt db). Only used when FakeDNS is
+        // active, and ONLY to persist the fakeip domain↔synthetic-IP table across restarts.
+        //
+        // WHY THIS MATTERS: without a cache file sing-box keeps the fakeip table in memory only, so
+        // every reconnect restarts the pool at 198.18.0.1 and hands the SAME synthetic IPs out to
+        // WHATEVER domain happens to be looked up first this session. Apps that cache DNS answers for
+        // a long time (anything on OkHttp/JVM — ChatGPT, banking apps — unlike browsers, which
+        // re-resolve) then dial a fake IP they learned BEFORE the reconnect, sing-box maps it to a
+        // DIFFERENT domain, and the TLS handshake completes against the wrong host: the app reports
+        // "this network uses an untrusted SSL certificate". Persisting the table keeps a fake IP
+        // bound to its domain forever, so a stale app-side cache entry still resolves correctly.
+        // Null (or FakeDNS off) → no `experimental` block at all, i.e. unchanged behaviour.
+        cacheFilePath: String? = null,
     ): String {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
         val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
         // FakeDNS is on when either the (legacy global) traffic toggle is set OR this location carries a
         // translated spec. The pool ranges come from the spec when present, else the defaults.
-        val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null
+        val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null || forceFakeDns
         val fake4Range = fakeDnsSpec?.inet4Range?.takeIf { it.isNotBlank() } ?: "198.18.0.0/15"
         val fake6Range = fakeDnsSpec?.inet6Range?.takeIf { it.isNotBlank() } ?: "fc00::/18"
         val config = buildJsonObject {
             putJsonObject("log") {
                 put("level", logLevel)
                 put("timestamp", true)
+                if (!logFilePath.isNullOrBlank()) put("output", logFilePath)
             }
 
             putJsonObject("dns") {
                 putJsonArray("servers") {
-                    // App traffic resolves through the proxy (no DNS leak).
+                    // App traffic resolves through the proxy (no DNS leak). On desktop, ride DoH (TCP +
+                    // HTTP/2 multiplexing) so resolution survives proxy servers that don't carry UDP and
+                    // doesn't serialize concurrent lookups (see [remoteDnsOverHttps]).
+                    val remoteDnsAddress =
+                        if (remoteDnsOverHttps && !traffic.remoteDns.contains("://")) "https://${traffic.remoteDns}/dns-query"
+                        else traffic.remoteDns
+                    // Under a strict family (ipv4_only/ipv6_only) pin the server strategy so it never
+                    // fires the opposite-family query at all. Without this every connection wastes an
+                    // extra AAAA round-trip that's then "strategy rejected" — doubling DNS load over the
+                    // single DoT channel and slowing page loads. FakeDNS keeps both families (it fakes
+                    // AAAA deliberately), so skip the pin then.
+                    val familyStrategy = effectiveStrategy
+                        .takeIf { !fakeEnabled && (it == "ipv4_only" || it == "ipv6_only") }
                     addJsonObject {
                         put("tag", "remote")
-                        put("address", maybeTcpDns(traffic.remoteDns, preferTcpRemoteDns))
+                        // Compose both: DoH-ify (desktop) THEN rewrite a bare-IP/udp resolver to TCP
+                        // (Beta). maybeTcpDns is a no-op for a `https://…` DoH address, so order is safe.
+                        put("address", maybeTcpDns(remoteDnsAddress, preferTcpRemoteDns))
                         put("detour", PROXY_TAG)
+                        if (familyStrategy != null) put("strategy", familyStrategy)
                     }
                     // Optional second remote resolver (also via the proxy) — a fallback for "remote".
                     if (traffic.remoteDns2.isNotBlank()) {
@@ -229,11 +311,41 @@ object SingBoxConfig {
             }
 
             putJsonArray("inbounds") {
+                if (tunMode) {
+                    // sing-box-owned TUN: creates the adapter (wintun) and installs the default
+                    // routes itself; auto_detect_interface keeps its own upstream off the tunnel.
+                    addJsonObject {
+                        put("type", "tun")
+                        put("tag", TUN_IN_TAG)
+                        putJsonArray("address") {
+                            add("172.19.0.1/28")
+                            add("fdfe:dcba:9876::1/126")
+                        }
+                        // Match Hiddify's proven Windows defaults. The "mixed" stack uses the OS native
+                        // TCP stack (gVisor only for UDP) — pure gVisor TCP in userspace was dropping
+                        // part of the download direction (TLS ServerHello never arrived → Firefox
+                        // PR_END_OF_FILE_ERROR on many sites). MTU 9000 cuts per-packet overhead app↔tun.
+                        put("mtu", 9000)
+                        put("auto_route", true)
+                        put("strict_route", false)
+                        put("stack", "mixed")
+                        // Host routes around the tunnel for the engines' own upstreams (see the param).
+                        val excluded = tunExcludeAddresses
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .map { if ('/' in it) it else if (':' in it) "$it/128" else "$it/32" }
+                            .distinct()
+                        if (excluded.isNotEmpty()) {
+                            putJsonArray("route_exclude_address") { excluded.forEach { add(it) } }
+                        }
+                    }
+                }
                 addJsonObject {
-                    // SOCKS only. HTTP-proxy support for browsers in Proxy mode is provided uniformly by
-                    // the engine-agnostic HttpProxyBridge (started only in Proxy mode), so TUN mode keeps a
-                    // purely internal SOCKS bridge with NO HTTP listener.
-                    put("type", "socks")
+                    // Desktop: "mixed" speaks BOTH SOCKS and HTTP on one port (Windows system HTTP-proxy
+                    // points here; SOCKS5 clients like tun2socks/hev still work). Android passes
+                    // mixedInbound=false → plain "socks" (HTTP is provided by the HttpProxyBridge in
+                    // Proxy mode), so TUN mode keeps a purely internal SOCKS bridge with no HTTP listener.
+                    put("type", if (mixedInbound) "mixed" else "socks")
                     put("tag", SOCKS_IN_TAG)
                     put("listen", listenHost)
                     put("listen_port", listenPort)
@@ -268,9 +380,12 @@ object SingBoxConfig {
             // WireGuard moved from an `outbound` (removed in sing-box 1.13.0) to a top-level
             // `endpoints` entry, referenced by tag. Build them here so the outbounds below can detour
             // to them and the endpoints array is emitted as a sibling of `outbounds`.
-            val wgBaseEndpoint = wireguardBase?.let { buildWireguardEndpoint(it, WG_BASE_TAG) }
+            val wgBaseEndpoint = wireguardBase?.let {
+                buildWireguardEndpoint(it, WG_BASE_TAG, autoDetectInterface)
+            }
             val mainIsWireguard = profile.type == "wireguard"
-            val wgExitEndpoint = if (mainIsWireguard) buildWireguardEndpoint(profile, PROXY_TAG) else null
+            val wgExitEndpoint =
+                if (mainIsWireguard) buildWireguardEndpoint(profile, PROXY_TAG, autoDetectInterface) else null
 
             putJsonArray("outbounds") {
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
@@ -370,6 +485,29 @@ object SingBoxConfig {
                     ) {
                         addJsonObject { put("action", "sniff") }
                     }
+                    if (tunMode || hijackDns) {
+                        // System DNS queries arriving via the TUN are answered by sing-box itself.
+                        addJsonObject {
+                            putJsonArray("protocol") { add("dns") }
+                            put("action", "hijack-dns")
+                        }
+                    }
+                    // Per-process split tunneling (desktop): FIRST so a per-app decision wins over
+                    // every later domain/geo rule.
+                    val splitProcesses = splitTunnelProcesses.filter { it.isNotBlank() }
+                    if (tunMode && splitProcesses.isNotEmpty()) {
+                        when (splitTunnelMode) {
+                            SPLIT_TUNNEL_BYPASS -> addJsonObject {
+                                putJsonArray("process_name") { splitProcesses.forEach { add(it) } }
+                                put("outbound", "direct")
+                            }
+                            SPLIT_TUNNEL_PROXY -> addJsonObject {
+                                putJsonArray("process_name") { splitProcesses.forEach { add(it) } }
+                                put("invert", true)
+                                put("outbound", "direct")
+                            }
+                        }
+                    }
                     // NOTE: the family override for full UDP tunnels (the old inbound
                     // sniff_override_destination + domain_strategy) is already covered by the `resolve`
                     // route action further down (gated on forceFamily / usesIpRules / …), so no extra
@@ -427,6 +565,24 @@ object SingBoxConfig {
                     // Routing profile and the advanced toggles are COMBINED (not either/or): the
                     // profile's buckets run alongside the user's verbatim rules and the
                     // bypassRussia/blockAds/block-direct toggles.
+                    // A FakeDNS address is SYNTHETIC — it means "the domain I handed this app" and can
+                    // never be dialled for real, so it must reach the proxy no matter what follows.
+                    // This has to come BEFORE the private/LAN rule: the fake IPv6 pool (fc00::/18) sits
+                    // inside fc00::/7, which `ip_is_private` matches, so every fake-v6 connection was
+                    // classified as LAN and sent DIRECT. It then left the tunnel unprotected, and what
+                    // the user saw was the ISP's interception of the real destination — "эта сеть
+                    // использует недоверенный SSL-сертификат" in apps that check. (Normally the sniffed
+                    // SNI replaces the fake address before routing; when sniffing can't see it — ECH,
+                    // or anything that isn't TLS/HTTP — the fake address is all the router has.)
+                    if (fakeEnabled) {
+                        addJsonObject {
+                            putJsonArray("ip_cidr") {
+                                add(fake4Range)
+                                add(fake6Range)
+                            }
+                            put("outbound", PROXY_TAG)
+                        }
+                    }
                     // Private/LAN always direct (Happ profiles assume it; bypassLan toggle wants it).
                     if (routingProfile != null || routing.bypassLan) {
                         addJsonObject {
@@ -486,7 +642,7 @@ object SingBoxConfig {
                     // Advanced verbatim user rules (highest precedence).
                     parseJsonArray(routing.customRulesJson).forEach { add(it) }
                     // Structured v2rayNG-style rules (in user-defined order, after verbatim JSON).
-                    SingBoxRouting.manualRules(routing.rules).forEach { add(it) }
+                    SingBoxRouting.manualRules(routing.rules, matchAppsByProcess).forEach { add(it) }
                     // Blocking toggles first so ads/blocked domains die even if a profile bucket would proxy them.
                     if (routing.blockDomains.isNotEmpty()) {
                         addJsonObject {
@@ -551,7 +707,7 @@ object SingBoxConfig {
                             put("tag", "geosite-ads")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs")
-                            put("download_detour", "direct")
+                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
                         })
                     }
                     if (routing.bypassRussia) {
@@ -560,19 +716,37 @@ object SingBoxConfig {
                             put("tag", "geoip-ru")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs")
-                            put("download_detour", "direct")
+                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
                         })
                         add(buildJsonObject {
                             put("type", "remote")
                             put("tag", "geosite-ru")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs")
-                            put("download_detour", "direct")
+                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
                         })
                     }
                 }.associateBy { it["tag"]?.jsonPrimitive?.contentOrNull ?: it.toString() }.values
                 if (mergedRuleSets.isNotEmpty()) {
                     putJsonArray("rule_set") { mergedRuleSets.forEach { add(it) } }
+                }
+            }
+
+            // The cache file earns its place twice over:
+            //  - it persists FETCHED RULE-SETS. sing-box's RemoteRuleSet.StartContext only skips the
+            //    initial download when the cache has the set, and a failed initial download aborts
+            //    THE WHOLE CORE ("initial rule-set: <tag>"). With the cache, routing survives a start
+            //    with no working network instead of taking the connection down with it.
+            //  - with FakeDNS on it persists the fakeip table, so a synthetic IP keeps meaning the
+            //    same domain across reconnects (see [cacheFilePath]).
+            // Nothing else is cached (no selector/mode/RDRC state), so behaviour is otherwise identical.
+            if (!cacheFilePath.isNullOrBlank()) {
+                putJsonObject("experimental") {
+                    putJsonObject("cache_file") {
+                        put("enabled", true)
+                        put("path", cacheFilePath)
+                        if (fakeEnabled) put("store_fakeip", true)
+                    }
                 }
             }
         }
@@ -648,9 +822,11 @@ object SingBoxConfig {
                     put("uuid", profile.uuid)
                     if (profile.flow.isNotBlank()) {
                         put("flow", profile.flow)
-                    } else {
-                        put("packet_encoding", "xudp")
                     }
+                    // xudp coexists with vision flow and is what makes UDP (DNS/QUIC) actually ride the
+                    // vless tunnel. Omitting it (the old "flow XOR xudp") left UDP DNS over the proxy
+                    // stalling on desktop. xray-based vision servers speak xudp, so set it always.
+                    put("packet_encoding", "xudp")
                 }
 
                 ProxyProfile.TYPE_VMESS -> {
@@ -754,7 +930,17 @@ object SingBoxConfig {
      * removed in sing-box 1.13.0, so VK-TURN / WDTT (which tunnel through a local WireGuard listener)
      * must use an endpoint instead. Returns null if the raw JSON isn't a wireguard outbound.
      */
-    private fun buildWireguardEndpoint(profile: ProxyProfile, tag: String): JsonObject? {
+    /** Whether [host] is this machine — the shape every local relay listener uses. */
+    private fun isLoopbackHost(host: String): Boolean {
+        val h = host.trim().trim('[', ']').lowercase()
+        return h == "localhost" || h == "::1" || h.startsWith("127.")
+    }
+
+    private fun buildWireguardEndpoint(
+        profile: ProxyProfile,
+        tag: String,
+        autoDetectInterface: Boolean = false,
+    ): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
         val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
         if (obj["type"]?.jsonPrimitive?.contentOrNull != "wireguard") return null
@@ -769,6 +955,23 @@ object SingBoxConfig {
             put("tag", tag)
             // Userspace gVisor stack (the process is already bound to the upstream network).
             put("system", false)
+            // VK-TURN / WDTT put the WireGuard peer on 127.0.0.1 (the local relay listener). With
+            // `route.auto_detect_interface` on — desktop, where there is no VpnService.protect — sing-box
+            // appends its bind-to-interface control to EVERY dialer, and WireGuard's socket is a
+            // ListenPacket: the control sees the BIND address (0.0.0.0), never the destination, so it
+            // pins the socket to the physical NIC. Sending to 127.0.0.1 from there fails outright:
+            //   "failed to send handshake initiation: write udp4 0.0.0.0:x->127.0.0.1:9000:
+            //    wsasendmsg: The requested address is not valid in its context"
+            // (WSAEADDRNOTAVAIL, straight out of the user's singbox.log) — the tunnel comes up, the
+            // handshake never leaves the machine, and VK-TURN carries nothing.
+            //
+            // `inet4_bind_address` sets sing-box's `disableDefaultBind`, which is the only supported way
+            // to keep that control off ONE endpoint. Only for a loopback peer, and only when the bind
+            // would otherwise happen — Android (auto_detect_interface = false, protect() instead) is
+            // untouched.
+            if (autoDetectInterface && isLoopbackHost(server)) {
+                put("inet4_bind_address", "0.0.0.0")
+            }
             if (mtu != null && mtu > 0) put("mtu", mtu)
             putJsonArray("address") { localAddrs.forEach { add(it) } }
             put("private_key", privateKey)

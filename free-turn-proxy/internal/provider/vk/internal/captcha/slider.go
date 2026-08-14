@@ -11,10 +11,12 @@ import (
 	_ "image/jpeg" // регистрация JPEG-декодера для image.Decode
 	"math"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 )
@@ -32,17 +34,13 @@ type sliderGuess struct {
 	Score         int64
 	ScoreRGB      int64
 	ScoreLuma     int64
-	ScoreReverse  int64
 	ScoreText     float64
 	ConsensusRank int
 }
 
 func (s *captchaSession) solveSliderCaptcha(
 	sessionToken string,
-	browserFP string,
-	hash string,
 	content captchaContentRef,
-	debugInfo string,
 ) (string, error) {
 	if content.Value == "" {
 		return "", errors.New("slider content settings missing")
@@ -78,37 +76,40 @@ func (s *captchaSession) solveSliderCaptcha(
 	if limit <= 0 {
 		return "", errors.New("slider has no attempts available")
 	}
+	attempts := pickSliderAttempts(guesses, limit)
 	s.logger().Debugf("[Captcha] slider guesses ranked: total=%d limit=%d", len(guesses), limit)
 
-	deviceJSON := s.profile.DeviceJSON
-	s.logger().Debugf("[Captcha] slider componentDone device_bytes=%d", len(deviceJSON))
-	if _, err := s.captchaRequest("captchaNotRobot.componentDone", [][2]string{
-		{"session_token", sessionToken},
-		{"domain", s.domain},
-		{"adFp", ""},
-		{"access_token", ""},
-		{"browser_fp", browserFP},
-		{"device", deviceJSON},
-	}); err != nil {
-		return "", fmt.Errorf("captcha componentDone failed: %w", err)
+	if err := s.sendComponentDone(sessionToken); err != nil {
+		return "", err
 	}
 
-	for i := 0; i < limit; i++ {
-		s.logger().Debugf("[Captcha] slider attempt %d/%d (guess #%d)", i+1, limit, guesses[i].Index)
+	// Ручка стоит в начале дорожки; каждая следующая попытка тянет её от места,
+	// где остановилась предыдущая.
+	handle := point{X: s.layout.sliderLeft, Y: s.layout.sliderY}
+	if !s.profile.Touch() {
+		handle = approachFrom(s.profile, s.layout, handle)
+	}
+	for i, guess := range attempts {
+		s.logger().Debugf("[Captcha] slider attempt %d/%d (guess #%d)", i+1, len(attempts), guess.Index)
 		answerData, err := json.Marshal(struct {
 			Value []int `json:"value"`
-		}{Value: guesses[i].Swaps})
+		}{Value: guess.Swaps})
 		if err != nil {
 			return "", err
 		}
-		check, err := s.performCaptchaCheck(
-			sessionToken,
-			browserFP,
-			hash,
-			string(answerData),
-			buildSliderCursor(guesses[i].Index, len(guesses)),
-			debugInfo,
-		)
+		target := s.layout.sliderTarget(guess.Index, len(guesses))
+		g := gesture{
+			from:   handle,
+			to:     target,
+			move:   sliderDragTime(handle, target),
+			settle: time.Duration(200+randx.Intn(400)) * time.Millisecond,
+		}
+		if gestureErr := s.performGesture(g); gestureErr != nil {
+			return "", gestureErr
+		}
+		handle = target
+
+		check, err := s.performCaptchaCheck(sessionToken, string(answerData))
 		if err != nil {
 			return "", err
 		}
@@ -123,8 +124,20 @@ func (s *captchaSession) solveSliderCaptcha(
 		if strings.EqualFold(check.Status, "error_limit") {
 			return "", errCaptchaRateLimit
 		}
+		// Виджет показал ошибку - человеку нужно время, чтобы это осознать.
+		if dwellErr := s.dwell(700, 1600); dwellErr != nil {
+			return "", dwellErr
+		}
 	}
 	return "", errors.New("slider guesses exhausted")
+}
+
+// sliderDragTime - сколько занимает протяжка ручки: закон Фиттса, огрублённый до
+// линейной зависимости от дистанции.
+func sliderDragTime(from, to point) time.Duration {
+	dist := math.Abs(float64(to.X - from.X))
+	ms := 450 + dist*2.2 + float64(randx.Intn(350))
+	return time.Duration(ms) * time.Millisecond
 }
 
 func parseSliderPuzzle(raw map[string]any) (*sliderPuzzle, error) {
@@ -187,9 +200,12 @@ func splitSliderSteps(steps []int) (int, []int, int, error) {
 	tail := append([]int(nil), steps[1:]...)
 	attempts := 4
 	if len(tail)%2 != 0 {
+		// Штатный формат: [size, ...пары свапов, attempts].
 		attempts = tail[len(tail)-1]
 		tail = tail[:len(tail)-1]
-		Log.Warnf("[Captcha] slider payload had odd-length tail; fallback attempts=%d", attempts)
+		Log.Debugf("[Captcha] slider attempts from payload=%d", attempts)
+	} else {
+		Log.Debugf("[Captcha] slider payload without attempts counter; default=%d", attempts)
 	}
 	if attempts <= 0 {
 		attempts = 4
@@ -215,15 +231,6 @@ func rankSliderGuesses(img image.Image, gridSize int, swaps []int) ([]sliderGues
 		}
 		guesses[idx-1] = sliderGuess{Index: idx, Swaps: active}
 		guesses[idx-1].ScoreLuma = seamScoreLuma(img, gridSize, mapping)
-		if len(active) > 2 {
-			reverseMapping, err := applySliderSwaps(gridSize, reverseSwapPairs(active))
-			if err != nil {
-				return nil, err
-			}
-			guesses[idx-1].ScoreReverse = seamScoreLuma(img, gridSize, reverseMapping)
-		} else {
-			guesses[idx-1].ScoreReverse = guesses[idx-1].ScoreLuma
-		}
 	}
 
 	lumaOrder := append([]sliderGuess(nil), guesses...)
@@ -324,21 +331,9 @@ func rankSliderGuesses(img image.Image, gridSize int, swaps []int) ([]sliderGues
 		textRank[g.Index] = rank
 	}
 
-	reverseOrder := append([]sliderGuess(nil), guesses...)
-	sort.SliceStable(reverseOrder, func(i, j int) bool {
-		if reverseOrder[i].ScoreReverse == reverseOrder[j].ScoreReverse {
-			return reverseOrder[i].Index < reverseOrder[j].Index
-		}
-		return reverseOrder[i].ScoreReverse < reverseOrder[j].ScoreReverse
-	})
-	reverseRank := make(map[int]int, len(reverseOrder))
-	for rank, g := range reverseOrder {
-		reverseRank[g.Index] = rank
-	}
-
 	for i := range guesses {
 		g := &guesses[i]
-		g.ConsensusRank = lumaRank[g.Index] + reverseRank[g.Index]
+		g.ConsensusRank = lumaRank[g.Index]
 		if _, ok := stage2Set[g.Index]; ok {
 			g.ConsensusRank += rgbRank[g.Index] + textRank[g.Index]
 		} else {
@@ -359,10 +354,26 @@ func rankSliderGuesses(img image.Image, gridSize int, swaps []int) ([]sliderGues
 	return guesses, nil
 }
 
-func reverseSwapPairs(swaps []int) []int {
-	out := make([]int, 0, len(swaps))
-	for i := len(swaps) - 2; i >= 0; i -= 2 {
-		out = append(out, swaps[i], swaps[i+1])
+// pickSliderAttempts разносит попытки по дорожке: соседние кандидаты отличаются
+// одним свапом и получают почти равный скор, поэтому вторая попытка рядом с
+// первой промахивается вместе с ней.
+func pickSliderAttempts(guesses []sliderGuess, limit int) []sliderGuess {
+	const minGap = 3
+	out := make([]sliderGuess, 0, limit)
+	taken := func(index, gap int) bool {
+		return slices.ContainsFunc(out, func(g sliderGuess) bool {
+			return absInt(g.Index-index) < gap
+		})
+	}
+	for _, gap := range []int{minGap, 1} {
+		for _, g := range guesses {
+			if len(out) == limit {
+				return out
+			}
+			if !taken(g.Index, gap) {
+				out = append(out, g)
+			}
+		}
 	}
 	return out
 }
@@ -581,97 +592,4 @@ func absDiff(left uint32, right uint32) int64 {
 		return int64(left - right)
 	}
 	return int64(right - left)
-}
-
-func buildSliderCursor(candidateIndex int, candidateCount int) string {
-	if candidateCount <= 0 {
-		return "[]"
-	}
-	if candidateIndex < 1 {
-		candidateIndex = 1
-	}
-	if candidateIndex > candidateCount {
-		candidateIndex = candidateCount
-	}
-
-	type cursorPoint struct {
-		X int `json:"x"`
-		Y int `json:"y"`
-	}
-
-	startX := 570 + randx.Intn(40)
-	startY := 875 + randx.Intn(30)
-
-	denom := candidateCount - 1
-	if denom < 1 {
-		denom = 1
-	}
-	baseTargetX := 734 + (937-734)*(candidateIndex-1)/denom
-	targetX := baseTargetX + randx.Intn(10) - 5
-	targetY := 655 + randx.Intn(14)
-
-	points := make([]cursorPoint, 0, 128)
-
-	for i := 0; i < 4+randx.Intn(8); i++ {
-		points = append(points, cursorPoint{
-			X: startX + randx.Intn(5) - 2,
-			Y: startY + randx.Intn(5) - 2,
-		})
-	}
-
-	transitSteps := 32 + randx.Intn(26)
-	arcOffX := randx.Intn(60) - 30
-	arcOffY := -(randx.Intn(30) + 10)
-	for i := 1; i <= transitSteps; i++ {
-		t := easeInOut(float64(i) / float64(transitSteps+1))
-		cx := float64(startX+targetX)/2 + float64(arcOffX)
-		cy := float64(startY+targetY)/2 + float64(arcOffY)
-		bx := (1-t)*(1-t)*float64(startX) + 2*t*(1-t)*cx + t*t*float64(targetX)
-		by := (1-t)*(1-t)*float64(startY) + 2*t*(1-t)*cy + t*t*float64(targetY)
-		jitter := int((1-t)*5) + 1
-		points = append(points, cursorPoint{
-			X: int(math.Round(bx)) + randx.Intn(jitter*2+1) - jitter,
-			Y: int(math.Round(by)) + randx.Intn(jitter*2+1) - jitter,
-		})
-		if i%9 == 0 && randx.Intn(3) == 0 {
-			last := points[len(points)-1]
-			points = append(points, last)
-		}
-	}
-
-	approachSteps := 16 + randx.Intn(14)
-	prev := points[len(points)-1]
-	for i := 1; i <= approachSteps; i++ {
-		t := easeOut(float64(i) / float64(approachSteps))
-		ax := prev.X + int(math.Round(t*float64(targetX-prev.X))) + randx.Intn(5) - 2
-		ay := prev.Y + int(math.Round(t*float64(targetY-prev.Y))) + randx.Intn(5) - 2
-		points = append(points, cursorPoint{X: ax, Y: ay})
-	}
-
-	settleCount := 18 + randx.Intn(24)
-	for i := 0; i < settleCount; i++ {
-		points = append(points, cursorPoint{
-			X: targetX + randx.Intn(7) - 3,
-			Y: targetY + randx.Intn(7) - 3,
-		})
-	}
-
-	data, err := json.Marshal(points)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
-}
-
-func easeInOut(t float64) float64 {
-	if t < 0.5 {
-		return 2 * t * t
-	}
-	p := -2*t + 2
-	return 1 - p*p/2
-}
-
-func easeOut(t float64) float64 {
-	p := 1 - t
-	return 1 - p*p*p
 }

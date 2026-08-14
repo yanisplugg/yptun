@@ -1248,6 +1248,7 @@ class OlcboxVpnService : VpnService() {
                     // `direct` traffic exits via the dnstt-server (base tunnel), never the real network —
                     // routing only governs the second proxy, the tunnel itself is never bypassed.
                     directViaBase = true,
+                    cacheFilePath = singBoxCachePath(),
                 )
                 activeProxyCore = ProxyCore.SingBox
                 addLog("Starting sing-box (DNSTT proxy) via $socksListenHost:$socksListenPort")
@@ -1583,6 +1584,9 @@ class OlcboxVpnService : VpnService() {
                     // resolution works WITHOUT needing a 2nd proxy to carry DNS. No-op with a 2nd proxy
                     // (that proxy's own protocol carries DNS) or for DoH/DoT resolvers.
                     preferTcpRemoteDns = isLocalUdpTunnel && secondProfile == null,
+                    // Persist the fakeip table so a reconnect can't remap a synthetic IP onto another
+                    // domain (stale app DNS caches → "untrusted SSL certificate" in OkHttp-based apps).
+                    cacheFilePath = singBoxCachePath(),
                 )
                 if (config.fakeDns != null) addLog("FakeDNS spec present → enabling sing-box fakeip (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
                 addLog("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -1998,6 +2002,7 @@ class OlcboxVpnService : VpnService() {
                         logLevel = "debug",
                         dnsStrategyOverride = "ipv4_only",
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                        cacheFilePath = singBoxCachePath(),
                     )
                 }
 
@@ -2021,6 +2026,7 @@ class OlcboxVpnService : VpnService() {
                         // TUN's captured ::/0 stays a harmless blackhole instead of a dead route.
                         dnsStrategyOverride = "ipv4_only",
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                        cacheFilePath = singBoxCachePath(),
                     )
                 }
 
@@ -2047,6 +2053,7 @@ class OlcboxVpnService : VpnService() {
                             // `direct` traffic exits via the WG-over-VK base, never the real network —
                             // routing only governs the chain proxy; the VK tunnel is never bypassed.
                             directViaBase = true,
+                            cacheFilePath = singBoxCachePath(),
                         )
                     } else {
                         SingBoxConfig.build(
@@ -2068,6 +2075,7 @@ class OlcboxVpnService : VpnService() {
                             // don't attempt IPv6 (no route through the tunnel → "no route to host").
                             dnsStrategyOverride = "ipv4_only",
                             blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                            cacheFilePath = singBoxCachePath(),
                         )
                     }
                 }
@@ -2158,10 +2166,20 @@ class OlcboxVpnService : VpnService() {
         )
     }
 
+    /** sing-box's work dir (libbox basePath); also holds its fakeip cache db. */
+    private fun singBoxWorkDir(): File = File(filesDir, "singbox")
+
+    /**
+     * Path of the sing-box fakeip cache (see [SingBoxConfig.build]'s `cacheFilePath`). Keeping the
+     * domain↔synthetic-IP table across restarts is what stops an app's stale DNS cache from dialing
+     * a fake IP that now belongs to another domain ("untrusted SSL certificate").
+     */
+    private fun singBoxCachePath(): String = File(singBoxWorkDir(), "cache.db").absolutePath
+
     private fun singBoxEngine(): SingBoxEngine {
         return singBox ?: SingBoxEngine(
             context = applicationContext,
-            workDir = File(filesDir, "singbox"),
+            workDir = singBoxWorkDir(),
             tempDir = File(cacheDir, "singbox"),
             protect = { fd -> protect(fd) },
             log = { addLog(it) },

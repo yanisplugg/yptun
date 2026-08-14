@@ -75,7 +75,7 @@
 ./client -manual-captcha ...
 ```
 
-Персона auth-запросов (UA + TLS JA3 + client hints + device) задаётся флагами `-browser` (семейство) и `-platform` (desktop/mobile); значения самосогласованы, без внешнего состояния.
+Персона auth-запросов (UA + TLS JA3 + client hints + порядок заголовков + device) - всегда Chrome; флаг `-platform` выбирает класс устройства (desktop/mobile). Значения самосогласованы, без внешнего состояния. Ручная captcha ходит на VK через ту же персону.
 
 ## DNS
 

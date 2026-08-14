@@ -40,7 +40,12 @@ internal object DesktopNativeAssets {
                 "olcrtc-darwin-${desktopArch()}",
                 "olcrtc-darwin-${desktopArchFallback()}"
             ).distinct()
-            DesktopOs.Windows -> listOf("olcrtc-windows-amd64.exe")
+            // arm64 first, amd64 as the fallback: an arm64 build carries the native binary, but an
+            // x64 build running under Windows-on-ARM emulation must still find its amd64 one.
+            DesktopOs.Windows -> listOf(
+                "olcrtc-windows-${desktopArch()}.exe",
+                "olcrtc-windows-${desktopArchFallback()}.exe"
+            ).distinct()
             DesktopOs.Linux -> listOf("olcrtc-linux-${desktopArch()}")
             DesktopOs.Other -> error("Olcbox desktop supports macOS, Windows and Linux")
         }
@@ -82,6 +87,55 @@ internal object DesktopNativeAssets {
         )
         copyRuntimeAsset("wintun.dll")
         return binary
+    }
+
+    /**
+     * Unpacks cronet (NaïveProxy's HTTP/2+QUIC engine) next to the other natives and returns the
+     * directory, which the core adds to its PATH so the `with_purego` loader can find it by name.
+     *
+     * Best-effort: a build without the library simply has no NaïveProxy support, and every other
+     * protocol is unaffected — so a missing resource returns the directory rather than throwing.
+     */
+    fun resolveCronetLibraryDir(): Path {
+        val target = DesktopPaths.appDataDir().resolve("bin")
+        Files.createDirectories(target)
+        runCatching { copyRuntimeAsset(cronetFileName()) }
+        return target
+    }
+
+    private fun cronetFileName(): String = when (DesktopPaths.os) {
+        DesktopOs.Windows -> "libcronet.dll"
+        DesktopOs.Linux -> "libcronet.so"
+        DesktopOs.MacOS -> "libcronet.dylib"
+        DesktopOs.Other -> "libcronet.so"
+    }
+
+    /** AdGuard Trust Tunnel CLI, run in SOCKS-only mode as the desktop stand-in for the Android AAR. */
+    fun resolveTrustTunnelClientBinary(): Path {
+        val fileName = trustTunnelFileName("client")
+        return resolveBinary(
+            fileName = fileName,
+            resourceName = "native/$fileName",
+            candidates = emptyList()
+        )
+    }
+
+    /** Trust Tunnel's setup_wizard, used only to turn a `tt://` deep link into an `[endpoint]` TOML. */
+    fun resolveTrustTunnelWizardBinary(): Path {
+        val fileName = trustTunnelFileName("wizard")
+        return resolveBinary(
+            fileName = fileName,
+            resourceName = "native/$fileName",
+            candidates = emptyList()
+        )
+    }
+
+    private fun trustTunnelFileName(kind: String): String {
+        return when (DesktopPaths.os) {
+            DesktopOs.Linux -> "trusttunnel-$kind-linux-${desktopArch()}"
+            DesktopOs.Windows -> "trusttunnel-$kind-windows-${desktopArch()}.exe"
+            else -> error("Trust Tunnel is not bundled for ${DesktopPaths.os}")
+        }
     }
 
     private fun resolveBinary(
@@ -138,7 +192,7 @@ internal object DesktopNativeAssets {
 
     fun windowsTun2SocksFileName(): String {
         return when (DesktopPaths.os) {
-            DesktopOs.Windows -> "tun2socks-windows-amd64.exe"
+            DesktopOs.Windows -> "tun2socks-windows-${desktopArch()}.exe"
             else -> error("tun2socks desktop binary is only used for Windows TUN mode")
         }
     }

@@ -13,7 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,6 +91,7 @@ type Session struct {
 	roomURL          string // referer for telemetry - opaque to the engine
 	telemetryReferer string
 	refresh          func(ctx context.Context) (engine.Credentials, error)
+	resolver         *net.Resolver
 
 	ws    *websocket.Conn
 	wsMu  sync.Mutex
@@ -131,8 +132,6 @@ type Session struct {
 	subscriberConn  chan struct{}
 	publisherConn   chan struct{}
 	wg              sync.WaitGroup
-
-	httpClient *http.Client
 }
 
 // New creates a new Goolom engine session.
@@ -175,6 +174,7 @@ func New(_ context.Context, cfg engine.Config) (engine.Session, error) {
 		roomURL:          roomURL,
 		telemetryReferer: telemetryReferer,
 		refresh:          cfg.Refresh,
+		resolver:         cfg.Resolver,
 		onData:           cfg.OnData,
 		reconnectCh:      make(chan struct{}, 1),
 		closeCh:          make(chan struct{}),
@@ -190,7 +190,6 @@ func New(_ context.Context, cfg engine.Config) (engine.Session, error) {
 			MinDelay:       defaultSendDelayLow,
 			MaxDelay:       defaultSendDelayMax,
 		},
-		httpClient: nil,
 	}, nil
 }
 

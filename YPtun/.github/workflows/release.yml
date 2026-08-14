@@ -54,7 +54,17 @@ jobs:
 
   build-windows:
     needs: release_version
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: amd64
+            jdk_arch: x64
+          - runner: windows-11-arm64
+            arch: arm64
+            jdk_arch: aarch64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     env:
@@ -83,7 +93,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          architecture: x64
+          architecture: ${{ matrix.jdk_arch }}
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -96,7 +106,7 @@ jobs:
         working-directory: olcbox
         run: |
           $env:OLCRTC_REPO="${{ github.workspace }}\olcrtc"
-          .\gradlew.bat "-Polcbox.version=$env:OLCBOX_VERSION" :desktopApp:packageReleaseExe :desktopApp:packageReleaseMsi :desktopApp:packageReleasePortableZip --stacktrace
+          .\gradlew.bat "-Polcbox.version=$env:OLCBOX_VERSION" :desktopApp:packageReleaseExe :desktopApp:packageReleaseMsi :desktopApp:packageReleasePortableExe --stacktrace
 
       - name: Prepare asset
         shell: pwsh
@@ -114,13 +124,13 @@ jobs:
               throw "Portable app image not found under $appRoot"
             }
             New-Item -ItemType Directory -Force $portableDir | Out-Null
-            $portableZip = Join-Path $portableDir "Olcbox-windows-amd64-portable.zip"
+            $portableZip = Join-Path $portableDir "Olcbox-windows-${{ matrix.arch }}-portable.zip"
             Compress-Archive -Path $appImage.FullName -DestinationPath $portableZip -Force
             $zip = Get-Item $portableZip
           }
-          Copy-Item $exe.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-amd64.exe"
-          Copy-Item $msi.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-amd64.msi"
-          Copy-Item $zip.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-amd64-portable.zip"
+          Copy-Item $exe.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-${{ matrix.arch }}.exe"
+          Copy-Item $msi.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-${{ matrix.arch }}.msi"
+          Copy-Item $zip.FullName "dist/Olcbox-${env:OLCBOX_VERSION}-windows-${{ matrix.arch }}-portable.zip"
 
       - name: Sign Windows release assets
         shell: pwsh
@@ -159,12 +169,12 @@ jobs:
             }
           }
 
-          $exeAsset = Get-ChildItem "dist/Olcbox-*-windows-amd64.exe" | Select-Object -First 1
-          $msiAsset = Get-ChildItem "dist/Olcbox-*-windows-amd64.msi" | Select-Object -First 1
+          $exeAsset = Get-ChildItem "dist/Olcbox-*-windows-${{ matrix.arch }}.exe" | Select-Object -First 1
+          $msiAsset = Get-ChildItem "dist/Olcbox-*-windows-${{ matrix.arch }}.msi" | Select-Object -First 1
           Sign-File $exeAsset.FullName
           Sign-File $msiAsset.FullName
 
-          $portableZip = (Get-ChildItem "dist/Olcbox-*-windows-amd64-portable.zip" | Select-Object -First 1).FullName
+          $portableZip = (Get-ChildItem "dist/Olcbox-*-windows-${{ matrix.arch }}-portable.zip" | Select-Object -First 1).FullName
           $portableDir = Join-Path $env:RUNNER_TEMP "olcbox-portable-sign"
           Remove-Item $portableDir -Recurse -Force -ErrorAction SilentlyContinue
           Expand-Archive -Path $portableZip -DestinationPath $portableDir
@@ -177,11 +187,11 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Olcbox-windows-amd64
+          name: Olcbox-windows-${{ matrix.arch }}
           path: |
-            olcbox/dist/Olcbox-*-windows-amd64.exe
-            olcbox/dist/Olcbox-*-windows-amd64.msi
-            olcbox/dist/Olcbox-*-windows-amd64-portable.zip
+            olcbox/dist/Olcbox-*-windows-${{ matrix.arch }}.exe
+            olcbox/dist/Olcbox-*-windows-${{ matrix.arch }}.msi
+            olcbox/dist/Olcbox-*-windows-${{ matrix.arch }}-portable.zip
 
   build-macos:
     needs: release_version

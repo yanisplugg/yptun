@@ -37,6 +37,7 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"net"
 
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
@@ -84,6 +85,7 @@ type Config struct {
 	// --- crypto & networking ---
 	KeyHex         string // 64-char hex (32 bytes) shared with the client
 	DNSServer      string // resolver used for target dials, e.g. "8.8.8.8:53"
+	Resolver       *net.Resolver
 	SOCKSProxyAddr string // optional outbound SOCKS5 proxy host
 	SOCKSProxyPort int    // optional outbound SOCKS5 proxy port
 	SOCKSProxyUser string // optional username for SOCKS5 proxy auth (RFC 1929)
@@ -129,6 +131,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Token:            s.cfg.Token,
 		KeyHex:           s.cfg.KeyHex,
 		DNSServer:        s.cfg.DNSServer,
+		Resolver:         s.cfg.Resolver,
 		SOCKSProxyAddr:   s.cfg.SOCKSProxyAddr,
 		SOCKSProxyPort:   s.cfg.SOCKSProxyPort,
 		SOCKSProxyUser:   s.cfg.SOCKSProxyUser,

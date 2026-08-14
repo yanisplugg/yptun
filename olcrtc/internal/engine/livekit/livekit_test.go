@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
+	lksdk "github.com/owenewans/owenlivekit/v2"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -66,20 +66,23 @@ func (r *fakeRoom) connectionState() lksdk.ConnectionState {
 }
 
 type fakeConnector struct {
-	mu        sync.Mutex
-	urls      []string
-	tokens    []string
-	callbacks []*lksdk.RoomCallback
-	rooms     []*fakeRoom
-	connected chan struct{}
-	err       error
+	mu           sync.Mutex
+	urls         []string
+	tokens       []string
+	callbacks    []*lksdk.RoomCallback
+	optionCounts []int
+	rooms        []*fakeRoom
+	connected    chan struct{}
+	err          error
 }
 
 func newFakeConnector() *fakeConnector {
 	return &fakeConnector{connected: make(chan struct{}, 8)}
 }
 
-func (c *fakeConnector) connect(url, token string, cb *lksdk.RoomCallback) (roomHandle, error) {
+func (c *fakeConnector) connect(
+	url, token string, cb *lksdk.RoomCallback, opts ...lksdk.ConnectOption,
+) (roomHandle, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.err != nil {
@@ -89,6 +92,7 @@ func (c *fakeConnector) connect(url, token string, cb *lksdk.RoomCallback) (room
 	c.urls = append(c.urls, url)
 	c.tokens = append(c.tokens, token)
 	c.callbacks = append(c.callbacks, cb)
+	c.optionCounts = append(c.optionCounts, len(opts))
 	c.rooms = append(c.rooms, room)
 	c.connected <- struct{}{}
 	return room, nil
@@ -116,6 +120,12 @@ func (c *fakeConnector) snapshot() ([]string, []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.urls...), append([]string(nil), c.tokens...)
+}
+
+func (c *fakeConnector) options() []int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]int(nil), c.optionCounts...)
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -182,6 +192,9 @@ func TestReconnectRefreshesCredentialsAndReplacesRoom(t *testing.T) {
 	}
 	if refreshes != 1 {
 		t.Fatalf("refreshes = %d, want 1", refreshes)
+	}
+	if got := connector.options(); len(got) != 2 || got[0] < 2 || got[0] != got[1] {
+		t.Fatalf("connect option counts = %v, want the same resolver options on reconnect", got)
 	}
 	oldRoom := connector.room(0)
 	oldRoom.mu.Lock()
@@ -294,7 +307,7 @@ func TestReconnectFailureRetriesUntilContextDone(t *testing.T) {
 	s := &Session{
 		url:   testOldURL,
 		token: testOldToken,
-		connectRoom: func(string, string, *lksdk.RoomCallback) (roomHandle, error) {
+		connectRoom: func(string, string, *lksdk.RoomCallback, ...lksdk.ConnectOption) (roomHandle, error) {
 			cancel()
 			return nil, errFakeConnect
 		},

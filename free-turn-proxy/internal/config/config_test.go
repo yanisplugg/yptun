@@ -36,7 +36,7 @@ func TestParseClient_Defaults(t *testing.T) {
 	if c.DNS.Mode != "auto" {
 		t.Errorf("DNS.Mode default: %q", c.DNS.Mode)
 	}
-	if c.VK.StreamsPerCred != defaultStreamsPerCache {
+	if c.VK.StreamsPerCred != DefaultStreamsPerCred {
 		t.Errorf("VK.StreamsPerCred default: %d", c.VK.StreamsPerCred)
 	}
 	if len(c.VK.Links) != 1 || c.VK.Links[0] != "abcdef" {
@@ -112,25 +112,6 @@ func TestParseClient_InvalidDNS(t *testing.T) {
 	_, err := ParseClient(args, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "invalid -dns-mode") {
 		t.Errorf("expected dns error, got %v", err)
-	}
-}
-
-func TestParseClient_BrowserSafari(t *testing.T) {
-	args := append(validClientArgs(), "-browser", "safari")
-	c, err := ParseClient(args, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.VK.Browser != BrowserSafari {
-		t.Errorf("VK.Browser = %q, want %q", c.VK.Browser, BrowserSafari)
-	}
-}
-
-func TestParseClient_BrowserInvalid(t *testing.T) {
-	args := append(validClientArgs(), "-browser", "opera")
-	_, err := ParseClient(args, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "invalid -browser") {
-		t.Errorf("expected browser error, got %v", err)
 	}
 }
 

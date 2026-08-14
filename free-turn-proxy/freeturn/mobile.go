@@ -94,7 +94,7 @@ func SetLogWriter(w LogWriter) {
 
 // freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
 // Bump it whenever the vendored core is updated; surfaced in the app's settings.
-const freeturnVersion = "1.8.0"
+const freeturnVersion = "2.1.1"
 
 // Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
 func Version() string { return freeturnVersion }
@@ -354,7 +354,15 @@ func run(ctx context.Context, cfg *config.Client, links []string, connected *ato
 		GetCreds:     udprelay.GetCredsFunc(getCreds),
 		ClientID:     cfg.ClientID,
 	}
-	return udprelay.Run(ctx, udpDtlsDialer, prov, logger, connectedStreams, udpParams, peer, cfg.Proxy.Listen, cfg.TURN.N)
+	// 2.1.0: Run no longer binds cfg.Proxy.Listen itself — the caller owns the local-peer conn (so a
+	// host can hand it an in-process pipe instead of a loopback socket) and Run closes it on ctx done.
+	// It also takes an OnTURNServer callback for the new route manager; that manager pokes OS routing
+	// tables, which we neither need nor are allowed to do from inside the VPN process — pass nil.
+	listenConn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp", cfg.Proxy.Listen)
+	if err != nil {
+		return fmt.Errorf("udprelay listen %s: %w", cfg.Proxy.Listen, err)
+	}
+	return udprelay.Run(ctx, udpDtlsDialer, prov, logger, connectedStreams, nil, udpParams, peer, listenConn, cfg.TURN.N)
 }
 
 // buildProvider mirrors cmd/client/main.go, but builds one VK provider per link and fans streams

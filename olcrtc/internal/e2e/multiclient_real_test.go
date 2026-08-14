@@ -66,7 +66,7 @@ func TestRealMultiClientConcurrent(t *testing.T) {
 			RoomURL:          roomURL,
 			ChannelID:        channelID,
 			KeyHex:           testKeyHex,
-			DNSServer:        localDNSServer,
+			DNSServer:        *realE2EDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
 			Liveness:         liveness,
 		})
@@ -145,7 +145,7 @@ func startNamedClient(ctx context.Context, t *testing.T, spec clientSpec) namedC
 			KeyHex:           testKeyHex,
 			DeviceID:         spec.deviceID,
 			LocalAddr:        socksAddr,
-			DNSServer:        localDNSServer,
+			DNSServer:        *realE2EDNSServer,
 			TransportOptions: e2eTransportOptions(spec.transport),
 			Liveness:         spec.liveness,
 		}, func() { close(ready) })

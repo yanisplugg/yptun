@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"net"
 	"slices"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,6 +16,7 @@ import (
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/openlibrecommunity/olcrtc/internal/server"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
@@ -190,6 +189,7 @@ type Config struct {
 	SOCKSUser             string
 	SOCKSPass             string
 	DNSServer             string
+	Resolver              *net.Resolver
 	SOCKSProxyAddr        string
 	SOCKSProxyPort        int
 	SOCKSProxyUser        string
@@ -390,7 +390,7 @@ func validateCommon(cfg Config) error {
 	if cfg.KeyHex == "" {
 		return ErrKeyRequired
 	}
-	if cfg.DNSServer == "" {
+	if cfg.DNSServer == "" && cfg.Resolver == nil {
 		return ErrDNSServerRequired
 	}
 	return nil
@@ -601,7 +601,7 @@ func isLoopbackListenHost(host string) bool {
 func Run(ctx context.Context, cfg Config) error {
 	cfg = ApplyTransportDefaults(cfg)
 	cfg = ApplyLivenessDefaults(cfg)
-	configureDefaultResolver(cfg.DNSServer)
+	cfg.Resolver = resolverFor(cfg.Resolver, cfg.DNSServer)
 	roomURL := cfg.RoomID
 	liveness, err := livenessConfig(cfg)
 	if err != nil {
@@ -625,69 +625,11 @@ func Run(ctx context.Context, cfg Config) error {
 	return run(ctx)
 }
 
-// dnsProbeDomain is a stable, widely-resolvable name used to test whether a candidate UDP/53 resolver
-// actually answers. A plain dial can't tell — a UDP "connect" succeeds even to a blackholed server —
-// so we send a real query and check for a reply.
-const dnsProbeDomain = "dns.google"
-
-// configureDefaultResolver points net.DefaultResolver at the configured upstream DNS. dnsServer may be
-// a single "ip:port" OR a comma-separated list tried in PREFERENCE order. On restrictive IPv4-only
-// mobile networks the international resolvers (Cloudflare 1.1.1.1, Google 8.8.8.8) are frequently
-// UDP/53-blocked while a RU resolver (Yandex 77.88.8.8) still answers — pinning a single dead server
-// left OLCRTC unable to resolve provider hostnames ("doesn't work on IPv4-only"). So on first use we
-// probe the candidates with a real query and stick to the first that responds.
-func configureDefaultResolver(dnsServer string) {
-	servers := make([]string, 0, 4)
-	for _, s := range strings.Split(dnsServer, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			servers = append(servers, s)
-		}
+func resolverFor(resolver *net.Resolver, dnsServer string) *net.Resolver {
+	if resolver != nil {
+		return resolver
 	}
-	if len(servers) == 0 {
-		return
-	}
-
-	dialServer := func(ctx context.Context, network, server string) (net.Conn, error) {
-		d := net.Dialer{Timeout: 3 * time.Second}
-		return d.DialContext(ctx, network, server)
-	}
-
-	var (
-		probeOnce sync.Once
-		picked    string
-	)
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			probeOnce.Do(func() { picked = pickReachableDNS(servers, dialServer) })
-			server := picked
-			if server == "" {
-				server = servers[0] // none probed clean — fall back to the first listed
-			}
-			return dialServer(ctx, network, server)
-		},
-	}
-}
-
-// pickReachableDNS returns the first server that answers a real probe query (over the same dialer the
-// resolver will use), or "" when none answered (the caller then falls back to the first listed server).
-func pickReachableDNS(servers []string, dial func(context.Context, string, string) (net.Conn, error)) string {
-	for _, server := range servers {
-		srv := server
-		probe := &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				return dial(ctx, network, srv)
-			},
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, err := probe.LookupHost(ctx, dnsProbeDomain)
-		cancel()
-		if err == nil {
-			return srv
-		}
-	}
-	return ""
+	return protect.NewResolver(dnsServer)
 }
 
 func runOnce(
@@ -707,6 +649,7 @@ func runOnce(
 			ChannelID:        cfg.ChannelID,
 			KeyHex:           cfg.KeyHex,
 			DNSServer:        cfg.DNSServer,
+			Resolver:         cfg.Resolver,
 			SOCKSProxyAddr:   cfg.SOCKSProxyAddr,
 			SOCKSProxyPort:   cfg.SOCKSProxyPort,
 			SOCKSProxyUser:   cfg.SOCKSProxyUser,
@@ -740,6 +683,7 @@ func runOnce(
 			KeyHex:           cfg.KeyHex,
 			LocalAddr:        fmt.Sprintf("%s:%d", cfg.SOCKSHost, cfg.SOCKSPort),
 			DNSServer:        cfg.DNSServer,
+			Resolver:         cfg.Resolver,
 			SOCKSUser:        cfg.SOCKSUser,
 			SOCKSPass:        cfg.SOCKSPass,
 			TransportOptions: opts,
@@ -812,7 +756,7 @@ func ValidateGen(cfg Config) error {
 	if !slices.Contains(enginebuiltin.Available(), cfg.Auth) {
 		return fmt.Errorf("%w: %s (available: %v)", ErrUnsupportedCarrier, cfg.Auth, enginebuiltin.Available())
 	}
-	if cfg.DNSServer == "" {
+	if cfg.DNSServer == "" && cfg.Resolver == nil {
 		return ErrDNSServerRequired
 	}
 	if cfg.Amount < 1 {
@@ -853,7 +797,7 @@ func genRetry(ctx context.Context, fn func(context.Context) error) error {
 
 // Gen creates cfg.Amount rooms for the configured auth provider and writes each room ID to out.
 func Gen(ctx context.Context, cfg Config, out func(string)) error {
-	configureDefaultResolver(cfg.DNSServer)
+	cfg.Resolver = resolverFor(cfg.Resolver, cfg.DNSServer)
 	p, err := auth.Get(cfg.Auth)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrUnsupportedCarrier, cfg.Auth)
@@ -866,7 +810,9 @@ func Gen(ctx context.Context, cfg Config, out func(string)) error {
 		var roomID string
 		err := genRetry(ctx, func(ctx context.Context) error {
 			var genErr error
-			roomID, genErr = creator.CreateRoom(ctx, auth.Config{Name: names.Generate(), DNSServer: cfg.DNSServer})
+			roomID, genErr = creator.CreateRoom(ctx, auth.Config{
+				Name: names.Generate(), DNSServer: cfg.DNSServer, Resolver: cfg.Resolver,
+			})
 			if genErr != nil {
 				return fmt.Errorf("CreateRoom: %w", genErr)
 			}

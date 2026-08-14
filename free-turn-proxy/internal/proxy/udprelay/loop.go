@@ -264,6 +264,9 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	}
 	relayConn := stream.Relay
 	deps.log().Debugf("[STREAM %d] TURN server IP: %s", streamID, stream.ServerUDPAddr.IP)
+	if deps.OnTURNServer != nil {
+		deps.OnTURNServer(stream.ServerUDPAddr.IP)
+	}
 
 	if params.ObfTiming > 0 {
 		relayConn = shape.WrapPacketConn(relayConn, params.ObfTiming)

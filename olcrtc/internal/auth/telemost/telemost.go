@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/openlibrecommunity/olcrtc/internal/auth"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 )
 
 const roomURLPrefix = "https://telemost.yandex.ru/j/"
@@ -33,7 +34,11 @@ func (Provider) Issue(ctx context.Context, cfg auth.Config) (auth.Credentials, e
 	if !strings.HasPrefix(roomURL, "https://") {
 		roomURL = roomURLPrefix + roomURL
 	}
-	info, err := GetConnectionInfo(ctx, roomURL, cfg.Name)
+	resolver := cfg.Resolver
+	if resolver == nil {
+		resolver = protect.NewResolver(cfg.DNSServer)
+	}
+	info, err := GetConnectionInfo(ctx, roomURL, cfg.Name, resolver)
 	if err != nil {
 		return auth.Credentials{}, fmt.Errorf("get connection info: %w", err)
 	}

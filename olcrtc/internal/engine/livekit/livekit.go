@@ -12,14 +12,16 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	protoLogger "github.com/livekit/protocol/logger"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
+	lksdk "github.com/owenewans/owenlivekit/v2"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -103,15 +105,22 @@ func (r *sdkRoom) connectionState() lksdk.ConnectionState {
 	return r.room.ConnectionState()
 }
 
-type connectRoomFunc func(url, token string, callback *lksdk.RoomCallback) (roomHandle, error)
+type connectRoomFunc func(
+	url, token string, callback *lksdk.RoomCallback, opts ...lksdk.ConnectOption,
+) (roomHandle, error)
 
-func connectSDKRoom(url, token string, callback *lksdk.RoomCallback) (roomHandle, error) {
+func connectSDKRoom(
+	url, token string, callback *lksdk.RoomCallback, opts ...lksdk.ConnectOption,
+) (roomHandle, error) {
+	opts = append([]lksdk.ConnectOption{
+		lksdk.WithAutoSubscribe(true),
+		lksdk.WithLogger(protoLogger.GetDiscardLogger()),
+	}, opts...)
 	room, err := lksdk.ConnectToRoomWithToken(
 		url,
 		token,
 		callback,
-		lksdk.WithAutoSubscribe(true),
-		lksdk.WithLogger(protoLogger.GetDiscardLogger()),
+		opts...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to livekit room: %w", err)
@@ -126,6 +135,7 @@ type Session struct {
 	name            string
 	refresh         func(ctx context.Context) (engine.Credentials, error)
 	connectRoom     connectRoomFunc
+	connectOpts     []lksdk.ConnectOption
 	room            roomHandle
 	roomMu          sync.RWMutex
 	onData          func([]byte)
@@ -158,12 +168,30 @@ func New(ctx context.Context, cfg engine.Config) (engine.Session, error) {
 		return nil, ErrTokenRequired
 	}
 	_, cancel := context.WithCancel(ctx)
+	httpClient := protect.NewHTTPClient(cfg.Resolver)
+	wsDialer := protect.NewWebSocketDialer(0, cfg.Resolver)
+	connectOpts := []lksdk.ConnectOption{
+		lksdk.WithConnectHTTPClient(httpClient),
+		lksdk.WithWebSocketDialer(&wsDialer),
+	}
+	if protect.Protector != nil || cfg.Resolver != nil || runtime.GOOS == "android" {
+		pnet, err := protect.NewProtectedNet(cfg.Resolver)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("protected net: %w", err)
+		}
+		connectOpts = append(connectOpts, lksdk.WithSettingEngineFunc(func(settings *webrtc.SettingEngine) {
+			settings.SetNet(pnet)
+			settings.SetICEProxyDialer(protect.NewProxyDialer(cfg.Resolver))
+		}))
+	}
 	return &Session{
 		url:         cfg.URL,
 		token:       cfg.Token,
 		name:        cfg.Name,
 		refresh:     cfg.Refresh,
 		connectRoom: connectSDKRoom,
+		connectOpts: connectOpts,
 		onData:      cfg.OnData,
 		reconnectCh: make(chan struct{}, 1),
 		closeCh:     make(chan struct{}),
@@ -218,7 +246,7 @@ func (s *Session) connectSession(_ context.Context) error {
 		},
 	}
 
-	room, err := s.connectRoom(s.url, s.token, roomCB)
+	room, err := s.connectRoom(s.url, s.token, roomCB, s.connectOpts...)
 	if err != nil {
 		return fmt.Errorf("connect to room: %w", err)
 	}

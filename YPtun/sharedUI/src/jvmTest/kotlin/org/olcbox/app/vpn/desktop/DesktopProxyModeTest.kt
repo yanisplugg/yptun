@@ -6,6 +6,9 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopProxyModeTest {
@@ -65,7 +68,11 @@ class DesktopProxyModeTest {
             val args = command.args(Path.of("/tmp/client.yaml"))
             val yaml = command.yaml()
 
-            assertEquals(listOf("/tmp/olcrtc", "/tmp/client.yaml"), args)
+            // Path.toString() is OS-dependent (backslashes on Windows) — compare the same way.
+            assertEquals(
+                listOf(Path.of("/tmp/olcrtc").toString(), Path.of("/tmp/client.yaml").toString()),
+                args
+            )
             assertContains(yaml, "mode: cnc")
             assertContains(yaml, "provider: '${OlcRtcCommand.desktopProviderArg(provider)}'")
             assertContains(yaml, "transport: '$expectedTransport'")
@@ -96,7 +103,7 @@ class DesktopProxyModeTest {
 
         assertContains(command, "transport: '${LocationConfig.TRANSPORT_DATACHANNEL}'")
         assertTrue("vp8:" !in command)
-        assertContains(command, "data: '/tmp/olcbox-data'")
+        assertContains(command, "data: '${Path.of("/tmp/olcbox-data")}'")
     }
 
     @Test
@@ -151,6 +158,61 @@ class DesktopProxyModeTest {
     }
 
     @Test
+    fun linuxTunConfigCarriesSocksCredentialsWhenSet() {
+        // The core's SOCKS inbound is started with these; without them in the yaml it rejects every
+        // connection from hev-socks5-tunnel and TUN mode looks dead.
+        val config = LinuxTunController.configContent(
+            socksPort = 10810,
+            socksUsername = "user",
+            socksPassword = "it's-secret"
+        )
+
+        assertContains(config, "username: 'user'")
+        // YAML single-quoted scalars escape a quote by doubling it.
+        assertContains(config, "password: 'it''s-secret'")
+    }
+
+    @Test
+    fun linuxTunConfigOmitsSocksCredentialsWhenUnset() {
+        val config = LinuxTunController.configContent(socksPort = 10810)
+
+        assertFalse(config.contains("username:"))
+        assertFalse(config.contains("password:"))
+    }
+
+    @Test
+    fun trustTunnelKeepsOnlyTheEndpointTableFromTheWizardDocument() {
+        // The wizard defaults to a TUN listener; keeping it would make the client create an
+        // interface and demand root, so everything after [endpoint] has to be dropped.
+        val document = """
+            loglevel = "info"
+
+            # a comment
+            [endpoint]
+            hostname = "vpn.example.com"
+            addresses = ["1.2.3.4:443", "[2001:db8::1]:443"]
+            certificate = ""
+
+            [listener]
+            [listener.tun]
+            mtu_size = 1350
+        """.trimIndent()
+
+        val endpoint = DesktopTrustTunnel.extractEndpointTable(document)
+
+        assertNotNull(endpoint)
+        assertTrue(endpoint.startsWith("[endpoint]"))
+        assertContains(endpoint, "hostname = \"vpn.example.com\"")
+        assertFalse(endpoint.contains("listener"))
+        assertFalse(endpoint.contains("mtu_size"))
+    }
+
+    @Test
+    fun trustTunnelReportsNoEndpointTableWhenAbsent() {
+        assertNull(DesktopTrustTunnel.extractEndpointTable("loglevel = \"info\"\n"))
+    }
+
+    @Test
     fun olcRtcCommandUsesDesktopWbStreamProviderAlias() {
         listOf(LocationConfig.PROVIDER_WB_STREAM, "wbstream").forEach { provider ->
             val command = OlcRtcCommand(
@@ -195,13 +257,19 @@ class DesktopProxyModeTest {
     }
 
     @Test
-    fun windowsProxyCommandsBackupShapeIsRestorable() {
-        val enable = WindowsProxyController.enableCommands("http://127.0.0.1:10809/proxy.pac")
-        assertEquals("reg", enable.first().first())
-        assertContains(enable.flatten(), "AutoConfigURL")
-        assertContains(enable.flatten(), "http://127.0.0.1:10809/proxy.pac")
+    fun windowsProxyHttpEnableSetsFixedProxyAndClearsPac() {
+        val edits = WindowsProxyController.enableHttpEdits("127.0.0.1:10812")
 
-        val restore = WindowsProxyController.restoreCommands(
+        // Reliable WinINET path: fixed ProxyServer + ProxyEnable=1, and any stale PAC cleared.
+        assertContains(edits, RegistryEdit.SetString("ProxyServer", "127.0.0.1:10812"))
+        assertContains(edits, RegistryEdit.SetDword("ProxyEnable", 1))
+        assertContains(edits, RegistryEdit.Delete("AutoConfigURL"))
+        assertTrue(edits.any { it.name == "ProxyOverride" && it is RegistryEdit.SetString })
+    }
+
+    @Test
+    fun windowsProxyRestoreReproducesOriginalRegistry() {
+        val edits = WindowsProxyController.restoreEdits(
             WindowsProxyState(
                 proxyEnable = "0x1",
                 proxyServer = "127.0.0.1:8888",
@@ -210,22 +278,28 @@ class DesktopProxyModeTest {
             )
         )
 
-        assertContains(restore.flatten(), "ProxyEnable")
-        assertContains(restore.flatten(), "ProxyServer")
-        assertContains(restore.flatten(), "ProxyOverride")
-        assertContains(restore.flatten(), "AutoConfigURL")
-        assertContains(restore.flatten(), "delete")
+        // The DWORD comes back as a number, not the "0x1" text the registry read produced.
+        assertContains(edits, RegistryEdit.SetDword("ProxyEnable", 1))
+        assertContains(edits, RegistryEdit.SetString("ProxyServer", "127.0.0.1:8888"))
+        assertContains(edits, RegistryEdit.SetString("ProxyOverride", "<local>"))
+        // A value that was absent before must be DELETED, not written back empty.
+        assertContains(edits, RegistryEdit.Delete("AutoConfigURL"))
     }
 
     @Test
-    fun windowsProxyRefreshCommandUsesFullyQualifiedWinInetSignature() {
-        val refresh = WindowsProxyController.refreshCommand()
-        val script = refresh.last()
-
-        assertEquals("powershell.exe", refresh.first())
-        assertContains(script, "System.Runtime.InteropServices.DllImport")
-        assertContains(script, "System.IntPtr")
-        assertContains(script, "InternetSetOption")
+    fun windowsProxyStateRecognisesOurOwnLoopbackProxy() {
+        // Guards the anti-poisoning backup: a loopback proxy is "ours", so it must never be saved as
+        // the value to restore to (that would strand the machine offline on disable).
+        assertTrue(
+            WindowsProxyState("0x1", "127.0.0.1:10808", "<local>", null).looksLikeOurs()
+        )
+        assertTrue(
+            WindowsProxyState("0x1", null, null, "http://127.0.0.1:9/proxy.pac").looksLikeOurs()
+        )
+        assertTrue(
+            !WindowsProxyState("0x1", "corp-proxy.example:3128", "<local>", null).looksLikeOurs()
+        )
+        assertTrue(!WindowsProxyState("0x0", null, null, null).looksLikeOurs())
     }
 
     @Test
@@ -248,13 +322,26 @@ class DesktopProxyModeTest {
             socksPort = 10812
         )
 
-        assertContains(command, "C:/Olcbox/bin/tun2socks-windows-amd64.exe")
+        assertContains(command, Path.of("C:/Olcbox/bin/tun2socks-windows-amd64.exe").toString())
         assertContains(command, "--device")
-        assertContains(command, "Olcbox")
+        assertContains(command, WindowsTunController.TUN_NAME)
         assertContains(command, "--proxy")
         assertContains(command, "socks5://127.0.0.1:10812")
         assertContains(command, "--mtu")
         assertContains(command, "1500")
+    }
+
+    @Test
+    fun windowsTunCommandCarriesTheSocksInboundCredentials() {
+        // The core's SOCKS inbound requires auth; a credential-less bridge is rejected outright.
+        val command = WindowsTunController.tun2SocksCommand(
+            tun2SocksBinary = Path.of("C:/Olcbox/bin/tun2socks-windows-amd64.exe"),
+            socksPort = 10812,
+            socksUsername = "olcbox",
+            socksPassword = "p@ss word"
+        )
+
+        assertContains(command, "socks5://olcbox:p%40ss%20word@127.0.0.1:10812")
     }
 
     @Test

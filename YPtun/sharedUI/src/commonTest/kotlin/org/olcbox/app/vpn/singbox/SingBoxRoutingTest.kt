@@ -77,7 +77,9 @@ class SingBoxRoutingTest {
         assertEquals(2, sets.size)
         val geosite = sets.first { it["tag"]!!.jsonPrimitive.content == "geosite-ru" }
         assertEquals("remote", geosite["type"]!!.jsonPrimitive.content)
-        assertEquals("direct", geosite["download_detour"]!!.jsonPrimitive.content)
+        // Through the tunnel, not direct — the .srs host is censored where this app is used, and a
+        // failed initial fetch aborts the whole core. See SingBoxRuleSetDetourTest.
+        assertEquals(SingBoxRouting.PROXY_TAG, geosite["download_detour"]!!.jsonPrimitive.content)
         assertTrue(geosite["url"]!!.jsonPrimitive.content.endsWith("geosite-ru.srs"))
         val geoip = sets.first { it["tag"]!!.jsonPrimitive.content == "geoip-cn" }
         assertTrue(geoip["url"]!!.jsonPrimitive.content.endsWith("geoip-cn.srs"))
