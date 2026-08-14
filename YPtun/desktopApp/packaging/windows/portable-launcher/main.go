@@ -22,8 +22,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -197,13 +199,14 @@ var (
 	user32            = syscall.NewLazyDLL("user32.dll")
 	comctl32          = syscall.NewLazyDLL("comctl32.dll")
 	createMutexW      = kernel32.NewProc("CreateMutexW")
-	getLastError      = kernel32.NewProc("GetLastError")
 	messageBoxW       = user32.NewProc("MessageBoxW")
 	createWindowExW   = user32.NewProc("CreateWindowExW")
 	destroyWindow     = user32.NewProc("DestroyWindow")
 	sendMessageW      = user32.NewProc("SendMessageW")
-	updateWindow      = user32.NewProc("UpdateWindow")
 	getSystemMetrics  = user32.NewProc("GetSystemMetrics")
+	peekMessageW      = user32.NewProc("PeekMessageW")
+	translateMessage  = user32.NewProc("TranslateMessage")
+	dispatchMessageW  = user32.NewProc("DispatchMessageW")
 	initCommonControl = comctl32.NewProc("InitCommonControlsEx")
 )
 
@@ -222,33 +225,112 @@ const (
 	smCxScreen = 0
 	smCyScreen = 1
 
+	pmRemove = 0x0001
+
 	mbIconError = 0x00000010
 )
 
 // claimSingleInstance returns false when another launcher is already running (so this one must not
 // unpack on top of it).
+//
+// The "already exists" answer is taken from the error CreateMutexW itself returned. Asking
+// GetLastError afterwards, through a second call, is unreliable: anything the Go runtime does in
+// between (it is free to switch OS threads) can overwrite the thread's last error — which is how
+// the first version managed to decide a first launch was a duplicate and exit without a word.
 func claimSingleInstance() bool {
 	name, err := syscall.UTF16PtrFromString("Local\\YPtunPortableLauncher")
 	if err != nil {
 		return true
 	}
-	handle, _, _ := createMutexW.Call(0, 1, uintptr(unsafe.Pointer(name)))
+	handle, _, callErr := createMutexW.Call(0, 1, uintptr(unsafe.Pointer(name)))
 	if handle == 0 {
 		return true
 	}
-	last, _, _ := getLastError.Call()
-	return last != errAlreadyExists
+	if errno, ok := callErr.(syscall.Errno); ok && uintptr(errno) == errAlreadyExists {
+		return false
+	}
+	return true
 }
 
-type progressBar struct{ hwnd uintptr }
+// progressBar is driven by a channel, never by cross-thread window calls.
+//
+// A window belongs to the thread that created it, and SendMessage from any OTHER thread blocks
+// until that thread pumps its message queue. Go moves goroutines between OS threads freely, so the
+// first version — create the window here, SendMessage from the extraction loop — deadlocked on the
+// very first file and the portable just hung with no window at all. Everything Win32 now happens on
+// one locked OS thread that runs a real message pump; the extraction loop only sends numbers.
+type progressBar struct {
+	updates chan int
+	done    chan struct{}
+}
 
-// showProgress puts a bare progress bar on screen for the first-run unpack. It is a predefined
-// control class used as a top-level window, so there is no window class to register and no message
-// loop to run — and if any of it fails, unpacking simply proceeds without it.
 func showProgress(total int) *progressBar {
+	p := &progressBar{}
 	if total <= 0 {
-		return &progressBar{}
+		return p
 	}
+	p.updates = make(chan int, 64)
+	p.done = make(chan struct{})
+	ready := make(chan struct{})
+	go p.run(total, ready)
+	<-ready
+	return p
+}
+
+func (p *progressBar) run(total int, ready chan struct{}) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer close(p.done)
+
+	hwnd := createProgressWindow()
+	close(ready)
+	if hwnd != 0 {
+		sendMessageW.Call(hwnd, pbmSetRange32, 0, uintptr(total))
+	}
+	defer func() {
+		if hwnd != 0 {
+			destroyWindow.Call(hwnd)
+		}
+	}()
+
+	var msg [48]byte // MSG is 48 bytes on amd64/arm64; we never read its fields
+	for {
+		select {
+		case done, ok := <-p.updates:
+			if !ok {
+				return
+			}
+			if hwnd != 0 {
+				sendMessageW.Call(hwnd, pbmSetPos, uintptr(done), 0)
+			}
+		default:
+		}
+		// Keep the bar painting without ever blocking on the queue.
+		for {
+			got, _, _ := peekMessageW.Call(uintptr(unsafe.Pointer(&msg[0])), 0, 0, 0, pmRemove)
+			if got == 0 {
+				break
+			}
+			translateMessage.Call(uintptr(unsafe.Pointer(&msg[0])))
+			dispatchMessageW.Call(uintptr(unsafe.Pointer(&msg[0])))
+		}
+		select {
+		case done, ok := <-p.updates:
+			if !ok {
+				return
+			}
+			if hwnd != 0 {
+				sendMessageW.Call(hwnd, pbmSetPos, uintptr(done), 0)
+			}
+		case <-time.After(30 * time.Millisecond):
+		}
+	}
+}
+
+// createProgressWindow uses a predefined control class as a top-level window, so there is no window
+// class to register and no WndProc callback. Returns 0 if anything fails — unpacking then simply
+// proceeds without a bar.
+func createProgressWindow() uintptr {
 	var icc struct {
 		size, flags uint32
 	}
@@ -258,7 +340,7 @@ func showProgress(total int) *progressBar {
 
 	class, err := syscall.UTF16PtrFromString("msctls_progress32")
 	if err != nil {
-		return &progressBar{}
+		return 0
 	}
 	empty, _ := syscall.UTF16PtrFromString("")
 	const w, h = 360, 24
@@ -272,28 +354,26 @@ func showProgress(total int) *progressBar {
 		(screenW-w)/2, (screenH-h)/2, w, h,
 		0, 0, 0, 0,
 	)
-	if hwnd == 0 {
-		return &progressBar{}
-	}
-	sendMessageW.Call(hwnd, pbmSetRange32, 0, uintptr(total))
-	updateWindow.Call(hwnd)
-	return &progressBar{hwnd: hwnd}
+	return hwnd
 }
 
 func (p *progressBar) set(done int) {
-	if p.hwnd == 0 {
+	if p.updates == nil {
 		return
 	}
-	sendMessageW.Call(p.hwnd, pbmSetPos, uintptr(done), 0)
-	updateWindow.Call(p.hwnd)
+	select {
+	case p.updates <- done:
+	default: // the bar is behind; dropping a tick is better than slowing the unpack
+	}
 }
 
 func (p *progressBar) close() {
-	if p.hwnd == 0 {
+	if p.updates == nil {
 		return
 	}
-	destroyWindow.Call(p.hwnd)
-	p.hwnd = 0
+	close(p.updates)
+	<-p.done
+	p.updates = nil
 }
 
 func fatal(message string) {
