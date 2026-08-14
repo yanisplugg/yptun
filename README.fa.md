@@ -138,7 +138,7 @@
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.0.0 -Polcbox.versionCode=287
+  -Polcbox.version=3.2.1 -Polcbox.versionCode=322
 ```
 
 <div dir="rtl">

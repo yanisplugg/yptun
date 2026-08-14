@@ -2,7 +2,7 @@
 
 # YPtun
 
-### Fast censorship-resistant VPN · Android
+### Fast censorship-resistant VPN · Android and Windows
 
 *VLESS · Reality · XHTTP over **Xray** and **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **DNSTT** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, which disguises traffic as a video call.*
 
@@ -32,21 +32,21 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 
 > Built for places where the internet fights back — Russia, Iran, and any country where sites vanish without warning.
 
-> **Desktop is coming** — native Windows and Linux builds are in the works.
+> **Windows is here** — an installer and a portable build as a single `.exe`, x64 and native ARM64. The same app and the same engines as on the phone: subscriptions, routing profiles, cascade, VK-TURN, olcRTC, DNSTT, Trust Tunnel.
 
 ---
 
-## What's new in 3.0.0
+## What's new in 3.2.1
 
 | | |
 |---|---|
-| **sing-box core upgraded to 1.13** | Latest fixes and compatibility. Most importantly, Hysteria2 and NaïveProxy now build **natively** inside sing-box, with no separate bridges. |
-| **Native Hysteria2** | Fully moved to sing-box's native outbound (auth, up/down, Salamander obfs, port hopping) — faster and more robust; the old external module is gone. |
-| **NaïveProxy** | A new protocol: it disguises traffic as ordinary Chrome HTTP/2 (Chromium cronet engine). Useful where connections are cut by signature (DPI). |
-| **Transparent proxy (tproxy)** | A new connection mode: kernel-level interception (TCP + UDP) with no TUN. Root only (needs `CAP_NET_ADMIN`). |
-| **Home-screen widgets** | Two themed widgets: a toggle, and a status widget with `↓/↑` speed, a `‹ ›` server switcher and an Auto button. They connect/switch straight from the service — **without opening the app**; the Auto button now runs in the background too and responds instantly. |
-| **Build protection + delta updates** | A warning if the APK was re-signed by someone else (repackaged/ad-injected build). Updates download as ~1 MB patches instead of the full APK. |
-| **VK-TURN cores updated** | freeturn 1.6.0 and WDTT — refreshed VK auth (`vkcalls` mode), captcha and fingerprints. |
+| **Windows client** | Installer (en/ru/zh/fa) and a portable build as a **single `.exe`**, x64 and native ARM64. Two modes: "Tunnel" — its own network adapter, like on the phone — and "Proxy" — a local SOCKS5 + HTTP endpoint that needs no administrator rights. |
+| **Per-process split** | The desktop counterpart of split tunneling: chosen programs go around the tunnel — or, the other way round, only they go through it. |
+| **Tray menu + global hotkey** | Status, connect, server switching, "My IP" and settings straight from the tray. A global shortcut toggles the VPN from any application. |
+| **Cores updated** | xray-core 26.7.28, sing-box 1.13.18, freeturn 2.1.1, olcRTC. QUIC (Hysteria2 / TUIC / DoQ / HTTP3) is now built on every platform. |
+| **FakeDNS no longer leaks past the tunnel** | A synthetic FakeDNS address could match a "private addresses → direct" rule, so the connection left the tunnel and apps reported an untrusted certificate. The FakeDNS table also survives a reconnect now. |
+| **Routing** | Rule-sets are fetched through the tunnel instead of directly, and `asn:` works on the desktop too. |
+| **Desktop delta updates** | An update downloads a few megabytes instead of the whole installer. |
 
 ---
 
@@ -130,7 +130,7 @@ Everything needed is already vendored (`cores`, `olcrtc`, `sing-box`, `awgproxy`
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.0.0 -Polcbox.versionCode=287
+  -Polcbox.version=3.2.1 -Polcbox.versionCode=322
 ```
 
 APKs land in `YPtun/androidApp/build/outputs/apk/release/`.
@@ -192,8 +192,8 @@ amneziawg-go/     AmneziaWG implementation                         (vendored)
 - [x] Android release
 - [x] AmneziaWG, VK-TURN and DNSTT engines
 - [x] Routing profiles (Happ-compatible) + ASN
-- [ ] **Windows** build — *soon*
-- [ ] **Linux** build — *soon*
+- [x] **Windows** build (x64 and ARM64)
+- [ ] **Linux** build — *in progress*
 
 > The shared engine already runs on the JVM (`desktopApp`), so desktop is next.
 
