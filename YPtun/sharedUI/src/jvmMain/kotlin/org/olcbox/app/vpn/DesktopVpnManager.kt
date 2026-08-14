@@ -25,7 +25,9 @@ import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.ui.features.locations.components.SpeedSample
+import org.olcbox.app.vpn.desktop.ConflictingVpnDetector
 import org.olcbox.app.vpn.desktop.DesktopEngineController
+import org.olcbox.app.vpn.desktop.DesktopHttpProxyBridge
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopProxyController
 import org.olcbox.app.vpn.desktop.DesktopTrafficStats
@@ -120,6 +122,31 @@ class DesktopVpnManager private constructor(
 
     /** The mode actually used by the current/last connection — drives the matching cleanup. */
     private var activeDesktopMode: DesktopMode? = null
+
+    /** Proxy mode only: the HTTP front the OS system proxy points at (see [startSystemProxy]). */
+    private var httpProxyBridge: DesktopHttpProxyBridge? = null
+
+    /**
+     * Set while a connect is waiting for the user to decide what to do about another VPN client that
+     * is already running (see [resolveConflictingVpnClients]). The UI shows it and answers.
+     */
+    private val _vpnConflict = MutableStateFlow<VpnConflictPrompt?>(null)
+    val vpnConflict: StateFlow<VpnConflictPrompt?> = _vpnConflict.asStateFlow()
+
+    /** Products the user chose to keep this session — never asked about again until they change. */
+    private val ignoredVpnConflicts = mutableSetOf<String>()
+
+    /**
+     * "Another VPN client is running" — the names, and the two answers the UI can give.
+     * [close] terminates them and continues the connect; [ignore] connects anyway.
+     */
+    class VpnConflictPrompt internal constructor(
+        val names: List<String>,
+        private val decision: CompletableDeferred<Boolean>,
+    ) {
+        fun close() { decision.complete(true) }
+        fun ignore() { decision.complete(false) }
+    }
 
     override fun needsPermission(): Boolean = false
 
@@ -559,6 +586,10 @@ class DesktopVpnManager private constructor(
             return
         }
 
+        // Another VPN client owning the adapter (or the system proxy) is the one failure mode that
+        // looks exactly like a broken YPtun. Ask about it BEFORE anything is started.
+        resolveConflictingVpnClients()
+
         try {
             val ready = CompletableDeferred<Unit>()
             val startupFailure = CompletableDeferred<String>()
@@ -568,7 +599,19 @@ class DesktopVpnManager private constructor(
                 DesktopMode.current()
             }
             activeDesktopMode = desktopMode
-            val socksSettings = _socksProxySettings.value.normalized()
+            // Proxy mode is a SERVER the OS and other apps point at, and neither WinINET's system
+            // proxy nor a browser can answer a SOCKS auth challenge — configured credentials there
+            // mean every request is refused at the CONNECT stage ("connects, carries nothing").
+            // Android forces no-auth in Proxy mode for exactly this reason; TUN keeps its private
+            // credentials (that listener is internal to the tun2socks/front bridge).
+            val socksSettings = _socksProxySettings.value.normalized().let {
+                if (desktopMode == DesktopMode.SystemProxy) it.copy(username = "", password = "") else it
+            }
+            if (desktopMode == DesktopMode.SystemProxy &&
+                _socksProxySettings.value.normalized().username.isNotBlank()
+            ) {
+                addLog("Proxy mode: local SOCKS runs without authentication (browsers and the Windows system proxy cannot authenticate)")
+            }
 
             if (desktopMode == DesktopMode.WindowsTun) {
                 windowsTunController.ensureAdministratorOrRequestRestart()
@@ -733,6 +776,8 @@ class DesktopVpnManager private constructor(
                     }.onFailure {
                         addLog("Proxy restore failed: ${it.message}")
                     }
+                    httpProxyBridge?.stop()
+                    httpProxyBridge = null
                 }
             }
 
@@ -747,6 +792,48 @@ class DesktopVpnManager private constructor(
             if (e !is CancellationException && requestGeneration == generation) {
                 setStatus(VpnStatus.Error(e.message ?: "Desktop start failed"))
             }
+        }
+    }
+
+    /**
+     * Offers to close another VPN client before we start. Returns once the user has answered (or
+     * after [CONFLICT_DECISION_TIMEOUT_MS], which just carries on — a prompt must never be able to
+     * wedge the connect).
+     *
+     * Whatever the user leaves running is remembered for the session, so this asks once, not on
+     * every reconnect.
+     */
+    private suspend fun resolveConflictingVpnClients() {
+        val running = withContext(Dispatchers.IO) {
+            runCatching { ConflictingVpnDetector.detect() }.getOrDefault(emptyList())
+        }.filter { it.displayName !in ignoredVpnConflicts }
+        if (running.isEmpty()) return
+
+        val names = running.map { it.displayName }
+        addLog("Another VPN client is running: ${names.joinToString()}")
+        val decision = CompletableDeferred<Boolean>()
+        val prompt = VpnConflictPrompt(names, decision)
+        _vpnConflict.value = prompt
+        val close = try {
+            kotlinx.coroutines.withTimeoutOrNull(CONFLICT_DECISION_TIMEOUT_MS) { decision.await() } ?: false
+        } finally {
+            if (_vpnConflict.value === prompt) _vpnConflict.value = null
+        }
+
+        if (!close) {
+            ignoredVpnConflicts += names
+            addLog("Continuing with ${names.joinToString()} still running")
+            return
+        }
+        val (closed, survived) = withContext(Dispatchers.IO) {
+            runCatching { ConflictingVpnDetector.terminate(running) }
+                .getOrDefault(emptyList<String>() to names)
+        }
+        if (closed.isNotEmpty()) addLog("Closed ${closed.joinToString()}")
+        if (survived.isNotEmpty()) {
+            // Almost always a Windows service running as SYSTEM: an unelevated YPtun cannot end it.
+            ignoredVpnConflicts += survived
+            addLog("Could not close ${survived.joinToString()} — stop it manually if this connection fails")
         }
     }
 
@@ -789,8 +876,33 @@ class DesktopVpnManager private constructor(
         socksSettings: DesktopSocksProxySettings,
         requestGeneration: Long
     ) {
-        // PAC is only used by macOS; Windows points its system HTTP proxy straight at the sing-box
-        // "mixed" inbound (host:port), which WinINET honours reliably (PAC+SOCKS5 is flaky there).
+        // The system HTTP proxy must NOT be pointed at the core's local port: only sing-box answers
+        // HTTP there (its "mixed" inbound). xray-core — which every routing profile, raw
+        // subscription config and xhttp cascade forces — plus olcRTC and dnstt all publish a
+        // SOCKS-only listener, so WinINET's absolute-form GET was never understood and the browser
+        // silently went direct. Our own HTTP bridge in front of the SOCKS gives one stable HTTP port
+        // that behaves identically on every engine.
+        val bridgePort = DesktopHttpProxyBridge.httpPortFor(socksSettings.port)
+        val bridge = DesktopHttpProxyBridge(
+            listenHost = socksSettings.host,
+            listenPort = bridgePort,
+            socksHost = socksSettings.host,
+            socksPort = socksSettings.port,
+            socksUsername = socksSettings.username,
+            socksPassword = socksSettings.password,
+            log = ::addLog,
+        )
+        httpProxyBridge?.stop()
+        httpProxyBridge = bridge
+        val bridgeUp = bridge.start()
+        if (!bridgeUp) {
+            httpProxyBridge = null
+            throw IllegalStateException("HTTP proxy port $bridgePort is already in use")
+        }
+        addLog("Proxy mode: SOCKS5 ${socksSettings.host}:${socksSettings.port} · HTTP ${socksSettings.host}:$bridgePort")
+
+        // PAC is only used by macOS; Windows gets the fixed HTTP proxy, which WinINET honours
+        // reliably (PAC + SOCKS5 is flaky there).
         pacServer.start(
             socksHost = socksSettings.host,
             socksPort = socksSettings.port,
@@ -798,12 +910,43 @@ class DesktopVpnManager private constructor(
             socksPassword = socksSettings.password
         )
         proxyController.enable(
-            httpProxyHostPort = "${socksSettings.host}:${socksSettings.port}",
+            httpProxyHostPort = "${socksSettings.host}:$bridgePort",
             pacUrl = pacServer.url
         )
 
         if (requestGeneration != generation) {
             throw CancellationException("Desktop start superseded")
+        }
+
+        // Say out loud whether traffic actually leaves through the proxy. Proxy mode has no tunnel
+        // to watch, so without this the only evidence was the user's browser — which is how the
+        // SOCKS-only listener above went unnoticed for so long.
+        scope.launch { reportProxyExitIp(socksSettings, bridgePort) }
+    }
+
+    /** One real request through the HTTP bridge; logs the exit IP, or why it failed. */
+    private suspend fun reportProxyExitIp(socksSettings: DesktopSocksProxySettings, bridgePort: Int) {
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress(socksSettings.host, bridgePort), 5_000)
+                    socket.soTimeout = 15_000
+                    socket.getOutputStream().write(
+                        ("GET http://api.ipify.org/ HTTP/1.1\r\nHost: api.ipify.org\r\n" +
+                            "User-Agent: YPtun\r\nConnection: close\r\n\r\n")
+                            .toByteArray(StandardCharsets.US_ASCII)
+                    )
+                    socket.getOutputStream().flush()
+                    val response = socket.getInputStream().readBytes().toString(StandardCharsets.US_ASCII)
+                    response.substringAfter("\r\n\r\n", "").trim()
+                }
+            }
+        }
+        val ip = result.getOrNull()
+        if (!ip.isNullOrBlank() && ip.length <= 45) {
+            addLog("Proxy self-check: traffic OK — exit IP $ip")
+        } else {
+            addLog("Proxy self-check: NO traffic through the HTTP proxy (${result.exceptionOrNull()?.message ?: "empty response"})")
         }
     }
 
@@ -888,6 +1031,8 @@ class DesktopVpnManager private constructor(
                 }.onFailure {
                     addLog("Proxy restore failed: ${it.message}")
                 }
+                httpProxyBridge?.stop()
+                httpProxyBridge = null
             }
         }
 
@@ -1321,6 +1466,9 @@ class DesktopVpnManager private constructor(
 
     private companion object {
         const val MAX_LOG_ENTRIES = 5_000
+
+        /** How long a connect waits for an answer to the "another VPN is running" prompt. */
+        const val CONFLICT_DECISION_TIMEOUT_MS = 60_000L
 
         /** Size past which yptun.log is dropped instead of appended to (matches singbox.log's cap). */
         const val MAX_LOG_FILE_BYTES = 32L * 1024 * 1024
