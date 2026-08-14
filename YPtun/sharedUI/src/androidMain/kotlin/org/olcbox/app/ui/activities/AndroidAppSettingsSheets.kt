@@ -31,6 +31,9 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.outlined.ContentCopy
+import org.olcbox.app.DonationInfo
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
@@ -804,6 +807,7 @@ private fun AppSettingsHubContent(
         // --- ИНФОРМАЦИЯ ---
         SettingsSectionLabel(s.info)
         val hwidClipboard = LocalClipboardManager.current
+        val donationContext = LocalContext.current
         SettingsGroupCard {
             SettingsGroupRow(
                 title = s.version(CurrentAppInfo.value.version),
@@ -879,6 +883,29 @@ private fun AppSettingsHubContent(
                 icon = Icons.Outlined.Shield,
                 enabled = true,
                 onClick = { communityUriHandler.openUri("https://t.me/YPtun") }
+            )
+            SettingsGroupDivider()
+            // One TON wallet takes USDT, TON and GRAM alike. Tapping copies it — the address is far
+            // too long to retype from a screen, and it is shown in full so it can be checked.
+            SettingsGroupRow(
+                title = s.donate,
+                subtitle = s.donateSubtitle,
+                icon = Icons.Rounded.Favorite,
+                enabled = true,
+                onClick = {
+                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
+                    Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show()
+                }
+            )
+            SettingsGroupRow(
+                title = DonationInfo.TON_ADDRESS,
+                icon = Icons.Outlined.ContentCopy,
+                enabled = true,
+                showChevron = false,
+                onClick = {
+                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
+                    Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show()
+                }
             )
         }
 

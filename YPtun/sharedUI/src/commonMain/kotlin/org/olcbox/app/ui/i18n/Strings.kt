@@ -170,6 +170,9 @@ interface Strings {
     fun hwid(v: String): String
     val community: String
     val howToConnect: String
+    val donate: String
+    val donateSubtitle: String
+    val donateAddressCopied: String
 
     // Application behavior
     val autoConnectTitle: String
@@ -815,6 +818,9 @@ object RuStrings : Strings {
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Сообщество"
     override val howToConnect = "Как подключиться?"
+    override val donate = "Поддержать проект"
+    override val donateSubtitle = "USDT · TON · GRAM — нажмите, чтобы скопировать адрес"
+    override val donateAddressCopied = "Адрес кошелька скопирован"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
     override val showAutoButtonTitle = "Кнопка «Авто» на главном"
@@ -1409,6 +1415,9 @@ object EnStrings : Strings {
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Community"
     override val howToConnect = "How to connect?"
+    override val donate = "Support the project"
+    override val donateSubtitle = "USDT · TON · GRAM — tap to copy the address"
+    override val donateAddressCopied = "Wallet address copied"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
     override val showAutoButtonTitle = "\"Auto\" button on Home"
@@ -2003,6 +2012,9 @@ object FaStrings : Strings {
     override fun hwid(v: String) = "HWID: $v"
     override val community = "انجمن"
     override val howToConnect = "چگونه متصل شویم؟"
+    override val donate = "حمایت از پروژه"
+    override val donateSubtitle = "USDT · TON · GRAM — برای کپی آدرس ضربه بزنید"
+    override val donateAddressCopied = "آدرس کیف پول کپی شد"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
     override val showAutoButtonTitle = "دکمه «خودکار» در خانه"
@@ -2597,6 +2609,9 @@ object ZhStrings : Strings {
     override fun hwid(v: String) = "HWID：$v"
     override val community = "社区"
     override val howToConnect = "如何连接？"
+    override val donate = "支持项目"
+    override val donateSubtitle = "USDT · TON · GRAM — 点按复制地址"
+    override val donateAddressCopied = "钱包地址已复制"
     override val autoConnectTitle = "启动时自动连接"
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
     override val showAutoButtonTitle = "主屏“自动”按钮"

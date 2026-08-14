@@ -80,6 +80,9 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.outlined.ContentCopy
+import org.olcbox.app.DonationInfo
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
@@ -871,6 +874,23 @@ private fun AppSettingsHubContent(
                 icon = Icons.Outlined.Shield,
                 enabled = true,
                 onClick = { DesktopUriLauncher.open("https://t.me/YPtun") }
+            )
+            SettingsGroupDivider()
+            // One TON wallet takes USDT, TON and GRAM alike. Clicking copies it — the address is far
+            // too long to retype from a screen, and it is shown in full so it can be checked.
+            SettingsGroupRow(
+                title = s.donate,
+                subtitle = s.donateSubtitle,
+                icon = Icons.Rounded.Favorite,
+                enabled = true,
+                onClick = { hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS)) }
+            )
+            SettingsGroupRow(
+                title = DonationInfo.TON_ADDRESS,
+                icon = Icons.Outlined.ContentCopy,
+                enabled = true,
+                showChevron = false,
+                onClick = { hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS)) }
             )
         }
 
