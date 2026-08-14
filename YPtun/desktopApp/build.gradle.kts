@@ -754,6 +754,29 @@ if (currentBuildOs.isWindows) {
             }
         }
     }
+
+    /**
+     * The portable the user actually asked for: ONE .exe, no folder, no re-unpacking on every start.
+     * A native launcher carries the app image appended to itself and unpacks it once into
+     * %LOCALAPPDATA%\YPtun\portable\<version> — see packaging/windows/build-portable.ps1.
+     */
+    tasks.register<Exec>("packageReleasePortableExe") {
+        group = "distribution"
+        description = "Packages the single-file portable Windows .exe from the jpackage app image."
+
+        dependsOn("createReleaseDistributable")
+        val script = layout.projectDirectory.file("packaging/windows/build-portable.ps1")
+        val appDir = jpackageAppRootDir.map { it.dir("YPtun") }
+        val outDir = layout.buildDirectory.dir("compose/binaries/main-release/portable")
+        commandLine(
+            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", script.asFile.absolutePath,
+            "-Version", desktopPackageVersion,
+            "-AppDir", appDir.get().asFile.absolutePath,
+            "-OutDir", outDir.get().asFile.absolutePath,
+            "-Arch", hostDesktopArch,
+        )
+    }
 }
 
 tasks.named("processResources") {
@@ -769,6 +792,7 @@ listOf(
     "packageReleaseDmg",
     "packageReleaseAppImage",
     "packageReleasePortableZip",
+    "packageReleasePortableExe",
     "packageDeb",
     "packageReleaseDeb"
 ).forEach { taskName ->

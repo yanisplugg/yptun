@@ -106,7 +106,7 @@ jobs:
         working-directory: olcbox
         run: |
           $env:OLCRTC_REPO="${{ github.workspace }}\olcrtc"
-          .\gradlew.bat "-Polcbox.version=$env:OLCBOX_VERSION" :desktopApp:packageReleaseExe :desktopApp:packageReleaseMsi :desktopApp:packageReleasePortableZip --stacktrace
+          .\gradlew.bat "-Polcbox.version=$env:OLCBOX_VERSION" :desktopApp:packageReleaseExe :desktopApp:packageReleaseMsi :desktopApp:packageReleasePortableExe --stacktrace
 
       - name: Prepare asset
         shell: pwsh
