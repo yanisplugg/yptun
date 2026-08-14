@@ -62,16 +62,48 @@ internal object ConflictingVpnDetector {
     fun detect(): List<RunningVpnApp> {
         val ours = ourOwnPids()
         val found = LinkedHashMap<String, MutableList<ProcessHandle>>()
-        runCatching {
-            ProcessHandle.allProcesses().forEach { handle ->
-                if (handle.pid() in ours) return@forEach
-                val command = handle.info().command().orElse(null) ?: return@forEach
-                val exe = command.substringAfterLast('\\').substringAfterLast('/').lowercase(Locale.ROOT)
-                val product = KNOWN[exe] ?: return@forEach
-                found.getOrPut(product) { mutableListOf() }.add(handle)
-            }
+        runningExecutables().forEach { (pid, exe) ->
+            if (pid in ours) return@forEach
+            val product = KNOWN[exe] ?: return@forEach
+            val handle = ProcessHandle.of(pid).orElse(null) ?: return@forEach
+            found.getOrPut(product) { mutableListOf() }.add(handle)
         }
         return found.map { (product, handles) -> RunningVpnApp(product, handles) }
+    }
+
+    /**
+     * pid → lowercase exe name for everything on the machine.
+     *
+     * `tasklist` rather than `ProcessHandle.info().command()`: the JDK has to OPEN a process to read
+     * its command line, which an unelevated YPtun cannot do for anything running as SYSTEM — and a
+     * VPN client's *service* is exactly what runs as SYSTEM. tasklist reads the image names from the
+     * kernel and lists them all. ProcessHandle stays the fallback (and is what terminates).
+     */
+    private fun runningExecutables(): List<Pair<Long, String>> {
+        val fromTasklist = runCatching {
+            val process = ProcessBuilder("tasklist.exe", "/FO", "CSV", "/NH")
+                .redirectErrorStream(true)
+                .start()
+            val rows = process.inputStream.bufferedReader().use { it.readLines() }
+            process.waitFor()
+            rows.mapNotNull { row ->
+                // "image name","pid","session","session#","mem usage"
+                val fields = row.split("\",\"")
+                if (fields.size < 2) return@mapNotNull null
+                val name = fields[0].removePrefix("\"").trim().lowercase(Locale.ROOT)
+                val pid = fields[1].trim().toLongOrNull() ?: return@mapNotNull null
+                pid to name
+            }
+        }.getOrDefault(emptyList())
+        if (fromTasklist.isNotEmpty()) return fromTasklist
+
+        return runCatching {
+            ProcessHandle.allProcesses().toList().mapNotNull { handle ->
+                val command = handle.info().command().orElse(null) ?: return@mapNotNull null
+                handle.pid() to command.substringAfterLast('\\').substringAfterLast('/')
+                    .lowercase(Locale.ROOT)
+            }
+        }.getOrDefault(emptyList())
     }
 
     /**
