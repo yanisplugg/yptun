@@ -87,6 +87,7 @@ import org.olcbox.app.desktop.DesktopElevation
 import org.olcbox.app.desktop.GlobalHotkey
 import org.olcbox.app.desktop.HotkeyBinding
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -186,6 +187,20 @@ private class DesktopAppDependencies {
 }
 
 private const val WINDOWS_ELEVATED_START_ARGUMENT = "--olcbox-start-vpn-after-elevation"
+
+/**
+ * Keeps an AWT window's own background on the theme colour.
+ *
+ * Compose Desktop draws into a plain [java.awt.Window] whose background is white until Skia paints —
+ * which is a visible white flash every time a new window appears (the hotkey / My-IP dialogs) and
+ * during resizes. Compose never touches it, so it is set here and re-set whenever the theme changes.
+ */
+@Composable
+private fun PaintNativeWindowBackground(window: java.awt.Window, color: Color) {
+    LaunchedEffect(window, color) {
+        runCatching { window.background = java.awt.Color(color.toArgb(), false) }
+    }
+}
 
 fun main(args: Array<String>) {
     // TUN mode needs administrator rights, and a process cannot acquire them while it runs — it has
@@ -545,6 +560,9 @@ private fun runApp(args: Array<String>) = application {
         val dynamicTheme by dependencies.settings.dynamicTheme.collectAsState()
 
         AppTheme(useDynamicColor = dynamicTheme) {
+            // The AWT frame under the Compose surface is white by default; it is what shows during a
+            // resize and for the frame or two before Skia has drawn. Keep it on the theme colour.
+            PaintNativeWindowBackground(window, MaterialTheme.colorScheme.background)
             val logs by dependencies.homeViewModel.logs.collectAsState()
             val homeState by dependencies.homeViewModel.state.collectAsState()
             val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
@@ -590,7 +608,15 @@ private fun runApp(args: Array<String>) = application {
                 org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides
                     (if (appBehavior.showSpeedOnHome && homeState.isVpnConnected) liveSpeed else null),
             ) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            // Compose Desktop windows have no background of their own: the AWT frame is bare white
+            // until Skia paints, and any frame where the content is not fully opaque — every screen
+            // crossfade, every sheet that fades in — shows that white through. Painting the theme
+            // background here is what turns those into proper transitions instead of a flash.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+            ) {
                 OlcboxAppContent(
                     homeViewModel = dependencies.homeViewModel,
                     locationViewModel = dependencies.locationViewModel,
@@ -1498,6 +1524,7 @@ private fun HotkeyCaptureDialog(
         title = if (russian) "Горячая клавиша" else "Global hotkey",
     ) {
         AppTheme(useDynamicColor = useDynamicColor) {
+            PaintNativeWindowBackground(window, MaterialTheme.colorScheme.surface)
             var captured by remember { mutableStateOf(current) }
             val focus = remember { FocusRequester() }
             LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
@@ -1586,6 +1613,7 @@ private fun MyIpDialog(
     ) {
         AppTheme(useDynamicColor = useDynamicColor) {
             val scheme = MaterialTheme.colorScheme
+            PaintNativeWindowBackground(window, scheme.surface)
             var provider by remember { mutableStateOf(initialProvider) }
             var ip by remember { mutableStateOf<String?>(null) }
             var loading by remember { mutableStateOf(true) }
