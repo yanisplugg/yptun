@@ -1647,10 +1647,9 @@ private fun MyIpDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         TextButton(onClick = {
-                            runCatching {
-                                java.awt.Desktop.getDesktop()
-                                    .browse(java.net.URI("https://$provider/"))
-                            }
+                            // Not Desktop.browse: in TUN mode this process is elevated, and a browser
+                            // launched from here can't reach the user's already-open session.
+                            org.olcbox.app.desktop.DesktopUriLauncher.open("https://$provider/")
                         }) { Text(if (russian) "Открыть в браузере" else "Open in browser") }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = { refresh() }) {

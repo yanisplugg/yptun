@@ -20,12 +20,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Slider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.desktop.DesktopUriLauncher
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.SingBoxRule
@@ -857,21 +857,20 @@ private fun AppSettingsHubContent(
         }
 
         // --- Сообщество / помощь ---
-        val communityUriHandler = LocalUriHandler.current
         SettingsGroupCard {
             SettingsGroupRow(
                 title = s.community,
                 subtitle = "t.me/YPtun",
                 icon = Icons.Rounded.Person,
                 enabled = true,
-                onClick = { communityUriHandler.openUri("https://t.me/YPtun") }
+                onClick = { DesktopUriLauncher.open("https://t.me/YPtun") }
             )
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.howToConnect,
                 icon = Icons.Outlined.Shield,
                 enabled = true,
-                onClick = { communityUriHandler.openUri("https://t.me/YPtun") }
+                onClick = { DesktopUriLauncher.open("https://t.me/YPtun") }
             )
         }
 
@@ -994,7 +993,6 @@ private fun ConnectionSettingsContent(
                     // One-tap copyable t.me/socks link: opening it in Telegram auto-fills the SOCKS5
                     // proxy (server/port/user/pass), no manual entry.
                     val clipboard = LocalClipboardManager.current
-                    val tgUriHandler = LocalUriHandler.current
                     val tgLink = remember(running) {
                         "https://t.me/socks?server=${running.host}&port=${running.port}" +
                             "&user=${running.user}&pass=${running.pass}"
@@ -1006,13 +1004,17 @@ private fun ConnectionSettingsContent(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         // One tap → Telegram Desktop's "Enable proxy?" dialog via the tg:// deep link
-                        // (it registers the scheme on Windows), falling back to the https link.
+                        // (it registers the scheme on Windows), falling back to the https link when
+                        // no handler is registered. Launched through [DesktopUriLauncher], NOT
+                        // LocalUriHandler: in TUN mode this process is elevated, and a handler
+                        // ShellExecute'd from here starts elevated too — it can't reach the Telegram
+                        // the user already has open, so the click did nothing at all.
                         Button(
                             onClick = {
                                 val tgDeep = "tg://socks?server=${running.host}&port=${running.port}" +
                                     "&user=${running.user}&pass=${running.pass}"
-                                val opened = runCatching { tgUriHandler.openUri(tgDeep) }.isSuccess
-                                if (!opened) runCatching { tgUriHandler.openUri(tgLink) }
+                                val target = if (DesktopUriLauncher.schemeRegistered("tg")) tgDeep else tgLink
+                                DesktopUriLauncher.open(target)
                             },
                             contentPadding = PaddingValues(horizontal = 12.dp),
                             modifier = Modifier.weight(1f)
@@ -1801,7 +1803,6 @@ private fun SubscriptionShareRow(
                 }
             }
 
-            val subUriHandler = LocalUriHandler.current
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onShareClick) {
                     Text(LocalStrings.current.qrShare)
@@ -1811,12 +1812,12 @@ private fun SubscriptionShareRow(
                 }
                 // Panel-advertised links (Remnawave/Happ `profile-web-page-url` / `support-url`).
                 item.webPageUrl?.takeIf { it.isNotBlank() }?.let { web ->
-                    TextButton(onClick = { runCatching { subUriHandler.openUri(web) } }) {
+                    TextButton(onClick = { DesktopUriLauncher.open(web) }) {
                         Text(LocalStrings.current.subscriptionWebPage)
                     }
                 }
                 item.supportUrl?.takeIf { it.isNotBlank() }?.let { support ->
-                    TextButton(onClick = { runCatching { subUriHandler.openUri(support) } }) {
+                    TextButton(onClick = { DesktopUriLauncher.open(support) }) {
                         Text(LocalStrings.current.subscriptionSupport)
                     }
                 }
