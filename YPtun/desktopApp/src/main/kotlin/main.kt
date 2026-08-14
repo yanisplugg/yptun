@@ -83,6 +83,7 @@ import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.awt.awtEventOrNull
+import org.olcbox.app.desktop.DesktopElevation
 import org.olcbox.app.desktop.GlobalHotkey
 import org.olcbox.app.desktop.HotkeyBinding
 import androidx.compose.ui.graphics.graphicsLayer
@@ -186,7 +187,18 @@ private class DesktopAppDependencies {
 
 private const val WINDOWS_ELEVATED_START_ARGUMENT = "--olcbox-start-vpn-after-elevation"
 
-fun main(args: Array<String>) = application {
+fun main(args: Array<String>) {
+    // TUN mode needs administrator rights, and a process cannot acquire them while it runs — it has
+    // to come back through UAC. Asking here, before the first window exists, is the difference
+    // between one UAC prompt at launch and the app visibly closing and reopening the first time the
+    // user presses Connect (worst on the portable build, which then only connected on the second
+    // try). Proxy mode needs nothing and is never asked. If this returns true the elevated copy is
+    // already starting and this one must go away without ever painting a window.
+    if (DesktopElevation.relaunchElevatedForStartup(args)) return
+    runApp(args)
+}
+
+private fun runApp(args: Array<String>) = application {
     // Configure JNA to find native libraries in resources
     System.setProperty(
         "jna.library.path",
