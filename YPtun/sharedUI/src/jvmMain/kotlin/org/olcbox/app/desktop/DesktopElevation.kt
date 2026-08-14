@@ -100,17 +100,19 @@ object DesktopElevation {
     /**
      * True when the persisted connection mode is TUN.
      *
-     * With nothing saved yet it follows the same first-run default the settings controller picks:
-     * the portable build starts in proxy mode (no rights, no UAC on a machine the user did not want
-     * to touch), the installed build in TUN.
+     * The portable is excluded outright (see below); for the installed build, nothing saved yet
+     * means TUN, its historical default.
      */
     private fun savedModeNeedsAdmin(): Boolean {
+        // The portable never elevates at launch, whatever is saved: it is the build you run without
+        // touching the machine, and DesktopSettingsController starts it in proxy mode to match.
+        if (DesktopRuntimeMode.isPortable) return false
         val file = DesktopPaths.appDataDir().resolve("settings").resolve("ui.json")
         val mode = runCatching {
             Json.parseToJsonElement(file.toFile().readText())
                 .jsonObject["connectionMode"]?.jsonPrimitive?.content
         }.getOrNull()?.trim()
-        if (mode.isNullOrBlank()) return !DesktopRuntimeMode.isPortable
+        if (mode.isNullOrBlank()) return true
         return !"proxy".equals(mode, ignoreCase = true)
     }
 
