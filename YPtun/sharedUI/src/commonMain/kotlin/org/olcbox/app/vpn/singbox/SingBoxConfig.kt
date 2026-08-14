@@ -380,9 +380,12 @@ object SingBoxConfig {
             // WireGuard moved from an `outbound` (removed in sing-box 1.13.0) to a top-level
             // `endpoints` entry, referenced by tag. Build them here so the outbounds below can detour
             // to them and the endpoints array is emitted as a sibling of `outbounds`.
-            val wgBaseEndpoint = wireguardBase?.let { buildWireguardEndpoint(it, WG_BASE_TAG) }
+            val wgBaseEndpoint = wireguardBase?.let {
+                buildWireguardEndpoint(it, WG_BASE_TAG, autoDetectInterface)
+            }
             val mainIsWireguard = profile.type == "wireguard"
-            val wgExitEndpoint = if (mainIsWireguard) buildWireguardEndpoint(profile, PROXY_TAG) else null
+            val wgExitEndpoint =
+                if (mainIsWireguard) buildWireguardEndpoint(profile, PROXY_TAG, autoDetectInterface) else null
 
             putJsonArray("outbounds") {
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
@@ -909,7 +912,17 @@ object SingBoxConfig {
      * removed in sing-box 1.13.0, so VK-TURN / WDTT (which tunnel through a local WireGuard listener)
      * must use an endpoint instead. Returns null if the raw JSON isn't a wireguard outbound.
      */
-    private fun buildWireguardEndpoint(profile: ProxyProfile, tag: String): JsonObject? {
+    /** Whether [host] is this machine — the shape every local relay listener uses. */
+    private fun isLoopbackHost(host: String): Boolean {
+        val h = host.trim().trim('[', ']').lowercase()
+        return h == "localhost" || h == "::1" || h.startsWith("127.")
+    }
+
+    private fun buildWireguardEndpoint(
+        profile: ProxyProfile,
+        tag: String,
+        autoDetectInterface: Boolean = false,
+    ): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
         val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
         if (obj["type"]?.jsonPrimitive?.contentOrNull != "wireguard") return null
@@ -924,6 +937,23 @@ object SingBoxConfig {
             put("tag", tag)
             // Userspace gVisor stack (the process is already bound to the upstream network).
             put("system", false)
+            // VK-TURN / WDTT put the WireGuard peer on 127.0.0.1 (the local relay listener). With
+            // `route.auto_detect_interface` on — desktop, where there is no VpnService.protect — sing-box
+            // appends its bind-to-interface control to EVERY dialer, and WireGuard's socket is a
+            // ListenPacket: the control sees the BIND address (0.0.0.0), never the destination, so it
+            // pins the socket to the physical NIC. Sending to 127.0.0.1 from there fails outright:
+            //   "failed to send handshake initiation: write udp4 0.0.0.0:x->127.0.0.1:9000:
+            //    wsasendmsg: The requested address is not valid in its context"
+            // (WSAEADDRNOTAVAIL, straight out of the user's singbox.log) — the tunnel comes up, the
+            // handshake never leaves the machine, and VK-TURN carries nothing.
+            //
+            // `inet4_bind_address` sets sing-box's `disableDefaultBind`, which is the only supported way
+            // to keep that control off ONE endpoint. Only for a loopback peer, and only when the bind
+            // would otherwise happen — Android (auto_detect_interface = false, protect() instead) is
+            // untouched.
+            if (autoDetectInterface && isLoopbackHost(server)) {
+                put("inet4_bind_address", "0.0.0.0")
+            }
             if (mtu != null && mtu > 0) put("mtu", mtu)
             putJsonArray("address") { localAddrs.forEach { add(it) } }
             put("private_key", privateKey)
