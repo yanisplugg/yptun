@@ -565,6 +565,24 @@ object SingBoxConfig {
                     // Routing profile and the advanced toggles are COMBINED (not either/or): the
                     // profile's buckets run alongside the user's verbatim rules and the
                     // bypassRussia/blockAds/block-direct toggles.
+                    // A FakeDNS address is SYNTHETIC — it means "the domain I handed this app" and can
+                    // never be dialled for real, so it must reach the proxy no matter what follows.
+                    // This has to come BEFORE the private/LAN rule: the fake IPv6 pool (fc00::/18) sits
+                    // inside fc00::/7, which `ip_is_private` matches, so every fake-v6 connection was
+                    // classified as LAN and sent DIRECT. It then left the tunnel unprotected, and what
+                    // the user saw was the ISP's interception of the real destination — "эта сеть
+                    // использует недоверенный SSL-сертификат" in apps that check. (Normally the sniffed
+                    // SNI replaces the fake address before routing; when sniffing can't see it — ECH,
+                    // or anything that isn't TLS/HTTP — the fake address is all the router has.)
+                    if (fakeEnabled) {
+                        addJsonObject {
+                            putJsonArray("ip_cidr") {
+                                add(fake4Range)
+                                add(fake6Range)
+                            }
+                            put("outbound", PROXY_TAG)
+                        }
+                    }
                     // Private/LAN always direct (Happ profiles assume it; bypassLan toggle wants it).
                     if (routingProfile != null || routing.bypassLan) {
                         addJsonObject {

@@ -45,6 +45,13 @@ object XrayConfig {
     // FakeDNS synthetic-IP pool (matches the v2rayNG/Happ default).
     private const val FAKEDNS_SERVER = "fakedns"
     private const val FAKEDNS_POOL = "198.18.0.0/15"
+
+    /**
+     * The IPv6 fake pool. Our own [fakeDnsPool] is IPv4-only, but a user's verbatim config (or a
+     * subscription's) can define one, and it is the same range sing-box uses — so the "never route a
+     * synthetic address direct" rule covers both.
+     */
+    private const val FAKEDNS_POOL6 = "fc00::/18"
     private const val FAKEDNS_POOL_SIZE = 65535
 
     private val json = Json { prettyPrint = true }
@@ -469,6 +476,23 @@ object XrayConfig {
                 putJsonArray("inboundTag") { add(CASCADE_LOOP_IN_TAG) }
                 put("outboundTag", PROXY_BASE_TAG)
             } else null
+            // A FakeDNS address is SYNTHETIC - it stands for the domain we handed the app and can
+            // never be dialled for real, so it must reach the proxy whatever comes after. It goes
+            // ahead of the LAN bypass AND of the profile's own rules, because a Happ routing profile
+            // routinely carries `geoip:private -> direct`, and geoip's private list contains both fake
+            // pools (198.18.0.0/15 is reserved-benchmark, fc00::/18 sits inside unique-local fc00::/7).
+            // Matching there sent the connection DIRECT, out of the tunnel, and the user saw the ISP's
+            // interception of the real destination as "недоверенный SSL-сертификат". Normally the
+            // sniffed SNI replaces the fake address first; when sniffing cannot see it (ECH, or
+            // anything that is not TLS/HTTP) the fake address is all the router has to go on.
+            val fakeDnsProxyRule = if (traffic.fakeDnsEnabled) buildJsonObject {
+                put("type", "field")
+                putJsonArray("ip") {
+                    add(FAKEDNS_POOL)
+                    add(FAKEDNS_POOL6)
+                }
+                put("outboundTag", if (directViaBase) PROXY_BASE_TAG else PROXY_TAG)
+            } else null
             val lanBypassRule = if (bypassLan && !directViaBase) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
@@ -489,6 +513,7 @@ object XrayConfig {
                         cascadeLoopRule?.let { add(it) }
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
                         dnsOutRules.forEach { add(it) }
+                        fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
@@ -500,6 +525,7 @@ object XrayConfig {
                     putJsonArray("rules") {
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
+                        fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
