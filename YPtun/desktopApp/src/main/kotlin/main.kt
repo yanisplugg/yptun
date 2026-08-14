@@ -517,6 +517,22 @@ private fun runApp(args: Array<String>) = application {
         )
     }
 
+    // Another VPN client is running and will fight us for the adapter / the system proxy.
+    val vpnConflict by dependencies.vpnManager.vpnConflict.collectAsState()
+    vpnConflict?.let { conflict ->
+        val conflictDynamic by dependencies.settings.dynamicTheme.collectAsState()
+        val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+        DesktopConfirmDialog(
+            title = s.otherVpnDetectedTitle,
+            message = s.otherVpnDetectedBody(conflict.names.joinToString(", ")),
+            confirmLabel = s.closeOtherVpn,
+            dismissLabel = s.connectAnyway,
+            useDynamicColor = conflictDynamic,
+            onConfirm = { conflict.close() },
+            onDismiss = { conflict.ignore() },
+        )
+    }
+
     if (hotkeyDialogVisible) {
         val hkDynamic by dependencies.settings.dynamicTheme.collectAsState()
         HotkeyCaptureDialog(

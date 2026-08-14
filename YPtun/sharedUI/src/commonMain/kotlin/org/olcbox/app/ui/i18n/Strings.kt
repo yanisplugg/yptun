@@ -542,6 +542,10 @@ interface Strings {
     val adminRightsTitle: String
     val tunNeedsAdminBody: String
     val restartAsAdmin: String
+    val otherVpnDetectedTitle: String
+    fun otherVpnDetectedBody(names: String): String
+    val closeOtherVpn: String
+    val connectAnyway: String
 
     // VK call link dialog
     val vkCallLink: String
@@ -1147,6 +1151,11 @@ object RuStrings : Strings {
     override val adminRightsTitle = "Права администратора"
     override val tunNeedsAdminBody = "Режим «Туннель» создаёт сетевой адаптер и меняет таблицу маршрутов — для этого нужны права администратора. YPtun перезапустится и запросит их. Режим «Прокси» работает без них."
     override val restartAsAdmin = "Перезапустить"
+    override val otherVpnDetectedTitle = "Запущен другой VPN"
+    override fun otherVpnDetectedBody(names: String) =
+        "Похоже, уже работает другой VPN-клиент ($names). Он занимает сетевой адаптер и может помешать подключению. Завершить его?"
+    override val closeOtherVpn = "Завершить и подключиться"
+    override val connectAnyway = "Подключиться всё равно"
     override val vkCallLink = "Ссылка на звонок VK"
     override fun vkCallLinkBody(name: String) =
         "Вставьте ссылку-приглашение VK Звонков для «$name». Можно вставить несколько ссылок " +
@@ -1736,6 +1745,11 @@ object EnStrings : Strings {
     override val adminRightsTitle = "Administrator rights"
     override val tunNeedsAdminBody = "Tunnel mode creates a network adapter and rewrites the routing table, which needs administrator rights. YPtun will restart and ask for them. Proxy mode works without them."
     override val restartAsAdmin = "Restart"
+    override val otherVpnDetectedTitle = "Another VPN is running"
+    override fun otherVpnDetectedBody(names: String) =
+        "Another VPN client already seems to be running ($names). It holds the network adapter and can keep this connection from starting. Close it?"
+    override val closeOtherVpn = "Close it and connect"
+    override val connectAnyway = "Connect anyway"
     override val vkCallLink = "VK call link"
     override fun vkCallLinkBody(name: String) =
         "Paste your VK Calls join link for \"$name\". You can paste several links " +
@@ -2325,6 +2339,11 @@ object FaStrings : Strings {
     override val adminRightsTitle = "دسترسی مدیر"
     override val tunNeedsAdminBody = "حالت تونل یک کارت شبکه می‌سازد و جدول مسیریابی را تغییر می‌دهد و به دسترسی مدیر نیاز دارد. YPtun دوباره اجرا می‌شود و آن را درخواست می‌کند. حالت پراکسی بدون آن کار می‌کند."
     override val restartAsAdmin = "راه‌اندازی مجدد"
+    override val otherVpnDetectedTitle = "یک VPN دیگر در حال اجراست"
+    override fun otherVpnDetectedBody(names: String) =
+        "به نظر می‌رسد کلاینت VPN دیگری در حال اجراست ($names). آن کارت شبکه را در اختیار دارد و می‌تواند مانع برقراری این اتصال شود. بسته شود؟"
+    override val closeOtherVpn = "بستن و اتصال"
+    override val connectAnyway = "به هر حال متصل شو"
     override val vkCallLink = "پیوند تماس VK"
     override fun vkCallLinkBody(name: String) =
         "پیوند پیوستن VK Calls خود را برای «$name» بچسبانید. می‌توانید چند پیوند " +
@@ -2914,6 +2933,11 @@ object ZhStrings : Strings {
     override val adminRightsTitle = "管理员权限"
     override val tunNeedsAdminBody = "隧道模式会创建网络适配器并修改路由表，需要管理员权限。YPtun 将重新启动并请求权限。代理模式无需权限。"
     override val restartAsAdmin = "重新启动"
+    override val otherVpnDetectedTitle = "检测到其他 VPN"
+    override fun otherVpnDetectedBody(names: String) =
+        "似乎已有其他 VPN 客户端正在运行（$names）。它占用网络适配器，可能导致本次连接无法建立。要结束它吗？"
+    override val closeOtherVpn = "结束并连接"
+    override val connectAnyway = "仍然连接"
     override val vkCallLink = "VK 通话链接"
     override fun vkCallLinkBody(name: String) =
         "为“$name”粘贴你的 VK Calls 加入链接。可以粘贴多个链接 " +
