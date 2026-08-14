@@ -229,6 +229,8 @@ private fun runApp(args: Array<String>) = application {
     var trayMenuVisible by remember { mutableStateOf(false) }
     var hotkeyBinding by remember { mutableStateOf(loadHotkeyBinding()) }
     var hotkeyDialogVisible by remember { mutableStateOf(false) }
+    // True while the "tunnel mode needs administrator rights" confirmation is on screen.
+    var tunElevationPrompt by remember { mutableStateOf(false) }
     var showMyIpDialog by remember { mutableStateOf(false) }
     var ipProvider by remember { mutableStateOf(loadIpProvider()) }
 
@@ -483,6 +485,36 @@ private fun runApp(args: Array<String>) = application {
                 )
             }
         }
+    }
+
+    // Picking «ТУННЕЛЬ» is the moment administrator rights are asked for — never before. The
+    // portable build starts in proxy mode precisely so its first launch touches nothing; the mode is
+    // therefore only persisted once the user has agreed to the restart, otherwise a dismissed UAC
+    // prompt would leave the app sitting in a mode it cannot run.
+    if (tunElevationPrompt) {
+        val promptDynamic by dependencies.settings.dynamicTheme.collectAsState()
+        val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+        DesktopConfirmDialog(
+            title = s.adminRightsTitle,
+            message = s.tunNeedsAdminBody,
+            confirmLabel = s.restartAsAdmin,
+            dismissLabel = s.cancel,
+            useDynamicColor = promptDynamic,
+            onConfirm = {
+                tunElevationPrompt = false
+                dependencies.settings.selectConnectionMode(org.olcbox.app.vpn.AndroidConnectionMode.Tun)
+                if (DesktopElevation.relaunchElevatedNow()) {
+                    dependencies.close()
+                    exitApplication()
+                } else {
+                    // UAC dismissed (or there is no launcher to relaunch, e.g. gradle :run): stay in
+                    // the mode that actually works instead of a TUN that cannot come up.
+                    dependencies.settings.selectConnectionMode(org.olcbox.app.vpn.AndroidConnectionMode.Proxy)
+                    desktopNotice = s.adminRightsTitle
+                }
+            },
+            onDismiss = { tunElevationPrompt = false },
+        )
     }
 
     if (hotkeyDialogVisible) {
@@ -793,9 +825,13 @@ private fun runApp(args: Array<String>) = application {
                         DesktopModeSwitch(
                             mode = mainConnectionMode,
                             onModeSelected = { mode ->
-                                dependencies.settings.selectConnectionMode(mode)
-                                if (homeState.isVpnConnected || homeState.isVpnLoading) {
-                                    dependencies.homeViewModel.restartVpnIfRunning()
+                                if (needsElevationFor(mode)) {
+                                    tunElevationPrompt = true
+                                } else {
+                                    dependencies.settings.selectConnectionMode(mode)
+                                    if (homeState.isVpnConnected || homeState.isVpnLoading) {
+                                        dependencies.homeViewModel.restartVpnIfRunning()
+                                    }
                                 }
                             }
                         )
@@ -903,9 +939,13 @@ private fun runApp(args: Array<String>) = application {
                         onTextColorSelected = dependencies.settings::setTextColor,
                         onBackgroundColorSelected = dependencies.settings::setBackgroundColor,
                         onModeSelected = { mode ->
-                            dependencies.settings.selectConnectionMode(mode)
-                            if (homeState.isVpnConnected) {
-                                dependencies.homeViewModel.restartVpnIfRunning()
+                            if (needsElevationFor(mode)) {
+                                tunElevationPrompt = true
+                            } else {
+                                dependencies.settings.selectConnectionMode(mode)
+                                if (homeState.isVpnConnected) {
+                                    dependencies.homeViewModel.restartVpnIfRunning()
+                                }
                             }
                         },
                         onProxySettingsSaved = { host, username, password, port ->
@@ -1508,6 +1548,66 @@ private fun hotkeyFromKeyEvent(e: androidx.compose.ui.input.key.KeyEvent): Hotke
         add(java.awt.event.KeyEvent.getKeyText(vk))
     }
     return HotkeyBinding(mod, vk, parts.joinToString("+"))
+}
+
+/**
+ * True when picking [mode] must go through UAC first: only TUN needs administrator rights, and only
+ * when this process does not already have them (the installed build normally elevates at launch).
+ */
+private fun needsElevationFor(mode: org.olcbox.app.vpn.AndroidConnectionMode): Boolean =
+    mode == org.olcbox.app.vpn.AndroidConnectionMode.Tun && DesktopElevation.needsAdministratorForTun()
+
+/**
+ * Plain two-button confirmation window, in the app's own theme — used for "tunnel mode needs
+ * administrator rights" and "another VPN client is running". Closing the window counts as dismiss,
+ * so a prompt can never be left hanging with nothing behind it.
+ */
+@Composable
+private fun DesktopConfirmDialog(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    dismissLabel: String,
+    useDynamicColor: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.ui.window.DialogWindow(
+        onCloseRequest = onDismiss,
+        state = androidx.compose.ui.window.rememberDialogState(size = DpSize(430.dp, 250.dp)),
+        title = title,
+    ) {
+        AppTheme(useDynamicColor = useDynamicColor) {
+            PaintNativeWindowBackground(window, MaterialTheme.colorScheme.surface)
+            Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        title,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = onDismiss) { Text(dismissLabel) }
+                        Button(onClick = onConfirm) { Text(confirmLabel) }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

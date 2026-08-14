@@ -538,6 +538,11 @@ interface Strings {
     val shareScanOrCopy: String
     val closeAction: String
 
+    // Desktop: administrator rights for TUN mode, and a conflicting VPN client
+    val adminRightsTitle: String
+    val tunNeedsAdminBody: String
+    val restartAsAdmin: String
+
     // VK call link dialog
     val vkCallLink: String
     fun vkCallLinkBody(name: String): String
@@ -1139,6 +1144,9 @@ object RuStrings : Strings {
     override val qrTooLarge = "Конфигурация слишком большая для QR-кода. Используйте «Копировать» или «Поделиться»."
     override val shareScanOrCopy = "Отсканируйте QR-код или скопируйте ссылку"
     override val closeAction = "Закрыть"
+    override val adminRightsTitle = "Права администратора"
+    override val tunNeedsAdminBody = "Режим «Туннель» создаёт сетевой адаптер и меняет таблицу маршрутов — для этого нужны права администратора. YPtun перезапустится и запросит их. Режим «Прокси» работает без них."
+    override val restartAsAdmin = "Перезапустить"
     override val vkCallLink = "Ссылка на звонок VK"
     override fun vkCallLinkBody(name: String) =
         "Вставьте ссылку-приглашение VK Звонков для «$name». Можно вставить несколько ссылок " +
@@ -1725,6 +1733,9 @@ object EnStrings : Strings {
     override val qrTooLarge = "Config is too large for a QR code. Use Copy or Share instead."
     override val shareScanOrCopy = "Scan the QR code or copy the link"
     override val closeAction = "Close"
+    override val adminRightsTitle = "Administrator rights"
+    override val tunNeedsAdminBody = "Tunnel mode creates a network adapter and rewrites the routing table, which needs administrator rights. YPtun will restart and ask for them. Proxy mode works without them."
+    override val restartAsAdmin = "Restart"
     override val vkCallLink = "VK call link"
     override fun vkCallLinkBody(name: String) =
         "Paste your VK Calls join link for \"$name\". You can paste several links " +
@@ -2311,6 +2322,9 @@ object FaStrings : Strings {
     override val qrTooLarge = "پیکربندی برای کد QR بیش از حد بزرگ است. از «رونوشت» یا «هم‌رسانی» استفاده کنید."
     override val shareScanOrCopy = "کد QR را پویش کنید یا پیوند را رونوشت بگیرید"
     override val closeAction = "بستن"
+    override val adminRightsTitle = "دسترسی مدیر"
+    override val tunNeedsAdminBody = "حالت تونل یک کارت شبکه می‌سازد و جدول مسیریابی را تغییر می‌دهد و به دسترسی مدیر نیاز دارد. YPtun دوباره اجرا می‌شود و آن را درخواست می‌کند. حالت پراکسی بدون آن کار می‌کند."
+    override val restartAsAdmin = "راه‌اندازی مجدد"
     override val vkCallLink = "پیوند تماس VK"
     override fun vkCallLinkBody(name: String) =
         "پیوند پیوستن VK Calls خود را برای «$name» بچسبانید. می‌توانید چند پیوند " +
@@ -2897,6 +2911,9 @@ object ZhStrings : Strings {
     override val qrTooLarge = "配置过大，无法生成二维码。请改用复制或分享。"
     override val shareScanOrCopy = "扫描二维码或复制链接"
     override val closeAction = "关闭"
+    override val adminRightsTitle = "管理员权限"
+    override val tunNeedsAdminBody = "隧道模式会创建网络适配器并修改路由表，需要管理员权限。YPtun 将重新启动并请求权限。代理模式无需权限。"
+    override val restartAsAdmin = "重新启动"
     override val vkCallLink = "VK 通话链接"
     override fun vkCallLinkBody(name: String) =
         "为“$name”粘贴你的 VK Calls 加入链接。可以粘贴多个链接 " +

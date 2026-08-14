@@ -41,6 +41,12 @@ object DesktopElevation {
         runCatching { Shell32Elevation.INSTANCE.IsUserAnAdmin() }.getOrDefault(false)
 
     /**
+     * True when switching to TUN mode would have to come back through UAC — i.e. the UI should ask
+     * the user before restarting the app. False on non-Windows and when we already have rights.
+     */
+    fun needsAdministratorForTun(): Boolean = isWindows && !isElevated()
+
+    /**
      * Relaunches this process elevated when TUN mode will need it. Returns true when a relaunch was
      * started, in which case the caller must exit **without** showing a window — the elevated copy is
      * the one that continues.
@@ -53,7 +59,22 @@ object DesktopElevation {
         if (STARTUP_ELEVATION_ARGUMENT in args) return false
         if (isElevated()) return false
         if (!savedModeNeedsAdmin()) return false
+        return relaunchElevated(args.toList())
+    }
 
+    /**
+     * Relaunches elevated on demand — the user just switched to TUN mode in a process that has no
+     * administrator rights (the portable build's normal state). Returns true when the elevated copy
+     * is starting and this one should exit.
+     */
+    fun relaunchElevatedNow(): Boolean {
+        if (!isWindows) return false
+        if (isElevated()) return false
+        val current = ProcessHandle.current().info().arguments().orElse(emptyArray()).toList()
+        return relaunchElevated(current)
+    }
+
+    private fun relaunchElevated(currentArguments: List<String>): Boolean {
         val info = ProcessHandle.current().info()
         val command = info.command().orElse(null) ?: return false
         // Only a real launcher can be relaunched. Running from a JDK (gradle :run, an IDE) would
@@ -64,7 +85,8 @@ object DesktopElevation {
         ) {
             return false
         }
-        val arguments = info.arguments().orElse(emptyArray()).toList() + STARTUP_ELEVATION_ARGUMENT
+        val arguments = currentArguments.filterNot { it == STARTUP_ELEVATION_ARGUMENT } +
+            STARTUP_ELEVATION_ARGUMENT
         return runCatching {
             val script = restartAsAdministratorScript(
                 command = command,
@@ -75,14 +97,21 @@ object DesktopElevation {
         }.getOrDefault(false)
     }
 
-    /** True when the persisted connection mode is TUN (the default when nothing is saved yet). */
+    /**
+     * True when the persisted connection mode is TUN.
+     *
+     * With nothing saved yet it follows the same first-run default the settings controller picks:
+     * the portable build starts in proxy mode (no rights, no UAC on a machine the user did not want
+     * to touch), the installed build in TUN.
+     */
     private fun savedModeNeedsAdmin(): Boolean {
         val file = DesktopPaths.appDataDir().resolve("settings").resolve("ui.json")
         val mode = runCatching {
             Json.parseToJsonElement(file.toFile().readText())
                 .jsonObject["connectionMode"]?.jsonPrimitive?.content
-        }.getOrNull()
-        return !"proxy".equals(mode?.trim(), ignoreCase = true)
+        }.getOrNull()?.trim()
+        if (mode.isNullOrBlank()) return !DesktopRuntimeMode.isPortable
+        return !"proxy".equals(mode, ignoreCase = true)
     }
 
     /** Returns true only if UAC was accepted and the elevated process actually started. */

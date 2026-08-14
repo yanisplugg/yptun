@@ -18,6 +18,7 @@ import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.desktop.DesktopPaths
+import org.olcbox.app.desktop.DesktopRuntimeMode
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.theme.ThemeState
@@ -85,10 +86,20 @@ class DesktopSettingsController {
             "zh" -> AppLanguage.Chinese
             else -> AppLanguage.English
         }
+        val firstRun = !uiFile.exists()
         val ui = loadUi()
         _language.value = AppLanguage.fromId(ui.language)
         LocalizationState.language = _language.value
-        _connectionMode.value = AndroidConnectionMode.fromValue(ui.connectionMode)
+        // The portable build starts in proxy mode: it is the "don't touch my machine" build, and
+        // proxy mode is the only mode that needs no administrator rights, so its first launch shows
+        // no UAC prompt at all. Tunnel mode stays the default for the installed build, and the
+        // portable user gets there by picking «ТУННЕЛЬ» — that is when rights are asked for.
+        _connectionMode.value = if (firstRun && DesktopRuntimeMode.isPortable) {
+            AndroidConnectionMode.Proxy
+        } else {
+            AndroidConnectionMode.fromValue(ui.connectionMode)
+        }
+        if (firstRun) saveUi { it.copy(connectionMode = _connectionMode.value.value) }
         _dynamicTheme.value = ui.dynamicTheme
         ThemeState.dynamicEnabled = ui.dynamicTheme
         ThemeState.accent = ui.accentArgb?.let { Color(it) }
