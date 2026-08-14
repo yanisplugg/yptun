@@ -218,6 +218,35 @@ internal class DesktopEngineController(
     }
 
     /**
+     * A cascade only exists if the MAIN can open a TCP connection to the SECOND's server. Two hops
+     * that resolve to the SAME machine cannot: a node's own routing normally refuses connections
+     * back to itself (loop protection), which presents as "cascade connects and nothing loads" with
+     * nothing wrong on our side at all.
+     *
+     * [ProxyProfile.isSameNodeAs] only compares the configured host, so two different hostnames on one
+     * box slip past it — exactly the case in the user's subscription, where both hops resolved to
+     * 185.230.141.216. Say so out loud instead of leaving the user to guess; the cascade is still
+     * attempted, because a CDN-fronted pair can legitimately share an address.
+     */
+    private fun warnIfCascadeHopsShareAnAddress(main: ProxyProfile, second: ProxyProfile) {
+        val mainIps = resolveAll(main.server)
+        if (mainIps.isEmpty()) return
+        val secondIps = resolveAll(second.server)
+        if (secondIps.isEmpty()) return
+        val shared = mainIps intersect secondIps
+        if (shared.isEmpty()) return
+        log(
+            "WARNING: the cascade's two hops resolve to the SAME address (${shared.joinToString()}) — " +
+                "'${main.displayName()}' would have to dial '${second.displayName()}' on its own machine, " +
+                "which most servers refuse. If nothing loads, pick a 2nd proxy on a different server."
+        )
+    }
+
+    private fun resolveAll(host: String): Set<String> = runCatching {
+        java.net.InetAddress.getAllByName(host).mapNotNull { it.hostAddress }.toSet()
+    }.getOrDefault(emptySet())
+
+    /**
      * Replace the proxy server domain with a host-resolved IPv4 (keeping the original host as TLS
      * SNI), so the core dials by IP and never re-resolves the server name per-connection through the
      * in-config bootstrap DNS (which stalled on desktop). No-op if the server is blank, already an IP,
@@ -275,6 +304,7 @@ internal class DesktopEngineController(
                 log("2nd (cascade) proxy is the same node as the main — a cascade into itself is impossible; ignoring it (exit via the main)")
                 null
             } else {
+                warnIfCascadeHopsShareAnAddress(profile, second)
                 second
             }
         }
