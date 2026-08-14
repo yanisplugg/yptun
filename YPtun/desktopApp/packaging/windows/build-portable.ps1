@@ -59,21 +59,38 @@ $work = Join-Path $desktopApp "build\tmp\portable-$Arch"
 New-Item -ItemType Directory -Force $work | Out-Null
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
-# 1. The launcher stub, built for the TARGET architecture (pure stdlib, so no cgo toolchain needed).
+# 1. The payload: the app image as a plain zip (Deflate, so the launcher needs nothing but the Go
+#    standard library to read it back).
+$archive = Join-Path $work "app.zip"
+Remove-Item $archive -Force -ErrorAction SilentlyContinue
+Write-Host "Compressing app image ($Arch)..."
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $AppDir, $archive, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+
+# 2. Fingerprint of that payload. The launcher unpacks into a directory named after it, so two
+#    builds of the SAME version never collide - and that is the normal case here, because fixes are
+#    asked for without changing the version. Keyed on the version alone, a newly built portable
+#    found the PREVIOUS build already unpacked and marked ready, and started that one instead: none
+#    of the new code ran and the fixes looked missing.
+$buildId = (Get-FileHash $archive -Algorithm SHA256).Hash.Substring(0, 16).ToLower()
+Write-Host "Payload id: $buildId"
+
+# 3. The launcher stub, built for the TARGET architecture (pure stdlib, so no cgo toolchain needed).
 $stub = Join-Path $work "yptun-launcher.exe"
 Push-Location (Join-Path $here "portable-launcher")
 try {
     $env:GOOS = "windows"
     $env:GOARCH = $Arch
     $env:CGO_ENABLED = "0"
-    & $go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$Version" -o $stub .
+    & $go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$Version -X main.buildID=$buildId" -o $stub .
     if ($LASTEXITCODE -ne 0) { throw "go build failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location
     Remove-Item Env:GOOS, Env:GOARCH, Env:CGO_ENABLED -ErrorAction SilentlyContinue
 }
 
-# 2. The app icon. Without it the portable shows the generic Go/console icon in Explorer and the
+# 4. The app icon. Without it the portable shows the generic Go/console icon in Explorer and the
 #    taskbar, which is what made the warp-packer attempt unusable.
 $rcedit = Join-Path $work "rcedit.exe"
 if (-not (Test-Path $rcedit)) {
@@ -88,16 +105,7 @@ if (-not (Test-Path $rcedit)) {
     --set-product-version $Version
 if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
 
-# 3. The payload: the app image as a plain zip (Deflate, so the launcher needs nothing but the Go
-#    standard library to read it back).
-$archive = Join-Path $work "app.zip"
-Remove-Item $archive -Force -ErrorAction SilentlyContinue
-Write-Host "Compressing app image ($Arch)..."
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::CreateFromDirectory(
-    $AppDir, $archive, [System.IO.Compression.CompressionLevel]::Optimal, $false)
-
-# 4. stub + payload + trailer.
+# 5. stub + payload + trailer.
 $output = Join-Path $OutDir "YPtun-$Version-$suffix-portable.exe"
 $out = [IO.File]::Create($output)
 try {

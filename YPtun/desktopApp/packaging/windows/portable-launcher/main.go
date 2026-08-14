@@ -29,8 +29,17 @@ import (
 	"unsafe"
 )
 
-// Set at build time: -ldflags "-X main.version=3.2.1".
+// Set at build time: -ldflags "-X main.version=3.2.1 -X main.buildID=<hash>".
 var version = "dev"
+
+// Fingerprint of the payload this launcher carries, from build-portable.ps1 (the first 16 hex
+// digits of the app image's SHA-256).
+//
+// The unpack directory is keyed on it, NOT on the version: two builds of the SAME version are the
+// normal case here - the user asks for fixes "не меняя версию" - and keying on the version alone
+// meant a freshly built portable found the previous build's directory already marked ready and
+// started THAT one. The new code never ran, and it looked like the fixes had not been made.
+var buildID = "dev"
 
 const (
 	trailerMagic = "YPTUNPKG"
@@ -65,10 +74,11 @@ func ensureUnpacked() (string, error) {
 	if base == "" {
 		base = os.TempDir()
 	}
-	target := filepath.Join(base, "YPtun", "portable", version)
+	root := filepath.Join(base, "YPtun", "portable")
+	target := filepath.Join(root, version+"-"+buildID)
 
-	if _, err := os.Stat(filepath.Join(target, readyMarker)); err == nil {
-		if _, err := os.Stat(filepath.Join(target, appExe)); err == nil {
+	if stamp, err := os.ReadFile(filepath.Join(target, readyMarker)); err == nil {
+		if _, err := os.Stat(filepath.Join(target, appExe)); err == nil && string(stamp) == buildID {
 			return target, nil // already unpacked — the common case
 		}
 	}
@@ -114,7 +124,7 @@ func ensureUnpacked() (string, error) {
 	if err := os.WriteFile(filepath.Join(staging, portableMarker), nil, 0o644); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(staging, readyMarker), []byte(version), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(staging, readyMarker), []byte(buildID), 0o644); err != nil {
 		return "", err
 	}
 	_ = os.RemoveAll(target)
@@ -124,7 +134,23 @@ func ensureUnpacked() (string, error) {
 	if err := os.Rename(staging, target); err != nil {
 		return "", err
 	}
+	// Previous builds are dead weight now — several unpacked app images are ~170 MB each.
+	removeOtherBuilds(root, filepath.Base(target))
 	return target, nil
+}
+
+// removeOtherBuilds drops every unpacked image except [keep]. Best-effort: one still in use by a
+// running copy simply stays.
+func removeOtherBuilds(root, keep string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != keep {
+			_ = os.RemoveAll(filepath.Join(root, entry.Name()))
+		}
+	}
 }
 
 // payloadRange reads the trailer and returns the appended zip's size and offset.
