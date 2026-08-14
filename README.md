@@ -2,7 +2,7 @@
 
 # YPtun
 
-### Быстрый VPN для обхода блокировок · Android и Windows
+### VPN-клиент для обхода блокировок · Android и Windows
 
 *VLESS · Reality · XHTTP поверх **Xray** и **sing-box**, **Hysteria2** (QUIC), обфусцированный **AmneziaWG**, туннель через звонки **VK-TURN**, DNS-туннель **DNSTT**, отдельный Telegram-прокси через **WARP** — и **olcRTC**, маскирующий трафик под видеозвонок.*
 
