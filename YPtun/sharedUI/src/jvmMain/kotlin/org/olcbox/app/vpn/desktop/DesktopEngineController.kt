@@ -110,6 +110,7 @@ internal class DesktopEngineController(
         tunHandledInCore = false
         localSocksNoAuth = false
         dnsttProxyActive = false
+        singBoxFrontActive = false
         val config = location.normalized()
         when (config.engine) {
             EngineType.Stealth -> startStealth(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
@@ -167,8 +168,16 @@ internal class DesktopEngineController(
     /** True when the active dnstt engine also fronts a proxy core (proxy-over-dnstt). */
     private var dnsttProxyActive: Boolean = false
 
-    private fun proxyCoreRunning(): Boolean =
-        if (activeProxyCore == ProxyCore.Xray) YpTunCore.xrayRunning() else YpTunCore.sbRunning()
+    /** True while a sing-box front owns the TUN in front of the Xray core (see [startSingBoxFront]). */
+    private var singBoxFrontActive: Boolean = false
+
+    private fun proxyCoreRunning(): Boolean = if (activeProxyCore == ProxyCore.Xray) {
+        // With a front, the tunnel is only alive while BOTH halves are — a dead front means the TUN
+        // has no reader at all, which the watchdog must see as "disconnected".
+        YpTunCore.xrayRunning() && (!singBoxFrontActive || YpTunCore.sbRunning())
+    } else {
+        YpTunCore.sbRunning()
+    }
 
     // ---------------------------------------------------------------------------------------
     // Stealth (olcrtc in-process)
@@ -376,6 +385,12 @@ internal class DesktopEngineController(
         }
 
         if (activeProxyCore == ProxyCore.Xray) {
+            // xray-core has no TUN of its own, so on Windows this used to be handed to the external
+            // tun2socks bridge — see [singBoxFrontPort] for why that never worked. Put xray on an
+            // internal port and let a thin sing-box own the adapter instead.
+            val frontXray = requestedTun
+            val xrayPort = if (frontXray) singBoxFrontPort(listenPort) else listenPort
+            val xrayHost = if (frontXray) "127.0.0.1" else listenHost
             val rawXray = effectiveProfile.rawXrayConfig
             var assetPath = ""
             val json = if (!rawXray.isNullOrBlank()) {
@@ -383,8 +398,8 @@ internal class DesktopEngineController(
                 log("Starting Xray with custom config")
                 XrayConfig.prepareRaw(
                     rawConfigJson = rawXray,
-                    listenPort = listenPort,
-                    listenHost = listenHost,
+                    listenPort = xrayPort,
+                    listenHost = xrayHost,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
@@ -394,8 +409,8 @@ internal class DesktopEngineController(
                 assetPath = ensureGeoAssetPath(routingProfile)
                 XrayConfig.build(
                     profile = effectiveProfile,
-                    listenPort = listenPort,
-                    listenHost = listenHost,
+                    listenPort = xrayPort,
+                    listenHost = xrayHost,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
                     olcrtcChainPort = if (chained) chainPort else null,
@@ -421,6 +436,19 @@ internal class DesktopEngineController(
             log("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
             if (assetPath.isNotEmpty()) YpTunCore.xraySetAssetPath(assetPath)
             YpTunCore.xrayStart(json)
+            if (frontXray) {
+                startSingBoxFront(
+                    xrayPort = xrayPort,
+                    listenHost = listenHost,
+                    listenPort = listenPort,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    routing = routing,
+                    traffic = traffic,
+                    // xray already blackholes UDP/443 for TCP-only transports; leave the policy there.
+                    blockQuic = false,
+                )
+            }
         } else {
             if (isAwg) log("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4")
             if (isHy2) log("Hysteria2 outbound: QUIC allowed + sniff-override→IPv4")
@@ -478,6 +506,92 @@ internal class DesktopEngineController(
             throw IllegalStateException("Proxy SOCKS port $listenPort did not open")
         }
         log("Proxy core ready on $listenHost:$listenPort")
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // sing-box front for the Xray core (desktop TUN mode)
+
+    /**
+     * Internal loopback port an Xray core listens on while a sing-box front owns the TUN.
+     *
+     * Clear of every other offset in use: +1 olcRTC chain / Xray's cascade loopback, +2 AmneziaWG,
+     * +5 Trust Tunnel. XrayConfig derives its own cascade loopback from the port we hand it, so this
+     * reserves +6 AND +7.
+     */
+    private fun singBoxFrontPort(socksPort: Int) = socksPort + 6
+
+    /**
+     * Puts a thin sing-box in front of an already-started Xray core: sing-box owns the system TUN
+     * (wintun, auto_route) and relays everything into Xray's loopback SOCKS.
+     *
+     * WHY: xray-core has no TUN of its own, so every location that forces it — xhttp/splithttp, a
+     * routing profile, an xhttp cascade — used to fall back to the external xjasonlyu/tun2socks
+     * bridge. That bridge carries the OS's DNS as a SOCKS5 UDP ASSOCIATE, which stalls; it is the
+     * very reason sing-box was moved to an in-core TUN in the first place, and nothing was ever done
+     * for the Xray path. The tunnel came up and the servers pinged, but nothing resolved and no
+     * connection completed. This is the same shape AmneziaWG and Trust Tunnel already use (a local
+     * SOCKS fronted by sing-box), so it needs no new machinery.
+     *
+     * The front is deliberately DUMB: routing profile, QUIC policy, DNS hosts, FakeDNS and the RU
+     * blocklist all live in the Xray config and must not be applied twice. It does not resolve
+     * sniffed domains either, so Xray receives the DOMAIN its `domain:`/`geosite:` rules (and the
+     * REALITY SNI) depend on.
+     */
+    private suspend fun startSingBoxFront(
+        xrayPort: Int,
+        listenHost: String,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+        routing: org.olcbox.app.data.model.RoutingRules,
+        traffic: org.olcbox.app.data.model.TrafficSettings,
+        blockQuic: Boolean,
+    ) {
+        if (!awaitSocksPortOpen(xrayPort, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("Xray SOCKS port $xrayPort did not open")
+        }
+        val credentials = if (socksUsername.isNotBlank()) {
+            ",\"username\":\"$socksUsername\",\"password\":\"$socksPassword\""
+        } else {
+            ""
+        }
+        val frontProfile = ProxyProfile(
+            tag = "xray",
+            type = "socks",
+            server = "127.0.0.1",
+            serverPort = xrayPort,
+            rawOutbound = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
+                "\"server_port\":$xrayPort,\"version\":\"5\"$credentials}",
+        )
+        val json = SingBoxConfig.build(
+            profile = frontProfile,
+            listenPort = listenPort,
+            listenHost = listenHost,
+            socksUsername = socksUsername,
+            socksPassword = socksPassword,
+            autoDetectInterface = true,
+            routing = routing,
+            matchAppsByProcess = true,
+            // Everything policy-shaped is Xray's job here — see the doc above.
+            traffic = traffic.copy(fakeDnsEnabled = false, blockRuDomains = false),
+            routingProfile = null,
+            blockQuic = blockQuic,
+            forceFamilyResolve = false,
+            // DNS goes to Xray as a plain SOCKS5 CONNECT instead of a UDP ASSOCIATE — the associate
+            // path is exactly what died on the tun2socks bridge.
+            preferTcpRemoteDns = true,
+            tunMode = true,
+            splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
+            splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+            tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+            mixedInbound = true,
+            logFilePath = singBoxLogPath(),
+            cacheFilePath = singBoxCachePath(),
+        )
+        log("Fronting Xray with sing-box: in-core TUN on $listenHost:$listenPort → 127.0.0.1:$xrayPort")
+        YpTunCore.sbStart(json)
+        tunHandledInCore = true
+        singBoxFrontActive = true
     }
 
     // ---------------------------------------------------------------------------------------
@@ -541,11 +655,16 @@ internal class DesktopEngineController(
         log("DNSTT chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
 
         if (useXray) {
+            // xray owns no TUN — a sing-box front does, so the external tun2socks bridge (and its
+            // stalling SOCKS-UDP DNS) is skipped here too. See [startSingBoxFront].
+            val frontXray = requestedTun
+            val xrayPort = if (frontXray) singBoxFrontPort(listenPort) else listenPort
+            val xrayHost = if (frontXray) "127.0.0.1" else listenHost
             val assetPath = ensureGeoAssetPath(routingProfile)
             val xrayJson = XrayConfig.build(
                 profile = proxy,
-                listenPort = listenPort,
-                listenHost = listenHost,
+                listenPort = xrayPort,
+                listenHost = xrayHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
                 olcrtcChainPort = dnsttPort,
@@ -567,6 +686,18 @@ internal class DesktopEngineController(
             activeProxyCore = ProxyCore.Xray
             if (assetPath.isNotEmpty()) YpTunCore.xraySetAssetPath(assetPath)
             YpTunCore.xrayStart(xrayJson)
+            if (frontXray) {
+                startSingBoxFront(
+                    xrayPort = xrayPort,
+                    listenHost = listenHost,
+                    listenPort = listenPort,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    routing = routing,
+                    traffic = traffic,
+                    blockQuic = false,
+                )
+            }
         } else {
             val json = SingBoxConfig.build(
                 profile = proxy,
@@ -704,12 +835,17 @@ internal class DesktopEngineController(
             vk.resolvedProxyCore(proxyForCore) == ProxyCore.Xray
 
         if (useXray) {
+            // Same as the Standard/Chain path: xray owns no TUN, so a sing-box front does (and the
+            // external tun2socks bridge — with its stalling SOCKS-UDP DNS — is skipped entirely).
+            val frontXray = requestedTun
+            val xrayPort = if (frontXray) singBoxFrontPort(listenPort) else listenPort
+            val xrayHost = if (frontXray) "127.0.0.1" else listenHost
             val xrayJson = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) {
                 log("VK-TURN exit: proxy ${exitProfile.displayName()} over VK (tcp, Xray)")
                 XrayConfig.build(
                     profile = exitProfile,
-                    listenPort = listenPort,
-                    listenHost = listenHost,
+                    listenPort = xrayPort,
+                    listenHost = xrayHost,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
                     logLevel = "debug",
@@ -722,8 +858,8 @@ internal class DesktopEngineController(
                 XrayConfig.build(
                     profile = chainProxy,
                     wireguardBase = exitProfile,
-                    listenPort = listenPort,
-                    listenHost = listenHost,
+                    listenPort = xrayPort,
+                    listenHost = xrayHost,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
                     logLevel = "debug",
@@ -735,6 +871,19 @@ internal class DesktopEngineController(
             activeProxyCore = ProxyCore.Xray
             log("Starting Xray (VK-TURN, $outboundType) via $listenAddr")
             YpTunCore.xrayStart(xrayJson)
+            if (frontXray) {
+                startSingBoxFront(
+                    xrayPort = xrayPort,
+                    listenHost = listenHost,
+                    listenPort = listenPort,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    routing = routing,
+                    traffic = traffic,
+                    // VK-TURN carries UDP natively — never blackhole QUIC on this engine.
+                    blockQuic = false,
+                )
+            }
         } else {
             val json = when (outboundType) {
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
