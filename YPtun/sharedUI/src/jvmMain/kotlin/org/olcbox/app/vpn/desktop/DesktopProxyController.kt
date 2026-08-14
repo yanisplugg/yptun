@@ -1,5 +1,10 @@
 package org.olcbox.app.vpn.desktop
 
+import com.sun.jna.Native
+import com.sun.jna.Pointer
+import com.sun.jna.platform.win32.Advapi32Util
+import com.sun.jna.platform.win32.WinReg
+import com.sun.jna.win32.StdCallLibrary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -141,6 +146,24 @@ internal data class WindowsProxyState(
     }
 }
 
+/**
+ * One change to the Internet Settings registry key.
+ *
+ * Kept as data rather than a command line because these used to be `reg.exe` invocations: enabling
+ * spawned eight processes (four `reg query` + four `reg add`) and disabling four more, plus a
+ * PowerShell process to notify WinINET. PowerShell alone costs the better part of a second from
+ * cold — which is the whole of "медленно завершается отключение в прокси режиме", since the user
+ * waits on it with the app sitting in «Отключение…». The edits are now applied through the registry
+ * API directly (microseconds), and building them stays a pure function so it can still be tested.
+ */
+internal sealed interface RegistryEdit {
+    val name: String
+
+    data class SetString(override val name: String, val value: String) : RegistryEdit
+    data class SetDword(override val name: String, val value: Int) : RegistryEdit
+    data class Delete(override val name: String) : RegistryEdit
+}
+
 internal class WindowsProxyController : DesktopProxyController {
     @Volatile private var backup: WindowsProxyState? = null
     @Volatile private var active = false
@@ -160,9 +183,9 @@ internal class WindowsProxyController : DesktopProxyController {
         active = true
         ensureShutdownHook()
         // Direct HTTP proxy is what WinINET honours reliably (PAC + SOCKS5 is flaky on Windows).
-        // Best-effort per command: e.g. `reg delete AutoConfigURL` exits non-zero when the value is
-        // absent — that must NOT abort enabling the proxy.
-        enableHttpCommands(httpProxyHostPort).forEach { runCatching { runCommand(it) } }
+        // Best-effort per edit: deleting AutoConfigURL fails when the value is absent, and that
+        // must NOT abort enabling the proxy.
+        apply(enableHttpEdits(httpProxyHostPort))
         refreshProxySettings()
     }
 
@@ -170,12 +193,28 @@ internal class WindowsProxyController : DesktopProxyController {
         val state = backup
         active = false
         if (state == null) return
-        restoreCommands(state).forEach { command ->
-            runCatching { runCommand(command) }
-        }
+        apply(restoreEdits(state))
         refreshProxySettings()
         backup = null
         removeShutdownHook()
+    }
+
+    private fun apply(edits: List<RegistryEdit>) {
+        edits.forEach { edit ->
+            runCatching {
+                when (edit) {
+                    is RegistryEdit.SetString -> Advapi32Util.registrySetStringValue(
+                        WinReg.HKEY_CURRENT_USER, REGISTRY_KEY, edit.name, edit.value
+                    )
+                    is RegistryEdit.SetDword -> Advapi32Util.registrySetIntValue(
+                        WinReg.HKEY_CURRENT_USER, REGISTRY_KEY, edit.name, edit.value
+                    )
+                    is RegistryEdit.Delete -> Advapi32Util.registryDeleteValue(
+                        WinReg.HKEY_CURRENT_USER, REGISTRY_KEY, edit.name
+                    )
+                }
+            }
+        }
     }
 
     override suspend fun clearStaleProxy() {
@@ -183,7 +222,7 @@ internal class WindowsProxyController : DesktopProxyController {
         if (current.looksLikeOurs()) {
             // A previous run left a loopback proxy set but nothing is serving it now → disable it so
             // the machine has working internet again.
-            restoreCommands(DISABLED_STATE).forEach { runCatching { runCommand(it) } }
+            apply(restoreEdits(DISABLED_STATE))
             refreshProxySettings()
         }
     }
@@ -204,31 +243,32 @@ internal class WindowsProxyController : DesktopProxyController {
         shutdownHook = null
     }
 
-    private suspend fun readState(): WindowsProxyState {
+    private fun readState(): WindowsProxyState {
         return WindowsProxyState(
-            proxyEnable = queryValue("ProxyEnable"),
-            proxyServer = queryValue("ProxyServer"),
-            proxyOverride = queryValue("ProxyOverride"),
-            autoConfigUrl = queryValue("AutoConfigURL")
+            proxyEnable = intValue("ProxyEnable")?.let { "0x" + Integer.toHexString(it) },
+            proxyServer = stringValue("ProxyServer"),
+            proxyOverride = stringValue("ProxyOverride"),
+            autoConfigUrl = stringValue("AutoConfigURL")
         )
     }
 
-    private suspend fun queryValue(name: String): String? {
-        val output = runCatching {
-            runCommand(listOf("reg", "query", REGISTRY_KEY, "/v", name))
-        }.getOrNull() ?: return null
+    private fun stringValue(name: String): String? = runCatching {
+        Advapi32Util.registryGetStringValue(WinReg.HKEY_CURRENT_USER, REGISTRY_KEY, name)
+    }.getOrNull()?.takeIf { it.isNotBlank() }
 
-        return output.lineSequence()
-            .map { it.trim() }
-            .firstOrNull { it.startsWith(name) }
-            ?.split(Regex("\\s{2,}"))
-            ?.lastOrNull()
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-    }
+    private fun intValue(name: String): Int? = runCatching {
+        Advapi32Util.registryGetIntValue(WinReg.HKEY_CURRENT_USER, REGISTRY_KEY, name)
+    }.getOrNull()
 
-    private suspend fun refreshProxySettings() {
-        runCatching { runCommand(refreshCommand()) }
+    /**
+     * Tells WinINET — and therefore Edge, Chrome and everything else on the system proxy — to
+     * re-read the settings. INTERNET_OPTION_SETTINGS_CHANGED = 39, INTERNET_OPTION_REFRESH = 37.
+     */
+    private fun refreshProxySettings() {
+        runCatching {
+            WinINet.INSTANCE.InternetSetOptionW(null, 39, null, 0)
+            WinINet.INSTANCE.InternetSetOptionW(null, 37, null, 0)
+        }
     }
 
     companion object {
@@ -242,53 +282,50 @@ internal class WindowsProxyController : DesktopProxyController {
             autoConfigUrl = null
         )
 
-        fun enableHttpCommands(hostPort: String): List<List<String>> {
+        fun enableHttpEdits(hostPort: String): List<RegistryEdit> {
             return listOf(
-                // Clear any PAC so it can't race with the fixed proxy.
-                listOf("reg", "delete", REGISTRY_KEY, "/v", "AutoConfigURL", "/f"),
-                setStringCommand("ProxyServer", hostPort),
+                // Clear any PAC so it cannot race with the fixed proxy.
+                RegistryEdit.Delete("AutoConfigURL"),
+                RegistryEdit.SetString("ProxyServer", hostPort),
                 // Let loopback/intranet bypass the proxy so localhost tooling keeps working.
-                setStringCommand("ProxyOverride", "<local>;localhost;127.*;10.*;172.16.*;192.168.*"),
-                setDwordCommand("ProxyEnable", "1")
+                RegistryEdit.SetString(
+                    "ProxyOverride", "<local>;localhost;127.*;10.*;172.16.*;192.168.*"
+                ),
+                RegistryEdit.SetDword("ProxyEnable", 1)
             )
         }
 
-        fun restoreCommands(state: WindowsProxyState): List<List<String>> {
+        fun restoreEdits(state: WindowsProxyState): List<RegistryEdit> {
             return listOf(
-                valueCommand("ProxyEnable", state.proxyEnable, isDword = true),
-                valueCommand("ProxyServer", state.proxyServer, isDword = false),
-                valueCommand("ProxyOverride", state.proxyOverride, isDword = false),
-                valueCommand("AutoConfigURL", state.autoConfigUrl, isDword = false)
+                dwordEdit("ProxyEnable", state.proxyEnable),
+                stringEdit("ProxyServer", state.proxyServer),
+                stringEdit("ProxyOverride", state.proxyOverride),
+                stringEdit("AutoConfigURL", state.autoConfigUrl)
             )
         }
 
-        private fun valueCommand(name: String, value: String?, isDword: Boolean): List<String> {
-            return if (value == null) {
-                listOf("reg", "delete", REGISTRY_KEY, "/v", name, "/f")
-            } else if (isDword) {
-                setDwordCommand(name, value.removePrefix("0x").toIntOrNull(16)?.toString() ?: value)
-            } else {
-                setStringCommand(name, value)
-            }
-        }
+        private fun stringEdit(name: String, value: String?): RegistryEdit =
+            if (value == null) RegistryEdit.Delete(name) else RegistryEdit.SetString(name, value)
 
-        private fun setStringCommand(name: String, value: String): List<String> {
-            return listOf("reg", "add", REGISTRY_KEY, "/v", name, "/t", "REG_SZ", "/d", value, "/f")
+        private fun dwordEdit(name: String, value: String?): RegistryEdit {
+            if (value == null) return RegistryEdit.Delete(name)
+            val parsed = value.removePrefix("0x").toIntOrNull(16) ?: value.toIntOrNull()
+            return if (parsed == null) RegistryEdit.Delete(name) else RegistryEdit.SetDword(name, parsed)
         }
+    }
+}
 
-        private fun setDwordCommand(name: String, value: String): List<String> {
-            return listOf("reg", "add", REGISTRY_KEY, "/v", name, "/t", "REG_DWORD", "/d", value, "/f")
-        }
+/** `wininet!InternetSetOptionW` - the "settings changed" notification, without a PowerShell detour. */
+private interface WinINet : StdCallLibrary {
+    fun InternetSetOptionW(
+        hInternet: Pointer?,
+        dwOption: Int,
+        lpBuffer: Pointer?,
+        dwBufferLength: Int
+    ): Boolean
 
-        fun refreshCommand(): List<String> {
-            val script = """
-                ${'$'}signature = '[System.Runtime.InteropServices.DllImport("wininet.dll", SetLastError = true)] public static extern bool InternetSetOption(System.IntPtr hInternet, int dwOption, System.IntPtr lpBuffer, int dwBufferLength);';
-                Add-Type -MemberDefinition ${'$'}signature -Name WinInet -Namespace Native;
-                [Native.WinInet]::InternetSetOption([System.IntPtr]::Zero, 39, [System.IntPtr]::Zero, 0) | Out-Null;
-                [Native.WinInet]::InternetSetOption([System.IntPtr]::Zero, 37, [System.IntPtr]::Zero, 0) | Out-Null;
-            """.trimIndent()
-            return listOf("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
-        }
+    companion object {
+        val INSTANCE: WinINet by lazy { Native.load("wininet", WinINet::class.java) }
     }
 }
 

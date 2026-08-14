@@ -258,20 +258,18 @@ class DesktopProxyModeTest {
 
     @Test
     fun windowsProxyHttpEnableSetsFixedProxyAndClearsPac() {
-        val enable = WindowsProxyController.enableHttpCommands("127.0.0.1:10808")
-        val flat = enable.flatten()
+        val edits = WindowsProxyController.enableHttpEdits("127.0.0.1:10812")
+
         // Reliable WinINET path: fixed ProxyServer + ProxyEnable=1, and any stale PAC cleared.
-        assertContains(flat, "ProxyServer")
-        assertContains(flat, "127.0.0.1:10808")
-        assertContains(flat, "ProxyEnable")
-        assertContains(flat, "AutoConfigURL")
-        assertContains(flat, "delete") // the PAC clear
-        assertTrue(enable.any { it.contains("ProxyOverride") })
+        assertContains(edits, RegistryEdit.SetString("ProxyServer", "127.0.0.1:10812"))
+        assertContains(edits, RegistryEdit.SetDword("ProxyEnable", 1))
+        assertContains(edits, RegistryEdit.Delete("AutoConfigURL"))
+        assertTrue(edits.any { it.name == "ProxyOverride" && it is RegistryEdit.SetString })
     }
 
     @Test
     fun windowsProxyRestoreReproducesOriginalRegistry() {
-        val restore = WindowsProxyController.restoreCommands(
+        val edits = WindowsProxyController.restoreEdits(
             WindowsProxyState(
                 proxyEnable = "0x1",
                 proxyServer = "127.0.0.1:8888",
@@ -279,12 +277,13 @@ class DesktopProxyModeTest {
                 autoConfigUrl = null
             )
         )
-        val flat = restore.flatten()
-        assertContains(flat, "ProxyEnable")
-        assertContains(flat, "ProxyServer")
-        assertContains(flat, "ProxyOverride")
-        assertContains(flat, "AutoConfigURL")
-        assertContains(flat, "delete") // null autoConfigUrl => delete that value
+
+        // The DWORD comes back as a number, not the "0x1" text the registry read produced.
+        assertContains(edits, RegistryEdit.SetDword("ProxyEnable", 1))
+        assertContains(edits, RegistryEdit.SetString("ProxyServer", "127.0.0.1:8888"))
+        assertContains(edits, RegistryEdit.SetString("ProxyOverride", "<local>"))
+        // A value that was absent before must be DELETED, not written back empty.
+        assertContains(edits, RegistryEdit.Delete("AutoConfigURL"))
     }
 
     @Test
@@ -301,17 +300,6 @@ class DesktopProxyModeTest {
             !WindowsProxyState("0x1", "corp-proxy.example:3128", "<local>", null).looksLikeOurs()
         )
         assertTrue(!WindowsProxyState("0x0", null, null, null).looksLikeOurs())
-    }
-
-    @Test
-    fun windowsProxyRefreshCommandUsesFullyQualifiedWinInetSignature() {
-        val refresh = WindowsProxyController.refreshCommand()
-        val script = refresh.last()
-
-        assertEquals("powershell.exe", refresh.first())
-        assertContains(script, "System.Runtime.InteropServices.DllImport")
-        assertContains(script, "System.IntPtr")
-        assertContains(script, "InternetSetOption")
     }
 
     @Test
