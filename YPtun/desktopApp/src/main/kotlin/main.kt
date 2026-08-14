@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -84,6 +85,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.awt.awtEventOrNull
 import org.olcbox.app.desktop.DesktopElevation
+import org.olcbox.app.desktop.DesktopSingleInstance
 import org.olcbox.app.desktop.GlobalHotkey
 import org.olcbox.app.desktop.HotkeyBinding
 import androidx.compose.ui.graphics.graphicsLayer
@@ -210,7 +212,50 @@ fun main(args: Array<String>) {
     // try). Proxy mode needs nothing and is never asked. If this returns true the elevated copy is
     // already starting and this one must go away without ever painting a window.
     if (DesktopElevation.relaunchElevatedForStartup(args)) return
+
+    // One YPtun per machine. Launching the .exe again used to bring up a whole second copy — two
+    // trays, two engine controllers, both grabbing the same local ports and settings files. A later
+    // launch now just raises the window of the copy that is already running and exits.
+    // The copy that came back through UAC is the exception: its predecessor is still shutting down,
+    // and it must wait for the port rather than mistake itself for a duplicate.
+    val relaunchedAfterElevation = DesktopElevation.STARTUP_ELEVATION_ARGUMENT in args ||
+        WINDOWS_ELEVATED_START_ARGUMENT in args
+    val claimed = if (relaunchedAfterElevation) {
+        DesktopSingleInstance.claimAfterPredecessorExits(::requestWindowToFront)
+    } else {
+        DesktopSingleInstance.claim(::requestWindowToFront)
+    }
+    if (!claimed) return
+
     runApp(args)
+}
+
+/**
+ * Set by the running app so a second launch can raise its window (see [DesktopSingleInstance]).
+ * Held here rather than inside the composition because it is called from a plain socket thread.
+ */
+@Volatile
+private var showWindowRequest: (() -> Unit)? = null
+
+private fun requestWindowToFront() {
+    val request = showWindowRequest ?: return
+    javax.swing.SwingUtilities.invokeLater { runCatching { request() } }
+}
+
+/**
+ * Ends the process, rather than just the Compose application.
+ *
+ * `exitApplication()` only ends the composition; the JVM lives on until every non-daemon thread has
+ * finished, and the tray icon, the AWT event loop and the JDK's own HTTP server threads are all
+ * non-daemon. That is why «Выход» left YPtun running in the background — invisible, still holding
+ * its ports, and the reason a later launch then looked like a duplicate. Cleanup runs first
+ * (dependencies.close() stops the tunnel and puts the system proxy back), and the shutdown hooks
+ * registered by the proxy controller still run inside exitProcess.
+ */
+private fun quitApplication(dependencies: DesktopAppDependencies) {
+    runCatching { dependencies.close() }
+    runCatching { DesktopSingleInstance.release() }
+    kotlin.system.exitProcess(0)
 }
 
 private fun runApp(args: Array<String>) = application {
@@ -325,8 +370,7 @@ private fun runApp(args: Array<String>) = application {
             // A staged delta only lands once this process is gone (it holds its own jar open), and
             // the swapper is already waiting on our PID — so shut down the way «Выход» does.
             if (result.getOrNull() is DesktopUpdateOutcome.RestartRequired) {
-                dependencies.close()
-                exitApplication()
+                quitApplication(dependencies)
             }
         }
     }
@@ -433,9 +477,7 @@ private fun runApp(args: Array<String>) = application {
             resizable = false,
             alwaysOnTop = true,
             focusable = true,
-            state = rememberWindowState(
-                size = DpSize(TRAY_MENU_WIDTH, trayMenuHeight(hasLocationName = trayLocationName != null))
-            ),
+            state = rememberWindowState(size = DpSize(TRAY_MENU_WIDTH, TRAY_MENU_WINDOW_HEIGHT)),
         ) {
             LaunchedEffect(Unit) {
                 runCatching {
@@ -462,27 +504,42 @@ private fun runApp(args: Array<String>) = application {
                 onDispose { window.removeWindowFocusListener(listener) }
             }
             AppTheme(useDynamicColor = trayDynamicTheme) {
-                TrayMenu(
-                    russian = trayRussian,
-                    connected = trayConnected,
-                    loading = trayLoading,
-                    locationName = trayLocationName,
-                    canToggle = trayConnected || trayLoading || trayHomeState.canStartVpn,
-                    onOpen = { trayMenuVisible = false; isWindowVisible = true },
-                    onToggle = { trayMenuVisible = false; dependencies.homeViewModel.ToggleVpn() },
-                    onMyIp = { trayMenuVisible = false; showMyIpDialog = true },
-                    onHotkey = { trayMenuVisible = false; hotkeyDialogVisible = true },
-                    onSettings = {
-                        trayMenuVisible = false
-                        isWindowVisible = true
-                        showDesktopSettings = true
-                    },
-                    onQuit = {
-                        trayMenuVisible = false
-                        dependencies.close()
-                        exitApplication()
-                    },
-                )
+                // The window is deliberately taller than any menu can be, and the menu sits at its
+                // BOTTOM edge — which is the edge anchored next to the tray icon. A fixed window
+                // sized from hand-derived paddings kept cutting «Выход» off the bottom whenever a
+                // location name, a longer translation or a different display scale made the content
+                // taller than the arithmetic predicted. The surplus is transparent, so nothing shows;
+                // clicking it dismisses the menu, exactly like clicking outside the window.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                        ) { trayMenuVisible = false },
+                    contentAlignment = Alignment.BottomCenter,
+                ) {
+                    TrayMenu(
+                        russian = trayRussian,
+                        connected = trayConnected,
+                        loading = trayLoading,
+                        locationName = trayLocationName,
+                        canToggle = trayConnected || trayLoading || trayHomeState.canStartVpn,
+                        onOpen = { trayMenuVisible = false; isWindowVisible = true },
+                        onToggle = { trayMenuVisible = false; dependencies.homeViewModel.ToggleVpn() },
+                        onMyIp = { trayMenuVisible = false; showMyIpDialog = true },
+                        onHotkey = { trayMenuVisible = false; hotkeyDialogVisible = true },
+                        onSettings = {
+                            trayMenuVisible = false
+                            isWindowVisible = true
+                            showDesktopSettings = true
+                        },
+                        onQuit = {
+                            trayMenuVisible = false
+                            quitApplication(dependencies)
+                        },
+                    )
+                }
             }
         }
     }
@@ -504,8 +561,8 @@ private fun runApp(args: Array<String>) = application {
                 tunElevationPrompt = false
                 dependencies.settings.selectConnectionMode(org.olcbox.app.vpn.AndroidConnectionMode.Tun)
                 if (DesktopElevation.relaunchElevatedNow()) {
-                    dependencies.close()
-                    exitApplication()
+                    // The elevated copy is already waiting for our single-instance port.
+                    quitApplication(dependencies)
                 } else {
                     // UAC dismissed (or there is no launcher to relaunch, e.g. gradle :run): stay in
                     // the mode that actually works instead of a TUN that cannot come up.
@@ -603,6 +660,20 @@ private fun runApp(args: Array<String>) = application {
             onDispose {
                 dependencies.close()
             }
+        }
+
+        // A second launch of the .exe hands its "show yourself" here instead of starting a duplicate.
+        DisposableEffect(Unit) {
+            showWindowRequest = {
+                isWindowVisible = true
+                runCatching {
+                    window.isVisible = true
+                    if (window.state == java.awt.Frame.ICONIFIED) window.state = java.awt.Frame.NORMAL
+                    window.toFront()
+                    window.requestFocus()
+                }
+            }
+            onDispose { showWindowRequest = null }
         }
 
         val dynamicTheme by dependencies.settings.dynamicTheme.collectAsState()
@@ -1339,24 +1410,17 @@ private fun chooseSaveFile(owner: Frame, defaultName: String): File? {
 
 private val TRAY_MENU_WIDTH = 260.dp
 
-/** Row height of a [TrayMenuItem]: 1.dp outer + 9.dp inner padding on each side around an 18.dp icon. */
-private val TRAY_MENU_ITEM_HEIGHT = 38.dp
-
 /**
- * Exact height of [TrayMenu]'s content. The window is undecorated and fixed-size, so a value that
- * is too small silently CLIPS the bottom row — which is what cut the «Выход» item in half whenever
- * a location name made the status header two lines tall. Derived from the same paddings [TrayMenu]
- * uses, so adding a row here is a one-line change instead of a new magic number.
+ * Height of the tray menu's WINDOW — deliberately larger than any menu it can hold.
+ *
+ * The old value was arithmetic over [TrayMenu]'s own paddings, and it kept being wrong: a location
+ * name that wraps, a longer translation or a different display scale each made the content taller
+ * than predicted, and an undecorated fixed-size window silently CLIPS what does not fit — which is
+ * how «Выход» ended up cut off the bottom again. The window is transparent and the menu is pinned to
+ * its bottom edge (the one anchored at the tray icon), so the surplus is invisible and nothing can
+ * be clipped no matter how the content grows.
  */
-private fun trayMenuHeight(hasLocationName: Boolean): androidx.compose.ui.unit.Dp {
-    val itemCount = 5 // Open, Connect/Disconnect, My IP, Hotkey, Settings
-    val header = 20.dp + if (hasLocationName) 34.dp else 19.dp // vertical padding + 1 or 2 text lines
-    val rows = TRAY_MENU_ITEM_HEIGHT * (itemCount + 1) // + the Quit row below the second divider
-    val dividers = 2.dp
-    val columnPadding = 12.dp
-    val surfaceInset = 16.dp // the Surface's own 8.dp padding, top + bottom
-    return header + rows + dividers + columnPadding + surfaceInset
-}
+private val TRAY_MENU_WINDOW_HEIGHT = 520.dp
 
 @Composable
 private fun TrayMenu(
@@ -1375,7 +1439,8 @@ private fun TrayMenu(
     val scheme = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxWidth()
+            .wrapContentHeight()
             .padding(8.dp)
             .shadow(16.dp, RoundedCornerShape(14.dp), clip = false),
         shape = RoundedCornerShape(14.dp),
