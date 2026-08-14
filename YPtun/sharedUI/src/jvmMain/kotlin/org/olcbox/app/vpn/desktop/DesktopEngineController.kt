@@ -760,6 +760,9 @@ internal class DesktopEngineController(
                         splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                         splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                         tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                        // SOCKS+HTTP so desktop proxy mode can point the Windows system proxy here.
+                        mixedInbound = true,
+                        logFilePath = singBoxLogPath(),
                         cacheFilePath = singBoxCachePath(),
                     )
                 }
@@ -786,6 +789,9 @@ internal class DesktopEngineController(
                         splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                         splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                         tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                        // SOCKS+HTTP so desktop proxy mode can point the Windows system proxy here.
+                        mixedInbound = true,
+                        logFilePath = singBoxLogPath(),
                         cacheFilePath = singBoxCachePath(),
                     )
                 }
@@ -814,6 +820,9 @@ internal class DesktopEngineController(
                             splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                             splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                             tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                            // SOCKS+HTTP so desktop proxy mode can point the Windows system proxy here.
+                            mixedInbound = true,
+                            logFilePath = singBoxLogPath(),
                             cacheFilePath = singBoxCachePath(),
                         )
                     } else {
@@ -837,13 +846,22 @@ internal class DesktopEngineController(
                             splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                             splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
                             tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                            // SOCKS+HTTP so desktop proxy mode can point the Windows system proxy here.
+                            mixedInbound = true,
+                            logFilePath = singBoxLogPath(),
                             cacheFilePath = singBoxCachePath(),
                         )
                     }
                 }
             }
-            log("Starting sing-box (VK-TURN, $outboundType) via $listenAddr")
+            log("Starting sing-box (VK-TURN, $outboundType) via $listenAddr" +
+                if (requestedTun) " (in-core TUN)" else "")
             YpTunCore.sbStart(json)
+            // This was MISSING: the configs above are built with `tunMode = requestedTun`, so sing-box
+            // raises the wintun adapter with auto_route — but the manager was never told, so it ALSO
+            // started tun2socks on its own adapter with 0.0.0.0/1 + 128.0.0.0/1 at metric 1. Two TUNs
+            // fought over the default route and VK-TURN carried nothing.
+            tunHandledInCore = requestedTun
         }
 
         if (!awaitSocksPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
