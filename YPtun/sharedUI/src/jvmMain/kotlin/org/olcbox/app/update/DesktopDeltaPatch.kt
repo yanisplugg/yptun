@@ -1,83 +1,160 @@
 package org.olcbox.app.update
 
 import com.google.archivepatcher.applier.FileByFileV1DeltaApplier
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.io.BufferedInputStream
-import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.util.zip.GZIPInputStream
-import kotlin.io.path.deleteIfExists
+import java.util.zip.ZipFile
+import kotlin.io.path.exists
 
 /**
- * Desktop delta updates: a File-by-File v1 patch that turns the INSTALLED application jar into the
- * new release's jar, so an update downloads a few MB instead of the ~160 MB installer.
+ * Desktop delta updates: a bundle that rebuilds the changed files of an installed app image, so an
+ * update downloads a few MB instead of the ~160 MB installer.
  *
- * ## Container format (`YPtun-delta-<from>-<to>-<os>-<arch>.patch`)
+ * ## Why a bundle and not a single patch
  *
- * ```
- * YPTUNDLT1\n          magic + format version
- * <sha256 of the old jar>\n
- * <sha256 of the new jar>\n
- * <gzip-compressed raw File-by-File v1 patch>
- * ```
+ * jpackage flattens every dependency into `<install>/app/` as its own jar, and each name carries a
+ * content hash (`desktopApp-8ae7e33d….jar`) that changes with the contents. A release therefore
+ * REPLACES a handful of files rather than modifying one, and `YPtun.cfg` — which enumerates the
+ * classpath by exact filename — has to change with them. Anything under `runtime/` is out of scope:
+ * a JRE change means a full installer, and the generator refuses to produce a bundle for it.
  *
- * The two hashes are what make this safe to apply blind: the patch is refused unless the installed
- * jar is EXACTLY the one it was generated against, and the reconstructed jar is refused unless it is
- * byte-identical to the published one. Either check failing simply falls back to the full installer.
+ * ## Format (`YPtun-delta-<from>-<to>-<os>-<arch>.patch`)
+ *
+ * A ZIP holding `manifest.json` plus one payload entry per operation:
+ * - `patch` — a gzip File-by-File v1 patch turning `from` into `to` (both jars).
+ * - `add` — the new file verbatim (new dependency, `YPtun.cfg`, anything not worth patching).
+ * - `delete` — no payload; the old file goes away.
+ *
+ * Every operation carries SHA-256 of what it expects and what it produces. Nothing is applied unless
+ * the installation is EXACTLY the one the bundle was generated against, and nothing is handed to the
+ * swapper unless it came out byte-identical to the published build.
  */
 internal object DesktopDeltaPatch {
 
-    const val MAGIC = "YPTUNDLT1"
+    const val FORMAT = 2
 
-    data class Header(val fromSha256: String, val toSha256: String)
+    @Serializable
+    data class Manifest(
+        val format: Int = FORMAT,
+        val from: String = "",
+        val to: String = "",
+        val target: String = "",
+        val ops: List<Op> = emptyList(),
+    )
+
+    @Serializable
+    data class Op(
+        val op: String,
+        val from: String = "",
+        @SerialName("to") val to: String = "",
+        val fromSha: String = "",
+        val toSha: String = "",
+        val payload: String = "",
+    ) {
+        companion object {
+            const val PATCH = "patch"
+            const val ADD = "add"
+            const val DELETE = "delete"
+        }
+    }
+
+    /** What the swapper has to do once this process exits. */
+    data class Plan(
+        /** staged file → its final place in the app directory. */
+        val moves: List<Pair<Path, Path>>,
+        /** files in the app directory that the new build no longer has. */
+        val deletions: List<Path>,
+        val stagingDir: Path,
+    )
+
+    private val json = Json { ignoreUnknownKeys = true }
 
     /**
-     * Rebuilds the new jar from [baseJar] + [patchFile] into [target].
-     *
-     * @throws IllegalStateException when the container is malformed, the installed jar is not the
-     * patch's base, or the result doesn't match the expected hash.
+     * Rebuilds every changed file of [appDir] into a staging directory and returns the [Plan] to
+     * commit it. Throws when the bundle doesn't fit this installation — the caller then falls back
+     * to the full installer.
      */
-    fun apply(baseJar: Path, patchFile: Path, target: Path, tempDir: Path) {
+    fun stage(appDir: Path, bundle: Path, stagingDir: Path, tempDir: Path): Plan {
         Files.createDirectories(tempDir)
-        BufferedInputStream(Files.newInputStream(patchFile)).use { input ->
-            val header = readHeader(input)
-            val baseHash = DesktopAppImage.sha256(baseJar)
-            check(baseHash.equals(header.fromSha256, ignoreCase = true)) {
-                "installed jar is not the patch base (have $baseHash, want ${header.fromSha256})"
+        if (Files.exists(stagingDir)) stagingDir.toFile().deleteRecursively()
+        Files.createDirectories(stagingDir)
+
+        ZipFile(bundle.toFile()).use { zip ->
+            val manifestEntry = zip.getEntry(MANIFEST) ?: error("delta bundle has no $MANIFEST")
+            val manifest = json.decodeFromString(
+                Manifest.serializer(),
+                // removePrefix("﻿"): tolerate a BOM, which is what most Windows tooling writes.
+                zip.getInputStream(manifestEntry).use { it.readBytes().decodeToString() }
+                    .removePrefix("﻿")
+            )
+            check(manifest.format == FORMAT) { "unsupported delta format ${manifest.format}" }
+
+            val moves = mutableListOf<Pair<Path, Path>>()
+            val deletions = mutableListOf<Path>()
+
+            // Sorted so the classpath file lands last: if a move fails halfway, the installation is
+            // still the old, working one (old jars are only removed afterwards).
+            for (op in manifest.ops.sortedBy { it.op == Op.DELETE || it.to.endsWith(".cfg") }) {
+                when (op.op) {
+                    Op.PATCH -> {
+                        val base = appDir.resolve(op.from).requireSafe(appDir)
+                        check(base.exists()) { "installed file missing: ${op.from}" }
+                        val baseSha = DesktopAppImage.sha256(base)
+                        check(baseSha.equals(op.fromSha, ignoreCase = true)) {
+                            "installed ${op.from} is not this patch's base"
+                        }
+                        val staged = stagingDir.resolve(op.to).requireSafe(stagingDir)
+                        val entry = zip.getEntry(op.payload) ?: error("missing payload ${op.payload}")
+                        Files.newOutputStream(staged).use { output ->
+                            GZIPInputStream(BufferedInputStream(zip.getInputStream(entry))).use { patch ->
+                                FileByFileV1DeltaApplier(tempDir.toFile())
+                                    .applyDelta(base.toFile(), patch, output)
+                            }
+                        }
+                        verify(staged, op.toSha, op.to)
+                        moves += staged to appDir.resolve(op.to).requireSafe(appDir)
+                        if (op.from != op.to) deletions.add(base)
+                    }
+
+                    Op.ADD -> {
+                        val staged = stagingDir.resolve(op.to).requireSafe(stagingDir)
+                        Files.createDirectories(staged.parent)
+                        val entry = zip.getEntry(op.payload) ?: error("missing payload ${op.payload}")
+                        zip.getInputStream(entry).use { input ->
+                            Files.copy(input, staged, StandardCopyOption.REPLACE_EXISTING)
+                        }
+                        verify(staged, op.toSha, op.to)
+                        moves += staged to appDir.resolve(op.to).requireSafe(appDir)
+                    }
+
+                    Op.DELETE -> deletions.add(appDir.resolve(op.from).requireSafe(appDir))
+
+                    else -> error("unknown delta operation '${op.op}'")
+                }
             }
-            Files.newOutputStream(target).use { output ->
-                FileByFileV1DeltaApplier(tempDir.toFile())
-                    .applyDelta(baseJar.toFile(), GZIPInputStream(input), output)
-            }
-            val resultHash = DesktopAppImage.sha256(target)
-            if (!resultHash.equals(header.toSha256, ignoreCase = true)) {
-                target.deleteIfExists()
-                error("patched jar does not match the published one ($resultHash != ${header.toSha256})")
-            }
+            return Plan(moves = moves, deletions = deletions, stagingDir = stagingDir)
         }
     }
 
-    /**
-     * Reads the three header lines, leaving [input] positioned at the first byte of the gzip stream.
-     * Read one byte at a time on purpose — a buffered reader would swallow part of the payload.
-     */
-    fun readHeader(input: InputStream): Header {
-        val magic = readLine(input)
-        check(magic == MAGIC) { "not a YPtun delta patch (magic='$magic')" }
-        val from = readLine(input)
-        val to = readLine(input)
-        check(from.length == 64 && to.length == 64) { "malformed delta patch header" }
-        return Header(from, to)
+    private fun verify(file: Path, expectedSha: String, name: String) {
+        val sha = DesktopAppImage.sha256(file)
+        check(sha.equals(expectedSha, ignoreCase = true)) {
+            "rebuilt $name does not match the published file"
+        }
     }
 
-    private fun readLine(input: InputStream): String {
-        val line = StringBuilder()
-        while (true) {
-            val b = input.read()
-            if (b < 0 || b == '\n'.code) break
-            if (b != '\r'.code) line.append(b.toChar())
-            check(line.length <= 128) { "malformed delta patch header" }
-        }
-        return line.toString()
+    /** Guards against a manifest path escaping the directory it is meant to write into. */
+    private fun Path.requireSafe(root: Path): Path {
+        val normalized = normalize()
+        check(normalized.startsWith(root.normalize())) { "delta bundle path escapes the app directory" }
+        return normalized
     }
+
+    private const val MANIFEST = "manifest.json"
 }

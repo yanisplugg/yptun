@@ -7,27 +7,30 @@ import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
 
 /**
- * Swaps a freshly-patched application jar into the installed app image.
+ * Commits a staged delta update into the installed app image.
  *
- * The running JVM holds its own jar open, so the file cannot be replaced in place. Instead a tiny
- * script is started that waits for THIS process to exit, moves the new jar over the old one and
- * relaunches YPtun. If the move fails (no permission, disk full), the installation is untouched and
- * the app simply starts on the old version again — the update is retried next time.
+ * The running JVM holds every jar on its classpath open, so nothing can be replaced in place.
+ * Instead a small script is started that waits for THIS process to exit, moves the rebuilt files
+ * over the old ones, removes what the new build dropped, and relaunches YPtun.
+ *
+ * Ordering is the safety net: [DesktopDeltaPatch] hands over moves with `YPtun.cfg` — the file that
+ * names the classpath — last, and deletions after that. A move that fails midway therefore leaves an
+ * installation that still boots the old build, and the update is simply retried next time.
  */
 internal object DesktopSelfUpdate {
 
     /**
-     * Starts the waiting swapper for [stagedJar] → [targetJar]. Safe to call before the app begins
-     * its own shutdown: the script polls for the process to disappear first.
+     * Starts the waiting swapper for [plan]. Safe to call before the app begins its own shutdown:
+     * the script polls for the process to disappear first.
      */
-    fun scheduleSwap(stagedJar: Path, targetJar: Path) {
+    fun scheduleSwap(plan: DesktopDeltaPatch.Plan) {
         val pid = ProcessHandle.current().pid()
         val launcher = DesktopAppImage.launcher()
         val script = when (DesktopPaths.os) {
-            DesktopOs.Windows -> writeWindowsScript(pid, stagedJar, targetJar, launcher)
-            else -> writeUnixScript(pid, stagedJar, targetJar, launcher)
+            DesktopOs.Windows -> writeWindowsScript(pid, plan, launcher)
+            else -> writeUnixScript(pid, plan, launcher)
         }
-        start(script, targetJar)
+        start(script, plan)
     }
 
     private fun scriptDir(): Path =
@@ -35,11 +38,16 @@ internal object DesktopSelfUpdate {
 
     private fun writeWindowsScript(
         pid: Long,
-        stagedJar: Path,
-        targetJar: Path,
+        plan: DesktopDeltaPatch.Plan,
         launcher: Path?
     ): Path {
         val script = scriptDir().resolve("yptun-apply-update.cmd")
+        val moves = plan.moves.joinToString("\r\n") { (from, to) ->
+            "move /y \"${from.toAbsolutePath()}\" \"${to.toAbsolutePath()}\" >nul"
+        }
+        val deletes = plan.deletions.joinToString("\r\n") { path ->
+            "del /f /q \"${path.toAbsolutePath()}\" >nul 2>&1"
+        }
         val relaunch = launcher?.let { "start \"\" \"${it.toAbsolutePath()}\"" }.orEmpty()
         Files.writeString(
             script,
@@ -51,7 +59,9 @@ internal object DesktopSelfUpdate {
               ping -n 2 127.0.0.1 >nul
               goto wait
             )
-            move /y "${stagedJar.toAbsolutePath()}" "${targetJar.toAbsolutePath()}" >nul
+            $moves
+            $deletes
+            rmdir /s /q "${plan.stagingDir.toAbsolutePath()}" >nul 2>&1
             $relaunch
             del "%~f0"
             """.trimIndent().replace("\n", "\r\n")
@@ -61,18 +71,25 @@ internal object DesktopSelfUpdate {
 
     private fun writeUnixScript(
         pid: Long,
-        stagedJar: Path,
-        targetJar: Path,
+        plan: DesktopDeltaPatch.Plan,
         launcher: Path?
     ): Path {
         val script = scriptDir().resolve("yptun-apply-update.sh")
+        val moves = plan.moves.joinToString("\n") { (from, to) ->
+            "mv -f \"${from.toAbsolutePath()}\" \"${to.toAbsolutePath()}\" || exit 1"
+        }
+        val deletes = plan.deletions.joinToString("\n") { path ->
+            "rm -f \"${path.toAbsolutePath()}\""
+        }
         val relaunch = launcher?.let { "\"${it.toAbsolutePath()}\" >/dev/null 2>&1 &" }.orEmpty()
         Files.writeString(
             script,
             """
             #!/bin/sh
             while kill -0 $pid 2>/dev/null; do sleep 0.5; done
-            mv -f "${stagedJar.toAbsolutePath()}" "${targetJar.toAbsolutePath()}" || exit 1
+            $moves
+            $deletes
+            rm -rf "${plan.stagingDir.toAbsolutePath()}"
             $relaunch
             rm -f "$0"
             """.trimIndent()
@@ -84,11 +101,11 @@ internal object DesktopSelfUpdate {
     }
 
     /**
-     * Runs the swapper, elevating only when the install directory is not writable by this process —
-     * an app already running as administrator (TUN mode restarts itself that way) never prompts.
+     * Runs the swapper, elevating only when the app directory is not writable by this process — an
+     * app already running as administrator (TUN mode restarts itself that way) never prompts.
      */
-    private fun start(script: Path, targetJar: Path) {
-        val needsElevation = !Files.isWritable(targetJar)
+    private fun start(script: Path, plan: DesktopDeltaPatch.Plan) {
+        val needsElevation = !Files.isWritable(plan.stagingDir.parent ?: plan.stagingDir)
         val command = when {
             DesktopPaths.os == DesktopOs.Windows && needsElevation -> listOf(
                 "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",

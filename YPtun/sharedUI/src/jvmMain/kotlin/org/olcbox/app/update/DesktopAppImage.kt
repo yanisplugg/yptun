@@ -32,22 +32,23 @@ internal object DesktopAppImage {
     }.getOrNull()
 
     /**
-     * The application jar of the installed image, i.e. the one delta patches apply to.
+     * The `app/` directory of the installed image — every jar plus `YPtun.cfg`, i.e. everything a
+     * delta update touches. Null outside an installation (a Gradle `run`, an IDE, loose classes).
      *
-     * The running jar IS that file in a packaged build; the check that it sits in an `app/` directory
-     * next to a `runtime/` one is what tells a real installation apart from a development run.
+     * The running jar sits in it in a packaged build; the check that it is an `app/` directory next
+     * to a `runtime/` one is what tells a real installation apart from a development run.
      */
-    fun installedAppJar(): Path? {
+    fun appDir(): Path? {
         val jar = runningJar() ?: return null
         val appDir = jar.parent ?: return null
         if (!appDir.name.equals("app", ignoreCase = true)) return null
         val installDir = appDir.parent ?: return null
         if (!installDir.resolve("runtime").isDirectory()) return null
-        return jar
+        return appDir
     }
 
     /** The installed image's root (the directory holding the launcher), or null outside one. */
-    fun installDir(): Path? = installedAppJar()?.parent?.parent
+    fun installDir(): Path? = appDir()?.parent
 
     /** The launcher executable to restart after an update, or null when it can't be found. */
     fun launcher(): Path? {

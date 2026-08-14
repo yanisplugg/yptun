@@ -27,11 +27,11 @@ class JvmUpdateInstaller(
     /**
      * Installs [info], preferring a binary delta.
      *
-     * The delta path downloads a few-MB patch and rebuilds the installed application jar locally
-     * instead of pulling the ~160 MB installer. It is refused unless the installed jar is exactly
-     * the patch's base AND the result matches the published jar byte for byte (see
-     * [DesktopDeltaPatch]), so any mismatch, any I/O failure and any non-app-image installation
-     * simply falls through to the full download below.
+     * The delta path downloads a few-MB bundle and rebuilds the changed files of the installed app
+     * image locally instead of pulling the ~160 MB installer. It is refused unless the installation
+     * is exactly the one the bundle was built against AND every rebuilt file matches the published
+     * one byte for byte (see [DesktopDeltaPatch]), so any mismatch, any I/O failure and any
+     * non-app-image run simply falls through to the full download below.
      */
     suspend fun install(
         info: AppUpdateInfo,
@@ -65,26 +65,25 @@ class JvmUpdateInstaller(
         delta: AppUpdateAsset,
         onProgress: (Float) -> Unit
     ): DesktopUpdateOutcome.RestartRequired? = withContext(Dispatchers.IO) {
-        val targetJar = DesktopAppImage.installedAppJar() ?: return@withContext null
-        val patch = download(delta, onProgress)
-        // Staged NEXT TO the installed jar when possible so the final move is a rename on the same
-        // volume; the swapper falls back to a cross-volume copy otherwise.
-        val staged = targetJar.resolveSibling(targetJar.fileName.toString() + ".new")
-        try {
-            DesktopDeltaPatch.apply(
-                baseJar = targetJar,
-                patchFile = patch,
-                target = staged,
+        val appDir = DesktopAppImage.appDir() ?: return@withContext null
+        val bundle = download(delta, onProgress)
+        // Staged INSIDE the app directory so every commit is a rename on the same volume.
+        val stagingDir = appDir.resolve(".yptun-update")
+        val plan = try {
+            DesktopDeltaPatch.stage(
+                appDir = appDir,
+                bundle = bundle,
+                stagingDir = stagingDir,
                 tempDir = directory.resolve("patch-tmp")
             )
         } catch (e: Exception) {
-            staged.deleteIfExists()
+            runCatching { stagingDir.toFile().deleteRecursively() }
             throw e
         } finally {
-            patch.deleteIfExists()
+            bundle.deleteIfExists()
             runCatching { directory.resolve("patch-tmp").toFile().deleteRecursively() }
         }
-        DesktopSelfUpdate.scheduleSwap(stagedJar = staged, targetJar = targetJar)
+        DesktopSelfUpdate.scheduleSwap(plan)
         DesktopUpdateOutcome.RestartRequired("Update ready — restarting YPtun")
     }
 
