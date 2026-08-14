@@ -20,6 +20,7 @@ on:
       - ".github/workflows/linux-deb.yml"
       - "YPtun/desktopApp/**"
       - "YPtun/sharedUI/src/jvmMain/**"
+      - "YPtun/sharedUI/src/commonMain/**"
       - "YPtun/gradle.properties"
       - "cores/**"
       - "olcrtc/**"

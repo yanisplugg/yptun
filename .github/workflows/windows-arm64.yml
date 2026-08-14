@@ -28,6 +28,7 @@ on:
       - ".github/workflows/windows-arm64.yml"
       - "YPtun/desktopApp/**"
       - "YPtun/sharedUI/src/jvmMain/**"
+      - "YPtun/sharedUI/src/commonMain/**"
       - "YPtun/gradle.properties"
       - "cores/**"
       - "olcrtc/**"
