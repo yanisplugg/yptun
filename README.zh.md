@@ -2,7 +2,7 @@
 
 # YPtun
 
-### 快速抗审查 VPN · Android
+### 快速抗审查 VPN · Android 与 Windows
 
 *基于 **Xray** 与 **sing-box** 的 VLESS · Reality · XHTTP，**Hysteria2**（QUIC），混淆的 **AmneziaWG**，通过 **VK-TURN** 通话的隧道，**DNSTT** DNS 隧道，基于 **WARP** 的独立 Telegram 代理 —— 以及把流量伪装成视频通话的 **olcRTC**。*
 
@@ -32,21 +32,21 @@
 
 > 为互联网受阻的地方而生 —— 俄罗斯、伊朗，以及任何网站会无预警消失的国家。
 
-> **桌面版即将到来** —— 原生 Windows 和 Linux 版本正在开发中。
+> **Windows 版已发布** —— 安装程序与单文件 `.exe` 便携版，支持 x64 与原生 ARM64。与手机端完全相同的应用和内核：订阅、路由配置、链式代理、VK-TURN、olcRTC、DNSTT、Trust Tunnel。
 
 ---
 
-## 3.0.0 新功能
+## 3.2.1 新功能
 
 | | |
 |---|---|
-| **sing-box 内核升级到 1.13** | 带来最新修复与兼容性。最重要的是，Hysteria2 与 NaïveProxy 现在**原生**内置于 sing-box，无需单独桥接。 |
-| **原生 Hysteria2** | 完全改用 sing-box 原生出站（auth、上/下行、Salamander 混淆、端口跳跃）—— 更快更稳；旧的外部模块已移除。 |
-| **NaïveProxy** | 新协议：把流量伪装成普通的 Chrome HTTP/2（Chromium cronet 引擎）。适用于按特征（DPI）阻断连接的环境。 |
-| **透明代理（tproxy）** | 新的连接模式：内核级拦截（TCP + UDP），无需 TUN。仅限 root（需要 `CAP_NET_ADMIN`）。 |
-| **主屏小组件** | 两个与应用主题一致的小组件：一个开关，以及带 `↓/↑` 速率、`‹ ›` 服务器切换和「自动」按钮的状态小组件。直接从服务连接/切换 —— **无需打开应用**；「自动」按钮现在也在后台运行并即时响应。 |
-| **构建保护 + 增量更新** | 若 APK 被他人重新签名（重打包/植入广告的构建）会给出警告。更新以约 1 MB 的补丁下载，而非完整 APK。 |
-| **VK-TURN 内核更新** | freeturn 1.6.0 与 WDTT —— 刷新 VK 认证（`vkcalls` 模式）、验证码与指纹。 |
+| **Windows 客户端** | 安装程序（中/英/俄/波斯语）以及**单文件 `.exe`** 便携版，支持 x64 与原生 ARM64。两种模式：「隧道」——像手机一样创建自己的网络适配器；「代理」——本地 SOCKS5 + HTTP，无需管理员权限。 |
+| **按进程分流** | 桌面端的分应用代理：所选程序绕过隧道，或者反过来只让它们走隧道。 |
+| **托盘菜单 + 全局快捷键** | 状态、连接、切换服务器、「我的 IP」和设置都可从托盘直接操作。全局快捷键可在任意应用中开关 VPN。 |
+| **内核更新** | xray-core 26.7.28、sing-box 1.13.18、freeturn 2.1.1、olcRTC。QUIC（Hysteria2 / TUIC / DoQ / HTTP3）已在所有平台编译。 |
+| **FakeDNS 不再漏到隧道之外** | FakeDNS 的合成地址可能命中「私有地址 → 直连」规则，导致连接绕过隧道，应用报告证书不受信任。FakeDNS 映射表现在也能在重连后保留。 |
+| **路由** | 规则集（rule-set）改为通过隧道下载，`asn:` 在桌面端同样可用。 |
+| **桌面增量更新** | 更新只下载几 MB，而不是整个安装包。 |
 
 ---
 
@@ -130,7 +130,7 @@
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.0.0 -Polcbox.versionCode=287
+  -Polcbox.version=3.2.1 -Polcbox.versionCode=322
 ```
 
 APK 会生成在 `YPtun/androidApp/build/outputs/apk/release/`。
@@ -192,8 +192,8 @@ amneziawg-go/     AmneziaWG 实现                                   (已 vendor
 - [x] Android 发布
 - [x] AmneziaWG、VK-TURN 与 DNSTT 引擎
 - [x] 分流配置（兼容 Happ）+ ASN
-- [ ] **Windows** 版本 —— *即将推出*
-- [ ] **Linux** 版本 —— *即将推出*
+- [x] **Windows** 版本（x64 与 ARM64）
+- [ ] **Linux** 版本 —— *开发中*
 
 > 共享引擎已能在 JVM（`desktopApp`）上运行，所以桌面端是下一步。
 
