@@ -19,21 +19,20 @@ import (
 	"time"
 
 	protoLogger "github.com/livekit/protocol/logger"
+	lksdk "github.com/owenewans/owenlivekit/v2"
+
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
 	configpkg "github.com/openlibrecommunity/olcrtc/internal/config"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
 	"github.com/openlibrecommunity/olcrtc/internal/supervisor"
-	lksdk "github.com/owenewans/owenlivekit/v2"
 )
 
-const modeGen = "gen"
+// shutdownGrace bounds how long a cancelled session may take to unwind.
+const shutdownGrace = 5 * time.Second
 
 // ErrConfigPathRequired is returned when no config file is provided.
 var ErrConfigPathRequired = errors.New("usage: olcrtc <config.yaml>")
-
-// ErrDataDirRequired is returned when the YAML config does not specify a data directory.
-var ErrDataDirRequired = errors.New("data directory required (set 'data:' in YAML)")
 
 // ErrProfilesUnsupportedForGen is returned when failover profiles are configured for gen mode.
 var ErrProfilesUnsupportedForGen = errors.New("profiles are only supported for srv and cnc modes")
@@ -59,9 +58,18 @@ type failoverConfig struct {
 }
 
 func main() {
-	if err := run(); err != nil {
+	err := run()
+
+	// Report before the filter is torn down: flushStderrFilter restores the
+	// real stderr, but the error still has to travel through the filter
+	// goroutine to stay ordered with everything already buffered in it.
+	if err != nil {
 		logger.Error(err)
-		flushStderrFilter()
+	}
+
+	flushStderrFilter()
+
+	if err != nil {
 		os.Exit(1)
 	}
 }
@@ -71,7 +79,6 @@ func run() error {
 }
 
 func runWithArgs(args []string) error {
-	logger.DisableNoisyPionLogs()
 	installStderrFilter()
 	session.RegisterDefaults()
 
@@ -83,90 +90,90 @@ func runWithArgs(args []string) error {
 	if err != nil {
 		return err
 	}
+
 	return runWithConfig(cfg)
 }
 
 func loadConfig(path string) (loadedConfig, error) {
-	f, err := configpkg.Load(path)
+	file, err := configpkg.Load(path)
 	if err != nil {
 		return loadedConfig{}, fmt.Errorf("load config: %w", err)
 	}
-	base := configpkg.Apply(session.Config{}, f)
-	profiles := make([]supervisor.Profile, 0, len(f.Profiles))
-	for i, profile := range f.Profiles {
+
+	base := configpkg.Apply(file)
+
+	profiles := make([]supervisor.Profile, 0, len(file.Profiles))
+	for i, profile := range file.Profiles {
 		name := profile.Name
 		if name == "" {
 			name = fmt.Sprintf("profile-%d", i+1)
 		}
+
 		profiles = append(profiles, supervisor.Profile{
 			Name:   name,
 			Config: configpkg.ApplyProfile(base, profile),
 		})
 	}
-	failover, err := parseFailoverConfig(f.Failover)
+
+	failover, err := parseFailoverConfig(file.Failover)
 	if err != nil {
 		return loadedConfig{}, err
 	}
+
 	return loadedConfig{
 		scfg:     base,
 		profiles: profiles,
 		failover: failover,
-		dataDir:  f.Data,
-		debug:    f.Debug,
+		dataDir:  resolveDataDir(path, file.Data),
+		debug:    file.Debug,
 	}, nil
 }
 
 func parseFailoverConfig(f configpkg.Failover) (failoverConfig, error) {
 	retryDelay := supervisor.DefaultRetryDelay
+
 	if f.RetryDelay != "" {
 		parsed, err := time.ParseDuration(f.RetryDelay)
 		if err != nil {
 			return failoverConfig{}, fmt.Errorf("parse failover.retry_delay: %w", err)
 		}
+
 		retryDelay = parsed
 	}
+
 	return failoverConfig{retryDelay: retryDelay, maxCycles: f.MaxCycles}, nil
 }
 
 func runWithConfig(cfg loadedConfig) error {
 	configureLogging(cfg.debug)
 
-	scfg, err := session.ApplyAuthDefaults(cfg.scfg)
-	if err != nil {
-		return fmt.Errorf("validate config: %w", err)
-	}
-	scfg = session.ApplyTransportDefaults(scfg)
-	scfg = session.ApplyLivenessDefaults(scfg)
+	scfg := session.ApplyDefaults(cfg.scfg)
 
-	if scfg.Mode == modeGen {
+	if scfg.Mode == session.ModeGen {
 		if len(cfg.profiles) > 0 {
 			return ErrProfilesUnsupportedForGen
 		}
+
 		return runGen(scfg)
 	}
 
 	if len(cfg.profiles) > 0 {
-		profiles, err := prepareProfiles(cfg.profiles)
-		if err != nil {
-			return err
-		}
+		profiles := prepareProfiles(cfg.profiles)
 		return runFailoverSessionMode(cfg.dataDir, profiles, cfg.failover)
 	}
 
 	return runSessionMode(cfg.dataDir, scfg)
 }
 
-func prepareProfiles(profiles []supervisor.Profile) ([]supervisor.Profile, error) {
+func prepareProfiles(profiles []supervisor.Profile) []supervisor.Profile {
 	out := make([]supervisor.Profile, 0, len(profiles))
+
 	for _, profile := range profiles {
-		scfg, err := session.ApplyAuthDefaults(profile.Config)
-		if err != nil {
-			return nil, fmt.Errorf("validate profile %q: %w", profile.Name, err)
-		}
-		profile.Config = session.ApplyLivenessDefaults(session.ApplyTransportDefaults(scfg))
+		profile.Config = session.ApplyDefaults(profile.Config)
 		out = append(out, profile)
 	}
-	return out, nil
+
+	return out
 }
 
 func runSessionMode(dataDir string, scfg session.Config) error {
@@ -174,7 +181,7 @@ func runSessionMode(dataDir string, scfg session.Config) error {
 		return fmt.Errorf("validate config: %w", err)
 	}
 
-	if err := prepareRuntimeData(dataDir); err != nil {
+	if err := loadNameOverrides(dataDir); err != nil {
 		return err
 	}
 
@@ -190,7 +197,7 @@ func runFailoverSessionMode(dataDir string, profiles []supervisor.Profile, failo
 		}
 	}
 
-	if err := prepareRuntimeData(dataDir); err != nil {
+	if err := loadNameOverrides(dataDir); err != nil {
 		return err
 	}
 
@@ -200,14 +207,16 @@ func runFailoverSessionMode(dataDir string, profiles []supervisor.Profile, failo
 			RetryDelay: failover.retryDelay,
 			MaxCycles:  failover.maxCycles,
 			OnProfileStart: func(profile supervisor.Profile, cycle int) {
-				logger.Infof("failover cycle=%d starting profile=%s carrier=%s transport=%s",
-					cycle, profile.Name, profile.Config.Auth, profile.Config.Transport)
+				logger.Infof("failover cycle=%d starting profile=%s provider=%s transport=%s",
+					cycle, profile.Name, profile.Config.Provider, profile.Config.Transport)
 			},
 			OnProfileEnd: func(profile supervisor.Profile, cycle int, err error) {
 				if err != nil {
 					logger.Warnf("failover cycle=%d profile=%s ended with error: %v", cycle, profile.Name, err)
+
 					return
 				}
+
 				logger.Warnf("failover cycle=%d profile=%s ended", cycle, profile.Name)
 			},
 			OnStatus: logFailoverStatus,
@@ -219,10 +228,12 @@ func logFailoverStatus(status supervisor.Status) {
 	if !logger.IsVerbose() {
 		return
 	}
+
 	active := status.ActiveProfile
 	if active == "" {
 		active = "none"
 	}
+
 	logger.Debugf("failover status cycle=%d active=%s last_error=%q profiles=%s history=%d",
 		status.Cycle, active, status.LastError, formatProfileStatuses(status.Profiles), len(status.History))
 }
@@ -231,34 +242,23 @@ func formatProfileStatuses(profiles []supervisor.ProfileStatus) string {
 	if len(profiles) == 0 {
 		return "[]"
 	}
+
 	var buf bytes.Buffer
-	buf.WriteByte('[')
+
+	_ = buf.WriteByte('[')
+
 	for i, profile := range profiles {
 		if i > 0 {
-			buf.WriteByte(' ')
+			_ = buf.WriteByte(' ')
 		}
-		fmt.Fprintf(&buf, "%s{starts=%d failures=%d clean=%d}",
+
+		_, _ = fmt.Fprintf(&buf, "%s{starts=%d failures=%d clean=%d}",
 			profile.Name, profile.Starts, profile.Failures, profile.CleanEnds)
 	}
-	buf.WriteByte(']')
+
+	_ = buf.WriteByte(']')
+
 	return buf.String()
-}
-
-func prepareRuntimeData(dataDir string) error {
-	if dataDir == "" {
-		return ErrDataDirRequired
-	}
-
-	resolvedDataDir, err := resolveDataDir(dataDir)
-	if err != nil {
-		return err
-	}
-
-	if err := loadNames(resolvedDataDir); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func runManaged(run func(context.Context) error) error {
@@ -268,7 +268,10 @@ func runManaged(run func(context.Context) error) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
+	defer signal.Stop(sigCh)
+
 	errCh := make(chan error, 1)
+
 	go func() {
 		errCh <- run(ctx)
 	}()
@@ -277,6 +280,7 @@ func runManaged(run func(context.Context) error) error {
 	case <-sigCh:
 		logger.Info("Shutting down gracefully...")
 		cancel()
+
 		return waitForShutdown(errCh)
 	case err := <-errCh:
 		return err
@@ -288,44 +292,29 @@ func execGen(scfg session.Config) error {
 		return fmt.Errorf("validate gen config: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- session.Gen(ctx, scfg, func(id string) { _, _ = fmt.Fprintln(os.Stdout, id) })
-	}()
-
-	select {
-	case <-sigCh:
-		cancel()
-		return waitForShutdown(errCh)
-	case err := <-errCh:
-		return err
-	}
+	return runManaged(func(ctx context.Context) error {
+		return session.Gen(ctx, scfg, func(id string) { _, _ = fmt.Fprintln(os.Stdout, id) })
+	})
 }
 
-// noisyPrefixes lists log prefixes from third-party libs that spam via std log.
+// noisyPrefixes lists log fragments from third-party libs that spam via std log.
 var noisyPrefixes = [][]byte{ //nolint:gochecknoglobals // package-level filter list
 	[]byte("turnc"), []byte("[turn]"), []byte("Fail to refresh permissions"),
 }
 
-// filteredWriter wraps an io.Writer and drops lines whose prefix matches noisyPrefixes.
+// filteredWriter wraps an io.Writer and drops lines matching noisyPrefixes.
 type filteredWriter struct{ w io.Writer }
 
 func (f filteredWriter) Write(p []byte) (int, error) {
-	for _, prefix := range noisyPrefixes {
-		if bytes.Contains(p, prefix) {
-			return len(p), nil
-		}
+	if isNoisyLogLine(p) {
+		return len(p), nil
 	}
+
 	n, err := f.w.Write(p)
 	if err != nil {
 		return n, fmt.Errorf("log write: %w", err)
 	}
+
 	return n, nil
 }
 
@@ -335,62 +324,63 @@ func isNoisyLogLine(line []byte) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
 func configureLogging(debug bool) {
-	installStderrFilter()
 	log.SetOutput(filteredWriter{w: os.Stderr})
 	logger.DisableNoisyPionLogs()
+
 	if debug {
 		logger.SetVerbose(true)
+
 		return
 	}
+
 	_ = os.Setenv("PION_LOG_DISABLE", "all")
 	lksdk.SetLogger(protoLogger.GetDiscardLogger())
 }
 
-func resolveDataDir(dataDir string) (string, error) {
-	if filepath.IsAbs(dataDir) {
-		return dataDir, nil
+// resolveDataDir resolves the optional `data:` override relative to the config
+// file, matching how `crypto.key_file` is resolved. An empty value means "use
+// the dictionaries embedded in the binary".
+func resolveDataDir(configPath, dataDir string) string {
+	if dataDir == "" || filepath.IsAbs(dataDir) {
+		return dataDir
 	}
 
-	exePath, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("resolve executable path: %w", err)
-	}
-
-	return filepath.Join(filepath.Dir(exePath), dataDir), nil
+	return filepath.Join(filepath.Dir(configPath), dataDir)
 }
 
-func loadNames(dataDir string) error {
+// loadNameOverrides swaps the embedded display-name dictionaries for the ones
+// in dataDir. Nothing to do when the operator did not ask for an override.
+func loadNameOverrides(dataDir string) error {
+	if dataDir == "" {
+		return nil
+	}
+
 	namesPath := filepath.Join(dataDir, "names")
 	surnamesPath := filepath.Join(dataDir, "surnames")
+
 	if err := names.LoadNameFiles(namesPath, surnamesPath); err != nil {
-		return fmt.Errorf("load embedded names override: %w", err)
+		return fmt.Errorf("load name override from %q: %w", dataDir, err)
 	}
 
 	return nil
 }
 
 func waitForShutdown(errCh <-chan error) error {
-	done := make(chan error, 1)
-	go func() {
-		if err := <-errCh; err != nil {
-			done <- err
-		} else {
-			done <- nil
-		}
-	}()
-
 	select {
-	case err := <-done:
+	case err := <-errCh:
 		if err == nil {
 			logger.Info("Shutdown complete")
 		}
+
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(shutdownGrace):
 		logger.Warn("Shutdown timeout, forcing exit")
+
 		return nil
 	}
 }

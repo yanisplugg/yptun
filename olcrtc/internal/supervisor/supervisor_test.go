@@ -26,8 +26,8 @@ func TestRunRequiresProfiles(t *testing.T) {
 
 func TestRunAdvancesProfilesAndStopsAtMaxCycles(t *testing.T) {
 	profiles := []Profile{
-		{Name: testProfileFirst, Config: session.Config{Auth: "wbstream"}},
-		{Name: testProfileSecond, Config: session.Config{Auth: "jitsi"}},
+		{Name: testProfileFirst, Config: session.Config{Provider: "wbstream"}},
+		{Name: testProfileSecond, Config: session.Config{Provider: "jitsi"}},
 	}
 	var started []string
 	var ended []string
@@ -48,7 +48,7 @@ func TestRunAdvancesProfilesAndStopsAtMaxCycles(t *testing.T) {
 			}
 		},
 	}, func(_ context.Context, cfg session.Config) error {
-		if cfg.Auth == "" {
+		if cfg.Provider == "" {
 			t.Fatal("runner received empty auth")
 		}
 		return errRunnerBoom
@@ -64,11 +64,10 @@ func TestRunAdvancesProfilesAndStopsAtMaxCycles(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // status history test verifies one complete failover cycle
 func TestRunEmitsStatusHistory(t *testing.T) {
 	profiles := []Profile{
-		{Name: testProfileFirst, Config: session.Config{Auth: "wbstream"}},
-		{Name: testProfileSecond, Config: session.Config{Auth: "jitsi"}},
+		{Name: testProfileFirst, Config: session.Config{Provider: "wbstream"}},
+		{Name: testProfileSecond, Config: session.Config{Provider: "jitsi"}},
 	}
 	var snapshots []Status
 	err := Run(context.Background(), Config{
@@ -80,7 +79,7 @@ func TestRunEmitsStatusHistory(t *testing.T) {
 			snapshots = append(snapshots, status)
 		},
 	}, func(_ context.Context, cfg session.Config) error {
-		if cfg.Auth == testProfileFirst {
+		if cfg.Provider == testProfileFirst {
 			t.Fatal("runner received profile name instead of config")
 		}
 		return errRunnerBoom

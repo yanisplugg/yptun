@@ -1,53 +1,41 @@
-// Package datachannel provides a transport backed by a carrier's data channel.
+// Package datachannel provides a transport backed by a provider's data channel.
 package datachannel
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
-	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
-	"github.com/pion/webrtc/v4"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
 )
 
 const defaultMaxPayloadSize = 12 * 1024
 
-// ErrByteStreamUnsupported is returned when a carrier engine cannot expose a byte stream.
-var ErrByteStreamUnsupported = errors.New("engine does not support byte stream")
+// PeerResetter is satisfied so upper layers can clear the peer binding.
+var _ transport.PeerResetter = (*streamTransport)(nil)
+
+// PeerIdentity is satisfied when the underlying engine exposes routing epochs.
+var _ transport.PeerIdentity = (*streamTransport)(nil)
 
 type streamTransport struct {
+	common.Lifecycle
+
 	session engine.Session
+	shaper  *transport.Shaper
 }
 
-// New creates a datachannel transport backed by a carrier engine.
+// New creates a datachannel transport backed by a provider engine.
 func New(ctx context.Context, cfg transport.Config) (transport.Transport, error) {
-	sess, err := enginebuiltin.Open(ctx, cfg.Carrier, enginebuiltin.Config{
-		RoomURL:             cfg.RoomURL,
-		Name:                cfg.Name,
-		OnData:              cfg.OnData,
-		OnPeerData:          cfg.OnPeerData,
-		DNSServer:           cfg.DNSServer,
-		Resolver:            cfg.Resolver,
-		ProxyAddr:           cfg.ProxyAddr,
-		ProxyPort:           cfg.ProxyPort,
-		Engine:              cfg.Engine,
-		URL:                 cfg.URL,
-		Token:               cfg.Token,
-		AuthToken:           cfg.AuthToken,
-		RequireTargetedPeer: cfg.RequireTargetedPeer,
-	})
+	sess, err := cfg.OpenEngine(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("open engine session: %w", err)
+		return nil, err
 	}
 
-	if !sess.Capabilities().ByteStream {
-		_ = sess.Close()
-		return nil, ErrByteStreamUnsupported
-	}
+	tr := &streamTransport{Lifecycle: common.NewLifecycle(sess), session: sess}
+	tr.shaper = transport.NewShaper(cfg.Traffic, tr.Features())
 
-	return &streamTransport{session: sess}, nil
+	return tr, nil
 }
 
 // Connect starts the transport connection.
@@ -60,6 +48,10 @@ func (p *streamTransport) Connect(ctx context.Context) error {
 
 // Send transmits data through the transport.
 func (p *streamTransport) Send(data []byte) error {
+	return p.shaper.Send(p.send, data)
+}
+
+func (p *streamTransport) send(data []byte) error {
 	if err := p.session.Send(data); err != nil {
 		return fmt.Errorf("session send: %w", err)
 	}
@@ -68,9 +60,15 @@ func (p *streamTransport) Send(data []byte) error {
 
 // SendTo transmits data to a specific remote endpoint when the engine supports it.
 func (p *streamTransport) SendTo(peerID string, data []byte) error {
+	return p.shaper.Send(func(payload []byte) error {
+		return p.sendTo(peerID, payload)
+	}, data)
+}
+
+func (p *streamTransport) sendTo(peerID string, data []byte) error {
 	peer, ok := p.session.(engine.PeerSession)
 	if !ok {
-		return p.Send(data)
+		return p.send(data)
 	}
 	if err := peer.SendTo(peerID, data); err != nil {
 		return fmt.Errorf("session send to peer: %w", err)
@@ -84,6 +82,27 @@ func (p *streamTransport) SupportsPeerRouting() bool {
 	return ok
 }
 
+// LocalPeerID returns the underlying engine's local routing identity, if any.
+func (p *streamTransport) LocalPeerID() string {
+	identity, ok := p.session.(engine.PeerIdentity)
+	if !ok {
+		return ""
+	}
+	return identity.LocalPeerID()
+}
+
+// ConfirmPeer authenticates the underlying engine's remote routing identity.
+func (p *streamTransport) ConfirmPeer(peerID string) error {
+	identity, ok := p.session.(engine.PeerIdentity)
+	if !ok {
+		return fmt.Errorf("confirm engine peer: %w", transport.ErrPeerIdentityUnsupported)
+	}
+	if err := identity.ConfirmPeer(peerID); err != nil {
+		return fmt.Errorf("confirm engine peer: %w", err)
+	}
+	return nil
+}
+
 // Close terminates the transport.
 func (p *streamTransport) Close() error {
 	if err := p.session.Close(); err != nil {
@@ -94,36 +113,14 @@ func (p *streamTransport) Close() error {
 
 // ResetPeer clears peer binding on engines that expose it.
 func (p *streamTransport) ResetPeer() {
-	if resetter, ok := p.session.(interface{ ResetPeer() }); ok {
+	if resetter, ok := p.session.(engine.PeerResetter); ok {
 		resetter.ResetPeer()
 	}
 }
 
-// Reconnect forwards to the underlying engine session.
-func (p *streamTransport) Reconnect(reason string) { p.session.Reconnect(reason) }
-
 // SetReconnectCallback registers reconnect handling.
 func (p *streamTransport) SetReconnectCallback(cb func()) {
-	p.session.SetReconnectCallback(func(*webrtc.DataChannel) {
-		if cb != nil {
-			cb()
-		}
-	})
-}
-
-// SetShouldReconnect configures reconnect policy.
-func (p *streamTransport) SetShouldReconnect(fn func() bool) {
-	p.session.SetShouldReconnect(fn)
-}
-
-// SetEndedCallback registers end-of-session handling.
-func (p *streamTransport) SetEndedCallback(cb func(string)) {
-	p.session.SetEndedCallback(cb)
-}
-
-// WatchConnection monitors connection lifecycle.
-func (p *streamTransport) WatchConnection(ctx context.Context) {
-	p.session.WatchConnection(ctx)
+	p.session.SetReconnectCallback(cb)
 }
 
 // CanSend reports whether transport is ready for sending.
@@ -146,10 +143,5 @@ func (p *streamTransport) WaitForPeer(ctx context.Context) error {
 
 // Features describes the current datachannel transport semantics.
 func (p *streamTransport) Features() transport.Features {
-	return transport.Features{
-		Reliable:        true,
-		Ordered:         true,
-		MessageOriented: true,
-		MaxPayloadSize:  defaultMaxPayloadSize,
-	}
+	return p.shaper.Features(transport.Features{MaxPayloadSize: defaultMaxPayloadSize})
 }

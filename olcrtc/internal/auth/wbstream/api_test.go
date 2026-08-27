@@ -16,21 +16,18 @@ import (
 )
 
 const (
-	testAccessToken = "access"
+	testAccessToken = "s3cret-guest-token"
 	testRoomID      = "room"
 	testToken       = "token"
 	testPeerName    = "peer"
 )
 
-func withWBAPIServer(t *testing.T, h http.Handler) {
+// newWBProvider returns a Provider pointed at a test server.
+func newWBProvider(t *testing.T, h http.Handler) Provider {
 	t.Helper()
-	old := apiBase
 	srv := httptest.NewServer(h)
-	t.Cleanup(func() {
-		apiBase = old
-		srv.Close()
-	})
-	apiBase = srv.URL
+	t.Cleanup(srv.Close)
+	return Provider{apiBase: srv.URL}
 }
 
 func TestWBStreamAPIHappyPath(t *testing.T) {
@@ -49,9 +46,10 @@ func TestWBStreamAPIHappyPath(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(tokenResponse{RoomToken: testToken})
 		})
 
-	withWBAPIServer(t, mux)
+	p := newWBProvider(t, mux)
+	client := http.DefaultClient
 
-	access, err := registerGuest(context.Background(), testPeerName)
+	access, err := p.registerGuest(context.Background(), client, testPeerName)
 	if err != nil {
 		t.Fatalf("registerGuest() error = %v", err)
 	}
@@ -59,10 +57,10 @@ func TestWBStreamAPIHappyPath(t *testing.T) {
 		t.Fatalf("registerGuest() = %q", access)
 	}
 
-	if err := joinRoom(context.Background(), access, testRoomID); err != nil {
-		t.Fatalf("joinRoom() error = %v", err)
+	if joinErr := p.joinRoom(context.Background(), client, access, testRoomID); joinErr != nil {
+		t.Fatalf("joinRoom() error = %v", joinErr)
 	}
-	tok, err := getToken(context.Background(), access, testRoomID, testPeerName)
+	tok, err := p.getToken(context.Background(), client, access, testRoomID, testPeerName)
 	if err != nil {
 		t.Fatalf("getToken() error = %v", err)
 	}
@@ -72,17 +70,19 @@ func TestWBStreamAPIHappyPath(t *testing.T) {
 }
 
 func TestWBStreamAPIErrors(t *testing.T) {
-	withWBAPIServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	p := newWBProvider(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "bad", http.StatusBadGateway)
 	}))
+	client := http.DefaultClient
 
-	if _, err := registerGuest(context.Background(), testPeerName); !errors.Is(err, errGuestRegister) {
+	if _, err := p.registerGuest(context.Background(), client, testPeerName); !errors.Is(err, errGuestRegister) {
 		t.Fatalf("registerGuest() error = %v, want %v", err, errGuestRegister)
 	}
-	if err := joinRoom(context.Background(), testAccessToken, testRoomID); !errors.Is(err, errJoinRoom) {
+	if err := p.joinRoom(context.Background(), client, testAccessToken, testRoomID); !errors.Is(err, errJoinRoom) {
 		t.Fatalf("joinRoom() error = %v, want %v", err, errJoinRoom)
 	}
-	if _, err := getToken(context.Background(), testAccessToken, testRoomID, testPeerName); !errors.Is(err, errGetToken) {
+	_, err := p.getToken(context.Background(), client, testAccessToken, testRoomID, testPeerName)
+	if !errors.Is(err, errGetToken) {
 		t.Fatalf("getToken() error = %v, want %v", err, errGetToken)
 	}
 }
@@ -99,9 +99,7 @@ func TestWBStreamIssue(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(tokenResponse{RoomToken: testToken})
 	})
 
-	withWBAPIServer(t, mux)
-
-	p := Provider{}
+	p := newWBProvider(t, mux)
 	creds, err := p.Issue(context.Background(), auth.Config{
 		RoomURL: testRoomID,
 		Name:    testPeerName,
@@ -136,9 +134,7 @@ func TestWBStreamIssueUsesSuppliedToken(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(tokenResponse{RoomToken: testToken})
 		})
 
-	withWBAPIServer(t, mux)
-
-	creds, err := Provider{}.Issue(context.Background(), auth.Config{
+	creds, err := newWBProvider(t, mux).Issue(context.Background(), auth.Config{
 		RoomURL: testRoomID,
 		Name:    testPeerName,
 		Token:   testAccessToken,
@@ -151,7 +147,7 @@ func TestWBStreamIssueUsesSuppliedToken(t *testing.T) {
 	}
 }
 
-func TestWBStreamIssueSurfacesGuestToken(t *testing.T) {
+func TestWBStreamIssueNeverLogsGuestToken(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /auth/api/v1/auth/user/guest-register", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(guestRegisterResponse{AccessToken: testAccessToken}) //nolint:gosec
@@ -163,7 +159,7 @@ func TestWBStreamIssueSurfacesGuestToken(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(tokenResponse{RoomToken: testToken})
 	})
 
-	withWBAPIServer(t, mux)
+	p := newWBProvider(t, mux)
 
 	var buf bytes.Buffer
 	old := log.Writer()
@@ -171,15 +167,18 @@ func TestWBStreamIssueSurfacesGuestToken(t *testing.T) {
 	logger.SetVerbose(false)
 	t.Cleanup(func() { log.SetOutput(old) })
 
-	_, err := Provider{}.Issue(context.Background(), auth.Config{
+	_, err := p.Issue(context.Background(), auth.Config{
 		RoomURL: testRoomID,
 		Name:    testPeerName,
 	})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
-	if !strings.Contains(buf.String(), testAccessToken) {
-		t.Fatalf("guest access token not surfaced in logs: %q", buf.String())
+	if strings.Contains(buf.String(), testAccessToken) {
+		t.Fatalf("guest access token leaked into logs: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "obtained guest access token") {
+		t.Fatalf("guest token acquisition not reported: %q", buf.String())
 	}
 }
 

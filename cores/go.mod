@@ -112,7 +112,7 @@ require (
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/openai/openai-go/v3 v3.26.0 // indirect
-	github.com/owenewans/owenlivekit/v2 v2.18.2-owen.1 // indirect
+	github.com/owenewans/owenlivekit/v2 v2.18.2 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect

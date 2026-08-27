@@ -7,10 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/webrtc/v4"
+	grtile "github.com/zarazaex69/gr/tile"
+
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
-	"github.com/pion/webrtc/v4"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
 )
 
 var errVideoUnitBoom = errors.New("boom")
@@ -33,8 +36,8 @@ func (s *fakeVideoStream) SetReconnectCallback(cb func())    { s.reconnect = cb 
 func (s *fakeVideoStream) SetShouldReconnect(fn func() bool) { s.should = fn }
 func (s *fakeVideoStream) SetEndedCallback(cb func(string))  { s.ended = cb }
 func (s *fakeVideoStream) WatchConnection(context.Context)   { s.watched = true }
-func (s *fakeVideoStream) CanSend() bool           { return s.canSend }
-func (s *fakeVideoStream) SubscriberCanSend() bool { return s.canSend }
+func (s *fakeVideoStream) CanSend() bool                     { return s.canSend }
+func (s *fakeVideoStream) SubscriberCanSend() bool           { return s.canSend }
 func (s *fakeVideoStream) AddTrack(webrtc.TrackLocal) error  { s.trackAdded = true; return nil }
 func (s *fakeVideoStream) Reconnect(string)                  {}
 func (s *fakeVideoStream) SetTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver)) {
@@ -43,44 +46,33 @@ func (s *fakeVideoStream) SetTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.R
 
 // fakeEngineSession adapts fakeVideoStream so it satisfies engine.Session and
 // engine.VideoTrackCapable, the two interfaces the videochannel transport
-// looks up after the carrier-layer collapse.
+// looks up after the provider-layer collapse.
 type fakeEngineSession struct {
-	stream  *fakeVideoStream
-	noVideo bool
+	stream *fakeVideoStream
 }
 
-func (s *fakeEngineSession) Capabilities() engine.Capabilities {
-	if s.noVideo {
-		return engine.Capabilities{}
-	}
-	return engine.Capabilities{VideoTrack: true}
-}
 func (s *fakeEngineSession) Connect(ctx context.Context) error { return s.stream.Connect(ctx) }
 func (s *fakeEngineSession) Send([]byte) error                 { return nil }
 func (s *fakeEngineSession) Close() error                      { return s.stream.Close() }
-func (s *fakeEngineSession) SetReconnectCallback(cb func(*webrtc.DataChannel)) {
-	s.stream.SetReconnectCallback(func() {
-		if cb != nil {
-			cb(nil)
-		}
-	})
-}
+func (s *fakeEngineSession) SetReconnectCallback(cb func())    { s.stream.SetReconnectCallback(cb) }
 func (s *fakeEngineSession) SetShouldReconnect(fn func() bool) { s.stream.SetShouldReconnect(fn) }
 func (s *fakeEngineSession) SetEndedCallback(cb func(string))  { s.stream.SetEndedCallback(cb) }
 func (s *fakeEngineSession) WatchConnection(ctx context.Context) {
 	s.stream.WatchConnection(ctx)
 }
-func (s *fakeEngineSession) CanSend() bool                            { return s.stream.CanSend() }
-func (s *fakeEngineSession) SubscriberCanSend() bool                   { return s.stream.SubscriberCanSend() }
-func (s *fakeEngineSession) GetSendQueue() chan []byte                { return nil }
-func (s *fakeEngineSession) GetBufferedAmount() uint64                { return 0 }
-func (s *fakeEngineSession) Reconnect(string)                         {}
-func (s *fakeEngineSession) AddVideoTrack(t webrtc.TrackLocal) error  { return s.stream.AddTrack(t) }
+func (s *fakeEngineSession) CanSend() bool                           { return s.stream.CanSend() }
+func (s *fakeEngineSession) SubscriberCanSend() bool                 { return s.stream.SubscriberCanSend() }
+func (s *fakeEngineSession) GetBufferedAmount() uint64               { return 0 }
+func (s *fakeEngineSession) Reconnect(string)                        {}
+func (s *fakeEngineSession) AddVideoTrack(t webrtc.TrackLocal) error { return s.stream.AddTrack(t) }
 func (s *fakeEngineSession) SetVideoTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver)) {
 	s.stream.SetTrackHandler(cb)
 }
 
-//nolint:cyclop // table-driven test naturally has many branches
+type noVideoEngineSession struct {
+	engine.Session
+}
+
 func TestNewCallbacksFeaturesAndClose(t *testing.T) {
 	stream := &fakeVideoStream{canSend: true}
 	name := "videochannel-unit-new"
@@ -89,12 +81,11 @@ func TestNewCallbacksFeaturesAndClose(t *testing.T) {
 	})
 
 	trIface, err := New(context.Background(), transport.Config{
-		Carrier: name,
+		Provider: name,
 		Options: Options{
 			Width:      320,
 			Height:     240,
 			FPS:        30,
-			Bitrate:    "1M",
 			Codec:      "qrcode",
 			TileModule: -1,
 			TileRS:     -1,
@@ -120,7 +111,7 @@ func TestNewCallbacksFeaturesAndClose(t *testing.T) {
 	if !tr.CanSend() {
 		t.Fatal("CanSend() = false, want true")
 	}
-	if features := tr.Features(); !features.Reliable || !features.Ordered || !features.MessageOriented || features.MaxPayloadSize == 0 { //nolint:lll // long test description
+	if features := tr.Features(); features.MaxPayloadSize == 0 {
 		t.Fatalf("Features() = %+v", features)
 	}
 	if tr.videoQRSize != defaultFragmentSize || tr.videoTileModule != 4 || tr.videoTileRS != 20 {
@@ -138,29 +129,38 @@ func TestNewErrorPaths(t *testing.T) {
 			return nil, errVideoUnitBoom
 		},
 	)
-	_, err := New(context.Background(), transport.Config{Carrier: "videochannel-create-fails"})
+	_, err := New(context.Background(), transport.Config{Provider: "videochannel-create-fails"})
 	if err == nil || err.Error() != "open engine session: boom" {
 		t.Fatalf("New() error = %v", err)
 	}
 
 	enginebuiltin.Register("videochannel-no-video", func(context.Context, enginebuiltin.Config) (engine.Session, error) {
-		return &fakeEngineSession{stream: &fakeVideoStream{}, noVideo: true}, nil
+		return &noVideoEngineSession{Session: &fakeEngineSession{stream: &fakeVideoStream{}}}, nil
 	})
-	_, err = New(context.Background(), transport.Config{Carrier: "videochannel-no-video"})
+	_, err = New(context.Background(), transport.Config{Provider: "videochannel-no-video"})
 	if !errors.Is(err, ErrVideoTrackUnsupported) {
 		t.Fatalf("New() error = %v, want %v", err, ErrVideoTrackUnsupported)
 	}
 }
 
 func TestSendAckAndClosePaths(t *testing.T) {
+	stream := &fakeVideoStream{canSend: true}
+	closeCh := make(chan struct{})
+	queue := common.NewOutboundQueue(closeCh, ErrTransportClosed)
 	tr := &streamTransport{
-		stream:      &fakeVideoStream{canSend: true},
-		outbound:    make(chan []byte, 8),
-		outboundAck: make(chan []byte, 8),
-		closeCh:     make(chan struct{}),
+		Lifecycle:   common.NewLifecycle(stream),
+		stream:      stream,
+		queue:       queue,
+		closeCh:     closeCh,
 		writerDone:  make(chan struct{}),
-		fragAcks:    newFragAckTracker(),
 		videoQRSize: 4,
+		sender: common.NewSender(common.SenderConfig{
+			FragmentSize:  4,
+			MaxAttempts:   maxSendAttempts,
+			FrameInterval: time.Millisecond,
+			BatchSize:     writerBatchSize,
+			AckFloor:      time.Second,
+		}, queue),
 	}
 
 	// "payload" = 7 bytes; with qrSize=4 -> two fragments. Send returns
@@ -170,19 +170,16 @@ func TestSendAckAndClosePaths(t *testing.T) {
 	go func() { done <- tr.Send(payload) }()
 
 	wantCRC := crc32.ChecksumIEEE(payload)
-	seen := 0
-	for seen < 2 {
-		select {
-		case frame := <-tr.outbound:
-			decoded, err := decodeTransportFrame(frame)
-			if err != nil {
-				t.Fatalf("decodeTransportFrame() error = %v", err)
-			}
-			tr.resolveAck(decoded.seq, wantCRC, decoded.fragIdx)
-			seen++
-		case <-time.After(time.Second):
+	for seen := range 2 {
+		frame, ok := waitForFrame(t, tr)
+		if !ok {
 			t.Fatalf("Send() did not enqueue fragment %d", seen)
 		}
+		decoded, err := common.DecodeFrame(frame)
+		if err != nil {
+			t.Fatalf("DecodeFrame() error = %v", err)
+		}
+		tr.resolveAck(decoded.Seq, wantCRC, decoded.FragIdx)
 	}
 
 	if err := <-done; err != nil {
@@ -196,13 +193,14 @@ func TestSendAckAndClosePaths(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // table-driven test naturally has many branches
 func TestOutboundPriorityRenderAndClosedEnqueue(t *testing.T) {
+	stream := &fakeVideoStream{canSend: true}
+	closeCh := make(chan struct{})
 	tr := &streamTransport{
-		stream:          &fakeVideoStream{canSend: true},
-		outbound:        make(chan []byte, 2),
-		outboundAck:     make(chan []byte, 2),
-		closeCh:         make(chan struct{}),
+		Lifecycle:       common.NewLifecycle(stream),
+		stream:          stream,
+		queue:           common.NewOutboundQueue(closeCh, ErrTransportClosed),
+		closeCh:         closeCh,
 		writerDone:      make(chan struct{}),
 		videoW:          16,
 		videoH:          16,
@@ -212,20 +210,20 @@ func TestOutboundPriorityRenderAndClosedEnqueue(t *testing.T) {
 		videoTileRS:     20,
 	}
 
-	if err := tr.enqueueFrame([]byte("data"), false); err != nil {
-		t.Fatalf("enqueueFrame(data) error = %v", err)
+	if err := tr.queue.Enqueue([]byte("data"), false); err != nil {
+		t.Fatalf("Enqueue(data) error = %v", err)
 	}
-	if err := tr.enqueueFrame([]byte("ack"), true); err != nil {
-		t.Fatalf("enqueueFrame(ack) error = %v", err)
+	if err := tr.queue.Enqueue([]byte("ack"), true); err != nil {
+		t.Fatalf("Enqueue(ack) error = %v", err)
 	}
-	if got, ok := tr.nextOutboundFrame(); !ok || string(got) != "ack" {
-		t.Fatalf("first nextOutboundFrame() = %q/%v, want ack/true", got, ok)
+	if got, ok := tr.queue.Next(); !ok || string(got) != "ack" {
+		t.Fatalf("first Next() = %q/%v, want ack/true", got, ok)
 	}
-	if got, ok := tr.nextOutboundFrame(); !ok || string(got) != "data" {
-		t.Fatalf("second nextOutboundFrame() = %q/%v, want data/true", got, ok)
+	if got, ok := tr.queue.Next(); !ok || string(got) != "data" {
+		t.Fatalf("second Next() = %q/%v, want data/true", got, ok)
 	}
-	if got, ok := tr.nextOutboundFrame(); !ok || got != nil {
-		t.Fatalf("idle nextOutboundFrame() = %q/%v, want nil/true", got, ok)
+	if got, ok := tr.queue.Next(); !ok || got != nil {
+		t.Fatalf("idle Next() = %q/%v, want nil/true", got, ok)
 	}
 
 	idle, err := tr.renderFrame(nil)
@@ -244,9 +242,9 @@ func TestOutboundPriorityRenderAndClosedEnqueue(t *testing.T) {
 		t.Fatalf("Features(large qr) = %+v", features)
 	}
 
-	tr.closed.Store(true)
-	if err := tr.enqueueFrame([]byte("closed"), false); !errors.Is(err, ErrTransportClosed) {
-		t.Fatalf("enqueueFrame(closed) error = %v, want %v", err, ErrTransportClosed)
+	close(closeCh)
+	if err := tr.queue.Enqueue([]byte("closed"), false); !errors.Is(err, ErrTransportClosed) {
+		t.Fatalf("Enqueue(closed) error = %v, want %v", err, ErrTransportClosed)
 	}
 }
 
@@ -281,13 +279,71 @@ func TestPerAttemptAckTimeoutScalesWithFragments(t *testing.T) {
 }
 
 func TestNextOutboundFrameStopsWhenClosed(t *testing.T) {
-	tr := &streamTransport{
-		outbound:    make(chan []byte, 1),
-		outboundAck: make(chan []byte, 1),
-		closeCh:     make(chan struct{}),
+	closeCh := make(chan struct{})
+	queue := common.NewOutboundQueue(closeCh, ErrTransportClosed)
+	close(closeCh)
+	if got, ok := queue.Next(); ok || got != nil {
+		t.Fatalf("Next(closed) = %q/%v, want nil/false", got, ok)
 	}
-	close(tr.closeCh)
-	if got, ok := tr.nextOutboundFrame(); ok || got != nil {
-		t.Fatalf("nextOutboundFrame(closed) = %q/%v, want nil/false", got, ok)
+}
+
+func TestZeroOptionsGetDefaultsAndWriterSurvives(t *testing.T) {
+	stream := &fakeVideoStream{canSend: true}
+	name := "videochannel-unit-zero-options"
+	enginebuiltin.Register(name, func(context.Context, enginebuiltin.Config) (engine.Session, error) {
+		return &fakeEngineSession{stream: stream}, nil
+	})
+
+	trIface, err := New(context.Background(), transport.Config{Provider: name})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
 	}
+	tr, ok := trIface.(*streamTransport)
+	if !ok {
+		t.Fatalf("transport type = %T, want *streamTransport", trIface)
+	}
+	if tr.videoFPS != defaultFPS || tr.videoW != defaultWidth || tr.videoH != defaultHeight {
+		t.Fatalf("defaults = %dx%d@%d, want %dx%d@%d",
+			tr.videoW, tr.videoH, tr.videoFPS, defaultWidth, defaultHeight, defaultFPS)
+	}
+
+	// Zero FPS used to divide by zero inside the writer goroutine.
+	if err := tr.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := tr.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestOptionsWithDefaultsTileDimensions(t *testing.T) {
+	got := Options{Codec: codecTile}.withDefaults()
+	if got.Width != grtile.FrameW || got.Height != grtile.FrameH || got.FPS != defaultFPS {
+		t.Fatalf("tile defaults = %+v", got)
+	}
+
+	kept := Options{Width: 100, Height: 200, FPS: 5}.withDefaults()
+	if kept.Width != 100 || kept.Height != 200 || kept.FPS != 5 {
+		t.Fatalf("withDefaults() overwrote explicit values: %+v", kept)
+	}
+}
+
+// waitForFrame polls the outbound queue until a frame shows up.
+func waitForFrame(t *testing.T, tr *streamTransport) ([]byte, bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		frame, open := tr.queue.Next()
+		if !open {
+			return nil, false
+		}
+		if frame != nil {
+			return frame, true
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	return nil, false
 }

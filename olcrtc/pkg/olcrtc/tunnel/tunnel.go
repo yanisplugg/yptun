@@ -1,154 +1,180 @@
-// Package tunnel exposes olcrtc's server-side tunnel as an embeddable Go library.
-//
-// A [Server] accepts encrypted tunnel connections over a WebRTC SFU carrier
-// and proxies their traffic to arbitrary TCP targets. Consumers plug in
-// authorization and observability via the [Config] hooks:
-//
-//	srv := tunnel.New(tunnel.Config{
-//	    Transport: "datachannel",
-//	    Carrier:   "jitsi",
-//	    // Use meet.small-dm.ru, meet1.arbitr.ru, or meet.handyweb.org - whichever works in your network
-//	    RoomURL:   "https://meet.small-dm.ru/myroom",
-//	    KeyHex:    "<64-char hex>",
-//	    DNSServer: "8.8.8.8:53",
-//	    AuthHook: func(deviceID string, claims map[string]any) (string, error) {
-//	        // reject unknown devices, enrich session with a DB-issued ID
-//	        return db.IssueSession(deviceID, claims)
-//	    },
-//	    OnSessionOpen: func(sid, dev string, claims map[string]any) {
-//	        log.Printf("session %s opened (device=%s)", sid, dev)
-//	    },
-//	    OnSessionClose: func(sid, reason string) {
-//	        log.Printf("session %s closed (%s)", sid, reason)
-//	    },
-//	    OnTraffic: func(sid, addr string, in, out uint64) {
-//	        metrics.Record(sid, addr, in, out)
-//	    },
-//	})
-//	if err := srv.Run(ctx); err != nil {
-//	    log.Fatal(err)
-//	}
-//
-// Call [RegisterDefaults] once at program start to register the built-in
-// carriers (jitsi, telemost, wbstream) and transports (datachannel,
-// videochannel, seichannel, vp8channel).
+// Package tunnel exposes the olcrtc server tunnel as an embeddable Go library.
+// New registers the built-in providers, engines, and transports automatically.
+// RegisterDefaults is only needed after custom registry manipulation or extension.
 package tunnel
 
 import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
 	"github.com/openlibrecommunity/olcrtc/internal/server"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/seichannel"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/videochannel"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/vp8channel"
 )
 
-// TransportOptions is the marker type for transport-specific tuning options.
-// Pass a value from the corresponding transport package (videochannel.Options,
-// vp8channel.Options, seichannel.Options) or nil for transports without
-// tunables (datachannel).
-type TransportOptions = transport.Options
-
-// AuthFunc is invoked after CLIENT_HELLO to authorize the client and issue a
-// session ID. Returning a non-nil error rejects the handshake; the error's
-// message is forwarded to the client as the reject reason, so it should not
-// leak sensitive details.
-type AuthFunc = handshake.AuthFunc
-
-// SessionOpenFunc fires right after a successful handshake, before the server
-// starts accepting tunnel streams on that session.
-type SessionOpenFunc = server.SessionOpenFunc
-
-// SessionCloseFunc fires when a session ends. Reasons include "reconnect"
-// (carrier dropped and was reestablished) and "closed" (graceful shutdown or
-// ctx cancel).
-type SessionCloseFunc = server.SessionCloseFunc
-
-// TrafficFunc fires once per tunnel stream after both copy loops finish.
-// bytesIn counts client→target bytes; bytesOut counts target→client bytes.
-type TrafficFunc = server.TrafficFunc
-
-// Config holds runtime server configuration.
-type Config struct {
-	// --- carrier selection ---
-	Transport string // datachannel, videochannel, seichannel, vp8channel
-	Carrier   string // jitsi, telemost, wbstream, none
-	RoomURL   string // conference room identifier for the carrier
-
-	// --- direct engine mode (Carrier == "none") ---
-	Engine string // livekit, goolom, jitsi
-	URL    string
-	Token  string
-
-	// --- crypto & networking ---
-	KeyHex         string // 64-char hex (32 bytes) shared with the client
-	DNSServer      string // resolver used for target dials, e.g. "8.8.8.8:53"
-	Resolver       *net.Resolver
-	SOCKSProxyAddr string // optional outbound SOCKS5 proxy host
-	SOCKSProxyPort int    // optional outbound SOCKS5 proxy port
-	SOCKSProxyUser string // optional username for SOCKS5 proxy auth (RFC 1929)
-	SOCKSProxyPass string // optional password for SOCKS5 proxy auth (RFC 1929)
-
-	// --- transport tuning ---
-	// TransportOptions carries transport-specific tuning. Use the Options
-	// type from the corresponding internal/transport/* package, or leave nil
-	// for transports that need no extra configuration (datachannel).
-	TransportOptions TransportOptions
-
-	// --- hooks ---
-	// AuthHook authorizes the client. If nil, every client is admitted with a
-	// random UUID as session ID.
-	AuthHook AuthFunc
-	// OnSessionOpen fires after a successful handshake. Nil is a no-op.
-	OnSessionOpen SessionOpenFunc
-	// OnSessionClose fires when the session is torn down. Nil is a no-op.
-	OnSessionClose SessionCloseFunc
-	// OnTraffic fires once per tunnel stream after both copy loops finish.
-	// Nil is a no-op.
-	OnTraffic TrafficFunc
+// TransportOptions is implemented by the built-in public option structs.
+type TransportOptions interface {
+	transportOptions()
 }
+
+// VideoOptions configures videochannel.
+type VideoOptions struct {
+	Width      int
+	Height     int
+	FPS        int
+	QRSize     int
+	QRRecovery string
+	Codec      string
+	TileModule int
+	TileRS     int
+}
+
+func (VideoOptions) transportOptions() {}
+
+// VP8Options configures vp8channel.
+type VP8Options struct {
+	FPS       int
+	BatchSize int
+}
+
+func (VP8Options) transportOptions() {}
+
+// SEIOptions configures seichannel.
+type SEIOptions struct {
+	FPS          int
+	BatchSize    int
+	FragmentSize int
+	AckTimeoutMS int
+}
+
+func (SEIOptions) transportOptions() {}
+
+// AuthFunc authorizes a client after CLIENT_HELLO.
+type AuthFunc func(deviceID string, claims map[string]any) (sessionID string, err error)
+
+// SessionOpenFunc is called after a successful handshake.
+type SessionOpenFunc func(sessionID, deviceID string, claims map[string]any)
+
+// SessionCloseFunc is called when a session ends.
+type SessionCloseFunc func(sessionID, reason string)
+
+// TrafficFunc is called after both copy loops for a tunnel stream finish.
+type TrafficFunc func(sessionID, addr string, bytesIn, bytesOut uint64)
+
+// HealthStatus is a control-stream health snapshot.
+type HealthStatus = control.Status
+
+// HealthFunc is called when the control-stream health snapshot changes.
+type HealthFunc func(HealthStatus)
+
+// LivenessConfig controls control-stream ping and pong checks.
+type LivenessConfig struct {
+	Interval time.Duration
+	Timeout  time.Duration
+	Failures int
+}
+
+// TrafficConfig controls optional payload limits and send pacing.
+type TrafficConfig struct {
+	MaxPayloadSize int
+	MinDelay       time.Duration
+	MaxDelay       time.Duration
+}
+
+// Config holds all server tunnel capabilities.
+type Config struct {
+	Transport        string
+	Provider         string
+	RoomURL          string
+	ChannelID        string
+	Engine           string
+	URL              string
+	Token            string
+	ProviderToken    string
+	KeyHex           string
+	DNSServer        string
+	Resolver         *net.Resolver
+	SOCKSProxyAddr   string
+	SOCKSProxyPort   int
+	SOCKSProxyUser   string
+	SOCKSProxyPass   string
+	TransportOptions TransportOptions
+	Liveness         LivenessConfig
+	Traffic          TrafficConfig
+	AuthHook         AuthFunc
+	OnSessionOpen    SessionOpenFunc
+	OnSessionClose   SessionCloseFunc
+	OnTraffic        TrafficFunc
+	OnHealth         HealthFunc
+}
+
+type runner func(context.Context, server.Config) error
 
 // Server is an embeddable tunnel server.
 type Server struct {
 	cfg Config
+	run runner
 }
 
-// New returns a Server configured by cfg. Call [Server.Run] to start it.
+// New returns a server configured by cfg.
 func New(cfg Config) *Server {
-	return &Server{cfg: cfg}
+	RegisterDefaults()
+	return &Server{cfg: cfg, run: server.Run}
 }
 
-// Run starts the server and blocks until ctx is cancelled or the carrier ends.
+// Run starts the server and blocks until ctx is canceled or the provider ends.
 func (s *Server) Run(ctx context.Context) error {
-	if err := server.Run(ctx, server.Config{
-		Transport:        s.cfg.Transport,
-		Carrier:          s.cfg.Carrier,
-		RoomURL:          s.cfg.RoomURL,
-		Engine:           s.cfg.Engine,
-		URL:              s.cfg.URL,
-		Token:            s.cfg.Token,
-		KeyHex:           s.cfg.KeyHex,
-		DNSServer:        s.cfg.DNSServer,
-		Resolver:         s.cfg.Resolver,
-		SOCKSProxyAddr:   s.cfg.SOCKSProxyAddr,
-		SOCKSProxyPort:   s.cfg.SOCKSProxyPort,
-		SOCKSProxyUser:   s.cfg.SOCKSProxyUser,
-		SOCKSProxyPass:   s.cfg.SOCKSProxyPass,
-		TransportOptions: s.cfg.TransportOptions,
-		AuthHook:         s.cfg.AuthHook,
-		OnSessionOpen:    s.cfg.OnSessionOpen,
-		OnSessionClose:   s.cfg.OnSessionClose,
-		OnTraffic:        s.cfg.OnTraffic,
-	}); err != nil {
+	if err := s.run(ctx, toServerConfig(s.cfg)); err != nil {
 		return fmt.Errorf("tunnel: %w", err)
 	}
 	return nil
 }
 
-// RegisterDefaults registers the built-in carriers, links and transports.
-// Safe to call multiple times.
+func toServerConfig(cfg Config) server.Config {
+	return server.Config{
+		Transport: cfg.Transport, Provider: cfg.Provider, RoomURL: cfg.RoomURL,
+		ChannelID: cfg.ChannelID, Engine: cfg.Engine, URL: cfg.URL, Token: cfg.Token,
+		ProviderToken: cfg.ProviderToken, KeyHex: cfg.KeyHex, DNSServer: cfg.DNSServer,
+		Resolver: cfg.Resolver, SOCKSProxyAddr: cfg.SOCKSProxyAddr,
+		SOCKSProxyPort: cfg.SOCKSProxyPort, SOCKSProxyUser: cfg.SOCKSProxyUser,
+		SOCKSProxyPass: cfg.SOCKSProxyPass, TransportOptions: toTransportOptions(cfg.TransportOptions),
+		Liveness: control.Config{
+			Interval: cfg.Liveness.Interval, Timeout: cfg.Liveness.Timeout, Failures: cfg.Liveness.Failures,
+		},
+		Traffic: transport.TrafficConfig{
+			MaxPayloadSize: cfg.Traffic.MaxPayloadSize,
+			MinDelay:       cfg.Traffic.MinDelay, MaxDelay: cfg.Traffic.MaxDelay,
+		},
+		AuthHook:       handshake.AuthFunc(cfg.AuthHook),
+		OnSessionOpen:  server.SessionOpenFunc(cfg.OnSessionOpen),
+		OnSessionClose: server.SessionCloseFunc(cfg.OnSessionClose),
+		OnTraffic:      server.TrafficFunc(cfg.OnTraffic), OnHealth: server.HealthFunc(cfg.OnHealth),
+	}
+}
+
+func toTransportOptions(options TransportOptions) transport.Options {
+	switch value := options.(type) {
+	case VideoOptions:
+		return videochannel.Options(value)
+	case VP8Options:
+		return vp8channel.Options(value)
+	case SEIOptions:
+		return seichannel.Options(value)
+	default:
+		return nil
+	}
+}
+
+// RegisterDefaults registers the built-in providers, engines, and transports.
+// New calls it automatically. Manual calls are only needed after custom registry
+// manipulation or extension. It is safe to call multiple times.
 func RegisterDefaults() {
 	session.RegisterDefaults()
 }

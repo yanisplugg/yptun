@@ -11,8 +11,8 @@ net:
 
 liveness:
   interval: 10s # how often to send liveness checks
-  timeout: 5s # wait time for a liveness reply
-  failures: 3 # consecutive failures before the link is considered dead
+  timeout: 15s # wait time for a liveness reply
+  failures: 4 # consecutive failures before the link is considered dead
 
 # Optional scheduled rebuild for each active profile.
 # lifecycle:
@@ -24,7 +24,6 @@ liveness:
 #   min_delay: 5ms
 #   max_delay: 30ms
 
-data: data # where to store / read data
 
 profiles: # ordered list of link profiles, tried top to bottom
   - name: wb-vp8 # profile label

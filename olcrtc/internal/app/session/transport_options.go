@@ -17,8 +17,6 @@ func buildTransportOptions(cfg Config) transport.Options {
 			Width:      cfg.Video.Width,
 			Height:     cfg.Video.Height,
 			FPS:        cfg.Video.FPS,
-			Bitrate:    cfg.Video.Bitrate,
-			HW:         cfg.Video.HW,
 			QRSize:     cfg.Video.QRSize,
 			QRRecovery: cfg.Video.QRRecovery,
 			Codec:      cfg.Video.Codec,

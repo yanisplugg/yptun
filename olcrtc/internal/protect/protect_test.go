@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -24,6 +26,12 @@ type rawConnStub struct {
 	controlFn func(func(uintptr)) error
 }
 
+func restoreProtector(t *testing.T) {
+	t.Helper()
+	old := protector.Load()
+	t.Cleanup(func() { protector.Store(old) })
+}
+
 func (r rawConnStub) Control(fn func(uintptr)) error {
 	if r.controlFn != nil {
 		return r.controlFn(fn)
@@ -35,9 +43,8 @@ func (r rawConnStub) Read(func(uintptr) bool) error  { return nil }
 func (r rawConnStub) Write(func(uintptr) bool) error { return nil }
 
 func TestControlFuncWithoutProtector(t *testing.T) {
-	old := Protector
-	Protector = nil
-	t.Cleanup(func() { Protector = old })
+	restoreProtector(t)
+	SetProtector(nil)
 
 	if err := controlFunc("tcp4", "", rawConnStub{}); err != nil {
 		t.Fatalf("controlFunc() error = %v", err)
@@ -45,25 +52,24 @@ func TestControlFuncWithoutProtector(t *testing.T) {
 }
 
 func TestControlFuncWithProtector(t *testing.T) {
-	old := Protector
-	t.Cleanup(func() { Protector = old })
+	restoreProtector(t)
 
 	called := 0
-	Protector = func(fd int) bool {
+	SetProtector(func(fd int) bool {
 		called++
 		if fd != 42 {
-			t.Fatalf("Protector fd = %d, want 42", fd)
+			t.Fatalf("protector fd = %d, want 42", fd)
 		}
 		return true
-	}
+	})
 	if err := controlFunc("tcp4", "", rawConnStub{}); err != nil {
 		t.Fatalf("controlFunc() error = %v", err)
 	}
 	if called != 1 {
-		t.Fatalf("Protector calls = %d, want 1", called)
+		t.Fatalf("protector calls = %d, want 1", called)
 	}
 
-	Protector = func(int) bool { return false }
+	SetProtector(func(int) bool { return false })
 	err := controlFunc("tcp4", "", rawConnStub{})
 	var opErr *net.OpError
 	if !errors.As(err, &opErr) || opErr.Op != "protect" {
@@ -72,9 +78,8 @@ func TestControlFuncWithProtector(t *testing.T) {
 }
 
 func TestControlFuncWrapsControlError(t *testing.T) {
-	old := Protector
-	Protector = func(int) bool { return true }
-	t.Cleanup(func() { Protector = old })
+	restoreProtector(t)
+	SetProtector(func(int) bool { return true })
 
 	err := controlFunc("tcp4", "", rawConnStub{
 		controlFn: func(func(uintptr)) error { return errProtectBoom },
@@ -84,11 +89,62 @@ func TestControlFuncWrapsControlError(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // table-driven test naturally has many branches
+func TestControlFuncSnapshotsProtector(t *testing.T) {
+	restoreProtector(t)
+	var firstCalls atomic.Int64
+	var secondCalls atomic.Int64
+	SetProtector(func(int) bool {
+		firstCalls.Add(1)
+		return true
+	})
+	err := controlFunc("tcp4", "", rawConnStub{controlFn: func(call func(uintptr)) error {
+		SetProtector(func(int) bool {
+			secondCalls.Add(1)
+			return true
+		})
+		call(42)
+		return nil
+	}})
+	if err != nil {
+		t.Fatalf("controlFunc() error = %v", err)
+	}
+	if firstCalls.Load() != 1 || secondCalls.Load() != 0 {
+		t.Fatalf("protector calls = %d/%d, want 1/0", firstCalls.Load(), secondCalls.Load())
+	}
+}
+
+func TestConcurrentSetClearAndDialControl(t *testing.T) {
+	restoreProtector(t)
+	var calls atomic.Int64
+	protectFunc := func(int) bool {
+		calls.Add(1)
+		return true
+	}
+	var wg sync.WaitGroup
+	for worker := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for iteration := range 500 {
+				if (worker+iteration)%3 == 0 {
+					SetProtector(nil)
+				} else {
+					SetProtector(protectFunc)
+				}
+				if err := controlFunc("tcp4", "", rawConnStub{}); err != nil {
+					t.Errorf("controlFunc() error = %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func TestNewDialerAndHTTPClient(t *testing.T) {
-	dialer := NewDialer()
+	dialer := newDialer()
 	if dialer.Timeout != 10*time.Second || dialer.KeepAlive != 30*time.Second || dialer.Control == nil {
-		t.Fatalf("NewDialer() = %+v", dialer)
+		t.Fatalf("newDialer() = %+v", dialer)
 	}
 
 	client := NewHTTPClient()
@@ -111,11 +167,11 @@ func TestNewDialerAndHTTPClient(t *testing.T) {
 func TestCustomResolverInjection(t *testing.T) {
 	resolver := &net.Resolver{PreferGo: true}
 
-	if got := NewDialerWithResolver(resolver).Resolver; got != resolver {
-		t.Fatalf("NewDialerWithResolver().Resolver = %p, want %p", got, resolver)
+	if got := newDialerWithResolver(resolver).Resolver; got != resolver {
+		t.Fatalf("newDialerWithResolver().Resolver = %p, want %p", got, resolver)
 	}
-	if got := NewDialerWithResolver(nil).Resolver; got != nil {
-		t.Fatalf("NewDialerWithResolver(nil).Resolver = %p, want nil", got)
+	if got := newDialerWithResolver(nil).Resolver; got != nil {
+		t.Fatalf("newDialerWithResolver(nil).Resolver = %p, want nil", got)
 	}
 	if got := NewProxyDialer(resolver).resolver; got != resolver {
 		t.Fatalf("NewProxyDialer().resolver = %p, want %p", got, resolver)
@@ -184,9 +240,9 @@ func TestStatusErrorRedactsAndLimitsBody(t *testing.T) {
 }
 
 func TestRedactSensitiveBearer(t *testing.T) {
-	got := RedactSensitive("Authorization: Bearer abc.def")
+	got := redactSensitive("Authorization: Bearer abc.def")
 	if strings.Contains(got, "abc.def") || !strings.Contains(got, "Bearer <redacted>") {
-		t.Fatalf("RedactSensitive() = %q", got)
+		t.Fatalf("redactSensitive() = %q", got)
 	}
 }
 
@@ -196,7 +252,7 @@ type ioNopCloser struct {
 
 func (c ioNopCloser) Close() error { return nil }
 
-func TestDialContextAndProxyDialer(t *testing.T) {
+func TestProxyDialerDials(t *testing.T) {
 	var lc net.ListenConfig
 	ln, err := lc.Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -204,23 +260,15 @@ func TestDialContextAndProxyDialer(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 
-	accepted := make(chan struct{}, 2)
+	accepted := make(chan struct{}, 1)
 	go func() {
-		for range 2 {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
-			accepted <- struct{}{}
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
 		}
+		_ = conn.Close()
+		accepted <- struct{}{}
 	}()
-
-	conn, err := DialContext(context.Background(), "tcp4", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("DialContext() error = %v", err)
-	}
-	_ = conn.Close()
 
 	proxyConn, err := NewProxyDialer().Dial("tcp4", ln.Addr().String())
 	if err != nil {
@@ -229,16 +277,9 @@ func TestDialContextAndProxyDialer(t *testing.T) {
 	_ = proxyConn.Close()
 
 	<-accepted
-	<-accepted
 }
 
 func TestDialFailuresAreWrapped(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-
-	if _, err := DialContext(ctx, "tcp4", "127.0.0.1:1"); err == nil {
-		t.Fatal("DialContext() unexpectedly succeeded")
-	}
 	if _, err := NewProxyDialer().Dial("tcp4", "127.0.0.1:1"); err == nil {
 		t.Fatal("ProxyDialer.Dial() unexpectedly succeeded")
 	}

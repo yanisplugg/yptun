@@ -15,11 +15,11 @@
 // After the exchange the control stream stays open; tunnel traffic flows over
 // additional smux streams opened by the client. The control stream then
 // carries ping/pong liveness and future control messages.
-//
-//nolint:tagliatelle // JSON keys are the stable wire protocol schema.
 package handshake
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +31,12 @@ import (
 
 // ProtoVersion identifies the wire-format version. Bumped only on breaking
 // changes to message layout or semantics.
-const ProtoVersion = 1
+const ProtoVersion = 3
+
+// challengeSize gives every handshake a fresh 128-bit identity. The server
+// echoes it in every reply so a valid encrypted reply captured for one client
+// cannot be retargeted to another client that shares the room and PSK.
+const challengeSize = 16
 
 // MaxMessageSize caps a single handshake frame. 64 KiB is comfortably larger
 // than any legitimate HELLO/WELCOME payload and prevents memory blowups from
@@ -56,10 +61,11 @@ const (
 
 // Hello is sent by the client to begin a session.
 type Hello struct {
-	Version  int            `json:"version"`
-	Type     MsgType        `json:"type"`
-	DeviceID string         `json:"device_id"`
-	Claims   map[string]any `json:"claims,omitempty"`
+	Version   int            `json:"version"`
+	Type      MsgType        `json:"type"`
+	DeviceID  string         `json:"device_id"`
+	Challenge string         `json:"challenge"`
+	Claims    map[string]any `json:"claims,omitempty"`
 }
 
 // Welcome is the server's response on a successful handshake.
@@ -67,13 +73,16 @@ type Welcome struct {
 	Version   int     `json:"version"`
 	Type      MsgType `json:"type"`
 	SessionID string  `json:"session_id"`
+	PeerID    string  `json:"peer_id,omitempty"`
+	Challenge string  `json:"challenge"`
 }
 
 // Reject is the server's response when auth fails.
 type Reject struct {
-	Version int     `json:"version"`
-	Type    MsgType `json:"type"`
-	Reason  string  `json:"reason"`
+	Version   int     `json:"version"`
+	Type      MsgType `json:"type"`
+	Reason    string  `json:"reason"`
+	Challenge string  `json:"challenge,omitempty"`
 }
 
 // Errors returned by [Client] and [Server].
@@ -86,6 +95,10 @@ var (
 	ErrUnexpectedMessage = errors.New("unexpected handshake message")
 	// ErrFrameTooLarge is returned when a peer announces a frame above [MaxMessageSize].
 	ErrFrameTooLarge = framing.ErrFrameTooLarge
+	// ErrChallengeMismatch is returned for a reply to a different CLIENT_HELLO.
+	ErrChallengeMismatch = errors.New("handshake challenge mismatch")
+	// ErrChallengeRequired is returned when CLIENT_HELLO lacks a valid challenge.
+	ErrChallengeRequired = errors.New("handshake challenge required")
 )
 
 // AuthFunc is invoked by [Server] after parsing CLIENT_HELLO.
@@ -95,89 +108,138 @@ var (
 type AuthFunc func(deviceID string, claims map[string]any) (sessionID string, err error)
 
 // Client performs the client side of the handshake on rw and returns the
-// session ID assigned by the server.
-func Client(rw io.ReadWriter, deviceID string, claims map[string]any) (string, error) {
+// session ID and authenticated routing peer ID assigned by the server.
+func Client(rw io.ReadWriter, deviceID string, claims map[string]any) (string, string, error) {
+	challenge, err := newChallenge()
+	if err != nil {
+		return "", "", err
+	}
 	hello := Hello{
-		Version:  ProtoVersion,
-		Type:     TypeHello,
-		DeviceID: deviceID,
-		Claims:   claims,
+		Version:   ProtoVersion,
+		Type:      TypeHello,
+		DeviceID:  deviceID,
+		Challenge: challenge,
+		Claims:    claims,
 	}
 	if err := writeFrame(rw, hello); err != nil {
-		return "", fmt.Errorf("send hello: %w", err)
+		return "", "", fmt.Errorf("send hello: %w", err)
 	}
 
+	for {
+		sessionID, peerID, matched, replyErr := readReply(rw, challenge)
+		if !matched {
+			continue
+		}
+
+		return sessionID, peerID, replyErr
+	}
+}
+
+func readReply(rw io.Reader, challenge string) (string, string, bool, error) {
 	raw, err := readFrame(rw)
 	if err != nil {
-		return "", fmt.Errorf("read welcome: %w", err)
+		return "", "", true, fmt.Errorf("read welcome: %w", err)
 	}
 
 	var probe struct {
-		Type MsgType `json:"type"`
+		Type      MsgType `json:"type"`
+		Challenge string  `json:"challenge"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		return "", fmt.Errorf("parse reply: %w", err)
+		return "", "", true, fmt.Errorf("parse reply: %w", err)
+	}
+	if probe.Challenge != challenge {
+		return "", "", false, nil
 	}
 
 	switch probe.Type {
-	case TypeHello:
-		return "", fmt.Errorf("%w: got %q", ErrUnexpectedMessage, probe.Type)
 	case TypeWelcome:
-		return parseWelcome(raw)
+		sessionID, peerID, parseErr := parseWelcome(raw, challenge)
+		return sessionID, peerID, true, parseErr
 	case TypeReject:
-		return parseReject(raw)
+		return "", "", true, parseReject(raw, challenge)
+	case TypeHello:
+		return "", "", true, fmt.Errorf("%w: got %q", ErrUnexpectedMessage, probe.Type)
 	default:
-		return "", fmt.Errorf("%w: got %q", ErrUnexpectedMessage, probe.Type)
+		return "", "", true, fmt.Errorf("%w: got %q", ErrUnexpectedMessage, probe.Type)
 	}
 }
 
-func parseWelcome(raw []byte) (string, error) {
+func parseWelcome(raw []byte, challenge string) (string, string, error) {
 	var w Welcome
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return "", fmt.Errorf("parse welcome: %w", err)
+		return "", "", fmt.Errorf("parse welcome: %w", err)
 	}
 	if w.Version != ProtoVersion {
-		return "", fmt.Errorf("%w: server v%d, client v%d",
+		return "", "", fmt.Errorf("%w: server v%d, client v%d",
 			ErrProtocolVersion, w.Version, ProtoVersion)
 	}
-	return w.SessionID, nil
+	if w.Challenge != challenge {
+		return "", "", ErrChallengeMismatch
+	}
+	return w.SessionID, w.PeerID, nil
 }
 
-func parseReject(raw []byte) (string, error) {
+func parseReject(raw []byte, challenge string) error {
 	var r Reject
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return "", fmt.Errorf("parse reject: %w", err)
+		return fmt.Errorf("parse reject: %w", err)
 	}
-	return "", fmt.Errorf("%w: %s", ErrRejected, r.Reason)
+	if r.Challenge != challenge {
+		return ErrChallengeMismatch
+	}
+	return fmt.Errorf("%w: %s", ErrRejected, r.Reason)
+}
+
+func newChallenge() (string, error) {
+	var raw [challengeSize]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate handshake challenge: %w", err)
+	}
+
+	return hex.EncodeToString(raw[:]), nil
 }
 
 // Server performs the server side of the handshake. It reads CLIENT_HELLO,
 // invokes auth, and writes the corresponding WELCOME or REJECT. On success it
 // returns the parsed Hello and the session ID produced by auth.
-func Server(rw io.ReadWriter, auth AuthFunc) (Hello, string, error) {
+func Server(rw io.ReadWriter, auth AuthFunc, peerID string) (Hello, string, error) {
 	raw, err := readFrame(rw)
 	if err != nil {
 		return Hello{}, "", fmt.Errorf("read hello: %w", err)
 	}
 
 	var h Hello
-	if err := json.Unmarshal(raw, &h); err != nil {
+	if parseErr := json.Unmarshal(raw, &h); parseErr != nil {
 		_ = writeFrame(rw, Reject{Version: ProtoVersion, Type: TypeReject, Reason: "malformed hello"})
-		return Hello{}, "", fmt.Errorf("parse hello: %w", err)
+		return Hello{}, "", fmt.Errorf("parse hello: %w", parseErr)
 	}
 	if h.Type != TypeHello {
 		_ = writeFrame(rw, Reject{Version: ProtoVersion, Type: TypeReject, Reason: "expected CLIENT_HELLO"})
 		return h, "", fmt.Errorf("%w: got %q", ErrUnexpectedMessage, h.Type)
 	}
 	if h.Version != ProtoVersion {
-		_ = writeFrame(rw, Reject{Version: ProtoVersion, Type: TypeReject, Reason: "protocol version mismatch"})
+		_ = writeFrame(rw, Reject{
+			Version: ProtoVersion, Type: TypeReject,
+			Reason: "protocol version mismatch", Challenge: h.Challenge,
+		})
 		return h, "", fmt.Errorf("%w: client v%d, server v%d",
 			ErrProtocolVersion, h.Version, ProtoVersion)
+	}
+	if !validChallenge(h.Challenge) {
+		_ = writeFrame(rw, Reject{
+			Version: ProtoVersion, Type: TypeReject,
+			Reason: "invalid handshake challenge", Challenge: h.Challenge,
+		})
+		return h, "", ErrChallengeRequired
 	}
 
 	sessionID, err := auth(h.DeviceID, h.Claims)
 	if err != nil {
-		_ = writeFrame(rw, Reject{Version: ProtoVersion, Type: TypeReject, Reason: err.Error()})
+		_ = writeFrame(rw, Reject{
+			Version: ProtoVersion, Type: TypeReject,
+			Reason: err.Error(), Challenge: h.Challenge,
+		})
 		return h, "", fmt.Errorf("auth: %w", err)
 	}
 
@@ -185,10 +247,17 @@ func Server(rw io.ReadWriter, auth AuthFunc) (Hello, string, error) {
 		Version:   ProtoVersion,
 		Type:      TypeWelcome,
 		SessionID: sessionID,
+		PeerID:    peerID,
+		Challenge: h.Challenge,
 	}); err != nil {
 		return h, sessionID, fmt.Errorf("send welcome: %w", err)
 	}
 	return h, sessionID, nil
+}
+
+func validChallenge(challenge string) bool {
+	decoded, err := hex.DecodeString(challenge)
+	return err == nil && len(decoded) == challengeSize
 }
 
 func writeFrame(w io.Writer, msg any) error {

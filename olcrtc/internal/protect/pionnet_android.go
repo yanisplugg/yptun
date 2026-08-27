@@ -90,6 +90,7 @@ static int android_api_level(void) {
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"unsafe"
@@ -98,6 +99,11 @@ import (
 )
 
 const android11ApiLevel = 30
+
+// ErrInterfacesUnavailable is returned when getifaddrs(3) cannot enumerate
+// interfaces. It only exists on the android+cgo build, the only one that
+// calls getifaddrs.
+var ErrInterfacesUnavailable = errors.New("protect: interfaces unavailable")
 
 // loadInterfaces enumerates network interfaces.
 //
@@ -174,28 +180,6 @@ func loadInterfacesGetifaddrs() ([]*transport.Interface, error) {
 		entry := byName[name]
 		ifc := transport.NewInterface(entry.iface)
 		for _, addr := range entry.addrs {
-			ifc.AddAddress(addr)
-		}
-		out = append(out, ifc)
-	}
-	return out, nil
-}
-
-// loadInterfacesNetlink falls back to net.Interfaces() for Android API < 30,
-// where SELinux does not yet restrict netlink_route_socket.
-func loadInterfacesNetlink() ([]*transport.Interface, error) {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("net interfaces: %w", err)
-	}
-	out := make([]*transport.Interface, 0, len(ifs))
-	for i := range ifs {
-		ifc := transport.NewInterface(ifs[i])
-		addrs, err := ifs[i].Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
 			ifc.AddAddress(addr)
 		}
 		out = append(out, ifc)

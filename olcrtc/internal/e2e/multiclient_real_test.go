@@ -37,7 +37,7 @@ func TestRealMultiClientConcurrent(t *testing.T) {
 	}
 
 	const (
-		carrierName   = "telemost"
+		providerName  = "telemost"
 		transportName = "vp8channel"
 		holdDuration  = 25 * time.Second
 	)
@@ -45,7 +45,7 @@ func TestRealMultiClientConcurrent(t *testing.T) {
 	echoAddr := startEchoServer(t)
 
 	roomCtx, cancelRoom := context.WithTimeout(context.Background(), *realE2ETimeout)
-	roomURL := requireRealRoom(roomCtx, t, carrierName)
+	roomURL := requireRealRoom(roomCtx, t, providerName)
 	cancelRoom()
 
 	ctx, cancel := context.WithTimeout(context.Background(), holdDuration+3*(*realE2ETimeout))
@@ -62,7 +62,7 @@ func TestRealMultiClientConcurrent(t *testing.T) {
 	go func() {
 		serverErr <- server.Run(ctx, server.Config{
 			Transport:        transportName,
-			Carrier:          carrierName,
+			Provider:         providerName,
 			RoomURL:          roomURL,
 			ChannelID:        channelID,
 			KeyHex:           testKeyHex,
@@ -79,11 +79,11 @@ func TestRealMultiClientConcurrent(t *testing.T) {
 	}
 
 	clientA := startNamedClient(ctx, t, clientSpec{
-		carrier: carrierName, transport: transportName, room: roomURL,
+		provider: providerName, transport: transportName, room: roomURL,
 		channelID: channelID, deviceID: "client-A", liveness: liveness,
 	})
 	clientB := startNamedClient(ctx, t, clientSpec{
-		carrier: carrierName, transport: transportName, room: roomURL,
+		provider: providerName, transport: transportName, room: roomURL,
 		channelID: channelID, deviceID: "client-B", liveness: liveness,
 	})
 
@@ -117,7 +117,7 @@ func TestRealMultiClientConcurrent(t *testing.T) {
 }
 
 type clientSpec struct {
-	carrier   string
+	provider  string
 	transport string
 	room      string
 	channelID string
@@ -139,7 +139,7 @@ func startNamedClient(ctx context.Context, t *testing.T, spec clientSpec) namedC
 	go func() {
 		errc <- client.RunWithReady(ctx, client.Config{
 			Transport:        spec.transport,
-			Carrier:          spec.carrier,
+			Provider:         spec.provider,
 			RoomURL:          spec.room,
 			ChannelID:        spec.channelID,
 			KeyHex:           testKeyHex,
@@ -165,11 +165,11 @@ func mustEcho(t *testing.T, socksAddr, echoAddr, tag string) {
 	defer func() { _ = conn.Close() }()
 
 	payload := []byte("olcrtc-multi-" + tag + "\n")
-	if _, err := conn.Write(payload); err != nil {
-		t.Fatalf("[%s] write: %v", tag, err)
+	if _, writeErr := conn.Write(payload); writeErr != nil {
+		t.Fatalf("[%s] write: %v", tag, writeErr)
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(*realE2ETimeout)); err != nil {
-		t.Fatalf("[%s] set deadline: %v", tag, err)
+	if deadlineErr := conn.SetReadDeadline(time.Now().Add(*realE2ETimeout)); deadlineErr != nil {
+		t.Fatalf("[%s] set deadline: %v", tag, deadlineErr)
 	}
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {

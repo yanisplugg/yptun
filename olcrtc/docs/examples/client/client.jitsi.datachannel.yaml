@@ -8,7 +8,7 @@ auth:
 
 # For jitsi: full room URL (https://host/room or host/room).
 # Must match the server.
-# Instances: see docs/examples/jitsi.instances.yaml
+# Instances: see docs/jitsi.instances.yaml
 # Check in a browser which one works in your network.
 room:
   id: "https://meet.example.org/REPLACE_WITH_ROOM_NAME" # room name / URL
@@ -23,8 +23,8 @@ net:
 
 liveness:
   interval: 10s # how often to send liveness checks
-  timeout: 5s # wait time for a liveness reply
-  failures: 3 # consecutive failures before the link is considered dead
+  timeout: 15s # wait time for a liveness reply
+  failures: 4 # consecutive failures before the link is considered dead
 
 socks: # local socks proxy exposed to apps
   host: "127.0.0.1" # address to listen on
@@ -32,5 +32,4 @@ socks: # local socks proxy exposed to apps
   user: "" # optional inbound auth
   pass: "" # optional inbound auth
 
-data: data # where to store / read data
 debug: false # log actions in more detail

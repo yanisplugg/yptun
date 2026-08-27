@@ -41,7 +41,7 @@ func TestWriteTooLarge(t *testing.T) {
 func TestReadTooLarge(t *testing.T) {
 	var buf bytes.Buffer
 	// Manually craft an oversized header.
-	buf.Write([]byte{0x00, 0x00, 0x10, 0x00}) // 4096
+	_, _ = buf.Write([]byte{0x00, 0x00, 0x10, 0x00}) // 4096
 	_, err := framing.ReadBytes(&buf, 1024)
 	if !errors.Is(err, framing.ErrFrameTooLarge) {
 		t.Fatalf("want ErrFrameTooLarge, got %v", err)
@@ -50,8 +50,8 @@ func TestReadTooLarge(t *testing.T) {
 
 func TestReadTruncated(t *testing.T) {
 	var buf bytes.Buffer
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x04})
-	buf.WriteByte(0x41) // only 1 of 4 body bytes
+	_, _ = buf.Write([]byte{0x00, 0x00, 0x00, 0x04})
+	_ = buf.WriteByte(0x41) // only 1 of 4 body bytes
 	_, err := framing.ReadBytes(&buf, 1024)
 	if err == nil || errors.Is(err, framing.ErrFrameTooLarge) {
 		t.Fatalf("want EOF/unexpected, got %v", err)

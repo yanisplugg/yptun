@@ -8,7 +8,6 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
-	"github.com/pion/webrtc/v4"
 )
 
 var (
@@ -19,37 +18,46 @@ var (
 )
 
 type stubSession struct {
-	caps        engine.Capabilities
-	connectErr  error
-	sendErr     error
-	closeErr    error
-	canSend     bool
+	connectErr    error
+	sendErr       error
+	closeErr      error
+	canSend       bool
 	connectCalled bool
-	sent        []byte
-	watched     bool
-	reconnectCB func(*webrtc.DataChannel)
-	shouldFn    func() bool
-	endedCB     func(string)
+	sent          []byte
+	watched       bool
+	reconnectCB   func()
+	shouldFn      func() bool
+	endedCB       func(string)
 }
 
-func (s *stubSession) Capabilities() engine.Capabilities { return s.caps }
-func (s *stubSession) Connect(context.Context) error    { s.connectCalled = true; return s.connectErr }
+func (s *stubSession) Connect(context.Context) error { s.connectCalled = true; return s.connectErr }
 func (s *stubSession) Send(data []byte) error {
 	s.sent = append([]byte(nil), data...)
 	return s.sendErr
 }
-func (s *stubSession) Close() error                                            { return s.closeErr }
-func (s *stubSession) SetReconnectCallback(cb func(*webrtc.DataChannel))       { s.reconnectCB = cb }
-func (s *stubSession) SetShouldReconnect(fn func() bool)                       { s.shouldFn = fn }
-func (s *stubSession) SetEndedCallback(cb func(string))                        { s.endedCB = cb }
-func (s *stubSession) WatchConnection(context.Context)                         { s.watched = true }
-func (s *stubSession) CanSend() bool                                           { return s.canSend }
-func (s *stubSession) SubscriberCanSend() bool                                 { return s.canSend }
-func (s *stubSession) GetSendQueue() chan []byte                               { return nil }
-func (s *stubSession) GetBufferedAmount() uint64                               { return 0 }
-func (s *stubSession) Reconnect(string)                                        {}
+func (s *stubSession) Close() error                      { return s.closeErr }
+func (s *stubSession) SetReconnectCallback(cb func())    { s.reconnectCB = cb }
+func (s *stubSession) SetShouldReconnect(fn func() bool) { s.shouldFn = fn }
+func (s *stubSession) SetEndedCallback(cb func(string))  { s.endedCB = cb }
+func (s *stubSession) WatchConnection(context.Context)   { s.watched = true }
+func (s *stubSession) CanSend() bool                     { return s.canSend }
+func (s *stubSession) SubscriberCanSend() bool           { return s.canSend }
+func (s *stubSession) GetBufferedAmount() uint64         { return 0 }
+func (s *stubSession) Reconnect(string)                  {}
 
-func registerCarrier(name string, sess engine.Session, err error) {
+type identitySession struct {
+	*stubSession
+	local     string
+	confirmed string
+}
+
+func (s *identitySession) LocalPeerID() string { return s.local }
+func (s *identitySession) ConfirmPeer(peerID string) error {
+	s.confirmed = peerID
+	return nil
+}
+
+func registerProvider(name string, sess engine.Session, err error) {
 	enginebuiltin.Register(name, func(context.Context, enginebuiltin.Config) (engine.Session, error) {
 		if err != nil {
 			return nil, err
@@ -58,12 +66,11 @@ func registerCarrier(name string, sess engine.Session, err error) {
 	})
 }
 
-//nolint:cyclop // table-driven test naturally has many branches
 func TestNewAndFeatures(t *testing.T) {
-	sess := &stubSession{caps: engine.Capabilities{ByteStream: true}, canSend: true}
-	registerCarrier("datachannel-test-new-and-features", sess, nil)
+	sess := &stubSession{canSend: true}
+	registerProvider("datachannel-test-new-and-features", sess, nil)
 
-	tr, err := New(context.Background(), transport.Config{Carrier: "datachannel-test-new-and-features"})
+	tr, err := New(context.Background(), transport.Config{Provider: "datachannel-test-new-and-features"})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -92,7 +99,7 @@ func TestNewAndFeatures(t *testing.T) {
 	}
 
 	features := tr.Features()
-	if !features.Reliable || !features.Ordered || !features.MessageOriented || features.MaxPayloadSize != defaultMaxPayloadSize { //nolint:lll // long test description
+	if features.MaxPayloadSize != defaultMaxPayloadSize {
 		t.Fatalf("Features() = %+v", features)
 	}
 	if err := tr.Close(); err != nil {
@@ -101,23 +108,38 @@ func TestNewAndFeatures(t *testing.T) {
 }
 
 func TestNewErrorPaths(t *testing.T) {
-	registerCarrier("datachannel-fail-create", nil, errDCBoom)
-	_, err := New(context.Background(), transport.Config{Carrier: "datachannel-fail-create"})
+	registerProvider("datachannel-fail-create", nil, errDCBoom)
+	_, err := New(context.Background(), transport.Config{Provider: "datachannel-fail-create"})
 	if err == nil || err.Error() != "open engine session: boom" {
 		t.Fatalf("New() error = %v", err)
 	}
+}
 
-	nonByteStream := &stubSession{caps: engine.Capabilities{}}
-	registerCarrier("datachannel-no-stream", nonByteStream, nil)
-	_, err = New(context.Background(), transport.Config{Carrier: "datachannel-no-stream"})
-	if !errors.Is(err, ErrByteStreamUnsupported) {
-		t.Fatalf("New() error = %v, want %v", err, ErrByteStreamUnsupported)
+func TestPeerIdentityPropagatesToEngine(t *testing.T) {
+	sess := &identitySession{stubSession: &stubSession{}, local: "1234abcd"}
+	registerProvider("datachannel-test-peer-identity", sess, nil)
+
+	tr, err := New(context.Background(), transport.Config{Provider: "datachannel-test-peer-identity"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	identity, ok := tr.(transport.PeerIdentity)
+	if !ok {
+		t.Fatal("datachannel transport does not expose PeerIdentity")
+	}
+	if got := identity.LocalPeerID(); got != sess.local {
+		t.Fatalf("LocalPeerID() = %q, want %q", got, sess.local)
+	}
+	if err := identity.ConfirmPeer("89abcdef"); err != nil {
+		t.Fatalf("ConfirmPeer() error = %v", err)
+	}
+	if sess.confirmed != "89abcdef" {
+		t.Fatalf("engine confirmed peer = %q, want 89abcdef", sess.confirmed)
 	}
 }
 
 func TestStreamTransportWrapsErrors(t *testing.T) {
 	tr := &streamTransport{session: &stubSession{
-		caps:       engine.Capabilities{ByteStream: true},
 		connectErr: errDCConnectBoom,
 		sendErr:    errDCSendBoom,
 		closeErr:   errDCCloseBoom,

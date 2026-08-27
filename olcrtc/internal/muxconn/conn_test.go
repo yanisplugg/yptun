@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
+	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,26 +60,60 @@ func (s *stubLink) SendTo(peerID string, data []byte) error {
 }
 func (s *stubLink) SupportsPeerRouting() bool { return true }
 
-func newTestCipher(t *testing.T) *cryptopkg.Cipher {
-	t.Helper()
-	c, err := cryptopkg.NewCipher("01234567890123456789012345678901")
-	if err != nil {
-		t.Fatalf("NewCipher() error = %v", err)
+type loopLink struct {
+	peer          *loopLink
+	onData        func([]byte)
+	controlOnData func([]byte)
+}
+
+func (l *loopLink) Connect(context.Context) error   { return nil }
+func (l *loopLink) Close() error                    { return nil }
+func (l *loopLink) SetReconnectCallback(func())     {}
+func (l *loopLink) SetShouldReconnect(func() bool)  {}
+func (l *loopLink) SetEndedCallback(func(string))   {}
+func (l *loopLink) WatchConnection(context.Context) {}
+func (l *loopLink) CanSend() bool                   { return true }
+func (l *loopLink) Features() transport.Features    { return transport.Features{} }
+func (l *loopLink) Reconnect(string)                {}
+func (l *loopLink) Send(data []byte) error {
+	if l.peer.onData != nil {
+		l.peer.onData(bytes.Clone(data))
 	}
-	return c
+	return nil
+}
+func (l *loopLink) ControlSend(data []byte) error {
+	if l.peer.controlOnData != nil {
+		l.peer.controlOnData(bytes.Clone(data))
+	}
+	return nil
+}
+func (l *loopLink) SetControlOnData(cb func([]byte)) { l.controlOnData = cb }
+func (l *loopLink) ControlCanSend() bool             { return true }
+
+func newTestKeyPair(t *testing.T) (*cryptopkg.KeySet, *cryptopkg.KeySet) {
+	t.Helper()
+	client, err := cryptopkg.NewKeySet([]byte("01234567890123456789012345678901"), cryptopkg.Client)
+	if err != nil {
+		t.Fatalf("NewKeySet(client) error = %v", err)
+	}
+	server, err := cryptopkg.NewKeySet([]byte("01234567890123456789012345678901"), cryptopkg.Server)
+	if err != nil {
+		t.Fatalf("NewKeySet(server) error = %v", err)
+	}
+	return client, server
 }
 
 func TestPushAndReadRoundTrip(t *testing.T) {
-	cipher := newTestCipher(t)
-	conn := New(&stubLink{canSend: true}, cipher)
+	clientKeys, serverKeys := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: true}, serverKeys)
 
-	msg1, err := cipher.Encrypt([]byte("hello "))
+	msg1, err := clientKeys.Seal([]byte("hello "), []byte(dataRecordAAD))
 	if err != nil {
-		t.Fatalf("Encrypt(msg1) error = %v", err)
+		t.Fatalf("Seal(msg1) error = %v", err)
 	}
-	msg2, err := cipher.Encrypt([]byte("world"))
+	msg2, err := clientKeys.Seal([]byte("world"), []byte(dataRecordAAD))
 	if err != nil {
-		t.Fatalf("Encrypt(msg2) error = %v", err)
+		t.Fatalf("Seal(msg2) error = %v", err)
 	}
 
 	conn.Push(msg1)
@@ -93,8 +130,8 @@ func TestPushAndReadRoundTrip(t *testing.T) {
 }
 
 func TestPushIgnoresInvalidCiphertext(t *testing.T) {
-	cipher := newTestCipher(t)
-	conn := New(&stubLink{canSend: true}, cipher)
+	_, serverKeys := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: true}, serverKeys)
 
 	conn.Push([]byte("bad"))
 	if err := conn.Close(); err != nil {
@@ -109,9 +146,9 @@ func TestPushIgnoresInvalidCiphertext(t *testing.T) {
 }
 
 func TestWriteEncryptsAndSends(t *testing.T) {
-	cipher := newTestCipher(t)
+	clientKeys, serverKeys := newTestKeyPair(t)
 	ln := &stubLink{canSend: true}
-	conn := New(ln, cipher)
+	conn := New(ln, clientKeys)
 
 	n, err := conn.Write([]byte("payload"))
 	if err != nil {
@@ -124,19 +161,89 @@ func TestWriteEncryptsAndSends(t *testing.T) {
 		t.Fatalf("sent packets = %d, want 1", len(ln.sent))
 	}
 
-	got, err := cipher.Decrypt(ln.sent[0])
+	got, err := serverKeys.Open(ln.sent[0], []byte(dataRecordAAD))
 	if err != nil {
-		t.Fatalf("Decrypt(sent) error = %v", err)
+		t.Fatalf("Open(sent) error = %v", err)
 	}
 	if !bytes.Equal(got, []byte("payload")) {
 		t.Fatalf("decrypted payload = %q, want %q", got, "payload")
 	}
 }
 
+func TestComplementaryKeySetsRoundTripBothPlanes(t *testing.T) {
+	clientKeys, serverKeys := newTestKeyPair(t)
+	clientLink, serverLink := &loopLink{}, &loopLink{}
+	clientLink.peer, serverLink.peer = serverLink, clientLink
+
+	clientData := New(clientLink, clientKeys)
+	serverData := New(serverLink, serverKeys)
+	clientLink.onData, serverLink.onData = clientData.Push, serverData.Push
+	clientControl := NewControl(clientLink, clientKeys)
+	serverControl := NewControl(serverLink, serverKeys)
+
+	assertConnRoundTrip(t, clientData, serverData, "client data")
+	assertConnRoundTrip(t, serverData, clientData, "server data")
+	assertConnRoundTrip(t, clientControl, serverControl, "client control")
+	assertConnRoundTrip(t, serverControl, clientControl, "server control")
+}
+
+func assertConnRoundTrip(t *testing.T, sender, receiver *Conn, payload string) {
+	t.Helper()
+	if _, err := sender.Write([]byte(payload)); err != nil {
+		t.Fatalf("Write(%q) error = %v", payload, err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(receiver, buf); err != nil {
+		t.Fatalf("ReadFull(%q) error = %v", payload, err)
+	}
+	if string(buf) != payload {
+		t.Fatalf("round trip = %q, want %q", buf, payload)
+	}
+}
+
+func TestReplayRejectedAcrossMuxconnRecreation(t *testing.T) {
+	clientKeys, serverKeys := newTestKeyPair(t)
+	clientLink := &stubLink{canSend: true}
+	clientConn := New(clientLink, clientKeys)
+	firstServerConn := New(&stubLink{canSend: true}, serverKeys)
+	if _, err := clientConn.Write([]byte("first")); err != nil {
+		t.Fatalf("Write(first) error = %v", err)
+	}
+	firstRecord := clientLink.sent[0]
+	firstServerConn.Push(firstRecord)
+	assertRead(t, firstServerConn, "first")
+
+	secondServerConn := New(&stubLink{canSend: true}, serverKeys)
+	secondServerConn.Push(firstRecord)
+	if len(secondServerConn.in) != 0 {
+		t.Fatalf("replayed frames queued = %d, want 0", len(secondServerConn.in))
+	}
+	if _, err := clientConn.Write([]byte("second")); err != nil {
+		t.Fatalf("Write(second) error = %v", err)
+	}
+	secondServerConn.Push(clientLink.sent[1])
+	assertRead(t, secondServerConn, "second")
+}
+
+func assertRead(t *testing.T, conn *Conn, want string) {
+	t.Helper()
+	buf := make([]byte, len(want))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("ReadFull() error = %v", err)
+	}
+	if string(buf) != want {
+		t.Fatalf("ReadFull() = %q, want %q", buf, want)
+	}
+}
+
 func TestPeerWriteEncryptsAndSendsToPeer(t *testing.T) {
-	cipher := newTestCipher(t)
+	_, serverKeys := newTestKeyPair(t)
+	clientReceiver, err := cryptopkg.NewKeySet([]byte("01234567890123456789012345678901"), cryptopkg.Client)
+	if err != nil {
+		t.Fatalf("NewKeySet(client receiver) error = %v", err)
+	}
 	ln := &stubLink{canSend: true}
-	conn := NewPeer(ln, cipher, "peer-a")
+	conn := NewPeer(ln, serverKeys, "peer-a")
 
 	n, err := conn.Write([]byte("payload"))
 	if err != nil {
@@ -152,9 +259,9 @@ func TestPeerWriteEncryptsAndSendsToPeer(t *testing.T) {
 		t.Fatalf("peer sent packets = %d, want 1", len(ln.peerSent["peer-a"]))
 	}
 
-	got, err := cipher.Decrypt(ln.peerSent["peer-a"][0])
+	got, err := clientReceiver.Open(ln.peerSent["peer-a"][0], []byte(dataRecordAAD))
 	if err != nil {
-		t.Fatalf("Decrypt(peer sent) error = %v", err)
+		t.Fatalf("Open(peer sent) error = %v", err)
 	}
 	if !bytes.Equal(got, []byte("payload")) {
 		t.Fatalf("decrypted payload = %q, want %q", got, "payload")
@@ -162,7 +269,7 @@ func TestPeerWriteEncryptsAndSendsToPeer(t *testing.T) {
 }
 
 func TestWriteWaitsForCanSend(t *testing.T) {
-	cipher := newTestCipher(t)
+	clientKeys, _ := newTestKeyPair(t)
 	start := time.Now()
 	readyAt := start.Add(15 * time.Millisecond)
 	ln := &stubLink{
@@ -170,7 +277,7 @@ func TestWriteWaitsForCanSend(t *testing.T) {
 			return time.Now().After(readyAt)
 		},
 	}
-	conn := New(ln, cipher)
+	conn := New(ln, clientKeys)
 
 	if _, err := conn.Write([]byte("payload")); err != nil {
 		t.Fatalf("Write() error = %v", err)
@@ -181,8 +288,8 @@ func TestWriteWaitsForCanSend(t *testing.T) {
 }
 
 func TestWriteReturnsErrClosedWhileWaiting(t *testing.T) {
-	cipher := newTestCipher(t)
-	conn := New(&stubLink{canSend: false}, cipher)
+	clientKeys, _ := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: false}, clientKeys)
 
 	done := make(chan error, 1)
 	go func() {
@@ -206,8 +313,8 @@ func TestWriteReturnsErrClosedWhileWaiting(t *testing.T) {
 }
 
 func TestWriteWrapsSendError(t *testing.T) {
-	cipher := newTestCipher(t)
-	conn := New(&stubLink{canSend: true, sendErr: errMuxBoom}, cipher)
+	clientKeys, _ := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: true, sendErr: errMuxBoom}, clientKeys)
 
 	_, err := conn.Write([]byte("payload"))
 	if err == nil || err.Error() != "send: boom" {
@@ -215,9 +322,89 @@ func TestWriteWrapsSendError(t *testing.T) {
 	}
 }
 
+func TestWriteTimesOutWhenTransportNeverReady(t *testing.T) {
+	clientKeys, _ := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: false}, clientKeys)
+	conn.writeTimeout = 20 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := conn.Write([]byte("payload"))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrWriteTimeout) {
+			t.Fatalf("Write() error = %v, want %v", err, ErrWriteTimeout)
+		}
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("Write() error = %v, want a net.Error with Timeout() == true", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write() did not time out on a permanently blocked transport")
+	}
+}
+
+func TestReadCloseErrorIsBothEOFAndErrClosed(t *testing.T) {
+	clientKeys, _ := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: true}, clientKeys)
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	_, err := conn.Read(make([]byte, 4))
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Read() error = %v, want it to wrap io.EOF", err)
+	}
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("Read() error = %v, want it to wrap %v", err, ErrClosed)
+	}
+}
+
+func TestCloseRecyclesQueuedFrames(t *testing.T) {
+	clientKeys, serverKeys := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: true}, serverKeys)
+	for range 4 {
+		msg, err := clientKeys.Seal([]byte("queued"), []byte(dataRecordAAD))
+		if err != nil {
+			t.Fatalf("Seal() error = %v", err)
+		}
+		conn.Push(msg)
+	}
+	if len(conn.in) != 4 {
+		t.Fatalf("queued frames = %d, want 4", len(conn.in))
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if len(conn.in) != 0 {
+		t.Fatalf("queued frames after Close = %d, want 0", len(conn.in))
+	}
+}
+
+func TestPushRateLimitsDecryptFailureLogs(t *testing.T) {
+	_, serverKeys := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: true}, serverKeys)
+
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(old) })
+
+	for range 500 {
+		conn.Push([]byte("bad"))
+	}
+
+	if got := strings.Count(buf.String(), "decrypt failed"); got != 1 {
+		t.Fatalf("decrypt failure log lines = %d, want 1:\n%s", got, buf.String())
+	}
+}
+
 func TestCloseMakesReadReturnEOF(t *testing.T) {
-	cipher := newTestCipher(t)
-	conn := New(&stubLink{canSend: true}, cipher)
+	clientKeys, _ := newTestKeyPair(t)
+	conn := New(&stubLink{canSend: true}, clientKeys)
 
 	done := make(chan struct{})
 	go func() {

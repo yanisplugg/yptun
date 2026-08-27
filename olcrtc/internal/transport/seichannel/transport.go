@@ -1,174 +1,112 @@
 // Package seichannel provides a byte transport over H264 SEI messages.
+//
+// Payload fragments ride SEI NAL units inside otherwise ordinary H264 access
+// units, so an SFU that only inspects the video bitstream forwards them
+// untouched. Framing, fragment acknowledgement and the retransmit loop are
+// the shared ones in internal/transport/common; this package owns the H264
+// provider and the FPS-paced writer.
 package seichannel
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/openlibrecommunity/olcrtc/internal/engine"
-	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
-	"github.com/openlibrecommunity/olcrtc/internal/transport"
-	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/samplebuilder"
+
+	"github.com/openlibrecommunity/olcrtc/internal/transport"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
 )
 
 const (
-	defaultMaxPayloadSize        = 7 * 1024
-	defaultFragmentSize          = 900
-	defaultAckTimeout            = 3 * time.Second
-	defaultFrameInterval         = 16 * time.Millisecond
-	defaultFPS                   = 30
-	defaultBatchSize             = 64
-	defaultConnectTimeout        = 30 * time.Second
-	maxSendAttempts              = 4
-	sampleBuilderMaxLate         = 128
-	protocolMagic         uint32 = 0x4f564331 // OVC1
-	protocolVersion       byte   = 1
-	frameTypeData         byte   = 1
-	frameTypeAck          byte   = 2
-	frameTypeHello        byte   = 3
+	defaultFragmentSize   = 900
+	defaultAckTimeout     = 3 * time.Second
+	defaultFPS            = 30
+	defaultBatchSize      = 64
+	defaultConnectTimeout = 30 * time.Second
+	// maxSendAttempts bounds retransmission of the fragments still unacked
+	// after one ack budget. It stays at four: the budget already scales with
+	// the message's drain time, so four rounds is a long wait, and a Send
+	// that fails is retried by the layer above.
+	maxSendAttempts      = 4
+	sampleBuilderMaxLate = 128
 )
 
 var (
-	// ErrVideoTrackUnsupported is returned when a carrier cannot expose video tracks.
-	ErrVideoTrackUnsupported = errors.New("carrier does not support video tracks")
+	// ErrVideoTrackUnsupported is returned when a provider cannot expose video tracks.
+	ErrVideoTrackUnsupported = common.ErrVideoTrackUnsupported
 	// ErrAckTimeout is returned when the peer does not acknowledge a payload in time.
 	ErrAckTimeout = errors.New("seichannel ack timeout")
 	// ErrTransportClosed is returned when operations are attempted on a closed transport.
 	ErrTransportClosed = errors.New("seichannel transport closed")
-	// ErrFrameTooShort is returned when the received frame is too short to decode.
-	ErrFrameTooShort = errors.New("frame too short")
-	// ErrUnexpectedMagic is returned when the frame magic bytes do not match.
-	ErrUnexpectedMagic = errors.New("unexpected frame magic")
-	// ErrUnexpectedVersion is returned when the frame protocol version does not match.
-	ErrUnexpectedVersion = errors.New("unexpected frame version")
-	// ErrAckTooShort is returned when the ack frame is shorter than expected.
-	ErrAckTooShort = errors.New("ack frame too short")
-	// ErrDataTooShort is returned when the data frame is shorter than expected.
-	ErrDataTooShort = errors.New("data frame too short")
-	// ErrUnexpectedFrameType is returned for unknown frame type bytes.
-	ErrUnexpectedFrameType = errors.New("unexpected frame type")
 )
 
-type transportFrame struct {
-	typ       byte
-	seq       uint32
-	crc       uint32
-	totalLen  uint32
-	fragIdx   uint16
-	fragTotal uint16
-	payload   []byte
-}
-
-// videoSession is the subset of engine.Session + engine.VideoTrackCapable the
-// seichannel transport relies on.
-type videoSession interface {
-	Connect(ctx context.Context) error
-	Close() error
-	SetReconnectCallback(cb func())
-	SetShouldReconnect(fn func() bool)
-	SetEndedCallback(cb func(string))
-	WatchConnection(ctx context.Context)
-	CanSend() bool
-	Reconnect(reason string)
-	AddTrack(track webrtc.TrackLocal) error
-	SetTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver))
-}
-
 type streamTransport struct {
-	stream        videoSession
-	track         *webrtc.TrackLocalStaticSample
-	onData        func([]byte)
-	outbound      chan []byte
-	outboundAck   chan []byte
-	closeCh       chan struct{}
-	writerDone    chan struct{}
-	nextSeq       atomic.Uint32
-	closed        atomic.Bool
-	writerUp      atomic.Bool
-	peerReady     atomic.Bool
-	sendMu        sync.Mutex
-	startWriter   sync.Once
-	acks          *common.AckRegistry
-	reassembler   *common.Reassembler
+	common.Lifecycle
+
+	stream      common.VideoSession
+	track       *webrtc.TrackLocalStaticSample
+	onData      func([]byte)
+	queue       *common.OutboundQueue
+	sender      *common.Sender
+	reassembler *common.Reassembler
+
+	closeCh     chan struct{}
+	writerDone  chan struct{}
+	closed      atomic.Bool
+	writerUp    atomic.Bool
+	peerReady   atomic.Bool
+	startWriter sync.Once
+
 	fragmentSize  int
-	ackTimeout    time.Duration
 	frameInterval time.Duration
 	batchSize     int
+	remoteRole    byte
+	bindingToken  uint32
+	shaper        *transport.Shaper
 }
 
-// New creates a seichannel transport backed by a carrier.
+// New creates a seichannel transport backed by a provider.
 func New(ctx context.Context, cfg transport.Config) (transport.Transport, error) {
 	opts, err := optionsFrom(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	session, err := enginebuiltin.Open(ctx, cfg.Carrier, enginebuiltin.Config{
-		RoomURL:   cfg.RoomURL,
-		Name:      cfg.Name,
-		OnData:    nil,
-		DNSServer: cfg.DNSServer,
-		Resolver:  cfg.Resolver,
-		ProxyAddr: cfg.ProxyAddr,
-		ProxyPort: cfg.ProxyPort,
-		Engine:    cfg.Engine,
-		URL:       cfg.URL,
-		Token:     cfg.Token,
-		AuthToken: cfg.AuthToken,
-	})
+	// Payloads ride the video track, so the engine stays in pure-video mode:
+	// no data callbacks, otherwise it would gate readiness on a bridge this
+	// transport never uses and deliver provider bytes behind our back.
+	engineCfg := cfg
+	engineCfg.OnData = nil
+	engineCfg.OnPeerData = nil
+
+	session, err := engineCfg.OpenEngine(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("open engine session: %w", err)
+		return nil, err
 	}
 
-	vt, ok := session.(engine.VideoTrackCapable)
-	if !ok || !session.Capabilities().VideoTrack {
-		_ = session.Close()
-		return nil, ErrVideoTrackUnsupported
-	}
-	stream := &engineVideoSession{session: session, vt: vt}
-
-	// Stream/track IDs must be unique per peer - Jitsi rejects session-accept
-	// when msid collides with another participant in the conference.
-	track, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeH264,
-			ClockRate:   90000,
-			Channels:    0,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
-		},
-		"seichannel-"+common.RandomID(),
-		"olcrtc-"+common.RandomID(),
-	)
+	stream, err := common.NewEngineVideoSession(session)
 	if err != nil {
-		return nil, fmt.Errorf("create local video track: %w", err)
+		return nil, fmt.Errorf("open video session: %w", err)
 	}
 
-	opts = opts.withDefaults()
-	tr := &streamTransport{
-		stream:        stream,
-		track:         track,
-		onData:        cfg.OnData,
-		outbound:      make(chan []byte, 256),
-		outboundAck:   make(chan []byte, 64),
-		closeCh:       make(chan struct{}),
-		writerDone:    make(chan struct{}),
-		acks:          common.NewAckRegistry(),
-		reassembler:   common.NewReassembler(256),
-		fragmentSize:  opts.FragmentSize,
-		ackTimeout:    time.Duration(opts.AckTimeoutMS) * time.Millisecond,
-		frameInterval: time.Second / time.Duration(opts.FPS),
-		batchSize:     opts.BatchSize,
+	track, err := common.NewVideoTrack(webrtc.RTPCodecCapability{
+		MimeType:    webrtc.MimeTypeH264,
+		ClockRate:   90000,
+		Channels:    0,
+		SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+	}, "seichannel")
+	if err != nil {
+		return nil, fmt.Errorf("build video track: %w", err)
 	}
+
+	tr := newStreamTransport(stream, track, cfg, opts)
 
 	if err := stream.AddTrack(track); err != nil {
 		return nil, fmt.Errorf("attach local video track: %w", err)
@@ -176,6 +114,44 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 	stream.SetTrackHandler(tr.handleRemoteTrack)
 
 	return tr, nil
+}
+
+func newStreamTransport(
+	stream common.VideoSession,
+	track *webrtc.TrackLocalStaticSample,
+	cfg transport.Config,
+	opts Options,
+) *streamTransport {
+	closeCh := make(chan struct{})
+	tr := &streamTransport{
+		Lifecycle:     common.NewLifecycle(stream),
+		stream:        stream,
+		track:         track,
+		onData:        cfg.OnData,
+		queue:         common.NewOutboundQueue(closeCh, ErrTransportClosed),
+		reassembler:   common.NewReassembler(256),
+		closeCh:       closeCh,
+		writerDone:    make(chan struct{}),
+		fragmentSize:  opts.FragmentSize,
+		frameInterval: time.Second / time.Duration(opts.FPS),
+		batchSize:     opts.BatchSize,
+		remoteRole:    common.RemoteRole(cfg.DeviceID),
+		bindingToken:  common.BindingToken(cfg.ChannelID, cfg.RoomURL),
+	}
+
+	tr.sender = common.NewSender(common.SenderConfig{
+		Role:          common.LocalRole(cfg.DeviceID),
+		Binding:       tr.bindingToken,
+		FragmentSize:  opts.FragmentSize,
+		MaxAttempts:   maxSendAttempts,
+		FrameInterval: tr.frameInterval,
+		BatchSize:     opts.BatchSize,
+		AckFloor:      time.Duration(opts.AckTimeoutMS) * time.Millisecond,
+	}, tr.queue)
+
+	tr.shaper = transport.NewShaper(cfg.Traffic, tr.Features())
+
+	return tr
 }
 
 // Connect starts the transport connection.
@@ -197,71 +173,23 @@ func (p *streamTransport) Connect(ctx context.Context) error {
 
 // Send transmits data through the transport.
 func (p *streamTransport) Send(data []byte) error {
+	return p.shaper.Send(p.send, data)
+}
+
+func (p *streamTransport) send(data []byte) error {
 	if p.closed.Load() {
 		return ErrTransportClosed
 	}
 
-	p.sendMu.Lock()
-	defer p.sendMu.Unlock()
-
-	seq := p.nextSeq.Add(1)
-	crc := crc32.ChecksumIEEE(data)
-	fragments := common.FragmentPayload(data, p.effectiveFragmentSize())
-	waiter := p.acks.Register(seq)
-	defer p.acks.Unregister(seq)
-
-	ackTimeout := p.perAttemptAckTimeout(len(fragments))
-
-	for attempt := range maxSendAttempts {
-		// Only enqueue fragments on the first attempt. Retries just wait
-		// longer - the fragments from the previous attempt are still in
-		// the outbound channel being drained by writerLoop. Re-enqueuing
-		// causes dead-fragment backlog that eventually clogs the channel.
-		if attempt == 0 {
-			for idx, fragment := range fragments {
-				frame := encodeDataFrame(seq, crc, len(data), idx, len(fragments), fragment)
-				if err := p.enqueueFrame(frame, false); err != nil {
-					return err
-				}
-			}
-		}
-
-		timer := time.NewTimer(ackTimeout)
-		select {
-		case ackCRC := <-waiter:
-			timer.Stop()
-			if ackCRC == crc {
-				return nil
-			}
-		case <-timer.C:
-		case <-p.closeCh:
-			timer.Stop()
-			return ErrTransportClosed
-		}
+	err := p.sender.Send(data)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, common.ErrAckTimeout):
+		return ErrAckTimeout
+	default:
+		return fmt.Errorf("send fragments: %w", err)
 	}
-
-	return ErrAckTimeout
-}
-
-// perAttemptAckTimeout computes a per-attempt timeout that accounts for the
-// time writerLoop needs to drain all fragments through the FPS-paced ticker.
-func (p *streamTransport) perAttemptAckTimeout(fragments int) time.Duration {
-	frameInterval := p.effectiveFrameInterval()
-	batchSize := p.effectiveBatchSize()
-	// Drain time: how long writerLoop needs to send all fragments.
-	drainTicks := (fragments + batchSize - 1) / batchSize
-	drainTime := time.Duration(drainTicks) * frameInterval
-	// Allow 3× drain time for scheduling jitter + peer reassembly + ack RTT.
-	estimated := drainTime * 3
-	floor := p.effectiveAckTimeout()
-	if estimated < floor {
-		return floor
-	}
-	const maxAckTimeout = 30 * time.Second
-	if estimated > maxAckTimeout {
-		return maxAckTimeout
-	}
-	return estimated
 }
 
 // Close terminates the transport.
@@ -278,29 +206,32 @@ func (p *streamTransport) Close() error {
 	return nil
 }
 
-// SetReconnectCallback registers reconnect handling.
+// SetReconnectCallback registers reconnect handling. The peer latch and the
+// reassembly state both describe a session the reconnect just replaced, so
+// they are cleared before the upper layer runs.
 func (p *streamTransport) SetReconnectCallback(cb func()) {
-	p.stream.SetReconnectCallback(cb)
+	p.stream.SetReconnectCallback(func() {
+		p.resetPeerState()
+		if cb != nil {
+			cb()
+		}
+	})
 }
 
-// Reconnect forwards to the underlying engine session.
-func (p *streamTransport) Reconnect(reason string) {
-	p.stream.Reconnect(reason)
+// PeerResetter is satisfied so the liveness layer can drop peer state without
+// rebuilding the provider connection.
+var _ transport.PeerResetter = (*streamTransport)(nil)
+
+// ResetPeer forgets the current peer. Without it the readiness latch, which
+// only ever moved to true, kept reporting a peer that had already left: every
+// send was accepted and then quietly burned its whole retry budget.
+func (p *streamTransport) ResetPeer() {
+	p.resetPeerState()
 }
 
-// SetShouldReconnect configures reconnect policy.
-func (p *streamTransport) SetShouldReconnect(fn func() bool) {
-	p.stream.SetShouldReconnect(fn)
-}
-
-// SetEndedCallback registers end-of-session handling.
-func (p *streamTransport) SetEndedCallback(cb func(string)) {
-	p.stream.SetEndedCallback(cb)
-}
-
-// WatchConnection monitors connection lifecycle.
-func (p *streamTransport) WatchConnection(ctx context.Context) {
-	p.stream.WatchConnection(ctx)
+func (p *streamTransport) resetPeerState() {
+	p.peerReady.Store(false)
+	p.reassembler.Reset()
 }
 
 // CanSend reports whether transport is ready for sending.
@@ -310,119 +241,56 @@ func (p *streamTransport) CanSend() bool {
 
 // Features describes the current seichannel transport semantics.
 func (p *streamTransport) Features() transport.Features {
-	return transport.Features{
-		Reliable:        true,
-		Ordered:         true,
-		MessageOriented: true,
-		MaxPayloadSize:  p.effectiveFragmentSize() * 8,
-	}
-}
-
-func (p *streamTransport) effectiveFragmentSize() int {
-	if p.fragmentSize <= 0 {
-		return defaultFragmentSize
-	}
-	return p.fragmentSize
-}
-
-func (p *streamTransport) effectiveAckTimeout() time.Duration {
-	if p.ackTimeout <= 0 {
-		return defaultAckTimeout
-	}
-	return p.ackTimeout
-}
-
-func (p *streamTransport) effectiveFrameInterval() time.Duration {
-	if p.frameInterval <= 0 {
-		return defaultFrameInterval
-	}
-	return p.frameInterval
-}
-
-func (p *streamTransport) effectiveBatchSize() int {
-	if p.batchSize <= 0 {
-		return defaultBatchSize
-	}
-	return p.batchSize
+	return p.shaper.Features(transport.Features{
+		MaxPayloadSize: p.fragmentSize * 8,
+	})
 }
 
 func (p *streamTransport) writerLoop() {
 	defer close(p.writerDone)
 
-	ticker := time.NewTicker(p.effectiveFrameInterval())
+	ticker := time.NewTicker(p.frameInterval)
 	defer ticker.Stop()
 
-	idle := buildVideoAccessUnit(encodeHelloFrame())
+	idle := buildVideoAccessUnit(p.sender.Hello())
+	var scratch []byte
 
 	for {
 		select {
 		case <-p.closeCh:
 			return
 		case <-ticker.C:
-			if !p.writeBatch(idle) {
+			var ok bool
+			scratch, ok = p.writeBatch(idle, scratch)
+			if !ok {
 				return
 			}
 		}
 	}
 }
 
-func (p *streamTransport) writeBatch(idle []byte) bool {
-	frameInterval := p.effectiveFrameInterval()
-	batchSize := p.effectiveBatchSize()
-	for i := range batchSize {
-		payload, ok := p.nextOutboundFrame()
+func (p *streamTransport) writeBatch(idle, scratch []byte) ([]byte, bool) {
+	for i := range p.batchSize {
+		payload, ok := p.queue.Next()
 		if !ok {
-			return false
+			return scratch, false
 		}
 		if payload == nil {
 			if i > 0 {
-				return true
+				return scratch, true
 			}
-			_ = p.track.WriteSample(media.Sample{Data: idle, Duration: frameInterval})
-			return true
+			_ = p.track.WriteSample(media.Sample{Data: idle, Duration: p.frameInterval})
+			return scratch, true
 		}
-		_ = p.track.WriteSample(media.Sample{Data: buildVideoAccessUnit(payload), Duration: frameInterval})
+		// Pion's H264 payloader copies every NAL into RTP-owned storage before
+		// WriteSample returns, so this writer-owned access unit can be reused.
+		scratch = buildVideoAccessUnitInto(scratch[:0], payload)
+		_ = p.track.WriteSample(media.Sample{
+			Data:     scratch,
+			Duration: p.frameInterval,
+		})
 	}
-	return true
-}
-
-func (p *streamTransport) nextOutboundFrame() ([]byte, bool) {
-	select {
-	case <-p.closeCh:
-		return nil, false
-	case payload := <-p.outboundAck:
-		return payload, true
-	default:
-	}
-
-	select {
-	case <-p.closeCh:
-		return nil, false
-	case payload := <-p.outboundAck:
-		return payload, true
-	case payload := <-p.outbound:
-		return payload, true
-	default:
-		return nil, true
-	}
-}
-
-func (p *streamTransport) enqueueFrame(frame []byte, priority bool) error {
-	if p.closed.Load() {
-		return ErrTransportClosed
-	}
-
-	ch := p.outbound
-	if priority {
-		ch = p.outboundAck
-	}
-
-	select {
-	case <-p.closeCh:
-		return ErrTransportClosed
-	case ch <- frame:
-		return nil
-	}
+	return scratch, true
 }
 
 func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
@@ -450,126 +318,49 @@ func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc
 }
 
 func (p *streamTransport) handleSample(sample []byte) {
-	payloads, err := extractVideoPayloads(sample)
-	if err != nil {
+	// The track reader flushes the sample builder when the track ends, which
+	// is exactly what Close causes: without this the application receives
+	// data after Close has already returned.
+	if p.closed.Load() {
 		return
 	}
-
+	payloads := extractVideoPayloads(sample)
 	for _, payload := range payloads {
-		frame, err := decodeTransportFrame(payload)
+		frame, err := common.DecodeFrame(payload)
 		if err != nil {
 			continue
 		}
+		if !p.acceptFrame(frame) {
+			continue
+		}
 
-		switch frame.typ {
-		case frameTypeHello:
-			p.peerReady.Store(true)
-		case frameTypeAck:
-			p.peerReady.Store(true)
-			p.resolveAck(frame.seq, frame.crc)
-		case frameTypeData:
-			p.peerReady.Store(true)
+		p.peerReady.Store(true)
+
+		switch frame.Type {
+		case common.FrameTypeHello:
+			// Presence only; readiness is already recorded above.
+		case common.FrameTypeAck:
+			p.resolveAck(frame.Seq, frame.CRC, frame.FragIdx)
+		case common.FrameTypeData:
 			p.handleInboundFrame(frame)
 		}
 	}
 }
 
-func (p *streamTransport) handleInboundFrame(frame transportFrame) {
-	result, data := p.reassembler.Push(common.Fragment{
-		Seq:       frame.seq,
-		CRC:       frame.crc,
-		TotalLen:  frame.totalLen,
-		FragIdx:   frame.fragIdx,
-		FragTotal: frame.fragTotal,
-		Payload:   frame.payload,
-	})
-	switch result {
-	case common.ResultDuplicate:
-		p.sendAck(frame.seq, frame.crc)
-	case common.ResultDelivered:
-		if p.onData != nil {
-			p.onData(data)
-		}
-		p.sendAck(frame.seq, frame.crc)
-	case common.ResultPartial, common.ResultIgnore:
-		// fragment stored or discarded; no peer response needed yet.
-	}
+func (p *streamTransport) handleInboundFrame(frame common.Frame) {
+	common.DeliverFragment(p.reassembler, frame, p.onData, p.sendAck)
 }
 
-func (p *streamTransport) sendAck(seq, crc uint32) {
-	_ = p.enqueueFrame(encodeAckFrame(seq, crc), true)
+func (p *streamTransport) sendAck(seq, crc uint32, fragIdx uint16) {
+	p.sender.Ack(seq, crc, fragIdx)
 }
 
-func (p *streamTransport) resolveAck(seq, crc uint32) {
-	p.acks.Resolve(seq, crc)
+func (p *streamTransport) resolveAck(seq, crc uint32, fragIdx uint16) {
+	p.sender.Resolve(seq, crc, fragIdx)
 }
 
-func encodeDataFrame(seq, crc uint32, totalLen, fragIdx, fragTotal int, payload []byte) []byte {
-	out := make([]byte, 22+len(payload))
-	binary.BigEndian.PutUint32(out[0:4], protocolMagic)
-	out[4] = protocolVersion
-	out[5] = frameTypeData
-	binary.BigEndian.PutUint32(out[6:10], seq)
-	binary.BigEndian.PutUint32(out[10:14], crc)
-	binary.BigEndian.PutUint32(out[14:18], uint32(totalLen))  //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
-	binary.BigEndian.PutUint16(out[18:20], uint16(fragIdx))   //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
-	binary.BigEndian.PutUint16(out[20:22], uint16(fragTotal)) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
-	copy(out[22:], payload)
-	return out
-}
-
-func encodeAckFrame(seq, crc uint32) []byte {
-	out := make([]byte, 14)
-	binary.BigEndian.PutUint32(out[0:4], protocolMagic)
-	out[4] = protocolVersion
-	out[5] = frameTypeAck
-	binary.BigEndian.PutUint32(out[6:10], seq)
-	binary.BigEndian.PutUint32(out[10:14], crc)
-	return out
-}
-
-func encodeHelloFrame() []byte {
-	out := make([]byte, 6)
-	binary.BigEndian.PutUint32(out[0:4], protocolMagic)
-	out[4] = protocolVersion
-	out[5] = frameTypeHello
-	return out
-}
-
-func decodeTransportFrame(data []byte) (transportFrame, error) {
-	if len(data) < 6 {
-		return transportFrame{}, ErrFrameTooShort
-	}
-	if binary.BigEndian.Uint32(data[0:4]) != protocolMagic {
-		return transportFrame{}, ErrUnexpectedMagic
-	}
-	if data[4] != protocolVersion {
-		return transportFrame{}, ErrUnexpectedVersion
-	}
-
-	frame := transportFrame{typ: data[5]}
-	switch frame.typ {
-	case frameTypeHello:
-		return frame, nil
-	case frameTypeAck:
-		if len(data) < 14 {
-			return transportFrame{}, ErrAckTooShort
-		}
-		frame.seq = binary.BigEndian.Uint32(data[6:10])
-		frame.crc = binary.BigEndian.Uint32(data[10:14])
-		return frame, nil
-	case frameTypeData:
-		if len(data) < 22 {
-			return transportFrame{}, ErrDataTooShort
-		}
-		frame.seq = binary.BigEndian.Uint32(data[6:10])
-		frame.crc = binary.BigEndian.Uint32(data[10:14])
-		frame.totalLen = binary.BigEndian.Uint32(data[14:18])
-		frame.fragIdx = binary.BigEndian.Uint16(data[18:20])
-		frame.fragTotal = binary.BigEndian.Uint16(data[20:22])
-		frame.payload = append([]byte(nil), data[22:]...)
-		return frame, nil
-	default:
-		return transportFrame{}, ErrUnexpectedFrameType
-	}
+// acceptFrame reports whether an inbound frame is addressed to this side:
+// sent by the peer role we expect and carrying our session binding.
+func (p *streamTransport) acceptFrame(frame common.Frame) bool {
+	return frame.AcceptedBy(p.remoteRole, p.bindingToken)
 }

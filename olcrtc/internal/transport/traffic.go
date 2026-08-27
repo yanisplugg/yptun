@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -12,139 +11,81 @@ import (
 // ErrTrafficPayloadTooLarge is returned when Send receives a payload above the configured cap.
 var ErrTrafficPayloadTooLarge = errors.New("traffic payload exceeds max_payload_size")
 
-var (
-	errTrafficConnect = errors.New("traffic connect failed")
-	errTrafficSend    = errors.New("traffic send failed")
-	errTrafficClose   = errors.New("traffic close failed")
-)
-
-type trafficTransport struct {
-	inner          Transport
+// Shaper applies the optional `traffic:` policy - a hard payload cap plus
+// randomised inter-send pacing - to a transport's bulk data path.
+//
+// It is a value owned by each transport rather than a decorator around
+// [Transport]: transports expose several optional capability interfaces
+// (ControlPlane, PeerControlPlane, PeerReadyTransport, ...) and a wrapper can
+// only ever implement a fixed subset of them, silently disabling the rest.
+//
+// The control plane is deliberately never shaped: liveness and handshake
+// frames must not inherit the pacing applied to bulk traffic.
+type Shaper struct {
 	maxPayloadSize int
 	minDelay       time.Duration
 	maxDelay       time.Duration
-	sendMu         sync.Mutex
+	mu             sync.Mutex
 }
 
-// WithTraffic wraps tr with optional payload caps and send pacing.
-func WithTraffic(tr Transport, cfg TrafficConfig) Transport {
-	if tr == nil {
+// NewShaper returns a Shaper for cfg, or nil when no shaping was requested.
+// features clamps MaxPayloadSize to whatever the transport can actually carry.
+func NewShaper(cfg TrafficConfig, features Features) *Shaper {
+	if cfg.MaxPayloadSize > 0 && features.MaxPayloadSize > 0 && features.MaxPayloadSize < cfg.MaxPayloadSize {
+		cfg.MaxPayloadSize = features.MaxPayloadSize
+	}
+
+	if cfg.MaxPayloadSize <= 0 && cfg.MinDelay <= 0 && cfg.MaxDelay <= 0 {
 		return nil
 	}
-	cfg = effectiveTrafficConfig(tr.Features(), cfg)
-	if cfg.MaxPayloadSize <= 0 && cfg.MinDelay <= 0 && cfg.MaxDelay <= 0 {
-		return tr
-	}
-	return &trafficTransport{
-		inner:          tr,
+
+	return &Shaper{
 		maxPayloadSize: cfg.MaxPayloadSize,
 		minDelay:       cfg.MinDelay,
 		maxDelay:       cfg.MaxDelay,
 	}
 }
 
-func effectiveTrafficConfig(features Features, cfg TrafficConfig) TrafficConfig {
-	if cfg.MaxPayloadSize > 0 && features.MaxPayloadSize > 0 && features.MaxPayloadSize < cfg.MaxPayloadSize {
-		cfg.MaxPayloadSize = features.MaxPayloadSize
+// Send enforces the payload cap, waits out the pacing delay and then calls
+// send. A nil Shaper calls send directly, so callers never need a nil check.
+func (s *Shaper) Send(send func([]byte) error, data []byte) error {
+	if s == nil {
+		return send(data)
 	}
-	return cfg
-}
 
-func (t *trafficTransport) Connect(ctx context.Context) error {
-	if err := t.inner.Connect(ctx); err != nil {
-		return fmt.Errorf("%w: %w", errTrafficConnect, err)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.maxPayloadSize > 0 && len(data) > s.maxPayloadSize {
+		return fmt.Errorf("%w: size=%d max=%d", ErrTrafficPayloadTooLarge, len(data), s.maxPayloadSize)
 	}
-	return nil
-}
 
-func (t *trafficTransport) Send(data []byte) error {
-	return t.sendWith(func(payload []byte) error {
-		return t.inner.Send(payload)
-	}, data)
-}
-
-func (t *trafficTransport) SendTo(peerID string, data []byte) error {
-	peer, ok := t.inner.(PeerTransport)
-	if !ok || !peer.SupportsPeerRouting() {
-		return t.Send(data)
-	}
-	return t.sendWith(func(payload []byte) error {
-		return peer.SendTo(peerID, payload)
-	}, data)
-}
-
-func (t *trafficTransport) SupportsPeerRouting() bool {
-	peer, ok := t.inner.(PeerTransport)
-	return ok && peer.SupportsPeerRouting()
-}
-
-func (t *trafficTransport) sendWith(send func([]byte) error, data []byte) error {
-	t.sendMu.Lock()
-	defer t.sendMu.Unlock()
-	if t.maxPayloadSize > 0 && len(data) > t.maxPayloadSize {
-		return fmt.Errorf("%w: size=%d max=%d", ErrTrafficPayloadTooLarge, len(data), t.maxPayloadSize)
-	}
-	if delay := t.nextDelay(); delay > 0 {
+	if delay := s.nextDelay(); delay > 0 {
 		time.Sleep(delay)
 	}
-	if err := send(data); err != nil {
-		return fmt.Errorf("%w: %w", errTrafficSend, err)
-	}
-	return nil
+
+	return send(data)
 }
 
-func (t *trafficTransport) Close() error {
-	if err := t.inner.Close(); err != nil {
-		return fmt.Errorf("%w: %w", errTrafficClose, err)
+// Features narrows f by the shaper's payload cap so upper layers size their
+// frames against the effective limit.
+func (s *Shaper) Features(f Features) Features {
+	if s == nil || s.maxPayloadSize <= 0 {
+		return f
 	}
-	return nil
+
+	if f.MaxPayloadSize == 0 || s.maxPayloadSize < f.MaxPayloadSize {
+		f.MaxPayloadSize = s.maxPayloadSize
+	}
+
+	return f
 }
 
-func (t *trafficTransport) ResetPeer() {
-	if resetter, ok := t.inner.(interface{ ResetPeer() }); ok {
-		resetter.ResetPeer()
+func (s *Shaper) nextDelay() time.Duration {
+	if s.maxDelay <= s.minDelay {
+		return s.minDelay
 	}
-}
 
-// NotifyLinkHealth forwards to inner if it implements LinkHealthObserver;
-// otherwise it's a no-op (most transports don't need this signal).
-//
-// ai-generated: new method, part of the peer-restart-corroboration PR.
-func (t *trafficTransport) NotifyLinkHealth(unhealthy bool) {
-	if obs, ok := t.inner.(LinkHealthObserver); ok {
-		obs.NotifyLinkHealth(unhealthy)
-	}
-}
-
-func (t *trafficTransport) Reconnect(reason string) { t.inner.Reconnect(reason) }
-
-func (t *trafficTransport) SetReconnectCallback(cb func()) { t.inner.SetReconnectCallback(cb) }
-
-func (t *trafficTransport) SetShouldReconnect(fn func() bool) { t.inner.SetShouldReconnect(fn) }
-
-func (t *trafficTransport) SetEndedCallback(cb func(string)) { t.inner.SetEndedCallback(cb) }
-
-func (t *trafficTransport) WatchConnection(ctx context.Context) { t.inner.WatchConnection(ctx) }
-
-func (t *trafficTransport) CanSend() bool { return t.inner.CanSend() }
-
-func (t *trafficTransport) Features() Features {
-	features := t.inner.Features()
-	if t.maxPayloadSize > 0 &&
-		(features.MaxPayloadSize == 0 || t.maxPayloadSize < features.MaxPayloadSize) {
-		features.MaxPayloadSize = t.maxPayloadSize
-	}
-	return features
-}
-
-func (t *trafficTransport) nextDelay() time.Duration {
-	if t.maxDelay <= 0 && t.minDelay <= 0 {
-		return 0
-	}
-	minDelay := t.minDelay
-	maxDelay := t.maxDelay
-	if maxDelay <= minDelay {
-		return minDelay
-	}
-	return minDelay + time.Duration(rand.Int64N(int64(maxDelay-minDelay))) //nolint:gosec,lll // G404: non-cryptographic pacing jitter
+	//nolint:gosec // G404: non-cryptographic pacing jitter
+	return s.minDelay + time.Duration(rand.Int64N(int64(s.maxDelay-s.minDelay)))
 }

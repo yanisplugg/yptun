@@ -12,12 +12,17 @@ import (
 )
 
 var (
-	stderrFilterOnce   sync.Once    //nolint:gochecknoglobals // process-wide stderr fd filter
-	stderrPipeWriter   *os.File     //nolint:gochecknoglobals // process-wide stderr fd filter
+	stderrFilterOnce   sync.Once     //nolint:gochecknoglobals // process-wide stderr fd filter
+	stderrPipeWriter   *os.File      //nolint:gochecknoglobals // process-wide stderr fd filter
 	stderrFilterDone   chan struct{} //nolint:gochecknoglobals // process-wide stderr fd filter
-	stderrFilterActive bool         //nolint:gochecknoglobals // process-wide stderr fd filter
+	stderrFilterActive bool          //nolint:gochecknoglobals // process-wide stderr fd filter
+	stderrOrigFD       int           //nolint:gochecknoglobals // process-wide stderr fd filter
 )
 
+// installStderrFilter redirects fd 2 into a pipe drained by a goroutine that
+// drops third-party noise. os.Stderr is deliberately left alone: reassigning
+// it drops the last reference to the original *os.File, whose finalizer then
+// closes fd 2 out from under the process.
 func installStderrFilter() {
 	stderrFilterOnce.Do(func() {
 		origFD, err := unix.Dup(int(os.Stderr.Fd()))
@@ -38,7 +43,7 @@ func installStderrFilter() {
 		stderrPipeWriter = writer
 		stderrFilterDone = make(chan struct{})
 		stderrFilterActive = true
-		os.Stderr = os.NewFile(uintptr(unix.Stderr), "/dev/stderr")
+		stderrOrigFD = origFD
 		orig := os.NewFile(uintptr(origFD), "/dev/stderr-original")
 		go func() {
 			defer close(stderrFilterDone)
@@ -47,14 +52,17 @@ func installStderrFilter() {
 	})
 }
 
-// flushStderrFilter closes the pipe write ends so the filter goroutine
-// sees EOF and drains any buffered output before the process exits.
+// flushStderrFilter puts the real stderr back on fd 2, then closes the pipe
+// write end so the filter goroutine sees EOF and drains what is left. The
+// restore has to come first: it drops the last extra reference to the pipe
+// (so the reader really gets EOF) and it keeps fd 2 usable afterwards, which
+// closing it outright would not.
 func flushStderrFilter() {
 	if !stderrFilterActive {
 		return
 	}
+	_ = unix.Dup2(stderrOrigFD, unix.Stderr)
 	_ = stderrPipeWriter.Close()
-	_ = unix.Close(unix.Stderr)
 	<-stderrFilterDone
 }
 

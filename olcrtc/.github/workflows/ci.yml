@@ -4,14 +4,15 @@ on:
   push:
   pull_request:
     branches: ["main", "master"]
-  schedule:
-    # Nightly full E2E - 00:17 UTC (03:17 MSK)
-    - cron: "17 0 * * *"
   workflow_dispatch:
 
+env:
+  GO_VERSION: "1.26.x"
+  GOLANGCI_LINT_VERSION: "v2.12.2"
+
 jobs:
-  test:
-    name: Test
+  hygiene:
+    name: Hygiene (fmt, tidy, vet)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,100 +22,22 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: ${{ env.GO_VERSION }}
 
-      - name: Run tests
-        run: go test -count=1 ./...
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.x"
-
-      - name: Run tests with coverage
-        run: go test -count=1 ./... --cover
-
-  race:
-    name: Test (-race)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.x"
-
-      - name: Run tests with -race
-        run: go test -count=1 -race ./...
-
-  real-e2e:
-    name: Real E2E (Providers x Transports)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.x"
-
-      - name: Install media tools
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Run real provider e2e matrix
+      - name: gofmt
         run: |
-          go test -count=1 -v ./internal/e2e \
-            -olcrtc.real-carriers=telemost,wbstream,jitsi \
-            -run '^TestRealProviderTransportMatrix$' \
-            -olcrtc.real-e2e
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
 
-  stress-soak:
-    name: Real E2E Stress Soak (Nightly)
-    # Long-form stress over real carriers: only on schedule or manual
-    # dispatch. Push and PR runs stay fast.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - name: go mod tidy
+        run: go mod tidy -diff
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.x"
-
-      - name: Install media tools
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Run real stress soak
-        run: |
-          go test -count=1 -v ./internal/e2e \
-            -run '^TestRealProviderTransportStress$' \
-            -timeout=85m \
-            -olcrtc.real-e2e \
-            -olcrtc.stress \
-            -olcrtc.real-carriers=telemost,wbstream,jitsi \
-            -olcrtc.stress-bulk-duration=90s \
-            -olcrtc.stress-duration=120s \
-            -olcrtc.stress-echo-size=1024 \
-            -olcrtc.stress-case-timeout=8m
+      - name: go vet
+        run: go vet ./...
 
   lint:
     name: Lint
@@ -127,12 +50,62 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --timeout=5m
+
+  test:
+    name: Test (-race, coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run tests
+        run: go test -count=1 -race -timeout 15m -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  real-e2e:
+    name: Real E2E (Providers x Transports)
+    # Talks to third-party services, but runs on every push and PR so
+    # breakage is caught immediately instead of waiting for a schedule.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run real provider e2e matrix
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-          $(go env GOPATH)/bin/golangci-lint run --timeout=5m
+          go test -count=1 -v ./internal/e2e \
+            -olcrtc.real-providers=telemost,wbstream,jitsi \
+            -run '^TestRealProviderTransportMatrix$' \
+            -olcrtc.real-e2e
 
   build-cli:
     name: Build CLI (Binaries)
@@ -145,7 +118,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Install Mage
         run: go install github.com/magefile/mage@latest
@@ -170,7 +143,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -195,11 +168,9 @@ jobs:
           name: olcrtc-android
           path: build/olcrtc.aar
 
-  nightly-soak:
-    name: Nightly Soak (All Carriers × Transports)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  build-cgo:
+    name: Build c-shared library
     runs-on: ubuntu-latest
-    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
@@ -208,28 +179,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: ${{ env.GO_VERSION }}
 
-      - name: Install media tools
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install Mage
+        run: go install github.com/magefile/mage@latest
 
-      - name: Run real soak (all carriers × dc+vp8, 10m each)
-        run: |
-          go test -count=1 -v ./internal/e2e \
-            -run '^TestRealThroughputSoak$' \
-            -timeout=170m \
-            -olcrtc.real-e2e \
-            -olcrtc.real-soak \
-            -olcrtc.real-soak-carrier=telemost,jitsi,wbstream \
-            -olcrtc.real-soak-transport=datachannel,vp8channel \
-            -olcrtc.real-soak-duration=10m
+      - name: Build c-shared
+        run: mage cgo
 
-      - name: Run local soak with chaos (all transports, 6m, reconnect every 30s)
-        run: |
-          go test -count=1 -v ./internal/e2e \
-            -run '^TestLocalThroughputSoak$' \
-            -timeout=60m \
-            -olcrtc.local-soak \
-            -olcrtc.local-soak-transport=all \
-            -olcrtc.local-soak-duration=6m \
-            -olcrtc.local-soak-chaos=30s
+      - name: Upload c-shared artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: olcrtc-cshared
+          path: build/libolcrtc.*

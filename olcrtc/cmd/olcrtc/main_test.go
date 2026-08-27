@@ -15,8 +15,8 @@ import (
 var errBoom = errors.New("boom")
 
 const (
-	testAuthWBStream = "wbstream"
-	testDNSServer    = "8.8.8.8:53"
+	testProviderWBStream = "wbstream"
+	testDNSServer        = "8.8.8.8:53"
 )
 
 func writeYAML(t *testing.T, body string) string {
@@ -45,12 +45,12 @@ func TestRunWithArgsRequiresConfig(t *testing.T) {
 func TestRunGenModeValidationErrors(t *testing.T) {
 	session.RegisterDefaults()
 
-	if err := runWithConfig(loadedConfig{scfg: session.Config{Mode: modeGen}}); err == nil {
-		t.Fatal("runWithConfig(gen, no carrier) error = nil")
+	if err := runWithConfig(loadedConfig{scfg: session.Config{Mode: session.ModeGen}}); err == nil {
+		t.Fatal("runWithConfig(gen, no provider) error = nil")
 	}
 
 	cfg := loadedConfig{scfg: session.Config{
-		Mode: modeGen, Auth: testAuthWBStream, DNSServer: testDNSServer,
+		Mode: session.ModeGen, Provider: testProviderWBStream, DNSServer: testDNSServer,
 	}}
 	if err := runWithConfig(cfg); err == nil {
 		t.Fatal("runWithConfig(gen, amount=0) error = nil")
@@ -64,7 +64,7 @@ func TestRunGenModeCallsGen(t *testing.T) {
 	oldRunGen := runGen
 	t.Cleanup(func() { runGen = oldRunGen })
 	runGen = func(scfg session.Config) error {
-		if scfg.Auth != testAuthWBStream || scfg.DNSServer != testDNSServer || scfg.Amount != 3 {
+		if scfg.Provider != testProviderWBStream || scfg.DNSServer != testDNSServer || scfg.Amount != 3 {
 			t.Fatalf("runGen scfg = %+v", scfg)
 		}
 		collected = append(collected, "ok")
@@ -72,7 +72,7 @@ func TestRunGenModeCallsGen(t *testing.T) {
 	}
 
 	cfg := loadedConfig{scfg: session.Config{
-		Mode: modeGen, Auth: testAuthWBStream, DNSServer: testDNSServer, Amount: 3,
+		Mode: session.ModeGen, Provider: testProviderWBStream, DNSServer: testDNSServer, Amount: 3,
 	}}
 	if err := runWithConfig(cfg); err != nil {
 		t.Fatalf("runWithConfig(gen) error = %v", err)
@@ -82,23 +82,41 @@ func TestRunGenModeCallsGen(t *testing.T) {
 	}
 }
 
-func TestRunWithConfigValidationAndDataDirErrors(t *testing.T) {
+func TestRunWithConfigRejectsInvalidConfig(t *testing.T) {
 	session.RegisterDefaults()
+
+	scfg := session.Config{
+		Transport: "datachannel",
+		Provider:  "jitsi",
+		RoomID:    "https://meet.systemli.org/test",
+		KeyHex:    testKeyHex,
+		DNSServer: "8.8.8.8:53",
+	}
+
+	if err := runWithConfig(loadedConfig{scfg: scfg}); err == nil {
+		t.Fatal("runWithConfig(invalid config) error = nil")
+	}
+}
+
+// testKeyHex is a syntactically valid PSK: config validation rejects anything
+// that is not 64 hex characters.
+const testKeyHex = "0000000000000000000000000000000000000000000000000000000000000001"
+
+func TestRunWithConfigRejectsUnreadableDataOverride(t *testing.T) {
+	session.RegisterDefaults()
+
 	scfg := session.Config{
 		Mode:      "srv",
 		Transport: "datachannel",
-		Auth:      "jitsi",
+		Provider:  "jitsi",
 		RoomID:    "https://meet.systemli.org/test",
-		KeyHex:    "key",
+		KeyHex:    testKeyHex,
 		DNSServer: "8.8.8.8:53",
 	}
-	if err := runWithConfig(loadedConfig{scfg: scfg}); !errors.Is(err, ErrDataDirRequired) {
-		t.Fatalf("runWithConfig(no data dir) = %v, want %v", err, ErrDataDirRequired)
-	}
 
-	scfg.Mode = ""
-	if err := runWithConfig(loadedConfig{scfg: scfg}); err == nil {
-		t.Fatal("runWithConfig(invalid config) error = nil")
+	err := runWithConfig(loadedConfig{scfg: scfg, dataDir: filepath.Join(t.TempDir(), "missing")})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runWithConfig(bad data dir) = %v, want os.ErrNotExist", err)
 	}
 }
 
@@ -118,7 +136,7 @@ func TestRunWithArgsSuccessfulSessionReturn(t *testing.T) {
 	called := false
 	runSession = func(ctx context.Context, cfg session.Config) error {
 		called = true
-		if cfg.Mode != "srv" || cfg.Auth != "jitsi" {
+		if cfg.Mode != "srv" || cfg.Provider != "jitsi" {
 			t.Fatalf("session config = %+v", cfg)
 		}
 		select {
@@ -131,13 +149,12 @@ func TestRunWithArgsSuccessfulSessionReturn(t *testing.T) {
 
 	yamlPath := writeYAML(t, `
 mode: srv
-link: direct
 auth:
   provider: jitsi
 room:
   id: https://meet.systemli.org/test
 crypto:
-  key: key
+  key: "0000000000000000000000000000000000000000000000000000000000000001"
 net:
   transport: datachannel
   dns: 8.8.8.8:53
@@ -172,13 +189,12 @@ func TestRunWithArgsAppliesTransportDefaults(t *testing.T) {
 
 	yamlPath := writeYAML(t, `
 mode: srv
-link: direct
 auth:
   provider: wbstream
 room:
   id: room
 crypto:
-  key: key
+  key: "0000000000000000000000000000000000000000000000000000000000000001"
 net:
   transport: vp8channel
   dns: 8.8.8.8:53
@@ -203,8 +219,8 @@ func TestRunWithArgsFailoverProfiles(t *testing.T) {
 	t.Cleanup(func() { runSession = oldRunSession })
 	var seen []string
 	runSession = func(_ context.Context, cfg session.Config) error {
-		seen = append(seen, cfg.Auth+"/"+cfg.Transport)
-		if cfg.Auth == "wbstream" && (cfg.VP8.FPS != 30 || cfg.VP8.BatchSize != 64) {
+		seen = append(seen, cfg.Provider+"/"+cfg.Transport)
+		if cfg.Provider == "wbstream" && (cfg.VP8.FPS != 30 || cfg.VP8.BatchSize != 64) {
 			t.Errorf("VP8 defaults = fps %d batch %d, want 30/64", cfg.VP8.FPS, cfg.VP8.BatchSize)
 		}
 		return errBoom
@@ -212,9 +228,8 @@ func TestRunWithArgsFailoverProfiles(t *testing.T) {
 
 	yamlPath := writeYAML(t, `
 mode: srv
-link: direct
 crypto:
-  key: key
+  key: "0000000000000000000000000000000000000000000000000000000000000001"
 net:
   dns: 8.8.8.8:53
 profiles:
@@ -250,7 +265,7 @@ data: `+dir+`
 
 func TestRunWithConfigRejectsProfilesInGenMode(t *testing.T) {
 	cfg := loadedConfig{
-		scfg:     session.Config{Mode: modeGen},
+		scfg:     session.Config{Mode: session.ModeGen},
 		profiles: []supervisor.Profile{{Name: "one"}},
 	}
 	if err := runWithConfig(cfg); !errors.Is(err, ErrProfilesUnsupportedForGen) {
@@ -293,33 +308,36 @@ func equalStrings(a, b []string) bool {
 
 func TestResolveDataDir(t *testing.T) {
 	abs := filepath.Join(t.TempDir(), "data")
-	got, err := resolveDataDir(abs)
-	if err != nil {
-		t.Fatalf("resolveDataDir(abs) error = %v", err)
-	}
-	if got != abs {
+	if got := resolveDataDir("/etc/olcrtc/server.yaml", abs); got != abs {
 		t.Fatalf("resolveDataDir(abs) = %q, want %q", got, abs)
 	}
 
-	got, err = resolveDataDir("data")
-	if err != nil {
-		t.Fatalf("resolveDataDir(rel) error = %v", err)
+	want := filepath.FromSlash("/etc/olcrtc/data")
+	if got := resolveDataDir("/etc/olcrtc/server.yaml", "data"); got != want {
+		t.Fatalf("resolveDataDir(rel) = %q, want %q", got, want)
 	}
-	if filepath.Base(got) != "data" || !filepath.IsAbs(got) {
-		t.Fatalf("resolveDataDir(rel) = %q, want absolute path ending in data", got)
+
+	if got := resolveDataDir("/etc/olcrtc/server.yaml", ""); got != "" {
+		t.Fatalf("resolveDataDir(unset) = %q, want empty", got)
 	}
 }
 
-func TestLoadNames(t *testing.T) {
+func TestLoadNameOverrides(t *testing.T) {
+	if err := loadNameOverrides(""); err != nil {
+		t.Fatalf("loadNameOverrides(unset) error = %v", err)
+	}
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "names"), []byte("A\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(names) error = %v", err)
 	}
+
 	if err := os.WriteFile(filepath.Join(dir, "surnames"), []byte("B\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(surnames) error = %v", err)
 	}
-	if err := loadNames(dir); err != nil {
-		t.Fatalf("loadNames() error = %v", err)
+
+	if err := loadNameOverrides(dir); err != nil {
+		t.Fatalf("loadNameOverrides() error = %v", err)
 	}
 }
 

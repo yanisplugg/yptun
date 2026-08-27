@@ -26,7 +26,10 @@ func loadInterfaces() ([]*transport.Interface, error) {
 		ifc := transport.NewInterface(ifs[i])
 		addrs, err := anet.InterfaceAddrsByInterface(&ifs[i])
 		if err != nil {
-			return nil, fmt.Errorf("anet addrs %s: %w", ifs[i].Name, err)
+			// Skip this interface rather than failing the whole
+			// enumeration: one unreadable device must not cost us
+			// every candidate.
+			continue
 		}
 		for _, addr := range addrs {
 			ifc.AddAddress(addr)

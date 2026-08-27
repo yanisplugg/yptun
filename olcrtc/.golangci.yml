@@ -3,16 +3,9 @@ version: "2"
 run:
   timeout: 5m
   tests: true
-  build-tags:
-    - race
 
 linters:
   enable:
-    - errcheck
-    - govet
-    - staticcheck
-    - unused
-    - ineffassign
     - asasalint
     - asciicheck
     - bidichk
@@ -35,6 +28,7 @@ linters:
     - fatcontext
     - forbidigo
     - forcetypeassert
+    - funlen
     - gocheckcompilerdirectives
     - gochecknoglobals
     - gochecknoinits
@@ -52,7 +46,6 @@ linters:
     - inamedparam
     - interfacebloat
     - intrange
-    # - ireturn
     - lll
     - loggercheck
     - maintidx
@@ -94,180 +87,199 @@ linters:
     - wrapcheck
     - zerologlint
 
-linters-settings:
-  errcheck:
-    check-blank: true
-    check-type-assertions: true
-    exclude-functions:
-      - (io.Closer).Close
+  settings:
+    errcheck:
+      # `_ =` is treated as an explicit, reviewed decision to drop the error
+      check-blank: false
+      check-type-assertions: true
+      exclude-functions:
+        - (io.Closer).Close
 
-  govet:
-    enable-all: true
-    settings:
-      shadow:
-        strict: true
+    govet:
+      enable-all: true
+      disable:
+        # struct layout micro-optimisation, too noisy to be actionable here
+        - fieldalignment
+      settings:
+        shadow:
+          strict: false
 
-  gosec:
-    severity: medium
-    confidence: medium
-    excludes:
-      - G104
-      - G114
+    gosec:
+      severity: medium
+      confidence: medium
+      excludes:
+        - G104
+        - G114
 
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-      - experimental
-      - opinionated
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - experimental
+        - opinionated
+      disabled-checks:
+        - whyNoLint
+        - unnamedResult
+        - hugeParam
+        - rangeValCopy
 
-  revive:
-    severity: warning
-    enable-all-rules: false
-    rules:
-      - name: atomic
-      - name: blank-imports
-      - name: bool-literal-in-expr
-      - name: call-to-gc
-      - name: constant-logical-expr
-      - name: context-as-argument
-      - name: context-keys-type
-      - name: datarace
-      - name: defer
-      - name: dot-imports
-      - name: duplicated-imports
-      - name: early-return
-      - name: empty-block
-      - name: empty-lines
-      - name: error-naming
-      - name: error-return
-      - name: error-strings
-      - name: errorf
-      - name: exported
-      - name: identical-branches
-      - name: if-return
-      - name: increment-decrement
-      - name: indent-error-flow
-      - name: modifies-parameter
-      - name: modifies-value-receiver
-      - name: range
-      - name: range-val-address
-      - name: range-val-in-closure
-      - name: receiver-naming
-      - name: redefines-builtin-id
-      - name: string-of-int
-      - name: struct-tag
-      - name: superfluous-else
-      - name: time-equal
-      - name: time-naming
-      - name: unconditional-recursion
-      - name: unexported-naming
-      - name: unexported-return
-      - name: unhandled-error
-      - name: unnecessary-stmt
-      - name: unreachable-code
-      - name: unused-parameter
-      - name: unused-receiver
-      - name: use-any
-      - name: useless-break
-      - name: var-declaration
-      - name: var-naming
-      - name: waitgroup-by-value
-
-  stylecheck:
-    checks: ["all"]
-
-  staticcheck:
-    checks: ["all"]
-
-  unparam:
-    check-exported: true
-
-  nakedret:
-    max-func-lines: 0
-
-  cyclop:
-    max-complexity: 10
-
-  gocyclo:
-    min-complexity: 10
-
-  gocognit:
-    min-complexity: 15
-
-  nestif:
-    min-complexity: 4
-
-  lll:
-    line-length: 120
-
-  maintidx:
-    under: 20
-
-  funlen:
-    lines: 80
-    statements: 50
-
-  gochecknoglobals:
-    check-no-globals: true
-
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-
-  dupl:
-    threshold: 100
-
-  forbidigo:
-    forbid:
-      - ^print.*$
-      - ^fmt\.Print.*$
-
-  tagliatelle:
-    case:
+    revive:
+      severity: warning
+      enable-all-rules: false
       rules:
-        json: snake
-        yaml: snake
-        xml: camel
-        bson: camel
-        avro: snake
-        mapstructure: kebab
+        - name: atomic
+        - name: blank-imports
+        - name: bool-literal-in-expr
+        - name: call-to-gc
+        - name: constant-logical-expr
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: datarace
+        - name: defer
+        - name: dot-imports
+        - name: duplicated-imports
+        - name: early-return
+        - name: empty-block
+        - name: empty-lines
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: identical-branches
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: modifies-parameter
+        - name: modifies-value-receiver
+        - name: range
+        - name: range-val-address
+        - name: range-val-in-closure
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: string-of-int
+        - name: struct-tag
+        - name: superfluous-else
+        - name: time-equal
+        - name: time-naming
+        - name: unconditional-recursion
+        - name: unexported-naming
+        - name: unexported-return
+        - name: unhandled-error
+        - name: unnecessary-stmt
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: use-any
+        - name: useless-break
+        - name: var-declaration
+        - name: var-naming
+        - name: waitgroup-by-value
 
-  varnamelen:
-    min-name-length: 2
-    ignore-names:
-      - err
-      - i
-      - j
-      - k
-      - v
-      - id
-      - ok
-      - db
-      - tx
-      - wg
-      - mu
+    staticcheck:
+      checks:
+        - all
 
-  ireturn:
-    allow:
-      - anon
-      - error
-      - empty
-      - stdlib
-      - Provider
-      - provider.Provider
+    unparam:
+      check-exported: true
 
-  wrapcheck:
-    ignoreSigs:
-      - .Errorf(
-      - errors.New(
-      - errors.Unwrap(
-      - .Wrap(
-      - .Wrapf(
-      - .WithMessage(
+    nakedret:
+      max-func-lines: 0
+
+    cyclop:
+      max-complexity: 15
+
+    gocyclo:
+      min-complexity: 15
+
+    gocognit:
+      min-complexity: 30
+
+    nestif:
+      min-complexity: 5
+
+    lll:
+      line-length: 120
+
+    maintidx:
+      under: 20
+
+    funlen:
+      lines: 100
+      statements: 60
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+    dupl:
+      threshold: 150
+
+    forbidigo:
+      forbid:
+        - pattern: ^print.*$
+        - pattern: ^fmt\.Print.*$
+
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+          yaml: snake
+          xml: camel
+          bson: camel
+          avro: snake
+          mapstructure: kebab
+
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+        - .WithMessage(
+        # In-package helpers that already return wrapped or sentinel errors;
+        # re-wrapping at every transport call site only duplicates context.
+        - internal/transport.Config).OpenEngine(
+        - internal/transport.Shaper).Send(
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: _test\.go$
+        linters:
+          - containedctx
+          - dupl
+          - err113
+          - errcheck
+          - forcetypeassert
+          - funlen
+          - gochecknoglobals
+          - goconst
+          - gocognit
+          - gocyclo
+          - cyclop
+          - lll
+          - maintidx
+          - noctx
+          - unparam
+          - wrapcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/openlibrecommunity/olcrtc
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-use-default: false

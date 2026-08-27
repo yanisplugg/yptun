@@ -3,19 +3,16 @@ package goolom
 import (
 	"context"
 	"fmt"
-	"net"
-	"runtime"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/pion/webrtc/v4"
+
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/protect"
-	"github.com/pion/ice/v4"
-	"github.com/pion/interceptor"
-	"github.com/pion/webrtc/v4"
 )
 
 // defaultSTUNURL is the bootstrap STUN server used before the SFU
@@ -25,6 +22,13 @@ const defaultSTUNURL = "stun:stun.rtc.yandex.net:3478"
 
 // Connect starts the WebRTC connection process.
 func (s *Session) Connect(ctx context.Context) error {
+	// Reconnect reaches here too, and Close cancels no context this path
+	// uses. Without the check a reconnect racing Close clears closed, builds
+	// a fresh PeerConnection pair, DataChannel and WebSocket, and leaves them
+	// running behind a session the caller already closed.
+	if s.terminated.Load() {
+		return ErrSessionClosed
+	}
 	s.closed.Store(false)
 	s.resetMediaState()
 
@@ -40,13 +44,13 @@ func (s *Session) Connect(ctx context.Context) error {
 	keepAliveCh, sessionCloseCh := s.resetSession()
 	var dcReady chan struct{}
 	if s.onData != nil {
-		var err error
-		s.dc, err = s.pcPub.CreateDataChannel("olcrtc", nil)
+		dc, err := s.pubPC().CreateDataChannel("olcrtc", nil)
 		if err != nil {
 			return fmt.Errorf("create dc: %w", err)
 		}
+		s.dc.Store(dc)
 		dcReady = make(chan struct{})
-		s.setupDataChannelHandlers(dcReady, sessionCloseCh)
+		s.setupDataChannelHandlers(dc, dcReady, sessionCloseCh)
 	}
 
 	if err := s.dialWebSocket(); err != nil {
@@ -59,7 +63,7 @@ func (s *Session) Connect(ctx context.Context) error {
 	if s.onData != nil {
 		select {
 		case <-dcReady:
-			return nil
+			return s.abortIfTerminated()
 		case <-time.After(15 * time.Second):
 			return ErrDataChannelTimeout
 		case <-ctx.Done():
@@ -67,15 +71,38 @@ func (s *Session) Connect(ctx context.Context) error {
 		}
 	}
 
-	return s.waitForMediaReady(ctx, 20*time.Second)
+	if err := s.waitForMediaReady(ctx, 20*time.Second); err != nil {
+		return err
+	}
+	return s.abortIfTerminated()
 }
 
+// abortIfTerminated tears down the generation Connect just built when Close
+// ran while it was being built. Checking terminated once on entry is not
+// enough: Close can finish its teardown between that check and the point
+// where the new PeerConnections, DataChannel and WebSocket exist, and it has
+// no way to see resources that were not published yet.
+func (s *Session) abortIfTerminated() error {
+	if !s.terminated.Load() {
+		return nil
+	}
+	s.closeDataChannel()
+	s.closePeerConns()
+	s.closeWebSocket()
+	return ErrSessionClosed
+}
+
+// waitForMediaReady blocks until the subscriber PC reports Connected.
+//
+// Only the subscriber side gates readiness: publisher readiness deliberately
+// does not gate sending (see CanSend), because KCP buffers and retransmits
+// while the publisher PC is still negotiating.
 func (s *Session) waitForMediaReady(ctx context.Context, timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	select {
-	case <-s.subscriberConn:
+	case <-s.subscriberConnCh():
 	case <-timer.C:
 		return ErrSubscriberMediaTimeout
 	case <-ctx.Done():
@@ -84,114 +111,20 @@ func (s *Session) waitForMediaReady(ctx context.Context, timeout time.Duration) 
 	return nil
 }
 
-func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
-	api, err := newWebRTCAPI(s.resolver)
-	if err != nil {
-		return err
-	}
-
-	s.pcSub, err = api.NewPeerConnection(config)
-	if err != nil {
-		return fmt.Errorf("new sub pc: %w", err)
-	}
-	s.pcSub.OnConnectionStateChange(s.onSubscriberConnectionStateChange)
-	s.pcSub.OnTrack(s.onSubscriberTrack)
-
-	s.pcPub, err = api.NewPeerConnection(config)
-	if err != nil {
-		return fmt.Errorf("new pub pc: %w", err)
-	}
-	s.pcPub.OnConnectionStateChange(s.onPublisherConnectionStateChange)
-
-	if err := s.attachPendingVideoTracks(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// newWebRTCAPI builds a pion API with IPv4-only ICE and the default media
-// engine + interceptors. On Android 11+ SELinux denies netlink_route_socket
-// for untrusted apps (b/155595000), so ProtectedNet (getifaddrs-based) must
-// be installed even without a Protector.
-func newWebRTCAPI(resolver *net.Resolver) (*webrtc.API, error) {
-	settingEngine := webrtc.SettingEngine{}
-	if protect.Protector != nil || resolver != nil || runtime.GOOS == "android" {
-		pnet, err := protect.NewProtectedNet(resolver)
-		if err != nil {
-			return nil, fmt.Errorf("protected net: %w", err)
-		}
-		settingEngine.SetNet(pnet)
-		settingEngine.SetICEProxyDialer(protect.NewProxyDialer(resolver))
-		settingEngine.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
-	}
-	settingEngine.LoggerFactory = logger.NewPionLoggerFactory()
-
-	// Restrict ICE to UDP/IPv4. On hosts with many veth/docker interfaces the
-	// agent otherwise enumerates dozens of link-local IPv6 candidates that can
-	// never reach the SFU ("sendto: network is unreachable"). The flood of dead
-	// pairs starves ICE consent-freshness checks on the working pair, so the
-	// SFU stops receiving consent and tears down media after ~30-40 s. Limiting
-	// to IPv4 keeps the candidate set small and consent alive for the session.
-	settingEngine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
-	settingEngine.SetIPFilter(func(ip net.IP) bool {
-		return ip.To4() != nil
-	})
-
-	// Register the default media engine + interceptors. Without the default
-	// interceptors pion never emits RTCP Receiver Reports (or NACK/TWCC) for
-	// the inbound tracks, so the SFU sees a silent subscriber and stops
-	// forwarding VP8 after ~40 s. Registering them keeps the subscriber path
-	// alive for the lifetime of the PC.
-	mediaEngine := &webrtc.MediaEngine{}
-	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
-		return nil, fmt.Errorf("register default codecs: %w", err)
-	}
-	interceptorRegistry := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
-		return nil, fmt.Errorf("register default interceptors: %w", err)
-	}
-	return webrtc.NewAPI(
-		webrtc.WithSettingEngine(settingEngine),
-		webrtc.WithMediaEngine(mediaEngine),
-		webrtc.WithInterceptorRegistry(interceptorRegistry),
-	), nil
-}
-
-// onSubscriberTrack handles a remote track arriving on the subscriber PC.
-func (s *Session) onSubscriberTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-	if track.Kind() != webrtc.RTPCodecTypeVideo {
-		return
-	}
-	logger.Infof("goolom remote video track: codec=%s stream=%s track=%s",
-		track.Codec().MimeType, track.StreamID(), track.ID())
-	if cb := s.videoTrackHandler(); cb != nil {
-		cb(track, receiver)
-	}
-	// Drain inbound RTCP on the receiver so the configured interceptors
-	// (Receiver Report / NACK / TWCC) keep running. Without an active reader
-	// the interceptor chain stalls and the SFU eventually stops forwarding
-	// the track.
-	go func() {
-		rtcpBuf := make([]byte, 1500)
-		for {
-			if _, _, err := receiver.Read(rtcpBuf); err != nil {
-				return
-			}
-		}
-	}()
-}
-
 func (s *Session) dialWebSocket() error {
 	wsDialer := protect.NewWebSocketDialer(wsHandshakeTimeout, s.resolver)
-	ws, resp, err := wsDialer.Dial(s.mediaServerURL, nil)
+	ws, resp, err := wsDialer.Dial(s.signalingURL(), nil)
 	if err != nil {
 		return fmt.Errorf("dial ws: %w", err)
 	}
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
+	s.wsMu.Lock()
 	s.ws = ws
+	s.wsMu.Unlock()
 
+	ws.SetReadLimit(wsReadLimit)
 	ws.SetPongHandler(func(string) error {
 		_ = ws.SetReadDeadline(time.Now().Add(wsReadTimeout))
 		return nil
@@ -201,19 +134,13 @@ func (s *Session) dialWebSocket() error {
 }
 
 func (s *Session) startBackgroundGoroutines(ctx context.Context, keepAliveCh chan struct{}) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.keepAlive(keepAliveCh)
-	}()
+	s.goLaunch(func() { s.keepAlive(keepAliveCh) })
 
-	_ = s.sendHello()
+	if err := s.sendHello(); err != nil {
+		logger.Debugf("goolom: hello: %v", err)
+	}
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.handleSignaling(ctx)
-	}()
+	s.goLaunch(func() { s.handleSignaling(ctx) })
 }
 
 func (s *Session) onConnectionStateChange(state webrtc.PeerConnectionState) {
@@ -227,7 +154,7 @@ func (s *Session) onSubscriberConnectionStateChange(state webrtc.PeerConnectionS
 	switch state {
 	case webrtc.PeerConnectionStateConnected:
 		s.subscriberReady.Store(true)
-		closeSignal(s.subscriberConn)
+		s.signalSubscriberConn()
 	case webrtc.PeerConnectionStateDisconnected,
 		webrtc.PeerConnectionStateFailed,
 		webrtc.PeerConnectionStateClosed:
@@ -244,7 +171,6 @@ func (s *Session) onPublisherConnectionStateChange(state webrtc.PeerConnectionSt
 	switch state {
 	case webrtc.PeerConnectionStateConnected:
 		s.publisherReady.Store(true)
-		closeSignal(s.publisherConn)
 	case webrtc.PeerConnectionStateDisconnected,
 		webrtc.PeerConnectionStateFailed,
 		webrtc.PeerConnectionStateClosed:
@@ -276,7 +202,7 @@ const pcCloseTimeout = 2 * time.Second
 // pcCloseTimeout elapses, whichever comes first.
 func (s *Session) closePeerConns() {
 	var wg sync.WaitGroup
-	for _, pc := range []*webrtc.PeerConnection{s.pcPub, s.pcSub} {
+	for _, pc := range []*webrtc.PeerConnection{s.pubPC(), s.subPC()} {
 		if pc == nil {
 			continue
 		}
@@ -298,6 +224,30 @@ func (s *Session) closePeerConns() {
 	}
 }
 
+// closeDataChannel closes the live data channel, if any.
+func (s *Session) closeDataChannel() {
+	if dc := s.dc.Swap(nil); dc != nil {
+		_ = dc.Close()
+	}
+}
+
+// closeWebSocket sends the WebSocket close frame and tears the connection
+// down. Clearing the pointer under wsMu makes every later writeJSON fail with
+// ErrWebSocketClosed instead of writing to a dead socket.
+func (s *Session) closeWebSocket() {
+	s.wsMu.Lock()
+	ws := s.ws
+	s.ws = nil
+	s.wsMu.Unlock()
+	if ws == nil {
+		return
+	}
+	_ = ws.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(time.Second))
+	_ = ws.Close()
+}
+
 // sleepCtx waits for d or until ctx is cancelled, returning ctx.Err() when
 // the context ends first. It lets the reconnect path bail out promptly
 // during shutdown instead of sleeping through a fixed backoff.
@@ -314,6 +264,7 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 
 // Close terminates the session and releases resources.
 func (s *Session) Close() error {
+	s.terminated.Store(true)
 	alreadyClosing := s.closed.Swap(true)
 	s.sendQueueClosed.Store(true)
 
@@ -332,21 +283,14 @@ func (s *Session) Close() error {
 		}
 	}
 
-	closeSignal(s.closeCh)
+	s.closeOnce.Do(func() { close(s.closeCh) })
 	s.stopSession()
 
-	if s.dc != nil {
-		_ = s.dc.Close()
-	}
+	s.closeDataChannel()
 	s.closePeerConns()
-	if s.ws != nil {
-		s.wsMu.Lock()
-		_ = s.ws.WriteControl(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-			time.Now().Add(time.Second))
-		_ = s.ws.Close()
-		s.wsMu.Unlock()
-	}
+	s.closeWebSocket()
+
+	s.stopLaunching()
 
 	done := make(chan struct{})
 	go func() {
@@ -363,61 +307,13 @@ func (s *Session) Close() error {
 
 // WatchConnection monitors the connection lifecycle and reconnects as needed.
 func (s *Session) WatchConnection(ctx context.Context) {
-	const maxReconnects = 10
-	const reconnectWindow = 5 * time.Minute
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.closeCh:
-			return
-		case <-s.reconnectCh:
-			if s.handleReconnectAttempt(ctx, maxReconnects, reconnectWindow) {
-				return
-			}
-		}
-	}
-}
-
-func (s *Session) handleReconnectAttempt(ctx context.Context, maxReconnects int, reconnectWindow time.Duration) bool {
-	if time.Since(s.lastReconnect) > reconnectWindow {
-		s.reconnectCount = 0
-	}
-	s.reconnectCount++
-	s.lastReconnect = time.Now()
-
-	if s.reconnectCount > maxReconnects {
-		s.signalEnded("reconnect limit reached")
-		return true
-	}
-
-	backoff := time.Duration(s.reconnectCount) * 2 * time.Second
-	if backoff > 30*time.Second {
-		backoff = 30 * time.Second
-	}
-	return s.retryReconnect(ctx, backoff)
-}
-
-func (s *Session) retryReconnect(ctx context.Context, backoff time.Duration) bool {
-	for {
-		if err := s.reconnect(ctx); err != nil {
-			logger.Debugf("reconnect failed: %v", err)
-			select {
-			case <-ctx.Done():
-				return true
-			case <-s.closeCh:
-				return true
-			case <-time.After(backoff):
-				continue
-			}
-		}
-		break
-	}
-	return false
+	s.Watch(ctx, s.closeCh)
 }
 
 func (s *Session) reconnect(ctx context.Context) error {
+	if s.terminated.Load() {
+		return ErrSessionClosed
+	}
 	logger.Warnf("goolom: full reconnect triggered")
 	s.reconnecting.Store(true)
 	defer s.reconnecting.Store(false)
@@ -428,18 +324,9 @@ func (s *Session) reconnect(ctx context.Context) error {
 	}
 	s.stopSession()
 
-	if s.dc != nil {
-		_ = s.dc.Close()
-	}
+	s.closeDataChannel()
 	s.closePeerConns()
-	if s.ws != nil {
-		s.wsMu.Lock()
-		_ = s.ws.WriteControl(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-			time.Now().Add(time.Second))
-		_ = s.ws.Close()
-		s.wsMu.Unlock()
-	}
+	s.closeWebSocket()
 
 	if err := sleepCtx(ctx, 3*time.Second); err != nil {
 		return err
@@ -451,63 +338,24 @@ func (s *Session) reconnect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reconnect refresh: %w", err)
 	}
-	s.applyRefreshedCredentials(creds)
+	s.credMu.Lock()
+	engine.ApplyRefreshedCredentials(creds, &s.mediaServerURL, &s.peerID, map[string]*string{
+		credentialKeyRoomID:           &s.roomID,
+		credentialKeyCredentials:      &s.credentials,
+		credentialKeyRoomURL:          &s.roomURL,
+		credentialKeyTelemetryReferer: &s.telemetryReferer,
+	})
+	s.credMu.Unlock()
 
 	if err := s.Connect(ctx); err != nil {
 		return err
 	}
-	if s.onReconnect != nil {
-		s.onReconnect(s.dc)
-	}
-	s.drainReconnectQueue()
+	s.NotifyReconnect()
 	return nil
 }
 
-func (s *Session) applyRefreshedCredentials(creds engine.Credentials) {
-	if creds.URL != "" {
-		s.mediaServerURL = creds.URL
-	}
-	if creds.Token != "" {
-		s.peerID = creds.Token
-	}
-	if creds.Extra == nil {
-		return
-	}
-	if v := creds.Extra[credentialKeyRoomID]; v != "" {
-		s.roomID = v
-	}
-	if v := creds.Extra[credentialKeyCredentials]; v != "" {
-		s.credentials = v
-	}
-	if v := creds.Extra[credentialKeyRoomURL]; v != "" {
-		s.roomURL = v
-	}
-	if v := creds.Extra[credentialKeyTelemetryReferer]; v != "" {
-		s.telemetryReferer = v
-	}
-}
-
-func (s *Session) drainReconnectQueue() {
-	for {
-		select {
-		case <-s.reconnectCh:
-		default:
-			return
-		}
-	}
-}
-
 func (s *Session) queueReconnect() {
-	if s.closed.Load() || s.reconnecting.Load() {
-		return
-	}
-	if s.shouldReconnect != nil && !s.shouldReconnect() {
-		return
-	}
-	select {
-	case s.reconnectCh <- struct{}{}:
-	default:
-	}
+	s.Request(s.closed.Load(), s.reconnecting.Load())
 }
 
 // Reconnect asks the goolom session to tear down its peer connections and
@@ -526,8 +374,8 @@ func (s *Session) Reconnect(reason string) {
 func (s *Session) stopSession() {
 	s.stopTelemetry()
 	s.sessionMu.Lock()
-	closeSignal(s.keepAliveCh)
-	closeSignal(s.sessionCloseCh)
+	engine.CloseSignal(s.keepAliveCh)
+	engine.CloseSignal(s.sessionCloseCh)
 	s.sessionMu.Unlock()
 }
 
@@ -542,14 +390,13 @@ func (s *Session) resetSession() (chan struct{}, chan struct{}) {
 func (s *Session) resetMediaState() {
 	s.subscriberReady.Store(false)
 	s.publisherReady.Store(false)
+	s.mediaMu.Lock()
 	s.subscriberConn = make(chan struct{})
-	s.publisherConn = make(chan struct{})
+	s.mediaMu.Unlock()
 }
 
 func (s *Session) signalEnded(reason string) {
 	s.closed.Store(true)
 	s.stopTelemetry()
-	if s.onEnded != nil {
-		s.onEnded(reason)
-	}
+	s.SignalEnded(reason)
 }

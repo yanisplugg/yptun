@@ -53,7 +53,8 @@ Ready-made examples:
 |---|---|
 | `mode` | `srv`, `cnc` or `gen` |
 | `auth.provider` | `jitsi`, `telemost`, `wbstream`, `none` |
-| `room.id` | room ID/URL for the chosen auth provider |
+| `auth.token` | optional pre-issued provider account token |
+| `room.id` | room ID/URL for the chosen provider |
 | `room.channel` | optional channel ID for peer-routing scenarios |
 | `crypto.key` / `crypto.key_file` | shared key: 64 hex chars, directly or from a file |
 | `net.transport` | `datachannel`, `vp8channel`, `seichannel`, `videochannel` |
@@ -67,8 +68,8 @@ Ready-made examples:
 | `vp8.*` | `vp8channel` settings |
 | `sei.*` | `seichannel` settings |
 | `liveness.interval` | ping interval over the control stream, default `10s` |
-| `liveness.timeout` | pong timeout, default `5s` |
-| `liveness.failures` | how many pongs may be missed before rebuild, default `3` |
+| `liveness.timeout` | pong timeout, default `15s` |
+| `liveness.failures` | how many pongs may be missed before rebuild, default `4` |
 | `lifecycle.max_session_duration` | planned session rebuild, e.g. `6h`; empty = disabled |
 | `traffic.max_payload_size` | limit of the encrypted wire-message; `0` = transport limit |
 | `traffic.min_delay` / `traffic.max_delay` | optional send pacing, e.g. `5ms` / `30ms` |
@@ -76,26 +77,37 @@ Ready-made examples:
 | `profiles[]` | list of failover profiles for `srv`/`cnc` |
 | `failover.retry_delay` | pause before the next profile, e.g. `2s` |
 | `failover.max_cycles` | how many full passes over the profiles to do; `0` = infinite |
-| `data` | path to the directory with runtime data (`names`, `surnames`) |
+| `data` | optional: directory holding `names`/`surnames` files that override the built-in display-name dictionaries. Resolved relative to the YAML file |
 | `debug` | verbose logging |
-| `ffmpeg` | path to the ffmpeg binary for `videochannel` |
 
 `crypto.key_file` is read relative to the YAML file. You cannot set `crypto.key` and `crypto.key_file` at the same time.
 
 `mode: cnc` forbids listening on a non-loopback address (`0.0.0.0`, LAN IP etc.) unless both `socks.user` and `socks.pass` are set.
 
+The `data` directory must contain files named `names` and `surnames`, one display-name component per line. The embedded dictionaries remain active when `data` is omitted.
+
+## Config schema migration
+
+For one migration cycle the strict loader accepts the deprecated fields `link`, `ffmpeg`, `video.bitrate` and `video.hw`. All four fields are ignored by the current runtime and will be removed in the next config schema. Delete them from persisted configs. Other unknown or misspelled fields still cause a load error.
+
+## Wire compatibility
+
+Current builds use the OLC2 encrypted record layer. Directional HKDF-SHA256 keys, distinct data/control AEAD associated data and a shared 64-record replay window make it incompatible with the old record format. There is no legacy decoder fallback.
+
+`seichannel` and `videochannel` use OLVC frame version 5, which adds a per-fragment checksum so a damaged fragment is retransmitted instead of acknowledged. Older frames are rejected by magic or version checks. Upgrade both tunnel endpoints together.
+
 ## Required minimum
 
 ### Server
 
-> **Jitsi provider:** take instances from [`examples/jitsi.instances.yaml`](./examples/jitsi.instances.yaml), not from bare text. Check the host in the browser and pick a working one.
+> **Jitsi provider:** take instances from [`jitsi.instances.yaml`](./jitsi.instances.yaml), not from bare text. Check the host in the browser and pick a working one.
 
 ```yaml
 mode: srv
 auth:
   provider: jitsi
 room:
-  # Take the host from docs/examples/jitsi.instances.yaml:
+  # Take the host from docs/jitsi.instances.yaml:
   # https://HOST/ROOM
   id: "https://REPLACE_ME_WITH_HOST/REPLACE_ME_WITH_ROOM_ID"
 crypto:
@@ -103,7 +115,6 @@ crypto:
 net:
   transport: datachannel
   dns: "8.8.8.8:53"
-data: data
 ```
 
 ### Client
@@ -113,7 +124,7 @@ mode: cnc
 auth:
   provider: jitsi
 room:
-  # Take the host from docs/examples/jitsi.instances.yaml:
+  # Take the host from docs/jitsi.instances.yaml:
   # https://HOST/ROOM
   id: "https://REPLACE_ME_WITH_HOST/REPLACE_ME_WITH_ROOM_ID"
 crypto:
@@ -124,7 +135,6 @@ net:
 socks:
   host: "127.0.0.1"
   port: 8808
-data: data
 ```
 
 ## Liveness
@@ -134,8 +144,8 @@ After `CLIENT_HELLO` / `SERVER_WELCOME` the first smux stream stays open as an e
 ```yaml
 liveness:
   interval: 10s
-  timeout: 5s
-  failures: 3
+  timeout: 15s
+  failures: 4
 ```
 
 When the threshold of missed pongs is reached, the current smux session is rebuilt. In failover mode the profile that finished after a failed reconnect hands control to the supervisor, and the supervisor tries the next profile.
@@ -174,7 +184,6 @@ crypto:
   key_file: ./olcrtc.key
 net:
   dns: "8.8.8.8:53"
-data: data
 
 profiles:
   - name: wb-vp8
@@ -202,7 +211,7 @@ The order of profiles and the room parameters must be compatible on the server a
 
 ## mode: gen
 
-`gen` is kept for auth providers that implement room creation via an API.
+`gen` is kept for providers that implement room creation via an API.
 The current built-in providers (`jitsi`, `telemost`, `wbstream`) do not create rooms
 through `olcrtc`: for `telemost` and `wbstream` create the room on the service site and
 paste it into `room.id`; for `jitsi` specify the room URL.

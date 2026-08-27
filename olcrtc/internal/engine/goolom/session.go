@@ -19,8 +19,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/pion/webrtc/v4"
+
+	"github.com/openlibrecommunity/olcrtc/internal/engine"
+	"github.com/openlibrecommunity/olcrtc/internal/logger"
 )
 
 const (
@@ -28,12 +30,19 @@ const (
 	defaultSendDelayLow         = 2 * time.Millisecond
 	defaultSendDelayMax         = 12 * time.Millisecond
 	defaultTelemetryInterval    = 20 * time.Second
-	defaultSendQueueSize        = 5000
-	defaultBufferHighWaterMark  = 512 * 1024
-	defaultSendQueueCapHard     = 4000
+	// minTelemetryInterval and maxTelemetryInterval bound the cadence the
+	// media server asks for.
+	minTelemetryInterval       = time.Second
+	maxTelemetryInterval       = 5 * time.Minute
+	defaultBufferHighWaterMark = 512 * 1024
 
 	wsReadTimeout      = 60 * time.Second
+	wsWriteTimeout     = 15 * time.Second
 	wsHandshakeTimeout = 15 * time.Second
+	// wsReadLimit caps one signaling frame. gorilla reads without a limit by
+	// default, so the media server could otherwise name any size and have it
+	// buffered and JSON-decoded in full.
+	wsReadLimit = 8 << 20
 
 	keyUID          = "uid"
 	keyDescription  = "description"
@@ -72,6 +81,9 @@ var (
 	ErrPeerIDRequired = errors.New("goolom peer ID required")
 	// ErrNoRefresh is returned when reconnect is attempted without a refresh callback.
 	ErrNoRefresh = errors.New("goolom reconnect: no refresh callback supplied")
+	// ErrWebSocketClosed is returned when a signaling write is attempted
+	// while no WebSocket is connected.
+	ErrWebSocketClosed = errors.New("goolom signaling websocket closed")
 )
 
 // TrafficShape controls outgoing data-channel pacing.
@@ -83,6 +95,9 @@ type TrafficShape struct {
 
 // Session is the Goolom engine handle.
 type Session struct {
+	engine.Reconnector
+	engine.VideoTrackState
+
 	name             string
 	mediaServerURL   string
 	peerID           string
@@ -93,29 +108,46 @@ type Session struct {
 	refresh          func(ctx context.Context) (engine.Credentials, error)
 	resolver         *net.Resolver
 
-	ws    *websocket.Conn
-	wsMu  sync.Mutex
-	pcSub *webrtc.PeerConnection
-	pcPub *webrtc.PeerConnection
-	dc    *webrtc.DataChannel
+	// wsMu owns ws: it serialises the writes (gorilla allows a single
+	// concurrent writer) and guards the pointer itself, which Connect
+	// replaces on every reconnect.
+	wsMu sync.Mutex
+	ws   *websocket.Conn
 
-	onData          func([]byte)
-	onReconnect     func(*webrtc.DataChannel)
-	shouldReconnect func() bool
-	onEnded         func(string)
+	// The peer connections and the data channel are replaced on every
+	// reconnect while pion callbacks from the previous generation are still
+	// running, so they are published atomically.
+	pcSub atomic.Pointer[webrtc.PeerConnection]
+	pcPub atomic.Pointer[webrtc.PeerConnection]
+	dc    atomic.Pointer[webrtc.DataChannel]
 
-	reconnectCh    chan struct{}
+	onData func([]byte)
+
 	closeCh        chan struct{}
+	closeOnce      sync.Once
 	keepAliveCh    chan struct{}
 	telemetryCh    chan struct{}
 	sessionCloseCh chan struct{}
-	lastReconnect  time.Time
-	reconnectCount int
 	sessionMu      sync.Mutex
 
 	sendQueue       chan []byte
 	sendQueueClosed atomic.Bool
 	closed          atomic.Bool
+	// terminated is the one-way flag Close sets. closed is cleared again by
+	// Connect on every reconnect, so it cannot answer "is this session gone
+	// for good?" - which is what the reconnect path has to ask before it
+	// builds a new PeerConnection, DataChannel and WebSocket that Close has
+	// already finished tearing down.
+	terminated atomic.Bool
+	// goMu guards goClosed, which stops new tracked goroutines once Close has
+	// started waiting on wg.
+	goMu     sync.Mutex
+	goClosed bool
+	// credMu guards the credential fields below. A reconnect rewrites them
+	// while the previous session's telemetry goroutine is still reading them:
+	// stopTelemetry is a best-effort signal and nothing waits for that
+	// goroutine to leave.
+	credMu          sync.RWMutex
 	reconnecting    atomic.Bool
 	telemetryActive atomic.Bool
 
@@ -124,14 +156,117 @@ type Session struct {
 
 	trafficShape TrafficShape
 
-	videoTrackMu    sync.RWMutex
-	videoTracks     []webrtc.TrackLocal
-	onVideoTrack    func(*webrtc.TrackRemote, *webrtc.RTPReceiver)
 	subscriberReady atomic.Bool
 	publisherReady  atomic.Bool
-	subscriberConn  chan struct{}
-	publisherConn   chan struct{}
-	wg              sync.WaitGroup
+
+	// mediaMu guards subscriberConn, which Connect replaces while the
+	// callbacks of the previous subscriber PC may still be signalling it.
+	mediaMu        sync.Mutex
+	subscriberConn chan struct{}
+
+	wg sync.WaitGroup
+}
+
+// wsConn returns the live signaling connection, or nil when there is none.
+func (s *Session) wsConn() *websocket.Conn {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	return s.ws
+}
+
+// writeJSON serialises v onto the signaling WebSocket. It is the single
+// writer path: it owns wsMu (gorilla permits one concurrent writer) and it is
+// the only place that has to deal with a torn-down connection.
+//
+// The deadline is what keeps wsMu a lock and not a trap. gorilla has no write
+// deadline by default, so on a black-holed socket the write blocks forever
+// with wsMu held - taking every other writer with it, including the keepalive
+// that would have detected the dead link and the Close that would have torn
+// it down.
+func (s *Session) writeJSON(v any) error {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	if s.ws == nil {
+		return ErrWebSocketClosed
+	}
+	_ = s.ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+	if err := s.ws.WriteJSON(v); err != nil {
+		return fmt.Errorf("ws write: %w", err)
+	}
+	return nil
+}
+
+// goLaunch starts a tracked goroutine unless Close has started waiting.
+// sync.WaitGroup forbids a positive Add from a zero counter concurrent with
+// Wait, and the signaling, telemetry and data-channel paths all spawn from
+// goroutines Close does not control.
+func (s *Session) goLaunch(fn func()) {
+	s.goMu.Lock()
+	if s.goClosed {
+		s.goMu.Unlock()
+		return
+	}
+	s.wg.Add(1)
+	s.goMu.Unlock()
+
+	go func() {
+		defer s.wg.Done()
+		fn()
+	}()
+}
+
+// credentialSnapshot returns the identity fields (peer ID, room ID, referer)
+// under one read lock so a concurrent refresh cannot tear them apart.
+func (s *Session) credentialSnapshot() (string, string, string) {
+	s.credMu.RLock()
+	defer s.credMu.RUnlock()
+	return s.peerID, s.roomID, s.telemetryReferer
+}
+
+// joinCredentials returns the peer ID, room ID and credentials the join
+// message carries.
+func (s *Session) joinCredentials() (string, string, string) {
+	s.credMu.RLock()
+	defer s.credMu.RUnlock()
+	return s.peerID, s.roomID, s.credentials
+}
+
+// signalingURL returns the media server endpoint to dial.
+func (s *Session) signalingURL() string {
+	s.credMu.RLock()
+	defer s.credMu.RUnlock()
+	return s.mediaServerURL
+}
+
+func (s *Session) stopLaunching() {
+	s.goMu.Lock()
+	s.goClosed = true
+	s.goMu.Unlock()
+}
+
+// subPC returns the live subscriber PeerConnection, or nil before setup.
+func (s *Session) subPC() *webrtc.PeerConnection { return s.pcSub.Load() }
+
+// pubPC returns the live publisher PeerConnection, or nil before setup.
+func (s *Session) pubPC() *webrtc.PeerConnection { return s.pcPub.Load() }
+
+// dataChannel returns the live data channel, or nil when the session carries
+// no byte stream.
+func (s *Session) dataChannel() *webrtc.DataChannel { return s.dc.Load() }
+
+// signalSubscriberConn reports that subscriber media is flowing. Serialised
+// so a callback from a superseded PC cannot close an already-closed channel.
+func (s *Session) signalSubscriberConn() {
+	s.mediaMu.Lock()
+	engine.CloseSignal(s.subscriberConn)
+	s.mediaMu.Unlock()
+}
+
+// subscriberConnCh returns the current subscriber-ready signal.
+func (s *Session) subscriberConnCh() <-chan struct{} {
+	s.mediaMu.Lock()
+	defer s.mediaMu.Unlock()
+	return s.subscriberConn
 }
 
 // New creates a new Goolom engine session.
@@ -165,7 +300,7 @@ func New(_ context.Context, cfg engine.Config) (engine.Session, error) {
 		telemetryReferer = roomURL
 	}
 
-	return &Session{
+	s := &Session{
 		name:             cfg.Name,
 		mediaServerURL:   cfg.URL,
 		peerID:           peerID,
@@ -176,26 +311,29 @@ func New(_ context.Context, cfg engine.Config) (engine.Session, error) {
 		refresh:          cfg.Refresh,
 		resolver:         cfg.Resolver,
 		onData:           cfg.OnData,
-		reconnectCh:      make(chan struct{}, 1),
 		closeCh:          make(chan struct{}),
 		keepAliveCh:      make(chan struct{}),
 		sessionCloseCh:   make(chan struct{}),
 		telemetryCh:      make(chan struct{}, 1),
-		sendQueue:        make(chan []byte, defaultSendQueueSize),
+		sendQueue:        make(chan []byte, engine.DefaultSendQueueSize),
 		ackWaiters:       make(map[string]chan struct{}),
 		subscriberConn:   make(chan struct{}),
-		publisherConn:    make(chan struct{}),
 		trafficShape: TrafficShape{
 			MaxMessageSize: realDataChannelMessageLimit,
 			MinDelay:       defaultSendDelayLow,
 			MaxDelay:       defaultSendDelayMax,
 		},
-	}, nil
-}
-
-// Capabilities reports what this engine can do.
-func (s *Session) Capabilities() engine.Capabilities {
-	return engine.Capabilities{ByteStream: true, VideoTrack: true}
+	}
+	s.Configure(engine.ReconnectorConfig{
+		MaxAttempts: 10,
+		Reconnect:   s.reconnect,
+		OnError: func(err error) {
+			logger.Debugf("reconnect failed: %v", err)
+		},
+		OnLimit:     s.signalEnded,
+		LimitReason: "reconnect limit reached",
+	})
+	return s, nil
 }
 
 // SetTrafficShape adjusts the outgoing data-channel pacing.
@@ -211,7 +349,7 @@ func (s *Session) SetTrafficShape(shape TrafficShape) {
 
 // Send queues data for transmission.
 func (s *Session) Send(data []byte) error {
-	if s.dc == nil || s.dc.ReadyState() != webrtc.DataChannelStateOpen {
+	if dc := s.dataChannel(); dc == nil || dc.ReadyState() != webrtc.DataChannelStateOpen {
 		return ErrDataChannelNotReady
 	}
 	if s.sendQueueClosed.Load() {
@@ -225,29 +363,17 @@ func (s *Session) Send(data []byte) error {
 	}
 }
 
-// GetSendQueue returns the transmission queue.
-func (s *Session) GetSendQueue() chan []byte { return s.sendQueue }
-
 // GetBufferedAmount returns the WebRTC buffered amount.
 func (s *Session) GetBufferedAmount() uint64 {
-	if s.dc != nil {
-		return s.dc.BufferedAmount()
+	if dc := s.dataChannel(); dc != nil {
+		return dc.BufferedAmount()
 	}
 	return 0
 }
 
-// SetEndedCallback sets the callback for connection termination.
-func (s *Session) SetEndedCallback(cb func(string)) { s.onEnded = cb }
-
-// SetReconnectCallback sets the callback for reconnection events.
-func (s *Session) SetReconnectCallback(cb func(*webrtc.DataChannel)) { s.onReconnect = cb }
-
-// SetShouldReconnect sets the policy for reconnection.
-func (s *Session) SetShouldReconnect(fn func() bool) { s.shouldReconnect = fn }
-
 // SubscriberCanSend reports whether the subscriber PC is connected.
 // Unlike CanSend, it does not require publisherReady, so it returns true
-// as soon as SFU data can arrive — before the publisher PC negotiates.
+// as soon as SFU data can arrive - before the publisher PC negotiates.
 func (s *Session) SubscriberCanSend() bool {
 	return !s.closed.Load() && s.subscriberReady.Load()
 }
@@ -261,58 +387,48 @@ func (s *Session) CanSend() bool {
 		// and tunnel stream acks to time out before the publisher PC is up.
 		return !s.closed.Load() && s.subscriberReady.Load()
 	}
-	if s.dc == nil || s.dc.ReadyState() != webrtc.DataChannelStateOpen {
+	if dc := s.dataChannel(); dc == nil || dc.ReadyState() != webrtc.DataChannelStateOpen {
 		return false
 	}
-	return len(s.sendQueue) < defaultSendQueueCapHard
+	return len(s.sendQueue) < engine.DefaultSendQueueCapHard
 }
 
 // AddVideoTrack adds a video track to the publisher peer connection.
 func (s *Session) AddVideoTrack(track webrtc.TrackLocal) error {
-	s.videoTrackMu.Lock()
-	s.videoTracks = append(s.videoTracks, track)
-	s.videoTrackMu.Unlock()
+	s.StoreVideoTrack(track)
 
-	if s.pcPub == nil {
+	pub := s.pubPC()
+	if pub == nil {
 		return nil
 	}
-	if _, err := s.pcPub.AddTrack(track); err != nil {
+	if _, err := pub.AddTrack(track); err != nil {
 		return fmt.Errorf("failed to add track: %w", err)
 	}
 	return nil
 }
 
-// SetVideoTrackHandler registers a callback for remote video tracks.
-func (s *Session) SetVideoTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver)) {
-	s.videoTrackMu.Lock()
-	defer s.videoTrackMu.Unlock()
-	s.onVideoTrack = cb
-}
-
 func (s *Session) hasLocalVideoTracks() bool {
-	s.videoTrackMu.RLock()
-	defer s.videoTrackMu.RUnlock()
-	return len(s.videoTracks) > 0
+	return s.HasVideoTracks()
 }
 
 func (s *Session) videoTrackHandler() func(*webrtc.TrackRemote, *webrtc.RTPReceiver) {
-	s.videoTrackMu.RLock()
-	defer s.videoTrackMu.RUnlock()
-	return s.onVideoTrack
+	return s.VideoTrackHandler()
 }
 
-func (s *Session) attachPendingVideoTracks() error {
-	s.videoTrackMu.RLock()
-	defer s.videoTrackMu.RUnlock()
-
-	for _, track := range s.videoTracks {
-		sender, err := s.pcPub.AddTrack(track)
+func (s *Session) attachPendingVideoTracks(pub *webrtc.PeerConnection) error {
+	var attachErr error
+	s.RangeVideoTracks(func(track webrtc.TrackLocal, _ bool) {
+		if attachErr != nil {
+			return
+		}
+		sender, err := pub.AddTrack(track)
 		if err != nil {
-			return fmt.Errorf("add video track: %w", err)
+			attachErr = fmt.Errorf("add video track: %w", err)
+			return
 		}
 		s.drainPublisherRTCP(sender)
-	}
-	return nil
+	})
+	return attachErr
 }
 
 // drainPublisherRTCP reads (and discards) RTCP feedback the SFU sends for our
@@ -322,27 +438,5 @@ func (s *Session) drainPublisherRTCP(sender *webrtc.RTPSender) {
 	if sender == nil {
 		return
 	}
-	go func() {
-		buf := make([]byte, 1500)
-		for {
-			if _, _, err := sender.Read(buf); err != nil {
-				return
-			}
-		}
-	}()
-}
-
-func closeSignal(ch chan struct{}) {
-	if ch == nil {
-		return
-	}
-	select {
-	case <-ch:
-	default:
-		close(ch)
-	}
-}
-
-func init() { //nolint:gochecknoinits // engine registration is the canonical Go pattern for plugins
-	engine.Register("goolom", New)
+	go engine.DrainRTCP(sender)
 }

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,40 @@ import (
 // ErrClosed is returned from Read/Write after the conn has been closed.
 var ErrClosed = errors.New("muxconn: closed")
 
+// ErrWriteTimeout is returned from Write when the transport never reports
+// CanSend within writeReadyTimeout. It satisfies net.Error with Timeout()
+// true, which is how smux (and the net package contract) recognises a
+// deadline rather than a protocol fault.
+var ErrWriteTimeout net.Error = writeTimeoutError{}
+
+type writeTimeoutError struct{}
+
+func (writeTimeoutError) Error() string { return "muxconn: write timeout waiting for transport" }
+
+func (writeTimeoutError) Timeout() bool { return true }
+
+func (writeTimeoutError) Temporary() bool { return true }
+
+// errReadClosed is what Read reports once the conn is closed and drained.
+//
+// smux stores whatever error the underlying conn returns and hands it to
+// stream readers verbatim; its recvLoop never compares against io.EOF, so
+// widening the error is safe there. We still unwrap to io.EOF because
+// every io.Reader consumer (and the io contract) treats EOF as the clean
+// end of a stream, while errors.Is(err, ErrClosed) now lets callers tell a
+// deliberate close from an aborted link.
+var errReadClosed error = closedReadError{}
+
+type closedReadError struct{}
+
+func (closedReadError) Error() string { return "muxconn: closed (EOF)" }
+
+func (closedReadError) Unwrap() []error { return []error{io.EOF, ErrClosed} }
+
 const (
+	dataRecordAAD    = "olcrtc/muxconn/v2/data"
+	controlRecordAAD = "olcrtc/muxconn/v2/control"
+
 	// inboundQueue is the buffered capacity of the Push -> Read pipeline.
 	// It absorbs short Read stalls without applying back-pressure to the
 	// transport callback. Frames are typically smux-sized (up to 32 KiB),
@@ -48,6 +82,18 @@ const (
 	// caps at 12 KiB on the wire, vp8channel at 60 KiB; we round up to
 	// give Open room to write in place without growing the slice).
 	pooledFrameCap = 64 * 1024
+
+	// writeReadyTimeout bounds how long Write waits for the transport to
+	// accept data. A transport that cannot send for this long is dead in
+	// every practical sense - it exceeds the smux keepalive timeout - so
+	// failing the write (and with it the session) beats parking the smux
+	// send loop for the lifetime of the process.
+	writeReadyTimeout = 30 * time.Second
+
+	// decryptLogInterval bounds how often a conn reports frames that failed
+	// to decrypt. Any participant in the same SFU room can spray junk into
+	// our channel, so the steady state must not be one log line per frame.
+	decryptLogInterval = 30 * time.Second
 )
 
 // frameBufPool recycles plaintext buffers between Push (decrypts a wire
@@ -63,7 +109,11 @@ var frameBufPool = sync.Pool{ //nolint:gochecknoglobals // intentional process-w
 }
 
 func acquireFrameBuf() *[]byte {
-	bp := frameBufPool.Get().(*[]byte) //nolint:forcetypeassert // pool only ever holds *[]byte
+	bp, ok := frameBufPool.Get().(*[]byte)
+	if !ok {
+		b := make([]byte, 0, pooledFrameCap)
+		return &b
+	}
 	*bp = (*bp)[:0]
 	return bp
 }
@@ -81,7 +131,7 @@ func releaseFrameBuf(bp *[]byte) {
 	frameBufPool.Put(bp)
 }
 
-// Conn is an io.ReadWriteCloser over a [transport.Transport] with optional AEAD wrapping.
+// Conn is an io.ReadWriteCloser over a [transport.Transport] with v2 record protection.
 //
 // Push produces decrypted plaintext frames into an internal channel; Read
 // drains the channel and slices each frame across as many caller buffers
@@ -96,7 +146,8 @@ type Conn struct {
 	ln      transport.Transport
 	send    func([]byte) error
 	canSend func() bool // if nil, uses ln.CanSend
-	cipher  *crypto.Cipher
+	keys    *crypto.KeySet
+	aad     []byte
 
 	in        chan *[]byte
 	closeOnce sync.Once
@@ -108,15 +159,32 @@ type Conn struct {
 	// pool and clear both fields. Touched only by Read.
 	leftoverBuf *[]byte
 	leftover    []byte
+
+	// decrypt failure accounting for the rate-limited log in Push.
+	decryptFails  atomic.Uint64
+	decryptLogged atomic.Uint64
+	decryptLogAt  atomic.Int64
+
+	// writeTimeout overrides writeReadyTimeout. Zero means the default;
+	// only tests set it.
+	writeTimeout time.Duration
+}
+
+func (c *Conn) sendDeadline() time.Duration {
+	if c.writeTimeout > 0 {
+		return c.writeTimeout
+	}
+	return writeReadyTimeout
 }
 
 // New wires a Conn over the given transport. Push must be set as the
 // transport's OnData callback before this conn is used.
-func New(ln transport.Transport, cipher *crypto.Cipher) *Conn {
+func New(ln transport.Transport, keys *crypto.KeySet) *Conn {
 	return &Conn{
 		ln:      ln,
 		send:    ln.Send,
-		cipher:  cipher,
+		keys:    keys,
+		aad:     []byte(dataRecordAAD),
 		in:      make(chan *[]byte, inboundQueue),
 		closeCh: make(chan struct{}),
 	}
@@ -125,7 +193,7 @@ func New(ln transport.Transport, cipher *crypto.Cipher) *Conn {
 // NewControl wires a Conn that routes through the transport's isolated
 // control-plane channel (transport.ControlPlane). Returns nil if the
 // transport does not implement ControlPlane.
-func NewControl(ln transport.Transport, cipher *crypto.Cipher) *Conn {
+func NewControl(ln transport.Transport, keys *crypto.KeySet) *Conn {
 	cp, ok := ln.(transport.ControlPlane)
 	if !ok {
 		return nil
@@ -134,7 +202,8 @@ func NewControl(ln transport.Transport, cipher *crypto.Cipher) *Conn {
 		ln:      ln,
 		send:    cp.ControlSend,
 		canSend: cp.ControlCanSend,
-		cipher:  cipher,
+		keys:    keys,
+		aad:     []byte(controlRecordAAD),
 		in:      make(chan *[]byte, inboundQueue),
 		closeCh: make(chan struct{}),
 	}
@@ -143,23 +212,28 @@ func NewControl(ln transport.Transport, cipher *crypto.Cipher) *Conn {
 }
 
 // NewPeer wires a Conn whose writes are addressed to a specific transport peer.
-func NewPeer(ln transport.PeerTransport, cipher *crypto.Cipher, peerID string) *Conn {
+func NewPeer(ln transport.PeerTransport, keys *crypto.KeySet, peerID string) *Conn {
 	return &Conn{
 		ln: ln,
 		send: func(data []byte) error {
 			return ln.SendTo(peerID, data)
 		},
-		cipher:  cipher,
+		keys:    keys,
+		aad:     []byte(dataRecordAAD),
 		in:      make(chan *[]byte, inboundQueue),
 		closeCh: make(chan struct{}),
 	}
 }
 
-// NewPeerControl wires a Conn to the per-peer control plane of a
+// NewPeerControlUnbound wires a Conn to the per-peer control plane of a
 // transport.PeerControlPlane. Returns nil if the transport does not implement
-// PeerControlPlane. The caller is responsible for registering a push callback
-// via cp.SetControlOnPeerData to drive this conn's Push.
-func NewPeerControl(ln transport.Transport, cipher *crypto.Cipher, peerID string) *Conn {
+// PeerControlPlane.
+//
+// Unlike NewControl, the returned conn is NOT bound to the transport: the
+// caller must feed it via Push. PeerControlPlane exposes a single
+// SetControlOnPeerData callback covering every peer, so registering here
+// would clobber the caller's demultiplexer - hence the name.
+func NewPeerControlUnbound(ln transport.Transport, keys *crypto.KeySet, peerID string) *Conn {
 	cp, ok := ln.(transport.PeerControlPlane)
 	if !ok {
 		return nil
@@ -172,7 +246,8 @@ func NewPeerControl(ln transport.Transport, cipher *crypto.Cipher, peerID string
 		canSend: func() bool {
 			return cp.ControlPeerCanSend(peerID)
 		},
-		cipher:  cipher,
+		keys:    keys,
+		aad:     []byte(controlRecordAAD),
 		in:      make(chan *[]byte, inboundQueue),
 		closeCh: make(chan struct{}),
 	}
@@ -188,10 +263,10 @@ func NewPeerControl(ln transport.Transport, cipher *crypto.Cipher, peerID string
 // also bail on closeCh.
 func (c *Conn) Push(ciphertext []byte) {
 	bufPtr := acquireFrameBuf()
-	pt, err := c.cipher.DecryptInto(*bufPtr, ciphertext)
+	pt, err := c.keys.OpenInto(*bufPtr, ciphertext, c.aad)
 	if err != nil {
 		releaseFrameBuf(bufPtr)
-		logger.Infof("muxconn: decrypt failed len=%d: %v", len(ciphertext), err)
+		c.noteDecryptFailure(len(ciphertext), err)
 		return
 	}
 	*bufPtr = pt
@@ -206,6 +281,31 @@ func (c *Conn) Push(ciphertext []byte) {
 	}
 }
 
+// noteDecryptFailure records an undecryptable frame and logs the first one
+// plus a periodic summary carrying how many were dropped since the last
+// report. Frames from unrelated room participants are expected traffic, not
+// an error worth one line each.
+func (c *Conn) noteDecryptFailure(size int, err error) {
+	total := c.decryptFails.Add(1)
+	now := time.Now().UnixNano()
+	if total == 1 {
+		c.decryptLogAt.Store(now)
+		c.decryptLogged.Store(total)
+		logger.Warnf("muxconn: decrypt failed len=%d: %v", size, err)
+		return
+	}
+	last := c.decryptLogAt.Load()
+	if now-last < int64(decryptLogInterval) {
+		return
+	}
+	if !c.decryptLogAt.CompareAndSwap(last, now) {
+		return
+	}
+	dropped := total - c.decryptLogged.Swap(total)
+	logger.Warnf("muxconn: decrypt failed for %d more frames in the last %s, latest len=%d: %v",
+		dropped, decryptLogInterval, size, err)
+}
+
 // Read implements io.Reader. Blocks until at least one byte is available;
 // after that, drains additional ready frames non-blockingly to fill p, so
 // a single Read can absorb several queued frames in one go. This matches
@@ -218,7 +318,7 @@ func (c *Conn) Read(p []byte) (int, error) {
 	if len(c.leftover) == 0 {
 		bufPtr, ok := c.takeFrame()
 		if !ok {
-			return 0, io.EOF
+			return 0, errReadClosed
 		}
 		c.leftoverBuf = bufPtr
 		c.leftover = *bufPtr
@@ -253,9 +353,8 @@ func (c *Conn) Read(p []byte) (int, error) {
 }
 
 // takeFrame blocks until a frame is available or the conn is closed.
-// On a clean close it still drains any frame that landed before the
-// close signal won the race, so a peer that shuts us down right after a
-// final write doesn't lose data.
+// On close it still picks up a frame that raced past Close's drain, so a
+// peer that shuts us down right after a final write doesn't lose data.
 func (c *Conn) takeFrame() (*[]byte, bool) {
 	select {
 	case bufPtr, ok := <-c.in:
@@ -284,35 +383,13 @@ func (c *Conn) recycleIfDrained() {
 }
 
 // Write encrypts p and ships it to the link as a single message. Blocks while
-// the link signals back-pressure.
+// the link signals back-pressure, up to writeReadyTimeout.
 func (c *Conn) Write(p []byte) (int, error) {
-	// Spin briefly first - on a healthy link CanSend usually clears within
-	// well under a millisecond, so a 10ms sleep adds visible per-frame
-	// latency to interactive request/response traffic. Fall back to a
-	// modest sleep only if the link is truly congested.
-	const (
-		fastSpinAttempts = 16
-		slowPollDelay    = 2 * time.Millisecond
-	)
-	for attempt := 0; ; attempt++ {
-		if c.closed.Load() {
-			return 0, ErrClosed
-		}
-		canSend := c.canSend
-		if canSend == nil {
-			canSend = c.ln.CanSend
-		}
-		if canSend() {
-			break
-		}
-		if attempt < fastSpinAttempts {
-			runtime.Gosched()
-			continue
-		}
-		time.Sleep(slowPollDelay)
+	if err := c.waitSendReady(); err != nil {
+		return 0, err
 	}
 
-	enc, err := c.cipher.Encrypt(p)
+	enc, err := c.keys.SealInto(nil, p, c.aad)
 	if err != nil {
 		return 0, fmt.Errorf("encrypt: %w", err)
 	}
@@ -322,11 +399,73 @@ func (c *Conn) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Close unblocks any pending Read with io.EOF.
-func (c *Conn) Close() error {
+// waitSendReady blocks until the link accepts data, the conn closes, or
+// writeReadyTimeout elapses.
+//
+// A short spin comes first: on a healthy link CanSend usually clears well
+// under a millisecond, and sleeping straight away adds visible per-frame
+// latency to interactive request/response traffic. Only a genuinely
+// congested link falls through to the polling loop.
+func (c *Conn) waitSendReady() error {
+	const (
+		fastSpinAttempts = 16
+		slowPollDelay    = 2 * time.Millisecond
+	)
+	canSend := c.canSend
+	if canSend == nil {
+		canSend = c.ln.CanSend
+	}
+	for range fastSpinAttempts {
+		if c.closed.Load() {
+			return ErrClosed
+		}
+		if canSend() {
+			return nil
+		}
+		runtime.Gosched()
+	}
+
+	deadline := time.NewTimer(c.sendDeadline())
+	defer deadline.Stop()
+	ticker := time.NewTicker(slowPollDelay)
+	defer ticker.Stop()
+	for {
+		if c.closed.Load() {
+			return ErrClosed
+		}
+		if canSend() {
+			return nil
+		}
+		select {
+		case <-c.closeCh:
+			return ErrClosed
+		case <-deadline.C:
+			return ErrWriteTimeout
+		case <-ticker.C:
+		}
+	}
+}
+
+// Close unblocks any pending Read with errReadClosed and returns every
+// queued inbound buffer to the pool. Frames still sitting in the queue are
+// dropped: the caller asked to tear the conn down, and holding pooled
+// buffers alive past that only costs the pool its warm working set.
+func (c *Conn) Close() error { //nolint:unparam // io.Closer requires an error result
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
 		close(c.closeCh)
+		c.drainInbound()
 	})
 	return nil
+}
+
+func (c *Conn) drainInbound() {
+	for {
+		select {
+		case bufPtr := <-c.in:
+			releaseFrameBuf(bufPtr)
+		default:
+			return
+		}
+	}
 }
