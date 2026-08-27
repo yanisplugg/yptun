@@ -9,7 +9,7 @@
 
 </div>
 
-# Quick start (via scripts)
+# Quick start (via install.sh)
 
 > **Important:** always check that the video call service you need is on the allow lists, that it works in your network, and so on. If not, use another one.
 
@@ -59,7 +59,15 @@ sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
 
 ---
 
-## Step 1: Clone the repository
+## Step 1: Get install.sh
+
+Either run it straight from GitHub:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/openlibrecommunity/olcrtc/master/install.sh | bash
+```
+
+Or clone the repository first, if you want the source next to it:
 
 ```sh
 git clone https://github.com/openlibrecommunity/olcrtc --recurse-submodules
@@ -72,15 +80,11 @@ cd olcrtc
 
 ## Step 2: Run the server
 
-On the machine the traffic should go through (VPS, server abroad, home PC):
+On the machine the traffic should go through (VPS, server abroad, home PC), run the one-liner above, or `./install.sh` from a clone, and pick **1) server** when asked for the mode.
 
-```sh
-./script/srv.sh
-```
+The script installs podman if needed, clones the current code, builds the binary in a container and starts it. Then it asks a few questions.
 
-The script installs podman if needed, clones the current code, builds the binary in a container and starts the server. Then it asks a few questions.
-
-#### `srv.sh` flags
+#### `install.sh` flags
 
 | Flag | What it does |
 |---|---|
@@ -88,14 +92,14 @@ The script installs podman if needed, clones the current code, builds the binary
 | `--no-cache` | Purge the Go cache (`~/.cache/olcrtc`) before building - rebuild from scratch |
 
 ```sh
-./script/srv.sh --no-cache               # build from scratch
-./script/srv.sh --branch=dev --no-cache  # branch dev, no cache
+./install.sh --no-cache               # build from scratch
+./install.sh --branch=dev --no-cache  # branch dev, no cache
 ```
 
-### Carrier (which service carries the traffic)
+### Provider (which service carries the traffic)
 
 ```
-Select carrier:
+Select provider:
   1) jitsi
   2) telemost
   3) wbstream
@@ -123,16 +127,16 @@ Recommendations:
 
 **Recommended combo: `jitsi + datachannel`**. Alternative: `wbstream + vp8channel`.
 
-### Jitsi server (carrier jitsi only)
+### Jitsi server (provider jitsi only)
 
 ```
 Enter a Jitsi room URL (https://HOST/ROOM).
-Pick a HOST from docs/examples/jitsi.instances.yaml and verify it opens in a browser.
+Pick a HOST from docs/jitsi.instances.yaml and verify it opens in a browser.
 ```
 
 Pick the one that **opens in your browser**. Any public or self-hosted Jitsi Meet works.
 
-### Room (carrier jitsi only)
+### Room (provider jitsi only)
 
 ```
 Room options:
@@ -174,7 +178,7 @@ Enter choice [1-2, default: 1]:
 - **qrcode** - QR codes, configurable resolution, stable, slow.
 - **tile** - tile codec, 1080x1080 only, Reed-Solomon support, faster but less stable.
 
-Then the script asks for width/height, QR error correction, fragment size (or tile params), FPS, bitrate and hardware acceleration (`none`/`nvenc`). Press Enter for defaults.
+Then the script asks for width/height, QR error correction, fragment size (or tile params), and FPS. Press Enter for defaults.
 
 ### Transport settings (vp8channel only)
 
@@ -206,13 +210,13 @@ This is the label for the resulting `olcrtc://` URI. You can leave it empty (Ent
 
 ### Result
 
-After startup the script prints the container name, carrier, transport, Room ID, the **encryption key** and a ready `olcrtc://` URI:
+After startup the script prints the container name, provider, transport, Room ID, the **encryption key** and a ready `olcrtc://` URI:
 
 ```
 [+] Server started successfully!
 
 Container name: olcrtc-server-xxxxxxxx
-Carrier:        jitsi
+Provider:        jitsi
 Transport:      datachannel
 Room ID/URL:    https://meet.example.org/olcrtc-xxxxxxxx
 Encryption key: d823fa01cb3e0609b67322f7cf984c4ee2e294936fc24ef38c9e59f4799...
@@ -231,10 +235,10 @@ On your machine (home PC, laptop):
 > Prefer a ready-made Android client? Use [owenewans/owenclave](https://github.com/owenewans/owenclave) ([src.owenewans.org/owenrtc](https://src.owenewans.org/owenrtc)) - it reads the `olcrtc://` URI and subscriptions directly, no binary needed. The steps below run the native `cnc` binary (SOCKS5 only).
 
 ```sh
-git clone https://github.com/openlibrecommunity/olcrtc --recurse-submodules
-cd olcrtc
-./script/cnc.sh
+curl -fsSL https://raw.githubusercontent.com/openlibrecommunity/olcrtc/master/install.sh | bash
 ```
+
+Pick **2) client** when asked for the mode. From a clone, run `./install.sh` instead.
 
 Answer the same questions as on the server - **auth, transport and room ID must match**. For jitsi the script asks for the same server choice and room name/URL.
 
@@ -262,7 +266,7 @@ Press Enter for address and port - the proxy comes up on `127.0.0.1:8808`. If yo
 [+] Client started successfully!
 
 Container name: olcrtc-client-xxxxxxxx
-Auth:           jitsi
+Provider:       jitsi
 Transport:      datachannel
 Room ID/URL:    https://meet.example.org/olcrtc-xxxxxxxx
 SOCKS5 proxy:   127.0.0.1:8808
@@ -318,9 +322,9 @@ A running container does not update itself: it keeps the binary built at start t
 
 ```sh
 cd olcrtc
-git pull --recurse-submodules          # update local scripts
+git pull --recurse-submodules          # update install.sh and sources
 podman stop olcrtc-server-xxxxxxxx     # stop the old container
-./script/srv.sh --no-cache             # start again with fresh code
+./install.sh --no-cache                # start again with fresh code, pick server
 ```
 
 `--no-cache` is optional but guarantees a clean rebuild. On the rerun use the same `auth`, `transport`, `room ID` and key. The server key lives in `~/.olcrtc_key` and is reused automatically.
@@ -332,15 +336,15 @@ podman stop olcrtc-server-xxxxxxxx     # stop the old container
 You can run several servers or clients on one machine - each run creates a container with a unique name (`olcrtc-server-<random>`), they do not conflict.
 
 ```sh
-./script/srv.sh   # first instance - e.g. jitsi + datachannel
-./script/srv.sh   # second instance - e.g. wbstream + vp8channel
+./install.sh   # first instance - e.g. jitsi + datachannel, mode server
+./install.sh   # second instance - e.g. wbstream + vp8channel, mode server
 ```
 
-On the client run a separate `cnc.sh` for each instance with **different SOCKS5 ports** to switch between them:
+On the client run `install.sh` again for each instance, mode client, with **different SOCKS5 ports** to switch between them:
 
 ```sh
-./script/cnc.sh   # first client - port 8808 (default)
-./script/cnc.sh   # second client - set port 8809
+./install.sh   # first client - port 8808 (default)
+./install.sh   # second client - set port 8809
 ```
 
 ---

@@ -22,7 +22,7 @@ import (
 // Local throughput soak: pump as much traffic as the selected transport
 // can sustain, locally, for an arbitrary duration.
 //
-// The tunnel is built on the in-memory carrier (no real provider, no
+// The tunnel is built on the in-memory provider (no real provider, no
 // network), so this measures the upper bound of what the
 // SOCKS+muxconn+transport stack can do on this machine. Useful to:
 //
@@ -46,41 +46,41 @@ import (
 // The test is gated by -olcrtc.local-soak so it never runs in regular CI.
 
 var (
-	localSoakEnabled = flag.Bool( //nolint:gochecknoglobals // package-level state intentional
+	localSoakEnabled = flag.Bool(
 		"olcrtc.local-soak",
 		false,
 		"run TestLocalThroughputSoak (long-running local throughput pump)",
 	)
-	localSoakDuration = flag.Duration( //nolint:gochecknoglobals // package-level state intentional
+	localSoakDuration = flag.Duration(
 		"olcrtc.local-soak-duration",
 		30*time.Second,
 		"how long to keep pumping traffic (e.g. 12h, 30m, 90s)",
 	)
-	localSoakTransport = flag.String( //nolint:gochecknoglobals // package-level state intentional
+	localSoakTransport = flag.String(
 		"olcrtc.local-soak-transport",
 		transportData,
 		"transport(s) to pump through: datachannel|videochannel|seichannel|vp8channel, "+
 			"or 'all', or a comma-separated subset (e.g. datachannel,vp8channel)",
 	)
-	localSoakChunk = flag.Int( //nolint:gochecknoglobals // package-level state intentional
+	localSoakChunk = flag.Int(
 		"olcrtc.local-soak-chunk",
 		64*1024,
 		"write/read chunk size in bytes",
 	)
-	localSoakProgress = flag.Duration( //nolint:gochecknoglobals // package-level state intentional
+	localSoakProgress = flag.Duration(
 		"olcrtc.local-soak-progress",
 		30*time.Second,
 		"how often to log throughput progress lines",
 	)
-	localSoakVerify = flag.Bool( //nolint:gochecknoglobals // package-level state intentional
+	localSoakVerify = flag.Bool(
 		"olcrtc.local-soak-verify",
 		true,
 		"verify echoed bytes match the sent pattern (slower, but catches corruption)",
 	)
-	localSoakChaos = flag.Duration( //nolint:gochecknoglobals // package-level state intentional
+	localSoakChaos = flag.Duration(
 		"olcrtc.local-soak-chaos",
 		0,
-		"if >0, trigger carrier reconnect every this interval to simulate network disruption",
+		"if >0, trigger provider reconnect every this interval to simulate network disruption",
 	)
 )
 
@@ -121,7 +121,7 @@ func TestLocalThroughputSoak(t *testing.T) {
 
 // runLocalSoakOnce builds a fresh tunnel for transportName and pumps it
 // for one full -olcrtc.local-soak-duration window. Each subtest gets its
-// own carrier, SOCKS port and goroutines via t.Cleanup, so transports
+// own provider, SOCKS port and goroutines via t.Cleanup, so transports
 // don't share state and a leak in one of them won't poison the next.
 func runLocalSoakOnce(t *testing.T, transportName string) {
 	t.Helper()
@@ -212,7 +212,7 @@ func resolveLocalSoakTransports(value string) ([]string, error) {
 func startLocalSoakTunnel(t *testing.T, transportName string) *tunnelRuntime {
 	t.Helper()
 
-	carrierName, room := registerMemoryCarrier(t)
+	providerName, room := registerMemoryProvider(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	socksAddr := freeLocalAddr(ctx, t)
@@ -223,7 +223,7 @@ func startLocalSoakTunnel(t *testing.T, transportName string) *tunnelRuntime {
 		serverErr <- server.Run(ctx, server.Config{
 			Transport:        transportName,
 			TransportOptions: options,
-			Carrier:          carrierName,
+			Provider:         providerName,
 			RoomURL:          testRoom,
 			KeyHex:           testKeyHex,
 			DNSServer:        localDNSServer,
@@ -237,7 +237,7 @@ func startLocalSoakTunnel(t *testing.T, transportName string) *tunnelRuntime {
 		clientErr <- client.RunWithReady(ctx, client.Config{
 			Transport:        transportName,
 			TransportOptions: options,
-			Carrier:          carrierName,
+			Provider:         providerName,
 			RoomURL:          testRoom,
 			KeyHex:           testKeyHex,
 			DeviceID:         testClientDeviceID,
@@ -460,9 +460,9 @@ func humanBytes(n int64) string {
 	}
 }
 
-// runLocalSoakChaos periodically triggers carrier reconnect to simulate
+// runLocalSoakChaos periodically triggers provider reconnect to simulate
 // network disruption (WiFi flap, NAT rebind, etc). This reproduces the
-// scenario from issue #72 where a carrier-driven reconnect leaves the
+// scenario from issue #72 where a provider-driven reconnect leaves the
 // server and client in a desynchronized state.
 func runLocalSoakChaos(ctx context.Context, t *testing.T, room *memoryRoom, interval time.Duration) {
 	t.Helper()
@@ -475,7 +475,7 @@ func runLocalSoakChaos(ctx context.Context, t *testing.T, room *memoryRoom, inte
 			return
 		case <-ticker.C:
 			count++
-			t.Logf("[chaos] triggering carrier reconnect #%d", count)
+			t.Logf("[chaos] triggering provider reconnect #%d", count)
 			room.triggerReconnect()
 		}
 	}

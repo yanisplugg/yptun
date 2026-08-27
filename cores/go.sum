@@ -279,8 +279,8 @@ github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJw
 github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
 github.com/ory/dockertest/v4 v4.0.0 h1:i19aFsO/VXE0VrMk4ifnKW4G/KIJ93PCjLOslxXoPME=
 github.com/ory/dockertest/v4 v4.0.0/go.mod h1:b5Ofu8VIxWNhXFvQcLu17pRNQdoUBKtXBW74G4Ygzx8=
-github.com/owenewans/owenlivekit/v2 v2.18.2-owen.1 h1:Qw5UzCzYqJrkauN4ZKWfVDUTp/kdaEGvuX/E4vHioGo=
-github.com/owenewans/owenlivekit/v2 v2.18.2-owen.1/go.mod h1:KZeo1HZVhlpd6zcBcv+hgt4muj9rT56FCzrKzxwsFIw=
+github.com/owenewans/owenlivekit/v2 v2.18.2 h1:O9dehD2jv4PY5XftUOESAQxQi/nnRFRpJ0sMLuvVHms=
+github.com/owenewans/owenlivekit/v2 v2.18.2/go.mod h1:ZLiVy3/XevpcF6NJcll3RcHjhAcquBBq+428/qofEi4=
 github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=
 github.com/pelletier/go-toml v1.9.5/go.mod h1:u1nR/EPcESfeI/szUZKdtJ0xRNbUoANCkoOuaOx1Y+c=
 github.com/pierrec/lz4/v4 v4.1.21 h1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=

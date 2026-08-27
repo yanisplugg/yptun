@@ -8,6 +8,11 @@ import org.olcbox.app.data.model.LocationConfig
 import java.net.ServerSocket
 
 internal object OlcRtcConnectionChecker {
+    // Check/Ping run isolated, generation-less probes internally (see Runtime.runProbe upstream) — they
+    // never touch Runtime's own Start/Stop state machine, so one shared instance is safe here and
+    // independent of any other Runtime (e.g. OlcboxVpnService's own live-tunnel mobileRuntime).
+    private val runtime = Mobile.new_()
+
     suspend fun check(locationConfig: LocationConfig, deviceId: String): Long? {
         return withContext(Dispatchers.IO) {
             val config = locationConfig.normalized()
@@ -17,7 +22,7 @@ internal object OlcRtcConnectionChecker {
                 val socksPort = allocateLocalPort()
 
                 val result: Long? = runCatching {
-                    Mobile.check(
+                    runtime.check(
                         config.bypassProvider,
                         config.transport,
                         config.id,
@@ -48,7 +53,7 @@ internal object OlcRtcConnectionChecker {
                 val socksPort = allocateLocalPort()
 
                 val result: Long? = runCatching {
-                    Mobile.ping(
+                    runtime.ping(
                         config.bypassProvider,
                         config.transport,
                         config.id,

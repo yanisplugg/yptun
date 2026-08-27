@@ -257,3 +257,4 @@ package.json
 package-lock.json
 .opencode
 .direnv
+.kb

@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
+
+	"github.com/zarazaex69/j"
 
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
-	"github.com/zarazaex69/j"
 )
 
 const (
@@ -86,11 +86,7 @@ func TestNewSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer func() { _ = sess.Close() }()
-	caps := sess.Capabilities()
-	if !caps.ByteStream || !caps.VideoTrack {
-		t.Fatalf("Capabilities = %+v, want ByteStream && VideoTrack", caps)
-	}
+	t.Cleanup(func() { _ = sess.Close() })
 }
 
 func TestByteStreamWebSocketNegotiatesPeerConnectionWithoutRTCPKeepalive(t *testing.T) {
@@ -343,20 +339,7 @@ func TestReconnectEpochAnnounceWithZeroPeerEpochIsAccepted(t *testing.T) {
 	}
 }
 
-// TestRequireTargetedPeerLatchesFirstBroadcastThenRejectsOthers codifies the
-// field-verified handshake order under WaitForPeer. The client blocks in
-// WaitForPeer until peerEpoch latches, and the latch can only come from the
-// peer's first bridge frame. Because the client waits before sending its own
-// SYN, the server has not learned the client's localEpoch yet, so that first
-// frame necessarily arrives as a broadcast (receiverEpoch==0). The guard must
-// therefore accept an unlatched broadcast (or WaitForPeer wedges and the link
-// never comes up - "ping works, no connection"). Once latched, broadcasts from
-// a different senderEpoch (a third-party olcrtc instance or a stale ghost in a
-// polluted room) are dropped, while further frames from the latched peer keep
-// flowing.
-//
-//nolint:cyclop // setup asserts latch, epoch, and delivery state
-func TestRequireTargetedPeerLatchesFirstBroadcastThenRejectsOthers(t *testing.T) {
+func TestRequireTargetedPeerIgnoresBroadcastUntilConfirmed(t *testing.T) {
 	var received [][]byte
 	sess, err := New(context.Background(), engine.Config{
 		URL:                 testHost,
@@ -377,37 +360,40 @@ func TestRequireTargetedPeerLatchesFirstBroadcastThenRejectsOthers(t *testing.T)
 	}
 	js.localEpoch.Store(0x3333)
 
-	// Server welcome arrives as a broadcast (receiverEpoch==0) because the
-	// server has not learned our epoch yet. It must latch us and be delivered
-	// so WaitForPeer can unblock.
-	serverWelcome := makeBridgeFrameForEpoch(t, 0x1111, 0, []byte("SERVER_WELCOME"))
-	js.deliverBridgeMessage(makeBridgeMessageFrom("server", map[string]any{rawFieldKey: serverWelcome}), true)
-	if len(received) != 1 || string(received[0]) != "SERVER_WELCOME" {
-		t.Fatalf("received = %q, want server welcome", received)
-	}
-	if got := js.peerEpoch.Load(); got != 0x1111 {
-		t.Fatalf("peerEpoch after welcome = 0x%08x, want server epoch", got)
-	}
-	if got := js.peerEndpoint.Load(); got == nil || *got != "server" {
-		t.Fatalf("peerEndpoint after welcome = %v, want server", got)
+	foreignBroadcast := makeBridgeFrameForEpoch(t, 0x2222, 0, []byte("CLIENT_HELLO"))
+	js.deliverBridgeMessage(makeBridgeMessageFrom("clientB", map[string]any{rawFieldKey: foreignBroadcast}), true)
+	if len(received) != 0 || js.peerEpoch.Load() != 0 {
+		t.Fatalf("broadcast changed targeted peer state: received=%q peerEpoch=0x%08x",
+			received, js.peerEpoch.Load())
 	}
 
-	// A broadcast from a different senderEpoch after we are latched is a
-	// third-party/ghost and must be dropped.
-	otherClient := makeBridgeFrameForEpoch(t, 0x2222, 0, []byte("CLIENT_HELLO"))
-	js.deliverBridgeMessage(makeBridgeMessageFrom("clientB", map[string]any{rawFieldKey: otherClient}), true)
+	targetedWelcome := makeBridgeFrameForEpoch(t, 0x1111, 0x3333, []byte("SERVER_WELCOME"))
+	js.deliverBridgeMessage(makeBridgeMessageFrom("server", map[string]any{rawFieldKey: targetedWelcome}), true)
+	if len(received) != 1 || string(received[0]) != "SERVER_WELCOME" {
+		t.Fatalf("received = %q, want targeted server welcome", received)
+	}
+	if js.peerEpoch.Load() != 0 || js.peerEndpoint.Load() != nil {
+		t.Fatal("targeted frame bound peer before authenticated welcome confirmation")
+	}
+	if err := js.ConfirmPeer("00001111"); err != nil {
+		t.Fatalf("ConfirmPeer() error = %v", err)
+	}
+	if got := js.peerEpoch.Load(); got != 0x1111 {
+		t.Fatalf("peerEpoch after confirmation = 0x%08x, want server epoch", got)
+	}
+
+	js.deliverBridgeMessage(makeBridgeMessageFrom("clientB", map[string]any{rawFieldKey: foreignBroadcast}), true)
 	if len(received) != 1 {
 		t.Fatalf("received after third-party broadcast = %q, want only server welcome", received)
 	}
-	if got := js.peerEpoch.Load(); got != 0x1111 {
-		t.Fatalf("peerEpoch after third-party broadcast = 0x%08x, want latched server epoch", got)
-	}
 
-	// A further frame from the latched peer keeps flowing.
-	more := makeBridgeFrameForEpoch(t, 0x1111, 0, []byte("MORE"))
+	more := makeBridgeFrameForEpoch(t, 0x1111, 0x3333, []byte("MORE"))
 	js.deliverBridgeMessage(makeBridgeMessageFrom("server", map[string]any{rawFieldKey: more}), true)
 	if len(received) != 2 || string(received[1]) != "MORE" {
 		t.Fatalf("received = %q, want server welcome + MORE", received)
+	}
+	if got := js.peerEndpoint.Load(); got == nil || *got != "server" {
+		t.Fatalf("peerEndpoint after confirmed frame = %v, want server", got)
 	}
 }
 
@@ -457,10 +443,8 @@ func TestDeliverBridgeMessagePeerEpochChangeAcceptsFrameNoReconnect(t *testing.T
 	if got := js.peerEpoch.Load(); got != 0x2222 {
 		t.Fatalf("peerEpoch.Load() = 0x%X, want 0x2222 (latch must update)", got)
 	}
-	select {
-	case <-js.reconnectCh:
+	if js.Drain() {
 		t.Fatal("peer epoch change must NOT enqueue a self-reconnect (causes ping-pong loop)")
-	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -485,9 +469,7 @@ func TestBridgeCloseRequestsReconnect(t *testing.T) {
 	if js.deliverBridgeMessage(j.BridgeMessage{}, false) {
 		t.Fatal("deliverBridgeMessage returned true on closed bridge")
 	}
-	select {
-	case <-js.reconnectCh:
-	case <-time.After(time.Second):
+	if !js.Drain() {
 		t.Fatal("bridge close did not request reconnect")
 	}
 	if ended != "" {
@@ -518,14 +500,5 @@ func TestBridgeCloseEndsWhenReconnectDisabled(t *testing.T) {
 	}
 	if ended != "jitsi bridge closed" {
 		t.Fatalf("ended = %q, want bridge close reason", ended)
-	}
-}
-
-func TestEngineRegistration(t *testing.T) {
-	if _, err := engine.New(context.Background(), "jitsi", engine.Config{
-		URL:   testHost,
-		Extra: map[string]string{credentialKeyRoom: testRoom},
-	}); err != nil {
-		t.Fatalf("engine.New(jitsi) = %v, want nil", err)
 	}
 }

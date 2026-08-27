@@ -16,13 +16,13 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
+	"sync"
 )
 
 var (
-	// ErrAuthNotFound is returned when a requested auth provider is not registered.
-	ErrAuthNotFound = errors.New("auth provider not found")
-	// ErrRoomCreationUnsupported is returned when an auth provider cannot create rooms.
-	ErrRoomCreationUnsupported = errors.New("auth provider does not support room creation")
+	// ErrProviderNotFound is returned when a requested provider is not registered.
+	ErrProviderNotFound = errors.New("provider not found")
 	// ErrRoomIDRequired is returned when an auth flow needs an existing room ID and none was supplied.
 	ErrRoomIDRequired = errors.New("room ID required")
 )
@@ -75,27 +75,58 @@ type RoomCreator interface {
 	CreateRoom(ctx context.Context, cfg Config) (roomID string, err error)
 }
 
-var registry = make(map[string]Provider) //nolint:gochecknoglobals // package-level state intentional
+//nolint:gochecknoglobals // process-wide auth provider registry
+var (
+	registryMu sync.RWMutex
+	registry   = make(map[string]Provider)
+)
 
 // Register adds an auth provider to the registry.
 func Register(name string, p Provider) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+
 	registry[name] = p
 }
 
 // Get returns a registered auth provider by name.
 func Get(name string) (Provider, error) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
 	p, ok := registry[name]
 	if !ok {
-		return nil, ErrAuthNotFound
+		return nil, ErrProviderNotFound
 	}
 	return p, nil
 }
 
 // Available returns the list of registered auth provider names.
 func Available() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
 	names := make([]string, 0, len(registry))
 	for name := range registry {
 		names = append(names, name)
 	}
+	slices.Sort(names)
+	return names
+}
+
+// RoomCreators returns the sorted names of registered providers that
+// implement RoomCreator, i.e. the ones `-mode gen` can drive. The list is
+// empty when no provider can create rooms.
+func RoomCreators() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
+	names := make([]string, 0, len(registry))
+	for name, p := range registry {
+		if _, ok := p.(RoomCreator); ok {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
 	return names
 }

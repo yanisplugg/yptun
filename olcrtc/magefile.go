@@ -11,6 +11,7 @@
 //	mage build          # native binary
 //	mage cross          # all platforms
 //	mage mobile         # Android AAR
+//	mage cgo            # c-shared library
 //
 //	mage test           # short unit tests
 //	mage testfull       # all unit tests, no real providers
@@ -21,14 +22,15 @@
 //
 // Tunables (env):
 //
-//	E2E_CARRIERS, E2E_TRANSPORTS, E2E_TIMEOUT
+//	E2E_PROVIDERS, E2E_TRANSPORTS, E2E_TIMEOUT
 //	E2E_STRESS, E2E_STRESS_DURATION
-//	STRESS_BULK_DURATION, STRESS_ECHO_DURATION, STRESS_CASE_TIMEOUT, STRESS_TIMEOUT
-//	SOAK_CARRIERS, SOAK_TRANSPORTS, SOAK_DURATION, SOAK_CHAOS
+//	STRESS_PROVIDERS, STRESS_BULK_DURATION, STRESS_ECHO_DURATION, STRESS_CASE_TIMEOUT, STRESS_TIMEOUT
+//	SOAK_PROVIDERS, SOAK_TRANSPORTS, SOAK_DURATION, SOAK_CHAOS
 
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,6 +52,11 @@ const (
 	ldflags  = "-s -w"
 )
 
+// errNotFormatted reports files that are not gofmt-clean.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNotFormatted = errors.New("files were not gofmt-clean")
+
 var (
 	goexe  = mg.GoCmd()
 	goos   = envOr("GOOS", runtime.GOOS)
@@ -67,10 +74,10 @@ func Help() error {
 	return sh.RunV("mage", "-l")
 }
 
-// Check runs the fast pre-commit pipeline: build + vet + lint + unit tests.
-// Use this before every commit.
+// Check runs the fast pre-commit pipeline: formatting, build, vet, lint and
+// unit tests. Use this before every commit.
 func Check() {
-	mg.SerialDeps(Build, Vet, Lint, TestFull)
+	mg.SerialDeps(Fmt, Build, Vet, Lint, TestFull)
 }
 
 // All runs the full pre-merge pipeline: Check + the real-provider smoke
@@ -130,10 +137,41 @@ func Cross() error {
 	return nil
 }
 
+// Cgo builds the c-shared library exposed by cmd/olcrtc-cgo.
+func Cgo() error {
+	mg.Deps(Deps)
+
+	if err := ensureBuildDir(); err != nil {
+		return err
+	}
+
+	ext := ".so"
+
+	switch goos {
+	case "windows":
+		ext = ".dll"
+	case "darwin":
+		ext = ".dylib"
+	}
+
+	out := filepath.Join(buildDir, "libolcrtc"+ext)
+	fmt.Printf("building c-shared library -> %s\n", out)
+
+	env := map[string]string{"CGO_ENABLED": "1"}
+	args := []string{"build", "-trimpath", "-buildmode=c-shared", "-ldflags", ldflags, "-o", out, "./cmd/olcrtc-cgo"}
+
+	if err := sh.RunWithV(env, goexe, args...); err != nil {
+		return fmt.Errorf("build c-shared library: %w", err)
+	}
+
+	return nil
+}
+
 // Mobile builds the Android AAR via gomobile.
 func Mobile() error {
 	if err := ensureTool("gomobile"); err != nil {
-		return fmt.Errorf("gomobile not found: run 'go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init'")
+		return fmt.Errorf("gomobile not found, run "+
+			"'go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init': %w", err)
 	}
 	if err := ensureBuildDir(); err != nil {
 		return err
@@ -151,6 +189,20 @@ func Mobile() error {
 // Quality
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Fmt verifies that every file is gofmt-clean, the same gate CI applies.
+func Fmt() error {
+	out, err := sh.Output("gofmt", "-l", ".")
+	if err != nil {
+		return fmt.Errorf("gofmt -l: %w", err)
+	}
+
+	if strings.TrimSpace(out) != "" {
+		return fmt.Errorf("%w:\n%s", errNotFormatted, out)
+	}
+
+	return nil
+}
+
 // Vet runs go vet on the whole module.
 func Vet() error {
 	return sh.RunV(goexe, "vet", "./...")
@@ -159,7 +211,8 @@ func Vet() error {
 // Lint runs golangci-lint.
 func Lint() error {
 	if err := ensureTool("golangci-lint"); err != nil {
-		return fmt.Errorf("golangci-lint not found, install it:\n  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest")
+		return fmt.Errorf("golangci-lint not found, install it with "+
+			"'go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest': %w", err)
 	}
 	return sh.RunV("golangci-lint", "run", "./...")
 }
@@ -187,20 +240,20 @@ func TestFull() error {
 }
 
 // E2e runs the real-provider smoke matrix.
-// Configure via env: E2E_CARRIERS, E2E_TRANSPORTS, E2E_TIMEOUT, E2E_STRESS.
+// Configure via env: E2E_PROVIDERS, E2E_TRANSPORTS, E2E_TIMEOUT, E2E_STRESS.
 //
 // Note: -race is intentionally NOT enabled here. The race detector adds
 // significant CPU overhead and breaks timing-sensitive handshake tests
 // against real networks (telemost/videochannel handshake regularly times
 // out under -race). Race coverage for production code paths is provided
-// by `mage testFull` against in-memory carriers.
+// by `mage testFull` against in-memory providers.
 func E2e() error {
 	args := []string{"test", "-count=1", "-v", "-timeout", "30m",
 		"./internal/e2e/...",
 		"-olcrtc.real-e2e=true",
 	}
-	if carriers := os.Getenv("E2E_CARRIERS"); carriers != "" {
-		args = append(args, "-olcrtc.real-carriers="+carriers)
+	if providers := os.Getenv("E2E_PROVIDERS"); providers != "" {
+		args = append(args, "-olcrtc.real-providers="+providers)
 	}
 	if transports := os.Getenv("E2E_TRANSPORTS"); transports != "" {
 		args = append(args, "-olcrtc.real-transports="+transports)
@@ -217,10 +270,10 @@ func E2e() error {
 	return sh.RunV(goexe, args...)
 }
 
-// Stress runs the real-provider stress matrix on every carrier × transport pair.
+// Stress runs the real-provider stress matrix on every provider × transport pair.
 // Defaults match the long nightly profile (15m bulk + 15m echo, 35m hard cap per case).
 // Override via env: STRESS_BULK_DURATION, STRESS_ECHO_DURATION, STRESS_CASE_TIMEOUT,
-// STRESS_TIMEOUT, E2E_CARRIERS, E2E_TRANSPORTS.
+// STRESS_TIMEOUT, STRESS_PROVIDERS, E2E_TRANSPORTS.
 func Stress() error {
 	bulk := envOr("STRESS_BULK_DURATION", "15m")
 	echo := envOr("STRESS_ECHO_DURATION", "15m")
@@ -237,8 +290,8 @@ func Stress() error {
 		"-olcrtc.stress-duration=" + echo,
 		"-olcrtc.stress-case-timeout=" + caseTO,
 	}
-	if carriers := os.Getenv("E2E_CARRIERS"); carriers != "" {
-		args = append(args, "-olcrtc.real-carriers="+carriers)
+	if providers := os.Getenv("STRESS_PROVIDERS"); providers != "" {
+		args = append(args, "-olcrtc.real-providers="+providers)
 	}
 	if transports := os.Getenv("E2E_TRANSPORTS"); transports != "" {
 		args = append(args, "-olcrtc.real-transports="+transports)
@@ -247,9 +300,9 @@ func Stress() error {
 }
 
 // Soak runs the real-provider throughput soak test.
-// Configure via env: SOAK_CARRIERS, SOAK_TRANSPORTS, SOAK_DURATION.
+// Configure via env: SOAK_PROVIDERS, SOAK_TRANSPORTS, SOAK_DURATION.
 func Soak() error {
-	carriers := envOr("SOAK_CARRIERS", "telemost,jitsi,wbstream")
+	providers := envOr("SOAK_PROVIDERS", "telemost,jitsi,wbstream")
 	transports := envOr("SOAK_TRANSPORTS", "datachannel,vp8channel")
 	duration := envOr("SOAK_DURATION", "10m")
 
@@ -259,7 +312,7 @@ func Soak() error {
 		"./internal/e2e/...",
 		"-olcrtc.real-e2e=true",
 		"-olcrtc.real-soak=true",
-		"-olcrtc.real-soak-carrier=" + carriers,
+		"-olcrtc.real-soak-provider=" + providers,
 		"-olcrtc.real-soak-transport=" + transports,
 		"-olcrtc.real-soak-duration=" + duration,
 	}

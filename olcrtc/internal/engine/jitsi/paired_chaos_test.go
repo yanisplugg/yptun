@@ -3,7 +3,7 @@
 // Why paired: a single instance never receives session-initiate from
 // Jicofo because of min-participants=2 (jicofo/.../reference.conf).
 // Without a peer the bridge never opens and most of the engine's
-// reconnect logic — peer-epoch latch, bridgeKeepalive, RTCP keepalive —
+// reconnect logic - peer-epoch latch, bridgeKeepalive, RTCP keepalive -
 // is never exercised. The single-client tests proved that xmppKeepalive
 // holds the BOSH session for a single endpoint, but the production
 // failure mode the user actually observes (DTLS CloseNotify → cascading
@@ -28,7 +28,7 @@
 //	OLCRTC_JITSI_PAIRED_ROOM          optional, defaults to a unique name
 //	OLCRTC_JITSI_PAIRED_DURATION      default 30m, "0"/"infinite" runs forever
 //	OLCRTC_JITSI_PAIRED_IDLE          default 75s
-//	OLCRTC_JITSI_PAIRED_CHAOS_INTERVAL default 60s — how often to cause chaos
+//	OLCRTC_JITSI_PAIRED_CHAOS_INTERVAL default 60s - how often to cause chaos
 //	OLCRTC_JITSI_PAIRED_VERBOSE       default off
 //
 // Quick run:
@@ -94,7 +94,7 @@ func (c *pairedConfig) durationLabel() string {
 	return c.duration.String()
 }
 
-func readPairedConfig(t *testing.T) *pairedConfig { //nolint:cyclop // config parsing is naturally branchy
+func readPairedConfig(t *testing.T) *pairedConfig {
 	t.Helper()
 	host := strings.TrimSpace(os.Getenv(envPairedHost))
 	if host == "" {
@@ -137,7 +137,7 @@ func readPairedConfig(t *testing.T) *pairedConfig { //nolint:cyclop // config pa
 		cfg.chaosInterval = d
 	}
 	if v := strings.TrimSpace(os.Getenv(envPairedVerbose)); v != "" {
-		cfg.verbose = v != "0" && strings.ToLower(v) != "false"
+		cfg.verbose = v != "0" && !strings.EqualFold(v, "false")
 	}
 	return cfg
 }
@@ -148,9 +148,9 @@ type pairedInstance struct {
 	name string
 	js   *Session
 
-	mu              sync.Mutex
+	mu                sync.Mutex
 	receivedFromOther int64
-	lastReceiveAt   time.Time
+	lastReceiveAt     time.Time
 }
 
 func (p *pairedInstance) note(b []byte) {
@@ -276,8 +276,6 @@ type pairedStats struct {
 //     never re-establishes the bridge frame path).
 //   - Either side hits ErrSessionClosed at the engine level
 //     (the closed flag is the canonical "we gave up" signal).
-//
-//nolint:cyclop,gocognit // chaos cycle structure naturally branches on phase + side
 func TestJitsiPairedChaosStress(t *testing.T) {
 	cfg := readPairedConfig(t)
 	infinite := cfg.duration == 0
@@ -296,7 +294,7 @@ func TestJitsiPairedChaosStress(t *testing.T) {
 	}
 	defer cancel()
 
-	// Spin up Alice first so she's already in the room when Bob arrives —
+	// Spin up Alice first so she's already in the room when Bob arrives -
 	// this guarantees min-participants triggers session-initiate.
 	alice, err := startInstance(ctx, t, cfg, nameAlice)
 	if err != nil {
@@ -326,7 +324,7 @@ func TestJitsiPairedChaosStress(t *testing.T) {
 
 	// Background pumps: each side sends a heartbeat every 2s. The other
 	// side records arrivals via OnData. This is the actual end-to-end
-	// liveness signal — if it stops flowing, the bridge is dead.
+	// liveness signal - if it stops flowing, the bridge is dead.
 	pumpCtx, pumpCancel := context.WithCancel(ctx)
 	defer pumpCancel()
 	payload := []byte("0123456789abcdef-paired-keepalive-stress-payload")
@@ -389,7 +387,7 @@ func TestJitsiPairedChaosStress(t *testing.T) {
 			victimName = nameBob
 		}
 		if cfg.verbose {
-			t.Logf("[paired][%d] CHAOS victim=%s — teardownPC + requestReconnect", stats.cycles, victimName)
+			t.Logf("[paired][%d] CHAOS victim=%s - teardownPC + requestReconnect", stats.cycles, victimName)
 		}
 		victim.js.teardownPC()
 		victim.js.requestReconnect(fmt.Sprintf("paired chaos cycle=%d victim=%s", stats.cycles, victimName))

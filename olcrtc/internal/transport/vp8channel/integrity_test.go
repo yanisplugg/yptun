@@ -9,14 +9,14 @@ import (
 )
 
 // corruptPump forwards packets from `from` into `to.deliver`, flipping a byte
-// in the KCP body of a fraction of them. It models a carrier (an SFU that may
+// in the KCP body of a fraction of them. It models a provider (an SFU that may
 // transcode our fake-VP8 stream) that perturbs payload bytes without dropping
 // the packet outright. KCP runs with block=nil, so before the wire CRC was
 // added a corrupt-but-parseable segment rode through as valid in-order data
 // and broke the muxconn AEAD above it (issue #109).
 func corruptPump(
 	stop <-chan struct{},
-	from <-chan []byte,
+	from <-chan *packetBuffer,
 	to *kcpRuntime,
 	corruptRatio float64,
 	seed uint64,
@@ -31,10 +31,12 @@ func corruptPump(
 		case <-stop:
 			return
 		case pkt := <-from:
-			if len(pkt) <= epochHdrLen {
+			if len(pkt.data) <= epochHdrLen {
+				pkt.release()
 				continue
 			}
-			body := append([]byte(nil), pkt[epochHdrLen:]...)
+			body := append([]byte(nil), pkt.data[epochHdrLen:]...)
+			pkt.release()
 			// Flip a byte in the KCP-packet region, but leave the trailing
 			// CRC intact so the corruption is what the CRC must catch.
 			if len(body) > wireCRCLen+1 && rng.Float64() < corruptRatio {
@@ -49,12 +51,12 @@ func corruptPump(
 	}
 }
 
-// TestKCPDropsCarrierCorruptedPackets is the issue #109 regression guard. With
+// TestKCPDropsProviderCorruptedPackets is the issue #109 regression guard. With
 // ~15% of packets corrupted in flight, every message must still arrive intact:
 // the wire CRC drops the corrupt segments and KCP retransmits them. Without the
 // CRC, corrupt bytes reach the receiver and checkMessages fails - exactly the
 // "chacha20poly1305: message authentication failed" path one layer up.
-func TestKCPDropsCarrierCorruptedPackets(t *testing.T) {
+func TestKCPDropsProviderCorruptedPackets(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integrity chaos test in -short mode")
 	}
@@ -65,8 +67,8 @@ func TestKCPDropsCarrierCorruptedPackets(t *testing.T) {
 		bytes.Repeat([]byte("D"), 20000),
 	}
 
-	a2b := make(chan []byte, 1024)
-	b2a := make(chan []byte, 1024)
+	a2b := make(chan *packetBuffer, 1024)
+	b2a := make(chan *packetBuffer, 1024)
 	cb, doneB, getRecv := buildReceiver(len(msgs))
 
 	rtA, err := startKCP(a2b, nil, testEpochHdr(1))

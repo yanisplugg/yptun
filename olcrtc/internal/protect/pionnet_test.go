@@ -63,33 +63,30 @@ func TestInterfaceByNameRejectsTun(t *testing.T) {
 	}
 }
 
-// TestControlFuncFailClosed verifies that Protector can reject a socket.
+// TestControlFuncFailClosed verifies that the protector can reject a socket.
 func TestControlFuncFailClosed(t *testing.T) {
-	old := Protector
-	t.Cleanup(func() { Protector = old })
-
-	Protector = func(int) bool { return false }
+	restoreProtector(t)
+	SetProtector(func(int) bool { return false })
 	lc := net.ListenConfig{Control: controlFunc}
 	pc, err := lc.ListenPacket(context.Background(), "udp", "127.0.0.1:0")
 	if err == nil {
 		_ = pc.Close()
-		t.Fatal("expected protected ListenPacket to fail when Protector rejects fd")
+		t.Fatal("expected protected ListenPacket to fail when the protector rejects fd")
 	}
 }
 
-// TestControlFuncProtects verifies that Protector receives a real fd.
+// TestControlFuncProtects verifies that the protector receives a real fd.
 func TestControlFuncProtects(t *testing.T) {
-	old := Protector
-	t.Cleanup(func() { Protector = old })
+	restoreProtector(t)
 
 	var calls int
-	Protector = func(fd int) bool {
+	SetProtector(func(fd int) bool {
 		if fd < 0 {
 			t.Errorf("protector got negative fd %d", fd)
 		}
 		calls++
 		return true
-	}
+	})
 	lc := net.ListenConfig{Control: controlFunc}
 	pc, err := lc.ListenPacket(context.Background(), "udp", "127.0.0.1:0")
 	if err != nil {
@@ -113,7 +110,6 @@ func TestCreateDialerUsesResolver(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // covers related address forms together
 func TestResolveAddrUsesInjectedResolverSemantics(t *testing.T) {
 	t.Parallel()
 
@@ -208,11 +204,10 @@ func TestLookupIPAddrSelection(t *testing.T) {
 // TestCreateDialerProtectsAndChains verifies that CreateDialer copies the
 // caller's Dialer and keeps the caller's Control hook.
 func TestCreateDialerProtectsAndChains(t *testing.T) {
-	old := Protector
-	t.Cleanup(func() { Protector = old })
+	restoreProtector(t)
 
 	var protectorRan bool
-	Protector = func(int) bool { protectorRan = true; return true }
+	SetProtector(func(int) bool { protectorRan = true; return true })
 
 	n, err := NewProtectedNet()
 	if err != nil {
@@ -264,11 +259,10 @@ func TestCreateDialerProtectsAndChains(t *testing.T) {
 // TestCreateDialerProtectsAndChainsControlContext verifies that CreateDialer
 // keeps the caller's ControlContext hook.
 func TestCreateDialerProtectsAndChainsControlContext(t *testing.T) {
-	old := Protector
-	t.Cleanup(func() { Protector = old })
+	restoreProtector(t)
 
 	var protectorRan bool
-	Protector = func(int) bool { protectorRan = true; return true }
+	SetProtector(func(int) bool { protectorRan = true; return true })
 
 	n, err := NewProtectedNet()
 	if err != nil {

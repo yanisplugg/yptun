@@ -28,7 +28,6 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               androidSdk
-              ffmpeg
               go
               golangci-lint
               gomobile

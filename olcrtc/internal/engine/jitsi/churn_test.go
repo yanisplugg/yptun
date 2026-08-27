@@ -13,70 +13,6 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 )
 
-// TestReconnectCounterResetsOnSuccess pins the post-fix counting model:
-// the reconnect counter records *consecutive failures*, not the total
-// number of reconnects. A success must zero the counter so legitimate
-// long-running churn (peer rejoin, JVB restart) doesn't gradually creep
-// past maxReconnects on perfectly recoverable failures.
-func TestReconnectCounterResetsOnSuccess(t *testing.T) {
-	js := newChurnSession(t)
-	defer func() { _ = js.Close() }()
-
-	js.reconnectMu.Lock()
-	js.reconnectCount = 4
-	js.reconnectWindowStart = time.Now()
-	js.reconnectMu.Unlock()
-
-	// Mimic handleReconnectAttempt's success path.
-	js.reconnectMu.Lock()
-	js.reconnectCount = 0
-	js.reconnectWindowStart = time.Time{}
-	count := js.reconnectCount
-	wst := js.reconnectWindowStart
-	js.reconnectMu.Unlock()
-
-	if count != 0 || !wst.IsZero() {
-		t.Fatalf("after success: count=%d window=%v, want 0/zero", count, wst)
-	}
-}
-
-// TestReconnectCounterTripsOnConsecutiveFailures verifies the safety
-// net: when reconnect attempts keep failing back-to-back, the supervisor
-// must end the session once the counter exceeds maxReconnects.
-func TestReconnectCounterTripsOnConsecutiveFailures(t *testing.T) {
-	js := newChurnSession(t)
-	defer func() { _ = js.Close() }()
-
-	endedCh := make(chan string, 1)
-	js.SetEndedCallback(func(reason string) {
-		select {
-		case endedCh <- reason:
-		default:
-		}
-	})
-
-	// Pre-fill the counter as if maxReconnects+1 failures had landed.
-	js.reconnectMu.Lock()
-	js.reconnectCount = maxReconnects + 1
-	js.reconnectMu.Unlock()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan bool, 1)
-	go func() { done <- js.handleReconnectAttempt(ctx) }()
-
-	select {
-	case reason := <-endedCh:
-		if reason == "" {
-			t.Fatal("ended with empty reason")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("cap was not enforced after consecutive failures")
-	}
-	cancel()
-	<-done
-}
-
 // TestResetPeerClearsBindingForNewPeer covers fix 032151b: after an
 // upper-layer handshake failure the supervisor calls ResetPeer, and the
 // next peer in the room must be allowed to latch - not blocked by the
@@ -106,7 +42,7 @@ func TestResetPeerClearsBindingForNewPeer(t *testing.T) {
 	frameA := makeBridgeFrameForEpoch(t, 0x1111, 0, []byte("from-A"))
 	js.deliverBridgeMessage(makeBridgeMessageFrom("peerA", map[string]any{rawFieldKey: frameA}), true)
 
-	// Peer B sends — magic passes, so we re-latch onto peerB and the
+	// Peer B sends - magic passes, so we re-latch onto peerB and the
 	// payload is delivered. (Old behaviour: dropped until ResetPeer.)
 	frameB1 := makeBridgeFrameForEpoch(t, 0x2222, 0, []byte("from-B-relatched"))
 	js.deliverBridgeMessage(makeBridgeMessageFrom("peerB", map[string]any{rawFieldKey: frameB1}), true)
@@ -120,7 +56,7 @@ func TestResetPeerClearsBindingForNewPeer(t *testing.T) {
 		t.Fatalf("peerEndpoint after ResetPeer = %q, want nil", *p)
 	}
 
-	// Peer B again — fresh latch, frame delivers.
+	// Peer B again - fresh latch, frame delivers.
 	frameB2 := makeBridgeFrameForEpoch(t, 0x2222, 0, []byte("from-B-final"))
 	js.deliverBridgeMessage(makeBridgeMessageFrom("peerB", map[string]any{rawFieldKey: frameB2}), true)
 
@@ -258,7 +194,6 @@ func TestChurnConcurrentResetAndDeliver(t *testing.T) {
 	wg.Wait()
 }
 
-// TestChurnReconnectAttemptSerial exercises handleReconnectAttempt across
 // --- helpers ---
 
 func newChurnSession(t *testing.T) *Session {
@@ -278,10 +213,7 @@ func newChurnSession(t *testing.T) *Session {
 }
 
 func drainReconnectCh(js *Session) {
-	select {
-	case <-js.reconnectCh:
-	default:
-	}
+	js.Drain()
 }
 
 // Keep binary.BigEndian referenced even if all current uses are removed.

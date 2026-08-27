@@ -32,7 +32,7 @@ body:
     attributes:
       label: Версия olcrtc
       description: Тег релиза, имя ветки и git commit (`git rev-parse --short HEAD`).
-      placeholder: "main @ a1b2c3d  /  v0.x.y  /  refactor/universal-carrier @ ef01234"
+      placeholder: "main @ a1b2c3d  /  v0.x.y  /  refactor/universal-provider @ ef01234"
     validations:
       required: true
 

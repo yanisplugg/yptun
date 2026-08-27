@@ -88,14 +88,16 @@ func Run(ctx context.Context, cfg Config, run Runner) error {
 	if len(cfg.Profiles) == 0 {
 		return ErrNoProfiles
 	}
-	if cfg.RetryDelay == 0 {
+	// A negative delay parses fine from YAML and waitRetryDelay treats it as
+	// "no wait", which turns failover into a busy loop against a profile that
+	// fails immediately.
+	if cfg.RetryDelay <= 0 {
 		cfg.RetryDelay = DefaultRetryDelay
 	}
 	state := newStatusTracker(cfg.Profiles, cfg.HistoryLimit, cfg.OnStatus)
 
-	var lastErr error
 	for cycle := 1; ; cycle++ {
-		if err := runCycle(ctx, cfg, run, state, cycle, &lastErr); err != nil {
+		if err := runCycle(ctx, cfg, run, state, cycle); err != nil {
 			return err
 		}
 		if ctx.Err() != nil {
@@ -110,10 +112,9 @@ func runCycle(
 	run Runner,
 	state *statusTracker,
 	cycle int,
-	lastErr *error,
 ) error {
 	for i, profile := range cfg.Profiles {
-		if err := runProfile(ctx, cfg, run, state, cycle, i, profile, lastErr); err != nil {
+		if err := runProfile(ctx, cfg, run, state, cycle, i, profile); err != nil {
 			return err
 		}
 	}
@@ -128,7 +129,6 @@ func runProfile(
 	cycle int,
 	profileIndex int,
 	profile Profile,
-	lastErr *error,
 ) error {
 	if ctx.Err() != nil {
 		return nil //nolint:nilerr // context cancellation is normal supervisor shutdown
@@ -142,14 +142,14 @@ func runProfile(
 	if ctx.Err() != nil {
 		return nil //nolint:nilerr // context cancellation is normal supervisor shutdown
 	}
-	*lastErr = profileResultError(profile.Name, err)
+	resultErr := profileResultError(profile.Name, err)
 	state.end(profileIndex, cycle, err)
 	if cfg.OnProfileEnd != nil {
 		cfg.OnProfileEnd(profile, cycle, err)
 	}
 
 	if cfg.MaxCycles > 0 && cycle >= cfg.MaxCycles && profileIndex == len(cfg.Profiles)-1 {
-		return fmt.Errorf("%w after %d cycle(s): %w", ErrMaxCyclesExceeded, cycle, *lastErr)
+		return fmt.Errorf("%w after %d cycle(s): %w", ErrMaxCyclesExceeded, cycle, resultErr)
 	}
 	if err := waitRetryDelay(ctx, cfg.RetryDelay); err != nil {
 		return nil //nolint:nilerr // context cancellation during retry delay is normal shutdown

@@ -8,33 +8,32 @@ package telemost
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 
 	"github.com/google/uuid"
-	"github.com/openlibrecommunity/olcrtc/internal/protect"
+
+	"github.com/openlibrecommunity/olcrtc/internal/auth"
 )
 
-//nolint:gochecknoglobals // overridable base URL for tests
-var apiBase = "https://cloud-api.yandex.ru/telemost_front/v2/telemost"
+const defaultAPIURL = "https://cloud-api.yandex.ru/telemost_front/v2/telemost"
+
+// ErrAPI marks failures returned by the Telemost HTTP API.
+var ErrAPI = errors.New("api error")
 
 //nolint:gochecknoglobals // optional Yandex auth cookies, set from the mobile binding
 var cookies string
 
 // SetCookies stores the Yandex auth cookie header (e.g. "Session_id=...; yandexuid=...") sent with
 // Telemost API requests. Empty disables it. Lets a signed-in account join restricted conferences.
+//
+// DELIBERATELY NEVER WIRED TO A REAL PERSONAL ACCOUNT: attaching a real Yandex identity to the
+// circumvention tunnel would deanonymize exactly what olcRTC exists to protect. Leave this unset.
 func SetCookies(c string) { cookies = c }
 
-// ErrAPI marks failures returned by the Telemost HTTP API.
-var ErrAPI = errors.New("api error")
-
 // ConnectionInfo describes the connection metadata returned by the Telemost API.
-//
-//nolint:tagliatelle // wire format dictated by the upstream Telemost API
 type ConnectionInfo struct {
 	RoomID       string `json:"room_id"`
 	PeerID       string `json:"peer_id"`
@@ -44,15 +43,23 @@ type ConnectionInfo struct {
 	} `json:"client_configuration"`
 }
 
-// GetConnectionInfo fetches connection metadata for the given Telemost room URL.
-func GetConnectionInfo(
-	ctx context.Context, roomURL, displayName string, resolvers ...*net.Resolver,
-) (*ConnectionInfo, error) {
-	u := fmt.Sprintf("%s/conferences/%s/connection", apiBase, url.QueryEscape(roomURL))
+// apiURL returns the REST base for this provider.
+func (p Provider) apiURL() string {
+	if p.apiBase == "" {
+		return defaultAPIURL
+	}
+	return p.apiBase
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+// connectionInfo fetches connection metadata for the given Telemost room URL.
+func (p Provider) connectionInfo(
+	ctx context.Context, client *http.Client, roomURL, displayName string,
+) (ConnectionInfo, error) {
+	u := fmt.Sprintf("%s/conferences/%s/connection", p.apiURL(), url.QueryEscape(roomURL))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return ConnectionInfo{}, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	q := req.URL.Query()
@@ -73,20 +80,9 @@ func GetConnectionInfo(
 		req.Header.Set("Cookie", cookies)
 	}
 
-	client := protect.NewHTTPClient(resolvers...)
-	resp, err := client.Do(req)
+	info, err := auth.DoJSON[ConnectionInfo](client, req, ErrAPI)
 	if err != nil {
-		return nil, fmt.Errorf("failed to do request: %w", err)
+		return ConnectionInfo{}, fmt.Errorf("telemost api: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("telemost api status: %w", protect.StatusError(ErrAPI, resp, 4096))
-	}
-
-	var info ConnectionInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-	return &info, nil
+	return info, nil
 }

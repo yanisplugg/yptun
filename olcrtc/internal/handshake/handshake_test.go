@@ -1,6 +1,7 @@
 package handshake
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -9,6 +10,7 @@ import (
 )
 
 const testSessionID = "sess-42"
+const testPeerID = "1234abcd"
 
 var errNope = errors.New("nope")
 
@@ -34,7 +36,7 @@ func TestHandshakeRoundTrip(t *testing.T) {
 				t.Errorf("claims = %v", claims)
 			}
 			return testSessionID, nil
-		})
+		}, testPeerID)
 		if err != nil {
 			t.Errorf("Server: %v", err)
 		}
@@ -43,12 +45,15 @@ func TestHandshakeRoundTrip(t *testing.T) {
 		}
 	}()
 
-	sid, err := Client(cConn, "dev-1", map[string]any{"plan": "pro"})
+	sid, peerID, err := Client(cConn, "dev-1", map[string]any{"plan": "pro"})
 	if err != nil {
 		t.Fatalf("Client: %v", err)
 	}
 	if sid != testSessionID {
 		t.Fatalf("session id = %q, want sess-42", sid)
+	}
+	if peerID != testPeerID {
+		t.Fatalf("peer id = %q, want %q", peerID, testPeerID)
 	}
 }
 
@@ -58,15 +63,47 @@ func TestHandshakeRejected(t *testing.T) {
 	go func() {
 		_, _, _ = Server(sConn, func(string, map[string]any) (string, error) {
 			return "", errNope
-		})
+		}, testPeerID)
 	}()
 
-	_, err := Client(cConn, "dev-1", nil)
+	_, _, err := Client(cConn, "dev-1", nil)
 	if !errors.Is(err, ErrRejected) {
 		t.Fatalf("Client err = %v, want ErrRejected", err)
 	}
 	if !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("err message %q missing reason", err.Error())
+	}
+}
+
+func TestReplyMustMatchClientChallenge(t *testing.T) {
+	const (
+		challengeA = "00112233445566778899aabbccddeeff"
+		challengeB = "ffeeddccbbaa99887766554433221100"
+	)
+
+	var replies bytes.Buffer
+	if err := writeFrame(&replies, Welcome{
+		Version: ProtoVersion, Type: TypeWelcome, SessionID: "session-a",
+		PeerID: "peer-a", Challenge: challengeA,
+	}); err != nil {
+		t.Fatalf("write replayed welcome: %v", err)
+	}
+	if err := writeFrame(&replies, Welcome{
+		Version: ProtoVersion, Type: TypeWelcome, SessionID: "session-b",
+		PeerID: "peer-b", Challenge: challengeB,
+	}); err != nil {
+		t.Fatalf("write matching welcome: %v", err)
+	}
+
+	if _, _, matched, err := readReply(&replies, challengeB); err != nil || matched {
+		t.Fatalf("replayed reply = matched %v, err %v; want ignored", matched, err)
+	}
+	sessionID, peerID, matched, err := readReply(&replies, challengeB)
+	if err != nil || !matched {
+		t.Fatalf("matching reply = matched %v, err %v", matched, err)
+	}
+	if sessionID != "session-b" || peerID != "peer-b" {
+		t.Fatalf("matching reply = session %q peer %q", sessionID, peerID)
 	}
 }
 
@@ -81,7 +118,7 @@ func TestHandshakeProtocolMismatch(t *testing.T) {
 	_, _, err := Server(sConn, func(string, map[string]any) (string, error) {
 		t.Fatal("auth must not be invoked on protocol mismatch")
 		return "", nil
-	})
+	}, testPeerID)
 	if !errors.Is(err, ErrProtocolVersion) {
 		t.Fatalf("Server err = %v, want ErrProtocolVersion", err)
 	}
@@ -98,7 +135,7 @@ func TestHandshakeUnexpectedType(t *testing.T) {
 	_, _, err := Server(sConn, func(string, map[string]any) (string, error) {
 		t.Fatal("auth must not be invoked on bad type")
 		return "", nil
-	})
+	}, testPeerID)
 	if !errors.Is(err, ErrUnexpectedMessage) {
 		t.Fatalf("Server err = %v, want ErrUnexpectedMessage", err)
 	}

@@ -10,7 +10,7 @@ import (
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 )
 
-// Real-carrier throughput soak: same pump as TestLocalThroughputSoak but
+// Real-provider throughput soak: same pump as TestLocalThroughputSoak but
 // over a real WebRTC provider (Jitsi, Telemost, WBStream).
 //
 // Quick start:
@@ -19,43 +19,43 @@ import (
 //	    -run '^TestRealThroughputSoak$' \
 //	    -olcrtc.real-e2e \
 //	    -olcrtc.real-soak \
-//	    -olcrtc.real-soak-carrier=jitsi \
+//	    -olcrtc.real-soak-provider=jitsi \
 //	    -olcrtc.real-soak-transport=seichannel \
 //	    -olcrtc.real-soak-duration=30m \
 //	    -timeout=60m
 
 var (
-	realSoakEnabled = flag.Bool( //nolint:gochecknoglobals // package-level state intentional
+	realSoakEnabled = flag.Bool(
 		"olcrtc.real-soak",
 		false,
-		"run TestRealThroughputSoak (long-running real-carrier throughput pump)",
+		"run TestRealThroughputSoak (long-running real-provider throughput pump)",
 	)
-	realSoakDuration = flag.Duration( //nolint:gochecknoglobals // package-level state intentional
+	realSoakDuration = flag.Duration(
 		"olcrtc.real-soak-duration",
 		5*time.Minute,
-		"how long to pump traffic per carrier×transport case",
+		"how long to pump traffic per provider×transport case",
 	)
-	realSoakCarrier = flag.String( //nolint:gochecknoglobals // package-level state intentional
-		"olcrtc.real-soak-carrier",
+	realSoakProvider = flag.String(
+		"olcrtc.real-soak-provider",
 		"jitsi",
-		"carrier(s) to use: comma-separated list (e.g. jitsi,telemost,wbstream)",
+		"provider(s) to use: comma-separated list (e.g. jitsi,telemost,wbstream)",
 	)
-	realSoakTransport = flag.String( //nolint:gochecknoglobals // package-level state intentional
+	realSoakTransport = flag.String(
 		"olcrtc.real-soak-transport",
 		"seichannel",
 		"transport(s): datachannel|videochannel|seichannel|vp8channel or comma-separated",
 	)
-	realSoakChunk = flag.Int( //nolint:gochecknoglobals // package-level state intentional
+	realSoakChunk = flag.Int(
 		"olcrtc.real-soak-chunk",
 		4096,
 		"write/read chunk size in bytes",
 	)
-	realSoakProgress = flag.Duration( //nolint:gochecknoglobals // package-level state intentional
+	realSoakProgress = flag.Duration(
 		"olcrtc.real-soak-progress",
 		30*time.Second,
 		"how often to log throughput progress lines",
 	)
-	realSoakVerify = flag.Bool( //nolint:gochecknoglobals // package-level state intentional
+	realSoakVerify = flag.Bool(
 		"olcrtc.real-soak-verify",
 		true,
 		"verify echoed bytes match the sent pattern",
@@ -73,9 +73,9 @@ func TestRealThroughputSoak(t *testing.T) {
 		t.Skip("real soak duration is zero")
 	}
 
-	carriers := splitTestList(*realSoakCarrier)
-	if len(carriers) == 0 {
-		t.Fatal("no carriers specified in -olcrtc.real-soak-carrier")
+	providers := splitTestList(*realSoakProvider)
+	if len(providers) == 0 {
+		t.Fatal("no providers specified in -olcrtc.real-soak-provider")
 	}
 	transports, err := resolveLocalSoakTransports(*realSoakTransport)
 	if err != nil {
@@ -84,36 +84,36 @@ func TestRealThroughputSoak(t *testing.T) {
 
 	echoAddr := startEchoServer(t)
 
-	for _, carrierName := range carriers {
-		t.Run(carrierName, func(t *testing.T) {
+	for _, providerName := range providers {
+		t.Run(providerName, func(t *testing.T) {
 			roomCtx, cancelRoom := context.WithTimeout(context.Background(), *realSoakDuration+2*time.Minute)
 			defer cancelRoom()
-			roomURL := requireRealRoom(roomCtx, t, carrierName)
+			roomURL := requireRealRoom(roomCtx, t, providerName)
 
 			for _, transportName := range transports {
 				t.Run(transportName, func(t *testing.T) {
-					runRealSoakOnce(t, carrierName, transportName, roomURL, echoAddr)
+					runRealSoakOnce(t, providerName, transportName, roomURL, echoAddr)
 				})
 			}
 		})
 	}
 }
 
-func runRealSoakOnce(t *testing.T, carrierName, transportName, roomURL, echoAddr string) {
+func runRealSoakOnce(t *testing.T, providerName, transportName, roomURL, echoAddr string) {
 	t.Helper()
 
 	const setupBudget = 90 * time.Second
 
-	t.Logf("[soak] carrier=%s transport=%s duration=%s chunk=%d verify=%t progress=%s",
-		carrierName, transportName, *realSoakDuration, *realSoakChunk,
+	t.Logf("[soak] provider=%s transport=%s duration=%s chunk=%d verify=%t progress=%s",
+		providerName, transportName, *realSoakDuration, *realSoakChunk,
 		*realSoakVerify, *realSoakProgress)
 
-	expectation := realE2ECaseExpectation(carrierName, transportName)
+	expectation := realE2ECaseExpectation(providerName, transportName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *realSoakDuration+setupBudget)
 	defer cancel()
 
-	rt, err := startRealTunnel(ctx, t, carrierName, transportName, roomURL, testClientDeviceID, testClientDeviceID)
+	rt, err := startRealTunnel(ctx, t, providerName, transportName, roomURL, testClientDeviceID, testClientDeviceID)
 	if err != nil {
 		if errors.Is(err, enginebuiltin.ErrAuthFailed) {
 			t.Skipf("auth failed (skip): %v", err)
@@ -143,8 +143,8 @@ func runRealSoakOnce(t *testing.T, carrierName, transportName, roomURL, echoAddr
 		t.Fatalf("pump error: %v", stats.err)
 	}
 
-	t.Logf("[soak] DONE carrier=%s transport=%s elapsed=%s sent=%s recv=%s send=%s/s recv=%s/s",
-		carrierName, transportName,
+	t.Logf("[soak] DONE provider=%s transport=%s elapsed=%s sent=%s recv=%s send=%s/s recv=%s/s",
+		providerName, transportName,
 		stats.elapsed.Round(time.Second),
 		humanBytes(stats.sent),
 		humanBytes(stats.recv),

@@ -29,7 +29,11 @@ func TestParseICEServerKeepsTURN(t *testing.T) {
 		},
 		{
 			name: "turns kept",
-			raw:  map[string]any{keyURLs: []any{"turns:turn.tel.yandex.net:5349"}},
+			raw: map[string]any{
+				keyURLs:      []any{"turns:turn.tel.yandex.net:5349"},
+				"username":   "user",
+				"credential": "pass",
+			},
 			want: []string{"turns:turn.tel.yandex.net:5349"},
 		},
 		{

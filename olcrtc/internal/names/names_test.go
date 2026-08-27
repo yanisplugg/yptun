@@ -1,51 +1,72 @@
 package names
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
-func TestParseEmbedded(t *testing.T) {
-	got := parseEmbedded(" Alice \n\n Bob\n")
+func restoreDictionaries(t *testing.T) {
+	t.Helper()
+
+	saved := dictionaries.Load()
+	t.Cleanup(func() { dictionaries.Store(saved) })
+}
+
+func TestParseLines(t *testing.T) {
+	got := parseLines(" Alice \n\n Bob\n")
 	want := []string{"Alice", "Bob"}
+
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("parseEmbedded() = %#v, want %#v", got, want)
+		t.Fatalf("parseLines() = %#v, want %#v", got, want)
 	}
 }
 
-func TestLoadNames(t *testing.T) {
+func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "names.txt")
+
 	if err := os.WriteFile(path, []byte(" Alice \n\nBob\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	got, err := loadNames(path)
+	got, err := loadFile(path)
 	if err != nil {
-		t.Fatalf("loadNames() error = %v", err)
+		t.Fatalf("loadFile() error = %v", err)
 	}
+
 	want := []string{"Alice", "Bob"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("loadNames() = %#v, want %#v", got, want)
+		t.Fatalf("loadFile() = %#v, want %#v", got, want)
 	}
 }
 
-func TestLoadNameFilesOverridesGlobals(t *testing.T) {
-	oldFirst, oldLast := append([]string(nil), firstNames...), append([]string(nil), lastNames...)
-	t.Cleanup(func() {
-		firstNames = oldFirst
-		lastNames = oldLast
-	})
+func TestLoadFileRejectsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.txt")
+
+	if err := os.WriteFile(path, []byte("\n  \n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := loadFile(path); !errors.Is(err, ErrEmptyDictionary) {
+		t.Fatalf("loadFile() error = %v, want ErrEmptyDictionary", err)
+	}
+}
+
+func TestLoadNameFilesOverridesDictionaries(t *testing.T) {
+	restoreDictionaries(t)
 
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.txt")
 	last := filepath.Join(dir, "last.txt")
+
 	if err := os.WriteFile(first, []byte("Neo\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(first) error = %v", err)
 	}
+
 	if err := os.WriteFile(last, []byte("Anderson\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(last) error = %v", err)
 	}
@@ -59,18 +80,53 @@ func TestLoadNameFilesOverridesGlobals(t *testing.T) {
 	}
 }
 
-func TestGenerateFallsBackWhenNamesEmpty(t *testing.T) {
-	oldFirst, oldLast := append([]string(nil), firstNames...), append([]string(nil), lastNames...)
-	t.Cleanup(func() {
-		firstNames = oldFirst
-		lastNames = oldLast
-	})
+func TestLoadNameFilesReportsMissingFiles(t *testing.T) {
+	restoreDictionaries(t)
 
-	firstNames = nil
-	lastNames = nil
+	err := LoadNameFiles("missing-first", "missing-last")
+	if err == nil {
+		t.Fatal("LoadNameFiles() error = nil, want failure for a missing file")
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("LoadNameFiles() error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestLoadNameFilesKeepsDictionariesOnFailure(t *testing.T) {
+	restoreDictionaries(t)
+
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.txt")
+
+	if err := os.WriteFile(first, []byte("Neo\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(first) error = %v", err)
+	}
+
+	before := dictionaries.Load()
+
+	if err := LoadNameFiles(first, filepath.Join(dir, "missing.txt")); err == nil {
+		t.Fatal("LoadNameFiles() error = nil, want failure")
+	}
+
+	if dictionaries.Load() != before {
+		t.Fatal("LoadNameFiles() replaced the dictionaries despite failing")
+	}
+}
+
+func TestGenerateFallsBackWhenDictionariesEmpty(t *testing.T) {
+	restoreDictionaries(t)
+
+	dictionaries.Store(&pool{})
 
 	if got := Generate(); got != "anonymous user" {
 		t.Fatalf("Generate() = %q, want anonymous user", got)
+	}
+}
+
+func TestEmbeddedDictionariesDiffer(t *testing.T) {
+	if embeddedNames == embeddedSurnames {
+		t.Fatal("embedded surnames are a copy of the given names")
 	}
 }
 
@@ -84,24 +140,5 @@ func TestRandomIndexBounds(t *testing.T) {
 
 	if got := randomIndex(0); got != 0 {
 		t.Fatalf("randomIndex(0) = %d, want 0", got)
-	}
-}
-
-func TestLoadNameFilesIgnoresMissingFiles(t *testing.T) {
-	oldFirst, oldLast := append([]string(nil), firstNames...), append([]string(nil), lastNames...)
-	t.Cleanup(func() {
-		firstNames = oldFirst
-		lastNames = oldLast
-	})
-
-	firstNames = []string{"Kept"}
-	lastNames = []string{"Value"}
-	if err := LoadNameFiles("missing-first", "missing-last"); err != nil {
-		t.Fatalf("LoadNameFiles() error = %v", err)
-	}
-
-	got := Generate()
-	if !strings.Contains(got, "Kept") || !strings.Contains(got, "Value") {
-		t.Fatalf("Generate() = %q, want preserved names", got)
 	}
 }

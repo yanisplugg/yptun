@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
+	"sync"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -19,17 +21,9 @@ import (
 var (
 	// ErrEngineNotFound is returned when a requested engine is not registered.
 	ErrEngineNotFound = errors.New("engine not found")
-	// ErrByteStreamUnsupported is returned when an engine cannot expose a byte stream.
-	ErrByteStreamUnsupported = errors.New("engine does not support byte stream")
-	// ErrVideoTrackUnsupported is returned when an engine cannot exchange video tracks.
-	ErrVideoTrackUnsupported = errors.New("engine does not support video tracks")
+	// ErrInvalidPeerID is returned when an authenticated routing peer ID is malformed.
+	ErrInvalidPeerID = errors.New("invalid peer id")
 )
-
-// Capabilities describes the transport primitives an engine can expose.
-type Capabilities struct {
-	ByteStream bool
-	VideoTrack bool
-}
 
 // Credentials are produced by an auth provider - duplicated here to avoid an
 // import cycle between engine and auth.
@@ -75,7 +69,7 @@ type Session interface {
 	Connect(ctx context.Context) error
 	Send(data []byte) error
 	Close() error
-	SetReconnectCallback(cb func(*webrtc.DataChannel))
+	SetReconnectCallback(cb func())
 	SetShouldReconnect(fn func() bool)
 	SetEndedCallback(cb func(string))
 	WatchConnection(ctx context.Context)
@@ -83,12 +77,10 @@ type Session interface {
 	// SubscriberCanSend reports whether the subscriber PC is connected.
 	// Unlike CanSend, it does not require the publisher PC to be ready.
 	SubscriberCanSend() bool
-	GetSendQueue() chan []byte
 	GetBufferedAmount() uint64
-	Capabilities() Capabilities
 	// Reconnect asks the engine to tear down and re-establish the underlying
 	// SFU connection. Used by upper layers when a liveness probe declares the
-	// carrier dead before the engine has noticed (e.g. silent packet loss on
+	// provider dead before the engine has noticed (e.g. silent packet loss on
 	// a video track). Implementations should be best-effort and idempotent;
 	// reason is logged for diagnostics.
 	Reconnect(reason string)
@@ -107,6 +99,18 @@ type PeerReadySession interface {
 	WaitForPeer(ctx context.Context) error
 }
 
+// PeerIdentity is implemented by engines that expose and confirm routing
+// identities carried inside the encrypted tunnel handshake.
+type PeerIdentity interface {
+	LocalPeerID() string
+	ConfirmPeer(peerID string) error
+}
+
+// PeerResetter is implemented by engines that retain a remote peer binding.
+type PeerResetter interface {
+	ResetPeer()
+}
+
 // VideoTrackCapable is implemented by engines that can exchange video tracks.
 type VideoTrackCapable interface {
 	AddVideoTrack(track webrtc.TrackLocal) error
@@ -116,16 +120,25 @@ type VideoTrackCapable interface {
 // Factory creates a new engine session.
 type Factory func(ctx context.Context, cfg Config) (Session, error)
 
-var registry = make(map[string]Factory) //nolint:gochecknoglobals // package-level state intentional
+//nolint:gochecknoglobals // process-wide engine registry
+var (
+	registryMu sync.RWMutex
+	registry   = make(map[string]Factory)
+)
 
 // Register adds an engine factory to the registry.
 func Register(name string, factory Factory) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+
 	registry[name] = factory
 }
 
 // New creates an engine session by name.
 func New(ctx context.Context, name string, cfg Config) (Session, error) {
+	registryMu.RLock()
 	factory, ok := registry[name]
+	registryMu.RUnlock()
 	if !ok {
 		return nil, ErrEngineNotFound
 	}
@@ -134,9 +147,13 @@ func New(ctx context.Context, name string, cfg Config) (Session, error) {
 
 // Available returns the list of registered engine names.
 func Available() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
 	names := make([]string, 0, len(registry))
 	for name := range registry {
 		names = append(names, name)
 	}
+	slices.Sort(names)
 	return names
 }

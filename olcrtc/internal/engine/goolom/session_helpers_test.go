@@ -3,12 +3,12 @@ package goolom
 import (
 	"testing"
 	"time"
+
+	"github.com/openlibrecommunity/olcrtc/internal/engine"
 )
 
-//nolint:cyclop // table-driven test naturally has many branches
 func TestSessionReconnectAndEndedHelpers(t *testing.T) {
 	s := &Session{
-		reconnectCh:    make(chan struct{}, 2),
 		closeCh:        make(chan struct{}),
 		keepAliveCh:    make(chan struct{}),
 		sessionCloseCh: make(chan struct{}),
@@ -23,32 +23,30 @@ func TestSessionReconnectAndEndedHelpers(t *testing.T) {
 	s.subscriberReady.Store(true)
 	s.publisherReady.Store(true)
 	s.resetMediaState()
-	if s.subscriberReady.Load() || s.publisherReady.Load() || s.subscriberConn == nil || s.publisherConn == nil {
+	if s.subscriberReady.Load() || s.publisherReady.Load() || s.subscriberConnCh() == nil {
 		t.Fatal("resetMediaState() did not reset readiness")
 	}
 
 	s.queueReconnect()
-	select {
-	case <-s.reconnectCh:
-	default:
+	if !s.Drain() {
 		t.Fatal("queueReconnect() did not enqueue")
 	}
 
 	s.SetShouldReconnect(func() bool { return false })
 	s.queueReconnect()
-	select {
-	case <-s.reconnectCh:
+	if s.Drain() {
 		t.Fatal("queueReconnect() enqueued despite policy=false")
-	default:
 	}
 
-	s.reconnectCh <- struct{}{}
-	s.reconnectCh <- struct{}{}
-	s.drainReconnectQueue()
-	select {
-	case <-s.reconnectCh:
-		t.Fatal("drainReconnectQueue() left queued item")
-	default:
+	s.SetShouldReconnect(nil)
+	if got := s.Request(false, false); got != engine.ReconnectQueued {
+		t.Fatalf("first reconnect request = %v, want queued", got)
+	}
+	if got := s.Request(false, false); got != engine.ReconnectCoalesced {
+		t.Fatalf("second reconnect request = %v, want coalesced", got)
+	}
+	if !s.Drain() || s.Drain() {
+		t.Fatal("Drain() did not consume exactly one queued request")
 	}
 
 	s.telemetryActive.Store(true)

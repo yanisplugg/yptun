@@ -1,7 +1,3 @@
-// Package vp8channel provides byte transport over VP8 video frames using KCP.
-/*
-ЯНДЕКС ПИДОРАС СОСИ МОЙ ЖИРНЫЙ ХУЙ БЛЯТЬ
-*/
 package vp8channel
 
 import (
@@ -9,12 +5,15 @@ import (
 	"hash/crc32"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/openlibrecommunity/olcrtc/internal/logger"
 )
 
 // wireCRCLen is the size of the CRC32 trailer appended to every KCP packet
 // on the wire. KCP is handed to kcp-go with block=nil (no FEC, no checksum),
-// so the vp8channel carrier - a video stream an SFU may transcode or reorder -
+// so the vp8channel provider - a video stream an SFU may transcode or reorder -
 // has no integrity protection at all. A real UDP datagram carries a checksum
 // and is dropped on mismatch; without an equivalent, a single flipped byte
 // rides through KCP as valid in-order data and corrupts the encrypted muxconn
@@ -22,6 +21,9 @@ import (
 // (issue #109). The CRC restores UDP-equivalent semantics: a corrupted packet
 // is dropped so KCP retransmits it.
 const wireCRCLen = 4
+
+// warnInterval rate-limits the drop/truncation warnings.
+const warnInterval = 5 * time.Second
 
 // crcTable uses the Castagnoli polynomial for hardware-accelerated checksums
 // (SSE4.2 on amd64) on this throughput hot path.
@@ -32,7 +34,7 @@ func fakeUDPAddr() *net.UDPAddr {
 }
 
 // kcpConn is a net.PacketConn implementation that bridges kcp-go on top of
-// the vp8channel byte-message carrier.
+// the vp8channel byte-message provider.
 //
 //	kcp.UDPSession  ──Write──▶  WriteTo  ──▶ outbound chan  ──▶ VP8 wire
 //	kcp.UDPSession  ◀──Read──   ReadFrom  ◀── inbound (deliver) ◀── VP8 wire
@@ -40,8 +42,11 @@ func fakeUDPAddr() *net.UDPAddr {
 // All packet boundaries are preserved by the underlying transport, which is
 // exactly what KCP expects from a UDP-like conn.
 type kcpConn struct {
-	out       chan<- []byte
-	in        chan []byte
+	out       chan<- *packetBuffer
+	in        chan *packetBuffer
+	inPools   [4]sync.Pool
+	outPools  [4]sync.Pool
+	addr      *net.UDPAddr
 	closed    chan struct{}
 	closeOnce sync.Once
 
@@ -54,9 +59,66 @@ type kcpConn struct {
 	hdrMu    sync.RWMutex
 	epochHdr [epochHdrLen]byte
 
+	// dropped counts packets discarded because the inbound queue was full,
+	// corrupt counts packets rejected by the CRC check, and truncated counts
+	// reads whose destination buffer was too small for the packet. All three
+	// are otherwise-invisible failure modes, so they are reported through
+	// warnRateLimitedf.
+	dropped      atomic.Uint64
+	corrupt      atomic.Uint64
+	truncated    atomic.Uint64
+	lastWarnNano atomic.Int64
+
 	mu        sync.Mutex
 	rDeadline time.Time
 	wDeadline time.Time
+}
+
+type packetBuffer struct {
+	data []byte
+	pool *sync.Pool
+}
+
+func packetBufferClass(size int) (int, int, bool) {
+	switch {
+	case size <= 256:
+		return 0, 256, true
+	case size <= 512:
+		return 1, 512, true
+	case size <= 1024:
+		return 2, 1024, true
+	case size <= 1536:
+		return 3, 1536, true
+	default:
+		return 0, size, false
+	}
+}
+
+func acquirePacketBuffer(pools *[4]sync.Pool, size int) *packetBuffer {
+	class, capacity, pooled := packetBufferClass(size)
+	if !pooled {
+		return &packetBuffer{data: make([]byte, size)}
+	}
+	pool := &pools[class]
+	if value := pool.Get(); value != nil {
+		packet, ok := value.(*packetBuffer)
+		if ok {
+			packet.data = packet.data[:size]
+			packet.pool = pool
+			return packet
+		}
+	}
+	return &packetBuffer{data: make([]byte, size, capacity), pool: pool}
+}
+
+func (p *packetBuffer) release() {
+	if p == nil || p.pool == nil {
+		return
+	}
+	pool := p.pool
+	p.pool = nil
+	p.data = p.data[:0]
+	pool.Put(p)
 }
 
 // setHeader re-points the outgoing frame header (used to update the dst epoch
@@ -67,39 +129,65 @@ func (c *kcpConn) setHeader(hdr [epochHdrLen]byte) {
 	c.hdrMu.Unlock()
 }
 
-func newKCPConn(out chan<- []byte, inboundCap int, epochHdr [epochHdrLen]byte) *kcpConn {
+func newKCPConn(out chan<- *packetBuffer, inboundCap int, epochHdr [epochHdrLen]byte) *kcpConn {
 	if inboundCap <= 0 {
 		inboundCap = 1024
 	}
-	return &kcpConn{
+	conn := &kcpConn{
 		out:      out,
-		in:       make(chan []byte, inboundCap),
+		in:       make(chan *packetBuffer, inboundCap),
+		addr:     fakeUDPAddr(),
 		closed:   make(chan struct{}),
 		epochHdr: epochHdr,
 	}
+	return conn
 }
 
 // deliver hands an incoming wire payload to the KCP read loop. The trailing
-// CRC32 is verified and stripped first: a mismatch means the carrier corrupted
+// CRC32 is verified and stripped first: a mismatch means the provider corrupted
 // the packet, so we drop it (KCP retransmits via SACK) instead of feeding
 // garbage into KCP and, ultimately, the muxconn AEAD (issue #109). Drops on
-// overflow are intentional - KCP will detect the loss via SACK and retransmit.
+// overflow are intentional - KCP will detect the loss via SACK and retransmit -
+// but they are counted and reported, because a queue that keeps overflowing is
+// the difference between "KCP recovered a packet" and "the reader cannot keep
+// up and throughput is quietly capped".
 func (c *kcpConn) deliver(payload []byte) {
 	if len(payload) < wireCRCLen {
+		c.corrupt.Add(1)
 		return
 	}
 	body := payload[:len(payload)-wireCRCLen]
 	want := binary.BigEndian.Uint32(payload[len(payload)-wireCRCLen:])
 	if crc32.Checksum(body, crcTable) != want {
+		c.corrupt.Add(1)
 		return
 	}
-	cp := make([]byte, len(body))
-	copy(cp, body)
+	packet := acquirePacketBuffer(&c.inPools, len(body))
+	copy(packet.data, body)
 	select {
-	case c.in <- cp:
+	case c.in <- packet:
 	case <-c.closed:
+		packet.release()
 	default:
+		packet.release()
+		c.warnRateLimitedf("inbound queue full, dropped %d packet(s) (corrupt=%d)",
+			c.dropped.Add(1), c.corrupt.Load())
 	}
+}
+
+// warnRateLimitedf emits at most one warning per warnInterval so a sustained
+// drop storm cannot itself become the problem.
+func (c *kcpConn) warnRateLimitedf(format string, args ...any) {
+	now := time.Now().UnixNano()
+	last := c.lastWarnNano.Load()
+	if now-last < int64(warnInterval) {
+		return
+	}
+	if !c.lastWarnNano.CompareAndSwap(last, now) {
+		return
+	}
+
+	logger.Warnf("vp8channel: "+format, args...)
 }
 
 func (c *kcpConn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -119,9 +207,18 @@ func (c *kcpConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	}
 
 	select {
-	case msg := <-c.in:
-		n := copy(p, msg)
-		return n, fakeUDPAddr(), nil
+	case packet := <-c.in:
+		n := copy(p, packet.data)
+		packetLen := len(packet.data)
+		packet.release()
+		if n < packetLen {
+			// KCP always reads with a full-MTU buffer, so this means the
+			// packet exceeded the MTU: the tail is lost and KCP will see a
+			// malformed segment. Never silently.
+			c.warnRateLimitedf("read buffer too small: %d of %d bytes, %d truncated read(s)",
+				n, packetLen, c.truncated.Add(1))
+		}
+		return n, c.addr, nil
 	case <-c.closed:
 		return 0, nil, net.ErrClosed
 	case <-timerC:
@@ -132,7 +229,8 @@ func (c *kcpConn) ReadFrom(p []byte) (int, net.Addr, error) {
 func (c *kcpConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 	// Layout: [epoch header][KCP packet p][CRC32(p)]. The receiver strips the
 	// epoch header before deliver(), which then verifies and strips the CRC.
-	buf := make([]byte, epochHdrLen+len(p)+wireCRCLen)
+	packet := acquirePacketBuffer(&c.outPools, epochHdrLen+len(p)+wireCRCLen)
+	buf := packet.data
 	c.hdrMu.RLock()
 	copy(buf, c.epochHdr[:])
 	c.hdrMu.RUnlock()
@@ -155,11 +253,13 @@ func (c *kcpConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 	}
 
 	select {
-	case c.out <- buf:
+	case c.out <- packet:
 		return len(p), nil
 	case <-c.closed:
+		packet.release()
 		return 0, net.ErrClosed
 	case <-timerC:
+		packet.release()
 		return 0, TimeoutError{}
 	}
 }
@@ -169,7 +269,7 @@ func (c *kcpConn) Close() error {
 	return nil
 }
 
-func (c *kcpConn) LocalAddr() net.Addr { return fakeUDPAddr() }
+func (c *kcpConn) LocalAddr() net.Addr { return c.addr }
 
 func (c *kcpConn) SetDeadline(t time.Time) error {
 	_ = c.SetReadDeadline(t)
@@ -193,6 +293,12 @@ func (c *kcpConn) SetWriteDeadline(t time.Time) error {
 
 // TimeoutError is a net.Error indicating a deadline exceeded.
 type TimeoutError struct{}
+
+// kcp-go and everything else on this path classify read/write failures with
+// errors.As(err, &net.Error). That interface still lists the deprecated
+// Temporary method, so dropping it would silently stop TimeoutError being
+// recognised as a timeout at all.
+var _ net.Error = TimeoutError{}
 
 func (TimeoutError) Error() string { return "i/o timeout" }
 

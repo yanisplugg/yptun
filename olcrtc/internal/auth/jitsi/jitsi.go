@@ -41,7 +41,7 @@ type Provider struct{}
 // Engine reports which engine consumes credentials from this auth provider.
 func (Provider) Engine() string { return "jitsi" }
 
-const defaultServiceURL = "https://meet.small-dm.ru"
+const defaultServiceURL = "https://m.catonmoon.com"
 
 // DefaultServiceURL returns the default Jitsi Meet service URL used by config
 // defaults and interactive helpers. Users should verify which server is
@@ -90,8 +90,4 @@ func parseRoomURL(raw string) (string, string, error) {
 		return "", "", fmt.Errorf("%w: %q", ErrInvalidRoomURL, raw)
 	}
 	return host, room, nil
-}
-
-func init() { //nolint:gochecknoinits // auth registration is the canonical Go pattern for plugins
-	auth.Register("jitsi", Provider{})
 }

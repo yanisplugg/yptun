@@ -8,13 +8,16 @@ import (
 
 const errorResult = C.longlong(-1)
 
+//nolint:gochecknoglobals // c-shared ABI exports cannot carry a Go Runtime handle
+var defaultRuntime = mobile.New()
+
 // Ping starts a short-lived olcRTC client, waits for its SOCKS listener,
 // performs an HTTP ping through it, and returns latency in milliseconds.
 // It returns -1 when arguments are invalid, startup fails, or the ping fails.
 //
 //export Ping
 func Ping(
-	carrierName *C.char,
+	providerName *C.char,
 	transportName *C.char,
 	roomID *C.char,
 	clientID *C.char,
@@ -25,8 +28,8 @@ func Ping(
 	vp8FPS C.longlong,
 	vp8BatchSize C.longlong,
 ) C.longlong {
-	result, err := mobile.Ping(
-		goString(carrierName),
+	result, err := defaultRuntime.Ping(
+		goString(providerName),
 		goString(transportName),
 		goString(roomID),
 		goString(clientID),
@@ -48,7 +51,7 @@ func Ping(
 //
 //export Check
 func Check(
-	carrierName *C.char,
+	providerName *C.char,
 	transportName *C.char,
 	roomID *C.char,
 	clientID *C.char,
@@ -58,8 +61,8 @@ func Check(
 	vp8FPS C.longlong,
 	vp8BatchSize C.longlong,
 ) C.longlong {
-	result, err := mobile.Check(
-		goString(carrierName),
+	result, err := defaultRuntime.Check(
+		goString(providerName),
 		goString(transportName),
 		goString(roomID),
 		goString(clientID),

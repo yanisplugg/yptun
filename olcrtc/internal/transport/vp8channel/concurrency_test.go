@@ -42,8 +42,8 @@ func TestWriteSampleLockedSerializesConcurrentWriters(t *testing.T) {
 	}
 
 	const (
-		writers     = 16
-		perWriter   = 64
+		writers   = 16
+		perWriter = 64
 	)
 	var wg sync.WaitGroup
 	wg.Add(writers)

@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/rtp"
+	"github.com/pion/webrtc/v4"
+
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
-	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4"
 )
 
 var errVP8UnitBoom = errors.New("boom")
@@ -111,28 +112,15 @@ func (s *fakeVideoStream) SetTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.R
 
 // fakeEngineSession adapts fakeVideoStream so it satisfies engine.Session and
 // engine.VideoTrackCapable, the two interfaces the vp8channel transport
-// looks up after the carrier-layer collapse.
+// looks up after the provider-layer collapse.
 type fakeEngineSession struct {
-	stream  *fakeVideoStream
-	noVideo bool
+	stream *fakeVideoStream
 }
 
-func (s *fakeEngineSession) Capabilities() engine.Capabilities {
-	if s.noVideo {
-		return engine.Capabilities{}
-	}
-	return engine.Capabilities{VideoTrack: true}
-}
 func (s *fakeEngineSession) Connect(ctx context.Context) error { return s.stream.Connect(ctx) }
 func (s *fakeEngineSession) Send([]byte) error                 { return nil }
 func (s *fakeEngineSession) Close() error                      { return s.stream.Close() }
-func (s *fakeEngineSession) SetReconnectCallback(cb func(*webrtc.DataChannel)) {
-	s.stream.SetReconnectCallback(func() {
-		if cb != nil {
-			cb(nil)
-		}
-	})
-}
+func (s *fakeEngineSession) SetReconnectCallback(cb func())    { s.stream.SetReconnectCallback(cb) }
 func (s *fakeEngineSession) SetShouldReconnect(fn func() bool) { s.stream.SetShouldReconnect(fn) }
 func (s *fakeEngineSession) SetEndedCallback(cb func(string))  { s.stream.SetEndedCallback(cb) }
 func (s *fakeEngineSession) WatchConnection(ctx context.Context) {
@@ -140,7 +128,6 @@ func (s *fakeEngineSession) WatchConnection(ctx context.Context) {
 }
 func (s *fakeEngineSession) CanSend() bool                           { return s.stream.CanSend() }
 func (s *fakeEngineSession) SubscriberCanSend() bool                 { return s.stream.SubscriberCanSend() }
-func (s *fakeEngineSession) GetSendQueue() chan []byte               { return nil }
 func (s *fakeEngineSession) GetBufferedAmount() uint64               { return 0 }
 func (s *fakeEngineSession) Reconnect(string)                        {}
 func (s *fakeEngineSession) AddVideoTrack(t webrtc.TrackLocal) error { return s.stream.AddTrack(t) }
@@ -148,7 +135,10 @@ func (s *fakeEngineSession) SetVideoTrackHandler(cb func(*webrtc.TrackRemote, *w
 	s.stream.SetTrackHandler(cb)
 }
 
-//nolint:cyclop // table-driven test naturally has many branches
+type noVideoEngineSession struct {
+	engine.Session
+}
+
 func TestNewConnectSendCallbacksFeaturesAndClose(t *testing.T) {
 	stream := &fakeVideoStream{canSend: true}
 	name := "vp8channel-unit-new"
@@ -157,7 +147,7 @@ func TestNewConnectSendCallbacksFeaturesAndClose(t *testing.T) {
 	})
 
 	trIface, err := New(context.Background(), transport.Config{
-		Carrier:  name,
+		Provider: name,
 		DeviceID: "client",
 		Options:  Options{FPS: 30, BatchSize: 1},
 	})
@@ -174,7 +164,7 @@ func TestNewConnectSendCallbacksFeaturesAndClose(t *testing.T) {
 	if err := tr.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	if tr.kcp == nil || !tr.writerUp.Load() {
+	if tr.data.get() == nil || !tr.writerUp.Load() {
 		t.Fatal("Connect() should eagerly initialize kcp and writer")
 	}
 	tr.SetReconnectCallback(func() {})
@@ -192,22 +182,22 @@ func TestNewConnectSendCallbacksFeaturesAndClose(t *testing.T) {
 	binary.BigEndian.PutUint32(firstFrame[srcOff:dstOff], peerEpoch)
 	binary.BigEndian.PutUint32(firstFrame[dstOff:crcOff], 0)
 	binary.BigEndian.PutUint32(firstFrame[crcOff:epochHdrLen], epochCRC(tr.bindingToken, peerEpoch, 0))
-	copy(firstFrame[epochHdrLen:], []byte("data"))
+	copy(firstFrame[epochHdrLen:], "data")
 	tr.handleIncomingFrame(firstFrame)
-	if tr.kcp == nil {
+	if tr.data.get() == nil {
 		t.Fatal("kcp not initialized after first peer frame")
 	}
 
 	if !tr.CanSend() {
 		t.Fatal("CanSend() = false, want true")
 	}
-	if features := tr.Features(); !features.Reliable || !features.Ordered || !features.MessageOriented || features.MaxPayloadSize == 0 { //nolint:lll // long test description
+	if features := tr.Features(); features.MaxPayloadSize == 0 {
 		t.Fatalf("Features() = %+v", features)
 	}
 	if err := tr.Send([]byte("payload")); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
-	tr.drainOutbound()
+	tr.data.drain()
 	if err := tr.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -220,25 +210,25 @@ func TestNewErrorPaths(t *testing.T) {
 	enginebuiltin.Register("vp8channel-create-fails", func(context.Context, enginebuiltin.Config) (engine.Session, error) {
 		return nil, errVP8UnitBoom
 	})
-	_, err := New(context.Background(), transport.Config{Carrier: "vp8channel-create-fails"})
+	_, err := New(context.Background(), transport.Config{Provider: "vp8channel-create-fails"})
 	if err == nil || err.Error() != "open engine session: boom" {
 		t.Fatalf("New() error = %v", err)
 	}
 
 	enginebuiltin.Register("vp8channel-no-video", func(context.Context, enginebuiltin.Config) (engine.Session, error) {
-		return &fakeEngineSession{stream: &fakeVideoStream{}, noVideo: true}, nil
+		return &noVideoEngineSession{Session: &fakeEngineSession{stream: &fakeVideoStream{}}}, nil
 	})
-	_, err = New(context.Background(), transport.Config{Carrier: "vp8channel-no-video"})
+	_, err = New(context.Background(), transport.Config{Provider: "vp8channel-no-video"})
 	if !errors.Is(err, ErrVideoTrackUnsupported) {
 		t.Fatalf("New() error = %v, want %v", err, ErrVideoTrackUnsupported)
 	}
 }
 
-//nolint:cyclop // table-driven test naturally has many branches
 func TestEpochHeaderTokenAndOutboundCapacity(t *testing.T) {
 	tr := &streamTransport{
 		stream:       &fakeVideoStream{canSend: true},
-		outbound:     make(chan []byte, 10),
+		data:         newKCPPlane(10, nil),
+		control:      newKCPPlane(1, nil),
 		closeCh:      make(chan struct{}),
 		writerDone:   make(chan struct{}),
 		bindingToken: bindingToken("client"),
@@ -257,22 +247,20 @@ func TestEpochHeaderTokenAndOutboundCapacity(t *testing.T) {
 		t.Fatal("bindingToken/randomEpoch returned zero")
 	}
 
-	rt, err := startKCP(tr.outbound, nil, tr.epochHeader())
+	rt, err := startKCP(tr.data.out, nil, tr.epochHeader())
 	if err != nil {
 		t.Fatalf("startKCP: %v", err)
 	}
 	defer rt.close()
-	tr.kcpMu.Lock()
-	tr.kcp = rt
-	tr.kcpMu.Unlock()
+	tr.data.set(rt)
 
-	for len(tr.outbound) < cap(tr.outbound)*canSendHighWatermark/100 {
-		tr.outbound <- []byte("queued")
+	for len(tr.data.out) < cap(tr.data.out)*canSendHighWatermark/100 {
+		tr.data.out <- &packetBuffer{data: []byte("queued")}
 	}
 	if tr.CanSend() {
 		t.Fatal("CanSend() = true at high watermark")
 	}
-	tr.drainOutbound()
+	tr.data.drain()
 	if !tr.CanSend() {
 		t.Fatal("CanSend() = false after drain")
 	}
@@ -285,7 +273,8 @@ func TestEpochHeaderTokenAndOutboundCapacity(t *testing.T) {
 func TestResetPeerRestartsKCPAndDrainsOutbound(t *testing.T) {
 	tr := &streamTransport{
 		stream:       &fakeVideoStream{canSend: true},
-		outbound:     make(chan []byte, 10),
+		data:         newKCPPlane(10, nil),
+		control:      newKCPPlane(10, nil),
 		closeCh:      make(chan struct{}),
 		writerDone:   make(chan struct{}),
 		bindingToken: bindingToken("client"),
@@ -295,26 +284,22 @@ func TestResetPeerRestartsKCPAndDrainsOutbound(t *testing.T) {
 		_ = tr.Close()
 	}()
 
-	rt, err := startKCP(tr.outbound, nil, tr.epochHeader())
+	rt, err := startKCP(tr.data.out, nil, tr.epochHeader())
 	if err != nil {
 		t.Fatalf("startKCP: %v", err)
 	}
-	tr.kcpMu.Lock()
-	tr.kcp = rt
-	tr.kcpMu.Unlock()
-	tr.outbound <- []byte("stale")
+	tr.data.set(rt)
+	tr.data.out <- &packetBuffer{data: []byte("stale")}
 	oldEpoch := tr.localEpoch
 
 	tr.ResetPeer()
 
-	tr.kcpMu.RLock()
-	got := tr.kcp
-	tr.kcpMu.RUnlock()
+	got := tr.data.get()
 	if got == nil || got == rt {
 		t.Fatalf("ResetPeer kcp = %p, want fresh non-nil runtime distinct from %p", got, rt)
 	}
-	if len(tr.outbound) != 0 {
-		t.Fatalf("ResetPeer left %d outbound frame(s), want 0", len(tr.outbound))
+	if len(tr.data.out) != 0 {
+		t.Fatalf("ResetPeer left %d outbound frame(s), want 0", len(tr.data.out))
 	}
 	if tr.localEpoch == oldEpoch {
 		t.Fatalf("ResetPeer localEpoch = %#x, want different epoch", tr.localEpoch)
@@ -339,11 +324,11 @@ func TestVP8FrameStateAssemblesAndRejectsCorruptFrames(t *testing.T) {
 	}
 
 	state = vp8FrameState{}
-	if got := state.processRTPPacket(&rtp.Packet{
+	if partial := state.processRTPPacket(&rtp.Packet{
 		Header:  rtp.Header{SequenceNumber: 20},
 		Payload: append([]byte{0x10}, frame[:4]...),
-	}); got != nil {
-		t.Fatalf("partial frame = %x, want nil", got)
+	}); partial != nil {
+		t.Fatalf("partial frame = %x, want nil", partial)
 	}
 	got = state.processRTPPacket(&rtp.Packet{
 		Header:  rtp.Header{SequenceNumber: 21, Marker: true},
@@ -358,28 +343,28 @@ func TestVP8FrameStateAssemblesAndRejectsCorruptFrames(t *testing.T) {
 		Header:  rtp.Header{SequenceNumber: 30},
 		Payload: append([]byte{0x10}, frame[:4]...),
 	})
-	if got := state.processRTPPacket(&rtp.Packet{
+	if gapped := state.processRTPPacket(&rtp.Packet{
 		Header:  rtp.Header{SequenceNumber: 32, Marker: true},
 		Payload: append([]byte{0x00}, frame[4:]...),
-	}); got != nil {
-		t.Fatalf("frame after sequence gap = %x, want nil", got)
+	}); gapped != nil {
+		t.Fatalf("frame after sequence gap = %x, want nil", gapped)
 	}
 
 	state = vp8FrameState{}
-	if got := state.processRTPPacket(&rtp.Packet{
+	if bad := state.processRTPPacket(&rtp.Packet{
 		Header:  rtp.Header{SequenceNumber: 40, Marker: true},
 		Payload: []byte{},
-	}); got != nil {
-		t.Fatalf("bad vp8 payload = %x, want nil", got)
+	}); bad != nil {
+		t.Fatalf("bad vp8 payload = %x, want nil", bad)
 	}
 }
 
-//nolint:cyclop // table-driven test naturally has many branches
 func TestHandleIncomingFrameEpochFilteringAndReconnect(t *testing.T) {
 	called := 0
 	tr := &streamTransport{
 		stream:       &fakeVideoStream{canSend: true},
-		outbound:     make(chan []byte, 16),
+		data:         newKCPPlane(16, nil),
+		control:      newKCPPlane(16, nil),
 		closeCh:      make(chan struct{}),
 		writerDone:   make(chan struct{}),
 		bindingToken: bindingToken("client"),
@@ -407,10 +392,14 @@ func TestHandleIncomingFrameEpochFilteringAndReconnect(t *testing.T) {
 		t.Fatal("filtered frames changed peer state")
 	}
 
-	// Keepalive (nil payload) latches peer immediately.
+	// Neither a keepalive nor a non-empty broadcast may bind the peer.
 	tr.handleIncomingFrame(mkFrame(tr.bindingToken, 1, nil))
-	if !tr.peerConfirmed.Load() {
-		t.Fatal("first frame should confirm peer")
+	tr.handleIncomingFrame(mkFrame(tr.bindingToken, 2, []byte("foreign-data")))
+	if tr.peerConfirmed.Load() || tr.peerEpoch.Load() != 0 {
+		t.Fatal("unauthenticated frames changed peer state")
+	}
+	if err := tr.ConfirmPeer("00000001"); err != nil {
+		t.Fatalf("ConfirmPeer() error = %v", err)
 	}
 	if tr.peerEpoch.Load() != 1 {
 		t.Fatalf("peer epoch not stored: got %d want 1", tr.peerEpoch.Load())
@@ -426,21 +415,40 @@ func TestHandleIncomingFrameEpochFilteringAndReconnect(t *testing.T) {
 		t.Fatal("SetReconnectCallback did not install stream callback")
 	}
 	stream.reconnect()
-	if !reconnected || tr.kcp == nil {
-		t.Fatalf("stream reconnect did not reset/callback: reconnected=%v kcp=%v", reconnected, tr.kcp)
+	if !reconnected || tr.data.get() == nil {
+		t.Fatalf("stream reconnect did not reset/callback: reconnected=%v kcp=%v", reconnected, tr.data.get())
 	}
 	reconnected = false
-	// After reconnect, peerConfirmed is reset so the next frame re-latches
-	// the peer epoch. This allows the server to restart with a new epoch.
+	// After reconnect, only the next authenticated welcome can bind a peer.
 	if tr.peerConfirmed.Load() {
 		t.Fatal("reconnect should reset peerConfirmed")
 	}
 	tr.handleIncomingFrame(mkFrame(tr.bindingToken, 2, []byte("new-peer-after-reconnect")))
-	if !tr.peerConfirmed.Load() {
-		t.Fatal("frame after reconnect should re-latch peer")
+	if tr.peerConfirmed.Load() || tr.peerEpoch.Load() != 0 {
+		t.Fatal("frame after reconnect bound an unauthenticated peer")
+	}
+	if err := tr.ConfirmPeer("00000002"); err != nil {
+		t.Fatalf("ConfirmPeer() after reconnect error = %v", err)
 	}
 	if tr.peerEpoch.Load() != 2 {
 		t.Fatalf("peer epoch not re-latched: got %d want 2", tr.peerEpoch.Load())
+	}
+}
+
+func TestClientsCannotBindEachOtherBeforeServerWelcome(t *testing.T) {
+	token := bindingToken("shared-room")
+	first := &streamTransport{bindingToken: token, localEpoch: 0x101}
+	second := &streamTransport{bindingToken: token, localEpoch: 0x202}
+
+	first.handleIncomingFrame(mkPeerFrame(token, second.localEpochValue(), nil))
+	first.handleIncomingFrame(mkPeerFrame(token, second.localEpochValue(), []byte("client-two")))
+	second.handleIncomingFrame(mkPeerFrame(token, first.localEpochValue(), nil))
+	second.handleIncomingFrame(mkPeerFrame(token, first.localEpochValue(), []byte("client-one")))
+
+	for name, client := range map[string]*streamTransport{"first": first, "second": second} {
+		if client.peerConfirmed.Load() || client.peerEpoch.Load() != 0 {
+			t.Fatalf("%s client bound to another unauthenticated client", name)
+		}
 	}
 }
 
@@ -457,19 +465,18 @@ func mkPeerFrame(token, epoch uint32, payload []byte) []byte {
 	return frame
 }
 
-// ai-generated: added tr.NotifyLinkHealth(true) call + updated comment
 // below, peer-restart-corroboration PR (rest of the test predates it).
-//
-// TestPeerRestartRebuildsCarrierAfterGrace guards issue #105: when the latched
+// TestPeerRestartRebuildsProviderAfterGrace guards issue #105: when the latched
 // peer goes silent past peerRestartGrace and a frame from a fresh epoch
-// arrives, the transport rebuilds the carrier (stream.Reconnect) so the client
+// arrives, the transport rebuilds the provider (stream.Reconnect) so the client
 // re-handshakes against the restarted server instead of stalling for the full
 // control-liveness window.
-func TestPeerRestartRebuildsCarrierAfterGrace(t *testing.T) {
+func TestPeerRestartRebuildsProviderAfterGrace(t *testing.T) {
 	stream := &fakeVideoStream{canSend: true}
 	tr := &streamTransport{
 		stream:           stream,
-		outbound:         make(chan []byte, 16),
+		data:             newKCPPlane(16, nil),
+		control:          newKCPPlane(16, nil),
 		closeCh:          make(chan struct{}),
 		writerDone:       make(chan struct{}),
 		bindingToken:     bindingToken("client"),
@@ -478,21 +485,22 @@ func TestPeerRestartRebuildsCarrierAfterGrace(t *testing.T) {
 	}
 	defer func() { _ = tr.Close() }()
 
-	// Latch the original server epoch.
-	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, 0x200, []byte("hello")))
+	if err := tr.ConfirmPeer("00000200"); err != nil {
+		t.Fatalf("ConfirmPeer() error = %v", err)
+	}
 	if tr.peerEpoch.Load() != 0x200 {
 		t.Fatalf("peer epoch = 0x%08x, want 0x200", tr.peerEpoch.Load())
 	}
 
-	// A different epoch inside the grace window must NOT rebuild the carrier.
+	// A different epoch inside the grace window must NOT rebuild the provider.
 	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, 0x300, []byte("early")))
 	time.Sleep(10 * time.Millisecond)
 	if got := stream.reconnects.Load(); got != 0 {
-		t.Fatalf("carrier rebuilt inside grace window: got %d, want 0", got)
+		t.Fatalf("provider rebuilt inside grace window: got %d, want 0", got)
 	}
 
 	// After the latched peer has been silent past the grace window, a frame
-	// from the new epoch is read as a restart and rebuilds the carrier - but
+	// from the new epoch is read as a restart and rebuilds the provider - but
 	// only once the control-plane liveness loop has corroborated trouble.
 	time.Sleep(15 * time.Millisecond)
 	tr.NotifyLinkHealth(true)
@@ -502,23 +510,22 @@ func TestPeerRestartRebuildsCarrierAfterGrace(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if got := stream.reconnects.Load(); got != 1 {
-		t.Fatalf("carrier rebuilds after grace = %d, want 1", got)
+		t.Fatalf("provider rebuilds after grace = %d, want 1", got)
 	}
 	if !tr.peerRestarting.Load() {
 		t.Fatal("peerRestarting flag not set after restart detection")
 	}
 }
 
-// ai-generated: added tr.NotifyLinkHealth(true) call below,
 // peer-restart-corroboration PR (rest of the test predates it).
-//
 // TestPeerRestartRebuildsOnlyOnce ensures repeated frames from the new epoch do
 // not trigger a rebuild storm before the latch is reset.
 func TestPeerRestartRebuildsOnlyOnce(t *testing.T) {
 	stream := &fakeVideoStream{canSend: true}
 	tr := &streamTransport{
 		stream:           stream,
-		outbound:         make(chan []byte, 16),
+		data:             newKCPPlane(16, nil),
+		control:          newKCPPlane(16, nil),
 		closeCh:          make(chan struct{}),
 		writerDone:       make(chan struct{}),
 		bindingToken:     bindingToken("client"),
@@ -527,7 +534,9 @@ func TestPeerRestartRebuildsOnlyOnce(t *testing.T) {
 	}
 	defer func() { _ = tr.Close() }()
 
-	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, 0x200, []byte("hello")))
+	if err := tr.ConfirmPeer("00000200"); err != nil {
+		t.Fatalf("ConfirmPeer() error = %v", err)
+	}
 	time.Sleep(15 * time.Millisecond)
 	tr.NotifyLinkHealth(true)
 	for range 5 {
@@ -535,13 +544,11 @@ func TestPeerRestartRebuildsOnlyOnce(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 	if got := stream.reconnects.Load(); got != 1 {
-		t.Fatalf("carrier rebuilt %d times, want exactly 1", got)
+		t.Fatalf("provider rebuilt %d times, want exactly 1", got)
 	}
 }
 
-// ai-generated: added the linkUnhealthy default-false assertion below,
 // peer-restart-corroboration PR (rest of the test predates it).
-//
 // TestLivePeerKeepsLatchFresh confirms a peer that keeps sending frames within
 // the grace window never trips the restart watchdog, even if a stray frame from
 // another epoch shows up (unrelated room participant).
@@ -549,7 +556,8 @@ func TestLivePeerKeepsLatchFresh(t *testing.T) {
 	stream := &fakeVideoStream{canSend: true}
 	tr := &streamTransport{
 		stream:           stream,
-		outbound:         make(chan []byte, 16),
+		data:             newKCPPlane(16, nil),
+		control:          newKCPPlane(16, nil),
 		closeCh:          make(chan struct{}),
 		writerDone:       make(chan struct{}),
 		bindingToken:     bindingToken("client"),
@@ -562,7 +570,9 @@ func TestLivePeerKeepsLatchFresh(t *testing.T) {
 		t.Fatal("linkUnhealthy should default to false")
 	}
 
-	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, 0x200, nil))
+	if err := tr.ConfirmPeer("00000200"); err != nil {
+		t.Fatalf("ConfirmPeer() error = %v", err)
+	}
 	// Keep the latched peer alive with frequent keepalives while a foreign
 	// epoch repeatedly shows up. The latch stays fresh, so no rebuild fires.
 	for range 8 {
@@ -571,22 +581,21 @@ func TestLivePeerKeepsLatchFresh(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if got := stream.reconnects.Load(); got != 0 {
-		t.Fatalf("carrier rebuilt %d times for a live peer, want 0", got)
+		t.Fatalf("provider rebuilt %d times for a live peer, want 0", got)
 	}
 }
 
-// ai-generated: new test, peer-restart-corroboration PR.
-//
 // TestPeerRestartSuppressedWhenControlHealthy reproduces the multi-client SFU
 // scenario directly: a second, unrelated room participant's epoch shows up
 // after the latched peer's silence exceeds peerRestartGrace, but the client's
 // own control-plane liveness never reported trouble. The heuristic must not
-// tear down a perfectly healthy carrier over unrelated room noise.
+// tear down a perfectly healthy provider over unrelated room noise.
 func TestPeerRestartSuppressedWhenControlHealthy(t *testing.T) {
 	stream := &fakeVideoStream{canSend: true}
 	tr := &streamTransport{
 		stream:           stream,
-		outbound:         make(chan []byte, 16),
+		data:             newKCPPlane(16, nil),
+		control:          newKCPPlane(16, nil),
 		closeCh:          make(chan struct{}),
 		writerDone:       make(chan struct{}),
 		bindingToken:     bindingToken("client"),
@@ -595,9 +604,11 @@ func TestPeerRestartSuppressedWhenControlHealthy(t *testing.T) {
 	}
 	defer func() { _ = tr.Close() }()
 
-	// Latch the real server epoch, then let it go quiet past the grace
+	// Bind the real server epoch, then let it go quiet past the grace
 	// window - a normal, brief silence, not a real restart.
-	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, 0x200, []byte("hello")))
+	if err := tr.ConfirmPeer("00000200"); err != nil {
+		t.Fatalf("ConfirmPeer() error = %v", err)
+	}
 	time.Sleep(15 * time.Millisecond)
 
 	// A second olcbox client joins the same Telemost room; the SFU broadcasts
@@ -606,21 +617,20 @@ func TestPeerRestartSuppressedWhenControlHealthy(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	if got := stream.reconnects.Load(); got != 0 {
-		t.Fatalf("carrier rebuilt %d times for an unrelated peer with healthy control plane, want 0", got)
+		t.Fatalf("provider rebuilt %d times for an unrelated peer with healthy control plane, want 0", got)
 	}
 }
 
-// ai-generated: new test, peer-restart-corroboration PR.
-//
 // TestPeerRestartFiresOnceCorroborated confirms NotifyLinkHealth(true) is a
 // gate, not a permanent disable: with corroborating evidence the client's own
 // link is down, the same foreign-epoch frame still triggers the fast-path
-// carrier rebuild.
+// provider rebuild.
 func TestPeerRestartFiresOnceCorroborated(t *testing.T) {
 	stream := &fakeVideoStream{canSend: true}
 	tr := &streamTransport{
 		stream:           stream,
-		outbound:         make(chan []byte, 16),
+		data:             newKCPPlane(16, nil),
+		control:          newKCPPlane(16, nil),
 		closeCh:          make(chan struct{}),
 		writerDone:       make(chan struct{}),
 		bindingToken:     bindingToken("client"),
@@ -629,7 +639,9 @@ func TestPeerRestartFiresOnceCorroborated(t *testing.T) {
 	}
 	defer func() { _ = tr.Close() }()
 
-	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, 0x200, []byte("hello")))
+	if err := tr.ConfirmPeer("00000200"); err != nil {
+		t.Fatalf("ConfirmPeer() error = %v", err)
+	}
 	time.Sleep(15 * time.Millisecond)
 	tr.NotifyLinkHealth(true)
 	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, 0x300, []byte("restart")))
@@ -639,12 +651,10 @@ func TestPeerRestartFiresOnceCorroborated(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if got := stream.reconnects.Load(); got != 1 {
-		t.Fatalf("carrier rebuilds when corroborated = %d, want 1", got)
+		t.Fatalf("provider rebuilds when corroborated = %d, want 1", got)
 	}
 }
 
-// ai-generated: new test, peer-restart-corroboration PR.
-//
 // TestNotifyLinkHealthTogglesGuard is a direct unit test of the setter.
 func TestNotifyLinkHealthTogglesGuard(t *testing.T) {
 	tr := &streamTransport{}
@@ -661,11 +671,11 @@ func TestNotifyLinkHealthTogglesGuard(t *testing.T) {
 	}
 }
 
-func seqList(pkts []*rtp.Packet) []uint16 {
-	out := make([]uint16, len(pkts))
-	for i, p := range pkts {
-		out[i] = p.SequenceNumber
-	}
+func pushedSeqs(buffer *reorderBuffer, packet *rtp.Packet) []uint16 {
+	var out []uint16
+	buffer.push(packet, func(delivered *rtp.Packet) {
+		out = append(out, delivered.SequenceNumber)
+	})
 	return out
 }
 
@@ -674,7 +684,7 @@ func TestReorderBufferRestoresOrderAndSurvivesLoss(t *testing.T) {
 	b := newReorderBuffer()
 	got := make([]uint16, 0, 3)
 	for _, seq := range []uint16{100, 101, 102} {
-		got = append(got, seqList(b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: seq}}))...)
+		got = append(got, pushedSeqs(b, &rtp.Packet{Header: rtp.Header{SequenceNumber: seq}})...)
 	}
 	if !reflect.DeepEqual(got, []uint16{100, 101, 102}) {
 		t.Fatalf("in-order drain = %v, want [100 101 102]", got)
@@ -682,27 +692,27 @@ func TestReorderBufferRestoresOrderAndSurvivesLoss(t *testing.T) {
 
 	// A reordered packet is held until the gap fills, then both drain in order.
 	b = newReorderBuffer()
-	if out := b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 10}}); !reflect.DeepEqual(seqList(out), []uint16{10}) {
-		t.Fatalf("first packet = %v, want [10]", seqList(out))
+	if out := pushedSeqs(b, &rtp.Packet{Header: rtp.Header{SequenceNumber: 10}}); !reflect.DeepEqual(out, []uint16{10}) {
+		t.Fatalf("first packet = %v, want [10]", out)
 	}
 	// 12 arrives before 11: must be buffered, nothing delivered yet.
-	if out := b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 12}}); out != nil {
-		t.Fatalf("out-of-order packet drained early = %v, want nil", seqList(out))
+	if out := pushedSeqs(b, &rtp.Packet{Header: rtp.Header{SequenceNumber: 12}}); out != nil {
+		t.Fatalf("out-of-order packet drained early = %v, want nil", out)
 	}
 	// 11 fills the hole: 11 and 12 drain in order.
-	out := b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 11}})
-	if !reflect.DeepEqual(seqList(out), []uint16{11, 12}) {
-		t.Fatalf("gap fill drain = %v, want [11 12]", seqList(out))
+	out := pushedSeqs(b, &rtp.Packet{Header: rtp.Header{SequenceNumber: 11}})
+	if !reflect.DeepEqual(out, []uint16{11, 12}) {
+		t.Fatalf("gap fill drain = %v, want [11 12]", out)
 	}
 
 	// Genuine loss: a full window piles up behind a hole, buffer skips the
 	// lost sequence rather than stalling forever.
 	b = newReorderBuffer()
-	_ = b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 0}})
+	_ = pushedSeqs(b, &rtp.Packet{Header: rtp.Header{SequenceNumber: 0}})
 	var delivered int
 	for i := 2; i <= reorderWindow+2; i++ {
 		seq := uint16(i & 0xffff)
-		delivered += len(b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: seq}}))
+		delivered += len(pushedSeqs(b, &rtp.Packet{Header: rtp.Header{SequenceNumber: seq}}))
 	}
 	if delivered == 0 {
 		t.Fatal("buffer stalled on lost packet: nothing delivered after window overflow")
@@ -710,10 +720,37 @@ func TestReorderBufferRestoresOrderAndSurvivesLoss(t *testing.T) {
 
 	// Stale packets older than the current position are dropped.
 	b = newReorderBuffer()
-	_ = b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 50}})
-	if out := b.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 49}}); out != nil {
-		t.Fatalf("stale packet delivered = %v, want nil", seqList(out))
+	_ = pushedSeqs(b, &rtp.Packet{Header: rtp.Header{SequenceNumber: 50}})
+	if out := pushedSeqs(b, &rtp.Packet{Header: rtp.Header{SequenceNumber: 49}}); out != nil {
+		t.Fatalf("stale packet delivered = %v, want nil", out)
 	}
+}
+
+func TestReorderBufferReusesPacketStorage(t *testing.T) {
+	buffer := newReorderBuffer()
+	firstInput := &rtp.Packet{
+		Header:  rtp.Header{SequenceNumber: 1},
+		Payload: []byte("first"),
+	}
+	var first *rtp.Packet
+	buffer.push(firstInput, func(packet *rtp.Packet) {
+		first = packet
+		if string(packet.Payload) != "first" {
+			t.Fatalf("first payload = %q", packet.Payload)
+		}
+	})
+	secondInput := &rtp.Packet{
+		Header:  rtp.Header{SequenceNumber: 2},
+		Payload: []byte("second"),
+	}
+	buffer.push(secondInput, func(packet *rtp.Packet) {
+		if packet != first {
+			t.Fatal("reorder buffer did not reuse delivered packet storage")
+		}
+		if string(packet.Payload) != "second" {
+			t.Fatalf("second payload = %q", packet.Payload)
+		}
+	})
 }
 
 func TestSeqLessWrapAround(t *testing.T) {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: WTFPL
 
-// ProtectedNet wraps Pion's network adapter. It applies Protector to each
+// ProtectedNet wraps Pion's network adapter. It applies the configured protector to each
 // socket fd and hides tunnel-style interfaces from candidate gathering.
 //
 // On Android 11+ (API 30) SELinux denies untrusted_app from binding
@@ -26,15 +26,10 @@ import (
 	"github.com/pion/transport/v4"
 )
 
-var (
-	// ErrUnexpectedConnType is returned when a protected listen/dial yields an
-	// unexpected concrete type. The caller closes that connection instead of
-	// using an unprotected fallback.
-	ErrUnexpectedConnType = errors.New("protect: unexpected connection type")
-
-	// ErrInterfacesUnavailable is returned when interface enumeration fails.
-	ErrInterfacesUnavailable = errors.New("protect: interfaces unavailable")
-)
+// ErrUnexpectedConnType is returned when a protected listen/dial yields an
+// unexpected concrete type. The caller closes that connection instead of
+// using an unprotected fallback.
+var ErrUnexpectedConnType = errors.New("protect: unexpected connection type")
 
 // tunInterfacePrefixes lists interface name prefixes excluded from candidate
 // gathering. Keep pptp explicit; it does not match the ppp prefix.
@@ -56,10 +51,15 @@ type ProtectedNet struct {
 
 // NewProtectedNet builds a ProtectedNet with platform-specific interface
 // enumeration.
+//
+// Enumeration is deliberately not probed or cached here: every Interfaces()
+// call re-reads the live list because interfaces come and go at runtime on
+// mobile (Wi-Fi to cellular handover), and a snapshot taken at construction
+// would hand pion a stale set for the rest of the session. Enumeration
+// failures therefore surface from Interfaces(), not from here.
+//
+//nolint:unparam // error kept so the signature stays stable for the engine call sites
 func NewProtectedNet(resolvers ...*net.Resolver) (*ProtectedNet, error) {
-	if _, err := loadInterfaces(); err != nil {
-		return nil, fmt.Errorf("load interfaces: %w", err)
-	}
 	return &ProtectedNet{resolver: firstResolver(resolvers)}, nil
 }
 
@@ -273,11 +273,11 @@ func (n *ProtectedNet) ResolveTCPAddr(network, address string) (*net.TCPAddr, er
 	return &net.TCPAddr{IP: ip.IP, Port: port, Zone: ip.Zone}, nil
 }
 
-func resolveTransportNetwork(network, transport string) (string, error) {
+func resolveTransportNetwork(network, protocol string) (string, error) {
 	if network == "" {
-		return transport, nil
+		return protocol, nil
 	}
-	if network == transport || network == transport+"4" || network == transport+"6" {
+	if network == protocol || network == protocol+"4" || network == protocol+"6" {
 		return network, nil
 	}
 	return "", net.UnknownNetworkError(network)

@@ -2,33 +2,101 @@ package goolom
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openlibrecommunity/olcrtc/internal/logger"
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
+
+	"github.com/openlibrecommunity/olcrtc/internal/engine"
+	"github.com/openlibrecommunity/olcrtc/internal/logger"
 )
 
-func (s *Session) setupDataChannelHandlers(dcReady chan struct{}, sessionCloseCh chan struct{}) {
-	s.dc.OnOpen(func() {
+func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
+	api, err := newWebRTCAPI(s.resolver)
+	if err != nil {
+		return err
+	}
+
+	sub, err := api.NewPeerConnection(config)
+	if err != nil {
+		return fmt.Errorf("new sub pc: %w", err)
+	}
+	sub.OnConnectionStateChange(s.onSubscriberConnectionStateChange)
+	sub.OnTrack(s.onSubscriberTrack)
+	s.pcSub.Store(sub)
+
+	pub, err := api.NewPeerConnection(config)
+	if err != nil {
+		return fmt.Errorf("new pub pc: %w", err)
+	}
+	pub.OnConnectionStateChange(s.onPublisherConnectionStateChange)
+	s.pcPub.Store(pub)
+
+	return s.attachPendingVideoTracks(pub)
+}
+
+// newWebRTCAPI builds a pion API with IPv4-only ICE and default interceptors.
+func newWebRTCAPI(resolver *net.Resolver) (*webrtc.API, error) {
+	settingEngine := webrtc.SettingEngine{}
+	apply, err := engine.NewPionSettings(engine.PionSettingsOptions{
+		Resolver:         resolver,
+		LoggerFactory:    logger.NewPionLoggerFactory(),
+		IPv4Only:         true,
+		ProxyDialer:      true,
+		DisableMulticast: true,
+	})
+	if err != nil {
+		return nil, err //nolint:wrapcheck // shared builder already adds protected-net context
+	}
+	apply(&settingEngine)
+
+	mediaEngine := &webrtc.MediaEngine{}
+	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
+		return nil, fmt.Errorf("register default codecs: %w", err)
+	}
+	interceptorRegistry := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
+		return nil, fmt.Errorf("register default interceptors: %w", err)
+	}
+	return webrtc.NewAPI(
+		webrtc.WithSettingEngine(settingEngine),
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(interceptorRegistry),
+	), nil
+}
+
+func (s *Session) onSubscriberTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+	if track.Kind() != webrtc.RTPCodecTypeVideo {
+		return
+	}
+	logger.Infof("goolom remote video track: codec=%s stream=%s track=%s",
+		track.Codec().MimeType, track.StreamID(), track.ID())
+	if cb := s.videoTrackHandler(); cb != nil {
+		cb(track, receiver)
+	}
+	go engine.DrainRTCP(receiver)
+}
+
+func (s *Session) setupDataChannelHandlers(
+	dc *webrtc.DataChannel, dcReady chan struct{}, sessionCloseCh chan struct{},
+) {
+	dc.OnOpen(func() {
 		numWorkers := 4
 		for i := range numWorkers {
-			s.wg.Add(1)
-			go func(workerID int) {
-				defer s.wg.Done()
-				s.processSendQueue(workerID, sessionCloseCh)
-			}(i)
+			s.goLaunch(func() { s.processSendQueue(dc, i, sessionCloseCh) })
 		}
 		close(dcReady)
 	})
 
-	s.dc.OnClose(s.onDataChannelClose)
-	s.dc.OnMessage(s.onDataChannelMessage)
+	dc.OnClose(s.onDataChannelClose)
+	dc.OnMessage(s.onDataChannelMessage)
 
-	s.pcSub.OnDataChannel(func(dc *webrtc.DataChannel) {
+	s.subPC().OnDataChannel(func(remote *webrtc.DataChannel) {
 		if s.onData != nil {
-			dc.OnMessage(s.onDataChannelMessage)
+			remote.OnMessage(s.onDataChannelMessage)
 		}
 	})
 }
@@ -46,40 +114,44 @@ func (s *Session) onDataChannelMessage(msg webrtc.DataChannelMessage) {
 }
 
 func (s *Session) handleSdpOffer(offer map[string]any, uid string, sendPub bool) error {
+	sub := s.subPC()
+	if sub == nil {
+		return ErrSessionClosed
+	}
 	sdp, _ := offer["sdp"].(string)
 	pcSeq, _ := offer["pcSeq"].(float64)
 
-	if err := s.pcSub.SetRemoteDescription(webrtc.SessionDescription{
+	if err := sub.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
 		SDP:  sdp,
 	}); err != nil {
 		return fmt.Errorf("set remote desc: %w", err)
 	}
 
-	answer, err := s.pcSub.CreateAnswer(nil)
+	answer, err := sub.CreateAnswer(nil)
 	if err != nil {
 		return fmt.Errorf("create answer: %w", err)
 	}
 
-	if err := s.pcSub.SetLocalDescription(answer); err != nil {
-		return fmt.Errorf("set local desc: %w", err)
+	if setErr := sub.SetLocalDescription(answer); setErr != nil {
+		return fmt.Errorf("set local desc: %w", setErr)
 	}
 
-	s.wsMu.Lock()
-	_ = s.ws.WriteJSON(map[string]any{
+	if writeErr := s.writeJSON(map[string]any{
 		keyUID: uuid.New().String(),
 		"subscriberSdpAnswer": map[string]any{
 			keyPcSeq: int(pcSeq),
 			"sdp":    answer.SDP,
 		},
-	})
-	s.wsMu.Unlock()
+	}); writeErr != nil {
+		return fmt.Errorf("send subscriber answer: %w", writeErr)
+	}
 
 	s.sendAck(uid)
 
 	if s.onData == nil {
-		if err := s.sendSetSlots(); err != nil {
-			logger.Debugf("setSlots error: %v", err)
+		if slotErr := s.sendSetSlots(); slotErr != nil {
+			logger.Debugf("setSlots error: %v", slotErr)
 		}
 	}
 
@@ -87,32 +159,51 @@ func (s *Session) handleSdpOffer(offer map[string]any, uid string, sendPub bool)
 		return nil
 	}
 
+	// Give the SFU time to apply our subscriberSdpAnswer before the
+	// publisher offer lands on the same signaling channel: in SEPARATE
+	// offer/answer mode it drops a publisher offer that arrives while the
+	// subscriber negotiation for the same peer is still being processed.
+	//
+	// The precise condition is the server's ack for the answer we just
+	// wrote, and the ack machinery exists (registerAckWaiter/waitForAck) -
+	// but it cannot be used here: handleSdpOffer runs on the single
+	// signaling read goroutine, so blocking for the ack would block the
+	// very loop that has to read it. This is a one-shot delay (sendPub is
+	// true only for the first subscriber offer of a session).
 	time.Sleep(300 * time.Millisecond)
 
-	pubOffer, err := s.pcPub.CreateOffer(nil)
+	pub := s.pubPC()
+	if pub == nil {
+		return ErrPublisherNotInitialized
+	}
+	pubOffer, err := pub.CreateOffer(nil)
 	if err != nil {
 		return fmt.Errorf("create pub offer: %w", err)
 	}
-	if err := s.pcPub.SetLocalDescription(pubOffer); err != nil {
+	if err := pub.SetLocalDescription(pubOffer); err != nil {
 		return fmt.Errorf("set local pub desc: %w", err)
 	}
 
-	s.wsMu.Lock()
-	_ = s.ws.WriteJSON(map[string]any{
+	if err := s.writeJSON(map[string]any{
 		keyUID: uuid.New().String(),
 		"publisherSdpOffer": map[string]any{
 			keyPcSeq: 1,
 			"sdp":    pubOffer.SDP,
 			"tracks": s.publisherTrackDescriptions(),
 		},
-	})
-	s.wsMu.Unlock()
+	}); err != nil {
+		return fmt.Errorf("send publisher offer: %w", err)
+	}
 	return nil
 }
 
 func (s *Session) handleSdpAnswer(answer map[string]any, uid string) {
+	pub := s.pubPC()
+	if pub == nil {
+		return
+	}
 	sdp, _ := answer["sdp"].(string)
-	if err := s.pcPub.SetRemoteDescription(webrtc.SessionDescription{
+	if err := pub.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeAnswer,
 		SDP:  sdp,
 	}); err != nil {
@@ -139,56 +230,49 @@ func (s *Session) handleICE(cand map[string]any) {
 	}
 	switch target {
 	case "SUBSCRIBER":
-		_ = s.pcSub.AddICECandidate(init)
+		if sub := s.subPC(); sub != nil {
+			_ = sub.AddICECandidate(init)
+		}
 	case "PUBLISHER":
-		_ = s.pcPub.AddICECandidate(init)
+		if pub := s.pubPC(); pub != nil {
+			_ = pub.AddICECandidate(init)
+		}
 	}
 }
 
 func (s *Session) setupICEHandlers() {
-	s.pcSub.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return
-		}
-		init := c.ToJSON()
-		s.wsMu.Lock()
-		_ = s.ws.WriteJSON(map[string]any{
-			keyUID: uuid.New().String(),
-			"webrtcIceCandidate": map[string]any{
-				"candidate":     init.Candidate,
-				"sdpMid":        init.SDPMid,
-				"sdpMlineIndex": init.SDPMLineIndex,
-				"target":        "SUBSCRIBER",
-				keyPcSeq:        1,
-			},
-		})
-		s.wsMu.Unlock()
-	})
+	if sub := s.subPC(); sub != nil {
+		sub.OnICECandidate(s.iceCandidateHandler("SUBSCRIBER"))
+	}
+	if pub := s.pubPC(); pub != nil {
+		pub.OnICECandidate(s.iceCandidateHandler("PUBLISHER"))
+	}
+}
 
-	s.pcPub.OnICECandidate(func(c *webrtc.ICECandidate) {
+// iceCandidateHandler builds the OnICECandidate callback that forwards local
+// candidates to the SFU for the given target side.
+func (s *Session) iceCandidateHandler(target string) func(*webrtc.ICECandidate) {
+	return func(c *webrtc.ICECandidate) {
 		if c == nil {
 			return
 		}
 		init := c.ToJSON()
-		s.wsMu.Lock()
-		_ = s.ws.WriteJSON(map[string]any{
+		if err := s.writeJSON(map[string]any{
 			keyUID: uuid.New().String(),
 			"webrtcIceCandidate": map[string]any{
 				"candidate":     init.Candidate,
 				"sdpMid":        init.SDPMid,
 				"sdpMlineIndex": init.SDPMLineIndex,
-				"target":        "PUBLISHER",
+				"target":        target,
 				keyPcSeq:        1,
 			},
-		})
-		s.wsMu.Unlock()
-	})
+		}); err != nil {
+			logger.Debugf("goolom: ice candidate (%s): %v", target, err)
+		}
+	}
 }
 
 func (s *Session) sendSetSlots() error {
-	s.wsMu.Lock()
-	defer s.wsMu.Unlock()
-
 	// Goolom only forwards as many remote videos as the subscriber asks for via
 	// setSlots. Request a generous count so each subscriber sees every active
 	// publisher in the room.
@@ -196,7 +280,7 @@ func (s *Session) sendSetSlots() error {
 	for range 8 {
 		slots = append(slots, map[string]int{"width": 1280, "height": 720})
 	}
-	if err := s.ws.WriteJSON(map[string]any{
+	if err := s.writeJSON(map[string]any{
 		keyUID: uuid.New().String(),
 		"setSlots": map[string]any{
 			"slots":              slots,
@@ -214,11 +298,12 @@ func (s *Session) sendSetSlots() error {
 }
 
 func (s *Session) publisherTrackDescriptions() []map[string]any {
-	if s.pcPub == nil {
+	pub := s.pubPC()
+	if pub == nil {
 		return nil
 	}
 	tracks := make([]map[string]any, 0)
-	for _, transceiver := range s.pcPub.GetTransceivers() {
+	for _, transceiver := range pub.GetTransceivers() {
 		sender := transceiver.Sender()
 		if sender == nil {
 			continue
@@ -245,35 +330,17 @@ func (s *Session) publisherTrackDescriptions() []map[string]any {
 	return tracks
 }
 
-// isICEURL reports whether url is a usable ICE server URL. It keeps every
-// standard ICE scheme - STUN and TURN alike. Earlier code stripped turn:/
-// turns: relays and kept only STUN, which left clients behind symmetric or
-// CGNAT carriers (e.g. mobile Tele2) with no working candidate pair: the
-// server-reflexive path comes up for a few seconds, then ICE consent can no
-// longer be refreshed without a relay and the SFU tears the session down
-// (issue #95). Keeping the advertised TURN relays restores a stable path.
-func isICEURL(url string) bool {
-	return strings.HasPrefix(url, "stun:") ||
-		strings.HasPrefix(url, "stuns:") ||
-		strings.HasPrefix(url, "turn:") ||
-		strings.HasPrefix(url, "turns:")
-}
-
 func parseICEURLs(server map[string]any) []string {
 	var urls []string
 	switch rawURLs := server["urls"].(type) {
 	case []any:
 		for _, rawURL := range rawURLs {
-			if url, ok := rawURL.(string); ok && isICEURL(url) {
+			if url, ok := rawURL.(string); ok {
 				urls = append(urls, url)
 			}
 		}
 	case []string:
-		for _, url := range rawURLs {
-			if isICEURL(url) {
-				urls = append(urls, url)
-			}
-		}
+		urls = append(urls, rawURLs...)
 	}
 	return urls
 }
@@ -294,7 +361,11 @@ func parseICEServer(rawServer any) (webrtc.ICEServer, bool) {
 	if credential, ok := server["credential"].(string); ok {
 		ice.Credential = credential
 	}
-	return ice, true
+	normalised := engine.NormaliseICEServers([]webrtc.ICEServer{ice})
+	if len(normalised) == 0 {
+		return webrtc.ICEServer{}, false
+	}
+	return normalised[0], true
 }
 
 func (s *Session) applyServerHelloConfig(serverHello map[string]any) {
@@ -319,10 +390,10 @@ func (s *Session) applyServerHelloConfig(serverHello map[string]any) {
 		ICEServers:   iceServers,
 		SDPSemantics: webrtc.SDPSemanticsUnifiedPlan,
 	}
-	if s.pcSub != nil {
-		_ = s.pcSub.SetConfiguration(cfg)
+	if sub := s.subPC(); sub != nil {
+		_ = sub.SetConfiguration(cfg)
 	}
-	if s.pcPub != nil {
-		_ = s.pcPub.SetConfiguration(cfg)
+	if pub := s.pubPC(); pub != nil {
+		_ = pub.SetConfiguration(cfg)
 	}
 }

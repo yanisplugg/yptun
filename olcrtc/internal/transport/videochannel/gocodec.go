@@ -46,31 +46,32 @@ func (e *goEncoder) EncodeFrame(frame []byte) ([]byte, error) {
 	return encoded, nil
 }
 
-func (e *goEncoder) Close() error {
+// Close stops the encoder. Further EncodeFrame calls fail.
+func (e *goEncoder) Close() {
 	e.closed.Store(true)
-	return nil
 }
 
 // goDecoder is a pure Go VP8 decoder.
+// decoderQueueDepth bounds how many decoded frames wait for the extractor.
+// Each one is a full grayscale plane the vp8 decoder allocates fresh - 2 MB at
+// 1080p - and one decoder exists per remote track, so the queue depth is the
+// dominant memory cost of this transport. It is deep enough to absorb an
+// extraction that runs long without stalling the reader, and no deeper.
+const decoderQueueDepth = 8
+
 type goDecoder struct {
 	dec       *vp8.Decoder
-	width     int
-	height    int
-	frameSize int
 	frames    chan []byte
 	closed    atomic.Bool
 	closeOnce sync.Once
 	closeCh   chan struct{}
 }
 
-func newGoDecoder(width, height int) *goDecoder {
+func newGoDecoder() *goDecoder {
 	return &goDecoder{
-		dec:       vp8.NewDecoder(),
-		width:     width,
-		height:    height,
-		frameSize: width * height,
-		frames:    make(chan []byte, 32),
-		closeCh:   make(chan struct{}),
+		dec:     vp8.NewDecoder(),
+		frames:  make(chan []byte, decoderQueueDepth),
+		closeCh: make(chan struct{}),
 	}
 }
 
@@ -86,6 +87,9 @@ func (d *goDecoder) PushSample(sample []byte) error {
 		return nil
 	}
 	gray := frame.Grayscale()
+	// Blocking here is deliberate. Every frame carries a fragment the peer is
+	// waiting to have acknowledged, so dropping one costs a full retransmit
+	// round; back-pressure onto the RTP reader is the cheaper of the two.
 	select {
 	case d.frames <- gray:
 	case <-d.closeCh:
@@ -106,10 +110,10 @@ func (d *goDecoder) PopFrame() ([]byte, error) {
 	}
 }
 
-func (d *goDecoder) Close() error {
+// Close stops the decoder and unblocks PopFrame.
+func (d *goDecoder) Close() {
 	d.closeOnce.Do(func() {
 		d.closed.Store(true)
 		close(d.closeCh)
 	})
-	return nil
 }

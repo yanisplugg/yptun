@@ -1,23 +1,24 @@
 // Package config loads olcrtc runtime configuration from YAML files.
 //
-// The YAML schema mirrors [session.Config]. Fields left unset in the file
-// remain at their zero value. Use [Apply] to map a parsed [File] onto an
-// existing [session.Config]; non-zero fields in the session config take
-// precedence over the YAML values.
-//
-//nolint:tagliatelle // YAML keys are the documented config file schema.
+// The YAML schema mirrors [session.Config]. Parsing is strict: an unknown key
+// is an error rather than a silently ignored typo. [Settings] is the part of
+// the schema a failover profile may override, so the top-level file and every
+// profile share exactly one definition and cannot drift apart.
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/openlibrecommunity/olcrtc/internal/app/session"
 	"gopkg.in/yaml.v3"
+
+	"github.com/openlibrecommunity/olcrtc/internal/app/session"
 )
 
 var (
@@ -31,9 +32,10 @@ var (
 	ErrCryptoKeyFileEmpty = errors.New("crypto key file is empty")
 )
 
-// File is the on-disk YAML schema.
-type File struct {
-	Mode      string    `yaml:"mode"`
+// Settings is the overridable part of the schema. The top-level file and every
+// failover profile share it, so a profile can override anything except the
+// process-wide fields (mode, data, debug, gen, profiles, failover).
+type Settings struct {
 	Auth      Auth      `yaml:"auth"`
 	Room      Room      `yaml:"room"`
 	Crypto    Crypto    `yaml:"crypto"`
@@ -46,28 +48,31 @@ type File struct {
 	Liveness  Liveness  `yaml:"liveness"`
 	Lifecycle Lifecycle `yaml:"lifecycle"`
 	Traffic   Traffic   `yaml:"traffic"`
-	Gen       Gen       `yaml:"gen"`
-	Profiles  []Profile `yaml:"profiles"`
-	Failover  Failover  `yaml:"failover"`
-	Data      string    `yaml:"data"`
-	Debug     bool      `yaml:"debug"`
+}
+
+// File is the on-disk YAML schema.
+type File struct {
+	Mode string `yaml:"mode"`
+	// Link is a deprecated no-op retained for one config schema migration cycle.
+	//
+	// Deprecated: remove this field from persisted configs.
+	Link string `yaml:"link"`
+	// FFmpeg is a deprecated no-op retained for one config schema migration cycle.
+	//
+	// Deprecated: remove this field from persisted configs.
+	FFmpeg   string `yaml:"ffmpeg"`
+	Settings `yaml:",inline"`
+	Gen      Gen       `yaml:"gen"`
+	Profiles []Profile `yaml:"profiles"`
+	Failover Failover  `yaml:"failover"`
+	Data     string    `yaml:"data"`
+	Debug    bool      `yaml:"debug"`
 }
 
 // Profile is a failover entry that overrides top-level runtime fields.
 type Profile struct {
-	Name      string    `yaml:"name"`
-	Auth      Auth      `yaml:"auth"`
-	Room      Room      `yaml:"room"`
-	Crypto    Crypto    `yaml:"crypto"`
-	Net       Net       `yaml:"net"`
-	SOCKS     SOCKS     `yaml:"socks"`
-	Engine    Engine    `yaml:"engine"`
-	Video     Video     `yaml:"video"`
-	VP8       VP8       `yaml:"vp8"`
-	SEI       SEI       `yaml:"sei"`
-	Liveness  Liveness  `yaml:"liveness"`
-	Lifecycle Lifecycle `yaml:"lifecycle"`
-	Traffic   Traffic   `yaml:"traffic"`
+	Name     string `yaml:"name"`
+	Settings `yaml:",inline"`
 }
 
 // Failover controls ordered profile failover.
@@ -78,7 +83,7 @@ type Failover struct {
 
 // Auth selects the auth provider.
 type Auth struct {
-	Provider string `yaml:"provider"` // telemost, wbstream, none
+	Provider string `yaml:"provider"` // jitsi, telemost, wbstream, none
 	Token    string `yaml:"token"`    // optional pre-issued account token (wbstream)
 }
 
@@ -121,10 +126,16 @@ type Engine struct {
 
 // Video tunes the videochannel transport.
 type Video struct {
-	Width      int    `yaml:"width"`
-	Height     int    `yaml:"height"`
-	FPS        int    `yaml:"fps"`
-	Bitrate    string `yaml:"bitrate"`
+	Width  int `yaml:"width"`
+	Height int `yaml:"height"`
+	FPS    int `yaml:"fps"`
+	// Bitrate is a deprecated no-op retained for one config schema migration cycle.
+	//
+	// Deprecated: remove this field from persisted configs.
+	Bitrate string `yaml:"bitrate"`
+	// HW is a deprecated no-op retained for one config schema migration cycle.
+	//
+	// Deprecated: remove this field from persisted configs.
 	HW         string `yaml:"hw"`
 	QRSize     int    `yaml:"qr_size"`
 	QRRecovery string `yaml:"qr_recovery"`
@@ -171,7 +182,8 @@ type Gen struct {
 	Amount int `yaml:"amount"`
 }
 
-// Load parses a YAML file from disk.
+// Load parses a YAML file from disk. Unknown keys are rejected so a mistyped
+// setting fails loudly instead of being silently ignored.
 func Load(path string) (File, error) {
 	// #nosec G304 -- config path is an explicit CLI/user input.
 	data, err := os.ReadFile(path)
@@ -179,52 +191,60 @@ func Load(path string) (File, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return File{}, fmt.Errorf("%w: %s", ErrConfigNotFound, path)
 		}
+
 		return File{}, fmt.Errorf("read config %s: %w", path, err)
 	}
+
 	if !utf8.Valid(data) {
 		return File{}, fmt.Errorf("parse config %s: %w", path, ErrConfigInvalidUTF8)
 	}
-	var f File
-	if err := yaml.Unmarshal(data, &f); err != nil {
+
+	var file File
+
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+
+	if err := decoder.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
 		return File{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	if err := loadExternalSecrets(path, &f); err != nil {
+
+	if err := loadExternalSecrets(path, &file); err != nil {
 		return File{}, err
 	}
-	return f, nil
+
+	return file, nil
 }
 
-func loadExternalSecrets(configPath string, f *File) error {
-	if f.Crypto.KeyFile == "" {
-		return loadProfileSecrets(configPath, f.Profiles)
-	}
-	if f.Crypto.Key != "" {
-		return ErrCryptoKeyConflict
-	}
-
-	key, err := readKeyFile(configPath, f.Crypto.KeyFile)
+func loadExternalSecrets(configPath string, file *File) error {
+	key, err := resolveKey(configPath, file.Crypto)
 	if err != nil {
 		return err
 	}
-	f.Crypto.Key = key
-	return loadProfileSecrets(configPath, f.Profiles)
-}
 
-func loadProfileSecrets(configPath string, profiles []Profile) error {
-	for i := range profiles {
-		if profiles[i].Crypto.KeyFile == "" {
-			continue
-		}
-		if profiles[i].Crypto.Key != "" {
-			return fmt.Errorf("profiles[%d]: %w", i, ErrCryptoKeyConflict)
-		}
-		key, err := readKeyFile(configPath, profiles[i].Crypto.KeyFile)
+	file.Crypto.Key = key
+
+	for i := range file.Profiles {
+		key, err := resolveKey(configPath, file.Profiles[i].Crypto)
 		if err != nil {
 			return fmt.Errorf("profiles[%d]: %w", i, err)
 		}
-		profiles[i].Crypto.Key = key
+
+		file.Profiles[i].Crypto.Key = key
 	}
+
 	return nil
+}
+
+func resolveKey(configPath string, crypto Crypto) (string, error) {
+	if crypto.KeyFile == "" {
+		return crypto.Key, nil
+	}
+
+	if crypto.Key != "" {
+		return "", ErrCryptoKeyConflict
+	}
+
+	return readKeyFile(configPath, crypto.KeyFile)
 }
 
 func readKeyFile(configPath, keyFile string) (string, error) {
@@ -238,133 +258,91 @@ func readKeyFile(configPath, keyFile string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read crypto key file %s: %w", keyPath, err)
 	}
+
 	key := strings.TrimSpace(string(data))
 	if key == "" {
 		return "", ErrCryptoKeyFileEmpty
 	}
+
 	return key, nil
 }
 
-// Apply merges f onto dst. CLI-set fields (non-zero values in dst) win;
-// YAML values fill in the rest.
-func Apply(dst session.Config, f File) session.Config {
-	dst.Mode = pickString(dst.Mode, f.Mode)
-	dst.Transport = pickString(dst.Transport, f.Net.Transport)
-	dst.Auth = pickString(dst.Auth, f.Auth.Provider)
-	dst.AuthToken = pickString(dst.AuthToken, f.Auth.Token)
-	dst.Engine = pickString(dst.Engine, f.Engine.Name)
-	dst.URL = pickString(dst.URL, f.Engine.URL)
-	dst.Token = pickString(dst.Token, f.Engine.Token)
-	dst.RoomID = pickString(dst.RoomID, f.Room.ID)
-	dst.ChannelID = pickString(dst.ChannelID, f.Room.Channel)
-	dst.KeyHex = pickString(dst.KeyHex, f.Crypto.Key)
-	dst.SOCKSHost = pickString(dst.SOCKSHost, f.SOCKS.Host)
-	dst.SOCKSPort = pickInt(dst.SOCKSPort, f.SOCKS.Port)
-	dst.SOCKSUser = pickString(dst.SOCKSUser, f.SOCKS.User)
-	dst.SOCKSPass = pickString(dst.SOCKSPass, f.SOCKS.Pass)
-	dst.DNSServer = pickString(dst.DNSServer, f.Net.DNS)
-	dst.SOCKSProxyAddr = pickString(dst.SOCKSProxyAddr, f.SOCKS.ProxyAddr)
-	dst.SOCKSProxyPort = pickInt(dst.SOCKSProxyPort, f.SOCKS.ProxyPort)
-	dst.SOCKSProxyUser = pickString(dst.SOCKSProxyUser, f.SOCKS.ProxyUser)
-	dst.SOCKSProxyPass = pickString(dst.SOCKSProxyPass, f.SOCKS.ProxyPass)
-	dst.Video.Width = pickInt(dst.Video.Width, f.Video.Width)
-	dst.Video.Height = pickInt(dst.Video.Height, f.Video.Height)
-	dst.Video.FPS = pickInt(dst.Video.FPS, f.Video.FPS)
-	dst.Video.Bitrate = pickString(dst.Video.Bitrate, f.Video.Bitrate)
-	dst.Video.HW = pickString(dst.Video.HW, f.Video.HW)
-	dst.Video.QRSize = pickInt(dst.Video.QRSize, f.Video.QRSize)
-	dst.Video.QRRecovery = pickString(dst.Video.QRRecovery, f.Video.QRRecovery)
-	dst.Video.Codec = pickString(dst.Video.Codec, f.Video.Codec)
-	dst.Video.TileModule = pickInt(dst.Video.TileModule, f.Video.TileModule)
-	dst.Video.TileRS = pickInt(dst.Video.TileRS, f.Video.TileRS)
-	dst.VP8.FPS = pickInt(dst.VP8.FPS, f.VP8.FPS)
-	dst.VP8.BatchSize = pickInt(dst.VP8.BatchSize, f.VP8.BatchSize)
-	dst.SEI.FPS = pickInt(dst.SEI.FPS, f.SEI.FPS)
-	dst.SEI.BatchSize = pickInt(dst.SEI.BatchSize, f.SEI.BatchSize)
-	dst.SEI.FragmentSize = pickInt(dst.SEI.FragmentSize, f.SEI.FragmentSize)
-	dst.SEI.AckTimeoutMS = pickInt(dst.SEI.AckTimeoutMS, f.SEI.AckTimeoutMS)
-	dst.LivenessInterval = pickString(dst.LivenessInterval, f.Liveness.Interval)
-	dst.LivenessTimeout = pickString(dst.LivenessTimeout, f.Liveness.Timeout)
-	dst.LivenessFailures = pickInt(dst.LivenessFailures, f.Liveness.Failures)
-	dst.MaxSessionDuration = pickString(dst.MaxSessionDuration, f.Lifecycle.MaxSessionDuration)
-	dst.TrafficMaxPayloadSize = pickInt(dst.TrafficMaxPayloadSize, f.Traffic.MaxPayloadSize)
-	dst.TrafficMinDelay = pickString(dst.TrafficMinDelay, f.Traffic.MinDelay)
-	dst.TrafficMaxDelay = pickString(dst.TrafficMaxDelay, f.Traffic.MaxDelay)
-	dst.Amount = pickInt(dst.Amount, f.Gen.Amount)
-	return dst
+// Apply converts a parsed file into a session config.
+func Apply(file File) session.Config {
+	cfg := ApplySettings(session.Config{}, file.Settings)
+	cfg.Mode = file.Mode
+	cfg.Amount = file.Gen.Amount
+
+	return cfg
 }
 
 // ApplyProfile overlays a failover profile onto an already-applied base config.
-func ApplyProfile(base session.Config, p Profile) session.Config {
-	dst := base
-	dst.Transport = overlayString(dst.Transport, p.Net.Transport)
-	dst.Auth = overlayString(dst.Auth, p.Auth.Provider)
-	dst.AuthToken = overlayString(dst.AuthToken, p.Auth.Token)
-	dst.Engine = overlayString(dst.Engine, p.Engine.Name)
-	dst.URL = overlayString(dst.URL, p.Engine.URL)
-	dst.Token = overlayString(dst.Token, p.Engine.Token)
-	dst.RoomID = overlayString(dst.RoomID, p.Room.ID)
-	dst.ChannelID = overlayString(dst.ChannelID, p.Room.Channel)
-	dst.KeyHex = overlayString(dst.KeyHex, p.Crypto.Key)
-	dst.SOCKSHost = overlayString(dst.SOCKSHost, p.SOCKS.Host)
-	dst.SOCKSPort = overlayInt(dst.SOCKSPort, p.SOCKS.Port)
-	dst.SOCKSUser = overlayString(dst.SOCKSUser, p.SOCKS.User)
-	dst.SOCKSPass = overlayString(dst.SOCKSPass, p.SOCKS.Pass)
-	dst.DNSServer = overlayString(dst.DNSServer, p.Net.DNS)
-	dst.SOCKSProxyAddr = overlayString(dst.SOCKSProxyAddr, p.SOCKS.ProxyAddr)
-	dst.SOCKSProxyPort = overlayInt(dst.SOCKSProxyPort, p.SOCKS.ProxyPort)
-	dst.SOCKSProxyUser = overlayString(dst.SOCKSProxyUser, p.SOCKS.ProxyUser)
-	dst.SOCKSProxyPass = overlayString(dst.SOCKSProxyPass, p.SOCKS.ProxyPass)
-	dst.Video.Width = overlayInt(dst.Video.Width, p.Video.Width)
-	dst.Video.Height = overlayInt(dst.Video.Height, p.Video.Height)
-	dst.Video.FPS = overlayInt(dst.Video.FPS, p.Video.FPS)
-	dst.Video.Bitrate = overlayString(dst.Video.Bitrate, p.Video.Bitrate)
-	dst.Video.HW = overlayString(dst.Video.HW, p.Video.HW)
-	dst.Video.QRSize = overlayInt(dst.Video.QRSize, p.Video.QRSize)
-	dst.Video.QRRecovery = overlayString(dst.Video.QRRecovery, p.Video.QRRecovery)
-	dst.Video.Codec = overlayString(dst.Video.Codec, p.Video.Codec)
-	dst.Video.TileModule = overlayInt(dst.Video.TileModule, p.Video.TileModule)
-	dst.Video.TileRS = overlayInt(dst.Video.TileRS, p.Video.TileRS)
-	dst.VP8.FPS = overlayInt(dst.VP8.FPS, p.VP8.FPS)
-	dst.VP8.BatchSize = overlayInt(dst.VP8.BatchSize, p.VP8.BatchSize)
-	dst.SEI.FPS = overlayInt(dst.SEI.FPS, p.SEI.FPS)
-	dst.SEI.BatchSize = overlayInt(dst.SEI.BatchSize, p.SEI.BatchSize)
-	dst.SEI.FragmentSize = overlayInt(dst.SEI.FragmentSize, p.SEI.FragmentSize)
-	dst.SEI.AckTimeoutMS = overlayInt(dst.SEI.AckTimeoutMS, p.SEI.AckTimeoutMS)
-	dst.LivenessInterval = overlayString(dst.LivenessInterval, p.Liveness.Interval)
-	dst.LivenessTimeout = overlayString(dst.LivenessTimeout, p.Liveness.Timeout)
-	dst.LivenessFailures = overlayInt(dst.LivenessFailures, p.Liveness.Failures)
-	dst.MaxSessionDuration = overlayString(dst.MaxSessionDuration, p.Lifecycle.MaxSessionDuration)
-	dst.TrafficMaxPayloadSize = overlayInt(dst.TrafficMaxPayloadSize, p.Traffic.MaxPayloadSize)
-	dst.TrafficMinDelay = overlayString(dst.TrafficMinDelay, p.Traffic.MinDelay)
-	dst.TrafficMaxDelay = overlayString(dst.TrafficMaxDelay, p.Traffic.MaxDelay)
+func ApplyProfile(base session.Config, profile Profile) session.Config {
+	return ApplySettings(base, profile.Settings)
+}
+
+// ApplySettings overlays every non-zero field of s onto dst. It is the single
+// place that knows how the YAML schema maps onto [session.Config].
+func ApplySettings(dst session.Config, s Settings) session.Config {
+	dst.Transport = overlay(dst.Transport, s.Net.Transport)
+	dst.DNSServer = overlay(dst.DNSServer, s.Net.DNS)
+
+	dst.Provider = overlay(dst.Provider, s.Auth.Provider)
+	dst.ProviderToken = overlay(dst.ProviderToken, s.Auth.Token)
+
+	dst.Engine = overlay(dst.Engine, s.Engine.Name)
+	dst.URL = overlay(dst.URL, s.Engine.URL)
+	dst.Token = overlay(dst.Token, s.Engine.Token)
+
+	dst.RoomID = overlay(dst.RoomID, s.Room.ID)
+	dst.ChannelID = overlay(dst.ChannelID, s.Room.Channel)
+	dst.KeyHex = overlay(dst.KeyHex, s.Crypto.Key)
+
+	dst.SOCKSHost = overlay(dst.SOCKSHost, s.SOCKS.Host)
+	dst.SOCKSPort = overlay(dst.SOCKSPort, s.SOCKS.Port)
+	dst.SOCKSUser = overlay(dst.SOCKSUser, s.SOCKS.User)
+	dst.SOCKSPass = overlay(dst.SOCKSPass, s.SOCKS.Pass)
+	dst.SOCKSProxyAddr = overlay(dst.SOCKSProxyAddr, s.SOCKS.ProxyAddr)
+	dst.SOCKSProxyPort = overlay(dst.SOCKSProxyPort, s.SOCKS.ProxyPort)
+	dst.SOCKSProxyUser = overlay(dst.SOCKSProxyUser, s.SOCKS.ProxyUser)
+	dst.SOCKSProxyPass = overlay(dst.SOCKSProxyPass, s.SOCKS.ProxyPass)
+
+	dst.Video.Width = overlay(dst.Video.Width, s.Video.Width)
+	dst.Video.Height = overlay(dst.Video.Height, s.Video.Height)
+	dst.Video.FPS = overlay(dst.Video.FPS, s.Video.FPS)
+	dst.Video.QRSize = overlay(dst.Video.QRSize, s.Video.QRSize)
+	dst.Video.QRRecovery = overlay(dst.Video.QRRecovery, s.Video.QRRecovery)
+	dst.Video.Codec = overlay(dst.Video.Codec, s.Video.Codec)
+	dst.Video.TileModule = overlay(dst.Video.TileModule, s.Video.TileModule)
+	dst.Video.TileRS = overlay(dst.Video.TileRS, s.Video.TileRS)
+
+	dst.VP8.FPS = overlay(dst.VP8.FPS, s.VP8.FPS)
+	dst.VP8.BatchSize = overlay(dst.VP8.BatchSize, s.VP8.BatchSize)
+
+	dst.SEI.FPS = overlay(dst.SEI.FPS, s.SEI.FPS)
+	dst.SEI.BatchSize = overlay(dst.SEI.BatchSize, s.SEI.BatchSize)
+	dst.SEI.FragmentSize = overlay(dst.SEI.FragmentSize, s.SEI.FragmentSize)
+	dst.SEI.AckTimeoutMS = overlay(dst.SEI.AckTimeoutMS, s.SEI.AckTimeoutMS)
+
+	dst.LivenessInterval = overlay(dst.LivenessInterval, s.Liveness.Interval)
+	dst.LivenessTimeout = overlay(dst.LivenessTimeout, s.Liveness.Timeout)
+	dst.LivenessFailures = overlay(dst.LivenessFailures, s.Liveness.Failures)
+
+	dst.MaxSessionDuration = overlay(dst.MaxSessionDuration, s.Lifecycle.MaxSessionDuration)
+
+	dst.TrafficMaxPayloadSize = overlay(dst.TrafficMaxPayloadSize, s.Traffic.MaxPayloadSize)
+	dst.TrafficMinDelay = overlay(dst.TrafficMinDelay, s.Traffic.MinDelay)
+	dst.TrafficMaxDelay = overlay(dst.TrafficMaxDelay, s.Traffic.MaxDelay)
+
 	return dst
 }
 
-func pickString(cli, yamlVal string) string {
-	if cli != "" {
-		return cli
-	}
-	return yamlVal
-}
-
-func pickInt(cli, yamlVal int) int {
-	if cli != 0 {
-		return cli
-	}
-	return yamlVal
-}
-
-func overlayString(base, override string) string {
-	if override != "" {
+// overlay returns override when it carries a value, otherwise base.
+func overlay[T comparable](base, override T) T {
+	var zero T
+	if override != zero {
 		return override
 	}
-	return base
-}
 
-func overlayInt(base, override int) int {
-	if override != 0 {
-		return override
-	}
 	return base
 }
