@@ -2288,8 +2288,14 @@ class OlcboxVpnService : VpnService() {
             ?.map(::dnsEndpoint)
             ?.firstOrNull()
 
-        val selectedDnsServer = upstreamDnsServer ?: FALLBACK_OLCRTC_DNS_SERVERS
-        val source = if (upstreamDnsServer != null) "upstream" else "fallback"
+        // Keep the fallbacks appended instead of replaced: olcrtc takes a LIST and walks it
+        // in order (protect.splitDNSServers/pickReachableDNS, which really resolves a probe
+        // name through each candidate). A carrier resolver that answers but answers wrong
+        // then fails the probe and signaling moves on, instead of being stranded on it.
+        val selectedDnsServer = upstreamDnsServer
+            ?.let { "$it,$FALLBACK_OLCRTC_DNS_SERVERS" }
+            ?: FALLBACK_OLCRTC_DNS_SERVERS
+        val source = if (upstreamDnsServer != null) "upstream+fallback" else "fallback"
         addLog("Using $source DNS server $selectedDnsServer for olcRTC signaling")
         return selectedDnsServer
     }
