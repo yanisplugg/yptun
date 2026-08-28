@@ -19,6 +19,10 @@ const (
 	// sendLoop must not wait through a full reconnect because it is the only
 	// consumer of both bounded queues. Old-epoch frames are stale anyway.
 	jSessionWaitTimeout = 2 * time.Second
+
+	// colibriClassEndpointMessage is the JVB bridge-channel message class
+	// used for opaque raw payloads (see endpointMessage and decodeRaw).
+	colibriClassEndpointMessage = "EndpointMessage"
 )
 
 var bridgeMagic = [4]byte{'O', 'L', 'R', '1'} //nolint:gochecknoglobals // wire protocol constant
@@ -155,9 +159,9 @@ func (s *Session) sendBridgeFrame(to string, data []byte) {
 // and marshalled as a struct (not a map) to force colibriClass, to,
 // msgPayload in that exact order regardless of Go's map-key sorting.
 type endpointMessage struct {
-	ColibriClass string             `json:"colibriClass"`
-	To           string             `json:"to"`
-	MsgPayload   endpointRawPayload `json:"msgPayload"`
+	ColibriClass string             `json:"colibriClass"` //nolint:tagliatelle // JVB wire protocol uses camelCase
+	To           string             `json:"to"`           //nolint:tagliatelle // JVB wire protocol uses camelCase
+	MsgPayload   endpointRawPayload `json:"msgPayload"`   //nolint:tagliatelle // JVB wire protocol uses camelCase
 }
 
 type endpointRawPayload struct {
@@ -172,16 +176,19 @@ type endpointRawPayload struct {
 func sendEndpointRaw(jSess *j.Session, to string, data []byte) error {
 	br := jSess.Bridge()
 	if br == nil {
-		return fmt.Errorf("bridge not open; call OpenBridge first")
+		return ErrBridgeNotReady
 	}
 	msg := endpointMessage{
-		ColibriClass: "EndpointMessage",
+		ColibriClass: colibriClassEndpointMessage,
 		To:           to,
 		MsgPayload: endpointRawPayload{
 			Raw: base64.StdEncoding.EncodeToString(data),
 		},
 	}
-	return br.SendJSON(msg)
+	if err := br.SendJSON(msg); err != nil {
+		return fmt.Errorf("send endpoint message: %w", err)
+	}
+	return nil
 }
 
 // setJSession installs a session and republishes the readiness signal used by
@@ -330,7 +337,7 @@ func (s *Session) deliverPeerBridgePayload(from string, payload []byte) bool {
 // still on the j library's BridgeSendRaw), for backward compatibility. See
 // olcrtc#143.
 func decodeRaw(m j.BridgeMessage) []byte {
-	if m.Class != "EndpointMessage" {
+	if m.Class != colibriClassEndpointMessage {
 		return nil
 	}
 	enc, ok := rawFieldFrom(m.Fields)
