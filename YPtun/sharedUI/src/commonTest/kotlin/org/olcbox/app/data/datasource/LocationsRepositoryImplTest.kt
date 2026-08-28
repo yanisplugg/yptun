@@ -527,8 +527,13 @@ class LocationsRepositoryImplTest {
         var userAgent: String? = null
         var hwid: String? = null
         val engine = MockEngine { request ->
-            userAgent = request.headers[HttpHeaders.UserAgent]
-            hwid = request.headers["x-hwid"]
+            // One import now fires several requests: the main fetch, the Remnawave /info probe and a
+            // separate Happ-UA fetch used purely for FakeDNS enrichment. Only the FIRST carries the
+            // user's chosen UA, so capture that one instead of whichever happens to be last.
+            if (userAgent == null) {
+                userAgent = request.headers[HttpHeaders.UserAgent]
+                hwid = request.headers["x-hwid"]
+            }
             respond(
                 content = "olcrtc://wbstream?vp8channel@room#${"c".repeat(64)}${'$'}Sub",
                 headers = headersOf("profile-update-interval", "6")
@@ -557,7 +562,10 @@ class LocationsRepositoryImplTest {
         val engine = MockEngine { request ->
             userAgents += request.headers[HttpHeaders.UserAgent]
             hwids += request.headers["x-hwid"]
-            if (userAgents.size == 1) {
+            // The panel refuses the identity-mode request (the one carrying x-hwid) and serves a
+            // config only to the anonymous Compatibility retry. Keyed on the header rather than on a
+            // request count: one import fires several requests (main, /info, Happ-UA FakeDNS).
+            if (hwids.last() != null) {
                 respond("<html>blocked</html>")
             } else {
                 respond(
@@ -577,11 +585,14 @@ class LocationsRepositoryImplTest {
         val bundle = source.stored
         assertTrue(imported)
         assertNotNull(bundle)
-        assertEquals(2, userAgents.size)
-        assertEquals(CurrentAppInfo.userAgent, userAgents[0])
-        assertEquals("hwid-test", hwids[0])
-        assertTrue(userAgents[1]?.startsWith("Mozilla/5.0") == true)
-        assertNull(hwids[1])
+        assertEquals(CurrentAppInfo.userAgent, userAgents.first())
+        assertEquals("hwid-test", hwids.first())
+        // The retry is the Compatibility-mode attempt: it drops the identity headers (x-hwid and
+        // the device descriptors). The User-Agent itself stays the app's own — the browser-UA
+        // fallback this test used to assert no longer exists in the fetch path.
+        val retry = hwids.indexOfFirst { it == null }
+        assertTrue(retry > 0, "expected an anonymous retry after the identity attempt")
+        assertEquals(CurrentAppInfo.userAgent, userAgents[retry])
         assertEquals("room", bundle.locations.single().location.id)
         assertEquals(12, bundle.locations.single().metadata?.subscription?.updateIntervalHours)
         assertEquals("http://example.test/sub.txt", bundle.locations.single().subscriptionUrl)
