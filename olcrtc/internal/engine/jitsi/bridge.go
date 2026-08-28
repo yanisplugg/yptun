@@ -140,12 +140,48 @@ func (s *Session) sendBridgeFrame(to string, data []byte) {
 	if !s.outboundFrameCurrent(data) {
 		return
 	}
-	if err := jSess.BridgeSendRaw(to, data); err != nil {
+	if err := sendEndpointRaw(jSess, to, data); err != nil {
 		if s.closed.Load() {
 			return
 		}
 		logger.Debugf("jitsi bridge send: %v", err)
 	}
+}
+
+// endpointMessage mirrors the wire shape of a Jitsi Videobridge EndpointMessage.
+// Field order matters: some Jackson versions on the bridge side drop the
+// payload field entirely if it appears before "to" (see
+// https://github.com/jitsi/jitsi-videobridge/pull/2424), so this is declared
+// and marshalled as a struct (not a map) to force colibriClass, to,
+// msgPayload in that exact order regardless of Go's map-key sorting.
+type endpointMessage struct {
+	ColibriClass string             `json:"colibriClass"`
+	To           string             `json:"to"`
+	MsgPayload   endpointRawPayload `json:"msgPayload"`
+}
+
+type endpointRawPayload struct {
+	Raw string `json:"raw"`
+}
+
+// sendEndpointRaw sends opaque bytes as msgPayload.raw instead of the
+// nonstandard top-level "raw" field used by the underlying j library's
+// BridgeSendRaw. Per the JVB EndpointMessage docs, the payload belongs under
+// msgPayload; some bridge builds silently drop the frame otherwise. See
+// olcrtc#143.
+func sendEndpointRaw(jSess *j.Session, to string, data []byte) error {
+	br := jSess.Bridge()
+	if br == nil {
+		return fmt.Errorf("bridge not open; call OpenBridge first")
+	}
+	msg := endpointMessage{
+		ColibriClass: "EndpointMessage",
+		To:           to,
+		MsgPayload: endpointRawPayload{
+			Raw: base64.StdEncoding.EncodeToString(data),
+		},
+	}
+	return br.SendJSON(msg)
 }
 
 // setJSession installs a session and republishes the readiness signal used by
@@ -288,12 +324,16 @@ func (s *Session) deliverPeerBridgePayload(from string, payload []byte) bool {
 	return true
 }
 
-// decodeRaw mirrors the j library's unexported colibri.DecodeRaw helper.
+// decodeRaw extracts the base64 payload from an EndpointMessage. It accepts
+// both the standard msgPayload.raw shape (as sent by sendEndpointRaw) and the
+// legacy top-level "raw" field (as sent by older olcrtc builds, or by peers
+// still on the j library's BridgeSendRaw), for backward compatibility. See
+// olcrtc#143.
 func decodeRaw(m j.BridgeMessage) []byte {
 	if m.Class != "EndpointMessage" {
 		return nil
 	}
-	enc, ok := m.Fields["raw"].(string)
+	enc, ok := rawFieldFrom(m.Fields)
 	if !ok {
 		return nil
 	}
@@ -302,6 +342,16 @@ func decodeRaw(m j.BridgeMessage) []byte {
 		return nil
 	}
 	return out
+}
+
+func rawFieldFrom(fields map[string]any) (string, bool) {
+	if payload, ok := fields["msgPayload"].(map[string]any); ok {
+		if raw, ok := payload["raw"].(string); ok {
+			return raw, true
+		}
+	}
+	raw, ok := fields["raw"].(string)
+	return raw, ok
 }
 
 func (s *Session) markBridgeReady() {
