@@ -266,6 +266,9 @@ fun registerOlcRtcBuildTask(
 ) = tasks.register<Exec>(taskName) {
     val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
 
+    // Without an input the task is "up to date" for as long as the output file merely
+    // exists, so a re-vendored olcrtc would ship as a weeks-old binary.
+    inputs.dir(olcrtcRepoDir.get())
     outputs.file(outputFile)
     workingDir = olcrtcRepoDir.get()
     environment("GOOS", goos)
@@ -295,6 +298,9 @@ fun registerOlcRtcLibraryBuildTask(
 ) = tasks.register<Exec>(taskName) {
     val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
 
+    // Without an input the task is "up to date" for as long as the output file merely
+    // exists, so a re-vendored olcrtc would ship as a weeks-old binary.
+    inputs.dir(olcrtcRepoDir.get())
     outputs.file(outputFile)
     workingDir = olcrtcRepoDir.get()
     environment("GOOS", goos)
@@ -533,6 +539,9 @@ fun registerYpTunCoreBuildTask(
 
     inputs.dir(coresRepoDir.resolve("cmd"))
     inputs.file(coresRepoDir.resolve("go.mod"))
+    // olcrtc/mobile is compiled into this core through the path-replace in
+    // cores/go.mod, so a core re-sync has to invalidate it as well.
+    inputs.dir(olcrtcRepoDir.get())
     inputs.property("tags", ypTunCoreBuildTags)
     inputs.property("singboxVersion", ypTunCoreSingboxVersion)
     outputs.file(outputFile)
