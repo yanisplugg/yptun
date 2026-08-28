@@ -41,7 +41,9 @@ type Provider struct{}
 // Engine reports which engine consumes credentials from this auth provider.
 func (Provider) Engine() string { return "jitsi" }
 
-const defaultServiceURL = "https://m.catonmoon.com"
+// LOCAL PATCH (not upstream): keep meet.small-dm.ru as the default. Upstream
+// ships m.catonmoon.com; every re-vendor puts it back, so re-apply this.
+const defaultServiceURL = "https://meet.small-dm.ru"
 
 // DefaultServiceURL returns the default Jitsi Meet service URL used by config
 // defaults and interactive helpers. Users should verify which server is
