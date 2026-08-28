@@ -407,8 +407,12 @@ val buildOlcRtcLibWindowsArm64 = registerOlcRtcLibraryBuildTask(
     outputName = "olcrtc-windows-arm64.dll"
 )
 
+// The name/surname override lists the olcrtc binary loads over its embedded ones
+// (loadNameOverrides in cmd/olcrtc). Upstream moved them from data/ to
+// internal/names/data/ next to the //go:embed that owns them; the re-vendor in PR #28
+// therefore emptied this copy and verifyDesktopNativeResources refused to package.
 val copyOlcRtcDataAssets = tasks.register<Copy>("copyOlcRtcDataAssets") {
-    from(olcrtcRepoDir.map { it.resolve("data") }) {
+    from(olcrtcRepoDir.map { it.resolve("internal/names/data") }) {
         include("names", "surnames")
     }
     into(generatedNativeResources.map { it.dir("olcrtc-data") })
