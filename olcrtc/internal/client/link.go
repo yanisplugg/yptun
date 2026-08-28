@@ -17,6 +17,14 @@ import (
 const peerWaitTimeout = handshake.DefaultTimeout
 
 func (c *Client) bringUpLink(ctx context.Context, cfg Config, cancel context.CancelFunc) error {
+	// LOCAL PATCH (not upstream): serialize the whole bring-up against
+	// handleReconnect. Since upstream 86173f98 moved WatchConnection ahead of
+	// the handshake, a mid-handshake drop can run handleReconnect concurrently
+	// with this function - it nils c.conn/c.pair and reopens a fresh session,
+	// which installPairLocked below would then silently overwrite with the
+	// dead one. Bounded: every step below has its own timeout.
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
 	linkCfg := tunnelcore.BuildTransportConfig(tunnelcore.LinkConfig{
 		Provider: cfg.Provider, RoomURL: cfg.RoomURL, Engine: cfg.Engine,
 		URL: cfg.URL, Token: cfg.Token, ProviderToken: cfg.ProviderToken,
@@ -53,10 +61,16 @@ func (c *Client) bringUpLink(ctx context.Context, cfg Config, cancel context.Can
 	// with nobody consuming it yet - a deadlock where the fix (reconnect)
 	// waits on the very handshake it needs to unstick.
 	c.goTracked(func() { link.WatchConnection(ctx) })
-	c.conn = muxconn.New(link, c.keys)
-	c.controlConn = muxconn.NewControl(link, c.keys)
+	// LOCAL PATCH (not upstream): c.onData reads c.conn under sessMu from the
+	// transport delivery goroutine, which is live from link.Connect() onward,
+	// so these two writes must take the lock as well.
+	conn := muxconn.New(link, c.keys)
+	controlConn := muxconn.NewControl(link, c.keys)
+	c.sessMu.Lock()
+	c.conn, c.controlConn = conn, controlConn
+	c.sessMu.Unlock()
 	pair, err := tunnelcore.NewSessionPairWithConns(
-		link, c.conn, c.controlConn, tunnelcore.ClientRole,
+		link, conn, controlConn, tunnelcore.ClientRole,
 	)
 	if err != nil {
 		if pair != nil {
