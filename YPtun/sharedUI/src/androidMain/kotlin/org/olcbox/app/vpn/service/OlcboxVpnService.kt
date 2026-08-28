@@ -969,11 +969,6 @@ class OlcboxVpnService : VpnService() {
      * credentials (password-protected, loopback-only — no open proxy).
      */
     private suspend fun startOlcrtcSocks(config: LocationConfig, deviceId: String, port: Int, enableBond: Boolean = false) {
-        addLog(
-            "VVDBG startOlcrtcSocks: usesMultiRoom=${config.usesMultiRoom()} " +
-                "multiRoomEnabled=${config.multiRoomEnabled} extraRooms=${config.extraRooms.size} " +
-                "id=${config.id.take(40)}"
-        )
         if (config.usesMultiRoom()) {
             val specs = config.multiRoomSpecs().map {
                 OlcrtcRoomManager.RoomSpec(
