@@ -20,7 +20,7 @@ class JvmLocationsDataSourceImplTest {
             locations = listOf(
                 LocationEntry.from(
                     "desk",
-                    LocationConfig("Desktop", "room", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM)
+                    LocationConfig(name = "Desktop", id = "room", key = "a".repeat(64), bypassProvider = LocationConfig.PROVIDER_WB_STREAM)
                 )
             )
         )

@@ -24,11 +24,21 @@ class LocationsRepositoryImplTest {
     fun exportsAndImportsBundleV5WithActiveLocation() = runTest {
         val first = LocationEntry.from(
             "amsterdam",
-            LocationConfig("Amsterdam", "room-a", "key-a", LocationConfig.PROVIDER_JAZZ)
+            LocationConfig(
+                name = "Amsterdam",
+                id = "room-a",
+                key = "key-a",
+                bypassProvider = LocationConfig.PROVIDER_JAZZ
+            )
         )
         val second = LocationEntry.from(
             "berlin",
-            LocationConfig("Berlin", "room-b", "key-b", LocationConfig.PROVIDER_TELEMOST)
+            LocationConfig(
+                name = "Berlin",
+                id = "room-b",
+                key = "key-b",
+                bypassProvider = LocationConfig.PROVIDER_TELEMOST
+            )
         )
         val source = FakeLocationsDataSource(
             stored = LocationBundleV4(
@@ -442,7 +452,12 @@ class LocationsRepositoryImplTest {
                 locations = listOf(
                     LocationEntry.from(
                         "imported_room-01",
-                        LocationConfig("Old", "room-old", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM)
+                        LocationConfig(
+                            name = "Old",
+                            id = "room-old",
+                            key = "a".repeat(64),
+                            bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+                        )
                     )
                 )
             )
@@ -468,7 +483,12 @@ class LocationsRepositoryImplTest {
                 locations = listOf(
                     LocationEntry.from(
                         "same",
-                        LocationConfig("Old", "room-old", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM)
+                        LocationConfig(
+                            name = "Old",
+                            id = "room-old",
+                            key = "a".repeat(64),
+                            bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+                        )
                     )
                 )
             )
@@ -575,12 +595,22 @@ class LocationsRepositoryImplTest {
                 locations = listOf(
                     LocationEntry.from(
                         "alpha",
-                        LocationConfig("Alpha", "room-alpha", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM),
+                        LocationConfig(
+                            name = "Alpha",
+                            id = "room-alpha",
+                            key = "a".repeat(64),
+                            bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+                        ),
                         subscriptionUrl = "https://example.test/alpha"
                     ),
                     LocationEntry.from(
                         "beta",
-                        LocationConfig("Beta", "room-beta", "b".repeat(64), LocationConfig.PROVIDER_WB_STREAM),
+                        LocationConfig(
+                            name = "Beta",
+                            id = "room-beta",
+                            key = "b".repeat(64),
+                            bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+                        ),
                         subscriptionUrl = "https://example.test/beta"
                     )
                 )
@@ -614,7 +644,12 @@ class LocationsRepositoryImplTest {
                 locations = listOf(
                     LocationEntry.from(
                         "alpha",
-                        LocationConfig("Alpha", "room-alpha", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM),
+                        LocationConfig(
+                            name = "Alpha",
+                            id = "room-alpha",
+                            key = "a".repeat(64),
+                            bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+                        ),
                         subscriptionUrl = "https://example.test/alpha"
                     )
                 )
@@ -648,7 +683,8 @@ class LocationsRepositoryImplTest {
                     LocationEntry.from(
                         "srv-a",
                         LocationConfig(
-                            "A", "room-a", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM,
+                            name = "A", id = "room-a", key = "a".repeat(64),
+                            bypassProvider = LocationConfig.PROVIDER_WB_STREAM,
                             transport = LocationConfig.TRANSPORT_VP8CHANNEL
                         ),
                         subscriptionUrl = url
@@ -656,7 +692,8 @@ class LocationsRepositoryImplTest {
                     LocationEntry.from(
                         "srv-b",
                         LocationConfig(
-                            "B", "room-b", "b".repeat(64), LocationConfig.PROVIDER_WB_STREAM,
+                            name = "B", id = "room-b", key = "b".repeat(64),
+                            bypassProvider = LocationConfig.PROVIDER_WB_STREAM,
                             transport = LocationConfig.TRANSPORT_VP8CHANNEL
                         ),
                         subscriptionUrl = url
@@ -712,17 +749,32 @@ class LocationsRepositoryImplTest {
     fun subscriptionSharingListsDistinctUrls() {
         val first = LocationEntry.from(
             "first",
-            LocationConfig("First", "room-a", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM),
+            LocationConfig(
+                name = "First",
+                id = "room-a",
+                key = "a".repeat(64),
+                bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+            ),
             subscriptionUrl = "https://example.test/a"
         )
         val second = LocationEntry.from(
             "second",
-            LocationConfig("Second", "room-b", "b".repeat(64), LocationConfig.PROVIDER_WB_STREAM),
+            LocationConfig(
+                name = "Second",
+                id = "room-b",
+                key = "b".repeat(64),
+                bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+            ),
             subscriptionUrl = "https://example.test/b"
         )
         val third = LocationEntry.from(
             "third",
-            LocationConfig("Third", "room-c", "c".repeat(64), LocationConfig.PROVIDER_WB_STREAM),
+            LocationConfig(
+                name = "Third",
+                id = "room-c",
+                key = "c".repeat(64),
+                bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+            ),
             subscriptionUrl = "https://example.test/a"
         )
 

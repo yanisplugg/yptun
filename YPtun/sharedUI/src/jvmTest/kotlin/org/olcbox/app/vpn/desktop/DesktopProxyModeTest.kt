@@ -61,7 +61,7 @@ class DesktopProxyModeTest {
             )
             val command = OlcRtcCommand(
                 binary = Path.of("/tmp/olcrtc"),
-                location = LocationConfig("Test", "room-$provider", "b".repeat(64), provider),
+                location = LocationConfig(name = "Test", id = "room-$provider", key = "b".repeat(64), bypassProvider = provider),
                 socksHost = "127.0.0.1",
                 socksPort = 10808
             )
