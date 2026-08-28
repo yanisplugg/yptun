@@ -1019,6 +1019,13 @@ class OlcboxVpnService : VpnService() {
         mobileRuntime.setDeviceID(deviceId)
         mobileRuntime.setSocksPort(port.toLong())
         mobileRuntime.setSocksCredentials(socksUsername, socksPassword)
+        // A generation left in "stopping" (a teardown that outran its timeout) makes every
+        // later start fail with ErrAlreadyRunning until the app is killed, so give the old
+        // one a bounded teardown before starting. A no-op on the normal path.
+        if (mobileRuntime.isRunning()) {
+            addLog("olcRTC still active before start - tearing the previous run down first")
+            runCatching { mobileRuntime.stop(PREVIOUS_STOP_WAIT_MS) }
+        }
         mobileRuntime.start()
         mobileRuntime.waitReady(MOBILE_READY_TIMEOUT_MS)
     }
@@ -2926,7 +2933,9 @@ class OlcboxVpnService : VpnService() {
         trustTunnelClient = null
         val provider = lastMobileProvider
         val wasRunning = mobileRuntime.isRunning()
-        runCatching { mobileRuntime.stop(0) }
+        // stop(0) means Runtime's own 5 s default; on timeout it stays "stopping" and every
+        // later start returns ErrAlreadyRunning. Wait as long as a reconnect already does.
+        runCatching { mobileRuntime.stop(PREVIOUS_STOP_WAIT_MS) }
         if (wasRunning && provider == LocationConfig.PROVIDER_JITSI) {
             lastJitsiStopCompletedAtMs = System.currentTimeMillis()
         }
