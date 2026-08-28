@@ -434,13 +434,26 @@ class LocationsRepositoryImplTest {
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_WB_STREAM)
         )
+        // Jitsi carries all three: the olcRTC core registers transports globally and the auth
+        // provider is independent of them. datachannel stays FIRST because it is the default and
+        // the known-good pairing.
         assertEquals(
-            listOf(LocationConfig.TRANSPORT_DATACHANNEL),
+            listOf(
+                LocationConfig.TRANSPORT_DATACHANNEL,
+                LocationConfig.TRANSPORT_VP8CHANNEL,
+                LocationConfig.TRANSPORT_SEICHANNEL
+            ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JITSI)
         )
+        // A transport the provider does support is kept as-is...
         assertEquals(
-            LocationConfig.TRANSPORT_DATACHANNEL,
+            LocationConfig.TRANSPORT_VP8CHANNEL,
             LocationConfig.normalizeTransport(LocationConfig.TRANSPORT_VP8CHANNEL, LocationConfig.PROVIDER_JITSI)
+        )
+        // ...and one it does not falls back to that provider's first supported transport.
+        assertEquals(
+            LocationConfig.TRANSPORT_VP8CHANNEL,
+            LocationConfig.normalizeTransport(LocationConfig.TRANSPORT_DATACHANNEL, LocationConfig.PROVIDER_TELEMOST)
         )
     }
 
