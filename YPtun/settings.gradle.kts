@@ -26,9 +26,6 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
-        flatDir {
-            dirs("androidApp/jniLibs/arm64-v8a")
-        }
     }
 }
 include(":sharedUI")
