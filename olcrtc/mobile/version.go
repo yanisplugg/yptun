@@ -4,7 +4,7 @@ import "log"
 
 // olcrtcVersion identifies the vendored olcRTC core build (upstream commit + update date). Bump it
 // whenever the core is re-synced from upstream; surfaced in the app's settings.
-const olcrtcVersion = "2026.08.26-f616f57"
+const olcrtcVersion = "2026.08.28-f7068190"
 
 // Version returns the olcRTC core version for display in the app.
 func Version() string { return olcrtcVersion }
