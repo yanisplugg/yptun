@@ -1104,17 +1104,6 @@ private fun LazyListScope.vkTurnSection(
                     }
                 }
             }
-            // Bonding (TCP striping) is only valid for the proxy/tcp exit — freeturn rejects it in
-            // udp mode. For WireGuard/AmneziaWG (udp), aggregation comes from "streams" + multiple
-            // VK call links, so the switch is hidden there to avoid a start failure.
-            if (!isWdtt && draft.outbound == VkTurnConfig.OUTBOUND_PROXY) {
-                VkTurnSwitchRow(
-                    label = LocalStrings.current.bondingMultipath,
-                    checked = draft.bond,
-                    enabled = enabled,
-                    onCheckedChange = { v -> onChange { it.copy(bond = v) } }
-                )
-            }
         }
     }
 

@@ -686,7 +686,6 @@ interface Strings {
     val obfuscationProfile: String
     val obfuscationKey: String
     val streamsParallel: String
-    val bondingMultipath: String
     val privateKey: String
     val peerPublicKey: String
     val addressField: String
@@ -1283,7 +1282,6 @@ object RuStrings : Strings {
     override val obfuscationProfile = "Профиль обфускации"
     override val obfuscationKey = "Ключ обфускации"
     override val streamsParallel = "Потоки (параллельные ретрансляторы)"
-    override val bondingMultipath = "Агрегация каналов (multipath)"
     override val privateKey = "Приватный ключ"
     override val peerPublicKey = "Публичный ключ пира"
     override val addressField = "Адрес"
@@ -1880,7 +1878,6 @@ object EnStrings : Strings {
     override val obfuscationProfile = "Obfuscation profile"
     override val obfuscationKey = "Obfuscation key"
     override val streamsParallel = "Streams (parallel relays)"
-    override val bondingMultipath = "Bonding (multipath)"
     override val privateKey = "Private key"
     override val peerPublicKey = "Peer public key"
     override val addressField = "Address"
@@ -2477,7 +2474,6 @@ object FaStrings : Strings {
     override val obfuscationProfile = "نمایهٔ مبهم‌سازی"
     override val obfuscationKey = "کلید مبهم‌سازی"
     override val streamsParallel = "جریان‌ها (بازپخش‌های موازی)"
-    override val bondingMultipath = "تجمیع (چندمسیره)"
     override val privateKey = "کلید خصوصی"
     override val peerPublicKey = "کلید عمومی همتا"
     override val addressField = "نشانی"
@@ -3074,7 +3070,6 @@ object ZhStrings : Strings {
     override val obfuscationProfile = "混淆方案"
     override val obfuscationKey = "混淆密钥"
     override val streamsParallel = "流（并行中继）"
-    override val bondingMultipath = "绑定（多路径）"
     override val privateKey = "私钥"
     override val peerPublicKey = "对端公钥"
     override val addressField = "地址"

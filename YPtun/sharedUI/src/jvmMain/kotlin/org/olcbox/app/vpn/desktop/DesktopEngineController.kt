@@ -831,8 +831,8 @@ internal class DesktopEngineController(
                 )
             }
         } else {
-            val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
-            else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+            // bond=1 в старых ссылках ядро 3.2.0 игнорирует — вырезать его больше не нужно.
+            val freeturnUri = vk.uri
             log("Starting VK-TURN freeturn listener on $listenAddr")
             YpTunCore.ftStart(freeturnUri, listenAddr, vk.vkLink, vk.streams)
 

@@ -32,7 +32,6 @@ data class VkTurnDraft(
     val transport: String = "tcp",
     val mode: String = "udp",
     val obfProfile: String = "rtpopus",
-    val bond: Boolean = false,
     val peerHost: String = "",
     val peerPort: String = "",
     val obfKey: String = "",
@@ -271,10 +270,9 @@ object VkTurnComposer {
         val params = buildList {
             mode.trim().takeIf { it.isNotBlank() }?.let { add("mode=$it") }
             draft.obfProfile.trim().takeIf { it.isNotBlank() }?.let { add("obf-profile=$it") }
-            // freeturn rejects `-bond` unless mode==tcp ("-bond requires -mode tcp"); emitting it in
-            // udp mode (WireGuard/AmneziaWG) makes the client fail to start → the whole tunnel dies.
-            // UDP aggregation is instead achieved via multiple streams (-n) and multiple VK links.
-            if (draft.bond && mode == "tcp") add("bond=1")
+            // bond=1 больше не пишем: ядро free-turn-proxy 3.2.0 выпилило побайтовый striping,
+            // tcprelay сам раскидывает соединения по сессиям. Старые ссылки с bond=1 импортируются
+            // как раньше — поле просто игнорируется.
             if (wgB64.isNotBlank()) add("wg=$wgB64")
         }
         val transport = draft.transport.trim()
@@ -333,7 +331,6 @@ object VkTurnComposer {
                 val params = UriCodec.parseQuery(transportPart.substring(open + 1, close))
                 params["mode"]?.let { result = result.copy(mode = it) }
                 params["obf-profile"]?.let { result = result.copy(obfProfile = it) }
-                params["bond"]?.let { result = result.copy(bond = it == "1" || it == "true") }
                 params["wg"]?.let { wg ->
                     SubscriptionDecoder.decodeBase64Chunk(wg)?.let { result = applyWgConf(result, it) }
                 }

@@ -1774,10 +1774,9 @@ class OlcboxVpnService : VpnService() {
                         cancelVkCaptchaNotification()
                     }
                 })
-                // freeturn rejects `bond=1` unless mode==tcp; an old/imported URI carrying it in a udp
-                // (WireGuard/AmneziaWG) tunnel makes the client fail to start. Strip it defensively.
-                val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
-                    else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+                // bond=1 в старых ссылках ядро 3.2.0 просто игнорирует (раньше оно падало на нём в
+                // udp-режиме, поэтому поле вырезалось здесь), так что URI уходит как есть.
+                val freeturnUri = vk.uri
                 // Parallel TURN stream count, scaled GENTLY with the number of VK call links. The earlier
                 // aggressive scaling (links×10) made it SLOWER, not faster: a single WireGuard flow sprayed
                 // across 20-64 TURN paths of differing latency reorders past WG's replay window → drops →
@@ -1805,7 +1804,6 @@ class OlcboxVpnService : VpnService() {
                     val n = freeturnServers.size
                     val specsJson = Json.encodeToString(buildJsonArray {
                         freeturnServers.forEachIndexed { idx, u ->
-                            val sUri = u.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
                             // This server's share of the call links; if fewer links than servers, wrap
                             // so every relay still gets at least one call.
                             val myLinks = allLinks.filterIndexed { li, _ -> li % n == idx }
@@ -1816,7 +1814,7 @@ class OlcboxVpnService : VpnService() {
                                 .let { maxOf(vk.streams.takeIf { s -> s > 0 } ?: 0, it) }
                                 .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
                             addJsonObject {
-                                put("uri", sUri)
+                                put("uri", u)
                                 put("listenAddr", "127.0.0.1:${vk.listenPort + idx}")
                                 put("vkLink", myLinks.joinToString("\n"))
                                 put("streams", myStreams)
