@@ -785,7 +785,7 @@ class DesktopVpnManager private constructor(
             runCatching { engineController.stopAll() }
             runCatching { org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0) }
             engineLocation = null
-            stopProcess(process)
+            stopProcess(process, privileged = (activeDesktopMode ?: DesktopMode.current()) == DesktopMode.LinuxTun)
             process = null
             deleteOlcRtcConfig()
 
@@ -1008,7 +1008,8 @@ class DesktopVpnManager private constructor(
 
         setStatus(VpnStatus.Stopping)
 
-        when (activeDesktopMode ?: DesktopMode.current()) {
+        val stoppingDesktopMode = activeDesktopMode ?: DesktopMode.current()
+        when (stoppingDesktopMode) {
             DesktopMode.LinuxTun -> {
                 runCatching {
                     linuxTunController.stop(tunProcess)
@@ -1045,7 +1046,7 @@ class DesktopVpnManager private constructor(
         runCatching { org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0) }
         engineLocation = null
 
-        stopProcess(process)
+        stopProcess(process, privileged = stoppingDesktopMode == DesktopMode.LinuxTun)
         process = null
         deleteOlcRtcConfig()
 
@@ -1244,7 +1245,7 @@ class DesktopVpnManager private constructor(
         }.isSuccess
     }
 
-    private fun stopProcess(target: Process?) {
+    private suspend fun stopProcess(target: Process?, privileged: Boolean = false) {
         if (target == null) return
         if (!target.isAlive) return
 
@@ -1261,6 +1262,23 @@ class DesktopVpnManager private constructor(
 
             target.destroyForcibly()
             target.waitFor(PROCESS_KILL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        }
+
+        // A pkexec-elevated olcRTC now runs as root, and this JVM does not: destroy()/destroyForcibly()
+        // above call kill() as our own uid, which cannot signal a process owned by a different, more
+        // privileged one - even one we originally spawned. Confirmed live (2026-08-29): a plain `kill`
+        // on such a pid fails with EPERM, and the process survives every disconnect untouched, then goes
+        // on to fool the NEXT connect's canConnectToSocks() readiness check into firing early. Escalate.
+        if (privileged && target.isAlive) {
+            val pid = target.pid()
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val killProcess = ProcessBuilder(LinuxPrivilege.command(listOf("kill", pid.toString())))
+                        .redirectErrorStream(true)
+                        .start()
+                    killProcess.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                }
+            }
         }
     }
 
