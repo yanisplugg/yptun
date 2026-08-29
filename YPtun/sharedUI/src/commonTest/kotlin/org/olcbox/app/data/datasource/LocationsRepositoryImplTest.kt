@@ -345,7 +345,7 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
-    fun telemostLocationsForceVp8AndOtherProvidersCanUseDatachannel() = runTest {
+    fun importedTransportSurvivesForEveryProvider() = runTest {
         val source = FakeLocationsDataSource()
         val input = """
             {
@@ -375,7 +375,9 @@ class LocationsRepositoryImplTest {
 
         val imported = source.stored
         assertNotNull(imported)
-        assertEquals(LocationConfig.TRANSPORT_VP8CHANNEL, imported.locations[0].location.transport)
+        // Раньше telemost+datachannel подменялся на vp8 прямо при импорте, и поднятый на VPS сервер
+        // было нечем открыть. Теперь транспорт из конфига доезжает как есть — для любого сервиса.
+        assertEquals(LocationConfig.TRANSPORT_DATACHANNEL, imported.locations[0].location.transport)
         assertEquals(LocationConfig.TRANSPORT_DATACHANNEL, imported.locations[1].location.transport)
     }
 
@@ -415,10 +417,14 @@ class LocationsRepositoryImplTest {
 
     @Test
     fun exposesAllWorkingProviderTransportPairs() {
+        // Ни одна пара сервис/транспорт не вырезается: ядро регистрирует транспорты глобально, и
+        // сервер спокойно поднимается, например, в telemost+datachannel. Порядок = подсказка
+        // «лучшее первым», а не запрет.
         assertEquals(
             listOf(
                 LocationConfig.TRANSPORT_VP8CHANNEL,
-                LocationConfig.TRANSPORT_SEICHANNEL
+                LocationConfig.TRANSPORT_SEICHANNEL,
+                LocationConfig.TRANSPORT_DATACHANNEL
             ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_TELEMOST)
         )
@@ -431,7 +437,11 @@ class LocationsRepositoryImplTest {
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ)
         )
         assertEquals(
-            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ),
+            listOf(
+                LocationConfig.TRANSPORT_VP8CHANNEL,
+                LocationConfig.TRANSPORT_SEICHANNEL,
+                LocationConfig.TRANSPORT_DATACHANNEL
+            ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_WB_STREAM)
         )
         // Jitsi carries all three: the olcRTC core registers transports globally and the auth
@@ -450,9 +460,10 @@ class LocationsRepositoryImplTest {
             LocationConfig.TRANSPORT_VP8CHANNEL,
             LocationConfig.normalizeTransport(LocationConfig.TRANSPORT_VP8CHANNEL, LocationConfig.PROVIDER_JITSI)
         )
-        // ...and one it does not falls back to that provider's first supported transport.
+        // ...и раньше НЕ поддержанный подменялся на первый из списка. Теперь подменять нечего:
+        // выбранный пользователем транспорт доезжает до конфига как есть, каким бы ни был сервис.
         assertEquals(
-            LocationConfig.TRANSPORT_VP8CHANNEL,
+            LocationConfig.TRANSPORT_DATACHANNEL,
             LocationConfig.normalizeTransport(LocationConfig.TRANSPORT_DATACHANNEL, LocationConfig.PROVIDER_TELEMOST)
         )
     }

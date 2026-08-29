@@ -68,8 +68,20 @@ val libboxBuildTags =
     "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic,with_naive_outbound"
 
 // sing-box version embedded into libbox via ldflags (-X constant.Version); otherwise libbox.Version()
-// reports "unknown". Keep in sync with the pinned sing-box checkout (v1.13.18, see comment above).
-val singboxVersion = "1.13.18"
+// reports "unknown". Читается ИЗ вендоренного дерева (первый заголовок в docs/changelog.md), а не
+// вбивается руками: константа уже разъехалась однажды — ядро обновили до 1.13.19, а в настройках
+// приложения ещё висела 1.13.18. Через providers.fileContents, чтобы правка чейнджлога честно
+// инвалидировала configuration cache.
+val singboxChangelog = objects.fileProperty().fileValue(singboxRepoDir.resolve("docs/changelog.md"))
+val singboxVersion: String = providers
+    .fileContents(singboxChangelog)
+    .asText
+    .map { text ->
+        text.lineSequence()
+            .mapNotNull { Regex("""^####\s+(\d+\.\d+\.\d+\S*)\s*$""").find(it.trim())?.groupValues?.get(1) }
+            .firstOrNull() ?: "unknown"
+    }
+    .getOrElse("unknown")
 
 // --- Combined cores AAR: olcrtc (mobile) + sing-box (libbox) in ONE gomobile bind ---
 // Two separate gomobile AARs would ship two Go runtimes (duplicate go.* classes + two
@@ -289,3 +301,4 @@ kotlin {
             }
         }
 }
+

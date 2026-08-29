@@ -1773,6 +1773,10 @@ private fun FreeturnInstallDialog(
                                     // поэтому берём ровно те, что он сгенерировал, а не дефолты.
                                     ok.awg?.let { a ->
                                         base.copy(
+                                            // MTU выставляем явно: туннель едет внутри TURN, и на
+                                            // дефолтных 1420 полноразмерный кадр режется по дороге.
+                                            // Столько же ставит себе сервер и берёт сам freeturn.
+                                            wgMtu = "1280",
                                             awgJc = a.jc, awgJmin = a.jmin, awgJmax = a.jmax,
                                             awgS1 = a.s1, awgS2 = a.s2,
                                             awgH1 = a.h1, awgH2 = a.h2, awgH3 = a.h3, awgH4 = a.h4,

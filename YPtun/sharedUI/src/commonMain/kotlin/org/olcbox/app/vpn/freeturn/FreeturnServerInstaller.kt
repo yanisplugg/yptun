@@ -294,7 +294,8 @@ private fun awgBackend(port: Int, net: Int, wgPort: Int): String {
         rnd() { od -An -N4 -tu4 /dev/urandom | tr -d ' \n'; }
         jc=${d}(( ${d}(rnd) % 6 + 3 )); jmin=40; jmax=70
         s1=${d}(( ${d}(rnd) % 50 + 15 )); s2=${d}(( ${d}(rnd) % 50 + 15 ))
-        [ ${d}(( ${d}s1 + 56 )) -eq "${d}s2" ] && s2=${d}(( ${d}s2 + 1 ))
+        # `[ ... ] && ...` под `set -e` роняет скрипт, когда условие ЛОЖНО, а это обычный случай.
+        if [ ${d}(( ${d}s1 + 56 )) -eq "${d}s2" ]; then s2=${d}(( ${d}s2 + 1 )); fi
         hb=${d}(( ${d}(rnd) % 1000000000 + 5 ))
         h1=${d}hb; h2=${d}(( ${d}hb + 1 )); h3=${d}(( ${d}hb + 2 )); h4=${d}(( ${d}hb + 3 ))
         spriv=${d}(wg genkey); spub=${d}(printf '%s' "${d}spriv" | wg pubkey)
@@ -315,6 +316,9 @@ private fun awgBackend(port: Int, net: Int, wgPort: Int): String {
         while [ ! -S /var/run/amneziawg/${d}iface.sock ] && [ \${d}i -lt 50 ]; do sleep 0.2; i=\${d}(( \${d}i + 1 )); done
         socat - UNIX-CONNECT:/var/run/amneziawg/${d}iface.sock < /etc/amneziawg/${d}iface.uapi
         ip addr add 10.7.$net.1/24 dev ${d}iface 2>/dev/null || true
+        # 1280 - безопасный MTU для WireGuard поверх TURN (столько же берёт сам freeturn в своём
+        # встроенном туннеле): иначе полноразмерный кадр режется по дороге и теряется.
+        ip link set ${d}iface mtu 1280
         ip link set ${d}iface up
         sysctl -w net.ipv4.ip_forward=1 >/dev/null
         wan=\${d}(ip route show default 2>/dev/null | awk '/default/ {print \${d}5; exit}')
@@ -341,5 +345,10 @@ private fun awgBackend(port: Int, net: Int, wgPort: Int): String {
         systemctl enable --now ${d}iface
         sleep 1
         systemctl is-active ${d}iface >/dev/null || { echo "AmneziaWG-интерфейс ${d}iface не поднялся"; journalctl -u ${d}iface -n 20 --no-pager 2>/dev/null || true; exit 1; }
+        # Спрашиваем у самого устройства, что в него доехало: пустой ответ = UAPI-конфиг не применился,
+        # и туннель будет молча не работать (сокет есть, ключей и обфускации нет).
+        awgstate=${d}(printf 'get=1\n\n' | socat - UNIX-CONNECT:/var/run/amneziawg/${d}iface.sock 2>/dev/null || true)
+        echo "${d}awgstate" | grep -q '^listen_port=' || { echo "AmneziaWG: устройство не приняло конфиг (UAPI пуст)"; exit 1; }
+        echo "AmneziaWG ${d}iface: ${d}(echo "${d}awgstate" | grep -c '^public_key=') пир(ов), listen_port=${d}(echo "${d}awgstate" | sed -n 's/^listen_port=//p'), jc=${d}jc s1=${d}s1 s2=${d}s2"
     """.trimIndent()
 }
