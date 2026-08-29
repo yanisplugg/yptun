@@ -596,6 +596,29 @@ class LocationViewModel(
         validateKey(value)
     }
 
+    /**
+     * Раскладывает результат установки olcRTC на VPS по локации: первая комната — основная, остальные
+     * уезжают в extraRooms и включают мультирум. Ключ и сервис/транспорт берём такие же, как на
+     * сервере: разойдись хоть одно поле — комната поднимется, а трафик не пойдёт.
+     */
+    fun applyOlcRtcServerInstall(provider: String, transport: String, rooms: List<String>, key: String) {
+        val clean = rooms.map { it.trim() }.filter { it.isNotBlank() }
+        if (clean.isEmpty()) return
+        val extras = clean.drop(1).take(LocationConfig.MAX_EXTRA_ROOMS).map {
+            ExtraRoom(provider = provider, transport = transport, room = it, key = key)
+        }
+        editingConfig = editingConfig.copy(
+            bypassProvider = provider,
+            transport = LocationConfig.normalizeTransport(transport, provider),
+            id = clean.first(),
+            key = key,
+            extraRooms = extras,
+            multiRoomEnabled = extras.isNotEmpty(),
+        )
+        validateServer(clean.first())
+        validateKey(key)
+    }
+
     // --- Multi-room (Stealth/Chain aggregation) ---
     fun onMultiRoomToggle(enabled: Boolean) {
         editingConfig = editingConfig.copy(multiRoomEnabled = enabled)

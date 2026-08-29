@@ -189,6 +189,15 @@ fun LocationSettingsScreen(
         )
     }
 
+    var showOlcRtcInstall by remember { mutableStateOf(false) }
+    if (showOlcRtcInstall) {
+        OlcRtcInstallDialog(
+            config = viewModel.editingConfig,
+            onApply = viewModel::applyOlcRtcServerInstall,
+            onDismiss = { showOlcRtcInstall = false }
+        )
+    }
+
     var showDnsttInstall by remember { mutableStateOf(false) }
     if (showDnsttInstall) {
         DnsttInstallDialog(
@@ -433,6 +442,17 @@ fun LocationSettingsScreen(
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
                 )
+            }
+
+            if (allowVpsAutoInstall) {
+                item {
+                    // Своя кнопка рядом с комнатой и ключом: у olcRTC сервер задаётся ровно этими
+                    // полями, и установка их же и заполняет.
+                    TextButton(
+                        enabled = !isSaving,
+                        onClick = { showOlcRtcInstall = true }
+                    ) { Text("Установить olcRTC на VPS") }
+                }
             }
 
             item {
@@ -1306,7 +1326,7 @@ private fun LazyListScope.vkTurnSection(
  * button — so the user can paste the full SSH log when reporting an install problem.
  */
 @Composable
-private fun InstallLogView(log: List<String>, logScroll: ScrollState) {
+internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
     if (log.isEmpty()) return
     val clipboard = LocalClipboardManager.current
     Row(
@@ -2365,7 +2385,7 @@ private fun TransportPicker(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsDropdown(
+internal fun SettingsDropdown(
     label: String,
     selectedValue: String,
     options: List<String>,
