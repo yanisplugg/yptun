@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
+	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 )
 
 // serveSocks accepts SOCKS5 clients on ln and routes them through the AmneziaWG netstack tnet.

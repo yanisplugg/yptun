@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package ipc
@@ -8,7 +8,7 @@ package ipc
 import (
 	"net"
 
-	"github.com/amnezia-vpn/amneziawg-go/ipc/namedpipe"
+	"github.com/amnezia-vpn/amneziawg-go/v3/ipc/namedpipe"
 	"golang.org/x/sys/windows"
 )
 
