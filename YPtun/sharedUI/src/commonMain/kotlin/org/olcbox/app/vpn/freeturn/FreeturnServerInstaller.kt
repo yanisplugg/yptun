@@ -83,6 +83,15 @@ interface FreeturnServerInstaller {
      * artefacts on success, or a [Result.failure] carrying the SSH/install error.
      */
     suspend fun install(options: FreeturnInstallOptions, onLog: (String) -> Unit): Result<FreeturnInstallResult>
+
+    /**
+     * Сносит с VPS то, что поставил [install] на порту [FreeturnInstallOptions.freeturnPort]: службу,
+     * туннельный выход (любой из двух), конфиги и правило фаервола. Из настроек нужны только адрес,
+     * доступ по SSH и порт. Реализация по умолчанию отвечает отказом — платформы без SSH-клиента
+     * удалять тоже не умеют.
+     */
+    suspend fun uninstall(options: FreeturnInstallOptions, onLog: (String) -> Unit): Result<String> =
+        Result.failure(UnsupportedOperationException("Удаление freeturn-сервера доступно только в Android-приложении"))
 }
 
 /**
@@ -135,30 +144,6 @@ internal fun buildInstallScript(options: FreeturnInstallOptions): String {
         [ -n "${d}wan" ] || wan=eth0
         port=$port
         svc=freeturn-server-${d}port
-        # --- Idempotent teardown: снимаем службу и ОБА возможных бэкенда этого порта, чтобы
-        #     переустановка (в том числе со сменой типа выхода) не оставила старый туннель жить. ---
-        if systemctl list-unit-files 2>/dev/null | grep -q "^${d}svc.service" || [ -f /etc/systemd/system/${d}svc.service ]; then
-          echo "Обнаружена служба ${d}svc — удаляю и переустанавливаю с новыми параметрами"
-        fi
-        systemctl disable --now ${d}svc 2>/dev/null || true
-        rm -f /etc/systemd/system/${d}svc.service
-        systemctl stop wg-quick@ftwg$port 2>/dev/null || true
-        wg-quick down ftwg$port 2>/dev/null || true
-        rm -f /etc/wireguard/ftwg$port.conf
-        systemctl disable --now ftawg$port 2>/dev/null || true
-        rm -f /etc/systemd/system/ftawg$port.service /usr/local/bin/ftawg$port.sh /etc/amneziawg/ftawg$port.uapi
-        ip link del ftawg$port 2>/dev/null || true
-        # Legacy single-server install (old script used the fixed names freeturn-server/ftwg) — tear it
-        # down too, but ONLY if it was bound to THIS port, so a different-port legacy server survives.
-        if [ -f /etc/systemd/system/freeturn-server.service ] && grep -q "0.0.0.0:${d}port " /etc/systemd/system/freeturn-server.service; then
-          systemctl disable --now freeturn-server 2>/dev/null || true
-          rm -f /etc/systemd/system/freeturn-server.service
-          systemctl stop wg-quick@ftwg 2>/dev/null || true; wg-quick down ftwg 2>/dev/null || true
-          rm -f /etc/wireguard/ftwg.conf
-        fi
-        # Free the UDP port in case a stray process still holds it.
-        command -v fuser >/dev/null 2>&1 && fuser -k ${d}port/udp 2>/dev/null || true
-        systemctl daemon-reload
     """.trimIndent()
 
     val tail = """
@@ -185,7 +170,74 @@ internal fun buildInstallScript(options: FreeturnInstallOptions): String {
         echo "RESULT::${d}key|${d}spub|${d}cpriv|10.7.$net.2/32$resultTail"
     """.trimIndent()
 
-    return listOf(preamble, backend, tail).joinToString("\n")
+    return listOf(preamble, teardownBlock(port), backend, tail).joinToString("\n")
+}
+
+/**
+ * Снос всего, что установщик мог оставить на ЭТОМ порту: служба freeturn, оба возможных бэкенда
+ * (ядерный `ftwg<port>` и userspace `ftawg<port>`), их конфиги и занятый UDP-порт. Ожидает, что
+ * вызывающий уже задал shell-переменные `port` и `svc`.
+ *
+ * Один и тот же блок используется и переустановкой (поэтому она идемпотентна и переживает смену типа
+ * выхода), и удалением — чтобы эти два пути не разъезжались.
+ */
+internal fun teardownBlock(port: Int): String {
+    val d = "$"
+    return """
+        # --- Idempotent teardown: снимаем службу и ОБА возможных бэкенда этого порта, чтобы
+        #     переустановка (в том числе со сменой типа выхода) не оставила старый туннель жить. ---
+        if systemctl list-unit-files 2>/dev/null | grep -q "^${d}svc.service" || [ -f /etc/systemd/system/${d}svc.service ]; then
+          echo "Найдена служба ${d}svc — останавливаю и убираю её"
+        fi
+        systemctl disable --now ${d}svc 2>/dev/null || true
+        rm -f /etc/systemd/system/${d}svc.service
+        systemctl stop wg-quick@ftwg$port 2>/dev/null || true
+        wg-quick down ftwg$port 2>/dev/null || true
+        rm -f /etc/wireguard/ftwg$port.conf
+        systemctl disable --now ftawg$port 2>/dev/null || true
+        rm -f /etc/systemd/system/ftawg$port.service /usr/local/bin/ftawg$port.sh /etc/amneziawg/ftawg$port.uapi
+        ip link del ftawg$port 2>/dev/null || true
+        # Legacy single-server install (old script used the fixed names freeturn-server/ftwg) — tear it
+        # down too, but ONLY if it was bound to THIS port, so a different-port legacy server survives.
+        if [ -f /etc/systemd/system/freeturn-server.service ] && grep -q "0.0.0.0:${d}port " /etc/systemd/system/freeturn-server.service; then
+          systemctl disable --now freeturn-server 2>/dev/null || true
+          rm -f /etc/systemd/system/freeturn-server.service
+          systemctl stop wg-quick@ftwg 2>/dev/null || true; wg-quick down ftwg 2>/dev/null || true
+          rm -f /etc/wireguard/ftwg.conf
+        fi
+        # Free the UDP port in case a stray process still holds it.
+        command -v fuser >/dev/null 2>&1 && fuser -k ${d}port/udp 2>/dev/null || true
+        systemctl daemon-reload
+    """.trimIndent()
+}
+
+/**
+ * Полное удаление freeturn с VPS: тот же teardown плюс правила фаервола и — если на машине не
+ * осталось НИ ОДНОЙ службы freeturn — общие бинарники. Бинарники общие для всех портов, поэтому
+ * снести их безусловно значило бы убить соседние серверы на том же VPS.
+ */
+internal fun buildUninstallScript(port: Int): String {
+    val d = "$"
+    val head = """
+        set -e
+        port=$port
+        svc=freeturn-server-${d}port
+    """.trimIndent()
+    val tail = """
+        if command -v ufw >/dev/null 2>&1; then ufw delete allow $port/udp || true; fi
+        if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --remove-port=$port/udp --permanent && firewall-cmd --reload || true; fi
+        rmdir /etc/amneziawg 2>/dev/null || true
+        # Бинарники общие на все порты — сносим, только если других служб freeturn не осталось.
+        if ! ls /etc/systemd/system/freeturn-server-*.service >/dev/null 2>&1; then
+          rm -f /usr/local/bin/freeturn-server /usr/local/bin/amneziawg-go
+          echo "Других серверов freeturn не осталось — удалил и бинарники"
+        else
+          echo "На VPS остались другие серверы freeturn — общие бинарники не трогаю"
+        fi
+        systemctl daemon-reload
+        echo "REMOVED::$port"
+    """.trimIndent()
+    return listOf(head, teardownBlock(port), tail).joinToString("\n")
 }
 
 /** Ядерный WireGuard через wg-quick — исходный, проверенный путь. */

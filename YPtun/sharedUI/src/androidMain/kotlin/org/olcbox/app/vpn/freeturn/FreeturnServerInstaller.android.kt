@@ -78,6 +78,34 @@ internal class AndroidFreeturnServerInstaller(private val context: Context) : Fr
         }
     }
 
+    override suspend fun uninstall(
+        options: FreeturnInstallOptions,
+        onLog: (String) -> Unit
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(options.host.isNotBlank()) { "Не указан IP/хост VPS" }
+            require(options.sshKey.isNotBlank() || options.sshPassword.isNotBlank()) {
+                "Укажи пароль SSH или SSH-ключ"
+            }
+            require(options.freeturnPort in 1..65535) { "Некорректный порт freeturn" }
+
+            val target = SshTarget(
+                options.host, options.sshPort, options.login, options.sshPassword,
+                privateKey = options.sshKey, passphrase = options.sshKeyPassphrase,
+            )
+            onLog("Удаляю freeturn с ${options.host}:${options.freeturnPort}…")
+            val output = sshOneShot(target, buildUninstallScript(options.freeturnPort), onLog)
+            output.lineSequence().map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("REMOVED::") }
+                .forEach(onLog)
+            // Скрипт идёт под `set -e`, поэтому маркер в конце = дошли до конца без ошибок.
+            require(output.contains("REMOVED::${options.freeturnPort}")) {
+                "Сервер не подтвердил удаление — см. лог выше"
+            }
+            "freeturn на :${options.freeturnPort} удалён (служба, туннель, конфиги, правило фаервола)"
+        }
+    }
+
     /**
      * Pulls `RESULT::<obfKey>|<serverPub>|<clientPriv>|<clientAddr>[|jc,jmin,jmax,s1,s2,h1,h2,h3,h4]`
      * out of the output. Пятое поле появляется только у AmneziaWG-выхода.

@@ -1574,6 +1574,8 @@ private fun FreeturnInstallDialog(
     var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Result<String>?>(null) }
+    // Последняя операция была удалением — тогда не врём про «ключи подставлены в локацию».
+    var removed by remember { mutableStateOf(false) }
     val log = remember { mutableStateListOf<String>() }
     val logScroll = rememberScrollState()
 
@@ -1587,6 +1589,8 @@ private fun FreeturnInstallDialog(
     // ядерный модуль и awg-tools не нужны. Требует /dev/net/tun, как и обычный WireGuard.
     var exit by remember { mutableStateOf(FreeturnExit.WireGuard) }
     val succeeded = result?.isSuccess == true
+    // Установка и удаление требуют одного и того же: адреса и доступа по SSH.
+    val canRun = !running && ip.isNotBlank() && (if (useKey) sshKey.isNotBlank() else password.isNotBlank())
 
     androidx.compose.runtime.LaunchedEffect(log.size) {
         if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
@@ -1694,7 +1698,8 @@ private fun FreeturnInstallDialog(
                 }
                 if (succeeded) {
                     Text(
-                        result?.getOrNull().orEmpty() + "\nКлючи подставлены в локацию.",
+                        result?.getOrNull().orEmpty() +
+                            if (removed) "" else "\nКлючи подставлены в локацию.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -1706,10 +1711,11 @@ private fun FreeturnInstallDialog(
                 TextButton(onClick = onDismiss) { Text("Готово") }
             } else {
                 TextButton(
-                    enabled = !running && ip.isNotBlank() && (if (useKey) sshKey.isNotBlank() else password.isNotBlank()),
+                    enabled = canRun,
                     onClick = {
                         running = true
                         result = null
+                        removed = false
                         log.clear()
                         scope.launch {
                             val res = installer.install(
@@ -1769,8 +1775,37 @@ private fun FreeturnInstallDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !running) {
-                Text(if (succeeded) "Закрыть" else "Отмена")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Снос того же порта: служба, туннельный выход (любой из двух), конфиги и правило
+                // фаервола. Локацию не трогаем: ключи в ней ещё пригодятся, если сервер ставят заново.
+                TextButton(
+                    enabled = canRun,
+                    onClick = {
+                        running = true
+                        result = null
+                        removed = true
+                        log.clear()
+                        scope.launch {
+                            val res = installer.uninstall(
+                                FreeturnInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    freeturnPort = port,
+                                )
+                            ) { line -> log.add(line) }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) { Text("Удалить с VPS") }
+                TextButton(onClick = onDismiss, enabled = !running) {
+                    Text(if (succeeded) "Закрыть" else "Отмена")
+                }
             }
         }
     )

@@ -19,8 +19,9 @@ class FreeturnInstallScriptTest {
     /** Терминатор heredoc закрывает документ ТОЛЬКО в первой колонке — иначе всё, что ниже, съедается. */
     @Test
     fun heredocTerminatorsStartAtColumnZero() {
-        for (exit in FreeturnExit.entries) {
-            val lines = script(exit).lines()
+        val scripts = FreeturnExit.entries.map { it.name to script(it) } + ("uninstall" to buildUninstallScript(56000))
+        for ((exit, text) in scripts) {
+            val lines = text.lines()
             for (terminator in listOf("EOF", "UNIT", "RUNNER", "AWGUNIT")) {
                 val opens = lines.count { it.trimEnd().endsWith("<<$terminator") }
                 val closes = lines.count { it == terminator }
@@ -32,8 +33,9 @@ class FreeturnInstallScriptTest {
     /** Куски склеиваются после trimIndent — ни одна строка не должна уехать вправо. */
     @Test
     fun noStrayIndentation() {
-        for (exit in FreeturnExit.entries) {
-            val indented = script(exit).lines().filter { it.startsWith("    ") }
+        val scripts = FreeturnExit.entries.map { it.name to script(it) } + ("uninstall" to buildUninstallScript(56000))
+        for ((exit, text) in scripts) {
+            val indented = text.lines().filter { it.startsWith("    ") }
             assertTrue(indented.isEmpty(), "$exit: строки с лишним отступом: $indented")
         }
     }
@@ -64,6 +66,37 @@ class FreeturnInstallScriptTest {
         val wg = script(FreeturnExit.WireGuard)
         assertTrue(wg.contains("RESULT::\$key|\$spub|\$cpriv|10.7.1.2/32\""))
         assertFalse(wg.contains("\$jc"))
+    }
+
+    /** Удаление обязано снести ОБА возможных бэкенда: тип выхода по порту не восстановить. */
+    @Test
+    fun uninstallRemovesBothBackends() {
+        val s = buildUninstallScript(56000)
+        assertTrue(s.contains("wg-quick down ftwg56000"))
+        assertTrue(s.contains("systemctl disable --now ftawg56000"))
+        assertTrue(s.contains("rm -f /etc/wireguard/ftwg56000.conf"))
+        assertTrue(s.contains("ufw delete allow 56000/udp"))
+        assertTrue(s.contains("REMOVED::56000"))
+    }
+
+    /**
+     * Бинарники общие на все порты: снести их безусловно = убить соседние серверы на том же VPS.
+     * Удаление обязано спрашивать, остались ли другие службы.
+     */
+    @Test
+    fun uninstallKeepsSharedBinariesWhileOtherServersRemain() {
+        val s = buildUninstallScript(56000)
+        val guard = s.indexOf("ls /etc/systemd/system/freeturn-server-*.service")
+        val removal = s.indexOf("rm -f /usr/local/bin/freeturn-server")
+        assertTrue(guard in 0 until removal, "удаление бинарников не под проверкой других служб")
+    }
+
+    /** Установка переиспользует тот же teardown — иначе переустановка и удаление разъедутся. */
+    @Test
+    fun installReusesTheSameTeardown() {
+        val teardown = teardownBlock(56000)
+        assertTrue(script(FreeturnExit.WireGuard).contains(teardown))
+        assertTrue(buildUninstallScript(56000).contains(teardown))
     }
 
     /** Разные порты на одном VPS не должны делить ни подсеть, ни интерфейс. */
