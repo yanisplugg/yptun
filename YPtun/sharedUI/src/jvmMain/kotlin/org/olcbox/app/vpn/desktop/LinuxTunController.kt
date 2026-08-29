@@ -14,6 +14,7 @@ internal class LinuxTunController(
     private val addLog: (String) -> Unit
 ) {
     private var routesInstalled = false
+    private var hevBinary: Path? = null
 
     suspend fun start(
         hevBinary: Path,
@@ -21,6 +22,7 @@ internal class LinuxTunController(
         socksUsername: String = "",
         socksPassword: String = ""
     ): Process {
+        this.hevBinary = hevBinary
         val upScript = writeUpScript()
         val downScript = writeDownScript()
         val config = writeConfig(socksPort, upScript, downScript, socksUsername, socksPassword)
@@ -109,6 +111,15 @@ internal class LinuxTunController(
         error("$TUN_NAME routes were not installed")
     }
 
+    private suspend fun processMatchingBinaryExists(binary: Path): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val process = ProcessBuilder("pgrep", "-f", binary.toString())
+                .redirectErrorStream(true)
+                .start()
+            process.waitFor(1, TimeUnit.SECONDS) && process.exitValue() == 0
+        }.getOrDefault(false)
+    }
+
     private suspend fun interfaceExists(): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             val process = ProcessBuilder("ip", "link", "show", TUN_NAME)
@@ -167,14 +178,28 @@ internal class LinuxTunController(
             .start()
     }
 
-    private fun stopProcess(process: Process?) {
-        if (process == null || !process.isAlive) return
-        process.toHandle().descendants().forEach { it.destroy() }
-        process.destroy()
-        if (!process.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-            process.toHandle().descendants().forEach { it.destroyForcibly() }
-            process.destroyForcibly()
-            process.waitFor(PROCESS_KILL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    private suspend fun stopProcess(process: Process?) {
+        if (process != null && process.isAlive) {
+            process.toHandle().descendants().forEach { it.destroy() }
+            process.destroy()
+            if (!process.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                process.toHandle().descendants().forEach { it.destroyForcibly() }
+                process.destroyForcibly()
+                process.waitFor(PROCESS_KILL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            }
+        }
+        // hev-socks5-tunnel daemonizes itself (double-forks and detaches), so by the time we get here
+        // the Process handle above is often already !isAlive and the block does nothing - the real
+        // privileged process has been reparented to init, still holding the TUN device open. Check
+        // unprivileged first (pgrep reads another user's /proc/*/cmdline fine, no root needed) and only
+        // escalate to a pkexec kill when something is actually still there - stop() runs on every
+        // disconnect AND on every failed connect attempt's cleanup (sometimes twice), so an unconditional
+        // pkexec call here would prompt for a second, unrelated authorization on the common path where
+        // there is nothing left to clean up.
+        hevBinary?.let { binary ->
+            if (processMatchingBinaryExists(binary)) {
+                runCatching { runPrivilegedCommand(listOf("pkill", "-f", binary.toString())) }
+            }
         }
     }
 
