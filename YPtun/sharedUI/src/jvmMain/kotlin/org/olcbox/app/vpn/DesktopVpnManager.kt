@@ -1269,15 +1269,24 @@ class DesktopVpnManager private constructor(
         // privileged one - even one we originally spawned. Confirmed live (2026-08-29): a plain `kill`
         // on such a pid fails with EPERM, and the process survives every disconnect untouched, then goes
         // on to fool the NEXT connect's canConnectToSocks() readiness check into firing early. Escalate.
+        // Ждём смерти САМОГО процесса, а не команды kill, и добиваем -KILL: иначе stopProcess вернётся,
+        // пока olcRTC ещё разбирает SIGTERM (или игнорирует его), фиксированный SOCKS-порт останется
+        // занятым - и следующий connect снова пройдёт canConnectToSocks() мгновенно, ровно тот баг,
+        // который этот фикс и закрывает.
         if (privileged && target.isAlive) {
             val pid = target.pid()
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val killProcess = ProcessBuilder(LinuxPrivilege.command(listOf("kill", pid.toString())))
-                        .redirectErrorStream(true)
-                        .start()
-                    killProcess.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            withContext(Dispatchers.IO) {
+                for (signal in listOf("-TERM", "-KILL")) {
+                    runCatching {
+                        ProcessBuilder(LinuxPrivilege.command(listOf("kill", signal, pid.toString())))
+                            .redirectErrorStream(true)
+                            .start()
+                            .waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    }
+                    // waitpid по своему ребёнку работает и когда тот стал root'ом.
+                    if (target.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) return@withContext
                 }
+                addLog("Failed to stop the elevated olcRTC process (pid $pid)")
             }
         }
     }
