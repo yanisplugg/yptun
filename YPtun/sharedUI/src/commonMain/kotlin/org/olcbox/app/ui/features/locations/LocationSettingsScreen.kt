@@ -80,6 +80,7 @@ import androidx.compose.ui.text.font.FontFamily
 import org.olcbox.app.ui.features.locations.components.SshAuthFields
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
 import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
+import org.olcbox.app.vpn.freeturn.FreeturnExit
 import org.olcbox.app.vpn.freeturn.FreeturnInstallOptions
 import org.olcbox.app.vpn.freeturn.rememberFreeturnServerInstaller
 import org.olcbox.app.vpn.dnstt.DnsttInstallOptions
@@ -1581,6 +1582,10 @@ private fun FreeturnInstallDialog(
     // prefilled from the location draft (default rtpopus). rtpopus2/3 need a freeturn 1.3+/1.4+ server,
     // which the bundled binary is, so all are installable.
     var obfProfile by remember { mutableStateOf(draft.obfProfile.ifBlank { "rtpopus" }) }
+    // Чем поднимать выход на VPS. AmneziaWG прячет сам туннель ВНУТРИ TURN-релея (Jc/S1/S2/H1-H4
+    // генерируются на сервере и приезжают в локацию), ставится userspace-бинарником amneziawg-go —
+    // ядерный модуль и awg-tools не нужны. Требует /dev/net/tun, как и обычный WireGuard.
+    var exit by remember { mutableStateOf(FreeturnExit.WireGuard) }
     val succeeded = result?.isSuccess == true
 
     androidx.compose.runtime.LaunchedEffect(log.size) {
@@ -1596,8 +1601,9 @@ private fun FreeturnInstallDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    "Подключусь к VPS по SSH, подниму WireGuard и запущу free-turn-proxy сервер на " +
-                        "порту $port (obf $obfProfile). Ключи и obf-key подставятся в локацию.",
+                    "Подключусь к VPS по SSH, подниму выход (${if (exit == FreeturnExit.AmneziaWG) "AmneziaWG" else "WireGuard"}) " +
+                        "и запущу free-turn-proxy сервер на порту $port (obf $obfProfile). " +
+                        "Ключи и obf-key подставятся в локацию.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 OutlinedTextField(
@@ -1658,6 +1664,16 @@ private fun FreeturnInstallDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                SettingsDropdown(
+                    label = "Выход на VPS",
+                    selectedValue = exit.name,
+                    options = FreeturnExit.entries.map { it.name },
+                    enabled = !running,
+                    onValueSelected = { picked ->
+                        exit = FreeturnExit.entries.first { it.name == picked }
+                    },
+                    valueLabel = { if (it == FreeturnExit.AmneziaWG.name) "AmneziaWG (обфускация)" else "WireGuard" }
+                )
                 // Обфускация: профиль, с которым стартует сервер (rtpopus / rtpopus2 / rtpopus3).
                 // Должен совпадать с клиентом — на успехе он подставляется в локацию.
                 SettingsDropdown(
@@ -1707,14 +1723,16 @@ private fun FreeturnInstallDialog(
                                     freeturnPort = port,
                                     obfProfile = obfProfile,
                                     dns = dns.ifBlank { "1.1.1.1" },
+                                    exit = exit,
                                 )
                             ) { line -> log.add(line) }
                             // On success, write the obf key + WireGuard keys into the draft; the composer
                             // rebuilds the freeturn:// link + the WG outbound from these fields.
                             res.getOrNull()?.let { ok ->
                                 onApplyDraft { d ->
-                                    d.copy(
-                                        outbound = VkTurnConfig.OUTBOUND_WIREGUARD,
+                                    val base = d.copy(
+                                        outbound = if (ok.awg != null) VkTurnConfig.OUTBOUND_AMNEZIAWG
+                                        else VkTurnConfig.OUTBOUND_WIREGUARD,
                                         mode = "udp",
                                         obfProfile = obfProfile,
                                         obfKey = ok.obfKey,
@@ -1725,6 +1743,15 @@ private fun FreeturnInstallDialog(
                                         wgAddress = ok.clientWgAddress,
                                         wgDns = dns.ifBlank { "1.1.1.1" },
                                     )
+                                    // Параметры AmneziaWG обязаны совпасть с сервером до единого числа,
+                                    // поэтому берём ровно те, что он сгенерировал, а не дефолты.
+                                    ok.awg?.let { a ->
+                                        base.copy(
+                                            awgJc = a.jc, awgJmin = a.jmin, awgJmax = a.jmax,
+                                            awgS1 = a.s1, awgS2 = a.s2,
+                                            awgH1 = a.h1, awgH2 = a.h2, awgH3 = a.h3, awgH4 = a.h4,
+                                        )
+                                    } ?: base
                                 }
                             }
                             res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
