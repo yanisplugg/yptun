@@ -271,7 +271,7 @@ replace github.com/samosvalishe/free-turn-proxy => ../free-turn-proxy
 
 replace github.com/olc/awgproxy => ../awgproxy
 
-replace github.com/amnezia-vpn/amneziawg-go => ../amneziawg-go
+replace github.com/amnezia-vpn/amneziawg-go/v3 => ../amneziawg-go
 
 replace wg-turn-client => ../wdtt
 
