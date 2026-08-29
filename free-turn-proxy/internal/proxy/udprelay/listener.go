@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 )
 
-const inboundQueueCap = 2000
-
 // Packet представляет буферизованную датаграмму для передачи воркерам.
 type Packet struct {
 	Data []byte
@@ -20,8 +18,12 @@ var packetPool = sync.Pool{
 	New: func() any { return &Packet{Data: make([]byte, 2048)} },
 }
 
-// runListener читает входящие датаграммы и распределяет их в очередь inboundChan.
-func runListener(ctx context.Context, listenConn net.PacketConn, activeLocalPeer *atomic.Value, inboundChan chan<- *Packet) {
+// runListener читает входящие датаграммы и раздаёт их стримам через диспетчер с
+// chunk-affinity (см. dispatcher.dispatch). ЛОКАЛЬНЫЙ ПАТЧ: у upstream тут одна
+// общая очередь inboundChan, которую разбирают все стримы по готовности - это
+// размазывает подряд идущие WG-пакеты по TURN-путям с разным latency и роняет
+// скорость одиночного потока. Не терять при ре-вендоре.
+func runListener(ctx context.Context, listenConn net.PacketConn, activeLocalPeer *atomic.Value, d *dispatcher) {
 	var lastAddr net.Addr
 	var lastAddrStr string
 	for {
@@ -46,9 +48,7 @@ func runListener(ctx context.Context, listenConn net.PacketConn, activeLocalPeer
 
 		pkt.N = nRead
 
-		select {
-		case inboundChan <- pkt:
-		default:
+		if !d.dispatch(pkt) {
 			packetPool.Put(pkt)
 		}
 	}

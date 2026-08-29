@@ -41,7 +41,7 @@ func TestOneDTLSPairCancelRecycles(t *testing.T) {
 
 	go func() {
 		done <- oneDTLS(context.Background(), deps, &Params{}, peer, listenConn,
-			make(chan *Packet), connchan, nil, 1)
+			newDispatcher(), connchan, nil, 1)
 	}()
 
 	var pair streamPair
@@ -79,7 +79,7 @@ func TestOneDTLSPublishesPairOnce(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- oneDTLS(ctx, deps, &Params{}, peer, listenConn, make(chan *Packet), connchan, nil, 1)
+		done <- oneDTLS(ctx, deps, &Params{}, peer, listenConn, newDispatcher(), connchan, nil, 1)
 	}()
 
 	select {
@@ -114,7 +114,7 @@ func TestOneDTLSSessionCancelIsNotRecycle(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- oneDTLS(ctx, deps, &Params{}, peer, listenConn, make(chan *Packet), connchan, nil, 1)
+		done <- oneDTLS(ctx, deps, &Params{}, peer, listenConn, newDispatcher(), connchan, nil, 1)
 	}()
 
 	select {

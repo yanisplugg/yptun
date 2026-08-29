@@ -120,10 +120,10 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 		}
 	}()
 
-	inboundChan := make(chan *Packet, inboundQueueCap)
+	disp := newDispatcher()
 	wg := sync.WaitGroup{}
 	wg.Go(deps.guard(func() {
-		runListener(runCtx, listenConn, &activeLocalPeer, inboundChan)
+		runListener(runCtx, listenConn, &activeLocalPeer, disp)
 	}))
 
 	// Стрим 1 стартует первым для прогрева кэша учетных данных.
@@ -131,7 +131,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 	{
 		cchan := make(chan streamPair)
 		wg.Go(deps.guard(func() {
-			DTLSLoop(runCtx, deps, params, peer, listenConn, inboundChan, cchan, okchan, 1)
+			DTLSLoop(runCtx, deps, params, peer, listenConn, disp, cchan, okchan, 1)
 		}))
 		wg.Go(deps.guard(func() {
 			TURNLoop(runCtx, deps, params, peer, cchan, 1)
@@ -148,7 +148,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 		cchan := make(chan streamPair)
 		streamID := i + 1
 		wg.Go(deps.guard(func() {
-			DTLSLoop(runCtx, deps, params, peer, listenConn, inboundChan, cchan, nil, streamID)
+			DTLSLoop(runCtx, deps, params, peer, listenConn, disp, cchan, nil, streamID)
 		}))
 		wg.Go(deps.guard(func() {
 			TURNLoop(runCtx, deps, params, peer, cchan, streamID)

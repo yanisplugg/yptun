@@ -31,13 +31,13 @@ type streamPair struct {
 }
 
 // DTLSLoop поддерживает и перезапускает DTLS-соединение для указанного streamID.
-func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, inboundChan <-chan *Packet, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) {
+func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, d *dispatcher, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			err := oneDTLS(ctx, deps, params, peer, listenConn, inboundChan, connchan, okchan, streamID)
+			err := oneDTLS(ctx, deps, params, peer, listenConn, d, connchan, okchan, streamID)
 			// Пара пересоздаётся под новую аллокацию - TURN-цикл уже держит свою паузу.
 			if errors.Is(err, errPairRecycled) {
 				continue
@@ -118,11 +118,11 @@ func TURNLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr
 	}
 }
 
-func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, inboundChan <-chan *Packet, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) error {
+func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, d *dispatcher, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) error {
 	dtlsctx, dtlscancel := context.WithCancel(ctx)
 	defer dtlscancel()
 
-	err := dtlsSession(dtlsctx, dtlscancel, deps, params, peer, listenConn, inboundChan, connchan, okchan, streamID)
+	err := dtlsSession(dtlsctx, dtlscancel, deps, params, peer, listenConn, d, connchan, okchan, streamID)
 	// Отменена именно пара, а не вся сессия - значит её свернул TURN-цикл.
 	if err != nil && ctx.Err() == nil && dtlsctx.Err() != nil {
 		return errPairRecycled
@@ -130,7 +130,7 @@ func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	return err
 }
 
-func dtlsSession(dtlsctx context.Context, dtlscancel context.CancelFunc, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, inboundChan <-chan *Packet, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) error {
+func dtlsSession(dtlsctx context.Context, dtlscancel context.CancelFunc, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, d *dispatcher, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) error {
 	select {
 	case <-time.After(time.Duration(randx.Intn(400)+100) * time.Millisecond):
 	case <-dtlsctx.Done():
@@ -168,6 +168,13 @@ func dtlsSession(dtlsctx context.Context, dtlscancel context.CancelFunc, deps *D
 		}
 	}
 
+	// ЛОКАЛЬНЫЙ ПАТЧ (chunk-affinity, см. dispatcher.go): стрим получает СВОЮ очередь
+	// и регистрируется в диспетчере только после поднятого DTLS - до этого писать в
+	// него некуда. Отписка на выходе; недослитые пакеты подберёт GC.
+	slot := &streamSlot{id: streamID, sendCh: make(chan *Packet, streamSendBuf)}
+	d.register(slot)
+	defer d.unregister(slot)
+
 	forwardDone := make(chan struct{})
 	go func() {
 		defer close(forwardDone)
@@ -198,7 +205,7 @@ func dtlsSession(dtlsctx context.Context, dtlscancel context.CancelFunc, deps *D
 			return dtlsctx.Err()
 		case <-forwardDone:
 			return errors.New("DTLS connection closed by remote peer")
-		case pkt := <-inboundChan:
+		case pkt := <-slot.sendCh:
 			_, err := dtlsConn.Write(pkt.Data[:pkt.N])
 			packetPool.Put(pkt)
 			if err != nil {
