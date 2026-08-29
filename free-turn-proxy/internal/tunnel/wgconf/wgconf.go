@@ -1,9 +1,4 @@
-// Package wgconf разбирает конфиг в формате wg-quick (в том числе с
-// расширениями AmneziaWG) в tunnel.Config.
-//
-// Хост передаёт текст конфига как есть - тем, который пользователь получил от
-// сервера. Разбор и проверка живут здесь, чтобы приложение не резало строки
-// регулярками и не знало формат.
+// Package wgconf выполняет парсинг конфигурации формата wg-quick в tunnel.Config.
 package wgconf
 
 import (
@@ -16,9 +11,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 )
 
-// Ключи wg-quick, которые userspace-туннелю не нужны: маршруты, правила
-// файрвола и скрипты применяет платформа, а не мы. Встретив их, парсер молчит;
-// на всём остальном незнакомом - ругается, чтобы опечатка не потерялась.
+// ignoredKeys содержит ключи wg-quick, управляемые внешней платформой/ОС.
 var ignoredKeys = map[string]bool{
 	"table":       true,
 	"fwmark":      true,
@@ -31,7 +24,7 @@ var ignoredKeys = map[string]bool{
 	"description": true,
 }
 
-// Возвращает провалидированный tunnel.Config из wg-quick текста.
+// Parse разбирает и валидирует текст конфигурации wg-quick.
 func Parse(text string) (*tunnel.Config, error) {
 	cfg := tunnel.Defaults()
 
@@ -130,10 +123,49 @@ func applyInterface(cfg *tunnel.Config, key, value string) error {
 	case "i1", "i2", "i3", "i4", "i5":
 		idx := int(key[1] - '1')
 		cfg.Amnezia.I[idx] = value
+	case "headerprotectionkey":
+		k, err := parseKey(value)
+		if err != nil {
+			return fmt.Errorf("headerprotectionkey: %w", err)
+		}
+		cfg.Amnezia.HeaderProtectionKey = k
+	case "contentpaddingaddition", "rekeyaftertime", "rekeytimeout",
+		"rejectaftertime", "keepalivetimeout", "maxhandshakeattempts":
+		if err := tunnel.ValidateRange(value); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		setAmneziaRange(&cfg.Amnezia, key, value)
+	case "randomtrailers", "disablecookies":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		if key == "randomtrailers" {
+			cfg.Amnezia.RandomTrailers = b
+		} else {
+			cfg.Amnezia.DisableCookies = b
+		}
 	default:
 		return fmt.Errorf("unknown [Interface] key %q", key)
 	}
 	return nil
+}
+
+func setAmneziaRange(p *tunnel.AmneziaParams, key, value string) {
+	switch key {
+	case "contentpaddingaddition":
+		p.ContentPaddingAddition = value
+	case "rekeyaftertime":
+		p.RekeyAfterTime = value
+	case "rekeytimeout":
+		p.RekeyTimeout = value
+	case "rejectaftertime":
+		p.RejectAfterTime = value
+	case "keepalivetimeout":
+		p.KeepaliveTimeout = value
+	case "maxhandshakeattempts":
+		p.MaxHandshakeAttempts = value
+	}
 }
 
 func setAmneziaInt(p *tunnel.AmneziaParams, key string, n int) {
@@ -206,8 +238,7 @@ func parseKey(value string) (tunnel.Key, error) {
 	return k, nil
 }
 
-// parsePrefixes принимает список через запятую. Голый адрес без маски
-// достраивается до /32 или /128: клиенты пишут и так, и так.
+// parsePrefixes разбирает список IP/CIDR (голый IP преобразуется в /32 или /128).
 func parsePrefixes(value string) ([]netip.Prefix, error) {
 	var out []netip.Prefix
 	for _, item := range strings.Split(value, ",") {
@@ -228,8 +259,7 @@ func parsePrefixes(value string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
-// parseDNS берёт только адреса: wg-quick разрешает в этой же строке search
-// domains, но userspace-туннелю они не нужны.
+// parseDNS извлекает только IP-адреса DNS, игнорируя search domains.
 func parseDNS(value string) []netip.Addr {
 	var out []netip.Addr
 	for _, item := range strings.Split(value, ",") {

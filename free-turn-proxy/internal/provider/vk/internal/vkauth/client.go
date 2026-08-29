@@ -12,45 +12,25 @@ import (
 
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/browserprofile"
+	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/captcha"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/personanet"
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// Config конфигурирует Client. Нулевые значения - безопасные дефолты,
-// кроме Dialer (должен быть задан явно для кастомного DNS).
 type Config struct {
-	// Credentials для перебора по порядку. nil/empty -> DefaultCredentials.
-	Credentials []VKCredentials
-
-	Dialer net.Dialer
-
-	// ManualOnly форсирует ручной путь captcha с первой попытки.
-	ManualOnly bool
-
-	// StreamsPerCache - делитель streamID -> cacheID. <=0 -> дефолт.
+	Credentials     []VKCredentials
+	Dialer          net.Dialer
+	ManualOnly      bool
 	StreamsPerCache int
-
-	// StreamsAlive возвращает число подключённых потоков; используется для
-	// решения, является ли исчерпанная captcha фатальной или только throttle.
-	// nil -> 1.
-	StreamsAlive func() int32
-
-	// AutoSolver / ManualSolver - подключаемые решалки captcha. nil отключает
-	// соответствующий путь (поток переходит к следующей попытке).
-	AutoSolver   AutoSolveFunc
-	ManualSolver ManualSolveFunc
-
-	// Platform - класс устройства персоны (desktop|mobile). Нулевое -> desktop.
-	Platform browserprofile.Platform
-
-	// FingerprintSeed - стабильная строка установки, из которой выводится
-	// личность персоны. Пустая -> случайная на запуск.
+	StreamsAlive    func() int32
+	AutoSolver      AutoSolveFunc
+	ManualSolver    ManualSolveFunc
+	Platform        browserprofile.Platform
 	FingerprintSeed string
-
-	// Log - уровневый логгер. nil -> no-op.
-	Log logx.Logger
+	StatePaths      []string
+	Log             logx.Logger
 }
 
 type Client struct {
@@ -70,18 +50,12 @@ type Client struct {
 	personaMu sync.RWMutex
 	identity  browserprofile.Identity
 	persona   browserprofile.Profile
+	gens      genStore
 
-	fetchMu       sync.Mutex
-	lastFetchTime time.Time
-	// captchaAttempt считает попытки решения captcha в рамках одного fetch, в том
-	// числе через рестарт цепочки после сжигания персоны. Только под fetchMu.
-	captchaAttempt int
-
-	// tokenChain - 4-шаговый получатель токена для пары credentials.
-	// В prod подключён (*Client).getTokenChain; тесты подменяют fake.
-	tokenChain tokenChainFn
-
-	// minFetchIntervalFn ограничивает частоту запросов к VK. Тесты снижают.
+	fetchMu            sync.Mutex
+	lastFetchTime      time.Time
+	captchaAttempt     int
+	tokenChain         tokenChainFn
 	minFetchIntervalFn func() time.Duration
 }
 
@@ -114,11 +88,14 @@ func New(cfg Config) *Client {
 	}
 	seed := cfg.FingerprintSeed
 	if seed == "" {
-		// Пустой seed у всех установок дал бы им одну личность на всех.
 		seed = randx.Hex(16)
 	}
-	c.identity = browserprofile.Identity{Seed: seed}
+	c.gens = genStore{paths: cfg.StatePaths}
+	c.identity = browserprofile.Identity{Seed: seed, Gen: c.gens.load(seed)}
 	c.persona = browserprofile.For(c.platform, c.identity)
+	if c.identity.Gen > 0 {
+		c.log.Debugf("[VK Auth] Persona gen=%d restored | User-Agent: %s", c.identity.Gen, c.persona.UserAgent)
+	}
 	return c
 }
 
@@ -128,20 +105,19 @@ func (c *Client) currentPersona() browserprofile.Profile {
 	return c.persona
 }
 
-// burnPersona выдаёт следующее поколение личности. Зовётся, когда VK отверг
-// текущий отпечаток: продолжать в нём бессмысленно, а менять его в середине
-// сессии - сам по себе сигнал, поэтому цепочка перезапускается с нуля.
 func (c *Client) burnPersona(streamID int) {
 	c.personaMu.Lock()
 	c.identity.Gen++
 	c.persona = browserprofile.For(c.platform, c.identity)
-	ua, gen := c.persona.UserAgent, c.identity.Gen
+	ua, gen, seed := c.persona.UserAgent, c.identity.Gen, c.identity.Seed
 	c.personaMu.Unlock()
 	c.log.Infof("[STREAM %d] [VK Auth] Persona burned, gen=%d | User-Agent: %s", streamID, gen, ua)
+	if !c.gens.save(seed, gen) && len(c.gens.paths) > 0 {
+		c.log.Warnf("[STREAM %d] [VK Auth] Persona gen not persisted (%v) - burned fingerprint returns after restart", streamID, c.gens.paths)
+	}
 }
 
-// GetCredentials -> (username, password, server-addrs); addrs ротированы под
-// streamID (предпочтительный первым, см. orderAddrs), fetch к VK только при промахе кэша.
+// GetCredentials возвращает учетные данные TURN, используя кеш или запрашивая их у VK.
 func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) (string, string, []string, error) {
 	cache := c.store.Get(streamID)
 	cacheID := c.store.CacheID(streamID)
@@ -173,16 +149,12 @@ func (c *Client) GetCredentials(ctx context.Context, link string, streamID int) 
 		Username:    user,
 		Password:    pass,
 		ServerAddrs: addrs,
-		ExpiresAt:   time.Now().Add(CredentialLifetime - CacheSafetyMargin),
+		ExpiresAt:   time.Now().Add(CredentialLifetime - CacheSafetyMargin).Round(0),
 		Link:        link,
 	}
 	return user, pass, orderAddrs(addrs, streamID), nil
 }
 
-// orderAddrs возвращает копию addrs, ротированную так, что предпочтительный
-// для streamID адрес стоит первым, остальные - следом (сохраняя порядок).
-// Раскидывает primary по стримам (балансировка relay-IP), оставляя остальные
-// как фоллбэк при DPI-дропе.
 func orderAddrs(addrs []string, streamID int) []string {
 	n := len(addrs)
 	if n <= 1 {
@@ -195,7 +167,6 @@ func orderAddrs(addrs []string, streamID int) []string {
 	return out
 }
 
-// HandleAuthError инвалидирует кэш при MaxCacheErrors в окне ErrorWindow; true = инвалидирован.
 func (c *Client) HandleAuthError(streamID int) bool {
 	cache := c.store.Get(streamID)
 	cacheID := c.store.CacheID(streamID)
@@ -218,9 +189,16 @@ func (c *Client) HandleAuthError(streamID int) bool {
 	return false
 }
 
-// ResetErrors вызывать при успешном allocate.
 func (c *Client) ResetErrors(streamID int) {
 	c.store.Get(streamID).errorCount.Store(0)
+}
+
+func (c *Client) DropCredentials(streamID int) {
+	if !c.store.Get(streamID).Invalidate() {
+		return
+	}
+	c.log.Warnf("[STREAM %d] [VK Auth] Deallocate unconfirmed - credentials dropped (cache=%d)",
+		streamID, c.store.CacheID(streamID))
 }
 
 func (c *Client) LockoutUntilUnix() int64 {
@@ -256,8 +234,11 @@ func (c *Client) fetchSerialized(ctx context.Context, link string, streamID int)
 		case <-time.After(wait):
 		}
 	}
-	defer func() { c.lastFetchTime = time.Now() }()
-	return c.fetch(ctx, link, streamID)
+	user, pass, addrs, err := c.fetch(ctx, link, streamID)
+	if ctx.Err() == nil {
+		c.lastFetchTime = time.Now()
+	}
+	return user, pass, addrs, err
 }
 
 func (c *Client) fetch(ctx context.Context, link string, streamID int) (string, string, []string, error) {
@@ -272,14 +253,17 @@ func (c *Client) fetch(ctx context.Context, link string, streamID int) (string, 
 	jar := personanet.NewCookieJar()
 	for i := 0; i < len(c.credentials); {
 		creds := c.credentials[i]
-		c.log.Infof("[STREAM %d] [VK Auth] Trying credentials: client_id=%s", streamID, creds.ClientID)
+		c.log.Debugf("[STREAM %d] [VK Auth] Trying credentials: client_id=%s", streamID, creds.ClientID)
 
 		user, pass, addrs, err := c.tokenChain(ctx, link, streamID, creds, jar)
 		if err == nil {
-			c.log.Infof("[STREAM %d] [VK Auth] Success with client_id=%s", streamID, creds.ClientID)
+			c.log.Debugf("[STREAM %d] [VK Auth] Success with client_id=%s", streamID, creds.ClientID)
 			return user, pass, addrs, nil
 		}
 		lastErr = err
+		if ctx.Err() != nil {
+			return "", "", nil, err
+		}
 		c.log.Warnf("[STREAM %d] [VK Auth] Failed with client_id=%s: %v", streamID, creds.ClientID, err)
 
 		// Личность сменилась - тот же client_id проходится заново с чистыми
@@ -293,7 +277,7 @@ func (c *Client) fetch(ctx context.Context, link string, streamID int) (string, 
 
 		if errors.Is(err, ErrCaptchaWaitRequired) || errors.Is(err, ErrFatalCaptchaNoStreams) ||
 			errors.Is(err, ErrInvalidJoinLink) || errors.Is(err, ErrAnonymousBlocked) ||
-			errors.Is(err, ErrCallFull) {
+			errors.Is(err, ErrCallFull) || errors.Is(err, captcha.ErrUnavailable) {
 			return "", "", nil, err
 		}
 		es := err.Error()

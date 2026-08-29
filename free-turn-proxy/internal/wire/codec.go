@@ -1,7 +1,4 @@
-// Package wire - зонтик wire-профилей обфускации TURN-payload. Codec - общий
-// контракт профиля; NewClientCodec/Listen диспатчат по имени профиля. Профили
-// живут в подпакетах (rtpopus, rtpopus2, …) и реализуют Codec структурно, не
-// импортируя этот пакет.
+// Package wire предоставляет интерфейс и фабрики для профилей обфускации трафика.
 package wire
 
 import (
@@ -17,7 +14,6 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/shape"
 )
 
-// Имена wire-профилей; совпадают со значениями флага -obf-profile.
 const (
 	ProfileNone     = "none"
 	ProfileRTPOpus  = "rtpopus"
@@ -25,10 +21,7 @@ const (
 	ProfileRTPOpus3 = "rtpopus3"
 )
 
-// Codec - клиентский кодек wire-профиля: AEAD-обёртка payload с мимикрией.
-// In-place API (WrapInPlace/UnwrapInPlace) - горячий UDP-путь; копирующий
-// (WrapInto/Unwrap) - для RelayPacketConn. HeaderLen/Overhead/MaxWire задают
-// раскладку буфера: у профилей разный размер заголовка.
+// Codec определяет методы кодирования и декодирования пакетов wire-профиля.
 type Codec interface {
 	WrapInPlace(buf []byte, plainLen int) (int, error)
 	UnwrapInPlace(wire []byte) ([]byte, error)
@@ -39,8 +32,7 @@ type Codec interface {
 	MaxWire(payloadLen int) int
 }
 
-// NewClientCodec строит клиентский Codec для профиля. profile none/"" -> (nil, nil)
-// (обфускация выключена). Длину ключа проверяет конструктор профиля.
+// NewClientCodec создаёт экземпляр клиентского кодека по имени профиля.
 func NewClientCodec(profile string, key []byte) (Codec, error) {
 	switch profile {
 	case ProfileNone, "":
@@ -56,9 +48,7 @@ func NewClientCodec(profile string, key []byte) (Codec, error) {
 	}
 }
 
-// Listen строит серверный PacketListener, AEAD-разворачивающий каждый принятый
-// PacketConn по профилю. Зовётся только при включённой обфускации.
-// serverTiming добавляет pacing на отправку от сервера к клиенту (0 = без pacing).
+// Listen создаёт серверный PacketListener для указанного профиля обфускации.
 func Listen(profile string, addr *net.UDPAddr, key []byte, serverTiming ...time.Duration) (dtlsnet.PacketListener, error) {
 	var timing time.Duration
 	if len(serverTiming) > 0 {

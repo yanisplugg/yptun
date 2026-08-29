@@ -8,20 +8,21 @@ import (
 	"time"
 )
 
-// BiCopy запускает io.Copy в обе стороны между c1 и c2; возвращает
-// (bytesC1FromC2, bytesC2FromC1). Как только одна копия завершилась
-// (EOF/ошибка/cancel) - обоим концам выставляется deadline=time.Now(),
-// чтобы разблокировать парную горутину. Ошибки уходят в errf, если он не nil.
+// BiCopy закрывает оба conn, как только копирование в любую сторону завершится.
 func BiCopy(ctx context.Context, c1, c2 net.Conn, errf func(format string, v ...any)) (int64, int64) {
 	ctx2, cancel := context.WithCancel(ctx)
-	context.AfterFunc(ctx2, func() {
-		now := time.Now()
-		if err := c1.SetDeadline(now); err != nil && errf != nil {
-			errf("BiCopy: c1 SetDeadline: %v", err)
+	setDeadline := func(t time.Time, what string) {
+		if err := c1.SetDeadline(t); err != nil && errf != nil {
+			errf("BiCopy: c1 %s: %v", what, err)
 		}
-		if err := c2.SetDeadline(now); err != nil && errf != nil {
-			errf("BiCopy: c2 SetDeadline: %v", err)
+		if err := c2.SetDeadline(t); err != nil && errf != nil {
+			errf("BiCopy: c2 %s: %v", what, err)
 		}
+	}
+	hookDone := make(chan struct{})
+	stopOnCancel := context.AfterFunc(ctx2, func() {
+		defer close(hookDone)
+		setDeadline(time.Now(), "SetDeadline")
 	})
 
 	var wg sync.WaitGroup
@@ -44,11 +45,11 @@ func BiCopy(ctx context.Context, c1, c2 net.Conn, errf func(format string, v ...
 	})
 	wg.Wait()
 
-	if err := c1.SetDeadline(time.Time{}); err != nil && errf != nil {
-		errf("BiCopy: c1 clear deadline: %v", err)
+	// Дедлайны сбрасываются только после того, как хук отменён или доработал - иначе
+	// он взвёлся бы следом и оставил conn'ы просроченными навсегда.
+	if !stopOnCancel() {
+		<-hookDone
 	}
-	if err := c2.SetDeadline(time.Time{}); err != nil && errf != nil {
-		errf("BiCopy: c2 clear deadline: %v", err)
-	}
+	setDeadline(time.Time{}, "clear deadline")
 	return c1FromC2, c2FromC1
 }

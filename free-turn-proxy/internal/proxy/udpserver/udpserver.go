@@ -1,5 +1,4 @@
-// Package udpserver реализует серверную UDP-ретрансляцию: DTLS-терминированный
-// поток форвардится к UDP-backend (WireGuard) и обратно.
+// Package udpserver пересылает датаграммы между входящим DTLS-соединением и локальным UDP backend.
 package udpserver
 
 import (
@@ -16,8 +15,7 @@ const (
 	udpIdleTimeout  = 30 * time.Minute
 )
 
-// Handle форвардит DTLS-пакеты между conn и UDP-backend на connectAddr
-// до закрытия любой стороны. Блокируется до выхода обеих copy-горутин.
+// Handle выполняет двунаправленный релей UDP-пакетов между conn и connectAddr.
 func Handle(ctx context.Context, logger logx.Logger, conn net.Conn, connectAddr string) {
 	serverConn, err := (&net.Dialer{}).DialContext(ctx, "udp", connectAddr)
 	if err != nil {
@@ -54,8 +52,6 @@ func Handle(ctx context.Context, logger logx.Logger, conn net.Conn, connectAddr 
 	wg.Wait()
 }
 
-// copyOne читает из src и пишет в dst до отмены ctx или ошибки любой стороны.
-// Каждый read/write сбрасывает idle timeout - зависший конец закрывается, а не висит.
 func copyOne(ctx context.Context, logger logx.Logger, src, dst net.Conn) {
 	buf := make([]byte, udpRelayBufSize)
 	for {

@@ -4,72 +4,29 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/browserprofile"
 )
 
-func testPersona(plat browserprofile.Platform) browserprofile.Profile {
-	return browserprofile.For(plat, browserprofile.Identity{Seed: "telemetry-test"})
-}
-
-// Виджет всегда сериализует все семь ключей аккумулятора: пустой массив - валидный
-// ответ браузера, отсутствующий ключ - невозможное состояние.
-func TestAnalyticsAlwaysSendsAllKeys(t *testing.T) {
-	want := []string{"accelerometer", "gyroscope", "motion", "cursor", "taps", "connectionRtt", "connectionDownlink"}
-	for _, plat := range []browserprofile.Platform{browserprofile.Desktop, browserprofile.Mobile} {
-		p := testPersona(plat)
-		fields := buildAnalytics(p, defaultSensorConfig(), 4*time.Second).fields()
-		if len(fields) != len(want) {
-			t.Fatalf("%s: %d fields, want %d", plat, len(fields), len(want))
-		}
-		for i, kv := range fields {
-			if kv[0] != want[i] {
-				t.Fatalf("%s: field %d = %q, want %q", plat, i, kv[0], want[i])
-			}
-			if kv[1] == "" {
-				t.Fatalf("%s: field %q empty, want at least []", plat, kv[0])
-			}
-		}
+// Эталон снят с успешного check живого браузера через manual-прокси: непустой
+// там ровно один ключ.
+func TestAnalyticsMatchesLiveBrowser(t *testing.T) {
+	want := [][2]string{
+		{"accelerometer", "[]"},
+		{"gyroscope", "[]"},
+		{"motion", "[]"},
+		{"cursor", "[]"},
+		{"taps", "[]"},
+		{"connectionRtt", "[]"},
+		{"connectionDownlink", "[10,10,10]"},
 	}
-}
+	cfg := sensorConfig{delay: 200 * time.Millisecond}
+	got := buildAnalytics(cfg, 10, 600*time.Millisecond).fields()
 
-// Телеметрия не может содержать данных, которых персона физически не соберёт.
-func TestAnalyticsRespectsPersonaCapabilities(t *testing.T) {
-	cases := []struct {
-		plat      browserprofile.Platform
-		wantAccel bool
-	}{
-		{browserprofile.Desktop, false},
-		{browserprofile.Mobile, true},
+	if len(got) != len(want) {
+		t.Fatalf("%d fields, want %d", len(got), len(want))
 	}
-	for _, tc := range cases {
-		p := testPersona(tc.plat)
-		data := buildAnalytics(p, defaultSensorConfig(), 4*time.Second)
-
-		if len(data.connRtt) == 0 {
-			t.Fatalf("%s: NetworkInformation отсутствует", tc.plat)
-		}
-		if len(data.connRtt) != len(data.connDownlink) {
-			t.Fatalf("%s: rtt %d != downlink %d", tc.plat, len(data.connRtt), len(data.connDownlink))
-		}
-		if got := len(data.accelerometer) > 0; got != tc.wantAccel {
-			t.Fatalf("%s: accelerometer present = %v", tc.plat, got)
-		}
-		if len(data.gyroscope) != 0 || len(data.motion) != 0 {
-			t.Fatalf("%s: web-персона не может дать gyroscope/motion", tc.plat)
-		}
-	}
-}
-
-// Указатель пишется только через externalCoords, а их заполняет хост-страница или
-// нативный бридж. При прямой навигации виджет живого браузера оставляет cursor и
-// taps пустыми - и мы обязаны делать то же.
-func TestAnalyticsLeavesPointerEmpty(t *testing.T) {
-	for _, plat := range []browserprofile.Platform{browserprofile.Desktop, browserprofile.Mobile} {
-		p := testPersona(plat)
-		data := buildAnalytics(p, defaultSensorConfig(), 10*time.Second)
-		if len(data.cursor) != 0 || len(data.taps) != 0 {
-			t.Fatalf("%s: cursor %d, taps %d, want 0", plat, len(data.cursor), len(data.taps))
+	for i, kv := range got {
+		if kv != want[i] {
+			t.Fatalf("field %d = %v, want %v", i, kv, want[i])
 		}
 	}
 }
@@ -77,43 +34,19 @@ func TestAnalyticsLeavesPointerEmpty(t *testing.T) {
 // Число сэмплов задаёт таймер виджета: сколько тиков уместилось в реальное время
 // сессии, столько и точек.
 func TestAnalyticsSampleCountFollowsElapsed(t *testing.T) {
-	cfg := sensorConfig{delay: 100 * time.Millisecond, cursor: true, taps: true, accelerometer: true}
+	cfg := sensorConfig{delay: 100 * time.Millisecond}
 	elapsed := 5 * time.Second
-	ticks := int(elapsed / cfg.delay)
 
-	for _, plat := range []browserprofile.Platform{browserprofile.Desktop, browserprofile.Mobile} {
-		data := buildAnalytics(testPersona(plat), cfg, elapsed)
-		if len(data.connRtt) != ticks {
-			t.Fatalf("%s: conn %d, want %d", plat, len(data.connRtt), ticks)
-		}
-	}
-}
-
-// Сервер сам говорит, что слушает: неслушаемый сенсор остаётся пустым.
-func TestAnalyticsHonoursSensorList(t *testing.T) {
-	raw := map[string]any{"response": map[string]any{
-		"sensors_delay":       float64(250),
-		"bridge_sensors_list": []any{"cursor"},
-	}}
-	cfg := parseSensorConfig(raw)
-	if cfg.delay != 250*time.Millisecond || !cfg.cursor || cfg.taps || cfg.accelerometer {
-		t.Fatalf("sensor config = %+v", cfg)
-	}
-
-	p := testPersona(browserprofile.Mobile)
-	data := buildAnalytics(p, cfg, 3*time.Second)
-	if len(data.taps) != 0 || len(data.accelerometer) != 0 {
-		t.Fatalf("taps %d, accelerometer %d: сервер их не слушает", len(data.taps), len(data.accelerometer))
+	if got := len(buildAnalytics(cfg, 10, elapsed).connDownlink); got != int(elapsed/cfg.delay) {
+		t.Fatalf("downlink = %d, want %d", got, int(elapsed/cfg.delay))
 	}
 }
 
 // Сессия короче одного тика: массивы пустые, но ключи на месте.
 func TestAnalyticsWithoutTicksIsEmpty(t *testing.T) {
-	p := testPersona(browserprofile.Mobile)
-	cfg := sensorConfig{delay: 2 * time.Second, cursor: true, taps: true, accelerometer: true}
-	data := buildAnalytics(p, cfg, 500*time.Millisecond)
-	for _, kv := range data.fields() {
-		if kv[1] != "[]" {
+	cfg := sensorConfig{delay: 2 * time.Second}
+	for _, kv := range buildAnalytics(cfg, 10, 500*time.Millisecond).fields() {
+		if kv[1] != emptyArray {
 			t.Fatalf("field %q = %s, want []", kv[0], kv[1])
 		}
 	}
@@ -130,44 +63,45 @@ func TestParseSensorConfigFallsBackToDefaults(t *testing.T) {
 	}
 }
 
-// Chrome огрубляет NetworkInformation: rtt кратен 25 мс, downlink - шагу 0.05 и
-// не превышает 10 Мбит/с.
-func TestConnectionSamplesQuantized(t *testing.T) {
-	rtt, downlink := sampleConnection(false, 40)
-	for i := range rtt {
-		if rtt[i] <= 0 || rtt[i]%25 != 0 {
-			t.Fatalf("rtt[%d] = %d, want positive multiple of 25", i, rtt[i])
-		}
-		if downlink[i] <= 0 || downlink[i] > 10 {
-			t.Fatalf("downlink[%d] = %v, want (0, 10]", i, downlink[i])
-		}
-		if steps := downlink[i] / 0.05; steps-float64(int(steps+0.5)) > 1e-9 {
-			t.Fatalf("downlink[%d] = %v, want multiple of 0.05", i, downlink[i])
+func TestParseSensorConfigReadsDelay(t *testing.T) {
+	cfg := parseSensorConfig(map[string]any{"response": map[string]any{"sensors_delay": float64(250)}})
+	if cfg.delay != 250*time.Millisecond {
+		t.Fatalf("delay = %s, want 250ms", cfg.delay)
+	}
+}
+
+// Оценка не меняется за время captcha: замеры дали [10,10,10] и [9.6,9.6,9.6].
+func TestDownlinkIsConstantWithinSession(t *testing.T) {
+	for _, v := range sampleDownlink(9.6, 16) {
+		if v != 9.6 {
+			t.Fatalf("downlink = %v, want 9.6", v)
 		}
 	}
 }
 
-func TestAccelerometerSamplesAreGravity(t *testing.T) {
-	samples := sampleAccelerometer(12)
-	if len(samples) != 12 {
-		t.Fatalf("samples = %d, want 12", len(samples))
-	}
-	for _, s := range samples {
-		if mag := s.X*s.X + s.Y*s.Y + s.Z*s.Z; mag < 64 || mag > 144 {
-			t.Fatalf("magnitude^2 = %.1f, not gravity-like", mag)
+// JSON.stringify печатает число кратчайшей записью; 9.200000000000001 в выдаче
+// живого браузера невозможен и сам был бы маркером.
+func TestSessionDownlinkSerializesShort(t *testing.T) {
+	for range 500 {
+		v := sessionDownlink()
+		if v < 8 || v > 10 {
+			t.Fatalf("downlink = %v, want [8, 10]", v)
+		}
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) > 4 {
+			t.Fatalf("downlink serialized as %s, want at most 4 chars", raw)
 		}
 	}
 }
 
-func TestJSONArrayEmptyIsBrackets(t *testing.T) {
-	if got := jsonArray[point](nil); got != "[]" {
-		t.Fatalf("jsonArray(nil) = %q, want []", got)
+func TestDownlinkArray(t *testing.T) {
+	if got := downlinkArray(nil); got != emptyArray {
+		t.Fatalf("downlinkArray(nil) = %q, want []", got)
 	}
-	var pts []point
-	if err := json.Unmarshal([]byte(jsonArray([]point{{X: 1, Y: 2}})), &pts); err != nil {
-		t.Fatal(err)
-	}
-	if len(pts) != 1 || pts[0].X != 1 || pts[0].Y != 2 {
-		t.Fatalf("round-trip = %+v", pts)
+	if got := downlinkArray([]float64{10, 9.6}); got != "[10,9.6]" {
+		t.Fatalf("downlinkArray = %s, want [10,9.6]", got)
 	}
 }

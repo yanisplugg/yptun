@@ -4,83 +4,79 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strconv"
+	"strings"
 )
 
-// DefaultMTU - WireGuard идёт поверх TURN (STUN-обёртка + UDP + IP), и дефолтные
-// 1420 фрагментируются. 1280 - минимум IPv6, проходит везде. Серверная сторона
-// держит то же значение (control.sh, WG_MTU).
+// DefaultMTU - безопасный MTU для WireGuard поверх TURN без фрагментации.
 const DefaultMTU = 1280
 
-// KeyLen - длина ключа Curve25519 в байтах.
 const KeyLen = 32
 
-// Key - приватный, публичный или pre-shared ключ.
+// Key - 32-байтный ключ WireGuard.
 type Key [KeyLen]byte
 
-// IsZero сообщает, что ключ не задан.
 func (k Key) IsZero() bool { return k == Key{} }
 
-// Peer - удалённая сторона туннеля.
+// Peer описывает конфигурацию удалённого узла туннеля.
 type Peer struct {
 	PublicKey    Key
 	PresharedKey Key
 	AllowedIPs   []netip.Prefix
-	// Endpoint нужен только при работе через сокет. Когда туннель подключён к
-	// релею напрямую (singlePeerBind), адрес игнорируется: сторона ровно одна.
-	Endpoint  string
-	Keepalive int // persistent-keepalive, секунды; 0 - выключен
+	Endpoint     string
+	Keepalive    int
 }
 
-// Config - типизированный конфиг туннеля. Собирается парсером wg-quick или
-// хостом напрямую; в UAPI превращается одной функцией, без склейки текста.
 type Config struct {
 	PrivateKey Key
-	// Addresses и DNS туннель сам не применяет: их выставляет платформа при
-	// создании tun-интерфейса. Хранятся здесь, потому что приходят из того же
-	// .conf и хосту нужны при настройке VpnService.
-	Addresses []netip.Prefix
-	DNS       []netip.Addr
-	MTU       int
-	Peers     []Peer
-	// Amnezia пуст - протокол побитово совпадает с ванильным WireGuard.
-	Amnezia AmneziaParams
+	Addresses  []netip.Prefix
+	DNS        []netip.Addr
+	MTU        int
+	Peers      []Peer
+	Amnezia    AmneziaParams
 }
 
-// AmneziaParams - параметры маскировки AmneziaWG. Имена полей повторяют ключи
-// конфига (Jc, S1, H1, I1...), потому что пользователь копирует их из клиента
-// Amnezia как есть - переименование только запутало бы.
-//
-// Нулевое значение = ванильный WireGuard: в UAPI не уходит ни одного ключа.
-// Обнулять по отдельности нельзя - устройство отвергает jc/jmin/jmax <= 0.
+// MinHeaderProtectionPadding - минимум S1-S4, из которого AWG берёт nonce для защиты заголовка.
+const MinHeaderProtectionPadding = 12
+
+// AmneziaParams содержит параметры обфускации протокола AmneziaWG.
+// Range-поля пустые либо в формате "N" / "LO-HI".
 type AmneziaParams struct {
-	Jc   int // junk-пакетов перед handshake
-	Jmin int // минимальный размер junk-пакета
-	Jmax int // максимальный размер junk-пакета
+	Jc   int
+	Jmin int
+	Jmax int
 
-	S1 int // padding init-сообщения
-	S2 int // padding response-сообщения
-	S3 int // padding cookie-сообщения
-	S4 int // padding transport-сообщения
+	S1 int
+	S2 int
+	S3 int
+	S4 int
 
-	// H1..H4 - типы сообщений: число или диапазон "N-M".
 	H1 string
 	H2 string
 	H3 string
 	H4 string
 
-	// I - спецификации i1..i5: пакеты-обманки, отправляемые до handshake.
 	I [5]string
+
+	// AWG 3+.
+	HeaderProtectionKey    Key
+	ContentPaddingAddition string
+	RekeyAfterTime         string
+	RekeyTimeout           string
+	RejectAfterTime        string
+	KeepaliveTimeout       string
+	MaxHandshakeAttempts   string
+	RandomTrailers         bool
+	DisableCookies         bool
 }
 
-// Enabled сообщает, задан ли хоть один параметр маскировки.
 func (p AmneziaParams) Enabled() bool { return p != AmneziaParams{} }
 
-// Defaults - конфиг с дефолтами; ключи и пиры задаёт вызывающий.
+// Defaults возвращает конфигурацию туннеля с дефолтным MTU.
 func Defaults() Config {
 	return Config{MTU: DefaultMTU}
 }
 
-// Validate проверяет, что конфига достаточно для подъёма туннеля.
 func (c *Config) Validate() error {
 	if c == nil {
 		return errors.New("tunnel: nil config")
@@ -113,8 +109,7 @@ func (p AmneziaParams) validate() error {
 	if !p.Enabled() {
 		return nil
 	}
-	// Устройство отвергает неположительные jc/jmin/jmax, поэтому junk-параметры
-	// задаются либо все вместе, либо никак.
+	// Параметры junk (Jc, Jmin, Jmax) должны задаваться совместно.
 	junk := []int{p.Jc, p.Jmin, p.Jmax}
 	set := 0
 	for _, v := range junk {
@@ -132,6 +127,59 @@ func (p AmneziaParams) validate() error {
 		if v < 0 {
 			return errors.New("tunnel: amnezia padding must not be negative")
 		}
+	}
+	return p.validateAWG3()
+}
+
+func (p AmneziaParams) validateAWG3() error {
+	ranges := []struct {
+		name string
+		val  string
+	}{
+		{"H1", p.H1}, {"H2", p.H2}, {"H3", p.H3}, {"H4", p.H4},
+		{"ContentPaddingAddition", p.ContentPaddingAddition},
+		{"RekeyAfterTime", p.RekeyAfterTime},
+		{"RekeyTimeout", p.RekeyTimeout},
+		{"RejectAfterTime", p.RejectAfterTime},
+		{"KeepaliveTimeout", p.KeepaliveTimeout},
+		{"MaxHandshakeAttempts", p.MaxHandshakeAttempts},
+	}
+	for _, r := range ranges {
+		if err := ValidateRange(r.val); err != nil {
+			return fmt.Errorf("tunnel: amnezia %s: %w", r.name, err)
+		}
+	}
+	if p.HeaderProtectionKey.IsZero() {
+		return nil
+	}
+	// Защита заголовка берёт nonce из crypto-паддинга, короткого ей не хватает.
+	for _, v := range []int{p.S1, p.S2, p.S3, p.S4} {
+		if v < MinHeaderProtectionPadding {
+			return fmt.Errorf("tunnel: amnezia HeaderProtectionKey requires S1-S4 >= %d", MinHeaderProtectionPadding)
+		}
+	}
+	return nil
+}
+
+// ValidateRange проверяет формат диапазона AWG ("N" или "LO-HI"); пустая строка - не задан.
+func ValidateRange(s string) error {
+	if s == "" {
+		return nil
+	}
+	lo, hi, hasHi := strings.Cut(s, "-")
+	low, err := strconv.ParseUint(lo, 10, 32)
+	if err != nil {
+		return fmt.Errorf("bad lower bound %q", lo)
+	}
+	if !hasHi {
+		return nil
+	}
+	high, err := strconv.ParseUint(hi, 10, 32)
+	if err != nil {
+		return fmt.Errorf("bad upper bound %q", hi)
+	}
+	if high < low {
+		return fmt.Errorf("upper bound %d below lower %d", high, low)
 	}
 	return nil
 }

@@ -13,8 +13,6 @@ import (
 	pionudp "github.com/pion/transport/v4/udp"
 )
 
-// bufPool устраняет per-packet heap-аллокацию на горячих путях серверного
-// wrapped PacketConn.
 var bufPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, 1600+overhead)
@@ -58,8 +56,6 @@ func (l *packetListener) Accept() (net.PacketConn, net.Addr, error) {
 func (l *packetListener) Close() error   { return l.inner.Close() }
 func (l *packetListener) Addr() net.Addr { return l.inner.Addr() }
 
-// packetConn - per-peer net.PacketConn, AEAD-оборачивающий чтение/запись через
-// bufPool для allocation-free горячего пути.
 type packetConn struct {
 	inner net.PacketConn
 	conn  *Conn

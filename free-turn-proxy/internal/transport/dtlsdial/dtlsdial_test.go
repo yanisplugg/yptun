@@ -8,12 +8,10 @@ import (
 	"time"
 )
 
-// fakePC blocks forever on ReadFrom and accepts writes - enough to keep the
-// DTLS handshake stuck so we can exercise the gate/cancel paths.
 type fakePC struct{}
 
 func (fakePC) ReadFrom(_ []byte) (int, net.Addr, error) {
-	select {} // block forever
+	select {}
 }
 func (fakePC) WriteTo(b []byte, _ net.Addr) (int, error) { return len(b), nil }
 func (fakePC) Close() error                              { return nil }
@@ -22,11 +20,9 @@ func (fakePC) SetDeadline(time.Time) error               { return nil }
 func (fakePC) SetReadDeadline(time.Time) error           { return nil }
 func (fakePC) SetWriteDeadline(time.Time) error          { return nil }
 
-// When HandshakeSem is full and ctx fires, Dial must return ctx.Err()
-// without ever touching the underlying PacketConn.
 func TestDial_SemBlocksUntilCtx(t *testing.T) {
 	sem := make(chan struct{}, 1)
-	sem <- struct{}{} // pre-fill: no slots free
+	sem <- struct{}{}
 	d := &Dialer{HandshakeSem: sem, HandshakeTimeout: 5 * time.Second}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -37,5 +33,3 @@ func TestDial_SemBlocksUntilCtx(t *testing.T) {
 		t.Fatalf("expected DeadlineExceeded, got %v", err)
 	}
 }
-
-var _ = errors.New

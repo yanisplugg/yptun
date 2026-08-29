@@ -3,7 +3,9 @@ package vkauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -20,11 +22,11 @@ func testCaptchaErr() *captcha.Error {
 func TestPersonaStableUntilBurned(t *testing.T) {
 	c := New(Config{FingerprintSeed: "install-1"})
 	first, again := c.currentPersona(), c.currentPersona()
-	if first != again {
+	if !reflect.DeepEqual(first, again) {
 		t.Fatal("persona not stable")
 	}
 	same := New(Config{FingerprintSeed: "install-1"})
-	if same.currentPersona() != c.currentPersona() {
+	if !reflect.DeepEqual(same.currentPersona(), c.currentPersona()) {
 		t.Fatal("same seed produced different persona")
 	}
 	other := New(Config{FingerprintSeed: "install-2"})
@@ -142,5 +144,27 @@ func TestFetchBoundsPersonaRestarts(t *testing.T) {
 	}
 	if want := len(c.credentials) + maxPersonaBurns; calls != want {
 		t.Fatalf("tokenChain called %d times, want %d", calls, want)
+	}
+}
+
+func TestCaptchaUnavailableKeepsPersona(t *testing.T) {
+	c := newTestClient(t, nil)
+	c.autoSolver = func(context.Context, *captcha.Error, int, tlsclient.HttpClient, browserprofile.Profile) (string, error) {
+		return "", fmt.Errorf("%w: captcha page http 429 (bytes=120)", captcha.ErrUnavailable)
+	}
+
+	kept := c.currentPersona()
+	_, err := c.solveCaptcha(context.Background(), nil, kept, 1, "lnk", "name", "t1", testCaptchaErr())
+	if !errors.Is(err, captcha.ErrUnavailable) {
+		t.Fatalf("err = %v, want captcha.ErrUnavailable", err)
+	}
+	if c.currentPersona().VisitorID != kept.VisitorID {
+		t.Fatal("persona burned on an unavailable captcha page")
+	}
+	if c.captchaAttempt != 0 {
+		t.Fatalf("solve-mode ladder advanced to %d", c.captchaAttempt)
+	}
+	if c.LockoutUntilUnix() != 0 {
+		t.Fatal("lockout engaged on an unavailable captcha page")
 	}
 }

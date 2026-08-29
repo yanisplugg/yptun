@@ -53,7 +53,7 @@ func TestWrapIntoRoundTrip(t *testing.T) {
 	cli, _ := NewConn(key, false)
 	srv, _ := NewConn(key, true)
 
-	payload := []byte("xray tcp bytes over smux")
+	payload := []byte("wireguard bytes over relay")
 	dst := make([]byte, MaxWire(len(payload)))
 	n, err := cli.WrapInto(dst, payload)
 	if err != nil {
@@ -119,7 +119,6 @@ func TestSeqGaps(t *testing.T) {
 	key := newKey(t)
 	conn, _ := NewConn(key, false)
 
-	// Сбросим nextGapAt на маленькое значение для теста.
 	conn.nextGapAt = 3
 	conn.gapSize = 2
 
@@ -134,10 +133,8 @@ func TestSeqGaps(t *testing.T) {
 		seqs[i] = binary.BigEndian.Uint16(buf[2:4])
 	}
 
-	// С seq 3: gap 3 -> seq 3, nextGapAt=0 -> пропускаем 2 -> seq=4,5 пропущены, seq=6
-	// Проверяем что был пропуск: seqs[0]=X, seqs[1]=X+1, seqs[2]=X+2, seqs[3]=X+5 (2 пропущено).
 	got := int(seqs[3]) - int(seqs[2])
-	if got != 3 { // +1 за текущий +2 gap = 3
+	if got != 3 {
 		t.Logf("seq progression: %v", seqs)
 	}
 }
@@ -147,7 +144,6 @@ func TestAudioStateMachine(t *testing.T) {
 	key := newKey(t)
 	conn, _ := NewConn(key, false)
 
-	// Принудительно silence, маленький nextStateSwitch для теста.
 	conn.audioState = stateSilence
 	conn.pktsInState = 0
 	conn.nextStateSwitch = 2
@@ -163,8 +159,6 @@ func TestAudioStateMachine(t *testing.T) {
 		markers[i] = buf[1]&rtpMarker != 0
 	}
 
-	// Pkt 0: silence pktsInState=1 (<2, M=0).
-	// Pkt 1: silence pktsInState=2 (==nextStateSwitch) -> speech (M=1).
 	t.Logf("markers: %v", markers)
 	if !markers[1] {
 		t.Error("expected M=1 on silence->speech transition at packet index 1")
@@ -183,12 +177,10 @@ func TestAbsSendTimeValidFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Проверяем что abs-send-time укладывается в 24 бита и не негативный.
 	ast := (uint32(buf[22]) << 16) | (uint32(buf[23]) << 8) | uint32(buf[24])
 	if ast>>24 != 0 {
 		t.Errorf("abs-send-time exceeds 24 bits: 0x%06x", ast)
 	}
-	// seconds field (top 6 bits) should be < 64.
 	sec := ast >> 18
 	if sec >= 64 {
 		t.Errorf("abs-send-time seconds >= 64: %d", sec)
@@ -211,7 +203,6 @@ func TestVariableTsStep(t *testing.T) {
 		tsValues[i] = binary.BigEndian.Uint32(buf[4:8])
 	}
 
-	// Проверяем что не все шаги одинаковые (с допуском на случайность).
 	diffs := make(map[uint32]int)
 	for i := 1; i < len(tsValues); i++ {
 		diff := tsValues[i] - tsValues[i-1]

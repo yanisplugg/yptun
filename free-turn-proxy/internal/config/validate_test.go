@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 )
 
-// validClient - минимальный конфиг, проходящий Validate. Строится как это будет
-// делать не-CLI источник: дефолты плюс обязательные поля.
 func validClient() *Client {
 	c := Defaults()
 	c.Proxy.Peer = "1.2.3.4:5000"
@@ -35,11 +35,6 @@ func TestValidateRejects(t *testing.T) {
 		{"dns mode", func(c *Client) { c.DNS.Mode = "bogus" }, "invalid -dns-mode"},
 		{"obf profile", func(c *Client) { c.Obf.Profile = "bogus" }, "invalid -obf-profile"},
 		{"timing without obf", func(c *Client) { c.Obf.Timing = time.Second }, "-obf-timing"},
-		{"timing with tcp", func(c *Client) {
-			c.Obf.Profile = ObfProfileRTPOpus3
-			c.Obf.Timing = time.Second
-			c.Proxy.Mode = ProxyModeTCPFwd
-		}, "-obf-timing"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,5 +69,25 @@ func TestValidateServer(t *testing.T) {
 	s.Obf.Profile = "bogus"
 	if err := ValidateServer(&s); err == nil {
 		t.Fatal("ValidateServer() must reject unknown obf profile")
+	}
+}
+
+// Встроенный WG гонит датаграммы - в tcp-режиме такой конфиг молча не работал бы.
+func TestValidateTunnelRejectsTCPMode(t *testing.T) {
+	c := validClient()
+	c.Proxy.Mode = ProxyModeTCP
+	c.Tunnel = TunnelOpts{Mode: tunnel.ModeWG, Config: "[Interface]", MTU: 1280}
+	if err := Validate(c); err == nil || !strings.Contains(err.Error(), "tunnel requires") {
+		t.Errorf("expected tunnel/mode error, got %v", err)
+	}
+}
+
+// Маршруты к TURN от режима туннеля не зависят.
+func TestValidateRoutesAllowedInTCPMode(t *testing.T) {
+	c := validClient()
+	c.Proxy.Mode = ProxyModeTCP
+	c.Routes = true
+	if err := Validate(c); err != nil {
+		t.Errorf("routes must be allowed in tcp mode: %v", err)
 	}
 }

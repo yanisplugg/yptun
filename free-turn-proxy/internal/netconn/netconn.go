@@ -1,7 +1,4 @@
-// Package netconn - мелкие net.Conn / transport.Net адаптеры для клиента
-// и сервера: passthrough transport.Net (для pion turn), ConnectedUDPConn
-// (WriteTo поверх dialed UDPConn) и SplitFirstWriteConn (обход DPI через
-// разбиение первого сегмента).
+// Package netconn содержит сетевые адаптеры для net.Conn и transport.Net.
 package netconn
 
 import (
@@ -15,10 +12,8 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/netctl"
 )
 
-// DirectNet реализует transport.Net через стандартный net.
 type DirectNet struct{}
 
-// New возвращает transport.Net поверх стандартного net.
 func New() transport.Net {
 	return DirectNet{}
 }
@@ -35,10 +30,7 @@ type directTCPListener struct {
 	*net.TCPListener
 }
 
-// All socket-creating methods route through a net.Dialer / net.ListenConfig
-// carrying netctl.Apply as Control so the host can protect each fd from the
-// VPN tunnel. (net.DialUDP / net.ListenUDP take no Control, so we go via
-// Dialer/ListenConfig and type-assert back to the concrete UDP/TCP conn.)
+// Все сокеты создаются с Control: netctl.Apply для защиты от попадания в VPN-туннель.
 func (DirectNet) ListenPacket(network string, address string) (net.PacketConn, error) {
 	return (&net.ListenConfig{Control: netctl.Apply}).ListenPacket(context.Background(), network, address)
 }
@@ -169,21 +161,16 @@ func (l directTCPListener) AcceptTCP() (transport.TCPConn, error) {
 	return l.TCPListener.AcceptTCP()
 }
 
-// ConnectedUDPConn адаптирует dialed (connected) *net.UDPConn к семантике
-// net.PacketConn: WriteTo игнорирует адрес, т.к. ядро уже знает его из connect().
+// ConnectedUDPConn адаптирует dialed *net.UDPConn к net.PacketConn (WriteTo транслируется в Write).
 type ConnectedUDPConn struct {
 	*net.UDPConn
 }
 
-// WriteTo игнорирует addr (UDP уже connected) и пишет p.
 func (c *ConnectedUDPConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 	return c.Write(p)
 }
 
-// SplitFirstWriteConn оборачивает TCP net.Conn и разбивает самый первый Write
-// на два сегмента (SplitAt байт + остаток) с опциональной паузой Delay между ними.
-// Ломает DPI-правила, матчащие фиксированный offset в первом сегменте без
-// TCP-реассемблинга (например STUN magic cookie на offset 4-7).
+// SplitFirstWriteConn разбивает первый Write на два TCP-сегмента для обхода DPI без реассемблинга.
 type SplitFirstWriteConn struct {
 	net.Conn
 	SplitAt int
@@ -191,7 +178,6 @@ type SplitFirstWriteConn struct {
 	done    atomic.Bool
 }
 
-// Write делает one-shot разбиение при первом вызове, далее проксирует напрямую.
 func (s *SplitFirstWriteConn) Write(b []byte) (int, error) {
 	if s.done.CompareAndSwap(false, true) && len(b) > s.SplitAt {
 		n1, err := s.Conn.Write(b[:s.SplitAt])

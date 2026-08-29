@@ -12,11 +12,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk"
 )
 
-// buildProvider строит provider.Provider по cfg.Provider.Name. Одна ссылка даёт
-// обычный vk.Provider; несколько - multi.Provider (один vk.Provider на ссылку).
-//
-// solver=nil отключает ручной fallback captcha: при провале авто-решателя поток
-// падает. Хост решает сам - у CLI это браузер, у мобильного приложения WebView.
+// buildProvider создаёт экземпляр provider.Provider в зависимости от конфигурации.
 func buildProvider(
 	cfg *config.Client,
 	dialer net.Dialer,
@@ -39,6 +35,7 @@ func buildProvider(
 				StreamsPerCache: cfg.VK.StreamsPerCred,
 				StreamsAlive:    connected.Load,
 				FingerprintSeed: cfg.ClientID,
+				StatePaths:      vk.DefaultStatePaths(),
 				Log:             logger,
 				Debug:           cfg.Log.Debug,
 			}, solver)

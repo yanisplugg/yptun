@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// relayBufPool устраняет per-packet heap-аллокацию на горячих путях
-// RelayPacketConn. Дефолтный размер покрывает overhead любого профиля.
 var relayBufPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, 1600+128)
@@ -15,10 +13,7 @@ var relayBufPool = sync.Pool{
 	},
 }
 
-// RelayPacketConn оборачивает TURN relay PacketConn, направляя все записи
-// фиксированному Peer. Если Codec non-nil, пакеты заворачиваются/разворачиваются
-// wire-профилем (мимикрия). Заменяет прежний rtpopus.RelayPacketConn - теперь
-// обобщён по Codec, работает с любым профилем.
+// RelayPacketConn адаптирует net.PacketConn релея с опциональным шифрованием/обфускацией.
 type RelayPacketConn struct {
 	Relay net.PacketConn
 	Peer  net.Addr

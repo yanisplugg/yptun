@@ -5,15 +5,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcpmux"
 	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 )
 
-// Validate проверяет смысловые правила собранного клиентского конфига.
-// Работает по Client, а не по источнику, поэтому одинаково применима к CLI,
-// freeturn:// URI и JSON от мобильного хоста.
-//
-// Структурные проверки (валидность -transport/-mode, декод ключа) делает
-// assemble: там ещё видны сырые значения.
+// Validate проверяет валидность конфигурации Client.
 func Validate(c *Client) error {
 	if c == nil {
 		return errors.New("nil client config")
@@ -48,14 +44,39 @@ func Validate(c *Client) error {
 	if err := validateObfProfile(c.Obf.Profile); err != nil {
 		return err
 	}
+	if err := validateProxyMode(c.Proxy.Mode); err != nil {
+		return err
+	}
 	if err := validateTunnel(c.Tunnel, c.Proxy.Mode); err != nil {
 		return err
 	}
-	return validateObfTiming(c.Obf, c.Proxy.Mode)
+	if err := validateKCPFor(c.KCP, c.Proxy.Mode); err != nil {
+		return err
+	}
+	return validateObfTiming(c.Obf)
 }
 
-// validateTunnel: WireGuard - UDP-протокол, поверх tcp-форвардера (Xray) его
-// поднимать нечем, поэтому туннель разрешён только в udp-режиме прокси.
+func validateProxyMode(m ProxyMode) error {
+	switch m {
+	case ProxyModeUDP, ProxyModeTCP:
+		return nil
+	default:
+		return fmt.Errorf("invalid -mode value %q: must be %s | %s", m, ProxyModeUDP, ProxyModeTCP)
+	}
+}
+
+// validateKCPFor: -kcp-* настраивают ARQ, который живёт только в tcp-режиме.
+func validateKCPFor(k KCPOpts, mode ProxyMode) error {
+	if mode != ProxyModeTCP {
+		if k.Profile != kcpmux.DefaultProfile() {
+			return errors.New("-kcp-* supported only with -mode tcp")
+		}
+		return nil
+	}
+	return validateKCP(k.Profile)
+}
+
+// validateTunnel: встроенный WG гонит датаграммы, tcp-режим их не переносит.
 func validateTunnel(t TunnelOpts, mode ProxyMode) error {
 	if t.Mode != "" && !t.Mode.Valid() {
 		return fmt.Errorf("invalid tunnel mode %q: must be %s | %s | %s",
@@ -65,7 +86,7 @@ func validateTunnel(t TunnelOpts, mode ProxyMode) error {
 		return nil
 	}
 	if mode != ProxyModeUDP {
-		return errors.New("tunnel requires proxy mode udp")
+		return errors.New("tunnel requires -mode udp")
 	}
 	if strings.TrimSpace(t.Config) == "" {
 		return errors.New("tunnel config is required")
@@ -86,20 +107,21 @@ func ValidateServer(s *Server) error {
 	if err := validateObfProfile(s.Obf.Profile); err != nil {
 		return err
 	}
-	return validateObfTiming(s.Obf, s.Proxy.Mode)
+	if err := validateProxyMode(s.Proxy.Mode); err != nil {
+		return err
+	}
+	if err := validateKCPFor(s.KCP, s.Proxy.Mode); err != nil {
+		return err
+	}
+	return validateObfTiming(s.Obf)
 }
 
-// validateObfTiming ограничивает -obf-timing UDP-релеем с включённой обфускацией:
-// без RTP-профиля паковать нечего, а в tcp-режиме pacing ломает RTT/конгешн KCP.
-func validateObfTiming(o ObfOpts, mode ProxyMode) error {
+func validateObfTiming(o ObfOpts) error {
 	if o.Timing <= 0 {
 		return nil
 	}
 	if !o.Enabled() {
 		return errors.New("-obf-timing requires -obf-profile != none")
-	}
-	if mode != ProxyModeUDP {
-		return errors.New("-obf-timing supported only with -mode udp")
 	}
 	return nil
 }

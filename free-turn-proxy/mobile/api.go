@@ -1,17 +1,4 @@
-// Package mobile - фасад ядра для gomobile bind (Android/iOS).
-//
-// Экспортируются только примитивные типы, структуры этого пакета и интерфейсы,
-// реализуемые хостом - ограничение gomobile. Логика сессии живёт в
-// internal/session и общая с cmd/client; конфиг разбирает internal/config тем же
-// путём, что и CLI. Здесь остаются разбор входа, единственный синглтон и
-// конвертация типов.
-//
-// Порядок работы хоста:
-//
-//  1. SetEventSink / SetProtect - до первого Start;
-//  2. Start(configJSON) - валидация синхронна, ошибка возвращается сразу;
-//  3. состояние приходит в EventSink, метрики читаются GetState;
-//  4. Stop() - блокирует до фактической остановки сессии.
+// Package mobile предоставляет фасад ядра для gomobile bind (Android/iOS).
 package mobile
 
 import (
@@ -24,14 +11,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/samosvalishe/free-turn-proxy/internal/client/dnsdial"
 	"github.com/samosvalishe/free-turn-proxy/internal/config"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk"
+	"github.com/samosvalishe/free-turn-proxy/internal/safego"
 	"github.com/samosvalishe/free-turn-proxy/internal/session"
+	"github.com/samosvalishe/free-turn-proxy/internal/statedir"
 	"github.com/samosvalishe/free-turn-proxy/internal/sub"
 	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
+	"github.com/samosvalishe/free-turn-proxy/internal/tunnel/awg"
 )
 
-// Состояния подключения (дублируют session.Phase*).
+// Состояния подключения (session.Phase*).
 const (
 	StateIdle       = "idle"
 	StateConnecting = "connecting"
@@ -42,22 +33,21 @@ const (
 )
 
 const (
-	// Лимит ожидания первого стрима для UI.
-	connectTimeout = 15 * time.Second
-	// Лимит ожидания во избежание конфликта портов при перезапуске.
-	stopTimeout = 5 * time.Second
+	connectTimeout     = 15 * time.Second
+	stopTimeout        = 5 * time.Second
+	tunnelCloseTimeout = 3 * time.Second
 )
 
-// ErrTunnelRequiresStartTunnel - попытка вызвать Start с tunnel.mode wg/awg.
-// Хост должен вызвать StartTunnel, передав tun-дескриптор платформы.
 var ErrTunnelRequiresStartTunnel = errors.New("tunnel mode requires StartTunnel with a platform tun fd")
 
-// Подставляется при сборке.
+// ErrTCPModeRequiresStart - в tcp-режиме ядро слушает локальный порт и tun не читает:
+// принятый fd остался бы установленным вхолостую, а трафик устройства - в чёрной дыре.
+var ErrTCPModeRequiresStart = errors.New("proxy mode tcp requires Start without a tun fd")
+
 var version = "dev"
 
 func Version() string { return version }
 
-// live - запущенная сессия с отменой и туннелем.
 type live struct {
 	sess   *session.Session
 	cancel context.CancelFunc
@@ -66,7 +56,6 @@ type live struct {
 	tunnel *tunnelParts
 }
 
-// final - статус после завершения сессии.
 type final struct {
 	state  string
 	errMsg string
@@ -74,22 +63,21 @@ type final struct {
 }
 
 var (
-	// mu сериализует Start/Stop; чтение идет мимо.
-	mu       sync.Mutex
-	current  atomic.Pointer[live]
-	lastStop atomic.Pointer[final]
+	mu        sync.Mutex // сериализует Start/Stop
+	current   atomic.Pointer[live]
+	finishing atomic.Pointer[live] // сессия, завершающаяся самостоятельно, до освобождения туннеля
+	lastStop  atomic.Pointer[final]
 )
 
-// Snapshot - консистентный срез состояния сессии для тика UI.
 type Snapshot struct {
-	State   string // idle | connecting | connected | captcha | error
-	Streams int    // подключённых TURN-потоков прямо сейчас
-	Total   int    // целевое число потоков
-	ErrMsg  string // непустой при State == error
-	TxTotal int64  // всего отправлено байт
-	RxTotal int64  // всего получено байт
-	TxRate  int64  // текущая скорость отправки, байт/с
-	RxRate  int64  // текущая скорость получения, байт/с
+	State   string
+	Streams int
+	Total   int
+	ErrMsg  string
+	TxTotal int64
+	RxTotal int64
+	TxRate  int64
+	RxRate  int64
 }
 
 func GetState() *Snapshot {
@@ -112,8 +100,7 @@ func GetState() *Snapshot {
 	return &Snapshot{State: StateIdle}
 }
 
-// clampToInt64 насыщает uint64 до int64: gomobile экспортирует только int64,
-// а счётчики байт - uint64.
+// clampToInt64 насыщает uint64 до int64 для совместимости с типами gomobile.
 func clampToInt64(u uint64) int64 {
 	if u > math.MaxInt64 {
 		return math.MaxInt64
@@ -121,10 +108,11 @@ func clampToInt64(u uint64) int64 {
 	return int64(u)
 }
 
-// Хост строит из него стартовое состояние формы.
+// SetStateDir задаёт каталог состояния. На Android обязателен: app-uid не может писать в стандартные пути.
+func SetStateDir(path string) { statedir.SetDir(path) }
+
 func DefaultConfigJSON() string { return config.DefaultClientJSON() }
 
-// Для live-валидации формы без запуска.
 func ValidateConfig(configJSON string) string {
 	if _, err := config.ParseClientJSON([]byte(configJSON), ""); err != nil {
 		return err.Error()
@@ -132,7 +120,6 @@ func ValidateConfig(configJSON string) string {
 	return ""
 }
 
-// Для экрана "какая команда работает" (гарантирует совпадение с ядром).
 func ConfigToArgs(configJSON string) (string, error) {
 	c, err := config.ParseClientJSON([]byte(configJSON), "")
 	if err != nil {
@@ -141,7 +128,6 @@ func ConfigToArgs(configJSON string) (string, error) {
 	return strings.Join(config.ClientArgs(c), " "), nil
 }
 
-// Запуск в режиме прокси (для tunnel.mode wg/awg нужен StartTunnel).
 func Start(configJSON string) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -151,12 +137,15 @@ func Start(configJSON string) error {
 	return startLocked(configJSON, 0, false)
 }
 
-// Пересоздание сессии с новым конфигом (при смене сети).
+// Restart перезапускает сессию. tunFD - дубликат дескриптора (0 для режима прокси).
 func Restart(configJSON string, tunFD int) error {
+	if tunFD < 0 {
+		return fmt.Errorf("bad tun fd %d", tunFD)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	stopLocked()
-	return startLocked(configJSON, tunFD, true)
+	return startLocked(configJSON, tunFD, tunFD > 0)
 }
 
 func Stop() {
@@ -165,27 +154,74 @@ func Stop() {
 	stopLocked()
 }
 
+// Wake форсирует пересоздание TURN-аллокаций при пробуждении устройства.
+func Wake() {
+	if l := current.Load(); l != nil {
+		l.sess.Wake()
+	}
+}
+
+// Reconnect пересоздаёт TURN-аллокации, не трогая туннель и tun-дескриптор.
+func Reconnect() {
+	if l := current.Load(); l != nil {
+		l.sess.Reconnect()
+	}
+}
+
+// SetDNSServers подменяет UDP-резолверы на лету, без перезапуска сессии.
+func SetDNSServers(servers string) {
+	dnsdial.SetUDPDNSServers(strings.Split(servers, ","))
+}
+
 func stopLocked() {
 	l := current.Swap(nil)
 	if l == nil {
+		// Ожидание освобождения дескриптора сессией перед возможным Restart.
+		if prev := finishing.Swap(nil); prev != nil {
+			waitDone(prev.done, stopTimeout)
+		}
+		lastStop.Store(&final{state: StateIdle})
 		return
 	}
+	finishing.CompareAndSwap(l, nil)
 	l.cancel()
-	select {
-	case <-l.done:
-	case <-time.After(stopTimeout):
+	waitDone(l.done, stopTimeout)
+	closeTunnel(l.tunnel)
+	lastStop.Store(&final{state: StateIdle})
+}
+
+// Таймаут для защиты от зависания backend.Down() в upstream amneziawg-go.
+func closeTunnel(t *tunnelParts) {
+	if t == nil {
+		return
 	}
-	// backend.Down() может зависнуть (upstream amneziawg-go): запускаем в горутине,
-	// чтобы не блокировать Restart после истечения stopTimeout.
-	go l.tunnel.close()
-	lastStop.CompareAndSwap(nil, &final{state: StateIdle})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = safego.Run(coreLog(), t.close)
+	}()
+	waitDone(done, tunnelCloseTimeout)
+}
+
+func waitDone(done <-chan struct{}, limit time.Duration) {
+	select {
+	case <-done:
+	case <-time.After(limit):
+	}
 }
 
 func startLocked(configJSON string, tunFD int, withTunnel bool) error {
+	// До backend.Up дескриптор закрывается при ошибке инициализации.
+	ownFD := withTunnel
+	defer func() {
+		if ownFD {
+			awg.CloseTUNFD(tunFD)
+		}
+	}()
+
 	raw := []byte(configJSON)
 
-	// Подписка отдаёт peer, без которого конфиг не проходит валидацию, поэтому
-	// тянем её до разбора и накладываем URI ноды поверх.
+	// Резолв подписки до парсинга даёт обязательный peer.
 	overlayURI := ""
 	if subURL := config.PeekSubURLJSON(raw); subURL != "" {
 		s, err := sub.Fetch(context.Background(), subURL)
@@ -202,7 +238,6 @@ func startLocked(configJSON string, tunFD int, withTunnel bool) error {
 	if err != nil {
 		return err
 	}
-	// ID клиента постоянный и живет в приложении.
 	if cfg.ClientID == "" {
 		return errors.New("clientId is required")
 	}
@@ -212,10 +247,12 @@ func startLocked(configJSON string, tunFD int, withTunnel bool) error {
 	if cfg.Tunnel.Enabled() && !withTunnel {
 		return fmt.Errorf("%w (mode=%s)", ErrTunnelRequiresStartTunnel, cfg.Tunnel.Mode)
 	}
+	if withTunnel && cfg.Proxy.Mode == config.ProxyModeTCP {
+		return ErrTCPModeRequiresStart
+	}
 
 	logger := &sinkLogger{debug: cfg.Log.Debug, buf: sharedLogBuf}
 
-	// Туннель требует in-memory PacketConn до старта сессии.
 	var parts *tunnelParts
 	var tunCfg *tunnel.Config
 	if cfg.Tunnel.Enabled() {
@@ -225,7 +262,6 @@ func startLocked(configJSON string, tunFD int, withTunnel bool) error {
 		}
 	}
 
-	// Держит watchdog, пока пользователь решает капчу.
 	var captchaActive atomic.Bool
 	var solver vk.ManualSolverFunc
 	if currentSink() != nil {
@@ -255,15 +291,14 @@ func startLocked(configJSON string, tunFD int, withTunnel bool) error {
 		return err
 	}
 
-	// Handshake повторяется в фоне, ждать готовности не нужно.
 	if parts != nil {
+		ownFD = false // Up забирает владение дескриптором
 		if err := parts.backend.Up(tunCfg, tunFD); err != nil {
 			parts.close()
 			return err
 		}
 	}
 
-	ClearLogs()
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &live{
 		sess:   sess,
@@ -273,17 +308,21 @@ func startLocked(configJSON string, tunFD int, withTunnel bool) error {
 		tunnel: parts,
 	}
 	current.Store(l)
+	finishing.Store(nil)
 	lastStop.Store(nil)
 
 	go func() {
 		defer close(l.done)
-		runErr := sess.Run(ctx)
+		runErr := safego.Call(logger, func() error { return sess.Run(ctx) })
 		cancel()
 
-		// Если Stop перехватил сессию, финальный статус его.
+		// Публикация до CAS для синхронизации с параллельным Stop.
+		finishing.Store(l)
 		if !current.CompareAndSwap(l, nil) {
+			finishing.CompareAndSwap(l, nil)
 			return
 		}
+		closeTunnel(l.tunnel)
 		if runErr != nil {
 			lastStop.Store(&final{state: StateError, errMsg: runErr.Error(), total: l.total})
 			return

@@ -1,10 +1,4 @@
-// Package turndial централизует TURN dial+allocate pipeline, общий для
-// UDP (oneTurnConnection) и VLESS (createSmuxSession) режимов клиента.
-//
-// Один вызов Open выполняет: парсинг цели, применение host/port override,
-// резолв UDP-адреса, dial UDP-или-TCP (с SplitFirstWriteConn поверх TCP),
-// turn.NewClient, Listen, Allocate. Возвращает relay PacketConn и Close,
-// который разрушает аллокацию, TURN-клиент и транспорт.
+// Package turndial инкапсулирует подключение, аутентификацию и аллокацию сессий TURN.
 package turndial
 
 import (
@@ -14,39 +8,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/logging"
 	"github.com/pion/turn/v5"
+	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/netconn"
 	"github.com/samosvalishe/free-turn-proxy/internal/netctl"
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 )
 
-// Config конфигурирует один вызов Open.
+// Config задаёт параметры подключения к TURN-серверу.
 type Config struct {
-	// HostOverride, если непустой, заменяет host из lookup credentials.
 	HostOverride string
-	// PortOverride, если непустой, заменяет port из lookup credentials.
 	PortOverride string
-	// TransportUDP=true - dial TURN по UDP; иначе по TCP через STUNConn.
 	TransportUDP bool
-	// DialTimeout ограничивает TCP dial. Ноль -> 5s.
-	DialTimeout time.Duration
+	DialTimeout  time.Duration
+	Log          logx.Logger
+	StreamID     int
 }
 
-// Stream - активная TURN-аллокация с зависимостями. Close разрушает в обратном порядке.
+// Stream представляет активную TURN-аллокацию.
 type Stream struct {
-	// Relay - выделенный relay PacketConn из turn.Client.Allocate.
-	Relay net.PacketConn
-	// ServerUDPAddr - резолвнутый UDP-адрес TURN-сервера (host:port).
+	Relay         net.PacketConn
 	ServerUDPAddr *net.UDPAddr
-	// PermDead закрывается при стойком провале ChannelBind refresh (relay
-	// блэкхолит data-path) - вызывающий рециклит allocation. См. permwatch.go.
+	// PermDead закрывается при стойком провале ChannelBind refresh (relay блэкхолит трафик).
 	PermDead <-chan struct{}
 	close    func() error
 }
 
-// Close освобождает аллокацию, TURN-клиент и транспорт.
-// Безопасно вызвать один раз. Возвращает первую non-nil ошибку.
+// Close освобождает аллокацию, TURN-клиент и транспортное соединение.
 func (s *Stream) Close() error {
 	if s == nil || s.close == nil {
 		return nil
@@ -54,8 +42,7 @@ func (s *Stream) Close() error {
 	return s.close()
 }
 
-// Open подключается к TURN, создаёт turn.Client и выделяет relay. rawAddr -
-// host:port из lookup credentials; user/pass - долгосрочные TURN-реквизиты.
+// Open выполняет подключение к TURN-серверу и создаёт релей-соединение.
 func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAddr string) (*Stream, error) {
 	urlhost, urlport, err := net.SplitHostPort(rawAddr)
 	if err != nil {
@@ -98,13 +85,12 @@ func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAdd
 	} else {
 		dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
-		var d net.Dialer
+		d := net.Dialer{Control: netctl.Apply}
 		c, derr := d.DialContext(dctx, "tcp", turnServerAddr)
 		if derr != nil {
 			return nil, fmt.Errorf("dial TURN (tcp): %w", derr)
 		}
-		// Рез внутри STUN magic cookie (байты 4-7) рвёт DPI-матч на cookie.
-		// Offset рандомен в [5,7] - убирает статический фингерпринт фикс-offset.
+		// Разрезание внутри STUN magic cookie (байты 4-7) ломает DPI сигнатуры без TCP-реассемблинга.
 		wrapped := &netconn.SplitFirstWriteConn{Conn: c, SplitAt: 5 + randx.Intn(3), Delay: 20 * time.Millisecond}
 		turnConn = turn.NewSTUNConn(wrapped)
 		closeConn = c.Close
@@ -117,13 +103,11 @@ func Open(ctx context.Context, cfg Config, peer *net.UDPAddr, user, pass, rawAdd
 		addrFamily = turn.RequestedAddressFamilyIPv6
 	}
 
-	// Standalone CreatePermission refresh VK реджектит 400 - глушим (24h).
-	// Permission держится живым через ChannelBind refresh (RFC 8656 §11);
-	// блэкхол ловим по провалу этого байнда (см. permwatch.go).
+	// VK отбрасывает CreatePermission refresh с кодом 400; канал поддерживается через ChannelBind.
 	permDead := make(chan struct{})
 	var permOnce sync.Once
 	loggerFactory := &permWatchFactory{
-		inner:     logging.NewDefaultLoggerFactory(),
+		inner:     &logxFactory{log: cfg.Log, stream: cfg.StreamID},
 		threshold: permFailThreshold,
 		onDead:    func() { permOnce.Do(func() { close(permDead) }) },
 	}

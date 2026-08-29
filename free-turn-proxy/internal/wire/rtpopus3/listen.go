@@ -18,6 +18,7 @@ var bufPool = sync.Pool{
 	},
 }
 
+// Listen возвращает dtls PacketListener с поддержкой профиля rtpopus3.
 func Listen(addr *net.UDPAddr, key []byte) (dtlsnet.PacketListener, error) {
 	state, err := NewState(key)
 	if err != nil {

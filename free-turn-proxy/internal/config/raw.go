@@ -1,23 +1,17 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcptun"
+	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcpmux"
 	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 	"github.com/samosvalishe/free-turn-proxy/internal/uri"
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
 )
 
-// raw - опции в том виде, в каком их даёт источник: CLI-флаги, freeturn:// URI
-// или (позже) JSON мобильного хоста. Строки не разобраны, enum'ы не проверены.
-//
-// Единственный путь raw -> Client идёт через assemble, поэтому у всех
-// источников ровно одна семантика: новый источник заполняет raw и не повторяет
-// ни нормализацию, ни проверки.
+// raw хранит неразобранные строковые опции до этапа assemble.
 type raw struct {
 	Turn   string
 	Port   string
@@ -25,14 +19,13 @@ type raw struct {
 	Peer   string
 
 	Provider string
-	Link     string // устаревший -link: одна ссылка
-	Links    string // -links: через запятую
+	Link     string
+	Links    string
 
 	N              int
 	StreamsPerCred int
 	Transport      string
 	Mode           string
-	Bond           bool
 
 	ObfProfile string
 	ObfKey     string
@@ -53,10 +46,11 @@ type raw struct {
 	TunnelMode   string
 	TunnelConfig string
 	TunnelMTU    int
+
+	KCP kcpmux.Profile
 }
 
-// applyURI накладывает freeturn:// поверх raw: URI побеждает флаги, но только
-// теми полями, которые в нём есть - остальное остаётся от источника.
+// applyURI применяет параметры freeturn:// поверх raw-опций.
 func (r *raw) applyURI(u *uri.Config) {
 	if u.Provider != "" {
 		r.Provider = u.Provider
@@ -67,8 +61,17 @@ func (r *raw) applyURI(u *uri.Config) {
 	if u.Mode != "" {
 		r.Mode = u.Mode
 	}
-	if u.Bond {
-		r.Bond = true
+	if u.KCP != nil {
+		r.KCP = kcpmux.Profile{
+			NoDelay:    u.KCP.NoDelay,
+			Interval:   u.KCP.Interval,
+			Resend:     u.KCP.Resend,
+			NC:         u.KCP.NC,
+			SndWnd:     u.KCP.SndWnd,
+			RcvWnd:     u.KCP.RcvWnd,
+			MTU:        u.KCP.MTU,
+			ACKNoDelay: u.KCP.ACKNoDelay,
+		}
 	}
 	if u.N > 0 {
 		r.N = u.N
@@ -102,7 +105,6 @@ func (r *raw) applyURI(u *uri.Config) {
 	}
 }
 
-// Превращает raw в Client: разбирает энумы, нормализует ссылки, декодирует ключ.
 func assemble(r raw) (*Client, error) {
 	switch r.Transport {
 	case TransportTCP, TransportUDP:
@@ -114,12 +116,6 @@ func assemble(r raw) (*Client, error) {
 	default:
 		return nil, fmt.Errorf("invalid -mode value %q: must be %s | %s", r.Mode, ModeUDP, ModeTCP)
 	}
-	// Проверяется на raw: в Client комбинация уже свёрнута в один ProxyMode и
-	// "-bond без tcp" от обычного udp не отличить.
-	if r.Bond && r.Mode != ModeTCP {
-		return nil, errors.New("-bond requires -mode tcp")
-	}
-
 	n := r.N
 	if n <= 0 {
 		n = DefaultStreams
@@ -146,7 +142,7 @@ func assemble(r raw) (*Client, error) {
 			Timing:  r.ObfTiming,
 		},
 		Proxy: ProxyOpts{
-			Mode:   clientProxyMode(r.Mode, r.Bond),
+			Mode:   ProxyMode(r.Mode),
 			Listen: r.Listen,
 			Peer:   r.Peer,
 		},
@@ -159,10 +155,7 @@ func assemble(r raw) (*Client, error) {
 		},
 		DNS: DNSOpts{Mode: r.DNSMode},
 		Log: LogOpts{Debug: r.Debug},
-		KCP: KCPOpts{
-			Profile: kcptun.DefaultProfile(),
-			FEC:     kcptun.FEC{},
-		},
+		KCP: KCPOpts{Profile: r.KCP},
 		Tunnel: TunnelOpts{
 			Mode:   tunnel.Mode(r.TunnelMode),
 			Config: r.TunnelConfig,
@@ -177,7 +170,6 @@ func assemble(r raw) (*Client, error) {
 		c.DNS.Servers = strings.Split(r.DNSServers, ",")
 	}
 
-	// -gen-obf-key печатает новый ключ и выходит: разбирать переданный незачем.
 	if c.Obf.GenKey {
 		return c, nil
 	}
@@ -193,7 +185,7 @@ func assemble(r raw) (*Client, error) {
 	return c, nil
 }
 
-// Вытаскивает join-код из ссылки (принимает URL и голый код).
+// normalizeVKLinks извлекает join-код звонка из URL или строки кода.
 func normalizeVKLinks(links, link string) []string {
 	items := strings.Split(links, ",")
 	if len(items) == 1 && items[0] == "" {
@@ -218,22 +210,4 @@ func normalizeVKLinks(links, link string) []string {
 		return nil
 	}
 	return out
-}
-
-func clientProxyMode(mode string, bond bool) ProxyMode {
-	switch {
-	case mode == ModeTCP && bond:
-		return ProxyModeTCPFwdBond
-	case mode == ModeTCP:
-		return ProxyModeTCPFwd
-	default:
-		return ProxyModeUDP
-	}
-}
-
-func serverProxyMode(mode string) ProxyMode {
-	if mode == ModeTCP {
-		return ProxyModeTCPFwd
-	}
-	return ProxyModeUDP
 }

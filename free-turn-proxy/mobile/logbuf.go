@@ -5,9 +5,7 @@ import (
 	"sync"
 )
 
-// logBufMax - глубина кольцевого буфера. Не настройка сессии: при живом
-// EventSink строки уходят хосту сразу, а буфер нужен только для DumpLogs -
-// дампа "поделиться логом" и строк, накопленных до регистрации приёмника.
+// logBufMax - размер кольцевого буфера логов для DumpLogs.
 const logBufMax = 500
 
 type logBuffer struct {
@@ -38,8 +36,6 @@ func (b *logBuffer) clear() {
 
 var sharedLogBuf = &logBuffer{}
 
-// DumpLogs возвращает последние строки лога (до logBufMax).
 func DumpLogs() string { return sharedLogBuf.get() }
 
-// ClearLogs очищает буфер логов.
 func ClearLogs() { sharedLogBuf.clear() }

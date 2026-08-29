@@ -33,8 +33,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk"
-	"github.com/samosvalishe/free-turn-proxy/internal/proxy/bondclient"
-	"github.com/samosvalishe/free-turn-proxy/internal/proxy/tcpfwd"
+	"github.com/samosvalishe/free-turn-proxy/internal/proxy/tcprelay"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/udprelay"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
 )
@@ -318,26 +317,30 @@ func run(ctx context.Context, cfg *config.Client, links []string, connected *ato
 			HandshakeTimeout: 30 * time.Second,
 			HandshakeSem:     make(chan struct{}, dtlsHandshakeConcurrency),
 		}
-		bondH := &bondclient.Handler{Deps: bondclient.Deps{Log: logger}}
-		tcpDeps := &tcpfwd.Deps{
-			DTLSDialer:  tcpDtlsDialer,
-			Log:         logger,
-			BondHandler: bondH.Handle,
+		// 3.2.0: tcpfwd/tcpfwdserver (round-robin or bond, chosen by useBond) were replaced upstream
+		// by tcprelay/tcpserver - a session pool with allocpace-paced TURN allocation and round-robin
+		// dispatch of new connections. Bond (byte-striping one TCP flow across every session) is gone;
+		// the upstream author retired it in the same release, we are not reviving it. Auth wired here
+		// (was missing in the old tcpfwd path) so auth-error backoff/credential-drop works in TCP mode
+		// too, same as it already did for UDP below.
+		tcpDeps := &tcprelay.Deps{
+			DTLSDialer:       tcpDtlsDialer,
+			Auth:             prov,
+			Log:              logger,
+			ConnectedStreams: connectedStreams,
 		}
-		tcpParams := &tcpfwd.Params{
+		tcpParams := &tcprelay.Params{
 			Host:         cfg.TURN.Host,
 			Port:         cfg.TURN.Port,
 			TransportUDP: cfg.TURN.TransportUDP,
-			// 1.3.0: the obf wire layer became a Codec interface (none | rtpopus | rtpopus2), so the
-			// profile is threaded alongside the key (NewClientObf(profile, key) inside the relay).
 			Profile:      string(cfg.Obf.Profile),
 			ObfKey:       cfg.Obf.Key,
-			GetCreds:     tcpfwd.GetCredsFunc(getCreds),
+			ObfTiming:    cfg.Obf.Timing,
+			GetCreds:     tcprelay.GetCredsFunc(getCreds),
 			KCPProfile:   cfg.KCP.Profile,
-			KCPFEC:       cfg.KCP.FEC,
 			ClientID:     cfg.ClientID,
 		}
-		return tcpfwd.Run(ctx, tcpDeps, tcpParams, peer, cfg.Proxy.Listen, cfg.TURN.N, cfg.Proxy.Mode == config.ProxyModeTCPFwdBond)
+		return tcprelay.Run(ctx, tcpDeps, tcpParams, peer, cfg.Proxy.Listen, cfg.TURN.N)
 	}
 
 	udpDtlsDialer := &dtlsdial.Dialer{

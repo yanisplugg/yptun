@@ -17,6 +17,7 @@ type fakeProvider struct {
 	gotCreds   []int
 	gotHandle  []int
 	gotReset   []int
+	gotDrop    []int
 	authResult bool
 }
 
@@ -27,6 +28,7 @@ func (f *fakeProvider) GetCredentials(_ context.Context, streamID int) (provider
 func (f *fakeProvider) IsAuthError(error) bool     { return f.authResult }
 func (f *fakeProvider) HandleAuthError(s int) bool { f.gotHandle = append(f.gotHandle, s); return true }
 func (f *fakeProvider) ResetErrors(s int)          { f.gotReset = append(f.gotReset, s) }
+func (f *fakeProvider) DropCredentials(s int)      { f.gotDrop = append(f.gotDrop, s) }
 func (f *fakeProvider) BackoffUntilUnix() int64    { return f.backoff }
 func (f *fakeProvider) Name() string               { return fmt.Sprintf("fake%d", f.idx) }
 
@@ -92,6 +94,10 @@ func TestHandleAndResetRouting(t *testing.T) {
 	}
 	if len(fs[0].gotReset) != 1 || fs[0].gotReset[0] != 3 {
 		t.Fatalf("ResetErrors routed wrong: %v", fs[0].gotReset)
+	}
+	m.DropCredentials(5)
+	if len(fs[0].gotDrop) != 1 || fs[0].gotDrop[0] != 3 {
+		t.Fatalf("DropCredentials routed wrong: %v", fs[0].gotDrop)
 	}
 	if len(fs[1].gotHandle) != 0 {
 		t.Fatalf("provider 1 should not be touched: %v", fs[1].gotHandle)

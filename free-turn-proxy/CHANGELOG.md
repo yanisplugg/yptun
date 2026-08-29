@@ -1,5 +1,98 @@
 # Changelog
 
+## [3.2.0](https://github.com/samosvalishe/free-turn-proxy/compare/v3.1.1...v3.2.0) (2026-08-25)
+
+
+### Features
+
+* **proxy:** tcp-режим для xray/sing-box поверх turn ([f712909](https://github.com/samosvalishe/free-turn-proxy/commit/f7129099f711d627f6645fd18fd4c9be2b8a1437))
+* **session:** реконнект релея без пересоздания туннеля ([f61dc8c](https://github.com/samosvalishe/free-turn-proxy/commit/f61dc8c9578eb76f6cdf0a686af024ebbeab5b6b))
+* **tunnel:** параметры обфускации awg 3+ ([77fbdec](https://github.com/samosvalishe/free-turn-proxy/commit/77fbdec70703fd7222d58867cf033b371ab41849))
+
+
+### Bug Fixes
+
+* **captcha:** не жечь персону, когда страница не дошла до вердикта ([1547aae](https://github.com/samosvalishe/free-turn-proxy/commit/1547aaeed74bb23d45dd15f1d5cc030000c43481))
+* **core:** паника горутины больше не убивает процесс приложения ([748d5a0](https://github.com/samosvalishe/free-turn-proxy/commit/748d5a07ce21bec1620e3a4c55b5f2f33171fb99))
+* **logs:** убрать пострим-шум из лога без debug ([c2a9f0f](https://github.com/samosvalishe/free-turn-proxy/commit/c2a9f0f1d7054669eda7817a2f9d8d067573dcc4))
+* **udprelay:** не зависать на фатальной ошибке провайдера ([4863161](https://github.com/samosvalishe/free-turn-proxy/commit/48631616f143bc07f93d4a6cf6d5d2647022129e))
+* **udprelay:** фатальная ошибка не ждёт барьер прогрева ([03eb41e](https://github.com/samosvalishe/free-turn-proxy/commit/03eb41e2fb5cad671c52bb4807d424688145ba36))
+* **vkauth:** не считать отменённый поход за реквизитами нагрузкой на провайдера ([623ef46](https://github.com/samosvalishe/free-turn-proxy/commit/623ef46f2f908d4b5d011b1b099928d7a2e3714c))
+* **vkauth:** сбрасывать реквизиты при неподтверждённом deallocate ([7fc7fe2](https://github.com/samosvalishe/free-turn-proxy/commit/7fc7fe2e79906d5cd386da65e2064c2e159ae891))
+
+
+### Performance
+
+* **udprelay:** общий шлюз на allocate вместо per-stream джиттера ([e63279d](https://github.com/samosvalishe/free-turn-proxy/commit/e63279db185ae6205080fab6b4a9d4dd36e5c29c))
+
+## [3.1.1](https://github.com/samosvalishe/free-turn-proxy/compare/v3.1.0...v3.1.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **captcha:** адаптация ([9d454db](https://github.com/samosvalishe/free-turn-proxy/commit/9d454dbd419961ccdd2eebfeaacede4f40672fa8))
+
+## [3.1.0](https://github.com/samosvalishe/free-turn-proxy/compare/v3.0.0...v3.1.0) (2026-08-18)
+
+
+### Features
+
+* **server:** адрес клиента в логах сессии и handshake ([c670378](https://github.com/samosvalishe/free-turn-proxy/commit/c6703783c4a796045c0c385a8705c2756a1d8710))
+
+
+### Bug Fixes
+
+* ci ([c3fc939](https://github.com/samosvalishe/free-turn-proxy/commit/c3fc9396d4a38f6c77644a6bce04f1ed615aa397))
+* ci ([022692e](https://github.com/samosvalishe/free-turn-proxy/commit/022692ea18e012f8bc8feb2c1e5bb96e4998fc0e))
+* **session:** рецикл после пробуждения только при тишине в канале ([9c2cc93](https://github.com/samosvalishe/free-turn-proxy/commit/9c2cc93a1caa2ecbea87be8501dd13e6fb358071))
+* **udprelay:** рецикл turn-аллокации пересоздаёт dtls-сессию ([fd9c6ab](https://github.com/samosvalishe/free-turn-proxy/commit/fd9c6abf1e3be6e570af41ab03522c584a06df46))
+* **vkauth:** отмена капчи не сжигает персону ([60e3a69](https://github.com/samosvalishe/free-turn-proxy/commit/60e3a69a7d237d1635cd840bbbeaaada6b56a562))
+
+## [3.0.0](https://github.com/samosvalishe/free-turn-proxy/compare/v2.1.2...v3.0.0) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* флаги -mode и -bond удалены; конфиги и ссылки freeturn:// с tcp-режимом больше не принимаются.
+
+### Features
+
+* comment cleanup ([648c554](https://github.com/samosvalishe/free-turn-proxy/commit/648c55415b210eb0feea640e0a9f444b1fa07954))
+* **mobile:** переживание сна и рестарта на Android ([681dde8](https://github.com/samosvalishe/free-turn-proxy/commit/681dde8a6d98ccab10a2aa9eb865e5b3eaf86595))
+
+
+### Bug Fixes
+
+* **captcha:** персонная модель PoW и кэш TURN-кредов ([6b14a95](https://github.com/samosvalishe/free-turn-proxy/commit/6b14a95434b31bf505ed02c6764d0b2fce7c5351))
+* **captcha:** устранение регрессий ([5b5c93f](https://github.com/samosvalishe/free-turn-proxy/commit/5b5c93fae16dfcaa3de7b125ce34c0991180b831))
+* readme ([d208a0d](https://github.com/samosvalishe/free-turn-proxy/commit/d208a0d3df5546ea883662d36b457df980cc416a))
+* soft reconnect on network handover without tunnel drop ([0bef2e8](https://github.com/samosvalishe/free-turn-proxy/commit/0bef2e8ab5cd7c3db3e8ff5f3ee9c8ae67f80832))
+* **udprelay:** рецикл аллокации на простое туннеля ([a033cfb](https://github.com/samosvalishe/free-turn-proxy/commit/a033cfb9a2097365e144fa79a55ecaf12dc07c3e))
+* **vkauth:** ловим 486 как auth-error для рецикла аллокации ([5fdd8c3](https://github.com/samosvalishe/free-turn-proxy/commit/5fdd8c31123f5bcbe9ba4fa2677b604bc6da9294))
+* возврат фонового детектора сна для рецикла аллокаций ([53b8345](https://github.com/samosvalishe/free-turn-proxy/commit/53b8345aa07dd4375ba5646a3f14a309351bb147))
+* убрал лишний артефакт ([6bc4faf](https://github.com/samosvalishe/free-turn-proxy/commit/6bc4faf9423be9278f46642fbf29ee92bb46b5d3))
+* устранение предупреждений линтера ([49eecb3](https://github.com/samosvalishe/free-turn-proxy/commit/49eecb34784017e01d8077e8bbe178ed9c0ba023))
+* устранение предупреждений линтера ([65bc8a8](https://github.com/samosvalishe/free-turn-proxy/commit/65bc8a89932bcbc5cdc27163adc46cf118428901))
+
+
+### Performance
+
+* меньше фоновых таймеров при поднятом туннеле и опрос метрик только при видимом окне ([3cf7831](https://github.com/samosvalishe/free-turn-proxy/commit/3cf78316df14425e3811caaf483bf92eebe52cfc))
+
+
+### Breaking Changes
+
+* выпил tcp-режим туннеля ([74241de](https://github.com/samosvalishe/free-turn-proxy/commit/74241de764a428d9c3fee1aeae0d917851d1d542))
+
+## [2.1.2](https://github.com/samosvalishe/free-turn-proxy/compare/v2.1.1...v2.1.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **captcha:** fmt ([95803f4](https://github.com/samosvalishe/free-turn-proxy/commit/95803f481a683056651768225bc0c64e177ad468))
+* **captcha:** выровнять авторешение по живому браузеру ([235ab1a](https://github.com/samosvalishe/free-turn-proxy/commit/235ab1a6463a9758223d38f0eacc4c630d80a4a5))
+* **deps:** обновить Go 1.26.5 -&gt; 1.26.6 ([5bc164f](https://github.com/samosvalishe/free-turn-proxy/commit/5bc164f78da2b54a2013c3e046f7d02799ceaf20))
+
 ## [2.1.1](https://github.com/samosvalishe/free-turn-proxy/compare/v2.1.0...v2.1.1) (2026-08-04)
 
 

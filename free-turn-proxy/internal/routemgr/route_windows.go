@@ -25,7 +25,6 @@ func discoverGateway() (string, error) {
 		}
 
 		fields := strings.Fields(line)
-		// Ожидаем строку: 0.0.0.0 0.0.0.0 <Gateway> ...
 		if len(fields) >= 3 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
 			return fields[2], nil
 		}
@@ -47,7 +46,6 @@ func addRoute(ip, gateway string) error {
 
 func delRoute(ip string) error {
 	cmd := exec.Command("cmd", "/c", "route", "delete", ip) //nolint:gosec,noctx
-	// Игнорируем ошибки (например, если маршрут уже удалён)
 	_ = cmd.Run()
 	return nil
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/uri"
 )
 
-// Sub представляет распарсенную подписку
+// Sub представляет структуру подписки на серверы.
 type Sub struct {
 	Name      string
 	Update    string
@@ -25,7 +25,7 @@ type Sub struct {
 	Nodes     []Node
 }
 
-// Node представляет один сервер из подписки
+// Node представляет узел сервера из подписки.
 type Node struct {
 	URI       *uri.Config
 	Name      string
@@ -72,7 +72,6 @@ func Parse(r io.Reader) (*Sub, error) {
 			continue
 		}
 
-		// Глобальные поля
 		if strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "##") {
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
@@ -98,10 +97,9 @@ func Parse(r io.Reader) (*Sub, error) {
 			continue
 		}
 
-		// Локальные поля
 		if strings.HasPrefix(line, "##") {
 			if lastNode == nil {
-				continue // Нет привязанного URI
+				continue
 			}
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
@@ -127,7 +125,6 @@ func Parse(r io.Reader) (*Sub, error) {
 			continue
 		}
 
-		// URI (freeturn://)
 		if strings.HasPrefix(line, "freeturn://") {
 			cfg, err := uri.Parse(line)
 			if err == nil {

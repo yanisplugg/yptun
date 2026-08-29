@@ -11,9 +11,20 @@ esac
 
 set -- -listen "$LISTEN" -connect "$CONNECT"
 
-if [ "${MODE}" = "tcp" ]; then
-    set -- "$@" -mode tcp
+if [ -n "${MODE}" ]; then
+    set -- "$@" -mode "$MODE"
 fi
+
+for kcp_var in NODELAY INTERVAL RESEND NC SNDWND RCVWND MTU ACKNODELAY; do
+    eval "kcp_val=\${KCP_${kcp_var}}"
+    if [ -n "${kcp_val}" ]; then
+        kcp_flag="-kcp-$(echo "$kcp_var" | tr '[:upper:]' '[:lower:]')"
+        case "$kcp_var" in
+            ACKNODELAY) set -- "$@" "${kcp_flag}=${kcp_val}" ;;
+            *) set -- "$@" "$kcp_flag" "$kcp_val" ;;
+        esac
+    fi
+done
 
 if [ -n "${OBF_PROFILE}" ] && [ "${OBF_PROFILE}" != "none" ]; then
     OBF="${OBF_KEY:?OBF_KEY is required when OBF_PROFILE != none}"

@@ -5,10 +5,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/session"
 )
 
-// Уровни, с которыми приходит EventSink.OnLog.
 const (
 	LevelDebug = "debug"
 	LevelInfo  = "info"
@@ -16,29 +16,18 @@ const (
 	LevelError = "error"
 )
 
-// EventSink - приёмник событий сессии. Реализуется хостом (Java/ObjC-класс) и
-// заменяет разбор текста логов: стадия, счётчик стримов и captcha приходят
-// готовыми значениями.
-//
-// Контракт:
-//   - OnState вызывается только на изменение и всегда из одной горутины;
-//   - OnLog может прийти из любой горутины ядра, реализация обязана быть
-//     потокобезопасной;
-//   - ни один метод не должен блокировать: они стоят на пути сессии;
-//   - хост обязан держать ссылку на объект живой (Go его не удерживает от GC).
+// EventSink - приёмник событий сессии, реализуемый хостом (Java/ObjC).
+// OnLog может вызываться конкурентно; методы не должны блокировать исполнение.
 type EventSink interface {
 	OnState(state string, streams, total int, errMsg string)
 	OnLog(level, msg string, unixMillis int64)
-	// OnCaptcha показывает окно ручного решения captcha по url; пустой url -
-	// закрыть окно.
+	// OnCaptcha передаёт URL для решения капчи вручную (пустой url - закрыть окно).
 	OnCaptcha(url string)
 }
 
 var sink atomic.Pointer[EventSink]
 
-// SetEventSink регистрирует приёмник событий. nil отключает push-канал: хост
-// остаётся с GetState. Ручная captcha без приёмника недоступна - показывать
-// окно некому.
+// SetEventSink регистрирует приёмник событий (nil отключает push-канал).
 func SetEventSink(s EventSink) {
 	if s == nil {
 		sink.Store(nil)
@@ -60,8 +49,6 @@ func emitCaptcha(url string) {
 	}
 }
 
-// observer транслирует переходы сессии в EventSink. Приёмник читается на каждом
-// событии: хост может подменить его между сессиями.
 type observer struct{}
 
 func (observer) OnPhase(phase session.Phase, streams, total int, errMsg string) {
@@ -70,9 +57,9 @@ func (observer) OnPhase(phase session.Phase, streams, total int, errMsg string) 
 	}
 }
 
-// sinkLogger - logx.Logger, который пишет и в кольцевой буфер (для DumpLogs), и
-// в EventSink. Уровень задаёт вызванный метод, поэтому хосту не нужно угадывать
-// его по тексту.
+func coreLog() logx.Logger { return &sinkLogger{buf: sharedLogBuf} }
+
+// sinkLogger дублирует логи в кольцевой буфер и EventSink.
 type sinkLogger struct {
 	debug bool
 	buf   *logBuffer

@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 env:
-  GO_VERSION: "1.26.5"
+  GO_VERSION: "1.26.7"
   GORELEASER_VERSION: v2.17.1
   GOMOBILE_VERSION: latest
   TASK_VERSION: 3.52.0

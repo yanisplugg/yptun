@@ -10,17 +10,14 @@ import (
 	"time"
 )
 
-// ClientInfo содержит метаданные о клиенте
 type ClientInfo struct {
 	Comment string `json:"comment,omitempty"`
 }
 
-// Data структура JSON-файла
 type Data struct {
 	Clients map[string]ClientInfo `json:"clients"`
 }
 
-// DB - база данных клиентов с поддержкой hot-reload
 type DB struct {
 	mu           sync.RWMutex
 	path         string
@@ -28,7 +25,6 @@ type DB struct {
 	lastModified time.Time
 }
 
-// New создает новую базу данных и загружает ее из файла
 func New(path string) (*DB, error) {
 	db := &DB{
 		path: path,
@@ -36,7 +32,6 @@ func New(path string) (*DB, error) {
 	}
 
 	if err := db.load(); err != nil {
-		// Если файла нет, это не ошибка, просто пустая база
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
@@ -45,7 +40,6 @@ func New(path string) (*DB, error) {
 	return db, nil
 }
 
-// StartHotReload запускает горутину, которая периодически проверяет файл на изменения
 func (db *DB) StartHotReload(interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -56,7 +50,6 @@ func (db *DB) StartHotReload(interval time.Duration) {
 	}()
 }
 
-// IsAuthorized проверяет, разрешен ли клиент
 func (db *DB) IsAuthorized(clientID string) bool {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -64,7 +57,6 @@ func (db *DB) IsAuthorized(clientID string) bool {
 	return ok
 }
 
-// Add добавляет или обновляет клиента (и сразу сохраняет на диск)
 func (db *DB) Add(clientID, comment string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -73,7 +65,6 @@ func (db *DB) Add(clientID, comment string) error {
 	return db.save()
 }
 
-// Remove удаляет клиента
 func (db *DB) Remove(clientID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -82,7 +73,6 @@ func (db *DB) Remove(clientID string) error {
 	return db.save()
 }
 
-// List возвращает всех клиентов
 func (db *DB) List() map[string]ClientInfo {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -143,7 +133,7 @@ func (db *DB) save() error {
 	}
 
 	tmpFile := db.path + ".tmp"
-	err = os.WriteFile(tmpFile, b, 0o600) // содержит Client ID (auth-токены) - не world-readable
+	err = os.WriteFile(tmpFile, b, 0o600) // 0o600: файл содержит Client ID токены авторизации
 	if err == nil {
 		err = os.Rename(tmpFile, db.path)
 	}
@@ -156,36 +146,50 @@ func (db *DB) save() error {
 	return err
 }
 
-// WriteClientID отправляет Client ID (1 байт длины + строка) в соединение
-func WriteClientID(conn net.Conn, clientID string) error {
+// Тег режима едет хвостом той же записи: клиент до этого поля его не писал, а читатель
+// брал ровно 1+len байт - лишний байт старый сервер молча пропускает.
+const (
+	ModeUnset byte = 0
+	ModeUDP   byte = 1
+	ModeTCP   byte = 2
+)
+
+// WriteClientID отправляет Client ID (1 байт длины + строка + 1 байт режима).
+func WriteClientID(conn net.Conn, clientID string, mode byte) error {
 	b := []byte(clientID)
 	if len(b) > 255 {
-		b = b[:255] // Усекаем до 255 байт
+		b = b[:255]
 	}
-	buf := make([]byte, 1+len(b))
+	buf := make([]byte, 1+len(b)+1)
 	buf[0] = byte(len(b)) //nolint:gosec // len(b) усечён до ≤255 выше
 	copy(buf[1:], b)
+	buf[1+len(b)] = mode
 	_, err := conn.Write(buf)
 	return err
 }
 
-// ReadClientID читает Client ID из соединения. Учитывает DTLS record-orientated поведение.
-func ReadClientID(conn net.Conn) (string, error) {
+// ReadClientID читает Client ID из первой DTLS-записи. Режим ModeUnset - клиент старше
+// тега, режим у него всегда udp.
+func ReadClientID(conn net.Conn) (string, byte, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 
-	buf := make([]byte, 256)
+	buf := make([]byte, 257)
 	n, err := conn.Read(buf)
 	if err != nil {
-		return "", err
+		return "", ModeUnset, err
 	}
 	if n == 0 {
-		return "", nil
+		return "", ModeUnset, nil
 	}
 
 	l := int(buf[0])
 	if n < 1+l {
-		return "", io.ErrUnexpectedEOF
+		return "", ModeUnset, io.ErrUnexpectedEOF
 	}
-	return string(buf[1 : 1+l]), nil
+	mode := ModeUnset
+	if n > 1+l {
+		mode = buf[1+l]
+	}
+	return string(buf[1 : 1+l]), mode, nil
 }

@@ -41,8 +41,6 @@ func TestAssembleRejectsRawEnums(t *testing.T) {
 		want   string
 	}{
 		{"transport", func(r *raw) { r.Transport = "sctp" }, "invalid -transport"},
-		{"mode", func(r *raw) { r.Mode = "quic" }, "invalid -mode"},
-		{"bond without tcp", func(r *raw) { r.Bond = true }, "-bond requires"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,18 +78,15 @@ func TestApplyURIOverridesOnlyPresentFields(t *testing.T) {
 	r.applyURI(&uri.Config{
 		Peer:      "uri-peer:2",
 		Transport: TransportUDP,
-		Mode:      ModeTCP,
-		Bond:      true,
 		N:         7,
 	})
 
 	if r.Peer != "uri-peer:2" {
 		t.Errorf("Peer = %q, want URI value", r.Peer)
 	}
-	if r.Transport != TransportUDP || r.Mode != ModeTCP || !r.Bond || r.N != 7 {
+	if r.Transport != TransportUDP || r.N != 7 {
 		t.Errorf("URI fields not applied: %+v", r)
 	}
-	// URI не несёт ссылок и client-id - значения источника обязаны уцелеть.
 	if r.ClientID != "flag-id" || r.Links != "https://vk.ru/call/join/FROMFLAG" {
 		t.Errorf("URI wiped fields it does not carry: %+v", r)
 	}
@@ -101,12 +96,10 @@ func TestApplyURIIgnoresZeroValues(t *testing.T) {
 	r := defaultRaw()
 	r.N = 5
 	r.StreamsPerCred = 3
-	r.Bond = true
-	r.Mode = ModeTCP
 
 	r.applyURI(&uri.Config{})
 
-	if r.N != 5 || r.StreamsPerCred != 3 || !r.Bond || r.Mode != ModeTCP {
+	if r.N != 5 || r.StreamsPerCred != 3 {
 		t.Errorf("empty URI must not reset fields: %+v", r)
 	}
 }

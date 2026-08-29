@@ -8,26 +8,20 @@ import (
 	"time"
 )
 
-// ErrPacketTooLarge - датаграмма длиннее MTU пары; аналог EMSGSIZE на сокете.
+// ErrPacketTooLarge возвращается, если размер датаграммы превышает MTU пайпа.
 var ErrPacketTooLarge = errors.New("netconn: packet exceeds pipe MTU")
 
-// Дефолты пары в памяти.
 const (
-	// defaultPipeMTU с запасом покрывает WireGuard-датаграмму поверх TURN.
-	defaultPipeMTU = 2048
-	// defaultPipeQueue - глубина очереди в каждую сторону. Аналог SO_RCVBUF:
-	// сглаживает всплески, дальше пакеты отбрасываются.
+	defaultPipeMTU   = 2048
 	defaultPipeQueue = 256
 )
 
-// pipeAddr - адрес конца пары. Адресация внутри пары не нужна (ровно два
-// участника), но net.PacketConn требует net.Addr.
 type pipeAddr string
 
 func (pipeAddr) Network() string  { return "pipe" }
 func (a pipeAddr) String() string { return string(a) }
 
-// Возвращает пару связанных net.PacketConn в памяти без loopback-хопа.
+// PacketPipe возвращает пару связанных net.PacketConn в памяти.
 func PacketPipe(mtu, queue int) (net.PacketConn, net.PacketConn) {
 	if mtu <= 0 {
 		mtu = defaultPipeMTU
@@ -36,8 +30,7 @@ func PacketPipe(mtu, queue int) (net.PacketConn, net.PacketConn) {
 		queue = defaultPipeQueue
 	}
 
-	// По каналу ходит указатель на слайс: sync.Pool с []byte заставлял бы
-	// оборачивать каждый пакет в новый *[]byte, съедая смысл пула.
+	// sync.Pool хранит *[]byte для избежания аллокаций при передаче в канал.
 	pool := &sync.Pool{New: func() any { b := make([]byte, mtu); return &b }}
 	toA := make(chan *[]byte, queue)
 	toB := make(chan *[]byte, queue)
@@ -57,8 +50,7 @@ type packetPipe struct {
 	mtu    int
 	pool   *sync.Pool
 
-	// deadline охраняет и время, и канал-сигнал его смены: читатель, уже
-	// стоящий в select, обязан проснуться, когда дедлайн переставили.
+	// deadline хранит дедлайн и канал оповещения для немедленного пробуждения читателя.
 	deadline struct {
 		mu      sync.Mutex
 		at      time.Time
@@ -70,8 +62,6 @@ type packetPipe struct {
 }
 
 func (p *packetPipe) ReadFrom(b []byte) (int, net.Addr, error) {
-	// Таймер живёт снаружи цикла: смена дедлайна начинает круг заново, и
-	// per-iteration defer копил бы их до самого возврата.
 	var timer *time.Timer
 	defer func() {
 		if timer != nil {
@@ -96,7 +86,6 @@ func (p *packetPipe) ReadFrom(b []byte) (int, net.Addr, error) {
 		case <-p.done:
 			return 0, nil, net.ErrClosed
 		case <-changed:
-			// Дедлайн переставили - пересобрать таймер и ждать заново.
 			continue
 		case <-timeout:
 			return 0, nil, os.ErrDeadlineExceeded
@@ -104,7 +93,6 @@ func (p *packetPipe) ReadFrom(b []byte) (int, net.Addr, error) {
 			if !ok {
 				return 0, nil, net.ErrClosed
 			}
-			// Как UDP: не влезшее в буфер вызывающего отбрасывается.
 			n := copy(b, *buf)
 			p.pool.Put(buf)
 			return n, p.remote, nil
@@ -126,8 +114,6 @@ func (p *packetPipe) WriteTo(b []byte, _ net.Addr) (int, error) {
 		return 0, ErrPacketTooLarge
 	}
 
-	// Один select покрывает оба конца атомарно, исключая race между двумя
-	// последовательными проверками.
 	select {
 	case <-p.done:
 		return 0, net.ErrClosed
@@ -143,7 +129,6 @@ func (p *packetPipe) WriteTo(b []byte, _ net.Addr) (int, error) {
 	select {
 	case p.tx <- buf:
 	default:
-		// Очередь полна - пакет теряется, как на переполненном UDP-сокете.
 		p.pool.Put(buf)
 	}
 	return len(b), nil
@@ -164,7 +149,6 @@ func (p *packetPipe) SetReadDeadline(t time.Time) error {
 	p.deadline.mu.Lock()
 	defer p.deadline.mu.Unlock()
 	p.deadline.at = t
-	// Закрытие будит читателя; следующий его круг возьмёт уже новый канал.
 	if p.deadline.changed != nil {
 		close(p.deadline.changed)
 	}
@@ -172,6 +156,26 @@ func (p *packetPipe) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-// SetWriteDeadline - no-op: запись в пару никогда не блокируется (полная
-// очередь роняет пакет), поэтому дедлайну нечего прерывать.
+// SetWriteDeadline - no-op: неблокирующая запись дропает пакет при переполнении очереди.
 func (*packetPipe) SetWriteDeadline(time.Time) error { return nil }
+
+// datagramConn подаёт packetPipe как net.Conn: границы датаграмм сохраняются, поэтому
+// поверх такой пары можно поднимать KCP без реального сокета.
+type datagramConn struct {
+	net.PacketConn
+	remote net.Addr
+}
+
+func (c *datagramConn) Read(b []byte) (int, error) {
+	n, _, err := c.ReadFrom(b)
+	return n, err
+}
+
+func (c *datagramConn) Write(b []byte) (int, error) { return c.WriteTo(b, c.remote) }
+func (c *datagramConn) RemoteAddr() net.Addr        { return c.remote }
+
+// DatagramPipe - пара связанных net.Conn в памяти с датаграммной семантикой.
+func DatagramPipe(mtu, queue int) (net.Conn, net.Conn) {
+	a, b := PacketPipe(mtu, queue)
+	return &datagramConn{PacketConn: a, remote: b.LocalAddr()}, &datagramConn{PacketConn: b, remote: a.LocalAddr()}
+}

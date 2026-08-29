@@ -1,4 +1,4 @@
-package common
+package udprelay
 
 import (
 	"context"
@@ -12,7 +12,7 @@ func TestDialTURNNoCandidates(t *testing.T) {
 		return "u", "p", nil, nil
 	}
 	peer := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1}
-	_, err := DialTURN(context.Background(), "", "", false, peer, 0, getCreds)
+	_, err := DialTURN(context.Background(), "", "", false, peer, 0, getCreds, nil)
 	if err == nil {
 		t.Fatal("expected error on empty candidate list")
 	}

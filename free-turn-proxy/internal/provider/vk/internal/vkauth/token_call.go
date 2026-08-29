@@ -14,8 +14,6 @@ import (
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// fetchCallToken - шаг 2 цепочки: вызывает calls.getAnonymousToken и ведёт
-// цикл retry captcha до получения call-токена или исчерпания всех режимов решения.
 func (c *Client) fetchCallToken(
 	ctx context.Context,
 	httpClient tlsclient.HttpClient,
@@ -63,26 +61,20 @@ func (c *Client) fetchCallToken(
 	}
 }
 
-// classifyLinkError возвращает sentinel для терминальных ответов VK (nil - можно
-// ретраить по client_id). Сначала явные коды, текстовый матч по error_msg - только
-// для неизвестного кода (иначе подстрока может перекрыть транзиентный код).
 func classifyLinkError(errObj map[string]any) error {
 	code := 0
 	if f, ok := errObj["error_code"].(float64); ok {
 		code = int(f)
 	}
 
-	// Явные терминальные коды: 9008 Join link is not valid, 9000 Call not found.
 	if code == 9000 || code == 9008 {
 		return ErrInvalidJoinLink
 	}
-	// Явные транзиентные коды: гасить нельзя, текст ниже к ним не применяем.
 	switch code {
 	case 5, 6, 9, 14, 29:
 		return nil
 	}
 
-	// Код неизвестен/плавает - осторожный матч по тексту.
 	msg := ""
 	if s, ok := errObj["error_msg"].(string); ok {
 		msg = strings.ToLower(s)
@@ -90,7 +82,6 @@ func classifyLinkError(errObj map[string]any) error {
 	switch {
 	case strings.Contains(msg, "not valid") || strings.Contains(msg, "not found"):
 		return ErrInvalidJoinLink
-	// Анонимный вход запрещён. Матчим по "anonym" (не "authoriz" - коллизия с auth-failed).
 	case strings.Contains(msg, "anonym"):
 		return ErrAnonymousBlocked
 	case strings.Contains(msg, "full"):
@@ -99,8 +90,6 @@ func classifyLinkError(errObj map[string]any) error {
 	return nil
 }
 
-// solveCaptcha выполняет одну попытку решения captcha и возвращает тело POST
-// для следующего retry или ошибку при исчерпании всех режимов.
 func (c *Client) solveCaptcha(
 	ctx context.Context,
 	httpClient tlsclient.HttpClient,
@@ -148,9 +137,6 @@ func (c *Client) solveCaptcha(
 			break
 		}
 		c.log.Infof("[STREAM %d] [Captcha] Triggering manual captcha fallback", streamID)
-		// Ручной решалке выделяется свой 3-минутный бюджет - жёсткий parent-deadline
-		// не обрезает время пользователя. Отмена parent (завершение приложения)
-		// всё равно propagate, горутина не переживает процесс.
 		manualCtx, manualCancel := context.WithTimeout(ctx, 3*time.Minute)
 
 		type manualRes struct {
@@ -186,13 +172,25 @@ func (c *Client) solveCaptcha(
 		manualCancel()
 	}
 
+	// Сессию свернули (стоп, смена сети, рецикл) - решателю просто не дали доработать.
+	// Считать это провалом значит жечь поколение персоны и вешать lockout на своих же
+	// перезапусках.
+	if solveErr != nil && ctx.Err() != nil {
+		c.log.Warnf("[STREAM %d] [Captcha] solve interrupted by shutdown: %v", streamID, solveErr)
+		return "", solveErr
+	}
+
+	if solveErr != nil && errors.Is(solveErr, captcha.ErrUnavailable) {
+		c.captchaAttempt = attempt
+		c.log.Warnf("[STREAM %d] [Captcha] captcha unavailable, persona kept: %v", streamID, solveErr)
+		return "", solveErr
+	}
+
 	if solveErr != nil {
 		c.log.Warnf("[STREAM %d] [Captcha] %s failed (attempt %d): %v",
 			streamID, CaptchaSolveModeLabel(solveMode), attempt+1, solveErr)
 		nextSolveMode, hasNextSolveMode := CaptchaSolveModeForAttempt(attempt+1, c.manualOnly)
 		if hasNextSolveMode {
-			// Отпечаток отвергнут - следующий режим получает свежую личность и
-			// свою сессию, а не доигрывает сожжённую.
 			c.log.Infof("[STREAM %d] [Captcha] Falling back to %s with a new persona",
 				streamID, CaptchaSolveModeLabel(nextSolveMode))
 			c.burnPersona(streamID)

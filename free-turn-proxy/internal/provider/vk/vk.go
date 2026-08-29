@@ -11,43 +11,24 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/captcha"
 	manualcaptcha "github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/captcha/manual"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/vkauth"
+	"github.com/samosvalishe/free-turn-proxy/internal/statedir"
 )
 
 type Config struct {
-	// Link - VK callroom join-код (нормализованный, без префикса URL). Обязателен.
-	Link string
-
-	Dialer net.Dialer
-
-	// ManualOnly форсирует ручной путь captcha с первой попытки.
-	ManualOnly bool
-
-	// Platform - класс устройства персоны: "desktop" | "mobile". Пустое -> desktop.
-	Platform string
-
-	// StreamsPerCache - делитель streamID -> cacheID. <=0 -> дефолт (10).
+	Link            string
+	Dialer          net.Dialer
+	ManualOnly      bool
+	Platform        string
 	StreamsPerCache int
-
-	// StreamsAlive возвращает число подключённых потоков; vkauth использует
-	// для решения, является ли исчерпанная captcha фатальной или throttle.
-	StreamsAlive func() int32
-
-	// Credentials - VK app_id/secret пары; nil -> vkauth.DefaultCredentials.
-	Credentials []vkauth.VKCredentials
-
-	// FingerprintSeed - стабильный идентификатор установки; пустой -> личность
-	// случайная на запуск. Не сеять от Link: раздаваемая ссылка общая для всех.
+	StreamsAlive    func() int32
+	Credentials     []vkauth.VKCredentials
 	FingerprintSeed string
-
-	// Log - уровневый логгер. nil -> no-op.
-	Log logx.Logger
-
-	// Debug включает debug-вывод в manual-captcha (HTTP-сервер).
-	Debug bool
+	StatePaths      []string
+	Log             logx.Logger
+	Debug           bool
 }
 
-// ManualSolverFunc - кастомный решатель captcha. Если nil, vkauth не пытается
-// решать ручную captcha (поток падает на ErrFatalNoStreams при auto-fail).
+// ManualSolverFunc определяет сигнатуру функции для интерактивного решения капчи.
 type ManualSolverFunc = vkauth.ManualSolveFunc
 
 type Provider struct {
@@ -55,13 +36,11 @@ type Provider struct {
 	auth *vkauth.Client
 }
 
-// New: solver nil -> ручной путь captcha отключён (поток падает на auto-fail).
+// New создаёт провайдер авторизации VK.
 func New(cfg Config, solver ManualSolverFunc) (*Provider, error) {
 	if cfg.Link == "" {
 		return nil, fmt.Errorf("vk: empty Link")
 	}
-	// captcha-пакеты - internal/ для provider/vk, поэтому подключаем
-	// логгер здесь, а не в cmd/client.
 	captcha.SetLogger(cfg.Log)
 	manualcaptcha.SetLogger(cfg.Log)
 	manualcaptcha.Debug = cfg.Debug
@@ -74,10 +53,13 @@ func New(cfg Config, solver ManualSolverFunc) (*Provider, error) {
 		StreamsAlive:    cfg.StreamsAlive,
 		ManualSolver:    solver,
 		FingerprintSeed: cfg.FingerprintSeed,
+		StatePaths:      cfg.StatePaths,
 		Log:             cfg.Log,
 	})
 	return &Provider{link: cfg.Link, auth: auth}, nil
 }
+
+func DefaultStatePaths() []string { return statedir.Paths(vkauth.PersonaStateFile) }
 
 func (p *Provider) GetCredentials(ctx context.Context, streamID int) (provider.Credentials, error) {
 	user, pass, addrs, err := p.auth.GetCredentials(ctx, p.link, streamID)
@@ -92,6 +74,8 @@ func (p *Provider) IsAuthError(err error) bool { return p.auth.IsAuthError(err) 
 func (p *Provider) HandleAuthError(streamID int) bool { return p.auth.HandleAuthError(streamID) }
 
 func (p *Provider) ResetErrors(streamID int) { p.auth.ResetErrors(streamID) }
+
+func (p *Provider) DropCredentials(streamID int) { p.auth.DropCredentials(streamID) }
 
 func (p *Provider) BackoffUntilUnix() int64 { return p.auth.BackoffUntilUnix() }
 

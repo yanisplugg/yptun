@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// pipeRecorder is a net.Conn that records the slice handed to each Write.
 type pipeRecorder struct {
 	net.Conn
 	mu     sync.Mutex

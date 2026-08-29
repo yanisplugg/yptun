@@ -2,12 +2,14 @@ package session
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/config"
 	"github.com/samosvalishe/free-turn-proxy/internal/netconn"
+	"github.com/samosvalishe/free-turn-proxy/internal/safego"
 )
 
 func newTestSession(t *testing.T, opts Options, captcha func() bool) *Session {
@@ -127,7 +129,6 @@ func TestWatchReportsConnected(t *testing.T) {
 	}
 	cancel()
 
-	// Живой стрим снимает watchdog: таймаут давно прошёл, но ошибки нет.
 	if err := <-errCh; err != nil {
 		t.Fatalf("watch() error = %v, want nil", err)
 	}
@@ -154,8 +155,6 @@ func TestWatchCaptchaSuspendsTimeout(t *testing.T) {
 	}
 }
 
-// recordingObserver собирает переходы для проверки, что события приходят
-// только на изменение.
 type recordingObserver struct {
 	mu     sync.Mutex
 	phases []Phase
@@ -182,7 +181,6 @@ func TestObserverSeesOnlyChanges(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.watch(ctx, cancel) }()
 
-	// Десяток тиков с неизменным состоянием не должен дать ни одного события.
 	time.Sleep(60 * time.Millisecond)
 	if got := obs.snapshot(); len(got) != 0 {
 		t.Fatalf("phases = %v, want none while state is unchanged", got)
@@ -204,7 +202,6 @@ func TestRunEmitsFirstPhaseEvenIfUnchanged(t *testing.T) {
 	s := newTestSession(t, Options{}, nil)
 	s.deps.Observer = obs
 
-	// New заготовил ровно это состояние - событие всё равно обязано прийти.
 	s.publish(&statusInfo{phase: PhaseConnecting, total: s.total}, true)
 
 	if got := obs.snapshot(); len(got) != 1 || got[0] != PhaseConnecting {
@@ -218,7 +215,6 @@ func TestObserverGetsTerminalPhase(t *testing.T) {
 	s.deps.Observer = obs
 	s.started.Store(true)
 
-	// Run на уже стартовавшей сессии не трогает наблюдателя.
 	if err := s.Run(context.Background()); err != ErrAlreadyRun {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -289,21 +285,75 @@ func TestSnapshotWithoutTrafficStaysZero(t *testing.T) {
 	}
 }
 
-func TestTrafficRateMeter(t *testing.T) {
+func TestTrafficRates(t *testing.T) {
 	tr := newTraffic()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go tr.rateMeter(ctx, 10*time.Millisecond)
+	// Первый вызов только запоминает отметку - скорость считать не с чего.
+	if tx, rx := tr.rates(); tx != 0 || rx != 0 {
+		t.Fatalf("first rates = tx %d rx %d, want zero", tx, rx)
+	}
 
 	tr.stats.AddTx(1000)
 	tr.stats.AddRx(500)
+	time.Sleep(50 * time.Millisecond)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if tr.txRate.Load() == 1000 && tr.rxRate.Load() == 500 {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+	tx, rx := tr.rates()
+	if tx < 1000 || rx < 500 || rx >= tx {
+		t.Fatalf("rates = tx %d rx %d, want tx >= 1000 > rx >= 500", tx, rx)
 	}
-	t.Fatalf("rates = tx %d rx %d, want tx 1000 rx 500", tr.txRate.Load(), tr.rxRate.Load())
+
+	// Без нового трафика скорость обязана упасть в ноль.
+	time.Sleep(10 * time.Millisecond)
+	if tx, rx := tr.rates(); tx != 0 || rx != 0 {
+		t.Fatalf("idle rates = tx %d rx %d, want zero", tx, rx)
+	}
+}
+
+// Паника в попытке релея не должна валить процесс приложения: ядро - библиотека внутри
+// процесса UI, перехватить снаружи нечем.
+func TestRelayLoopTurnsPanicIntoError(t *testing.T) {
+	s := newTestSession(t, Options{}, nil)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.relayLoop(context.Background(), func(context.Context) error { panic("boom") }) }()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, safego.ErrPanic) {
+			t.Fatalf("relayLoop() error = %v, want ErrPanic", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("relayLoop() hung on panic")
+	}
+}
+
+// В tcp-режиме рецикл идёт в пул, а не в отмену попытки: отмена закрыла бы listener.
+func TestReconnectRoutesByMode(t *testing.T) {
+	t.Parallel()
+
+	tcp, err := New(&config.Client{Proxy: config.ProxyOpts{Mode: config.ProxyModeTCP}}, Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcp.Reconnect()
+	select {
+	case <-tcp.recycleCh:
+	default:
+		t.Error("tcp mode: recycleCh empty")
+	}
+	select {
+	case <-tcp.reconnectCh:
+		t.Error("tcp mode: reconnectCh must stay empty")
+	default:
+	}
+
+	udp, err := New(&config.Client{Proxy: config.ProxyOpts{Mode: config.ProxyModeUDP}}, Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp.Reconnect()
+	select {
+	case <-udp.reconnectCh:
+	default:
+		t.Error("udp mode: reconnectCh empty")
+	}
 }

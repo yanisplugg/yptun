@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tlsclient "github.com/bogdanfinn/tls-client"
+	"github.com/pion/stun/v3"
 )
 
 // newTestClient builds a Client with a zero-interval throttle and the supplied
@@ -31,13 +32,14 @@ func TestIsAuthError(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]bool{
-		"401 Unauthorized":        true,
-		"alloc failed: 401":       true,
-		"stale nonce":             true,
-		"invalid credential":      true,
-		"authentication required": true,
-		"connection refused":      false,
-		"":                        false,
+		"401 Unauthorized":                     true,
+		"alloc failed: 401":                    true,
+		"stale nonce":                          true,
+		"invalid credential":                   true,
+		"authentication required":              true,
+		"connection refused":                   false,
+		"dial tcp 10.0.0.1:48612: i/o timeout": false,
+		"":                                     false,
 	}
 	for msg, want := range cases {
 		got := IsAuthError(errors.New(msg))
@@ -47,6 +49,28 @@ func TestIsAuthError(t *testing.T) {
 	}
 	if IsAuthError(nil) {
 		t.Error("IsAuthError(nil) = true; want false")
+	}
+}
+
+func TestIsAuthErrorTurnCode(t *testing.T) {
+	t.Parallel()
+
+	codes := map[stun.ErrorCode]bool{
+		stun.CodeAllocQuotaReached:    true,
+		stun.CodeUnauthorized:         true,
+		stun.CodeStaleNonce:           true,
+		stun.CodeWrongCredentials:     true,
+		stun.CodeInsufficientCapacity: false,
+		stun.CodeForbidden:            false,
+	}
+	for code, want := range codes {
+		err := fmt.Errorf("TURN allocate: %w", &stun.TurnError{
+			StunMessageType: stun.NewType(stun.MethodAllocate, stun.ClassErrorResponse),
+			ErrorCodeAttr:   stun.ErrorCodeAttribute{Code: code, Reason: []byte("reason")},
+		})
+		if got := IsAuthError(err); got != want {
+			t.Errorf("IsAuthError(code %d) = %v, want %v", code, got, want)
+		}
 	}
 }
 
@@ -219,5 +243,28 @@ func TestThrottleHonorsContextCancel(t *testing.T) {
 	_, _, _, err := c.GetCredentials(ctx, "L2", 100) // different cache group -> miss cache
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestDropCredentialsClearsCacheOnce(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, nil)
+
+	cache := c.store.Get(1)
+	cache.creds = TurnCredentials{
+		Username:    "u",
+		Password:    "p",
+		ServerAddrs: []string{"turn:1.2.3.4:19302"},
+		ExpiresAt:   time.Now().Add(time.Minute),
+		Link:        "l",
+	}
+
+	c.DropCredentials(1)
+	if cache.creds.Username != "" {
+		t.Fatal("credentials survived DropCredentials")
+	}
+	// Второй стрим того же кэша не должен повторять сброс: иначе один обрыв даёт N строк.
+	if cache.Invalidate() {
+		t.Fatal("empty cache reported as invalidated")
 	}
 }

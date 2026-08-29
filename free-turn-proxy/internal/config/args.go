@@ -6,13 +6,7 @@ import (
 	"strings"
 )
 
-// ClientArgs собирает argv, эквивалентный конфигу: ParseClient(ClientArgs(c))
-// возвращает тот же Client. Нужен хостам, которые показывают пользователю
-// "какая команда сейчас работает" - строка гарантированно не расходится с тем,
-// что реально запущено, потому что выводится из того же Client.
-//
-// Печатаются обязательные поля и всё, что отличается от Defaults(): читаемо и
-// при этом самодостаточно - остальное восстановит парсер.
+// ClientArgs восстанавливает срез CLI-аргументов из Client структуры.
 func ClientArgs(c *Client) []string {
 	if c == nil {
 		return nil
@@ -49,14 +43,10 @@ func ClientArgs(c *Client) []string {
 	if c.TURN.TransportUDP != def.TURN.TransportUDP {
 		add("-transport", TransportUDP)
 	}
-	switch c.Proxy.Mode {
-	case ProxyModeTCPFwd:
-		add("-mode", ModeTCP)
-	case ProxyModeTCPFwdBond:
-		add("-mode", ModeTCP)
-		args = append(args, "-bond")
-	case ProxyModeUDP:
+	if c.Proxy.Mode != def.Proxy.Mode {
+		add("-mode", string(c.Proxy.Mode))
 	}
+	args = append(args, kcpArgs(c.KCP.Profile, def.KCP.Profile)...)
 	if c.Obf.Enabled() {
 		add("-obf-profile", string(c.Obf.Profile))
 		add("-obf-key", hex.EncodeToString(c.Obf.Key))

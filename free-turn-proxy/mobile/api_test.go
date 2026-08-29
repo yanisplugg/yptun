@@ -185,3 +185,24 @@ func TestRestartReplacesSession(t *testing.T) {
 		t.Errorf("GetState().State = %q, want running session", got)
 	}
 }
+
+// tcp-режим не требует tun: приложение зовёт Start, а не StartTunnel.
+func TestTCPModeConfig(t *testing.T) {
+	const tcpConfig = `{"peer":"1.2.3.4:5000","clientId":"deadbeef","proxy":{"mode":"tcp"},"vk":{"links":["https://vk.ru/call/join/CODE"]}}`
+	if msg := ValidateConfig(tcpConfig); msg != "" {
+		t.Errorf("ValidateConfig(tcp) = %q, want empty", msg)
+	}
+	args, err := ConfigToArgs(tcpConfig)
+	if err != nil {
+		t.Fatalf("ConfigToArgs() error = %v", err)
+	}
+	if !strings.Contains(args, "-mode tcp") {
+		t.Errorf("ConfigToArgs() = %q, missing -mode tcp", args)
+	}
+
+	tcpWithTunnel := `{"peer":"1.2.3.4:5000","clientId":"deadbeef","proxy":{"mode":"tcp"},` +
+		`"tunnel":{"mode":"wg","config":"[Interface]","mtu":1280},"vk":{"links":["https://vk.ru/call/join/CODE"]}}`
+	if msg := ValidateConfig(tcpWithTunnel); msg == "" {
+		t.Error("ValidateConfig(tcp+wg) = \"\", want error")
+	}
+}

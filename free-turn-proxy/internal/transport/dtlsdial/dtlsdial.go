@@ -1,6 +1,4 @@
-// Package dtlsdial оборачивает настройку pion-dtls клиента (self-signed cert, EMS,
-// AES-128-GCM, send-only CID) плюс опциональный конкурентный gate на handshake.
-// Используется UDP и VLESS pipeline'ами клиента.
+// Package dtlsdial настраивает DTLS-клиент с self-signed сертификатами и ограничением параллельных handshake.
 package dtlsdial
 
 import (
@@ -19,19 +17,11 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 
 // Dialer конфигурирует DTLS-handshake клиента.
 type Dialer struct {
-	// HandshakeTimeout ограничивает контекст handshake. Ноль - без таймаута.
 	HandshakeTimeout time.Duration
-	// HandshakeSem, если non-nil, ограничивает параллельные handshake
-	// (Dial блокируется до появления слота или отмены ctx).
-	HandshakeSem chan struct{}
+	HandshakeSem     chan struct{}
 }
 
-// Dial захватывает опциональный handshake-слот и выполняет DTLS-handshake
-// клиента поверх pc к peer. При успехе возвращает *dtls.Conn (закрывает вызывающий).
-// Self-signed сертификат генерируется заново на каждый handshake: каждая
-// TURN-сессия и каждый реконнект получают уникальный fingerprint, чтобы не
-// коррелировать N параллельных стримов с одного IP как ботный трафик
-// (DTLS здесь - для обфускации, не аутентификации; см. doc.go).
+// Dial выполняет DTLS-handshake поверх pc к peer с уникальным self-signed сертификатом.
 func (d *Dialer) Dial(ctx context.Context, pc net.PacketConn, peer *net.UDPAddr) (*dtls.Conn, error) {
 	certificate, err := GenerateSelfSignedCert()
 	if err != nil {

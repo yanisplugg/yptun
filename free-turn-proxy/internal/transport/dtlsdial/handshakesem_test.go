@@ -8,13 +8,9 @@ import (
 	"time"
 )
 
-// TestHandshakeSemBlocksWhenFull verifies the contract: when HandshakeSem
-// is at capacity, a new Dial blocks on the slot acquisition and respects
-// ctx cancellation. Validates the bound that prevents unbounded concurrent
-// handshakes under high -n values.
 func TestHandshakeSemBlocksWhenFull(t *testing.T) {
 	sem := make(chan struct{}, 1)
-	sem <- struct{}{} // pre-fill: cap = 1, full
+	sem <- struct{}{}
 
 	d := &Dialer{HandshakeSem: sem}
 

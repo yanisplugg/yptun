@@ -1,7 +1,4 @@
-// Package randx - тонкая обёртка над crypto/rand с API в стиле math/rand.
-// Используется там, где gosec G404 бьёт по math/rand: антифингерпринт-jitter,
-// случайные задержки, выбор имён/паттернов. CSPRNG здесь не критичен по
-// производительности, зато снимает шум линтера и убирает PRNG-предсказуемость.
+// Package randx предоставляет обёртку над crypto/rand с API в стиле math/rand.
 package randx
 
 import (
@@ -11,7 +8,7 @@ import (
 	"math/big"
 )
 
-// IntN возвращает равномерное случайное число из [0, n). Для n <= 0 возвращает 0.
+// IntN возвращает равномерное случайное число из [0, n).
 func IntN(n int) int {
 	if n <= 0 {
 		return 0
@@ -23,10 +20,9 @@ func IntN(n int) int {
 	return int(v.Int64())
 }
 
-// Intn - алиас IntN для совместимости с math/rand.
 func Intn(n int) int { return IntN(n) }
 
-// Hex возвращает n случайных байт в hex (строка длиной 2n).
+// Hex возвращает hex-строку из n случайных байт.
 func Hex(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -35,7 +31,7 @@ func Hex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// Float64 возвращает число из [0.0, 1.0) с 53 битами мантиссы.
+// Float64 возвращает случайное число из [0.0, 1.0).
 func Float64() float64 {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {

@@ -35,7 +35,6 @@ func discoverGateway() (string, error) {
 }
 
 func addRoute(ip, gateway string) error {
-	// Пытаемся удалить перед добавлением, игнорируем ошибку
 	_ = delRoute(ip)
 
 	cmd := exec.Command("route", "-n", "add", "-host", ip, gateway) //nolint:gosec,noctx
@@ -50,7 +49,7 @@ func delRoute(ip string) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if bytes.Contains(out, []byte("not in table")) {
-			return nil // Маршрут не существует
+			return nil
 		}
 		return fmt.Errorf("failed to delete route for %s: %w", ip, err)
 	}

@@ -11,8 +11,7 @@ import (
 )
 
 func discoverGateway() (string, error) {
-	// Если это стандартный линуксовый бинарь (GOOS=linux), но запущенный под Android
-	// (в Termux или как переименованный JNI-воркер), отключаем routemgr.
+	// Отключение routemgr при запуске под Android (Termux/JNI).
 	if os.Getenv("ANDROID_DATA") != "" || os.Getenv("ANDROID_ROOT") != "" {
 		return "", nil
 	}
@@ -23,7 +22,6 @@ func discoverGateway() (string, error) {
 		return "", fmt.Errorf("failed to get default route: %w", err)
 	}
 
-	// Пример: default via X.X.X.X dev eth0 proto dhcp metric 100
 	fields := strings.Fields(string(out))
 	for i, field := range fields {
 		if field == "via" && i+1 < len(fields) {
@@ -47,7 +45,7 @@ func delRoute(ip string) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if bytes.Contains(out, []byte("No such process")) {
-			return nil // Маршрут не найден, всё ок
+			return nil
 		}
 		return fmt.Errorf("failed to delete route for %s: %w", ip, err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net"
 	"strings"
 	"testing"
 
@@ -78,14 +79,32 @@ func TestBuildTunnelWiresPipeToBind(t *testing.T) {
 	if tunCfg.MTU != tunnel.DefaultMTU {
 		t.Errorf("MTU = %d, want %d", tunCfg.MTU, tunnel.DefaultMTU)
 	}
-	// Endpoint из файла не нужен: собеседник достижим только через релей.
 	if tunCfg.Peers[0].Endpoint != "" {
 		t.Errorf("Endpoint = %q, want empty", tunCfg.Peers[0].Endpoint)
 	}
 }
 
-// mode=wg - осознанный выбор пользователя: маскировка снимается, даже если
-// конфиг принесли от AmneziaWG.
+// Проверка освобождения пайпов при закрытии TunnelParts.
+func TestTunnelPartsCloseReleasesPipes(t *testing.T) {
+	cfg := parsedConfig(t, tunnelConfigJSON(t, "wg", wgConf()))
+
+	parts, _, err := buildTunnel(cfg, logx.Nop())
+	if err != nil {
+		t.Fatalf("buildTunnel() error = %v", err)
+	}
+
+	parts.close()
+	parts.close()
+
+	if _, err := parts.relaySide.WriteTo([]byte{1}, nil); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("relaySide.WriteTo() error = %v, want %v", err, net.ErrClosed)
+	}
+	if _, err := parts.deviceSide.WriteTo([]byte{1}, nil); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("deviceSide.WriteTo() error = %v, want %v", err, net.ErrClosed)
+	}
+}
+
+// Режим wg отключает параметры AmneziaWG.
 func TestBuildTunnelStripsAmneziaInWGMode(t *testing.T) {
 	cfg := parsedConfig(t, tunnelConfigJSON(t, "wg", awgConf()))
 
@@ -127,24 +146,6 @@ func TestStartTunnelRejectsBadFD(t *testing.T) {
 	}
 }
 
-func TestStartTunnelRejectsTCPMode(t *testing.T) {
-	t.Cleanup(Stop)
-	payload := map[string]any{
-		"peer":     "1.2.3.4:5000",
-		"clientId": "deadbeef",
-		"vk":       map[string]any{"links": []string{"CODE"}},
-		"proxy":    map[string]any{"mode": "tcp"},
-		"tunnel":   map[string]any{"mode": "wg", "config": wgConf()},
-	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := StartTunnel(string(b), 3); err == nil || !strings.Contains(err.Error(), "udp") {
-		t.Fatalf("StartTunnel() error = %v, want udp-mode requirement", err)
-	}
-}
-
 func TestValidateConfigRejectsTunnelWithoutConfig(t *testing.T) {
 	msg := ValidateConfig(tunnelConfigJSON(t, "wg", ""))
 	if !strings.Contains(msg, "tunnel config") {
@@ -159,6 +160,46 @@ func TestValidateConfigRejectsUnknownTunnelMode(t *testing.T) {
 	}
 }
 
+func TestParseTunnelConfig(t *testing.T) {
+	conf := "[Interface]\nPrivateKey = " + wgKey(1) + "\nAddress = 10.8.0.2/32, fd00::2/128\n" +
+		"DNS = 1.1.1.1, 8.8.8.8\nMTU = 1420\n\n" +
+		"[Peer]\nPublicKey = " + wgKey(2) + "\nAllowedIPs = 0.0.0.0/0\n\n" +
+		"[Peer]\nPublicKey = " + wgKey(3) + "\nAllowedIPs = 0.0.0.0/0, 10.9.0.0/24\n"
+
+	p, err := ParseTunnelConfig(conf, 0)
+	if err != nil {
+		t.Fatalf("ParseTunnelConfig() error = %v", err)
+	}
+	if p.Addresses != "10.8.0.2/32,fd00::2/128" {
+		t.Errorf("Addresses = %q", p.Addresses)
+	}
+	if p.DNS != "1.1.1.1,8.8.8.8" {
+		t.Errorf("DNS = %q", p.DNS)
+	}
+	if p.AllowedIPs != "0.0.0.0/0,10.9.0.0/24" {
+		t.Errorf("AllowedIPs = %q", p.AllowedIPs)
+	}
+	if p.MTU != 1420 {
+		t.Errorf("MTU = %d, want 1420", p.MTU)
+	}
+}
+
+func TestParseTunnelConfigMTUOverride(t *testing.T) {
+	p, err := ParseTunnelConfig(wgConf(), 1280)
+	if err != nil {
+		t.Fatalf("ParseTunnelConfig() error = %v", err)
+	}
+	if p.MTU != 1280 {
+		t.Errorf("MTU = %d, want 1280", p.MTU)
+	}
+}
+
+func TestParseTunnelConfigRejectsBroken(t *testing.T) {
+	if _, err := ParseTunnelConfig("[Interface]\nPrivateKey = nonsense\n", 0); err == nil {
+		t.Fatal("ParseTunnelConfig() error = nil for broken config")
+	}
+}
+
 func TestTunnelStatsWithoutTunnel(t *testing.T) {
 	Stop()
 	st := TunnelStats()
@@ -167,8 +208,7 @@ func TestTunnelStatsWithoutTunnel(t *testing.T) {
 	}
 }
 
-// clampToInt64 - публичная логика насыщения для gomobile; проверяем граничный
-// случай math.MaxUint64, который без насыщения вызвал бы переполнение int64.
+// Проверка насыщения при math.MaxUint64 для gomobile int64.
 func TestClampToInt64Overflow(t *testing.T) {
 	if got := clampToInt64(math.MaxUint64); got != math.MaxInt64 {
 		t.Errorf("clampToInt64(MaxUint64) = %d, want MaxInt64 (%d)", got, int64(math.MaxInt64))
@@ -178,5 +218,13 @@ func TestClampToInt64Overflow(t *testing.T) {
 	}
 	if got := clampToInt64(uint64(math.MaxInt64)); got != math.MaxInt64 {
 		t.Errorf("clampToInt64(MaxInt64) = %d, want MaxInt64", got)
+	}
+}
+
+// В tcp-режиме ядро tun не читает: принятый fd остался бы установленным вхолостую.
+func TestStartTunnelRejectsTCPMode(t *testing.T) {
+	const cfg = `{"peer":"1.2.3.4:5000","clientId":"deadbeef","proxy":{"mode":"tcp"},"vk":{"links":["https://vk.ru/call/join/CODE"]}}`
+	if err := StartTunnel(cfg, 7); !errors.Is(err, ErrTCPModeRequiresStart) {
+		t.Fatalf("StartTunnel() error = %v, want ErrTCPModeRequiresStart", err)
 	}
 }

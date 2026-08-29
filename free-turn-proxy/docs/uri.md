@@ -25,8 +25,7 @@ Payload - JSON-объект, закодированный `base64url` (без pa
 | `provider` | `-provider` | источник TURN-creds (например `vk`). |
 | `peer` | `-peer` | адрес сервера на VPS (`ip:port`). |
 | `transport` | `-transport` | транспорт до TURN-реле: `tcp` \| `udp`. |
-| `mode` | `-mode` | режим туннеля: `udp` \| `tcp`. |
-| `bond` | `-bond` | bonding TCP (`true`), только с `mode=tcp`. |
+| `mode` | `-mode` | режим туннеля: `udp` \| `tcp`; отсутствует - `udp`. |
 | `obf` | `-obf-profile` | профиль обфускации (`rtpopus` \| `rtpopus2`); `none` опускается. |
 | `key` | `-obf-key` | ключ обфускации (hex), только при заданном `obf`. |
 | `n` | `-n` | число TURN-потоков. |
@@ -36,6 +35,7 @@ Payload - JSON-объект, закодированный `base64url` (без pa
 | `dns` | `-dns-mode` | резолвер клиента: `plain` \| `doh` \| `auto`. |
 | `dnss` | `-dns-servers` | свои DNS через запятую. |
 | `mcap` | `-manual-captcha` | ручная VK captcha (`true`). |
+| `kcp` | `-kcp-*` | профиль ARQ для `mode: tcp` (`nodelay`, `interval`, `resend`, `nc`, `sndwnd`, `rcvwnd`, `mtu`, `acknodelay`); отсутствует - дефолт. |
 | `name` | - | имя клиента / комментарий. |
 
 > [!NOTE]
@@ -57,4 +57,6 @@ Payload - JSON-объект, закодированный `base64url` (без pa
 ./client "freeturn://eyJ2IjoxLCJwcm92aWRlciI6InZrIiwicGVlciI6..." -link "https://vk.ru/call/join/..."
 ```
 
-Параметры из URI переопределяют базовые флаги (`-peer`, `-mode`, `-obf-key`, `-n` ...).
+Параметры из URI переопределяют базовые флаги (`-peer`, `-transport`, `-mode`, `-obf-key`, `-n` ...).
+
+Версия ссылки не меняется: `mode` и `kcp` - опциональные поля, старый клиент их игнорирует и остаётся на `udp` с дефолтным ARQ.

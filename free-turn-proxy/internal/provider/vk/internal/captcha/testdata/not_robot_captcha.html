@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="EN">
+<head>
+    <meta charset="UTF-8"><script>
+        window.isBFF = true
+        window.currentStateCode = 0
+        window.deferStaticEntries = []
+        window._onloadDeferCallbacks = []
+        window.lang = {"vkconnect_not_robot_captcha_audio_load_error_text":"Failed to load audio","vkconnect_not_robot_captcha_checkbox_error_aria_label":"Error. Please try again.","vkconnect_not_robot_captcha_checkbox_error_text":"Please try again","vkconnect_not_robot_captcha_checkbox_text":"I\u0026#39;m not a robot","vkconnect_not_robot_captcha_close_button_text":"Close","vkconnect_not_robot_captcha_content_refresh_button_text":"Try again","vkconnect_not_robot_captcha_error_aria_label":"Error. Something went wrong. Please try again later.","vkconnect_not_robot_captcha_error_info_link_text":"Learn more","vkconnect_not_robot_captcha_error_text":"Something went wrong. Please try again later.","vkconnect_not_robot_captcha_image_load_error_text":"Failed to load image","vkconnect_not_robot_captcha_limit_error_text":"Please try again later.","vkconnect_not_robot_captcha_limit_error_title_text":"Attempt limit reached","vkconnect_not_robot_captcha_loader_text":"Loading...","vkconnect_not_robot_captcha_refresh_button_text":"Refresh","vkconnect_not_robot_captcha_refresh_via_button_text":"Refresh in {time}","vkconnect_not_robot_captcha_slider_change_type_button_aria_label":"Another verification method: instead of the image text, you can listen to an audio track and enter any word you hear","vkconnect_not_robot_captcha_slider_description_link_text":"Learn more","vkconnect_not_robot_captcha_slider_description_text":"Swipe the slider right until a picture forms.","vkconnect_not_robot_captcha_slider_refresh_button_aria_label":"Refresh image","vkconnect_not_robot_captcha_sound_change_type_button_aria_label":"Back to graphic code","vkconnect_not_robot_captcha_sound_input_error":"Invalid word","vkconnect_not_robot_captcha_sound_input_label":"Enter any word from the audio","vkconnect_not_robot_captcha_sound_input_placeholder":"Enter a word","vkconnect_not_robot_captcha_sound_play_button_aria_label":"Listen to audio","vkconnect_not_robot_captcha_sound_play_repeat_button_aria_label":"Listen to audio again","vkconnect_not_robot_captcha_sound_refresh_button_aria_label":"Refresh the audio track to listen to the code","vkconnect_not_robot_captcha_sound_refresh_info_text":"To hear a different audio file, press \u003cb\u003eRefresh\u003c/b\u003e.","vkconnect_not_robot_captcha_sound_replay_info_text":"To listen again, press CTRL.","vkconnect_not_robot_captcha_submit_button_text":"Continue","vkconnect_not_robot_captcha_swipe_default_text":"Swipe right","vkconnect_not_robot_captcha_swipe_error_button_refresh_text":"Refresh image","vkconnect_not_robot_captcha_swipe_error_button_retry_text":"Try again","vkconnect_not_robot_captcha_swipe_error_button_title_text":"Incorrect","vkconnect_not_robot_captcha_swipe_success_text":"Success","vkconnect_not_robot_captcha_terms_link_text":"Terms of Use","vkconnect_not_robot_captcha_title_aria_label":"Confirm you\u0026#39;re not a robot","vkconnect_not_robot_captcha_title_error_text":"Failed to verify","vkconnect_not_robot_captcha_title_text":"Confirm you\u0026#39;re\u003cbr\u003enot a robot"}
+        window.vk = {
+            apiConfigDomains: {"apiDomain":"api.vk.ru","connectDomain":"id.vk.ru","domain":"vk.ru","loginDomain":"login.vk.ru"},
+            webToken: null,
+            stDomain: "https://st.vk.ru/vkid/vkid-bff",
+            brlefapmjnpg: "273cc83f-426f-4d98-9ce5-92490107e3a6",
+            stExcludedMasks: null,
+            id: 0,
+            isCyrillic: false,
+            pabs: 0,
+            ex: {},
+            pe: {"frontend.vkid.bff_captcha_rollout":1},
+            cfg: {},
+            toggles: {},
+            lang: 3,
+            isVideoStandalone: false,
+            logoutUrl: "",
+            rv: 0,
+            ts: 1787154550,
+            statsMeta: {"platform":"","st":false,"id":0,"time":1787154550,"hash":"X84u4GhFSOt84JPrPRzto136tyBL6juibTu4yVj7uMX","reloadVersion":0},
+            wsTransport: "",
+            reservedTransport: [],
+            isOldBrowserVersion: false,
+			routerState: {"keyConfig":"notRobotCaptcha","data":{"params":{}}},
+			static: {
+                domain: "https://st.vk.ru/vkid/vkid-bff",
+        	},
+        };
+        window.langConfig = 
+	{"id":3,"parent":0,"locale":"en","numDel":",","numDelS":",","numDec":".","prepTags":null,"prep":[],"timeSys":["12hour","am","pm"],"yearOffset":0,"flexLast":false,"revOrder":false,"RTL":false,"numRules":{"int":[[0,[1],1],["*",0,2]],"float":2},"sexRules":[[1,2],["*",1]],"larr":"\u0026larr;","rarr":"\u0026rarr;"}
+        window.onLayoutReady = () => {};
+        window.apiPrefetchReadyPromise = new Promise((_resolve) => {
+  	        window.apiPrefetchReadyResolve = _resolve;
+  	    });
+        window.cur ??= {};
+	
+		window.cur.module ="notRobotCaptcha"
+		window.cur.screen ="notRobotCaptcha"
+        window.cur.isVideoStandalone = false
+        window.vk.host = location.hostname;
+        window.addLangKeys = (keys, global) => {
+            var obj = global ? window : window.cur;
+            if (!obj.lang) {
+                obj.lang = keys;
+            } else {
+                extend(obj.lang, keys);
+            }
+        }
+        window.browser = {}
+
+        const isFunction = (obj) => obj && Object.prototype.toString.call(obj) === '[object Function]';
+
+        function extend() {
+            const args = arguments;
+            const length = args.length;
+            let target = args[0] || {};
+            let i = 1;
+            let deep = false;
+
+            if (typeof target === 'boolean') {
+                deep = target;
+                target = args[1] || {};
+                i = 2;
+            }
+
+            if (typeof target !== 'object' && !isFunction(target)) {
+                target = {};
+            }
+
+            for (; i < length; i++) {
+                const options = args[i];
+                if (options != null) {
+                    for (const name in options) {
+                        if (!options.hasOwnProperty(name)) {
+                            continue;
+                        }
+                        const src = target[name];
+                        const copy = options[name];
+
+                        if (target === copy) {
+                            continue;
+                        }
+
+                        if (deep && copy && typeof copy === 'object' && !copy.nodeType) {
+                            target[name] = extend(deep, src || (copy.length != null ? [] : {}), copy);
+                        } else if (copy !== undefined) {
+                            target[name] = copy;
+                        }
+                    }
+                }
+            }
+            return target;
+        }
+
+        window.extend = extend
+    </script>
+<style>
+</style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, minimal-ui, user-scalable=no">
+	<title>VK ID</title>
+	<link rel="apple-touch-icon" href="https://st.vk.com/vkid/vkid-bff/assets/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="https://st.vk.com/vkid/vkid-bff/assets/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="192x192" href="https://st.vk.com/vkid/vkid-bff/assets/favicon-192x192.png">
+	<link rel="icon" type="image/svg+xml" href="https://st.vk.com/vkid/vkid-bff/assets/favicon.svg">
+	<script src="https://ad.mail.ru/static/sync-loader.js"></script>
+<link rel="stylesheet" href="https://st.vk.ru/vkid/vkid-bff/dist/projects/notRobotCaptcha-web/entrypoints/entry.7a2180dd.css"><script src="https://st.vk.ru/vkid/vkid-bff/dist/projects/notRobotCaptcha-web/entrypoints/entry.5cb3fd16.js" async></script><script>
+
+(function(_0x1be24c,_0x543e3e,_0x23e37e){const _0x445645=typeof window!=='undefined'&&!!window['crypto']&&!!window['crypto']['subtle']&&typeof window['crypto']['subtle']['digest']==='function';var _0x549a17=0x8;function _0x57b4b5(){var _0x6bef44={};function _0x2f6942(_0x311a3e,_0x18379a){try{_0x6bef44[_0x311a3e]={'ok':!![],'result':_0x18379a()};}catch(_0x544e57){_0x6bef44[_0x311a3e]={'ok':![],'error':'exception'};}}return _0x2f6942('globals',function(){return{'doc':typeof document==='object','win':typeof window==='object','nav':typeof navigator==='object','webdriver':!!navigator['webdriver'],'subtle':!!(window['crypto']&&window['crypto']['subtle']&&typeof window['crypto']['subtle']['digest']==='function'),'secure':!!window['isSecureContext'],'gcs':typeof window['getComputedStyle']==='function','raf':typeof window['requestAnimationFrame']==='function','wasm':typeof window['WebAssembly']==='object','plugins_len':navigator['plugins']?navigator['plugins']['length']:null,'languages_len':navigator['languages']?navigator['languages']['length']:null,'hw':navigator['hardwareConcurrency']||null,'mem':navigator['deviceMemory']||null};}),_0x2f6942('ua',function(){var _0x691f43=navigator['userAgent']||'',_0x5b8f78=null;try{if(navigator['userAgentData']){var _0x69a709=[];if(navigator['userAgentData']['brands'])for(var _0xdcc97b=0x0;_0xdcc97b<navigator['userAgentData']['brands']['length'];_0xdcc97b++){_0x69a709['push']({'brand':navigator['userAgentData']['brands'][_0xdcc97b]['brand']||'','version':navigator['userAgentData']['brands'][_0xdcc97b]['version']||''});}_0x5b8f78={'brands':_0x69a709,'platform':navigator['userAgentData']['platform']||null,'mobile':!!navigator['userAgentData']['mobile'],'architecture':navigator['userAgentData']['architecture']||null};}}catch(_0x1832d8){_0x5b8f78=null;}return{'userAgent':_0x691f43,'userAgentData':_0x5b8f78};}),_0x2f6942('frame',function(){var _0x2a45d0=null,_0x5c6650=0x0,_0x51e2fb=![];try{_0x2a45d0=window['frameElement']?'set':null;}catch(_0xf4df71){}try{if(window['location']&&window['location']['ancestorOrigins'])_0x5c6650=window['location']['ancestorOrigins']['length'];}catch(_0x36b6d0){}try{var _0x42973f=window['parent'];if(_0x42973f&&_0x42973f['location']){var _0x5989be=_0x42973f['location']['href'];_0x51e2fb=!![];}}catch(_0x4469ea){}return{'frameElement':_0x2a45d0,'ancestorOriginsLen':_0x5c6650,'parentAccessible':_0x51e2fb};}),_0x2f6942('match_media',function(){return{'prefersDark':!!window['matchMedia']('(prefers-color-scheme:\x20dark)')['matches'],'prefersLight':!!window['matchMedia']('(prefers-color-scheme:\x20light)')['matches'],'reducedMotion':!!window['matchMedia']('(prefers-reduced-motion:\x20reduce)')['matches'],'pointerFine':!!window['matchMedia']('(pointer:\x20fine)')['matches']};}),_0x2f6942('plugins',function(){var _0x3ef314=[],_0xf344b9=[],_0x73aedc=[];if(navigator['plugins'])for(var _0xb36215=0x0;_0xb36215<navigator['plugins']['length'];_0xb36215++){var _0xd011cf=navigator['plugins'][_0xb36215];_0x3ef314['push'](_0xd011cf['name']);_0xf344b9['push'](_0xd011cf['description']||'');var _0xe290e7=[];if(_0xd011cf['mimeTypes'])for(var _0x397277=0x0;_0x397277<_0xd011cf['mimeTypes']['length'];_0x397277++){_0xe290e7['push'](_0xd011cf['mimeTypes'][_0x397277]['type']||'');}_0x73aedc['push'](_0xe290e7);}var _0x7485df=_0x3ef314['some'](function(_0x4c3c7d){return String(_0x4c3c7d)['indexOf']('Chrome\x20PDF')>=0x0;});return{'length':navigator['plugins']?navigator['plugins']['length']:0x0,'names':_0x3ef314,'descriptions':_0xf344b9,'mimeTypes':_0x73aedc,'isChrome':_0x7485df};}),_0x2f6942('nav_tamper',function(){var _0xf42226=![];try{var _0x015154=Object['getOwnPropertyDescriptor'](Navigator['prototype'],'userAgent');_0xf42226=!!(_0x015154&&_0x015154['get']&&_0x015154['get']['toString']()['indexOf']('[native\x20code]')===-0x1);}catch(_0x43a2c1){}return{'tampered':_0xf42226,'el_ctor':typeof HTMLDivElement==='function'?HTMLDivElement['name']:null,'style_ctor':typeof CSSStyleDeclaration==='function'?CSSStyleDeclaration['name']:null,'nav_ctor':typeof Navigator==='function'?Navigator['name']:null,'alert_native':typeof window['alert']==='function'&&Function['prototype']['toString']['call'](window['alert'])['indexOf']('[native\x20code]')>=0x0,'to_string_native':typeof Function['prototype']['toString']==='function'&&Function['prototype']['toString']['toString']()['indexOf']('[native\x20code]')>=0x0};}),_0x2f6942('referrer',function(){return{'referrer':document['referrer']||'','inIframe':window['self']!==window['top'],'domain':document['domain']||''};}),_0x2f6942('devtools',function(){var _0x7df38c=0x0;try{var _0xce2073=performance['now']();new Function('debugger;')();_0x7df38c=performance['now']()-_0xce2073;}catch(_0x4c99e4){}return{'open':_0x7df38c>0x5,'delay_ms':Math['round'](_0x7df38c)};}),_0x2f6942('css',function(){var _0x4bd37e=0x0,_0x5d490e=['display:\x20grid','aspect-ratio:\x201\x20/\x201','container-type:\x20inline-size','selector(:has(*))','color:\x20oklch(40%\x200.4\x20200)'];for(var _0x3af6f8=0x0;_0x3af6f8<_0x5d490e['length'];_0x3af6f8++){try{if(!CSS['supports'](_0x5d490e[_0x3af6f8]))_0x4bd37e++;}catch(_0x58fa51){_0x4bd37e++;}}return{'expectedMissing':_0x4bd37e};}),_0x2f6942('native_integrity',function(){var _0x78a842=![],_0x9b5d84=![];try{var _0x37bd95=document['createElement']('div');_0x78a842=Object['getPrototypeOf'](_0x37bd95)===HTMLDivElement['prototype'];var _0x18b647=new XMLHttpRequest();_0x9b5d84=_0x18b647['toString']()['indexOf']('[object')>=0x0;}catch(_0x13d44f){}return{'protoMatch':_0x78a842,'xhrNative':_0x9b5d84,'xhrSendNative':typeof XMLHttpRequest==='function'&&typeof XMLHttpRequest['prototype']['send']==='function'&&Function['prototype']['toString']['call'](XMLHttpRequest['prototype']['send'])['indexOf']('[native\x20code]')>=0x0,'addEventListenerNative':typeof EventTarget!=='undefined'&&typeof EventTarget['prototype']['addEventListener']==='function'&&Function['prototype']['toString']['call'](EventTarget['prototype']['addEventListener'])['indexOf']('[native\x20code]')>=0x0,'alertNative':typeof window['alert']==='function'&&Function['prototype']['toString']['call'](window['alert'])['indexOf']('[native\x20code]')>=0x0,'toStringNative':typeof Function['prototype']['toString']==='function'&&Function['prototype']['toString']['toString']()['indexOf']('[native\x20code]')>=0x0};}),_0x2f6942('cookie_test',function(){var _0x3b3ed0='pow_cookie';try{document['cookie']=_0x3b3ed0+'=1;path=/';var _0xe6ed9f=(document['cookie']||'')['indexOf'](_0x3b3ed0+'=')>=0x0;document['cookie']=_0x3b3ed0+'=;path=/;max-age=0';return{'write':_0xe6ed9f};}catch(_0x34ea0e){return{'write':![]};}}),_0x2f6942('ancestor_origins',function(){var _0xc60eea=null;try{if(window['location']&&window['location']['ancestorOrigins']&&window['location']['ancestorOrigins']['length']>0x0)_0xc60eea=window['location']['ancestorOrigins'][0];}catch(_0x126c9b){}return{'ancestorOrigin':_0xc60eea};}),_0x2f6942('sandbox_behavior',function(){var _0xbd0403=![];try{window['localStorage']['setItem']('p','1');window['localStorage']['removeItem']('p');_0xbd0403=!![];}catch(_0x532d8d){}var _0x96206f=![];try{window['sessionStorage']['setItem']('p','1');window['sessionStorage']['removeItem']('p');_0x96206f=!![];}catch(_0x2a7aab){}return{'originIsNull':document['origin']==='null','localStorage':_0xbd0403,'sessionStorage':_0x96206f};}),_0x2f6942('max_touch_points',function(){return{'maxTouchPoints':typeof navigator['maxTouchPoints']==='number'?navigator['maxTouchPoints']:null};}),_0x2f6942('timezone_locale',function(){var _0x6bdeac=null;try{_0x6bdeac=Intl['DateTimeFormat']()['resolvedOptions']()['timeZone']||null;}catch(_0x515efc){}var _0x838fc2=navigator['languages']?navigator['languages']['slice'](0x0):null;return{'timezone':_0x6bdeac,'languages':_0x838fc2};}),_0x2f6942('device_pixel_ratio',function(){var _0x0e3aca=window['devicePixelRatio']||null,_0x126c9b=null,_0x0b0976=null;try{if(window['screen']&&window['screen']['orientation']&&window['screen']['orientation']['type']){_0x126c9b=window['screen']['orientation']['type'];_0x0b0976=window['screen']['orientation']['angle']||0x0;}}catch(_0x6725da){}return{'dpr':_0x0e3aca,'orientation':_0x126c9b,'orientationAngle':_0x0b0976};}),_0x6bef44;}function _0x265e99(_0x5bd15c){if(_0x5bd15c===null||_0x5bd15c===undefined)return'null';if(typeof _0x5bd15c!=='object')return JSON['stringify'](_0x5bd15c);if(Array['isArray'](_0x5bd15c))return'['+_0x5bd15c['map'](_0x265e99)['join'](',')+']';var _0x4de6ae=Object['keys'](_0x5bd15c)['filter'](function(_0x4b66e8){return _0x5bd15c[_0x4b66e8]!==undefined;})['sort']();return'{'+_0x4de6ae['map'](function(_0x429bc4){return JSON['stringify'](_0x429bc4)+':'+_0x265e99(_0x5bd15c[_0x429bc4]);})['join'](',')+'}';}function _0x2a1c54(_0x4b805f){var _0x36b593=JSON['stringify'](_0x4b805f)['replace'](/[^\x00-\x7F]/g,function(_0x32f54b){var _0x54d62c=_0x32f54b['charCodeAt'](0x0);return'\x5cu'+('0000'+_0x54d62c['toString'](0x10))['slice'](-0x4);});return btoa(_0x36b593);}function _0x50b9ee(_0x4337fb){function _0x309c22(_0x4902a0,_0x3468f1){return _0x4902a0>>>_0x3468f1|_0x4902a0<<0x20-_0x3468f1;}var _0x56dc78=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0xfc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x6ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2],_0x371d06=_0x4337fb['length'],_0x44b7a7=new Uint8Array((_0x371d06+0x9>>>0x6<<0x6)+0x40);for(var _0x48d025=0x0;_0x48d025<_0x371d06;_0x48d025++)_0x44b7a7[_0x48d025]=_0x4337fb['charCodeAt'](_0x48d025)&0xff;_0x44b7a7[_0x371d06]=0x80;var _0x47fce9=_0x371d06*0x8;_0x44b7a7[_0x44b7a7['length']-0x8]=0x0,_0x44b7a7[_0x44b7a7['length']-0x7]=0x0,_0x44b7a7[_0x44b7a7['length']-0x6]=0x0,_0x44b7a7[_0x44b7a7['length']-0x5]=0x0,_0x44b7a7[_0x44b7a7['length']-0x4]=_0x47fce9>>>0x18&0xff,_0x44b7a7[_0x44b7a7['length']-0x3]=_0x47fce9>>>0x10&0xff,_0x44b7a7[_0x44b7a7['length']-0x2]=_0x47fce9>>>0x8&0xff,_0x44b7a7[_0x44b7a7['length']-0x1]=_0x47fce9&0xff;var _0x180ede=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];for(var _0x3cc444=0x0;_0x3cc444<_0x44b7a7['length'];_0x3cc444+=0x40){var _0x31d798=new Uint32Array(0x40);for(var _0x48d025=0x0;_0x48d025<0x10;_0x48d025++)_0x31d798[_0x48d025]=_0x44b7a7[_0x3cc444+_0x48d025*0x4]<<0x18|_0x44b7a7[_0x3cc444+_0x48d025*0x4+0x1]<<0x10|_0x44b7a7[_0x3cc444+_0x48d025*0x4+0x2]<<0x8|_0x44b7a7[_0x3cc444+_0x48d025*0x4+0x3];for(var _0x48d025=0x10;_0x48d025<0x40;_0x48d025++){var _0xfed688=_0x309c22(_0x31d798[_0x48d025-0xf],0x7)^_0x309c22(_0x31d798[_0x48d025-0xf],0x12)^_0x31d798[_0x48d025-0xf]>>>0x3,_0x14941e=_0x309c22(_0x31d798[_0x48d025-0x2],0x11)^_0x309c22(_0x31d798[_0x48d025-0x2],0x13)^_0x31d798[_0x48d025-0x2]>>>0xa;_0x31d798[_0x48d025]=_0x31d798[_0x48d025-0x10]+_0xfed688+_0x31d798[_0x48d025-0x7]+_0x14941e|0x0;}var _0x33c06a=_0x180ede[0x0],_0x175489=_0x180ede[0x1],_0x18f346=_0x180ede[0x2],_0x4eecf8=_0x180ede[0x3],_0x20717f=_0x180ede[0x4],_0x2311fd=_0x180ede[0x5],_0x1c47f2=_0x180ede[0x6],_0x30c2a1=_0x180ede[0x7];for(var _0x48d025=0x0;_0x48d025<0x40;_0x48d025++){var _0x3f131f=_0x309c22(_0x20717f,0x6)^_0x309c22(_0x20717f,0xb)^_0x309c22(_0x20717f,0x19),_0x3ca268=_0x20717f&_0x2311fd^~_0x20717f&_0x1c47f2,_0x26181b=_0x30c2a1+_0x3f131f+_0x3ca268+_0x56dc78[_0x48d025]+_0x31d798[_0x48d025]|0x0,_0x2fb6a2=_0x309c22(_0x33c06a,0x2)^_0x309c22(_0x33c06a,0xd)^_0x309c22(_0x33c06a,0x16),_0x142360=_0x33c06a&_0x175489^_0x33c06a&_0x18f346^_0x175489&_0x18f346,_0x527d03=_0x2fb6a2+_0x142360|0x0;_0x30c2a1=_0x1c47f2,_0x1c47f2=_0x2311fd,_0x2311fd=_0x20717f,_0x20717f=_0x4eecf8+_0x26181b|0x0,_0x4eecf8=_0x18f346,_0x18f346=_0x175489,_0x175489=_0x33c06a,_0x33c06a=_0x26181b+_0x527d03|0x0;}_0x180ede[0x0]=_0x180ede[0x0]+_0x33c06a|0x0,_0x180ede[0x1]=_0x180ede[0x1]+_0x175489|0x0,_0x180ede[0x2]=_0x180ede[0x2]+_0x18f346|0x0,_0x180ede[0x3]=_0x180ede[0x3]+_0x4eecf8|0x0,_0x180ede[0x4]=_0x180ede[0x4]+_0x20717f|0x0,_0x180ede[0x5]=_0x180ede[0x5]+_0x2311fd|0x0,_0x180ede[0x6]=_0x180ede[0x6]+_0x1c47f2|0x0,_0x180ede[0x7]=_0x180ede[0x7]+_0x30c2a1|0x0;}var _0xac0589='';for(var _0x48d025=0x0;_0x48d025<0x8;_0x48d025++){var _0x295bd8=(_0x180ede[_0x48d025]>>>0x0)['toString'](0x10);while(_0x295bd8['length']<0x8)_0x295bd8='0'+_0x295bd8;_0xac0589+=_0x295bd8;}return _0xac0589;}async function _0x511354(_0x21fc30,_0x28edac){var _0x17d04b=_0x21fc30+_0x28edac;if(_0x445645){var _0x5b6929=new TextEncoder(),_0x54ae8f=await window['crypto']['subtle']['digest']('SHA-256',_0x5b6929['encode'](_0x17d04b)),_0x354b82=Array['from'](new Uint8Array(_0x54ae8f));return _0x354b82['map'](function(_0x442894){return _0x442894['toString'](0x10)['padStart'](0x2,'0');})['join']('');}return _0x50b9ee(_0x17d04b);}async function _0x3d045f(){var _0x421042=performance['now'](),_0xe827a8=_0x421042,_0x4135de={},_0x1b5962='';try{_0x4135de=_0x57b4b5(),_0x1b5962=await _0x511354(_0x265e99(_0x4135de),'');}catch(_0x540495){_0x4135de={},_0x1b5962='';}window['captchaPowResult']='v2.'+_0x2a1c54({'hash':'','nonce':0x0,'error':_0x23e37e,'duration_ms':0x0,'telemetry':_0x4135de,'tel_hash':_0x1b5962});try{for(let _0x5e5b3e=0x0;;_0x5e5b3e++){const _0x17dc50=await _0x511354(_0x1be24c,_0x5e5b3e);if(_0x17dc50['startsWith']('0'['repeat'](_0x543e3e))){window['captchaPowResult']='v2.'+_0x2a1c54({'hash':_0x17dc50,'nonce':_0x5e5b3e,'duration_ms':Math['round'](performance['now']()-_0x421042),'telemetry':_0x4135de,'tel_hash':_0x1b5962});return;}if(_0x5e5b3e%0xc8===0x0){window['captchaPowResult']='v2.'+_0x2a1c54({'hash':_0x17dc50,'nonce':_0x5e5b3e,'error':_0x23e37e,'duration_ms':Math['round'](performance['now']()-_0x421042),'telemetry':_0x4135de,'tel_hash':_0x1b5962});var _0x137271=performance['now']();_0x137271-_0xe827a8>=_0x549a17&&(await new Promise(function(_0x4f29d9){setTimeout(_0x4f29d9,0x0);}),_0xe827a8=_0x137271);}}}catch(_0x56a2f8){window['captchaPowResult']='v2.'+_0x2a1c54({'hash':'','nonce':0x0,'error':_0x56a2f8 instanceof Error?_0x56a2f8['message']:'unknown','duration_ms':Math['round'](performance['now']()-_0x421042),'telemetry':_0x4135de,'tel_hash':_0x1b5962});}}_0x3d045f();}("ST9BEClStK0wSdo4",2,"pow_timeout"));
+
+</script></head>
+<body>
+<div id="spa_root"></div>
+<script>
+window.cur.apiPrefetchCache = [];
+window.apiPrefetchReadyResolve();
+</script>
+</body>
+</html>
