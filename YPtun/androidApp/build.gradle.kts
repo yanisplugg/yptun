@@ -20,6 +20,10 @@ val hasReleaseKeystore =
     keystorePropertiesFile.exists() &&
         listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
             .all { key -> !keystoreProperties.getProperty(key).isNullOrBlank() }
+// applicationId — это ИДЕНТИЧНОСТЬ приложения для системы и единственное, по чему обновление
+// встаёт поверх установленного. Меняется только вместе с переездом (см. LegacyMigration), и только
+// после того, как релиз с мостом уже разошёлся пользователям.
+val olcboxApplicationId = providers.gradleProperty("olcbox.applicationId").orElse("org.olcbox.app")
 val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("1.0.0")
 val olcboxVersionCode = providers.gradleProperty("olcbox.versionCode")
     .map { it.toInt() }
@@ -46,7 +50,7 @@ android {
         minSdk = 23
         targetSdk = 37
 
-        applicationId = "org.olcbox.app"
+        applicationId = olcboxApplicationId.get()
         versionCode = olcboxVersionCode.get()
         versionName = olcboxVersion.get()
 

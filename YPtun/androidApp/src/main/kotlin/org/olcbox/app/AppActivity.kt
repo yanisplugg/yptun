@@ -17,6 +17,7 @@ import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.AndroidLogExporter
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.importer.AndroidConfigImporter
+import org.olcbox.app.migration.LegacyMigration
 import org.olcbox.app.ui.activities.AndroidMainScreen
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationViewModel
@@ -107,6 +108,12 @@ class AppActivity : ComponentActivity() {
                 dialog.dismiss()
             }
             .show()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Если настройки только что переехали со старой сборки - предложить её удалить (один раз).
+        LegacyMigration.promptLegacyUninstallOnce(this)
     }
 
     override fun onNewIntent(intent: Intent) {
