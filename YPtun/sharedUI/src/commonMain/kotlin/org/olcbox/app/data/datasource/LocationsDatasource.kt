@@ -1255,9 +1255,18 @@ class LocationsRepositoryImpl(
             ?.let { id -> importedIdMap[id] ?: id }
             ?.takeIf { id -> mergedLocations.any { it.storageId == id } }
 
-        val active = importedActive
-            ?: currentBundle.activeLocationId?.takeIf { id -> mergedLocations.any { it.storageId == id } }
-            ?: mergedLocations.firstOrNull()?.storageId
+        // The CURRENT selection wins over the imported bundle's on an additive import: pasting a
+        // config must never re-point the active location, least of all while the VPN is up — the
+        // list marks the active entry as the connected one and starts drawing its traffic on the
+        // freshly pasted config while the tunnel still runs the old one. Only a Restore (a whole
+        // exported bundle) is allowed to carry its own active id back in.
+        val currentActive = currentBundle.activeLocationId
+            ?.takeIf { id -> mergedLocations.any { it.storageId == id } }
+        val active = if (replaceMatchingStorageIds) {
+            importedActive ?: currentActive
+        } else {
+            currentActive ?: importedActive
+        } ?: mergedLocations.firstOrNull()?.storageId
 
         return currentBundle.copy(
             activeLocationId = active,

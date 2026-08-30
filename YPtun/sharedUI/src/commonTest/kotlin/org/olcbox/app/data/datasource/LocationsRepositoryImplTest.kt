@@ -496,7 +496,65 @@ class LocationsRepositoryImplTest {
         assertEquals(listOf("imported_room-01", "imported_new"), imported.locations.map { it.storageId })
         assertEquals("room-old", imported.locations[0].location.id)
         assertEquals("room-01", imported.locations[1].location.id)
-        assertEquals("imported_new", imported.activeLocationId)
+        // An additive import must NOT move the selection: pasting a config while the VPN is up
+        // otherwise re-points the active location and the list starts drawing the running
+        // tunnel's traffic on the freshly pasted entry.
+        assertEquals("imported_room-01", imported.activeLocationId)
+    }
+
+    @Test
+    fun additiveImportKeepsTheActiveLocationButRestoreCarriesItsOwn() = runTest {
+        fun bundleWithActive() = LocationBundleV4(
+            activeLocationId = "keep_me",
+            locations = listOf(
+                LocationEntry.from(
+                    "keep_me",
+                    LocationConfig(
+                        name = "Running",
+                        id = "room-live",
+                        key = "a".repeat(64),
+                        bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+                    )
+                )
+            )
+        )
+
+        val additive = FakeLocationsDataSource(stored = bundleWithActive())
+        LocationsRepositoryImpl(additive).importText(
+            "olcrtc://wbstream?seichannel@room-99#${"b".repeat(64)}${'$'}Pasted"
+        )
+        val afterAdditive = additive.stored
+        assertNotNull(afterAdditive)
+        assertEquals(2, afterAdditive.locations.size)
+        assertEquals("keep_me", afterAdditive.activeLocationId)
+
+        // A Restore (a whole exported bundle) still carries its own active id back in.
+        val restore = FakeLocationsDataSource(stored = bundleWithActive())
+        LocationsRepositoryImpl(restore).importText(
+            """
+            {
+              "version": 4,
+              "active_location_id": "keep_me",
+              "locations": [
+                {
+                  "storage_id": "keep_me",
+                  "name": "Restored",
+                  "endpoint": {
+                    "room_id": "room-restored",
+                    "key": "${"b".repeat(64)}",
+                    "client_id": "desktop"
+                  },
+                  "carrier": "wbstream",
+                  "transport": {"type": "datachannel"}
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+        val afterRestore = restore.stored
+        assertNotNull(afterRestore)
+        assertEquals("keep_me", afterRestore.activeLocationId)
+        assertEquals("room-restored", afterRestore.locations.single().location.id)
     }
 
     @Test
