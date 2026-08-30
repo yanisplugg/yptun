@@ -19,6 +19,7 @@ import org.olcbox.app.data.importer.ConfigImporter
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.repository.LocationsRepository
+import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.vpn.ExpiringSubscriptionInfo
 import org.olcbox.app.vpn.PanelAnnouncementInfo
@@ -369,7 +370,7 @@ class HomeScreenViewModel(
                     )
                 }
                 if (!imported) {
-                    onError("No valid YPtun config found")
+                    onError(importFailureReason(rawText))
                     return@launch
                 }
                 loadCurrentConfigNow()
@@ -385,6 +386,25 @@ class HomeScreenViewModel(
                 }
                 onError(message)
             }
+        }
+    }
+
+    /**
+     * "No valid config" is a lie when the link IS ours but arrived damaged. A `yptun://inbound`
+     * payload is base64url, so it can contain runs of underscores, and every Markdown-rendering chat
+     * eats them (`___` -> `_`). The lost characters cannot be recovered — the payload simply stops
+     * inflating — while the link still looks perfectly intact to the eye, so the generic message
+     * sends the owner hunting for a bug in the importer instead of asking for the link again.
+     */
+    private fun importFailureReason(rawText: String): String {
+        val text = rawText.trim()
+        val isSingleInboundLink = text.startsWith(YptunInboundCodec.PREFIX) &&
+            text.indexOf(YptunInboundCodec.PREFIX, startIndex = 1) < 0
+        return if (isSingleInboundLink && YptunInboundCodec.parse(text) == null) {
+            "This YPtun link is damaged — characters were lost in transit. " +
+                "Scan the QR instead, or send the link as a file."
+        } else {
+            "No valid YPtun config found"
         }
     }
 
