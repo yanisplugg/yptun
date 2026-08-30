@@ -12,6 +12,7 @@ import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.share.ConfigShareService
+import org.olcbox.app.data.share.YptunInboundCodec
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -500,6 +501,27 @@ class LocationsRepositoryImplTest {
         // otherwise re-points the active location and the list starts drawing the running
         // tunnel's traffic on the freshly pasted entry.
         assertEquals("imported_room-01", imported.activeLocationId)
+    }
+
+    @Test
+    fun importsAYptunInboundLinkThatArrivedWrapped() = runTest {
+        // The importer splits a paste by line; a long link broken across lines by a chat client or a
+        // QR overlay lost everything after the first fragment and read as "no valid config".
+        val link = YptunInboundCodec.compose(
+            LocationConfig(
+                name = "Wrapped",
+                id = "room-wrapped",
+                key = "d".repeat(64),
+                bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+            )
+        )
+        val source = FakeLocationsDataSource()
+
+        assertTrue(LocationsRepositoryImpl(source).importText(link.chunked(40).joinToString("\n")))
+
+        val imported = source.stored
+        assertNotNull(imported)
+        assertEquals("room-wrapped", imported.locations.single().location.id)
     }
 
     @Test

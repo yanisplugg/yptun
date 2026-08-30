@@ -54,6 +54,15 @@ class YptunInboundCodecTest {
     }
 
     @Test
+    fun parsesAWrappedLink() {
+        // Chat clients and QR overlays break a long payload across lines; Base64 decoding throws on
+        // the embedded whitespace, so the link used to read as "no valid config".
+        val link = YptunInboundCodec.compose(sample)
+        val wrapped = link.chunked(40).joinToString("\n")
+        assertEquals(sample.normalized(), YptunInboundCodec.parse(wrapped))
+    }
+
+    @Test
     fun rejectsNonYptunLinks() {
         assertNull(YptunInboundCodec.parse("vless://abc@example.com:443"))
         assertNull(YptunInboundCodec.parse("https://example.com/sub"))

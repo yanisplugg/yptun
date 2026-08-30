@@ -48,7 +48,10 @@ object YptunInboundCodec {
         val t = uri.trim()
         if (!t.startsWith(PREFIX)) return null
         val extracted = extractData(t) ?: return null
-        val raw = runCatching { Base64.UrlSafe.decode(repad(extracted.value)) }.getOrNull() ?: return null
+        // A long link routinely arrives wrapped: chat clients, QR overlays and the app's own share
+        // sheet all break it across lines, and Base64 decoding throws on the embedded whitespace.
+        val payload = extracted.value.filterNot { it.isWhitespace() }
+        val raw = runCatching { Base64.UrlSafe.decode(repad(payload)) }.getOrNull() ?: return null
         val bytes = if (extracted.compressed) inflateOrNull(raw) ?: return null else raw
         val text = bytes.decodeToString()
         return runCatching { json.decodeFromString(LocationConfig.serializer(), text) }

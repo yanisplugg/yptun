@@ -1424,7 +1424,20 @@ class LocationsRepositoryImpl(
     ): LocationBundleV4? {
         if (!text.contains(YptunInboundCodec.PREFIX)) return null
         val usedStorageIds = mutableSetOf<String>()
-        val entries = text.lineSequence()
+        // ONE link that arrived wrapped is still one link: chat clients and QR overlays break a long
+        // base64 payload across lines, and splitting by line then kept only the first fragment, so the
+        // payload never inflated and the paste read as "no valid config". Only unwrap when the whole
+        // text is a single link — a genuine one-link-per-line list must keep its lines.
+        val single = text.filterNot { it.isWhitespace() }
+        val source = if (
+            single.startsWith(YptunInboundCodec.PREFIX) &&
+            single.indexOf(YptunInboundCodec.PREFIX, startIndex = 1) < 0
+        ) {
+            single
+        } else {
+            text
+        }
+        val entries = source.lineSequence()
             .map { it.normalizedImportText() }
             .filter { it.startsWith(YptunInboundCodec.PREFIX) }
             .mapNotNull { YptunInboundCodec.parse(it) }
