@@ -1,6 +1,9 @@
 package org.olcbox.app.vpn.desktop
 
 import com.sun.jna.Native
+import com.sun.jna.WString
+import com.sun.jna.ptr.IntByReference
+import com.sun.jna.ptr.LongByReference
 import com.sun.jna.win32.StdCallLibrary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -16,6 +19,21 @@ private interface Shell32Ext : StdCallLibrary {
 
     companion object {
         val INSTANCE: Shell32Ext by lazy { Native.load("shell32", Shell32Ext::class.java) }
+    }
+}
+
+/**
+ * `iphlpapi` — the only way to ask about an adapter by its Windows FRIENDLY name from the JVM.
+ * `NetworkInterface` exposes the adapter *description* ("tun2socks Tunnel"), never the friendly
+ * name we hand tun2socks with `--device` (see [WindowsTunController.adapterExists]).
+ */
+private interface IpHlpApiExt : StdCallLibrary {
+    fun ConvertInterfaceAliasToLuid(alias: WString, luid: LongByReference): Int
+
+    fun ConvertInterfaceLuidToIndex(luid: LongByReference, index: IntByReference): Int
+
+    companion object {
+        val INSTANCE: IpHlpApiExt by lazy { Native.load("iphlpapi", IpHlpApiExt::class.java) }
     }
 }
 
@@ -145,19 +163,33 @@ internal class WindowsTunController(
             delay(TUN_READY_POLL_MS)
         }
 
-        error("$TUN_NAME adapter was not created")
+        error(
+            buildString {
+                append("$TUN_NAME adapter was not created")
+                val output = bufferedOutput(process)
+                if (output.isNotBlank()) append(": ").append(output)
+            }
+        )
     }
 
     /**
-     * Whether wintun has published the adapter yet. Answered from the JVM's own interface list
-     * instead of `Get-NetAdapter`: this is polled every [TUN_READY_POLL_MS], and one PowerShell
-     * per poll dominated the connect time all by itself.
+     * Whether wintun has published the adapter yet. Answered natively instead of with
+     * `Get-NetAdapter`: this is polled every [TUN_READY_POLL_MS], and one PowerShell per poll
+     * dominated the connect time all by itself.
      */
-    private fun adapterExists(): Boolean = runCatching {
-        java.net.NetworkInterface.getNetworkInterfaces().toList().any { nic ->
-            listOfNotNull(nic.name, nic.displayName).any { it.equals(TUN_NAME, ignoreCase = true) }
+    private fun adapterExists(): Boolean = interfaceAliasIsUp(TUN_NAME)
+
+    /** Whatever tun2socks has already printed — without blocking on a process that is still alive. */
+    private fun bufferedOutput(process: Process): String = runCatching {
+        val pending = process.inputStream.available()
+        if (pending <= 0) {
+            ""
+        } else {
+            val buffer = ByteArray(pending)
+            val read = process.inputStream.read(buffer)
+            if (read <= 0) "" else String(buffer, 0, read).trim()
         }
-    }.getOrDefault(false)
+    }.getOrDefault("")
 
     /**
      * The whole TUN route setup in ONE PowerShell run: the tunnel's own address + `0.0.0.0/1` and
@@ -299,6 +331,27 @@ internal class WindowsTunController(
         const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
         const val ELEVATED_START_ARGUMENT = "--olcbox-start-vpn-after-elevation"
+
+        /**
+         * Whether the adapter with this Windows friendly name exists AND is operational.
+         *
+         * `java.net.NetworkInterface` NEVER reports the friendly name: `name` is a synthetic
+         * `iftype53_32770` and `displayName` is the adapter DESCRIPTION ("tun2socks Tunnel"), so
+         * matching [TUN_NAME] against them could not be true even once. Every tun2socks-backed
+         * session — olcRTC, DNSTT, anything whose core is not the sing-box that owns the TUN
+         * itself — therefore waited out [TUN_READY_TIMEOUT_MS] and died with "YPtun adapter was
+         * not created" while the adapter was in fact up.
+         *
+         * The alias is resolved through iphlpapi, and the interface must also be UP: a killed
+         * tun2socks leaves the alias behind as a ghost that still resolves to a stale index.
+         */
+        fun interfaceAliasIsUp(alias: String): Boolean = runCatching {
+            val luid = LongByReference()
+            val index = IntByReference()
+            IpHlpApiExt.INSTANCE.ConvertInterfaceAliasToLuid(WString(alias), luid) == 0 &&
+                IpHlpApiExt.INSTANCE.ConvertInterfaceLuidToIndex(luid, index) == 0 &&
+                java.net.NetworkInterface.getByIndex(index.value)?.isUp == true
+        }.getOrDefault(false)
 
         /**
          * The tun2socks bridge MUST authenticate against the core's SOCKS inbound. sing-box/xray are
