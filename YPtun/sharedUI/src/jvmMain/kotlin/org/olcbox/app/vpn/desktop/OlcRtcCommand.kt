@@ -31,7 +31,7 @@ internal data class OlcRtcCommand(
             appendLine("  key: ${config.key.yamlValue()}")
             appendLine("net:")
             appendLine("  transport: ${config.transport.yamlValue()}")
-            appendLine("  dns: \"1.1.1.1:53\"")
+            appendLine("  dns: ${DNS_SERVERS.yamlValue()}")
             appendLine("socks:")
             appendLine("  host: ${socksHost.yamlValue()}")
             appendLine("  port: $socksPort")
@@ -58,6 +58,16 @@ internal data class OlcRtcCommand(
     }
 
     companion object {
+        /**
+         * Preference-ordered resolver list for olcRTC signalling, mirroring Android's
+         * FALLBACK_OLCRTC_DNS_SERVERS. olcrtc probes these in order with a real query
+         * (protect.NewResolver/pickReachableDNS) and sticks to the first that answers; Yandex goes
+         * first because Cloudflare/Google UDP/53 are routinely blocked on RU networks. A single
+         * pinned resolver (this was "1.1.1.1:53") leaves the provider hostname unresolvable with no
+         * fallback at all.
+         */
+        const val DNS_SERVERS = "77.88.8.8:53,8.8.8.8:53,1.1.1.1:53"
+
         fun desktopProviderArg(provider: String): String {
             val normalizedProvider = LocationConfig.normalizeProvider(provider)
             return when (normalizedProvider) {
