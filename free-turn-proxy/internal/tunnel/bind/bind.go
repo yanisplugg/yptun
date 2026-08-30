@@ -6,19 +6,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/amnezia-vpn/amneziawg-go/conn"
+	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 )
 
-// Подключает WireGuard-устройство к каналу pc вместо сокета.
+// SinglePeerBind подключает WireGuard к каналу net.PacketConn вместо сокета.
 type SinglePeerBind struct {
 	pc     net.PacketConn
 	closed atomic.Bool
 }
 
-// peerEndpoint - единственный endpoint такого Bind. Адреса пустые: устройство
-// использует их только для логов и cookie-подсчёта, а маршрутизировать нечего.
 type peerEndpoint struct{}
 
 func (peerEndpoint) ClearSrc()           {}
@@ -30,23 +28,23 @@ func (peerEndpoint) SrcIP() netip.Addr   { return netip.Addr{} }
 
 var theEndpoint conn.Endpoint = peerEndpoint{}
 
-// NewSinglePeerBind оборачивает канал до релея. Bind не владеет pc: закрывает
-// его тот, кто открыл (сессия закрывает свою половину пары по отмене ctx).
 func NewSinglePeerBind(pc net.PacketConn) *SinglePeerBind {
 	return &SinglePeerBind{pc: pc}
 }
 
+// Open инициализирует функции приёма пакетов и сбрасывает дедлайны.
 func (b *SinglePeerBind) Open(uint16) ([]conn.ReceiveFunc, uint16, error) {
+	b.closed.Store(false)
+	if err := b.pc.SetReadDeadline(time.Time{}); err != nil {
+		return nil, 0, err
+	}
 	return []conn.ReceiveFunc{b.receive}, 0, nil
 }
 
 func (b *SinglePeerBind) receive(packets [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
 	n, _, err := b.pc.ReadFrom(packets[0])
 	if err != nil {
-		// Устройство прекращает цикл только на net.ErrClosed; любую другую
-		// ошибку оно логирует и читает снова, поэтому пробуждение по дедлайну
-		// после Close надо перевести именно в неё. Close сначала ставит
-		// closed=true, затем SetReadDeadline - race-окна нет.
+		// При закрытом Bind возвращаем net.ErrClosed для корректного выхода из цикла чтения.
 		if b.closed.Load() {
 			return 0, net.ErrClosed
 		}
@@ -66,23 +64,18 @@ func (b *SinglePeerBind) Send(bufs [][]byte, _ conn.Endpoint) error {
 	return nil
 }
 
-// ParseEndpoint игнорирует строку: собеседник один и известен заранее.
 func (*SinglePeerBind) ParseEndpoint(string) (conn.Endpoint, error) {
 	return theEndpoint, nil
 }
 
-// BatchSize=1: пара в памяти отдаёт по одной датаграмме, батчить нечего.
 func (*SinglePeerBind) BatchSize() int { return 1 }
 
-// SetMark - no-op: SO_MARK ставят на сокете, а его здесь нет.
 func (*SinglePeerBind) SetMark(uint32) error { return nil }
 
-// Close прекращает работу Bind. Сам канал не закрывается - им владеет тот, кто
-// его создал; после Close все ReceiveFunc отдают net.ErrClosed.
+// Close прерывает текущие операции чтения без закрытия нижележащего PacketConn.
 func (b *SinglePeerBind) Close() error {
 	if !b.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	// Дедлайн в прошлом будит читателя, висящего в ReadFrom.
 	return b.pc.SetReadDeadline(time.Unix(1, 0))
 }

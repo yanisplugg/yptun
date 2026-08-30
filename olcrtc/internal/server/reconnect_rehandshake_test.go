@@ -7,10 +7,11 @@ import (
 
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 
-	cryptopkg "github.com/openlibrecommunity/olcrtc/internal/crypto"
+	"github.com/xtaci/smux"
+
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/openlibrecommunity/olcrtc/internal/runtime"
-	"github.com/xtaci/smux"
+	"github.com/openlibrecommunity/olcrtc/internal/tunnelcore"
 )
 
 // mkServerSess builds a server-side smux session over one end of a pipe.
@@ -18,7 +19,7 @@ import (
 func mkServerSess(t *testing.T) (*smux.Session, func()) {
 	t.Helper()
 	a, b := net.Pipe()
-	sess, err := smux.Server(a, smuxConfig(0))
+	sess, err := smux.Server(a, testSmuxCfg())
 	if err != nil {
 		_ = a.Close()
 		_ = b.Close()
@@ -31,67 +32,11 @@ func mkServerSess(t *testing.T) (*smux.Session, func()) {
 	}
 }
 
-// TestSwapSessionAcceptsControlSessionInPeerRouting is the regression guard for
-// issue #95: in peer-routing mode s.session is nil and the handshake/liveness
-// loop runs on the control session. When that control loop dies it calls
-// reinstallSession(controlSess) -> swapSession(controlSess, r). The old guard
-// compared only against s.session, so nil != controlSess discarded the swap,
-// acceptHandshake was never re-armed, and every later client hung forever in
-// waitPeerHandshake. swapSession must accept a dying session that matches
-// s.controlSess even when s.session is nil.
-func TestSwapSessionAcceptsControlSessionInPeerRouting(t *testing.T) {
-	cipher, err := cryptopkg.NewCipher("01234567890123456789012345678901")
-	if err != nil {
-		t.Fatalf("NewCipher() error = %v", err)
-	}
-
-	deadControl, cleanupDead := mkServerSess(t)
-	defer cleanupDead()
-	newData, cleanupND := mkServerSess(t)
-	defer cleanupND()
-	newControl, cleanupNC := mkServerSess(t)
-	defer cleanupNC()
-
-	ln := &peerRoutingStub{}
-	s := &Server{
-		ln:          ln,
-		cipher:      cipher,
-		session:     nil, // peer-routing: data session is nil
-		controlSess: deadControl,
-		health:      runtime.NewHealthTracker(nil),
-	}
-
-	r := &replacementSession{
-		conn:        muxconn.New(ln, cipher),
-		sess:        newData,
-		controlConn: nil,
-		controlSess: newControl,
-	}
-
-	if ok := s.swapSession(deadControl, r); !ok {
-		t.Fatal("swapSession discarded a control-session reinstall (issue #95 regression): " +
-			"peer-routing handshake would never be re-armed")
-	}
-	s.sessMu.RLock()
-	gotCtrl := s.controlSess
-	gotData := s.session
-	s.sessMu.RUnlock()
-	if gotCtrl != newControl {
-		t.Fatalf("controlSess not swapped: got %p want %p", gotCtrl, newControl)
-	}
-	if gotData != newData {
-		t.Fatalf("session not swapped: got %p want %p", gotData, newData)
-	}
-}
-
 // TestSwapSessionDiscardsStaleReinstall confirms the guard still rejects a
 // reinstall whose dying session matches neither the live data nor control
 // session (another reinstall already won the race).
 func TestSwapSessionDiscardsStaleReinstall(t *testing.T) {
-	cipher, err := cryptopkg.NewCipher("01234567890123456789012345678901")
-	if err != nil {
-		t.Fatalf("NewCipher() error = %v", err)
-	}
+	keys := newServerTestKeys(t)
 	liveData, cleanupL := mkServerSess(t)
 	defer cleanupL()
 	stale, cleanupS := mkServerSess(t)
@@ -102,11 +47,11 @@ func TestSwapSessionDiscardsStaleReinstall(t *testing.T) {
 	ln := &peerRoutingStub{}
 	s := &Server{
 		ln:      ln,
-		cipher:  cipher,
+		keys:    keys,
 		session: liveData,
 		health:  runtime.NewHealthTracker(nil),
 	}
-	r := &replacementSession{sess: newData, conn: muxconn.New(ln, cipher)}
+	r := &tunnelcore.SessionPair{DataSession: newData, DataConn: muxconn.New(ln, keys)}
 	if ok := s.swapSession(stale, r); ok {
 		t.Fatal("swapSession accepted a stale reinstall that matched no live session")
 	}

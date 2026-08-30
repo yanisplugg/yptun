@@ -22,6 +22,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/client/ish"
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/browserprofile"
+	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/captcha"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk/internal/personanet"
 )
 
@@ -407,6 +408,25 @@ func notifyKey(keyCh chan<- string, key string) {
 
 type loggingTransport struct {
 	rt http.RoundTripper
+	// Открытие виджета: смещения от него дают человеческую раскладку пауз.
+	started time.Time
+}
+
+func (t *loggingTransport) elapsed() string {
+	return "+" + time.Since(t.started).Truncate(time.Millisecond).String()
+}
+
+// Конверт PoW живого браузера из тела check - эталон для телеметрии авторешателя.
+func browserPowEnvelope(body []byte) string {
+	form, err := neturl.ParseQuery(string(body))
+	if err != nil {
+		return ""
+	}
+	hash := form.Get("hash")
+	if hash == "" {
+		return ""
+	}
+	return captcha.DecodePowEnvelope(hash)
 }
 
 func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -422,12 +442,34 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 		if Debug {
 			Log.Debugf("[Captcha Proxy] real browser sent %s data: %s", req.URL.Path, string(b))
+			if env := browserPowEnvelope(b); env != "" {
+				Log.Debugf("[Captcha Proxy] real browser pow: %s", env)
+			}
 			for k, v := range req.Header {
 				Log.Debugf("[Captcha Proxy] header (%s): %s = %s", req.URL.Path, k, strings.Join(v, ", "))
 			}
 		}
 	}
-	return t.rt.RoundTrip(req)
+
+	start := time.Now()
+	resp, err := t.rt.RoundTrip(req)
+	// Весь трафик виджета, а не только check/componentDone: иначе не видно, зовёт
+	// ли живой браузер то, чего не зовём мы, и с какими паузами.
+	if err != nil {
+		Log.Debugf("[Captcha Proxy] http %s %s failed t=%s after=%s %s err=%v",
+			req.Method, captcha.SafeURL(req.URL.String()), t.elapsed(), time.Since(start).Truncate(time.Millisecond), navSummary(req), err)
+		return nil, err
+	}
+	Log.Debugf("[Captcha Proxy] http %s %s status=%d t=%s after=%s %s",
+		req.Method, captcha.SafeURL(req.URL.String()), resp.StatusCode, t.elapsed(), time.Since(start).Truncate(time.Millisecond), navSummary(req))
+	return resp, nil
+}
+
+func navSummary(req *http.Request) string {
+	return captcha.NavSummary(
+		req.Header.Get("Sec-Fetch-Dest"),
+		req.Header.Get("Sec-Fetch-Site"),
+		req.Header.Get("Referer"))
 }
 
 // SolveViaProxy проксирует VK redirect_uri через локальный HTTP-сервер,
@@ -459,7 +501,7 @@ func solveViaProxy(ctx context.Context, redirectURI string, dialer net.Dialer, p
 	if err != nil {
 		return "", fmt.Errorf("captcha proxy client: %w", err)
 	}
-	transport := &loggingTransport{rt: personanet.ProxyRoundTripper(client)}
+	transport := &loggingTransport{rt: personanet.ProxyRoundTripper(client), started: time.Now()}
 
 	proxy := &httputil.ReverseProxy{
 		Transport: transport,

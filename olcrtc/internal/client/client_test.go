@@ -9,15 +9,18 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/xtaci/smux"
 
 	"github.com/openlibrecommunity/olcrtc/internal/control"
 	cryptopkg "github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
-	"github.com/xtaci/smux"
+	"github.com/openlibrecommunity/olcrtc/internal/tunnelcore"
 )
 
 var errUnexpectedConnectRequest = errors.New("unexpected connect request")
@@ -27,36 +30,51 @@ const (
 	testConnectHost    = "example.com"
 )
 
-func TestSetupCipher(t *testing.T) {
+func TestSetupKeySet(t *testing.T) {
 	keyHex := "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-	cipher, err := setupCipher(keyHex)
+	keys, err := tunnelcore.SetupKeySet(keyHex, cryptopkg.Client)
 	if err != nil {
-		t.Fatalf("setupCipher() error = %v", err)
+		t.Fatalf("SetupKeySet() error = %v", err)
 	}
-	if cipher == nil {
-		t.Fatal("setupCipher() returned nil cipher")
-	}
-}
-
-func TestSetupCipherRejectsBadInput(t *testing.T) {
-	if _, err := setupCipher("zz"); err == nil {
-		t.Fatal("setupCipher() unexpectedly succeeded for bad hex")
-	}
-	if _, err := setupCipher("00"); !errors.Is(err, ErrKeySize) {
-		t.Fatalf("setupCipher() error = %v, want ErrKeySize", err)
+	if keys == nil {
+		t.Fatal("SetupKeySet() returned nil key set")
 	}
 }
 
-func TestSmuxConfig(t *testing.T) {
-	cfg := smuxConfig(0)
+func TestSetupKeySetRejectsBadInput(t *testing.T) {
+	if _, err := tunnelcore.SetupKeySet("zz", cryptopkg.Client); err == nil {
+		t.Fatal("SetupKeySet() unexpectedly succeeded for bad hex")
+	}
+	if _, err := tunnelcore.SetupKeySet("00", cryptopkg.Client); !errors.Is(err, ErrKeySize) {
+		t.Fatalf("SetupKeySet() error = %v, want ErrKeySize", err)
+	}
+}
+
+func newClientTestKeys(t *testing.T) *cryptopkg.KeySet {
+	t.Helper()
+	keys, err := cryptopkg.NewKeySet([]byte("01234567890123456789012345678901"), cryptopkg.Client)
+	if err != nil {
+		t.Fatalf("NewKeySet(client) error = %v", err)
+	}
+	return keys
+}
+
+// testSmuxCfg is the data-plane smux config buildSmuxClient builds for a plain
+// (non control-plane) transport.
+func testSmuxCfg() *smux.Config {
+	return runtime.SmuxConfigFor(&closerLinkStub{})
+}
+
+func TestDataSmuxConfig(t *testing.T) {
+	cfg := runtime.SmuxConfigFor(&closerLinkStub{})
 	if cfg.Version != 2 || cfg.KeepAliveDisabled || cfg.MaxFrameSize != 32768 ||
 		cfg.MaxReceiveBuffer != 32*1024*1024 || cfg.MaxStreamBuffer != 4*1024*1024 {
-		t.Fatalf("smuxConfig(0) = %+v", cfg)
+		t.Fatalf("SmuxConfigFor(plain link) = %+v", cfg)
 	}
-	capped := smuxConfig(4096)
+	capped := runtime.SmuxConfigFor(&closerLinkStub{maxPayload: 4096})
 	want := 4096 - runtime.SmuxWireOverhead
 	if capped.MaxFrameSize != want {
-		t.Fatalf("smuxConfig(4096).MaxFrameSize = %d, want %d",
+		t.Fatalf("SmuxConfigFor(maxPayload=4096).MaxFrameSize = %d, want %d",
 			capped.MaxFrameSize, want)
 	}
 }
@@ -371,11 +389,24 @@ func TestSocks5RequestReadPortError(t *testing.T) {
 }
 
 func TestReplyBuffers(t *testing.T) {
-	if !bytes.Equal(replySuccess(), []byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}) {
-		t.Fatalf("replySuccess() = %v", replySuccess())
+	if !bytes.Equal(replySuccess(testConnectHost), []byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}) {
+		t.Fatalf("replySuccess() = %v", replySuccess(testConnectHost))
 	}
-	if !bytes.Equal(replyHostUnreachable(), []byte{5, 4, 0, 1, 0, 0, 0, 0, 0, 0}) {
-		t.Fatalf("replyHostUnreachable() = %v", replyHostUnreachable())
+	if !bytes.Equal(replyHostUnreachable(testConnectHost), []byte{5, 4, 0, 1, 0, 0, 0, 0, 0, 0}) {
+		t.Fatalf("replyHostUnreachable() = %v", replyHostUnreachable(testConnectHost))
+	}
+	// An IPv6 target must be answered with an IPv6 bound address.
+	want := append([]byte{5, 0, 0, 4}, make([]byte, 18)...)
+	if got := replySuccess("2001:db8::1"); !bytes.Equal(got, want) {
+		t.Fatalf("replySuccess(ipv6) = %v, want %v", got, want)
+	}
+	want[1] = 4
+	if got := replyHostUnreachable("2001:db8::1"); !bytes.Equal(got, want) {
+		t.Fatalf("replyHostUnreachable(ipv6) = %v, want %v", got, want)
+	}
+	// An IPv4 literal keeps the IPv4 form.
+	if got := replySuccess("127.0.0.1"); len(got) != 10 || got[3] != socksAddrIPv4 {
+		t.Fatalf("replySuccess(ipv4) = %v", got)
 	}
 }
 
@@ -407,12 +438,12 @@ func TestSendConnectRequestOverSmux(t *testing.T) {
 		_ = b.Close()
 	}()
 
-	serverSess, err := smux.Server(a, smuxConfig(0))
+	serverSess, err := smux.Server(a, testSmuxCfg())
 	if err != nil {
 		t.Fatalf("smux.Server() error = %v", err)
 	}
 	defer func() { _ = serverSess.Close() }()
-	clientSess, err := smux.Client(b, smuxConfig(0))
+	clientSess, err := smux.Client(b, testSmuxCfg())
 	if err != nil {
 		t.Fatalf("smux.Client() error = %v", err)
 	}
@@ -420,24 +451,24 @@ func TestSendConnectRequestOverSmux(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		stream, err := serverSess.AcceptStream()
-		if err != nil {
-			done <- err
+		stream, acceptErr := serverSess.AcceptStream()
+		if acceptErr != nil {
+			done <- acceptErr
 			return
 		}
 		defer func() { _ = stream.Close() }()
 
 		var req map[string]any
-		if err := json.NewDecoder(stream).Decode(&req); err != nil {
-			done <- err
+		if decodeErr := json.NewDecoder(stream).Decode(&req); decodeErr != nil {
+			done <- decodeErr
 			return
 		}
 		if req["cmd"] != testConnectCommand || req["addr"] != testConnectHost {
 			done <- errUnexpectedConnectRequest
 			return
 		}
-		_, err = stream.Write([]byte{0x00})
-		done <- err
+		_, writeErr := stream.Write([]byte{0x00})
+		done <- writeErr
 	}()
 
 	stream, err := clientSess.OpenStream()
@@ -461,20 +492,20 @@ func TestSendConnectRequestRejectsBadAck(t *testing.T) {
 		_ = a.Close()
 		_ = b.Close()
 	}()
-	serverSess, err := smux.Server(a, smuxConfig(0))
+	serverSess, err := smux.Server(a, testSmuxCfg())
 	if err != nil {
 		t.Fatalf("smux.Server() error = %v", err)
 	}
 	defer func() { _ = serverSess.Close() }()
-	clientSess, err := smux.Client(b, smuxConfig(0))
+	clientSess, err := smux.Client(b, testSmuxCfg())
 	if err != nil {
 		t.Fatalf("smux.Client() error = %v", err)
 	}
 	defer func() { _ = clientSess.Close() }()
 
 	go func() {
-		stream, err := serverSess.AcceptStream()
-		if err != nil {
+		stream, acceptErr := serverSess.AcceptStream()
+		if acceptErr != nil {
 			return
 		}
 		defer func() { _ = stream.Close() }()
@@ -501,12 +532,12 @@ func TestOpenControlStreamStopsOnContextCancel(t *testing.T) {
 		_ = b.Close()
 	}()
 
-	serverSess, err := smux.Server(a, smuxConfig(0))
+	serverSess, err := smux.Server(a, testSmuxCfg())
 	if err != nil {
 		t.Fatalf("smux.Server() error = %v", err)
 	}
 	defer func() { _ = serverSess.Close() }()
-	clientSess, err := smux.Client(b, smuxConfig(0))
+	clientSess, err := smux.Client(b, testSmuxCfg())
 	if err != nil {
 		t.Fatalf("smux.Client() error = %v", err)
 	}
@@ -515,7 +546,7 @@ func TestOpenControlStreamStopsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		_, _, err := openControlStreamTimeout(ctx, clientSess, "dev", nil, time.Hour)
+		_, _, _, err := openControlStreamTimeout(ctx, clientSess, "dev", nil, time.Hour)
 		errCh <- err
 	}()
 
@@ -532,28 +563,44 @@ func TestOpenControlStreamStopsOnContextCancel(t *testing.T) {
 	}
 }
 
-// ai-generated: mu/unhealthy fields and the NotifyLinkHealth/lastNotified
 // methods below are new (peer-restart-corroboration PR); closed/resetCount
 // and the rest of the stub predate it.
 type closerLinkStub struct {
 	closed     bool
 	resetCount int
+	maxPayload int
 
 	mu        sync.Mutex
 	unhealthy []bool
+	sends     int
+	sentCh    chan struct{}
 }
 
-func (s *closerLinkStub) Connect(context.Context) error   { return nil }
-func (s *closerLinkStub) Send([]byte) error               { return nil }
+func (s *closerLinkStub) Connect(context.Context) error { return nil }
+func (s *closerLinkStub) Send([]byte) error {
+	s.mu.Lock()
+	s.sends++
+	ch := s.sentCh
+	s.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
 func (s *closerLinkStub) Close() error                    { s.closed = true; return nil }
 func (s *closerLinkStub) SetReconnectCallback(func())     {}
 func (s *closerLinkStub) SetShouldReconnect(func() bool)  {}
 func (s *closerLinkStub) SetEndedCallback(func(string))   {}
 func (s *closerLinkStub) WatchConnection(context.Context) {}
 func (s *closerLinkStub) CanSend() bool                   { return true }
-func (s *closerLinkStub) Features() transport.Features    { return transport.Features{} }
-func (s *closerLinkStub) Reconnect(string)                {}
-func (s *closerLinkStub) ResetPeer()                      { s.resetCount++ }
+func (s *closerLinkStub) Features() transport.Features {
+	return transport.Features{MaxPayloadSize: s.maxPayload}
+}
+func (s *closerLinkStub) Reconnect(string) {}
+func (s *closerLinkStub) ResetPeer()       { s.resetCount++ }
 
 func (s *closerLinkStub) NotifyLinkHealth(unhealthy bool) {
 	s.mu.Lock()
@@ -578,15 +625,12 @@ func TestOnDataWithNilConn(_ *testing.T) {
 }
 
 func TestShutdownClosesLinkAndConn(t *testing.T) {
-	cipher, err := cryptopkg.NewCipher("01234567890123456789012345678901")
-	if err != nil {
-		t.Fatalf("NewCipher() error = %v", err)
-	}
+	keys := newClientTestKeys(t)
 	ln := &closerLinkStub{}
 	c := &Client{
-		ln:     ln,
-		cipher: cipher,
-		conn:   muxconn.New(ln, cipher),
+		ln:   ln,
+		keys: keys,
+		conn: muxconn.New(ln, keys),
 	}
 	c.shutdown()
 	if !ln.closed {
@@ -597,13 +641,12 @@ func TestShutdownClosesLinkAndConn(t *testing.T) {
 func TestResetLinkPeer(t *testing.T) {
 	ln := &closerLinkStub{}
 	c := &Client{ln: ln}
-	c.resetLinkPeer()
+	tunnelcore.ResetPeer(c.ln)
 	if ln.resetCount != 1 {
 		t.Fatalf("ResetPeer calls = %d, want 1", ln.resetCount)
 	}
 }
 
-//nolint:cyclop // integration-style control loop test needs setup and async assertions together
 func TestStartControlLoopReportsPong(t *testing.T) {
 	a, b := net.Pipe()
 	defer func() {
@@ -611,12 +654,12 @@ func TestStartControlLoopReportsPong(t *testing.T) {
 		_ = b.Close()
 	}()
 
-	serverSess, err := smux.Server(a, smuxConfig(0))
+	serverSess, err := smux.Server(a, testSmuxCfg())
 	if err != nil {
 		t.Fatalf("smux.Server() error = %v", err)
 	}
 	defer func() { _ = serverSess.Close() }()
-	clientSess, err := smux.Client(b, smuxConfig(0))
+	clientSess, err := smux.Client(b, testSmuxCfg())
 	if err != nil {
 		t.Fatalf("smux.Client() error = %v", err)
 	}
@@ -624,8 +667,8 @@ func TestStartControlLoopReportsPong(t *testing.T) {
 
 	peerStreamCh := make(chan *smux.Stream, 1)
 	go func() {
-		stream, err := serverSess.AcceptStream()
-		if err == nil {
+		stream, acceptErr := serverSess.AcceptStream()
+		if acceptErr == nil {
 			peerStreamCh <- stream
 		}
 	}()
@@ -640,7 +683,7 @@ func TestStartControlLoopReportsPong(t *testing.T) {
 	defer cancel()
 	got := make(chan control.Health, 1)
 	c := &Client{sessionID: "sid-control", health: runtime.NewHealthTracker(nil)}
-	c.recordSession("sid-control")
+	c.health.RecordSession("sid-control")
 	c.startControlLoop(ctx, Config{
 		Liveness: control.Config{
 			Interval: 10 * time.Millisecond,
@@ -679,8 +722,6 @@ func TestStartControlLoopReportsPong(t *testing.T) {
 	}
 }
 
-// ai-generated: new test, peer-restart-corroboration PR.
-//
 // TestWatchControlStalenessNotifiesTransport unit-tests watchControlStaleness
 // directly (not through the full control.Run/smux stack - control.Run always
 // closes its stream when its context is done, so "stop responding but keep
@@ -728,10 +769,10 @@ func TestWatchControlStalenessNotifiesTransport(t *testing.T) {
 func TestStatusRecordsReconnectAndUnhealthy(t *testing.T) {
 	updates := 0
 	c := &Client{health: runtime.NewHealthTracker(func(control.Status) { updates++ })}
-	c.recordSession("sid-1")
-	c.recordMissed(2)
-	c.recordUnhealthy(3)
-	c.recordReconnect()
+	c.health.RecordSession("sid-1")
+	c.health.RecordMissed(2)
+	c.health.RecordUnhealthy(3)
+	c.health.RecordReconnect()
 
 	status := c.Status()
 	if status.SessionID != "sid-1" || status.MissedPongs != 3 ||
@@ -741,4 +782,277 @@ func TestStatusRecordsReconnectAndUnhealthy(t *testing.T) {
 	if updates != 4 {
 		t.Fatalf("health updates = %d, want 4", updates)
 	}
+}
+
+func TestSocks5RequestIPv6(t *testing.T) {
+	c := &Client{}
+	server, client := net.Pipe()
+	defer func() {
+		_ = server.Close()
+		_ = client.Close()
+	}()
+
+	type result struct {
+		addr string
+		port int
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		addr, port, err := c.socks5Request(server)
+		done <- result{addr: addr, port: port, err: err}
+	}()
+
+	req := make([]byte, 0, 4+net.IPv6len+2)
+	req = append(req, 5, 1, 0, socksAddrIPv6)
+	req = append(req, net.ParseIP("2001:db8::1").To16()...)
+	port := make([]byte, 2)
+	binary.BigEndian.PutUint16(port, 8443)
+	req = append(req, port...)
+	if _, err := client.Write(req); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("socks5Request() error = %v", res.err)
+	}
+	if res.addr != "2001:db8::1" || res.port != 8443 {
+		t.Fatalf("socks5Request() = (%q, %d), want (2001:db8::1, 8443)", res.addr, res.port)
+	}
+}
+
+func TestReadSocks5AddrIPv6ReadError(t *testing.T) {
+	c := &Client{}
+	server, client := net.Pipe()
+	defer func() {
+		_ = server.Close()
+		_ = client.Close()
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.readSocks5Addr(server, socksAddrIPv6)
+		done <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	_ = client.Close()
+	if err := <-done; err == nil {
+		t.Fatal("readSocks5Addr(ipv6) unexpectedly succeeded")
+	}
+}
+
+// TestSendConnectRequestMapsNegativeAck covers the negative CONNECT ack the
+// server now sends on dial failure: it must fail immediately instead of sitting
+// on the ack deadline, and the code must reach the local application as the
+// matching SOCKS5 reply. 0x05 is not emitted by today's server but pins the
+// pass-through, so a future code is not silently flattened.
+func TestSendConnectRequestMapsNegativeAck(t *testing.T) {
+	for _, ack := range []byte{tunnelcore.ConnectAckHostUnreachable, 0x05} {
+		elapsed, err := connectWithAck(t, ack)
+		if !errors.Is(err, ErrRemoteNotReady) {
+			t.Fatalf("ack=0x%02x: sendConnectRequest() error = %v, want %v", ack, err, ErrRemoteNotReady)
+		}
+		if elapsed > 5*time.Second {
+			t.Fatalf("ack=0x%02x: sendConnectRequest() blocked for %v", ack, elapsed)
+		}
+		reply := replyForConnectError(err, testConnectHost)
+		if !bytes.Equal(reply, []byte{5, ack, 0, 1, 0, 0, 0, 0, 0, 0}) {
+			t.Fatalf("ack=0x%02x: replyForConnectError() = %v", ack, reply)
+		}
+	}
+}
+
+// connectWithAck runs one tunnel CONNECT against a stub server that answers
+// with the given ack byte, and reports how long the client took to surface the
+// result plus the error it produced.
+func connectWithAck(t *testing.T, ack byte) (time.Duration, error) {
+	t.Helper()
+	a, b := net.Pipe()
+	defer func() {
+		_ = a.Close()
+		_ = b.Close()
+	}()
+	serverSess, err := smux.Server(a, testSmuxCfg())
+	if err != nil {
+		t.Fatalf("smux.Server() error = %v", err)
+	}
+	defer func() { _ = serverSess.Close() }()
+	clientSess, err := smux.Client(b, testSmuxCfg())
+	if err != nil {
+		t.Fatalf("smux.Client() error = %v", err)
+	}
+	defer func() { _ = clientSess.Close() }()
+
+	go func() {
+		peer, acceptErr := serverSess.AcceptStream()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = peer.Close() }()
+		_, _ = io.CopyN(io.Discard, peer, 1)
+		_, _ = peer.Write([]byte{ack})
+	}()
+
+	stream, err := clientSess.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream() error = %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	c := &Client{deviceID: "client-1"}
+	start := time.Now()
+	err = c.sendConnectRequest(stream, testConnectHost, 443)
+	return time.Since(start), err
+}
+
+// TestReplyForConnectErrorFallsBackToHostUnreachable covers a failure that
+// never produced an ack byte at all (write error, timeout).
+func TestReplyForConnectErrorFallsBackToHostUnreachable(t *testing.T) {
+	reply := replyForConnectError(ErrRemoteNotReady, testConnectHost)
+	if !bytes.Equal(reply, replyHostUnreachable(testConnectHost)) {
+		t.Fatalf("replyForConnectError() = %v", reply)
+	}
+}
+
+// TestShutdownWaitsForTrackedGoroutines guards the goroutine tracking: the
+// client used to start acceptLoop, WatchConnection, watchControlStaleness and
+// the control loop completely untracked, so a returning Run left them running.
+func TestShutdownWaitsForTrackedGoroutines(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &Client{ln: &closerLinkStub{}}
+	var finished atomic.Bool
+	c.goTracked(func() {
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond)
+		finished.Store(true)
+	})
+
+	cancel()
+	c.shutdown()
+	if !finished.Load() {
+		t.Fatal("shutdown() returned before the tracked goroutine finished")
+	}
+}
+
+// TestShutdownGiveUpOnStuckGoroutine is the other half of the contract: the
+// wait is bounded, so a wedged goroutine cannot hang the process on exit.
+func TestShutdownGivesUpOnStuckGoroutine(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+
+	c := &Client{ln: &closerLinkStub{}, shutdownGrace: 20 * time.Millisecond}
+	c.goTracked(func() { <-release })
+
+	done := make(chan struct{})
+	go func() {
+		c.shutdown()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown() hung on a stuck goroutine")
+	}
+}
+
+// TestLivenessFallbackReestablishesSession covers the case where the provider
+// never calls back after a liveness-triggered rebuild. handleReconnect returns
+// straight after ln.Reconnect and relies on that callback; without a fallback,
+// sessionReady is never signalled again and every SOCKS connection fails on the
+// 60s readiness gate. The fallback proves it acted by driving a handshake over
+// the link.
+func TestLivenessFallbackReestablishesSession(t *testing.T) {
+	keys := newClientTestKeys(t)
+	ln := &closerLinkStub{sentCh: make(chan struct{}, 1)}
+	c := &Client{
+		ln:               ln,
+		keys:             keys,
+		deviceID:         "dev-1",
+		health:           runtime.NewHealthTracker(nil),
+		sessionReady:     make(chan struct{}),
+		livenessFallback: 10 * time.Millisecond,
+		shutdownGrace:    2 * time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	// Drive the real path: a liveness reconnect hands the rebuild to the
+	// provider and arms the fallback.
+	c.handleReconnect(ctx, Config{}, cancel, reconnectLiveness)
+
+	select {
+	case <-ln.sentCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("liveness fallback never tried to re-establish the session")
+	}
+	cancel()
+	c.waitGoroutines()
+}
+
+// TestLivenessFallbackSkipsWhenSessionIsBack makes sure the fallback stays out
+// of the way when the provider callback did its job.
+func TestLivenessFallbackSkipsWhenSessionIsBack(t *testing.T) {
+	a, b := net.Pipe()
+	defer func() {
+		_ = a.Close()
+		_ = b.Close()
+	}()
+	sess, err := smux.Client(a, testSmuxCfg())
+	if err != nil {
+		t.Fatalf("smux.Client() error = %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	ln := &closerLinkStub{}
+	c := &Client{
+		ln:               ln,
+		health:           runtime.NewHealthTracker(nil),
+		sessionReady:     make(chan struct{}),
+		session:          sess,
+		sessionID:        "sid-1",
+		livenessFallback: 10 * time.Millisecond,
+		shutdownGrace:    time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.scheduleLivenessFallback(ctx, Config{}, cancel)
+	c.waitGoroutines()
+
+	ln.mu.Lock()
+	sends := ln.sends
+	ln.mu.Unlock()
+	if sends != 0 {
+		t.Fatalf("fallback ran with a healthy session (link sends = %d)", sends)
+	}
+}
+
+// TestClientLinkAccessIsRaceFree exercises the c.ln readers that used to
+// disagree about locking (resetLinkPeer under sessMu.RLock, notifyLinkHealth
+// and tryReopenSession unlocked) together with the session-state accessors.
+// Run with -race.
+func TestClientLinkAccessIsRaceFree(t *testing.T) {
+	keys := newClientTestKeys(t)
+	ln := &closerLinkStub{}
+	c := &Client{ln: ln, keys: keys, sessionReady: make(chan struct{})}
+
+	const workers = 8
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := range workers {
+		go func() {
+			defer wg.Done()
+			switch i % 4 {
+			case 0:
+				c.notifyLinkHealth(true)
+			case 1:
+				c.onData([]byte("frame"))
+			case 2:
+				c.signalSessionReady()
+			default:
+				_ = c.readyChannel()
+				_ = c.sessionEstablished()
+			}
+		}()
+	}
+	wg.Wait()
 }

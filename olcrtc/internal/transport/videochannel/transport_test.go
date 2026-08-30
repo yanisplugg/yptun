@@ -2,6 +2,7 @@ package videochannel
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 )
 
@@ -61,50 +62,56 @@ func TestTileIdleFrameIgnored(t *testing.T) {
 	}
 }
 
-func TestTransportFrameRoundTrip(t *testing.T) {
-	encoded := encodeDataFrameForBinding(frameRoleClient, 0x12345678, 42, 0xdeadbeef, 1024, 1, 3, []byte("chunk"))
-	decoded, err := decodeTransportFrame(encoded)
+func TestStreamTransportReusesIdleFrame(t *testing.T) {
+	tr := &streamTransport{videoW: 320, videoH: 240, videoCodec: "qrcode"}
+	first, err := tr.renderFrame(nil)
 	if err != nil {
-		t.Fatalf("decodeTransportFrame failed: %v", err)
+		t.Fatalf("renderFrame(first) error = %v", err)
 	}
-	assertFrameHeader(t, decoded, frameTypeData, frameRoleClient, 0x12345678, 42, 0xdeadbeef)
-	assertFrameFragmentation(t, decoded, 1024, 1, 3)
-	if !bytes.Equal(decoded.payload, []byte("chunk")) {
-		t.Fatalf("payload mismatch: got=%q", decoded.payload)
+	second, err := tr.renderFrame(nil)
+	if err != nil {
+		t.Fatalf("renderFrame(second) error = %v", err)
 	}
-}
-
-func assertFrameHeader(t *testing.T, f transportFrame, typ, role byte, binding, seq, crc uint32) {
-	t.Helper()
-	if f.typ != typ || f.role != role || f.binding != binding || f.seq != seq || f.crc != crc {
-		t.Fatalf("unexpected frame header: %+v", f)
+	if len(first) == 0 || &first[0] != &second[0] {
+		t.Fatal("renderFrame() did not reuse the transport idle frame")
 	}
-}
-
-func assertFrameFragmentation(t *testing.T, f transportFrame, totalLen uint32, fragIdx, fragTotal uint16) {
-	t.Helper()
-	if f.totalLen != totalLen || f.fragIdx != fragIdx || f.fragTotal != fragTotal {
-		t.Fatalf("unexpected fragmentation fields: %+v", f)
+	if allocs := testing.AllocsPerRun(100, func() {
+		_, _ = tr.renderFrame(nil)
+	}); allocs != 0 {
+		t.Fatalf("renderFrame(idle) allocations = %v, want 0", allocs)
 	}
 }
 
-func TestAcceptFrameRole(t *testing.T) {
-	server := &streamTransport{remoteRole: frameRoleClient, bindingToken: 10}
-	if !server.acceptFrame(transportFrame{role: frameRoleClient, binding: 10}) {
-		t.Fatal("server rejected client frame")
+func TestVisualCodecConcurrentRoundTrip(t *testing.T) {
+	tr := &streamTransport{
+		videoW:          320,
+		videoH:          240,
+		videoCodec:      "qrcode",
+		videoQRRecovery: "low",
+		videoTileModule: 4,
+		videoTileRS:     20,
 	}
-	if server.acceptFrame(transportFrame{role: frameRoleServer, binding: 10}) {
-		t.Fatal("server accepted server frame")
+	const workers = 8
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			payload := []byte{1, 2, 3, 4, 5}
+			frame, renderErr := tr.renderFrame(payload)
+			if renderErr != nil {
+				t.Errorf("render() error = %v", renderErr)
+				return
+			}
+			got, extractErr := tr.extractFrame(frame)
+			if extractErr != nil {
+				t.Errorf("extract() error = %v", extractErr)
+				return
+			}
+			if !bytes.Equal(got, payload) {
+				t.Errorf("round trip = %v, want %v", got, payload)
+			}
+		}()
 	}
-	if server.acceptFrame(transportFrame{role: frameRoleClient, binding: 11}) {
-		t.Fatal("server accepted different binding")
-	}
-
-	client := &streamTransport{remoteRole: frameRoleServer, bindingToken: 20}
-	if !client.acceptFrame(transportFrame{role: frameRoleServer, binding: 20}) {
-		t.Fatal("client rejected server frame")
-	}
-	if client.acceptFrame(transportFrame{role: frameRoleClient, binding: 20}) {
-		t.Fatal("client accepted client frame")
-	}
+	wg.Wait()
 }

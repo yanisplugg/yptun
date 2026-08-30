@@ -156,11 +156,11 @@ openssl rand -hex 32
 
 ## Шаг 7: Запустить сервер
 
-На серверной машине (VPS и т.д.). Подбери нужную комбинацию auth provider + transport из матрицы в [settings.md](settings.ru.md).
+На серверной машине (VPS и т.д.). Подбери нужную комбинацию provider + transport из матрицы в [settings.md](settings.ru.md).
 
 ### jitsi + datachannel (рекомендуется)
 
-Самый простой способ: используй любой self-hosted или публичный Jitsi Meet инстанс. Регистрация не нужна, имя комнаты выдумывается на лету. Доступные инстансы перечислены в [`docs/examples/jitsi.instances.yaml`](./examples/jitsi.instances.yaml) - **обязательно проверь в браузере, какой из них работает в твоей сети**, и используй тот, который открывается. Также подойдёт любой другой (`meet.jit.si`, свой self-hosted и т.п.).
+Самый простой способ: используй любой self-hosted или публичный Jitsi Meet инстанс. Регистрация не нужна, имя комнаты выдумывается на лету. Доступные инстансы перечислены в [`docs/jitsi.instances.yaml`](./jitsi.instances.yaml) - **обязательно проверь в браузере, какой из них работает в твоей сети**, и используй тот, который открывается. Также подойдёт любой другой (`meet.jit.si`, свой self-hosted и т.п.).
 
 Создай YAML конфиг:
 
@@ -170,14 +170,13 @@ mode: srv
 auth:
   provider: jitsi
 room:
-  # Инстансы: docs/examples/jitsi.instances.yaml
+  # Инстансы: docs/jitsi.instances.yaml
   id: "https://meet.example.org/myroom"
 crypto:
   key: "d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799"
 net:
   transport: datachannel
   dns: "8.8.8.8:53"
-data: data
 ```
 
 Запусти:
@@ -208,7 +207,6 @@ crypto:
 net:
   transport: vp8channel
   dns: "8.8.8.8:53"
-data: data
 ```
 
 Запусти:
@@ -247,7 +245,7 @@ mode: cnc
 auth:
   provider: jitsi
 room:
-  # Инстансы: docs/examples/jitsi.instances.yaml
+  # Инстансы: docs/jitsi.instances.yaml
   id: "https://meet.example.org/myroom"
 crypto:
   key: "<hex-key-такой-же-как-на-сервере>"
@@ -257,7 +255,6 @@ net:
 socks:
   host: "127.0.0.1"
   port: 8808
-data: data
 ```
 
 ```sh
@@ -283,7 +280,6 @@ net:
 socks:
   host: "127.0.0.1"
   port: 8808
-data: data
 ```
 
 ```sh
@@ -315,7 +311,6 @@ socks:
   port: 8808
   user: myuser
   pass: mypass
-data: data
 ```
 
 Без этих полей аутентификация отключена - поведение прежнее.
@@ -472,18 +467,18 @@ mage         # без аргументов = mage help
 
 ```sh
 # одиночный кейс stress
-E2E_CARRIERS=telemost E2E_TRANSPORTS=videochannel \
+STRESS_PROVIDERS=telemost E2E_TRANSPORTS=videochannel \
     STRESS_BULK_DURATION=0 STRESS_ECHO_DURATION=0 \
     STRESS_CASE_TIMEOUT=2m STRESS_TIMEOUT=3m mage stress
 
 # soak только jitsi на 30 минут
-SOAK_CARRIERS=jitsi SOAK_DURATION=30m mage soak
+SOAK_PROVIDERS=jitsi SOAK_DURATION=30m mage soak
 ```
 
 Полный список переменных:
-- `E2E_CARRIERS`, `E2E_TRANSPORTS`, `E2E_TIMEOUT`, `E2E_STRESS`, `E2E_STRESS_DURATION`
-- `STRESS_BULK_DURATION`, `STRESS_ECHO_DURATION`, `STRESS_CASE_TIMEOUT`, `STRESS_TIMEOUT`
-- `SOAK_CARRIERS`, `SOAK_TRANSPORTS`, `SOAK_DURATION`, `SOAK_CHAOS`
+- `E2E_PROVIDERS`, `E2E_TRANSPORTS`, `E2E_TIMEOUT`, `E2E_STRESS`, `E2E_STRESS_DURATION`
+- `STRESS_PROVIDERS`, `STRESS_BULK_DURATION`, `STRESS_ECHO_DURATION`, `STRESS_CASE_TIMEOUT`, `STRESS_TIMEOUT`
+- `SOAK_PROVIDERS`, `SOAK_TRANSPORTS`, `SOAK_DURATION`, `SOAK_CHAOS`
 
 ---
 
@@ -505,7 +500,6 @@ crypto:
 net:
   transport: datachannel
   dns: "8.8.8.8:53"
-data: data
 ```
 
 ```yaml
@@ -520,7 +514,6 @@ crypto:
 net:
   transport: vp8channel
   dns: "8.8.8.8:53"
-data: data
 ```
 
 Запусти каждый в отдельном терминале (или через `tmux` / `screen` / `systemd`):
@@ -549,7 +542,6 @@ net:
 socks:
   host: "127.0.0.1"
   port: 8808
-data: data
 ```
 
 ```yaml
@@ -567,7 +559,6 @@ net:
 socks:
   host: "127.0.0.1"
   port: 8809
-data: data
 ```
 
 ```sh

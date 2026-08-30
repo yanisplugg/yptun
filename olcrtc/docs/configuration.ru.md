@@ -53,7 +53,8 @@ olcrtc /etc/olcrtc/client.yaml
 |---|---|
 | `mode` | `srv`, `cnc` или `gen` |
 | `auth.provider` | `jitsi`, `telemost`, `wbstream`, `none` |
-| `room.id` | ID/URL комнаты для выбранного auth-провайдера |
+| `auth.token` | необязательный заранее выданный токен аккаунта провайдера |
+| `room.id` | ID/URL комнаты для выбранного провайдера |
 | `room.channel` | необязательный ID канала для peer-routing сценариев |
 | `crypto.key` / `crypto.key_file` | общий ключ: 64 hex-символа, напрямую или из файла |
 | `net.transport` | `datachannel`, `vp8channel`, `seichannel`, `videochannel` |
@@ -67,8 +68,8 @@ olcrtc /etc/olcrtc/client.yaml
 | `vp8.*` | настройки `vp8channel` |
 | `sei.*` | настройки `seichannel` |
 | `liveness.interval` | интервал ping по control stream, по умолчанию `10s` |
-| `liveness.timeout` | таймаут pong, по умолчанию `5s` |
-| `liveness.failures` | сколько pong можно пропустить до rebuild, по умолчанию `3` |
+| `liveness.timeout` | таймаут pong, по умолчанию `15s` |
+| `liveness.failures` | сколько pong можно пропустить до rebuild, по умолчанию `4` |
 | `lifecycle.max_session_duration` | плановый rebuild сессии, например `6h`; пусто = выключено |
 | `traffic.max_payload_size` | лимит зашифрованного wire-message; `0` = лимит транспорта |
 | `traffic.min_delay` / `traffic.max_delay` | необязательный pacing отправки, например `5ms` / `30ms` |
@@ -76,26 +77,37 @@ olcrtc /etc/olcrtc/client.yaml
 | `profiles[]` | список failover-профилей для `srv`/`cnc` |
 | `failover.retry_delay` | пауза перед следующим профилем, например `2s` |
 | `failover.max_cycles` | сколько полных проходов по профилям сделать; `0` = бесконечно |
-| `data` | путь к директории с runtime-данными (`names`, `surnames`) |
+| `data` | опционально: каталог с файлами `names`/`surnames`, переопределяющими встроенные словари имён. Путь резолвится относительно YAML-файла |
 | `debug` | подробное логирование |
-| `ffmpeg` | путь к бинарнику ffmpeg для `videochannel` |
 
 `crypto.key_file` читается относительно YAML-файла. Нельзя одновременно задавать `crypto.key` и `crypto.key_file`.
 
 `mode: cnc` запрещает слушать не-loopback адрес (`0.0.0.0`, LAN IP и т.п.), если не заданы оба поля `socks.user` и `socks.pass`.
 
+Каталог `data` должен содержать файлы `names` и `surnames`, по одному компоненту display name на строку. Если `data` не задан, используются словари, встроенные в бинарник.
+
+## Миграция схемы конфига
+
+На один цикл миграции строгий загрузчик принимает устаревшие поля `link`, `ffmpeg`, `video.bitrate` и `video.hw`. Текущий runtime игнорирует все четыре поля, а следующая схема конфига удалит их. Удали их из сохраненных конфигов. Остальные неизвестные поля и опечатки по-прежнему приводят к ошибке загрузки.
+
+## Совместимость wire-форматов
+
+Текущие сборки используют зашифрованный record layer OLC2. Направленные ключи HKDF-SHA256, разные AEAD associated data для data/control и общее replay-окно на 64 записи делают его несовместимым со старым форматом. Legacy fallback в декодере отсутствует.
+
+`seichannel` и `videochannel` используют формат кадров OLVC версии 5: у каждого фрагмента есть своя контрольная сумма, поэтому повреждённый фрагмент переспрашивается, а не подтверждается. Старые кадры отклоняются по magic или версии. Обновляй обе стороны туннеля одновременно.
+
 ## Обязательный минимум
 
 ### Сервер
 
-> **Jitsi-провайдер:** берите инстансы из файла [`examples/jitsi.instances.yaml`](./examples/jitsi.instances.yaml), а не из голого текста. Проверьте хост в браузере и выберите рабочий.
+> **Jitsi-провайдер:** берите инстансы из файла [`jitsi.instances.yaml`](./jitsi.instances.yaml), а не из голого текста. Проверьте хост в браузере и выберите рабочий.
 
 ```yaml
 mode: srv
 auth:
   provider: jitsi
 room:
-  # Хост берите из docs/examples/jitsi.instances.yaml:
+  # Хост берите из docs/jitsi.instances.yaml:
   # https://HOST/ROOM
   id: "https://REPLACE_ME_WITH_HOST/REPLACE_ME_WITH_ROOM_ID"
 crypto:
@@ -103,7 +115,6 @@ crypto:
 net:
   transport: datachannel
   dns: "8.8.8.8:53"
-data: data
 ```
 
 ### Клиент
@@ -113,7 +124,7 @@ mode: cnc
 auth:
   provider: jitsi
 room:
-  # Хост берите из docs/examples/jitsi.instances.yaml:
+  # Хост берите из docs/jitsi.instances.yaml:
   # https://HOST/ROOM
   id: "https://REPLACE_ME_WITH_HOST/REPLACE_ME_WITH_ROOM_ID"
 crypto:
@@ -124,7 +135,6 @@ net:
 socks:
   host: "127.0.0.1"
   port: 8808
-data: data
 ```
 
 ## Liveness
@@ -134,8 +144,8 @@ data: data
 ```yaml
 liveness:
   interval: 10s
-  timeout: 5s
-  failures: 3
+  timeout: 15s
+  failures: 4
 ```
 
 Когда порог пропущенных pong достигнут, текущая smux-сессия пересоздаётся. В failover-режиме профиль, который завершился после неудачного reconnect, отдаёт управление supervisor, и тот пробует следующий профиль.
@@ -174,7 +184,6 @@ crypto:
   key_file: ./olcrtc.key
 net:
   dns: "8.8.8.8:53"
-data: data
 
 profiles:
   - name: wb-vp8
@@ -202,7 +211,7 @@ failover:
 
 ## mode: gen
 
-`gen` оставлен для auth-провайдеров, которые реализуют создание комнат через API.
+`gen` оставлен для провайдеров, которые реализуют создание комнат через API.
 Текущие встроенные провайдеры (`jitsi`, `telemost`, `wbstream`) не создают комнаты
 через `olcrtc`: для `telemost` и `wbstream` создай комнату на сайте сервиса и
 вставь её в `room.id`; для `jitsi` укажи URL комнаты.

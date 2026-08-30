@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// Open dialing a bogus address must surface a wrapped resolve/dial error.
 func TestOpen_BadAddress(t *testing.T) {
 	peer := &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 1}
 	_, err := Open(context.Background(), Config{}, peer, "u", "p", "not-a-host-port")
@@ -20,8 +19,6 @@ func TestOpen_BadAddress(t *testing.T) {
 	}
 }
 
-// Open with overrides resolves the override host:port (still fails because
-// there's no TURN server, but the dial error must mention the override).
 func TestOpen_HostOverrideApplied(t *testing.T) {
 	peer := &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 1}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26.5"
+  GO_VERSION: "1.26.7"
   GOLANGCI_VERSION: v2.12.2
   GOVULN_VERSION: v1.6.0
   GORELEASER_VERSION: v2.17.1
@@ -95,6 +95,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      # checksum.extra_files глобит mobile-dist, а снапшот идёт без mobile-джоб
+      - name: Stub mobile artifacts
+        run: mkdir -p mobile-dist && touch mobile-dist/freeturn.aar mobile-dist/freeturn-sources.jar mobile-dist/Mobile.xcframework.zip
 
       - uses: goreleaser/goreleaser-action@v7.2.2
         with:

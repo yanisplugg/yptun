@@ -48,6 +48,16 @@ object IntegrityGuard {
     fun isOfficialApk(context: Context, apk: File): Boolean =
         apkSigningSha256(context, apk).matchesOfficial()
 
+    /**
+     * True when ANOTHER installed package carries the official signature. Used by the applicationId
+     * migration to make sure the data we import really comes from our own older build and not from
+     * something that squatted its content-provider authority. Not installed / unreadable → false.
+     */
+    fun isOfficialPackage(context: Context, packageName: String): Boolean =
+        signaturesOf(packageInfo(context.packageManager, packageName))
+            .firstNotNullOfOrNull { sha256Hex(it.toByteArray()) }
+            .matchesOfficial()
+
     // ──────────────────────────────────────────────────────────────────────
 
     private fun String?.matchesOfficial(): Boolean =

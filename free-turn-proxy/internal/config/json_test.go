@@ -7,13 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcpmux"
 	"github.com/samosvalishe/free-turn-proxy/internal/uri"
 )
 
 const minimalJSON = `{"peer":"1.2.3.4:5000","vk":{"links":["https://vk.ru/call/join/CODE"]}}`
 
-// Отсутствующие поля обязаны брать значения из Defaults(), иначе строгий
-// декодер заставил бы хост перечислять весь конфиг целиком.
 func TestParseClientJSONFillsDefaults(t *testing.T) {
 	c, err := ParseClientJSON([]byte(minimalJSON), "")
 	if err != nil {
@@ -34,7 +33,7 @@ func TestParseClientJSONAppliesFields(t *testing.T) {
 		"peer": "5.6.7.8:56000",
 		"clientId": "abc",
 		"turn":  {"n": 3, "transport": "udp"},
-		"proxy": {"mode": "tcp", "bond": true, "listen": "127.0.0.1:1080"},
+		"proxy": {"listen": "127.0.0.1:1080"},
 		"vk":    {"links": ["A", "B"], "streamsPerCred": 4, "manualCaptcha": true, "platform": "mobile"},
 		"obf":   {"profile": "rtpopus3", "key": "` + testObfKey + `"},
 		"dns":   {"mode": "doh", "servers": ["1.1.1.1", "8.8.8.8"]},
@@ -48,7 +47,7 @@ func TestParseClientJSONAppliesFields(t *testing.T) {
 	if c.TURN.N != 3 || !c.TURN.TransportUDP {
 		t.Errorf("TURN = %+v", c.TURN)
 	}
-	if c.Proxy.Mode != ProxyModeTCPFwdBond || c.Proxy.Listen != "127.0.0.1:1080" {
+	if c.Proxy.Listen != "127.0.0.1:1080" {
 		t.Errorf("Proxy = %+v", c.Proxy)
 	}
 	if len(c.VK.Links) != 2 || c.VK.Platform != PlatformMobile || !c.VK.ManualCaptcha {
@@ -65,11 +64,9 @@ func TestParseClientJSONAppliesFields(t *testing.T) {
 	}
 }
 
-// obf.timingMs учитывается только в udp-режиме - правило одно для всех
-// источников, проверяем что JSON доходит до Validate.
 func TestParseClientJSONRunsValidate(t *testing.T) {
-	in := `{"peer":"1.2.3.4:5000","vk":{"links":["A"]},"proxy":{"mode":"tcp"},` +
-		`"obf":{"profile":"rtpopus3","key":"` + testObfKey + `","timingMs":20}}`
+	in := `{"peer":"1.2.3.4:5000","vk":{"links":["A"]},` +
+		`"obf":{"profile":"none","timingMs":20}}`
 	_, err := ParseClientJSON([]byte(in), "")
 	if err == nil || !strings.Contains(err.Error(), "-obf-timing") {
 		t.Fatalf("ParseClientJSON() error = %v, want obf-timing rule", err)
@@ -100,7 +97,6 @@ func TestParseClientJSONOverlayURI(t *testing.T) {
 	if c.Proxy.Peer != "9.9.9.9:56000" || c.TURN.N != 5 {
 		t.Errorf("overlay not applied: peer %q, n %d", c.Proxy.Peer, c.TURN.N)
 	}
-	// Ссылки URI не несёт - значение из JSON обязано уцелеть.
 	if len(c.VK.Links) != 1 || c.VK.Links[0] != "CODE" {
 		t.Errorf("links overwritten by overlay: %v", c.VK.Links)
 	}
@@ -124,8 +120,6 @@ func TestPeekSubURLJSON(t *testing.T) {
 	}
 }
 
-// DefaultClientJSON должен сам себя разбирать: хост берёт его как стартовое
-// состояние формы и дописывает peer со ссылками.
 func TestDefaultClientJSONRoundTrip(t *testing.T) {
 	var dto ClientJSON
 	if err := json.Unmarshal([]byte(DefaultClientJSON()), &dto); err != nil {
@@ -159,5 +153,31 @@ func TestClientJSONTimingMsMapsToDuration(t *testing.T) {
 	}
 	if c.Obf.Timing != 25*time.Millisecond {
 		t.Errorf("Obf.Timing = %v, want 25ms", c.Obf.Timing)
+	}
+}
+
+// Старый JSON без секций mode/kcp обязан читаться: поля optional, дефолт - udp.
+func TestParseClientJSONLegacyWithoutMode(t *testing.T) {
+	data := `{"peer":"1.2.3.4:5000","vk":{"links":["abcdef"]}}`
+	c, err := ParseClientJSON([]byte(data), "")
+	if err != nil {
+		t.Fatalf("ParseClientJSON() error = %v", err)
+	}
+	if c.Proxy.Mode != ProxyModeUDP {
+		t.Errorf("Proxy.Mode = %q, want udp", c.Proxy.Mode)
+	}
+	if c.KCP.Profile != kcpmux.DefaultProfile() {
+		t.Errorf("KCP profile = %+v, want default", c.KCP.Profile)
+	}
+}
+
+func TestParseClientJSONTCPMode(t *testing.T) {
+	data := `{"peer":"1.2.3.4:5000","vk":{"links":["abcdef"]},"proxy":{"mode":"tcp"}}`
+	c, err := ParseClientJSON([]byte(data), "")
+	if err != nil {
+		t.Fatalf("ParseClientJSON() error = %v", err)
+	}
+	if c.Proxy.Mode != ProxyModeTCP {
+		t.Errorf("Proxy.Mode = %q, want tcp", c.Proxy.Mode)
 	}
 }

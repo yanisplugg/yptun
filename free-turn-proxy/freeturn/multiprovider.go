@@ -35,6 +35,8 @@ func (m *multiProvider) HandleAuthError(streamID int) bool {
 
 func (m *multiProvider) ResetErrors(streamID int) { m.pick(streamID).ResetErrors(streamID) }
 
+func (m *multiProvider) DropCredentials(streamID int) { m.pick(streamID).DropCredentials(streamID) }
+
 func (m *multiProvider) Name() string { return m.providers[0].Name() }
 
 // BackoffUntilUnix reports the earliest moment ANY provider is ready (min positive deadline),

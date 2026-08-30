@@ -1,50 +1,51 @@
 package session
 
 import (
-	"context"
 	"math"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/stats"
 )
 
-// traffic - счётчики сессии плюс мгновенная скорость. Скорость считает тикер по
-// разнице счётчиков: на горячем пути это дешевле per-packet таймстемпов.
+// traffic агрегирует счётчики и считает скорость передачи.
 type traffic struct {
-	stats  *stats.Stats
-	txRate atomic.Int64
-	rxRate atomic.Int64
+	stats *stats.Stats
+
+	mu     sync.Mutex
+	prevTx uint64
+	prevRx uint64
+	prevAt time.Time
 }
 
 func newTraffic() *traffic {
 	return &traffic{stats: stats.New(true)}
 }
 
-func (t *traffic) rateMeter(ctx context.Context, interval time.Duration) {
-	tick := time.NewTicker(interval)
-	defer tick.Stop()
-	var prevTx, prevRx uint64
-	for {
-		select {
-		case <-ctx.Done():
-			t.txRate.Store(0)
-			t.rxRate.Store(0)
-			return
-		case <-tick.C:
-			tx, rx := t.stats.Counters()
-			t.txRate.Store(clampInt64(tx - prevTx))
-			t.rxRate.Store(clampInt64(rx - prevRx))
-			prevTx, prevRx = tx, rx
-		}
+// rates - средняя скорость (байт/с) с прошлого вызова. Считается на запрос, а не
+// фоновым тикером: спрашивает только открытый экран, и будить процесс ради цифры,
+// которую никто не читает, незачем.
+func (t *traffic) rates() (txRate, rxRate int64) {
+	tx, rx := t.stats.Counters()
+	now := time.Now()
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	prevTx, prevRx, prevAt := t.prevTx, t.prevRx, t.prevAt
+	t.prevTx, t.prevRx, t.prevAt = tx, rx, now
+
+	elapsed := now.Sub(prevAt)
+	if prevAt.IsZero() || elapsed <= 0 {
+		return 0, 0
 	}
+	sec := elapsed.Seconds()
+	return perSecond(tx-prevTx, sec), perSecond(rx-prevRx, sec)
 }
 
-// clampInt64 насыщает uint64 до int64. Реальный трафик до MaxInt64 не доходит,
-// но насыщение делает конверсию безопасной от переполнения.
-func clampInt64(u uint64) int64 {
-	if u > math.MaxInt64 {
+func perSecond(delta uint64, sec float64) int64 {
+	rate := float64(delta) / sec
+	if rate >= math.MaxInt64 {
 		return math.MaxInt64
 	}
-	return int64(u)
+	return int64(rate)
 }

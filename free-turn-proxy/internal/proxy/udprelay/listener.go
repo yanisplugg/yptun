@@ -7,29 +7,23 @@ import (
 	"sync/atomic"
 )
 
-// Packet - пулированная UDP-датаграмма, передаваемая из listener'а в per-stream
-// DTLS-воркер. N - заполненный префикс Data.
+// Packet представляет буферизованную датаграмму для передачи воркерам.
 type Packet struct {
 	Data []byte
 	N    int
 }
 
-// packetPool переиспользует Packet-буферы на горячем inbound пути. Размер буфера
-// соответствует 2048 байт, которые ожидает цикл listener'а.
+// packetPool переиспользует буферы датаграмм.
 var packetPool = sync.Pool{
 	New: func() any { return &Packet{Data: make([]byte, 2048)} },
 }
 
-// runListener читает пакеты из listenConn, обновляет кэш active-peer и раздаёт
-// каждый пакет диспетчеру с chunk-affinity (см. dispatcher.dispatch). Если ни
-// один стрим не смог принять пакет, он отбрасывается - цикл чтения остаётся
-// wait-free.
+// runListener читает входящие датаграммы и раздаёт их стримам через диспетчер с
+// chunk-affinity (см. dispatcher.dispatch). ЛОКАЛЬНЫЙ ПАТЧ: у upstream тут одна
+// общая очередь inboundChan, которую разбирают все стримы по готовности - это
+// размазывает подряд идущие WG-пакеты по TURN-путям с разным latency и роняет
+// скорость одиночного потока. Не терять при ре-вендоре.
 func runListener(ctx context.Context, listenConn net.PacketConn, activeLocalPeer *atomic.Value, d *dispatcher) {
-	// Pointer-кэш последнего виденного адреса local peer. Позволяет избежать
-	// per-packet аллокации addr.String() на горячем WG ingest пути:
-	// большинство пакетов приходит от одного UDPAddr, поэтому проверка
-	// по указателю покрывает fast path. Медленный путь (новый экземпляр
-	// от ReadFrom для того же ip:port) делает одно String-сравнение и обновляет кэш.
 	var lastAddr net.Addr
 	var lastAddrStr string
 	for {

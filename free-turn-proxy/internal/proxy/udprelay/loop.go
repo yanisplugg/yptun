@@ -12,36 +12,36 @@ import (
 	"github.com/cbeuw/connutil"
 	"github.com/samosvalishe/free-turn-proxy/internal/clientsdb"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
-	"github.com/samosvalishe/free-turn-proxy/internal/proxy/common"
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
+	"github.com/samosvalishe/free-turn-proxy/internal/wire"
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/shape"
 )
 
-// recoverRelay contains a panic in a spawned relay goroutine. The UDP relay races many goroutines
-// against context-cancel on disconnect (closing DTLS/TURN conns, obf codec, packet copy loops); an
-// unrecovered panic in ANY of them aborts the whole process and crashes the Android app right after
-// the user stops VK-TURN. Catch it, log it, and let the goroutine exit cleanly instead.
-func recoverRelay(deps *Deps, streamID int) {
-	if r := recover(); r != nil {
-		deps.log().Errorf("[STREAM %d] recovered relay goroutine panic: %v", streamID, r)
-	}
+// errPairRecycled - пару свернул TURN-цикл (аллокация мертва), а не сеть: сетевой
+// backoff тут только удлиняет простой.
+var errPairRecycled = errors.New("udprelay: stream pair recycled")
+
+// streamPair связывает DTLS-сессию с аллокацией, поверх которой она поднята. Смерть
+// аллокации обязана ронять DTLS: у новой аллокации другой relayed-адрес, а миграция
+// адреса по DTLS Connection ID под obf-профилем на сервере не работает - сервер примет
+// такие записи за новую сессию и будет ждать от них handshake.
+type streamPair struct {
+	pipe   net.PacketConn
+	cancel context.CancelFunc
 }
 
-// DTLSLoop поддерживает единственное DTLS-подключение для streamID, перезапуская
-// его при сбое с backoff 10-30s (пропускается при активном provider-backoff,
-// если предыдущая ошибка - дедлайн). connchan получает свежую половину
-// AsyncPacketPipe на каждой попытке; okchan (non-nil только для потока 1)
-// сигнализирует о первом успешном handshake.
-func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, disp *dispatcher, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) {
+// DTLSLoop поддерживает и перезапускает DTLS-соединение для указанного streamID.
+func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, d *dispatcher, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			err := oneDTLS(ctx, deps, params, peer, listenConn, disp, connchan, okchan, streamID)
-			// При активном provider-backoff дедлайн handshake срабатывает раньше,
-			// чем auth-retry успевает отработать; делаем краткий backoff,
-			// чтобы не крутиться в tight spin до снятия блокировки.
+			err := oneDTLS(ctx, deps, params, peer, listenConn, d, connchan, okchan, streamID)
+			// Пара пересоздаётся под новую аллокацию - TURN-цикл уже держит свою паузу.
+			if errors.Is(err, errPairRecycled) {
+				continue
+			}
 			if err != nil && time.Now().Unix() < deps.Auth.BackoffUntilUnix() && errors.Is(err, context.DeadlineExceeded) {
 				select {
 				case <-ctx.Done():
@@ -61,23 +61,18 @@ func DTLSLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr
 	}
 }
 
-// TURNLoop ведёт половину TURN-аллокации. Ждёт свежий conn2 от DTLS-цикла,
-// тормозит через t (глобальный тик 200ms), выполняет одну TURN-сессию
-// и реагирует на provider.ErrFatalNoStreams / provider.ErrBackoffActive
-// соответственно.
-func TURNLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, connchan <-chan net.PacketConn, t <-chan time.Time, streamID int) {
+// TURNLoop управляет жизненным циклом одной TURN-аллокации.
+func TURNLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, connchan <-chan streamPair, streamID int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case conn2 := <-connchan:
-			select {
-			case <-t:
-			case <-ctx.Done():
+		case pair := <-connchan:
+			if !deps.allocPace.Wait(ctx) {
 				return
 			}
 			c := make(chan error, 1)
-			go oneTURN(ctx, deps, params, peer, conn2, streamID, c)
+			go deps.guard(func() { oneTURN(ctx, deps, params, peer, pair.pipe, streamID, c) })()
 
 			var err error
 			select {
@@ -85,13 +80,12 @@ func TURNLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr
 			case <-ctx.Done():
 				return
 			}
+			// Аллокация кончилась - DTLS поверх неё сервер больше не адресует (см. streamPair).
+			pair.cancel()
 			if err != nil {
 				if errors.Is(err, provider.ErrFatalNoStreams) {
 					deps.log().Errorf("[STREAM %d] Fatal provider error. Shutting down application.", streamID)
-					select {
-					case deps.fatalCh <- fmt.Errorf("%w: %w", ErrFatal, err):
-					default:
-					}
+					deps.fatal(err)
 					return
 				}
 				if errors.Is(err, provider.ErrBackoffActive) {
@@ -124,146 +118,118 @@ func TURNLoop(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr
 	}
 }
 
-func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, disp *dispatcher, connchan chan<- net.PacketConn, okchan chan<- struct{}, streamID int) error {
-	select {
-	case <-time.After(time.Duration(randx.Intn(400)+100) * time.Millisecond):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
+func oneDTLS(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, d *dispatcher, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) error {
 	dtlsctx, dtlscancel := context.WithCancel(ctx)
 	defer dtlscancel()
+
+	err := dtlsSession(dtlsctx, dtlscancel, deps, params, peer, listenConn, d, connchan, okchan, streamID)
+	// Отменена именно пара, а не вся сессия - значит её свернул TURN-цикл.
+	if err != nil && ctx.Err() == nil && dtlsctx.Err() != nil {
+		return errPairRecycled
+	}
+	return err
+}
+
+func dtlsSession(dtlsctx context.Context, dtlscancel context.CancelFunc, deps *Deps, params *Params, peer *net.UDPAddr, listenConn net.PacketConn, d *dispatcher, connchan chan<- streamPair, okchan chan<- struct{}, streamID int) error {
+	select {
+	case <-time.After(time.Duration(randx.Intn(400)+100) * time.Millisecond):
+	case <-dtlsctx.Done():
+		return dtlsctx.Err()
+	}
 
 	conn1, conn2 := connutil.AsyncPacketPipe()
 	defer func() { _ = conn1.Close() }()
 	defer func() { _ = conn2.Close() }()
-	// TURNLoop может перезапускать oneTURN несколько раз в рамках одного DTLS
-	// соединения, каждый раз перечитывая conn2; публикуем до завершения DTLS.
-	go func() {
-		defer recoverRelay(deps, streamID)
-		for {
-			select {
-			case <-dtlsctx.Done():
-				return
-			case connchan <- conn2:
-			}
-		}
-	}()
+	// Ровно один раз: пара строго 1:1, иначе следующая аллокация села бы на DTLS, который
+	// уже сворачивают. Отдаём до handshake - его пакеты идут через эту же аллокацию.
+	select {
+	case connchan <- streamPair{pipe: conn2, cancel: dtlscancel}:
+	case <-dtlsctx.Done():
+		return dtlsctx.Err()
+	}
 	dtlsRaw, err1 := deps.DTLSDialer.Dial(dtlsctx, conn1, peer)
 	if err1 != nil {
 		return fmt.Errorf("failed to connect DTLS: %w", err1)
 	}
 	var dtlsConn net.Conn = dtlsRaw
 	defer func() {
-		if closeErr := dtlsConn.Close(); closeErr != nil {
-			deps.log().Errorf("[STREAM %d] failed to close DTLS connection: %s", streamID, closeErr)
-		}
-		deps.log().Infof("[STREAM %d] Closed DTLS connection", streamID)
+		_ = dtlsConn.Close()
+		deps.log().Debugf("[STREAM %d] Closed DTLS connection", streamID)
 	}()
-	deps.log().Infof("[STREAM %d] Established DTLS connection", streamID)
+	deps.log().Debugf("[STREAM %d] Established DTLS connection", streamID)
 
-	// Client ID шлётся всегда (первой DTLS app-record); сервер всегда читает.
-	// -clients-file на сервере решает только, проверять ли ID по allowlist.
-	if err := clientsdb.WriteClientID(dtlsConn, params.ClientID); err != nil {
+	if err := clientsdb.WriteClientID(dtlsConn, params.ClientID, clientsdb.ModeUDP); err != nil {
 		return fmt.Errorf("failed to write client ID: %w", err)
 	}
-
 	if okchan != nil {
-		go func() {
-			defer recoverRelay(deps, streamID)
-			select {
-			case okchan <- struct{}{}:
-			case <-dtlsctx.Done():
-			}
-		}()
+		select {
+		case okchan <- struct{}{}:
+		default:
+		}
 	}
 
-	wg := sync.WaitGroup{}
-	context.AfterFunc(dtlsctx, func() {
-		if err := dtlsConn.SetDeadline(time.Now()); err != nil {
-			deps.log().Warnf("[STREAM %d] SetDeadline failed: %v", streamID, err)
-		}
-	})
-
-	// Регистрируем стрим в диспетчере - только теперь он готов нести данные
-	// (DTLS установлен, client ID отправлен). Диспетчер начнёт слать сюда чанки
-	// пакетов. Отписка на выходе убирает слот из набора; недослитые пакеты в
-	// sendCh соберёт GC (канал не закрываем - иначе гонка send-on-closed).
+	// ЛОКАЛЬНЫЙ ПАТЧ (chunk-affinity, см. dispatcher.go): стрим получает СВОЮ очередь
+	// и регистрируется в диспетчере только после поднятого DTLS - до этого писать в
+	// него некуда. Отписка на выходе; недослитые пакеты подберёт GC.
 	slot := &streamSlot{id: streamID, sendCh: make(chan *Packet, streamSendBuf)}
-	disp.register(slot)
-	defer disp.unregister(slot)
+	d.register(slot)
+	defer d.unregister(slot)
 
-	wg.Go(func() {
-		defer recoverRelay(deps, streamID)
-		defer dtlscancel()
+	forwardDone := make(chan struct{})
+	go func() {
+		defer close(forwardDone)
+		var buf [2048]byte
 		for {
-			select {
-			case <-dtlsctx.Done():
-				return
-			case pkt := <-slot.sendCh:
-				_, werr := dtlsConn.Write(pkt.Data[:pkt.N])
-				packetPool.Put(pkt)
-				if werr != nil {
-					deps.log().Debugf("[STREAM %d] DTLS write error: %v", streamID, werr)
-					return
-				}
-			}
-		}
-	})
-
-	wg.Go(func() {
-		defer recoverRelay(deps, streamID)
-		defer dtlscancel()
-		buf := make([]byte, 1600)
-		for {
-			n, err1 := dtlsConn.Read(buf)
-			if err1 != nil {
+			n, err := dtlsConn.Read(buf[:])
+			if err != nil {
 				return
 			}
-
-			if peerAddr := deps.ActiveLocalPeer.Load(); peerAddr != nil {
-				if addr, ok := peerAddr.(net.Addr); ok {
-					if _, err := listenConn.WriteTo(buf[:n], addr); err != nil {
-						deps.log().Errorf("[STREAM %d] failed to forward packet to local peer: %v", streamID, err)
-					}
-				}
+			addr := deps.ActiveLocalPeer.Load()
+			if addr == nil {
+				continue
+			}
+			netAddr, ok := addr.(net.Addr)
+			if !ok {
+				continue
+			}
+			_, writeErr := listenConn.WriteTo(buf[:n], netAddr)
+			if writeErr != nil {
+				return
 			}
 		}
-	})
+	}()
 
-	wg.Wait()
-	if err := dtlsConn.SetDeadline(time.Time{}); err != nil {
-		deps.log().Errorf("[STREAM %d] Failed to clear DTLS deadline: %s", streamID, err)
+	for {
+		select {
+		case <-dtlsctx.Done():
+			return dtlsctx.Err()
+		case <-forwardDone:
+			return errors.New("DTLS connection closed by remote peer")
+		case pkt := <-slot.sendCh:
+			_, err := dtlsConn.Write(pkt.Data[:pkt.N])
+			packetPool.Put(pkt)
+			if err != nil {
+				return fmt.Errorf("failed to forward packet to DTLS: %w", err)
+			}
+		}
 	}
-	return nil
 }
 
 func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr, conn2 net.PacketConn, streamID int, c chan<- error) {
 	var err error
 	defer func() {
-		// Contain a panic on the TURN/obf path (esp. during cancel) so it can't crash the process;
-		// the buffered c still gets an error so TURNLoop treats this as a failed stream.
-		if r := recover(); r != nil {
-			err = fmt.Errorf("oneTURN panic recovered: %v", r)
-		}
 		c <- err
 	}()
-	select {
-	case <-time.After(time.Duration(randx.Intn(400)+100) * time.Millisecond):
-	case <-ctx.Done():
-		err = ctx.Err()
-		return
-	}
-	stream, err1 := common.DialTURN(ctx, params.Host, params.Port, params.TransportUDP, peer, streamID, params.GetCreds)
-	if err1 != nil {
-		if deps.Auth.IsAuthError(err1) {
+
+	stream, derr := DialTURN(ctx, params.Host, params.Port, params.TransportUDP, peer, streamID, params.GetCreds, deps.log())
+	if derr != nil {
+		if deps.Auth.IsAuthError(derr) {
 			deps.Auth.HandleAuthError(streamID)
 		}
-		err = err1
+		err = fmt.Errorf("connect to TURN server: %w", derr)
 		return
 	}
 	relayConn := stream.Relay
-	deps.log().Debugf("[STREAM %d] TURN server IP: %s", streamID, stream.ServerUDPAddr.IP)
 	if deps.OnTURNServer != nil {
 		deps.OnTURNServer(stream.ServerUDPAddr.IP)
 	}
@@ -273,55 +239,61 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 		deps.log().Debugf("[STREAM %d] obf-timing=%s", streamID, params.ObfTiming)
 	}
 
-	// Инкремент до ResetErrors - конкурентные наблюдатели HandleAuthError видят
-	// поток подключённым до сброса счётчика ошибок.
 	deps.ConnectedStreams.Add(1)
 	deps.Auth.ResetErrors(streamID)
 
+	relayedAddr := relayConn.LocalAddr().String()
+	deps.log().Infof("[STREAM %d] TURN allocation up: relayed=%s server=%s",
+		streamID, relayedAddr, stream.ServerUDPAddr.IP)
+
 	defer func() {
 		deps.ConnectedStreams.Add(-1)
-		if cerr := stream.Close(); cerr != nil {
-			err = fmt.Errorf("failed to close TURN stream: %s", cerr)
+		// Освобождение аллокации логируем всегда: недошедший deallocate держит квоту VK
+		// до конца её lifetime, и следующий Allocate ловит 486.
+		cerr := stream.Close()
+		deps.log().Infof("[STREAM %d] TURN allocation released: relayed=%s deallocate=%v",
+			streamID, relayedAddr, cerr)
+		if cerr != nil {
+			deps.Auth.DropCredentials(streamID)
 		}
 	}()
 
-	deps.log().Debugf("[STREAM %d] relayed-address=%s", streamID, relayConn.LocalAddr().String())
-
 	wg := sync.WaitGroup{}
 	turnctx, turncancel := context.WithCancel(ctx)
+	defer turncancel()
 
+	// без дедлайна relayConn.ReadFrom не проснётся на отмене turnctx - wg.Wait встанет намертво
 	context.AfterFunc(turnctx, func() {
 		if err := relayConn.SetDeadline(time.Now()); err != nil {
-			deps.log().Errorf("Failed to set relay deadline: %s", err)
+			deps.log().Errorf("[STREAM %d] Failed to set relay deadline: %s", streamID, err)
 		}
 	})
+
 	var internalPipeAddr atomic.Value
-	obfConn, obfErr := common.NewClientObf(params.Profile, params.ObfKey)
+	obfConn, obfErr := wire.NewClientCodec(params.Profile, params.ObfKey)
 	if obfErr != nil {
 		deps.log().Errorf("[STREAM %d] OBF init failed: %v", streamID, obfErr)
-		turncancel()
 		return
 	}
 
 	const maxPayload = 1600
 
-	// PermDead закрывается при блэкхоле data-path (см. turndial/permwatch.go) -
-	// отменяем turnctx, TURNLoop делает свежий allocate.
 	wg.Go(func() {
-		defer recoverRelay(deps, streamID)
 		select {
 		case <-turnctx.Done():
 		case <-stream.PermDead:
 			deps.log().Warnf("[STREAM %d] TURN channel-bind умер - рецикл allocation", streamID)
 			turncancel()
 		}
+		// conn2 молчит, пока приложение не шлёт: без дедлайна его читатель досидел бы
+		// до первого пакета, а рецикл на простое висел бы вечно (тоннель без трафика)
+		if err := conn2.SetDeadline(time.Now()); err != nil {
+			deps.log().Errorf("[STREAM %d] Failed to set pipe deadline: %s", streamID, err)
+		}
 	})
 
 	wg.Go(func() {
-		defer recoverRelay(deps, streamID)
 		defer turncancel()
-		// При obf читаем payload сразу в buf[HeaderLen:], чтобы WrapInPlace
-		// дописал заголовок+tag без копии payload.
 		var buf, readSlot []byte
 		if obfConn != nil {
 			buf = make([]byte, obfConn.MaxWire(maxPayload))
@@ -330,8 +302,6 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 			buf = make([]byte, maxPayload)
 			readSlot = buf
 		}
-		// Адрес внутреннего пайпа константен; фиксируем один раз вместо
-		// atomic-записи на каждый пакет.
 		addrStored := false
 		for {
 			if turnctx.Err() != nil {
@@ -371,7 +341,6 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	})
 
 	wg.Go(func() {
-		defer recoverRelay(deps, streamID)
 		defer turncancel()
 		readBufLen := maxPayload
 		if obfConn != nil {
@@ -411,5 +380,10 @@ func oneTURN(ctx context.Context, deps *Deps, params *Params, peer *net.UDPAddr,
 	wg.Wait()
 	if err := relayConn.SetDeadline(time.Time{}); err != nil {
 		deps.log().Errorf("Failed to clear relay deadline: %s", err)
+	}
+	// Дедлайн снимаем до закрытия пары: пока DTLS сворачивается, его записи в pipe не
+	// должны сыпать таймаутами вместо реальной причины выхода.
+	if err := conn2.SetDeadline(time.Time{}); err != nil {
+		deps.log().Errorf("Failed to clear pipe deadline: %s", err)
 	}
 }

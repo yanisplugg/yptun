@@ -10,15 +10,11 @@ import (
 	"image/color"
 	_ "image/jpeg" // регистрация JPEG-декодера для image.Decode
 	"math"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
-
-	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 )
 
 type sliderPuzzle struct {
@@ -69,10 +65,7 @@ func (s *captchaSession) solveSliderCaptcha(
 		return "", err
 	}
 
-	limit := puzzle.Attempts
-	if limit > len(guesses) {
-		limit = len(guesses)
-	}
+	limit := min(puzzle.Attempts, len(guesses))
 	if limit <= 0 {
 		return "", errors.New("slider has no attempts available")
 	}
@@ -83,12 +76,6 @@ func (s *captchaSession) solveSliderCaptcha(
 		return "", err
 	}
 
-	// Ручка стоит в начале дорожки; каждая следующая попытка тянет её от места,
-	// где остановилась предыдущая.
-	handle := point{X: s.layout.sliderLeft, Y: s.layout.sliderY}
-	if !s.profile.Touch() {
-		handle = approachFrom(s.profile, s.layout, handle)
-	}
 	for i, guess := range attempts {
 		s.logger().Debugf("[Captcha] slider attempt %d/%d (guess #%d)", i+1, len(attempts), guess.Index)
 		answerData, err := json.Marshal(struct {
@@ -97,17 +84,11 @@ func (s *captchaSession) solveSliderCaptcha(
 		if err != nil {
 			return "", err
 		}
-		target := s.layout.sliderTarget(guess.Index, len(guesses))
-		g := gesture{
-			from:   handle,
-			to:     target,
-			move:   sliderDragTime(handle, target),
-			settle: time.Duration(200+randx.Intn(400)) * time.Millisecond,
+		// Протяжка ручки: координаты никуда не уходят, но время сессии задаёт
+		// длину массивов телеметрии.
+		if dragErr := s.dwell(650, 1750); dragErr != nil {
+			return "", dragErr
 		}
-		if gestureErr := s.performGesture(g); gestureErr != nil {
-			return "", gestureErr
-		}
-		handle = target
 
 		check, err := s.performCaptchaCheck(sessionToken, string(answerData))
 		if err != nil {
@@ -130,14 +111,6 @@ func (s *captchaSession) solveSliderCaptcha(
 		}
 	}
 	return "", errors.New("slider guesses exhausted")
-}
-
-// sliderDragTime - сколько занимает протяжка ручки: закон Фиттса, огрублённый до
-// линейной зависимости от дистанции.
-func sliderDragTime(from, to point) time.Duration {
-	dist := math.Abs(float64(to.X - from.X))
-	ms := 450 + dist*2.2 + float64(randx.Intn(350))
-	return time.Duration(ms) * time.Millisecond
 }
 
 func parseSliderPuzzle(raw map[string]any) (*sliderPuzzle, error) {
@@ -245,69 +218,25 @@ func rankSliderGuesses(img image.Image, gridSize int, swaps []int) ([]sliderGues
 		lumaRank[g.Index] = rank
 	}
 
-	stage2Count := candidateCount
-	stage2Set := make(map[int]struct{}, stage2Count)
-	for i := 0; i < stage2Count; i++ {
-		stage2Set[lumaOrder[i].Index] = struct{}{}
-	}
-
-	type stage2Result struct {
-		index int
-		rgb   int64
-		text  float64
-		err   error
-	}
-	jobs := make([]int, 0, stage2Count)
-	for idx := range stage2Set {
-		jobs = append(jobs, idx)
-	}
-	jobCh := make(chan int, len(jobs))
-	resCh := make(chan stage2Result, len(jobs))
-
-	workers := runtime.NumCPU()
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(jobs) {
-		workers = len(jobs)
-	}
+	// Второй проход тяжелее первого - считаем параллельно, каждый в свою ячейку.
+	errs := make([]error, candidateCount)
 	var wg sync.WaitGroup
-	for range workers {
+	for i := range guesses {
 		wg.Go(func() {
-			for index := range jobCh {
-				mapping, err := applySliderSwaps(gridSize, guesses[index-1].Swaps)
-				if err != nil {
-					resCh <- stage2Result{index: index, err: err}
-					continue
-				}
-				rgb, text := seamScoreRGBText(img, gridSize, mapping)
-				resCh <- stage2Result{index: index, rgb: rgb, text: text}
+			mapping, err := applySliderSwaps(gridSize, guesses[i].Swaps)
+			if err != nil {
+				errs[i] = err
+				return
 			}
+			guesses[i].ScoreRGB, guesses[i].ScoreText = seamScoreRGBText(img, gridSize, mapping)
 		})
 	}
-	for _, idx := range jobs {
-		jobCh <- idx
-	}
-	close(jobCh)
 	wg.Wait()
-	close(resCh)
-	for r := range resCh {
-		if r.err != nil {
-			return nil, r.err
-		}
-		g := &guesses[r.index-1]
-		g.ScoreRGB = r.rgb
-		g.ScoreText = r.text
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
 	}
 
-	stage2 := make([]sliderGuess, 0, stage2Count)
-	for _, g := range guesses {
-		if _, ok := stage2Set[g.Index]; ok {
-			stage2 = append(stage2, g)
-		}
-	}
-
-	rgbOrder := append([]sliderGuess(nil), stage2...)
+	rgbOrder := append([]sliderGuess(nil), guesses...)
 	sort.SliceStable(rgbOrder, func(i, j int) bool {
 		if rgbOrder[i].ScoreRGB == rgbOrder[j].ScoreRGB {
 			return rgbOrder[i].Index < rgbOrder[j].Index
@@ -319,7 +248,7 @@ func rankSliderGuesses(img image.Image, gridSize int, swaps []int) ([]sliderGues
 		rgbRank[g.Index] = rank
 	}
 
-	textOrder := append([]sliderGuess(nil), stage2...)
+	textOrder := append([]sliderGuess(nil), guesses...)
 	sort.SliceStable(textOrder, func(i, j int) bool {
 		if textOrder[i].ScoreText == textOrder[j].ScoreText {
 			return textOrder[i].Index < textOrder[j].Index
@@ -333,12 +262,7 @@ func rankSliderGuesses(img image.Image, gridSize int, swaps []int) ([]sliderGues
 
 	for i := range guesses {
 		g := &guesses[i]
-		g.ConsensusRank = lumaRank[g.Index]
-		if _, ok := stage2Set[g.Index]; ok {
-			g.ConsensusRank += rgbRank[g.Index] + textRank[g.Index]
-		} else {
-			g.ConsensusRank += candidateCount
-		}
+		g.ConsensusRank = lumaRank[g.Index] + rgbRank[g.Index] + textRank[g.Index]
 		g.Score = int64(g.ConsensusRank)
 	}
 
@@ -354,9 +278,8 @@ func rankSliderGuesses(img image.Image, gridSize int, swaps []int) ([]sliderGues
 	return guesses, nil
 }
 
-// pickSliderAttempts разносит попытки по дорожке: соседние кандидаты отличаются
-// одним свапом и получают почти равный скор, поэтому вторая попытка рядом с
-// первой промахивается вместе с ней.
+// pickSliderAttempts разносит попытки по номеру кандидата: соседние отличаются
+// одним свапом и промахиваются вместе.
 func pickSliderAttempts(guesses []sliderGuess, limit int) []sliderGuess {
 	const minGap = 3
 	out := make([]sliderGuess, 0, limit)
@@ -382,10 +305,7 @@ func activeSwapsForIndex(swaps []int, index int) []int {
 	if index <= 0 {
 		return []int{}
 	}
-	end := index * 2
-	if end > len(swaps) {
-		end = len(swaps)
-	}
+	end := min(index*2, len(swaps))
 	return append([]int(nil), swaps[:end]...)
 }
 
@@ -415,19 +335,15 @@ func applySliderSwaps(gridSize int, swaps []int) ([]int, error) {
 func seamScoreLuma(img image.Image, gridSize int, mapping []int) int64 {
 	bounds := img.Bounds()
 	var score int64
-	for row := 0; row < gridSize; row++ {
-		for col := 0; col < gridSize-1; col++ {
+	for row := range gridSize {
+		for col := range gridSize - 1 {
 			leftIdx := row*gridSize + col
 			rightIdx := leftIdx + 1
 			leftDst := sliderTileRect(bounds, gridSize, leftIdx)
 			rightDst := sliderTileRect(bounds, gridSize, rightIdx)
 			leftSrc := sliderTileRect(bounds, gridSize, mapping[leftIdx])
 			rightSrc := sliderTileRect(bounds, gridSize, mapping[rightIdx])
-			h := leftDst.Dy()
-			if rightDst.Dy() < h {
-				h = rightDst.Dy()
-			}
-			for y := 0; y < h; y++ {
+			for y := range min(leftDst.Dy(), rightDst.Dy()) {
 				yy := leftDst.Min.Y + y
 				a := sampleLumaMapped(img, leftDst, leftSrc, leftDst.Max.X-1, yy)
 				b := sampleLumaMapped(img, rightDst, rightSrc, rightDst.Min.X, yy)
@@ -435,19 +351,15 @@ func seamScoreLuma(img image.Image, gridSize int, mapping []int) int64 {
 			}
 		}
 	}
-	for row := 0; row < gridSize-1; row++ {
-		for col := 0; col < gridSize; col++ {
+	for row := range gridSize - 1 {
+		for col := range gridSize {
 			topIdx := row*gridSize + col
 			bottomIdx := (row+1)*gridSize + col
 			topDst := sliderTileRect(bounds, gridSize, topIdx)
 			bottomDst := sliderTileRect(bounds, gridSize, bottomIdx)
 			topSrc := sliderTileRect(bounds, gridSize, mapping[topIdx])
 			bottomSrc := sliderTileRect(bounds, gridSize, mapping[bottomIdx])
-			w := topDst.Dx()
-			if bottomDst.Dx() < w {
-				w = bottomDst.Dx()
-			}
-			for x := 0; x < w; x++ {
+			for x := range min(topDst.Dx(), bottomDst.Dx()) {
 				xx := topDst.Min.X + x
 				a := sampleLumaMapped(img, topDst, topSrc, xx, topDst.Max.Y-1)
 				b := sampleLumaMapped(img, bottomDst, bottomSrc, xx, bottomDst.Min.Y)
@@ -472,31 +384,24 @@ func seamScoreRGBText(img image.Image, gridSize int, mapping []int) (int64, floa
 	}
 	weight := func(y int) float64 {
 		yf := float64(y)
-		best := absFloat(yf - textCenters[0])
-		for i := 1; i < len(textCenters); i++ {
-			d := absFloat(yf - textCenters[i])
-			if d < best {
-				best = d
-			}
+		best := math.Abs(yf - textCenters[0])
+		for _, center := range textCenters[1:] {
+			best = min(best, math.Abs(yf-center))
 		}
 		return 1 + 3*math.Exp(-(best*best)/(2*sigma*sigma))
 	}
 
 	var rgbScore int64
 	var textScore float64
-	for row := 0; row < gridSize; row++ {
-		for col := 0; col < gridSize-1; col++ {
+	for row := range gridSize {
+		for col := range gridSize - 1 {
 			leftIdx := row*gridSize + col
 			rightIdx := leftIdx + 1
 			leftDst := sliderTileRect(bounds, gridSize, leftIdx)
 			rightDst := sliderTileRect(bounds, gridSize, rightIdx)
 			leftSrc := sliderTileRect(bounds, gridSize, mapping[leftIdx])
 			rightSrc := sliderTileRect(bounds, gridSize, mapping[rightIdx])
-			h := leftDst.Dy()
-			if rightDst.Dy() < h {
-				h = rightDst.Dy()
-			}
-			for y := 0; y < h; y++ {
+			for y := range min(leftDst.Dy(), rightDst.Dy()) {
 				yy := leftDst.Min.Y + y
 				l := sampleColorMapped(img, leftDst, leftSrc, leftDst.Max.X-1, yy)
 				r := sampleColorMapped(img, rightDst, rightSrc, rightDst.Min.X, yy)
@@ -507,19 +412,15 @@ func seamScoreRGBText(img image.Image, gridSize int, mapping []int) (int64, floa
 			}
 		}
 	}
-	for row := 0; row < gridSize-1; row++ {
-		for col := 0; col < gridSize; col++ {
+	for row := range gridSize - 1 {
+		for col := range gridSize {
 			topIdx := row*gridSize + col
 			bottomIdx := (row+1)*gridSize + col
 			topDst := sliderTileRect(bounds, gridSize, topIdx)
 			bottomDst := sliderTileRect(bounds, gridSize, bottomIdx)
 			topSrc := sliderTileRect(bounds, gridSize, mapping[topIdx])
 			bottomSrc := sliderTileRect(bounds, gridSize, mapping[bottomIdx])
-			w := topDst.Dx()
-			if bottomDst.Dx() < w {
-				w = bottomDst.Dx()
-			}
-			for x := 0; x < w; x++ {
+			for x := range min(topDst.Dx(), bottomDst.Dx()) {
 				xx := topDst.Min.X + x
 				t := sampleColorMapped(img, topDst, topSrc, xx, topDst.Max.Y-1)
 				b := sampleColorMapped(img, bottomDst, bottomSrc, xx, bottomDst.Min.Y)
@@ -533,35 +434,19 @@ func seamScoreRGBText(img image.Image, gridSize int, mapping []int) (int64, floa
 	return rgbScore, textScore
 }
 
-func sampleColorMapped(img image.Image, dstRect image.Rectangle, srcRect image.Rectangle, dstX int, dstY int) color.Color {
-	dx := dstRect.Dx()
-	if dx < 1 {
-		dx = 1
-	}
-	dy := dstRect.Dy()
-	if dy < 1 {
-		dy = 1
-	}
+func sampleColorMapped(img image.Image, dstRect, srcRect image.Rectangle, dstX, dstY int) color.Color {
+	dx := max(dstRect.Dx(), 1)
+	dy := max(dstRect.Dy(), 1)
 	sx := srcRect.Min.X + (dstX-dstRect.Min.X)*srcRect.Dx()/dx
 	sy := srcRect.Min.Y + (dstY-dstRect.Min.Y)*srcRect.Dy()/dy
 	return img.At(sx, sy)
 }
 
-func sampleLumaMapped(img image.Image, dstRect image.Rectangle, srcRect image.Rectangle, dstX int, dstY int) uint8 {
+func sampleLumaMapped(img image.Image, dstRect, srcRect image.Rectangle, dstX, dstY int) uint8 {
 	c := sampleColorMapped(img, dstRect, srcRect, dstX, dstY)
 	r, g, b, _ := c.RGBA()
-	y := (299*(r>>8) + 587*(g>>8) + 114*(b>>8)) / 1000
-	if y > 255 {
-		y = 255
-	}
+	y := min((299*(r>>8)+587*(g>>8)+114*(b>>8))/1000, 255)
 	return uint8(y) //nolint:gosec // bounded above by 255
-}
-
-func absFloat(v float64) float64 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 func absInt(v int) int {
@@ -571,7 +456,7 @@ func absInt(v int) int {
 	return v
 }
 
-func sliderTileRect(bounds image.Rectangle, gridSize int, index int) image.Rectangle {
+func sliderTileRect(bounds image.Rectangle, gridSize, index int) image.Rectangle {
 	row := index / gridSize
 	col := index % gridSize
 	x0 := bounds.Min.X + col*bounds.Dx()/gridSize

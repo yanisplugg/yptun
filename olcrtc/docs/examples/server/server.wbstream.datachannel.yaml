@@ -22,8 +22,8 @@ net:
 
 liveness:
   interval: 10s # how often to send liveness checks
-  timeout: 5s # wait time for a liveness reply
-  failures: 3 # consecutive failures before the link is considered dead
+  timeout: 15s # wait time for a liveness reply
+  failures: 4 # consecutive failures before the link is considered dead
 
 socks: # upstream socks proxy
   proxy_addr: "" # e.g. "127.0.0.1"
@@ -31,5 +31,4 @@ socks: # upstream socks proxy
   proxy_user: "" # optional auth for upstream proxy (RFC 1929)
   proxy_pass: "" # optional auth for upstream proxy (RFC 1929)
 
-data: data # where to store / read data
 debug: false # log actions in more detail

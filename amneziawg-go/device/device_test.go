@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -23,10 +23,10 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/amnezia-vpn/amneziawg-go/conn"
-	"github.com/amnezia-vpn/amneziawg-go/conn/bindtest"
-	"github.com/amnezia-vpn/amneziawg-go/tun"
-	"github.com/amnezia-vpn/amneziawg-go/tun/tuntest"
+	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	"github.com/amnezia-vpn/amneziawg-go/v3/conn/bindtest"
+	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+	"github.com/amnezia-vpn/amneziawg-go/v3/tun/tuntest"
 )
 
 // uapiCfg returns a string that contains cfg formatted use with IpcSet.
@@ -136,6 +136,7 @@ func (pair *testPair) Send(
 		// pong is the new ping
 		p0, p1 = p1, p0
 	}
+
 	msg := tuntest.Ping(p0.ip, p1.ip)
 	p1.tun.Outbound <- msg
 	timer := time.NewTimer(6 * time.Second)
@@ -226,16 +227,19 @@ func TestTwoDevicePing(t *testing.T) {
 // Run test with -race=false to avoid the race for setting the default msgTypes 2 times
 func TestAWGDevicePing(t *testing.T) {
 	goroutineLeakCheck(t)
+
 	pair := genTestPair(t, true,
 		"jc", "5",
 		"jmin", "500",
 		"jmax", "1000",
-		"s1", "30",
-		"s2", "40",
-		"h1", "123456",
-		"h2", "67543",
-		"h4", "32345",
-		"h3", "123123",
+		"s1", "15",
+		"s2", "18",
+		"s3", "20",
+		"s4", "25",
+		"h1", "123456-123500",
+		"h2", "67543-67550",
+		"h3", "123123-123200",
+		"h4", "32345-32350",
 	)
 	t.Run("ping 1.0.0.1", func(t *testing.T) {
 		pair.Send(t, Ping, nil)
@@ -260,12 +264,10 @@ func TestAWGHandshakeDevicePing(t *testing.T) {
 
 	goroutineLeakCheck(t)
 	pair := genTestPair(t, true,
-		"i1", "<b 0xf6ab3267fa><c><b 0xf6ab><t><r 10><wt 10>",
-		"i2", "<b 0xf6ab3267fa><r 100>",
-		"j1", "<b 0xffffffff><c><b 0xf6ab><t><r 10>",
-		"j2", "<c><b 0xf6ab><t><wt 1000>",
-		"j3", "<t><b 0xf6ab><c><r 10>",
-		"itime", "60",
+		"i1", "<b 0xf6ab3267fa><c><b 0xf6ab><t><r 10>",
+		"i2", "<b 0xf6ab3267fa><c><b 0xf6ab><t><rc 10>",
+		"i3", "<b 0xf6ab3267fa><c><b 0xf6ab><t><rd 10>",
+		"i4", "<b 0xf6ab3267fa><r 100>",
 		// "jc", "1",
 		// "jmin", "500",
 		// "jmax", "1000",

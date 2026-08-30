@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,17 +39,35 @@ var (
 	sensitiveBearerRE = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`)
 )
 
-// Protector is called with a socket file descriptor before connect.
-// On Android, this calls VpnService.protect(fd) to bypass VPN routing.
-var Protector func(fd int) bool //nolint:gochecknoglobals // package-level state intentional
+type protectorHolder struct {
+	protect func(int) bool
+}
+
+//nolint:gochecknoglobals // Android VpnService socket protection is process-wide by kernel fd
+var protector atomic.Pointer[protectorHolder]
+
+// SetProtector sets the process-wide Android VpnService socket callback.
+func SetProtector(protectFunc func(int) bool) {
+	if protectFunc == nil {
+		protector.Store(nil)
+		return
+	}
+	protector.Store(&protectorHolder{protect: protectFunc})
+}
+
+// HasProtector reports whether Android socket protection is configured.
+func HasProtector() bool {
+	return protector.Load() != nil
+}
 
 func controlFunc(network, _ string, c syscall.RawConn) error {
-	if Protector == nil {
+	current := protector.Load()
+	if current == nil {
 		return nil
 	}
 	var err error
 	controlErr := c.Control(func(fd uintptr) {
-		if !Protector(int(fd)) {
+		if !current.protect(int(fd)) {
 			err = &net.OpError{Op: "protect", Net: network, Err: net.ErrClosed}
 		}
 	})
@@ -58,13 +77,13 @@ func controlFunc(network, _ string, c syscall.RawConn) error {
 	return err
 }
 
-// NewDialer returns a net.Dialer that calls Protector on each new socket.
-func NewDialer() *net.Dialer {
-	return NewDialerWithResolver(nil)
+// newDialer returns a net.Dialer that protects each new socket.
+func newDialer() *net.Dialer {
+	return newDialerWithResolver(nil)
 }
 
-// NewDialerWithResolver returns a protected dialer using resolver for DNS.
-func NewDialerWithResolver(resolver *net.Resolver) *net.Dialer {
+// newDialerWithResolver returns a protected dialer using resolver for DNS.
+func newDialerWithResolver(resolver *net.Resolver) *net.Dialer {
 	return &net.Dialer{
 		Timeout:   defaultDialTimeout,
 		KeepAlive: defaultKeepAlive,
@@ -152,18 +171,18 @@ func pickReachableDNS(servers []string, dial func(context.Context, string, strin
 	return ""
 }
 
-// NewTLSConfig returns the shared TLS policy for provider HTTP/WebSocket clients.
-func NewTLSConfig() *tls.Config {
+// newTLSConfig returns the shared TLS policy for provider HTTP/WebSocket clients.
+func newTLSConfig() *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS12}
 }
 
-// NewHTTPTransport returns an HTTP transport using protected sockets and sane timeouts.
-func NewHTTPTransport(resolvers ...*net.Resolver) *http.Transport {
-	dialer := NewDialerWithResolver(firstResolver(resolvers))
+// newHTTPTransport returns an HTTP transport using protected sockets and sane timeouts.
+func newHTTPTransport(resolvers ...*net.Resolver) *http.Transport {
+	dialer := newDialerWithResolver(firstResolver(resolvers))
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           dialer.DialContext,
-		TLSClientConfig:       NewTLSConfig(),
+		TLSClientConfig:       newTLSConfig(),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          10,
 		IdleConnTimeout:       defaultIdleConnTimeout,
@@ -175,7 +194,7 @@ func NewHTTPTransport(resolvers ...*net.Resolver) *http.Transport {
 // NewHTTPClient returns an http.Client using protected sockets with DNS retry.
 func NewHTTPClient(resolvers ...*net.Resolver) *http.Client {
 	return &http.Client{
-		Transport: &retryTransport{base: NewHTTPTransport(resolvers...)},
+		Transport: &retryTransport{base: newHTTPTransport(resolvers...)},
 		Timeout:   defaultHTTPClientTimeout,
 	}
 }
@@ -230,7 +249,12 @@ func requestForAttempt(req *http.Request, attempt int) (*http.Request, error) {
 		return req, nil
 	}
 	retry := req.Clone(req.Context())
-	if req.Body == nil {
+	// ЛОКАЛЬНЫЙ ПАТЧ: http.NoBody is a NON-nil body that carries no GetBody, and every provider
+	// API call is built as NewRequestWithContext(..., http.MethodGet, u, http.NoBody). Without
+	// this case a bodyless GET was declared unreplayable, so the FIRST transient dial timeout
+	// turned into a hard startup failure ("prepare retry: request body is not replayable") and
+	// the real error was never seen. A bodyless request is always replayable.
+	if req.Body == nil || req.Body == http.NoBody {
 		return retry, nil
 	}
 	if req.GetBody == nil {
@@ -268,9 +292,9 @@ func NewWebSocketDialer(handshakeTimeout time.Duration, resolvers ...*net.Resolv
 		handshakeTimeout = defaultWebSocketTimeout
 	}
 	return websocket.Dialer{
-		NetDialContext:   NewDialerWithResolver(firstResolver(resolvers)).DialContext,
+		NetDialContext:   newDialerWithResolver(firstResolver(resolvers)).DialContext,
 		Proxy:            http.ProxyFromEnvironment,
-		TLSClientConfig:  NewTLSConfig(),
+		TLSClientConfig:  newTLSConfig(),
 		HandshakeTimeout: handshakeTimeout,
 	}
 }
@@ -281,26 +305,17 @@ func StatusError(base error, resp *http.Response, limit int64) error {
 		limit = defaultStatusBodyLimit
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
-	bodyText := RedactSensitive(strings.TrimSpace(string(body)))
+	bodyText := redactSensitive(strings.TrimSpace(string(body)))
 	if bodyText == "" {
 		return fmt.Errorf("%w: status %d", base, resp.StatusCode)
 	}
 	return fmt.Errorf("%w: status %d: %s", base, resp.StatusCode, bodyText)
 }
 
-// RedactSensitive removes common token-like values from provider error text.
-func RedactSensitive(text string) string {
+// redactSensitive removes common token-like values from provider error text.
+func redactSensitive(text string) string {
 	text = sensitiveBearerRE.ReplaceAllString(text, "${1}<redacted>")
 	return sensitiveFieldRE.ReplaceAllString(text, "${1}<redacted>")
-}
-
-// DialContext dials using a protected socket.
-func DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	conn, err := NewDialer().DialContext(ctx, network, address)
-	if err != nil {
-		return nil, fmt.Errorf("dial failed: %w", err)
-	}
-	return conn, nil
 }
 
 // ProxyDialer implements golang.org/x/net/proxy.Dialer for pion ICE.
@@ -310,7 +325,7 @@ type ProxyDialer struct {
 
 // Dial connects to the address on the named network using a protected socket.
 func (d *ProxyDialer) Dial(network, addr string) (net.Conn, error) {
-	conn, err := NewDialerWithResolver(d.resolver).Dial(network, addr)
+	conn, err := newDialerWithResolver(d.resolver).Dial(network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial failed: %w", err)
 	}

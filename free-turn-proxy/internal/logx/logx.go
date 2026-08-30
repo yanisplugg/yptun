@@ -1,20 +1,15 @@
-// Package logx - минимальный уровневый логгер поверх stdlib log.
-// Вызывающий получает Logger и зовёт Debugf/Infof/Warnf/Errorf;
-// Debugf управляется debug-флагом, остальные уровни всегда пишут.
+// Package logx предоставляет уровневый логгер поверх stdlib log.
 package logx
 
 import "log"
 
 // Logger - интерфейс уровневого логирования.
-// Debugf гейтится debug-флагом конструктора; остальные уровни печатают всегда.
 type Logger interface {
 	Debugf(format string, v ...any)
 	Infof(format string, v ...any)
 	Warnf(format string, v ...any)
 	Errorf(format string, v ...any)
-	// DebugEnabled сообщает, будет ли Debugf писать вывод. Hot-path
-	// (счётчики статистики, условные ветки) используют это, чтобы не
-	// делать работу, результат которой логгер всё равно отбросит.
+	// DebugEnabled сообщает, включен ли уровень отладки.
 	DebugEnabled() bool
 }
 
@@ -22,12 +17,10 @@ type stdLogger struct {
 	debug bool
 }
 
-// New возвращает Logger поверх stdlib log. При debug=false Debugf - no-op.
 func New(debug bool) Logger {
 	return &stdLogger{debug: debug}
 }
 
-// Nop возвращает Logger, отбрасывающий весь вывод. Полезно в тестах.
 func Nop() Logger { return nopLogger{} }
 
 func (l *stdLogger) Debugf(format string, v ...any) {
@@ -40,8 +33,7 @@ func (*stdLogger) Warnf(format string, v ...any)  { log.Printf("[WARN] "+format,
 func (*stdLogger) Errorf(format string, v ...any) { log.Printf("[ERROR] "+format, v...) }
 func (l *stdLogger) DebugEnabled() bool           { return l.debug }
 
-// OrNop возвращает l, если он не nil, иначе Nop. Используется в конструкторах
-// пакетов, принимающих nullable Logger.
+// OrNop возвращает l или Nop, если l == nil.
 func OrNop(l Logger) Logger {
 	if l == nil {
 		return Nop()

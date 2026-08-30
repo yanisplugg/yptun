@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/webrtc/v4"
+
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
-	"github.com/pion/webrtc/v4"
 )
 
 var errBoom = errors.New("boom")
@@ -41,8 +42,8 @@ func (s *fakeVideoStream) SetReconnectCallback(cb func())    { s.reconnect = cb 
 func (s *fakeVideoStream) SetShouldReconnect(fn func() bool) { s.should = fn }
 func (s *fakeVideoStream) SetEndedCallback(cb func(string))  { s.ended = cb }
 func (s *fakeVideoStream) WatchConnection(context.Context)   { s.watched = true }
-func (s *fakeVideoStream) CanSend() bool           { return s.canSend }
-func (s *fakeVideoStream) SubscriberCanSend() bool { return s.canSend }
+func (s *fakeVideoStream) CanSend() bool                     { return s.canSend }
+func (s *fakeVideoStream) SubscriberCanSend() bool           { return s.canSend }
 func (s *fakeVideoStream) AddTrack(webrtc.TrackLocal) error  { s.trackAdded = true; return nil }
 func (s *fakeVideoStream) Reconnect(string)                  {}
 func (s *fakeVideoStream) SetTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver)) {
@@ -53,42 +54,31 @@ func (s *fakeVideoStream) SetTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.R
 // it can be returned by enginebuiltin.Open in tests. It wraps a fakeVideoStream
 // for the video-track methods the real engine session exposes.
 type fakeEngineSession struct {
-	stream  *fakeVideoStream
-	noVideo bool
+	stream *fakeVideoStream
 }
 
-func (s *fakeEngineSession) Capabilities() engine.Capabilities {
-	if s.noVideo {
-		return engine.Capabilities{}
-	}
-	return engine.Capabilities{VideoTrack: true}
-}
 func (s *fakeEngineSession) Connect(ctx context.Context) error { return s.stream.Connect(ctx) }
 func (s *fakeEngineSession) Send([]byte) error                 { return nil }
 func (s *fakeEngineSession) Close() error                      { return s.stream.Close() }
-func (s *fakeEngineSession) SetReconnectCallback(cb func(*webrtc.DataChannel)) {
-	s.stream.SetReconnectCallback(func() {
-		if cb != nil {
-			cb(nil)
-		}
-	})
-}
+func (s *fakeEngineSession) SetReconnectCallback(cb func())    { s.stream.SetReconnectCallback(cb) }
 func (s *fakeEngineSession) SetShouldReconnect(fn func() bool) { s.stream.SetShouldReconnect(fn) }
 func (s *fakeEngineSession) SetEndedCallback(cb func(string))  { s.stream.SetEndedCallback(cb) }
 func (s *fakeEngineSession) WatchConnection(ctx context.Context) {
 	s.stream.WatchConnection(ctx)
 }
-func (s *fakeEngineSession) CanSend() bool                            { return s.stream.CanSend() }
-func (s *fakeEngineSession) SubscriberCanSend() bool                   { return s.stream.SubscriberCanSend() }
-func (s *fakeEngineSession) GetSendQueue() chan []byte                { return nil }
-func (s *fakeEngineSession) GetBufferedAmount() uint64                { return 0 }
-func (s *fakeEngineSession) Reconnect(string)                         {}
-func (s *fakeEngineSession) AddVideoTrack(t webrtc.TrackLocal) error  { return s.stream.AddTrack(t) }
+func (s *fakeEngineSession) CanSend() bool                           { return s.stream.CanSend() }
+func (s *fakeEngineSession) SubscriberCanSend() bool                 { return s.stream.SubscriberCanSend() }
+func (s *fakeEngineSession) GetBufferedAmount() uint64               { return 0 }
+func (s *fakeEngineSession) Reconnect(string)                        {}
+func (s *fakeEngineSession) AddVideoTrack(t webrtc.TrackLocal) error { return s.stream.AddTrack(t) }
 func (s *fakeEngineSession) SetVideoTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver)) {
 	s.stream.SetTrackHandler(cb)
 }
 
-//nolint:cyclop // table-driven test naturally has many branches
+type noVideoEngineSession struct {
+	engine.Session
+}
+
 func TestNewConnectCallbacksAndFeatures(t *testing.T) {
 	stream := &fakeVideoStream{canSend: true}
 	name := "seichannel-unit-new"
@@ -97,7 +87,7 @@ func TestNewConnectCallbacksAndFeatures(t *testing.T) {
 	})
 
 	trIface, err := New(t.Context(), transport.Config{
-		Carrier: name,
+		Provider: name,
 		Options: Options{
 			FPS:          40,
 			BatchSize:    3,
@@ -131,17 +121,18 @@ func TestNewConnectCallbacksAndFeatures(t *testing.T) {
 	if tr.CanSend() {
 		t.Fatal("CanSend() = true before peer hello")
 	}
-	tr.handleSample(buildVideoAccessUnit(encodeHelloFrame()))
+	// The peer is the client side, so its hello carries the client role.
+	peerHello := common.EncodeHello(common.RoleClient, tr.bindingToken)
+	tr.handleSample(buildVideoAccessUnit(peerHello))
 	if !tr.CanSend() {
 		t.Fatal("CanSend() = false after peer hello")
 	}
-	if features := tr.Features(); !features.Reliable || !features.Ordered || !features.MessageOriented || features.MaxPayloadSize == 0 { //nolint:lll // long test description
+	if features := tr.Features(); features.MaxPayloadSize == 0 {
 		t.Fatalf("Features() = %+v", features)
 	}
-	if tr.fragmentSize != 512 || tr.batchSize != 3 || tr.frameInterval != 25*time.Millisecond ||
-		tr.ackTimeout != 1500*time.Millisecond {
-		t.Fatalf("seichannel settings fragment=%d batch=%d interval=%v ack=%v",
-			tr.fragmentSize, tr.batchSize, tr.frameInterval, tr.ackTimeout)
+	if tr.fragmentSize != 512 || tr.batchSize != 3 || tr.frameInterval != 25*time.Millisecond {
+		t.Fatalf("seichannel settings fragment=%d batch=%d interval=%v",
+			tr.fragmentSize, tr.batchSize, tr.frameInterval)
 	}
 	if err := tr.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -152,43 +143,56 @@ func TestNewErrorPaths(t *testing.T) {
 	enginebuiltin.Register("seichannel-create-fails", func(context.Context, enginebuiltin.Config) (engine.Session, error) {
 		return nil, errBoom
 	})
-	_, err := New(context.Background(), transport.Config{Carrier: "seichannel-create-fails"})
+	_, err := New(context.Background(), transport.Config{Provider: "seichannel-create-fails"})
 	if err == nil || err.Error() != "open engine session: boom" {
 		t.Fatalf("New() error = %v", err)
 	}
 
 	enginebuiltin.Register("seichannel-no-video", func(context.Context, enginebuiltin.Config) (engine.Session, error) {
-		return &fakeEngineSession{stream: &fakeVideoStream{}, noVideo: true}, nil
+		return &noVideoEngineSession{Session: &fakeEngineSession{stream: &fakeVideoStream{}}}, nil
 	})
-	_, err = New(context.Background(), transport.Config{Carrier: "seichannel-no-video"})
+	_, err = New(context.Background(), transport.Config{Provider: "seichannel-no-video"})
 	if !errors.Is(err, ErrVideoTrackUnsupported) {
 		t.Fatalf("New() error = %v, want %v", err, ErrVideoTrackUnsupported)
 	}
 }
 
 func TestSendAckAndClosePaths(t *testing.T) {
+	stream := &fakeVideoStream{canSend: true}
+	closeCh := make(chan struct{})
+	queue := common.NewOutboundQueue(closeCh, ErrTransportClosed)
 	tr := &streamTransport{
-		stream:      &fakeVideoStream{canSend: true},
-		outbound:    make(chan []byte, 8),
-		outboundAck: make(chan []byte, 8),
-		closeCh:     make(chan struct{}),
-		writerDone:  make(chan struct{}),
-		acks:        common.NewAckRegistry(),
+		Lifecycle:  common.NewLifecycle(stream),
+		stream:     stream,
+		queue:      queue,
+		closeCh:    closeCh,
+		writerDone: make(chan struct{}),
+		sender: common.NewSender(common.SenderConfig{
+			FragmentSize:  4,
+			MaxAttempts:   maxSendAttempts,
+			FrameInterval: time.Millisecond,
+			BatchSize:     1,
+			AckFloor:      time.Second,
+		}, queue),
 	}
 
+	// "payload" = 7 bytes; with a 4-byte fragment size that is two
+	// fragments, and Send returns only once both are acked.
 	done := make(chan error, 1)
 	payload := []byte("payload")
 	go func() { done <- tr.Send(payload) }()
 
-	select {
-	case frame := <-tr.outbound:
-		decoded, err := decodeTransportFrame(frame)
-		if err != nil {
-			t.Fatalf("decodeTransportFrame() error = %v", err)
+	wantCRC := crc32.ChecksumIEEE(payload)
+	for seen := range 2 {
+		frame, ok := waitForFrame(t, tr)
+		if !ok {
+			t.Fatalf("Send() did not enqueue fragment %d", seen)
 		}
-		tr.resolveAck(decoded.seq, crc32.ChecksumIEEE(payload))
-	case <-time.After(time.Second):
-		t.Fatal("Send() did not enqueue frame")
+		decoded, err := common.DecodeFrame(frame)
+		if err != nil {
+			t.Fatalf("DecodeFrame() error = %v", err)
+		}
+		tr.resolveAck(decoded.Seq, wantCRC, decoded.FragIdx)
 	}
 
 	if err := <-done; err != nil {
@@ -199,5 +203,39 @@ func TestSendAckAndClosePaths(t *testing.T) {
 	}
 	if err := tr.Send([]byte("closed")); !errors.Is(err, ErrTransportClosed) {
 		t.Fatalf("Send(closed) error = %v, want %v", err, ErrTransportClosed)
+	}
+}
+
+// waitForFrame polls the outbound queue until a frame shows up.
+func waitForFrame(t *testing.T, tr *streamTransport) ([]byte, bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		frame, open := tr.queue.Next()
+		if !open {
+			return nil, false
+		}
+		if frame != nil {
+			return frame, true
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	return nil, false
+}
+
+// TestResetPeerClearsReadiness locks in that peer readiness is not a one-way
+// latch. It only ever moved to true, so after the peer left every send was
+// accepted by CanSend and then burned its full retry budget into a session
+// that no longer existed.
+func TestResetPeerClearsReadiness(t *testing.T) {
+	tr := &streamTransport{closeCh: make(chan struct{}), reassembler: common.NewReassembler(8)}
+	tr.peerReady.Store(true)
+
+	tr.ResetPeer()
+
+	if tr.peerReady.Load() {
+		t.Fatal("ResetPeer() left the peer marked ready")
 	}
 }

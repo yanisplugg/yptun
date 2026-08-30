@@ -1,9 +1,14 @@
 package org.olcbox.app.vpn.service
 
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import org.olcbox.app.ui.features.locations.components.SpeedSample
 import org.olcbox.app.vpn.VpnStatus
 
@@ -82,7 +87,7 @@ object OlcboxVpnState {
 
     fun addLog(msg: String) {
         Log.d(TAG, msg)
-        _logs.update { (it + stripAnsi(msg)).takeLast(MAX_LOG_ENTRIES) }
+        pushLog(stripAnsi(msg))
     }
 
     /**
@@ -90,8 +95,38 @@ object OlcboxVpnState {
      * ([OlcboxVpnService] full-logs capture) so reading our own process log doesn't feed itself.
      */
     fun appendRaw(line: String) {
-        _logs.update { (it + stripAnsi(line)).takeLast(MAX_LOG_ENTRIES) }
+        pushLog(stripAnsi(line))
     }
+
+    /**
+     * Кольцевой буфер + публикация пачками.
+     *
+     * Раньше каждая строка делала `_logs.update { (it + line).takeLast(5000) }`, то есть ДВЕ полные
+     * копии пятитысячного списка на строку. При включённом захвате логов сюда льётся весь лог
+     * процесса — это десятки мегабайт мусора в минуту, постоянные GC-паузы и рывки интерфейса на
+     * ровном месте. Теперь строка добавляется в ArrayDeque за O(1), а снимок в StateFlow уезжает не
+     * чаще раза в [LOG_PUBLISH_INTERVAL_MS] — журнал читает человек, ему хватает.
+     *
+     * Флаг сбрасывается ДО снятия снимка: строка, пришедшая в этот момент, попадёт в текущий снимок
+     * или запланирует следующий, но не потеряется.
+     */
+    private fun pushLog(line: String) {
+        synchronized(logBuffer) {
+            logBuffer.addLast(line)
+            while (logBuffer.size > MAX_LOG_ENTRIES) logBuffer.removeFirst()
+        }
+        if (logPublishScheduled.compareAndSet(false, true)) {
+            logScope.launch {
+                delay(LOG_PUBLISH_INTERVAL_MS)
+                logPublishScheduled.set(false)
+                _logs.value = synchronized(logBuffer) { logBuffer.toList() }
+            }
+        }
+    }
+
+    private val logBuffer = ArrayDeque<String>()
+    private val logPublishScheduled = AtomicBoolean(false)
+    private val logScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /**
      * Removes ANSI/VT100 colour & cursor escape sequences. sing-box/xray emit coloured levels like
@@ -119,6 +154,8 @@ object OlcboxVpnState {
     )
 
     private const val MAX_LOG_ENTRIES = 5_000
+    /** Как часто журнал уезжает в UI. Человеку хватает, GC — тем более. */
+    private const val LOG_PUBLISH_INTERVAL_MS = 250L
     // MUST stay "OlcboxVpnService": the full-logs logcat tailer skips lines whose tag contains this
     // string so our own addLog() output isn't re-captured from logcat and duplicated in the journal.
     private const val TAG = "OlcboxVpnService"

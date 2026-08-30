@@ -266,6 +266,9 @@ fun registerOlcRtcBuildTask(
 ) = tasks.register<Exec>(taskName) {
     val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
 
+    // Without an input the task is "up to date" for as long as the output file merely
+    // exists, so a re-vendored olcrtc would ship as a weeks-old binary.
+    inputs.dir(olcrtcRepoDir.get())
     outputs.file(outputFile)
     workingDir = olcrtcRepoDir.get()
     environment("GOOS", goos)
@@ -295,6 +298,9 @@ fun registerOlcRtcLibraryBuildTask(
 ) = tasks.register<Exec>(taskName) {
     val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
 
+    // Without an input the task is "up to date" for as long as the output file merely
+    // exists, so a re-vendored olcrtc would ship as a weeks-old binary.
+    inputs.dir(olcrtcRepoDir.get())
     outputs.file(outputFile)
     workingDir = olcrtcRepoDir.get()
     environment("GOOS", goos)
@@ -401,8 +407,12 @@ val buildOlcRtcLibWindowsArm64 = registerOlcRtcLibraryBuildTask(
     outputName = "olcrtc-windows-arm64.dll"
 )
 
+// The name/surname override lists the olcrtc binary loads over its embedded ones
+// (loadNameOverrides in cmd/olcrtc). Upstream moved them from data/ to
+// internal/names/data/ next to the //go:embed that owns them; the re-vendor in PR #28
+// therefore emptied this copy and verifyDesktopNativeResources refused to package.
 val copyOlcRtcDataAssets = tasks.register<Copy>("copyOlcRtcDataAssets") {
-    from(olcrtcRepoDir.map { it.resolve("data") }) {
+    from(olcrtcRepoDir.map { it.resolve("internal/names/data") }) {
         include("names", "surnames")
     }
     into(generatedNativeResources.map { it.dir("olcrtc-data") })
@@ -505,9 +515,19 @@ val ypTunCoreBuildTags =
 val coresRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("cores")
 
 // sing-box version embedded via ldflags (-X constant.Version); otherwise YpSbVersion() reports
-// "unknown" and the settings screen has to guess. Keep in sync with sharedUI's singboxVersion and
-// the sing-box version pinned in cores/go.mod.
-val ypTunCoreSingboxVersion = "1.13.18"
+// "unknown" and the settings screen has to guess. Читается ИЗ вендоренного дерева (первый заголовок
+// docs/changelog.md), как и в sharedUI: вбитая руками константа уже разъезжалась — ядро обновили до
+// 1.13.19, а в настройках висела 1.13.18.
+val singboxRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("sing-box")
+val ypTunCoreSingboxVersion: String = providers
+    .fileContents(objects.fileProperty().fileValue(singboxRepoDir.resolve("docs/changelog.md")))
+    .asText
+    .map { text ->
+        text.lineSequence()
+            .mapNotNull { Regex("""^####\s+(\d+\.\d+\.\d+\S*)\s*$""").find(it.trim())?.groupValues?.get(1) }
+            .firstOrNull() ?: "unknown"
+    }
+    .getOrElse("unknown")
 
 /**
  * cronet, NaïveProxy's engine, taken from the Go module cache and shipped as a native resource.
@@ -533,6 +553,25 @@ fun registerYpTunCoreBuildTask(
 
     inputs.dir(coresRepoDir.resolve("cmd"))
     inputs.file(coresRepoDir.resolve("go.mod"))
+    // olcrtc/mobile is compiled into this core through the path-replace in
+    // cores/go.mod, so a core re-sync has to invalidate it as well.
+    inputs.dir(olcrtcRepoDir.get())
+    // ...и ровно так же в ядро линкуются ОСТАЛЬНЫЕ соседние модули из replace-директив cores/go.mod.
+    // Без них правка, скажем, в awgproxy или free-turn-proxy не инвалидировала задачу: десктоп молча
+    // переиспользовал старую .so/.dll, и починка, уже уехавшая в Android, до ПК не доезжала вовсе.
+    // Тот же класс граблей, что был с olcrtc (строкой выше). Только .go/go.mod — остальное в сборку
+    // не попадает и хеширование не удорожает.
+    listOf("free-turn-proxy", "awgproxy", "wdtt", "dnstt", "sing-box", "xray-core", "amneziawg-go")
+        .map { coresRepoDir.resolveSibling(it) }
+        .filter { it.isDirectory }
+        .forEach { module ->
+            inputs.files(
+                fileTree(module) {
+                    include("**/*.go", "**/go.mod", "**/go.sum")
+                    exclude("**/testdata/**", "**/*_test.go")
+                }
+            )
+        }
     inputs.property("tags", ypTunCoreBuildTags)
     inputs.property("singboxVersion", ypTunCoreSingboxVersion)
     outputs.file(outputFile)
@@ -934,3 +973,4 @@ if (currentBuildOs.isLinux) {
         dependsOn(packageReleaseLinuxAppImage)
     }
 }
+

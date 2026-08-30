@@ -1,14 +1,4 @@
-// Package session - рантайм одной клиентской сессии: провайдер TURN-реквизитов,
-// DNS, DTLS-диалеры и выбранный режим релея (udprelay / tcpfwd).
-//
-// Общий для cmd/client, пакета mobile и любого будущего потребителя: хост даёт
-// конфиг, логгер и контекст, а взамен получает блокирующий Run и Snapshot для
-// UI. Пакет не знает ни про CLI, ни про gomobile - ничего из os.Exit, флагов и
-// платформенных типов здесь быть не должно.
-//
-// Одна активная сессия на процесс: dnsdial.InstallGlobalResolver и
-// netctl.SetControl - process-global, две параллельные сессии затирали бы
-// настройки друг друга.
+// Package session управляет жизненным циклом клиентской сессии и релея трафика.
 package session
 
 import (
@@ -25,70 +15,64 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk"
-	"github.com/samosvalishe/free-turn-proxy/internal/proxy/bondclient"
-	"github.com/samosvalishe/free-turn-proxy/internal/proxy/tcpfwd"
+	"github.com/samosvalishe/free-turn-proxy/internal/proxy/tcprelay"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/udprelay"
 	"github.com/samosvalishe/free-turn-proxy/internal/routemgr"
+	"github.com/samosvalishe/free-turn-proxy/internal/safego"
 	"github.com/samosvalishe/free-turn-proxy/internal/stats"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
+	"github.com/samosvalishe/free-turn-proxy/internal/wake"
 )
 
-// Phase - стадия подключения сессии.
+// Phase - текущая стадия подключения сессии.
 type Phase string
 
 const (
 	PhaseIdle       Phase = "idle"
 	PhaseConnecting Phase = "connecting"
 	PhaseConnected  Phase = "connected"
-	// PhaseCaptcha - пользователь решает captcha вручную. Отдельная стадия,
-	// чтобы UI не показывал ошибку, а watchdog не считал это зависанием.
+	// PhaseCaptcha - ожидание ручного ввода captcha пользователем.
 	PhaseCaptcha Phase = "captcha"
-	// PhaseError выставляет хост по ошибке из Run: сама сессия к этому моменту
-	// уже завершена.
-	PhaseError Phase = "error"
+	PhaseError   Phase = "error"
 )
 
 var (
-	ErrAlreadyRun = errors.New("session: already run")
-	// ErrConnectTimeout - ни один поток не поднялся за ConnectTimeout.
+	ErrAlreadyRun     = errors.New("session: already run")
 	ErrConnectTimeout = errors.New("session: connect timeout: no stream connected within the deadline")
 )
 
 const (
 	defaultStatusInterval       = 500 * time.Millisecond
-	defaultRateInterval         = time.Second
 	defaultUDPHandshakeTimeout  = 20 * time.Second
 	defaultTCPHandshakeTimeout  = 30 * time.Second
 	defaultHandshakeConcurrency = 3
+
+	// Порог вдвое больше тика: сон короче порога всё равно пропускаем, а тик почаще
+	// стоил бы пробуждений процесса на всё время сессии.
+	wakeTick      = 30 * time.Second
+	wakeThreshold = 60 * time.Second
+
+	// Окно проверки живости после пробуждения: рецикл - только если за него не пришло
+	// ни байта. Больше периода keepalive туннеля (25 c у WireGuard по умолчанию).
+	wakeProbeWindow = 30 * time.Second
 )
 
-// Options - тайминги и переключатели рантайма. Нулевое значение поля означает
-// "дефолт пакета"; ConnectTimeout=0 - особый случай, см. поле.
 type Options struct {
-	// ConnectTimeout ограничивает ожидание первого поднявшегося стрима: если за
-	// это время ни один не поднялся, Run возвращает ошибку вместо вечного
-	// connecting. Падение отдельного стрима не считается - таймаут снимается,
-	// пока жив хотя бы один. 0 отключает watchdog (поведение CLI: клиент ждёт
-	// столько, сколько попросили).
 	ConnectTimeout time.Duration
 
 	StatusInterval       time.Duration
-	RateInterval         time.Duration
 	UDPHandshakeTimeout  time.Duration
 	TCPHandshakeTimeout  time.Duration
 	HandshakeConcurrency int
+	// WakeProbeWindow - окно проверки живости канала после пробуждения.
+	WakeProbeWindow time.Duration
 
-	// Traffic включает подсчёт байт и скорости. Нужен UI; CLI без него не
-	// платит за атомики на пути пакета.
 	Traffic bool
 }
 
 func (o Options) withDefaults() Options {
 	if o.StatusInterval <= 0 {
 		o.StatusInterval = defaultStatusInterval
-	}
-	if o.RateInterval <= 0 {
-		o.RateInterval = defaultRateInterval
 	}
 	if o.UDPHandshakeTimeout <= 0 {
 		o.UDPHandshakeTimeout = defaultUDPHandshakeTimeout
@@ -99,30 +83,23 @@ func (o Options) withDefaults() Options {
 	if o.HandshakeConcurrency <= 0 {
 		o.HandshakeConcurrency = defaultHandshakeConcurrency
 	}
+	if o.WakeProbeWindow <= 0 {
+		o.WakeProbeWindow = wakeProbeWindow
+	}
 	return o
 }
 
-// Deps - зависимости хоста. Всё, кроме Logger, опционально.
 type Deps struct {
-	Logger logx.Logger
-	// Observer получает переходы состояния. nil - хост опрашивает Snapshot.
-	Observer Observer
-	// Solver - ручной решатель captcha. nil отключает ручной fallback.
-	Solver vk.ManualSolverFunc
-	// CaptchaActive сообщает, что прямо сейчас идёт ручное решение captcha:
-	// на это время watchdog приостанавливает отсчёт ConnectTimeout, а Snapshot
-	// отдаёт PhaseCaptcha. nil - captcha никогда не активна.
+	Logger        logx.Logger
+	Observer      Observer
+	Solver        vk.ManualSolverFunc
 	CaptchaActive func() bool
-	// LocalPipe подменяет локальный UDP-сокет каналом в памяти: так туннель,
-	// поднятый внутри процесса, соединяется с релеем напрямую. nil - обычный
-	// bind на cfg.Proxy.Listen. Только для udp-режима; сессия закрывает его сама.
+	// LocalPipe подменяет локальный UDP-сокет прямым каналом в памяти.
 	LocalPipe net.PacketConn
 	Options   Options
 }
 
-// Snapshot - консистентный срез состояния сессии для UI: и стадия подключения,
-// и статистика трафика. Один вызов на тик вместо нескольких геттеров - хост не
-// ловит рассогласование от порядка чтения.
+// Snapshot - моментальный снимок состояния сессии для UI.
 type Snapshot struct {
 	Phase   Phase
 	Streams int
@@ -141,8 +118,7 @@ type statusInfo struct {
 	err     string
 }
 
-// Session - одна клиентская сессия. Создаётся New, отрабатывает один Run,
-// повторно не используется.
+// Session инкапсулирует состояние и управление клиентской сессией.
 type Session struct {
 	cfg     *config.Client
 	deps    Deps
@@ -150,12 +126,14 @@ type Session struct {
 	total   int
 	traffic *traffic
 
-	connected atomic.Int32
-	status    atomic.Pointer[statusInfo]
-	started   atomic.Bool
+	connected   atomic.Int32
+	status      atomic.Pointer[statusInfo]
+	started     atomic.Bool
+	reconnectCh chan struct{}
+	recycleCh   chan struct{}
+	wakeCh      chan struct{}
 }
 
-// Сеть не трогает: блокирующие вызовы происходят в Run.
 func New(cfg *config.Client, deps Deps) (*Session, error) {
 	if cfg == nil {
 		return nil, errors.New("session: nil config")
@@ -164,33 +142,29 @@ func New(cfg *config.Client, deps Deps) (*Session, error) {
 		deps.Logger = logx.Nop()
 	}
 
-	// Несколько ссылок расширяют пул: каждая даёт cfg.TURN.N стримов, все
-	// объединяются в общий пул (больше параллельных TURN-аллокаций).
 	total := cfg.TURN.N * max(len(cfg.VK.Links), 1)
 
 	s := &Session{
-		cfg:   cfg,
-		deps:  deps,
-		opts:  deps.Options.withDefaults(),
-		total: total,
+		cfg:         cfg,
+		deps:        deps,
+		opts:        deps.Options.withDefaults(),
+		total:       total,
+		reconnectCh: make(chan struct{}, 1),
+		recycleCh:   make(chan struct{}, 1),
+		wakeCh:      make(chan struct{}, 1),
 	}
 	if s.opts.Traffic {
 		s.traffic = newTraffic()
 	}
-	// Созданная сессия уже "подключается": хост читает Snapshot сразу после New,
-	// и показывать ему idle до первой строки Run было бы враньём. Кладётся
-	// молча - наблюдателя на этот момент ещё нет, первое событие даст Run.
 	s.status.Store(&statusInfo{phase: PhaseConnecting, total: total})
 	return s, nil
 }
 
-// Блокирует до отмены ctx (возвращает nil) или фатальной ошибки.
+// Run запускает сессию и блокирует вызывающую горутину до завершения или ошибки.
 func (s *Session) Run(ctx context.Context) (err error) {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrAlreadyRun
 	}
-	// Первое событие сессии приходит всегда, даже если состояние совпало с
-	// заготовленным в New: для наблюдателя это начало жизни, а не повтор.
 	s.publish(&statusInfo{phase: PhaseConnecting, total: s.total}, true)
 	defer func() {
 		if err != nil {
@@ -227,36 +201,137 @@ func (s *Session) Run(ctx context.Context) (err error) {
 	defer cancel()
 
 	var bg sync.WaitGroup
-	if s.traffic != nil {
-		bg.Add(1)
-		go func() {
-			defer bg.Done()
-			s.traffic.rateMeter(runCtx, s.opts.RateInterval)
-		}()
+	var bgErr atomic.Pointer[error]
+	guard := func(fn func()) func() {
+		return func() {
+			if err := safego.Run(log, fn); err != nil {
+				bgErr.CompareAndSwap(nil, &err)
+				cancel()
+			}
+		}
 	}
+	bg.Go(guard(func() {
+		wake.New().Watch(runCtx, wakeTick, wakeThreshold, func(gap time.Duration) {
+			log.Warnf("device slept for %s - checking TURN allocations", gap.Truncate(time.Second))
+			s.Wake()
+		})
+	}))
+	bg.Go(guard(func() { s.watchWake(runCtx) }))
 
 	var watchdogErr error
-	bg.Add(1)
-	go func() {
-		defer bg.Done()
+	bg.Go(guard(func() {
 		watchdogErr = s.watch(runCtx, cancel)
-	}()
+	}))
 
-	relayErr := s.relay(runCtx, prov, peer)
-	// Причину смотрим до cancel: собственный defer сделал бы любой выход
-	// "отменённым" и проглотил бы настоящую ошибку релея.
+	relayErr := s.runRelayLoop(runCtx, prov, peer)
 	stopped := runCtx.Err() != nil
 	cancel()
 	bg.Wait()
 
+	if p := bgErr.Load(); p != nil {
+		return *p
+	}
 	if relayErr != nil && !stopped {
 		return relayErr
 	}
-	// Watchdog отменяет контекст сам, поэтому его ошибка приходит именно так.
 	return watchdogErr
 }
 
-// Snapshot - текущее состояние сессии. Безопасен из любой горутины.
+func (s *Session) runRelayLoop(ctx context.Context, prov provider.Provider, peer *net.UDPAddr) error {
+	return s.relayLoop(ctx, func(ctx context.Context) error { return s.relay(ctx, prov, peer) })
+}
+
+func (s *Session) relayLoop(ctx context.Context, attempt func(context.Context) error) error {
+	log := s.deps.Logger
+	for {
+		attemptCtx, attemptCancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() { done <- safego.Call(log, func() error { return attempt(attemptCtx) }) }()
+
+		var err error
+		select {
+		case err = <-done:
+		case <-s.reconnectCh:
+			attemptCancel()
+			err = <-done
+		}
+		attemptCancel()
+
+		if ctx.Err() != nil {
+			return err
+		}
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+	}
+}
+
+// Wake сообщает о подозрении на сон или смену сети. Рецикл не мгновенный: сначала
+// watchWake проверяет, молчит ли канал - пересоздание живых аллокаций стоит похода в VK
+// за реквизитами и решения капчи.
+func (s *Session) Wake() {
+	select {
+	case s.wakeCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Session) Reconnect() {
+	ch := s.reconnectCh
+	if s.cfg.Proxy.Mode == config.ProxyModeTCP {
+		ch = s.recycleCh
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Session) watchWake(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.wakeCh:
+		}
+		if s.wakeNeedsRecycle(ctx) {
+			s.Reconnect()
+		}
+	}
+}
+
+func (s *Session) wakeNeedsRecycle(ctx context.Context) bool {
+	log := s.deps.Logger
+	// Подключение ещё идёт: рецикл отменил бы перебор реквизитов и решение капчи.
+	if s.connected.Load() == 0 {
+		log.Warnf("wake: сессия ещё поднимается - рецикл пропущен")
+		return false
+	}
+	// Без счётчиков трафика подтвердить живость нечем.
+	if s.traffic == nil {
+		return true
+	}
+	before := s.traffic.stats.LivenessRx()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(s.opts.WakeProbeWindow):
+	}
+	// Пока ждали, могло прилететь ещё одно пробуждение - оно про тот же сон.
+	select {
+	case <-s.wakeCh:
+	default:
+	}
+	after := s.traffic.stats.LivenessRx()
+	if after > before {
+		log.Warnf("wake: канал жив (+%d B за %s) - рецикл не нужен", after-before, s.opts.WakeProbeWindow)
+		return false
+	}
+	log.Warnf("wake: тишина %s - рецикл TURN-аллокаций", s.opts.WakeProbeWindow)
+	return true
+}
+
+// Snapshot возвращает текущий снимок состояния сессии.
 func (s *Session) Snapshot() Snapshot {
 	st := s.status.Load()
 	if st == nil {
@@ -265,22 +340,15 @@ func (s *Session) Snapshot() Snapshot {
 	snap := Snapshot{Phase: st.phase, Streams: st.streams, Total: st.total, Err: st.err}
 	if s.traffic != nil {
 		snap.TxTotal, snap.RxTotal = s.traffic.stats.Counters()
-		snap.TxRate = s.traffic.txRate.Load()
-		snap.RxRate = s.traffic.rxRate.Load()
+		snap.TxRate, snap.RxRate = s.traffic.rates()
 	}
 	return snap
 }
 
-// setStatus публикует состояние и, если оно изменилось, дёргает Observer.
 func (s *Session) setStatus(phase Phase, streams int, errMsg string) {
 	s.publish(&statusInfo{phase: phase, streams: streams, total: s.total, err: errMsg}, false)
 }
 
-// publish кладёт состояние и уведомляет наблюдателя. force шлёт событие даже
-// при совпадении с предыдущим.
-//
-// Вызывается из одной горутины за раз: старт и терминальный статус - из Run,
-// промежуточные - из watch, который к моменту терминального уже завершён.
 func (s *Session) publish(next *statusInfo, force bool) {
 	prev := s.status.Swap(next)
 	if !force && prev != nil && *prev == *next {
@@ -295,8 +363,7 @@ func (s *Session) captchaActive() bool {
 	return s.deps.CaptchaActive != nil && s.deps.CaptchaActive()
 }
 
-// watch публикует стадию подключения и следит за ConnectTimeout. При срабатывании
-// отменяет сессию через cancel и возвращает ошибку - её Run отдаёт наружу.
+// watch публикует стадию подключения и следит за ConnectTimeout.
 func (s *Session) watch(ctx context.Context, cancel context.CancelFunc) error {
 	tick := time.NewTicker(s.opts.StatusInterval)
 	defer tick.Stop()
@@ -336,16 +403,15 @@ func (s *Session) watch(ctx context.Context, cancel context.CancelFunc) error {
 
 func (s *Session) relay(ctx context.Context, prov provider.Provider, peer *net.UDPAddr) error {
 	log := s.deps.Logger
-	getCreds := func(ctx context.Context, streamID int) (string, string, []string, error) {
+	getCreds := udprelay.GetCredsFunc(func(ctx context.Context, streamID int) (string, string, []string, error) {
 		c, err := prov.GetCredentials(ctx, streamID)
 		if err != nil {
 			return "", "", nil, err
 		}
 		return c.User, c.Pass, c.ServerAddrs, nil
-	}
+	})
 
-	// Управление маршрутами: создаём host-route для IP TURN-серверов через
-	// реальный шлюз, чтобы VPN не перехватывал TURN-трафик.
+	// host-route для IP TURN-серверов в обход VPN-туннеля.
 	var routeCallback func(net.IP)
 	if s.cfg.Routes && !s.cfg.Tunnel.Enabled() {
 		rm, rmErr := routemgr.New(log)
@@ -360,37 +426,20 @@ func (s *Session) relay(ctx context.Context, prov provider.Provider, peer *net.U
 		}
 	}
 
-	if s.cfg.Proxy.Mode != config.ProxyModeUDP {
-		dialer := &dtlsdial.Dialer{
-			HandshakeTimeout: s.opts.TCPHandshakeTimeout,
-			HandshakeSem:     make(chan struct{}, s.opts.HandshakeConcurrency),
-		}
-		bond := &bondclient.Handler{Deps: bondclient.Deps{Log: log}}
-		deps := &tcpfwd.Deps{
-			DTLSDialer:       dialer,
-			Log:              log,
-			BondHandler:      bond.Handle,
-			ConnectedStreams: &s.connected,
-			OnTURNServer:     routeCallback,
-		}
-		params := &tcpfwd.Params{
-			Host:         s.cfg.TURN.Host,
-			Port:         s.cfg.TURN.Port,
-			TransportUDP: s.cfg.TURN.TransportUDP,
-			Profile:      string(s.cfg.Obf.Profile),
-			ObfKey:       s.cfg.Obf.Key,
-			GetCreds:     tcpfwd.GetCredsFunc(getCreds),
-			KCPProfile:   s.cfg.KCP.Profile,
-			KCPFEC:       s.cfg.KCP.FEC,
-			ClientID:     s.cfg.ClientID,
-			TrafficStats: s.trafficStats(),
-		}
-		return tcpfwd.Run(ctx, deps, params, peer, s.cfg.Proxy.Listen, s.total, s.cfg.Proxy.Mode == config.ProxyModeTCPFwdBond)
+	if s.cfg.Proxy.Mode == config.ProxyModeTCP {
+		return s.relayTCP(ctx, prov, getCreds, peer, routeCallback)
 	}
+	return s.relayUDP(ctx, prov, getCreds, peer, routeCallback)
+}
 
+func (s *Session) relayUDP(ctx context.Context, prov provider.Provider, getCreds udprelay.GetCredsFunc, peer *net.UDPAddr, routeCallback func(net.IP)) error {
+	log := s.deps.Logger
 	local, err := s.localConn(ctx)
 	if err != nil {
 		return err
+	}
+	if s.deps.LocalPipe == nil {
+		defer func() { _ = local.Close() }()
 	}
 
 	dialer := &dtlsdial.Dialer{
@@ -404,16 +453,40 @@ func (s *Session) relay(ctx context.Context, prov provider.Provider, peer *net.U
 		Profile:      string(s.cfg.Obf.Profile),
 		ObfKey:       s.cfg.Obf.Key,
 		ObfTiming:    s.cfg.Obf.Timing,
-		GetCreds:     udprelay.GetCredsFunc(getCreds),
+		GetCreds:     getCreds,
 		ClientID:     s.cfg.ClientID,
 		TrafficStats: s.trafficStats(),
 	}
 	return udprelay.Run(ctx, dialer, prov, log, &s.connected, routeCallback, params, peer, local, s.total)
 }
 
-// localConn открывает канал до локального пира. Обычно это UDP-сокет на
-// cfg.Proxy.Listen, куда ходит внешний WireGuard. Если хост дал LocalPipe -
-// туннель живёт в этом же процессе, и петля через 127.0.0.1 не нужна.
+func (s *Session) relayTCP(ctx context.Context, prov provider.Provider, getCreds udprelay.GetCredsFunc, peer *net.UDPAddr, routeCallback func(net.IP)) error {
+	deps := &tcprelay.Deps{
+		DTLSDialer: &dtlsdial.Dialer{
+			HandshakeTimeout: s.opts.TCPHandshakeTimeout,
+			HandshakeSem:     make(chan struct{}, s.opts.HandshakeConcurrency),
+		},
+		Auth:             prov,
+		Log:              s.deps.Logger,
+		ConnectedStreams: &s.connected,
+		OnTURNServer:     routeCallback,
+		Recycle:          s.recycleCh,
+	}
+	params := &tcprelay.Params{
+		Host:         s.cfg.TURN.Host,
+		Port:         s.cfg.TURN.Port,
+		TransportUDP: s.cfg.TURN.TransportUDP,
+		Profile:      string(s.cfg.Obf.Profile),
+		ObfKey:       s.cfg.Obf.Key,
+		ObfTiming:    s.cfg.Obf.Timing,
+		GetCreds:     getCreds,
+		KCPProfile:   s.cfg.KCP.Profile,
+		ClientID:     s.cfg.ClientID,
+		TrafficStats: s.trafficStats(),
+	}
+	return tcprelay.Run(ctx, deps, params, peer, s.cfg.Proxy.Listen, s.total)
+}
+
 func (s *Session) localConn(ctx context.Context) (net.PacketConn, error) {
 	if s.deps.LocalPipe != nil {
 		s.deps.Logger.Infof("local peer: in-process pipe (no loopback socket)")

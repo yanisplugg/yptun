@@ -10,8 +10,6 @@ import (
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
-// fetchTurnCreds - шаг 4 цепочки: вызывает vchat.joinConversationByLink
-// и извлекает TURN username, credential и список адресов из ответа.
 func (c *Client) fetchTurnCreds(
 	ctx context.Context,
 	httpClient tlsclient.HttpClient,
@@ -45,9 +43,9 @@ func (c *Client) fetchTurnCreds(
 		return "", "", nil, fmt.Errorf("missing or empty urls in turn_server")
 	}
 
-	c.log.Infof("[STREAM %d] [VK Auth] TURN urls (%d total):", streamID, len(urlsRaw))
+	c.log.Debugf("[STREAM %d] [VK Auth] TURN urls (%d total):", streamID, len(urlsRaw))
 	for i, u := range urlsRaw {
-		c.log.Infof("[STREAM %d] [VK Auth]   [%d] %v", streamID, i, u)
+		c.log.Debugf("[STREAM %d] [VK Auth]   [%d] %v", streamID, i, u)
 	}
 
 	for _, u := range urlsRaw {

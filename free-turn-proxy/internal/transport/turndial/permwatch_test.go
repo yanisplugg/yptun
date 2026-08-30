@@ -29,7 +29,6 @@ func TestPermWatchFiresAfterThreshold(t *testing.T) {
 	if fired.Load() != 1 {
 		t.Fatalf("expected 1 fire after threshold, got %d", fired.Load())
 	}
-	// Дальнейшие провалы не должны фаерить повторно.
 	log.Warnf(permFailMarker+": %s", "boom")
 	if fired.Load() != 1 {
 		t.Fatalf("fired more than once: %d", fired.Load())
@@ -41,7 +40,7 @@ func TestPermWatchResetOnSuccess(t *testing.T) {
 	log := f.NewLogger(turncScope)
 
 	log.Warnf(permFailMarker + ": x")
-	log.Debug(permOKMarker) // сброс счётчика
+	log.Debug(permOKMarker)
 	log.Warnf(permFailMarker + ": x")
 	if fired.Load() != 0 {
 		t.Fatalf("reset failed: fired=%d (fail/ok/fail не должно фаерить)", fired.Load())

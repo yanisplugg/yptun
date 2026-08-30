@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
 
-import "github.com/amnezia-vpn/amneziawg-go/conn"
+import "github.com/amnezia-vpn/amneziawg-go/v3/conn"
 
 /* Reduce memory consumption for Android */
 

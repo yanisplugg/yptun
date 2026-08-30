@@ -1,9 +1,8 @@
 // Package builtin wires the built-in auth providers to their engines and
 // registers a name-keyed factory that transports use to obtain an
-// [engine.Session]. The factory replaces the former carrier layer: when
-// the auth provider is "none" the caller supplies engine/URL/token
-// directly; otherwise the named provider issues credentials and the
-// matching engine is constructed.
+// [engine.Session]. When the auth provider is "none" the caller supplies
+// engine/URL/token directly; otherwise the named provider issues credentials
+// and the engine it reports is constructed.
 package builtin
 
 import (
@@ -11,23 +10,29 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
+	"sync"
 
 	"github.com/openlibrecommunity/olcrtc/internal/auth"
 	authJitsi "github.com/openlibrecommunity/olcrtc/internal/auth/jitsi"
 	authTelemost "github.com/openlibrecommunity/olcrtc/internal/auth/telemost"
 	authWBStream "github.com/openlibrecommunity/olcrtc/internal/auth/wbstream"
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
-	_ "github.com/openlibrecommunity/olcrtc/internal/engine/goolom"  // register goolom engine via init
-	_ "github.com/openlibrecommunity/olcrtc/internal/engine/jitsi"   // register jitsi engine via init
-	_ "github.com/openlibrecommunity/olcrtc/internal/engine/livekit" // register livekit engine via init
+	"github.com/openlibrecommunity/olcrtc/internal/engine/goolom"
+	engineJitsi "github.com/openlibrecommunity/olcrtc/internal/engine/jitsi"
+	"github.com/openlibrecommunity/olcrtc/internal/engine/livekit"
 )
 
-// ErrCarrierNotFound is returned when an unregistered carrier name is requested.
-var ErrCarrierNotFound = errors.New("carrier not found")
+// defaultDirectEngine is used by the "none" provider when the config does not
+// name an engine explicitly.
+const defaultDirectEngine = "livekit"
+
+// ErrProviderNotFound is returned when an unregistered provider name is requested.
+var ErrProviderNotFound = errors.New("auth provider not found")
 
 // ErrAuthFailed wraps an auth provider rejection. It pairs with the inner
 // provider error returned from [Open].
-var ErrAuthFailed = errors.New("carrier auth failed")
+var ErrAuthFailed = errors.New("auth provider rejected the request")
 
 // Config holds the inputs to [Open]. The fields mirror the subset of
 // transport.Config that engines consume.
@@ -41,103 +46,91 @@ type Config struct {
 	ProxyAddr           string
 	ProxyPort           int
 	RequireTargetedPeer bool
-	// Engine, URL, Token are honoured only for the "none" carrier (direct
-	// engine access); other carriers derive them from their auth provider.
+	// Engine, URL, Token are honoured only for the "none" provider (direct
+	// engine access); other providers derive them from their auth flow.
 	Engine string
 	URL    string
 	Token  string
-	// AuthToken is an optional pre-issued account token forwarded to the auth
+	// ProviderToken is an optional pre-issued account token forwarded to the auth
 	// provider so it can act as that account instead of running its guest
 	// flow (e.g. a WB Stream account token). Empty uses the guest flow.
-	AuthToken string
+	ProviderToken string
 }
 
-// Factory creates an engine session for a given carrier.
+// Factory creates an engine session for a given provider.
 type Factory func(ctx context.Context, cfg Config) (engine.Session, error)
 
-var registry = map[string]Factory{} //nolint:gochecknoglobals // package-level registry
+//nolint:gochecknoglobals // process-wide provider registry
+var (
+	registryMu sync.RWMutex
+	registry   = map[string]Factory{}
+)
 
-// Register adds a carrier factory.
+// Register adds a provider factory.
 func Register(name string, f Factory) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+
 	registry[name] = f
 }
 
-// Open looks up the carrier factory and creates an engine session.
+// Open looks up the provider factory and creates an engine session.
 func Open(ctx context.Context, name string, cfg Config) (engine.Session, error) {
-	f, ok := registry[name]
+	registryMu.RLock()
+	factory, ok := registry[name]
+	registryMu.RUnlock()
+
 	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrCarrierNotFound, name)
+		return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, name)
 	}
-	return f(ctx, cfg)
+
+	return factory(ctx, cfg)
 }
 
-// Available reports all registered carrier names.
+// Available reports all registered provider names, sorted.
 func Available() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
 	names := make([]string, 0, len(registry))
 	for name := range registry {
 		names = append(names, name)
 	}
+
+	slices.Sort(names)
+
 	return names
 }
 
-// RegisterDefaults wires the built-in carriers: jitsi, telemost, wbstream
+// RegisterDefaults wires the built-in providers: jitsi, telemost, wbstream
 // and "none" (direct engine access).
 func RegisterDefaults() {
-	registerEngineAuth("wbstream", authWBStream.Provider{})
-	registerEngineAuth("telemost", authTelemost.Provider{})
-	registerEngineAuth("jitsi", authJitsi.Provider{})
-	registerDirect("none")
+	engine.Register("livekit", livekit.New)
+	engine.Register("goolom", goolom.New)
+	engine.Register("jitsi", engineJitsi.New)
+	register("wbstream", authWBStream.Provider{})
+	register("telemost", authTelemost.Provider{})
+	register("jitsi", authJitsi.Provider{})
+	register("none", nil)
 }
 
-// registerDirect registers a carrier that skips auth: the caller supplies
-// engine/URL/token directly via [Config].
-func registerDirect(name string) {
+// register adds a provider factory. A nil provider means direct engine access:
+// the caller supplies engine/URL/token through [Config] and no auth flow runs.
+func register(name string, provider auth.Provider) {
+	if provider != nil {
+		auth.Register(name, provider)
+	}
 	Register(name, func(ctx context.Context, cfg Config) (engine.Session, error) {
-		engineName := cfg.Engine
-		if engineName == "" {
-			engineName = "livekit"
+		engineName, creds, refresh, err := resolveCredentials(ctx, provider, cfg)
+		if err != nil {
+			return nil, err
 		}
+
 		sess, err := engine.New(ctx, engineName, engine.Config{
-			URL:                 cfg.URL,
-			Token:               cfg.Token,
-			Name:                cfg.Name,
-			OnData:              cfg.OnData,
-			OnPeerData:          cfg.OnPeerData,
-			DNSServer:           cfg.DNSServer,
-			Resolver:            cfg.Resolver,
-			ProxyAddr:           cfg.ProxyAddr,
-			ProxyPort:           cfg.ProxyPort,
-			RequireTargetedPeer: cfg.RequireTargetedPeer,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("engine new: %w", err)
-		}
-		return sess, nil
-	})
-}
-
-// registerEngineAuth registers a carrier that resolves credentials through an
-// auth provider and connects via the engine the auth provider reports.
-func registerEngineAuth(name string, provider auth.Provider) {
-	Register(name, func(ctx context.Context, cfg Config) (engine.Session, error) {
-		authCfg := auth.Config{
-			RoomURL:   cfg.RoomURL,
-			Name:      cfg.Name,
-			Token:     cfg.AuthToken,
-			DNSServer: cfg.DNSServer,
-			Resolver:  cfg.Resolver,
-			ProxyAddr: cfg.ProxyAddr,
-			ProxyPort: cfg.ProxyPort,
-		}
-		creds, err := provider.Issue(ctx, authCfg)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrAuthFailed, err)
-		}
-		sess, err := engine.New(ctx, provider.Engine(), engine.Config{
 			URL:                 creds.URL,
 			Token:               creds.Token,
-			Name:                cfg.Name,
 			Extra:               creds.Extra,
+			Name:                cfg.Name,
 			OnData:              cfg.OnData,
 			OnPeerData:          cfg.OnPeerData,
 			DNSServer:           cfg.DNSServer,
@@ -145,17 +138,56 @@ func registerEngineAuth(name string, provider auth.Provider) {
 			ProxyAddr:           cfg.ProxyAddr,
 			ProxyPort:           cfg.ProxyPort,
 			RequireTargetedPeer: cfg.RequireTargetedPeer,
-			Refresh: func(ctx context.Context) (engine.Credentials, error) {
-				fresh, err := provider.Issue(ctx, authCfg)
-				if err != nil {
-					return engine.Credentials{}, fmt.Errorf("auth refresh: %w", err)
-				}
-				return engine.Credentials{URL: fresh.URL, Token: fresh.Token, Extra: fresh.Extra}, nil
-			},
+			Refresh:             refresh,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("engine new: %w", err)
 		}
+
 		return sess, nil
 	})
+}
+
+// resolveCredentials returns the engine to build, the credentials to build it
+// with and, for auth-backed providers, a callback that re-issues them when the
+// engine needs to reconnect with fresh ones.
+func resolveCredentials(
+	ctx context.Context,
+	provider auth.Provider,
+	cfg Config,
+) (string, engine.Credentials, func(context.Context) (engine.Credentials, error), error) {
+	if provider == nil {
+		engineName := cfg.Engine
+		if engineName == "" {
+			engineName = defaultDirectEngine
+		}
+
+		return engineName, engine.Credentials{URL: cfg.URL, Token: cfg.Token}, nil, nil
+	}
+
+	authCfg := auth.Config{
+		RoomURL:   cfg.RoomURL,
+		Name:      cfg.Name,
+		Token:     cfg.ProviderToken,
+		DNSServer: cfg.DNSServer,
+		Resolver:  cfg.Resolver,
+		ProxyAddr: cfg.ProxyAddr,
+		ProxyPort: cfg.ProxyPort,
+	}
+
+	issue := func(ctx context.Context) (engine.Credentials, error) {
+		creds, err := provider.Issue(ctx, authCfg)
+		if err != nil {
+			return engine.Credentials{}, fmt.Errorf("%w: %w", ErrAuthFailed, err)
+		}
+
+		return engine.Credentials{URL: creds.URL, Token: creds.Token, Extra: creds.Extra}, nil
+	}
+
+	creds, err := issue(ctx)
+	if err != nil {
+		return "", engine.Credentials{}, nil, err
+	}
+
+	return provider.Engine(), creds, issue, nil
 }

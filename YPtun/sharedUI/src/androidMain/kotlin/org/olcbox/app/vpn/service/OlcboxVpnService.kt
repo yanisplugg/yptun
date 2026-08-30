@@ -61,6 +61,7 @@ import com.adguard.trusttunnel.VpnClient as TrustTunnelVpnClient
 import com.adguard.trusttunnel.VpnClientListener as TrustTunnelListener
 import mobile.LogWriter
 import mobile.Mobile
+import mobile.Runtime as OlcrtcRuntime
 import mobile.SocketProtector
 import org.olcbox.app.data.TUN2SOCKS_CONFIG_FILE_NAME
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
@@ -218,9 +219,13 @@ class OlcboxVpnService : VpnService() {
     private var httpProxyBridge: HttpProxyBridge? = null
     private var singBox: SingBoxEngine? = null
     private var xray: XrayEngine? = null
-    // Multi-room (Stealth/Chain): when a location uses it, the singleton Mobile.start* is replaced by N
-    // independent rooms fronted by a round-robin balancer (see OlcrtcRoomManager). Null = single-room.
+    // Multi-room (Stealth/Chain): when a location uses it, the single mobileRuntime tunnel is replaced by
+    // N independent rooms fronted by a round-robin balancer (see OlcrtcRoomManager). Null = single-room.
     private var olcrtcRoomManager: OlcrtcRoomManager? = null
+    // One owned olcRTC client lifecycle for the single-room path (Runtime replaced the old
+    // package-level Mobile.start/stop/waitReady singleton upstream). Independent rooms (multi-room
+    // path above) use their own package-level Mobile.startRoom/stopRoom handles, not this instance.
+    private val mobileRuntime: OlcrtcRuntime = Mobile.new_()
     private var engineType: EngineType = EngineType.Stealth
     private var activeMtu: Int = TUN_MTU
     // Snapshotted from the (suspend) traffic settings in [startMobile] so the non-suspend
@@ -264,8 +269,12 @@ class OlcboxVpnService : VpnService() {
         }
 
         override fun onLost(network: Network) {
-            addLog("Network lost")
+            // Колбэк приходит на ЛЮБУЮ исчезнувшую сеть, включая наш собственный VPN-интерфейс и
+            // чужие транзитные. Раньше «Network lost» писалось до проверки, и в журнале оно
+            // появлялось сразу после подъёма туннеля — выглядело как обрыв связи, хотя апстрим
+            // был жив и обработчик тут же выходил. Пишем только про сеть, на которой мы работаем.
             if (network != currentNetwork) return
+            addLog("Network lost")
 
             networkLossJob?.cancel()
             networkLossJob = scope.launch {
@@ -525,7 +534,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun installMobileCallbacks() {
-        Mobile.setProtector(object : SocketProtector {
+        mobileRuntime.setProtector(object : SocketProtector {
             override fun protect(fd: Long): Boolean {
                 if (connectionMode.isTunless) return true
                 return this@OlcboxVpnService.protect(fd.toInt())
@@ -551,8 +560,7 @@ class OlcboxVpnService : VpnService() {
                 }
             })
         }.onFailure { Log.w(TAG, "awg setProtector failed", it) }
-        Mobile.setProviders()
-        Mobile.setLogWriter(object : LogWriter {
+        mobileRuntime.setLogWriter(object : LogWriter {
             override fun writeLog(msg: String) {
                 val line = msg.trimEnd()
                 addLog("rtc: $line")
@@ -989,7 +997,6 @@ class OlcboxVpnService : VpnService() {
                     rooms = specs,
                     listenHost = socksListenHost,
                     listenPort = port,
-                    basePort = port + 101,
                     user = socksUsername,
                     pass = socksPassword,
                     bond = bond,
@@ -1010,11 +1017,21 @@ class OlcboxVpnService : VpnService() {
                     "transport=${config.transport}, room=${config.id}"
             )
         }
-        Mobile.startWithTransport(
-            config.bypassProvider, config.transport, config.id, deviceId, config.key,
-            port.toLong(), socksUsername, socksPassword,
-        )
-        Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+        mobileRuntime.setProvider(config.bypassProvider)
+        mobileRuntime.setRoom(config.id)
+        mobileRuntime.setKey(config.key)
+        mobileRuntime.setDeviceID(deviceId)
+        mobileRuntime.setSocksPort(port.toLong())
+        mobileRuntime.setSocksCredentials(socksUsername, socksPassword)
+        // A generation left in "stopping" (a teardown that outran its timeout) makes every
+        // later start fail with ErrAlreadyRunning until the app is killed, so give the old
+        // one a bounded teardown before starting. A no-op on the normal path.
+        if (mobileRuntime.isRunning()) {
+            addLog("olcRTC still active before start - tearing the previous run down first")
+            runCatching { mobileRuntime.stop(PREVIOUS_STOP_WAIT_MS) }
+        }
+        mobileRuntime.start()
+        mobileRuntime.waitReady(MOBILE_READY_TIMEOUT_MS)
     }
 
     private suspend fun startStealthCore(
@@ -1076,7 +1093,7 @@ class OlcboxVpnService : VpnService() {
             }
             false
         } finally {
-            if (!keepProcessBound || !Mobile.isRunning()) {
+            if (!keepProcessBound || !mobileRuntime.isRunning()) {
                 unbindProcessFromNetwork()
             }
         }
@@ -1761,10 +1778,9 @@ class OlcboxVpnService : VpnService() {
                         cancelVkCaptchaNotification()
                     }
                 })
-                // freeturn rejects `bond=1` unless mode==tcp; an old/imported URI carrying it in a udp
-                // (WireGuard/AmneziaWG) tunnel makes the client fail to start. Strip it defensively.
-                val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
-                    else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+                // bond=1 в старых ссылках ядро 3.2.0 просто игнорирует (раньше оно падало на нём в
+                // udp-режиме, поэтому поле вырезалось здесь), так что URI уходит как есть.
+                val freeturnUri = vk.uri
                 // Parallel TURN stream count, scaled GENTLY with the number of VK call links. The earlier
                 // aggressive scaling (links×10) made it SLOWER, not faster: a single WireGuard flow sprayed
                 // across 20-64 TURN paths of differing latency reorders past WG's replay window → drops →
@@ -1792,7 +1808,6 @@ class OlcboxVpnService : VpnService() {
                     val n = freeturnServers.size
                     val specsJson = Json.encodeToString(buildJsonArray {
                         freeturnServers.forEachIndexed { idx, u ->
-                            val sUri = u.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
                             // This server's share of the call links; if fewer links than servers, wrap
                             // so every relay still gets at least one call.
                             val myLinks = allLinks.filterIndexed { li, _ -> li % n == idx }
@@ -1803,7 +1818,7 @@ class OlcboxVpnService : VpnService() {
                                 .let { maxOf(vk.streams.takeIf { s -> s > 0 } ?: 0, it) }
                                 .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
                             addJsonObject {
-                                put("uri", sUri)
+                                put("uri", u)
                                 put("listenAddr", "127.0.0.1:${vk.listenPort + idx}")
                                 put("vkLink", myLinks.joinToString("\n"))
                                 put("streams", myStreams)
@@ -2199,7 +2214,7 @@ class OlcboxVpnService : VpnService() {
 
     /** olcRTC is alive in single-room (singleton) OR multi-room (>=1 independent room up) mode. */
     private fun olcrtcRunning(): Boolean =
-        Mobile.isRunning() || (olcrtcRoomManager != null && Mobile.roomsRunning() > 0)
+        mobileRuntime.isRunning() || (olcrtcRoomManager != null && Mobile.roomsRunning() > 0)
 
     /** True when the active engine's core(s) are alive. */
     private fun coreRunning(): Boolean = when (engineType) {
@@ -2250,14 +2265,45 @@ class OlcboxVpnService : VpnService() {
 
     private fun configureMobileTransport(location: LocationConfig) {
         val config = location.normalized()
-        Mobile.setProviders()
-        Mobile.setTransport(config.transport)
-        // Preference-ordered DNS list (olcRTC probes & sticks to the first that actually answers):
-        // Yandex first — it stays reachable on RU IPv4-only mobile where Cloudflare/Google UDP/53 are
-        // blocked, which previously left OLCRTC unable to resolve ("doesn't work on IPv4-only").
-        Mobile.setDNS("77.88.8.8:53,8.8.8.8:53,1.1.1.1:53")
-        Mobile.setSocksListenHost(socksListenHost)
-        Mobile.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
+        mobileRuntime.setTransport(config.transport)
+        mobileRuntime.setDNS(resolveOlcRtcDnsServer())
+        mobileRuntime.setSocksListenHost(socksListenHost)
+        mobileRuntime.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
+    }
+
+    /**
+     * Picks the DNS server olcRTC uses to resolve provider hostnames (Jitsi/Telemost) before the tunnel
+     * is up: the ACTIVE upstream network's own configured resolver first (fast, LAN-local, and correctly
+     * reflects whatever the user's router/AdGuard Home hands out over DHCP) — falling back to our
+     * preference-ordered public list (Runtime.setDNS probes it and sticks to the first that answers) only
+     * when the network doesn't advertise one. That fallback exists for RU IPv4-only mobile networks where
+     * Cloudflare/Google UDP/53 are frequently blocked; it would previously leave olcRTC unable to resolve.
+     */
+    private fun resolveOlcRtcDnsServer(): String {
+        val upstreamDnsServer = currentNetwork
+            ?.let(connectivityManager::getLinkProperties)
+            ?.dnsServers
+            ?.asSequence()
+            ?.filterNot { it.isAnyLocalAddress || it.isLoopbackAddress || it.isMulticastAddress }
+            ?.sortedBy { it.address.size }
+            ?.mapNotNull { it.hostAddress }
+            ?.map(::dnsEndpoint)
+            ?.firstOrNull()
+
+        // Keep the fallbacks appended instead of replaced: olcrtc takes a LIST and walks it
+        // in order (protect.splitDNSServers/pickReachableDNS, which really resolves a probe
+        // name through each candidate). A carrier resolver that answers but answers wrong
+        // then fails the probe and signaling moves on, instead of being stranded on it.
+        val selectedDnsServer = upstreamDnsServer
+            ?.let { "$it,$FALLBACK_OLCRTC_DNS_SERVERS" }
+            ?: FALLBACK_OLCRTC_DNS_SERVERS
+        val source = if (upstreamDnsServer != null) "upstream+fallback" else "fallback"
+        addLog("Using $source DNS server $selectedDnsServer for olcRTC signaling")
+        return selectedDnsServer
+    }
+
+    private fun dnsEndpoint(address: String): String {
+        return if (':' in address) "[$address]:53" else "$address:53"
     }
 
     private fun startTun2socks(pfd: ParcelFileDescriptor): Boolean {
@@ -2894,8 +2940,10 @@ class OlcboxVpnService : VpnService() {
         runCatching { trustTunnelClient?.close() }
         trustTunnelClient = null
         val provider = lastMobileProvider
-        val wasRunning = Mobile.isRunning()
-        runCatching { Mobile.stop() }
+        val wasRunning = mobileRuntime.isRunning()
+        // stop(0) means Runtime's own 5 s default; on timeout it stays "stopping" and every
+        // later start returns ErrAlreadyRunning. Wait as long as a reconnect already does.
+        runCatching { mobileRuntime.stop(PREVIOUS_STOP_WAIT_MS) }
         if (wasRunning && provider == LocationConfig.PROVIDER_JITSI) {
             lastJitsiStopCompletedAtMs = System.currentTimeMillis()
         }
@@ -3192,7 +3240,7 @@ class OlcboxVpnService : VpnService() {
         val use = behavior.telemostCookiesEnabled &&
             behavior.telemostCookies.isNotBlank() &&
             LocationConfig.normalizeProvider(config.bypassProvider) == LocationConfig.PROVIDER_TELEMOST
-        runCatching { Mobile.setTelemostCookies(if (use) behavior.telemostCookies.trim() else "") }
+        runCatching { mobileRuntime.setTelemostCookies(if (use) behavior.telemostCookies.trim() else "") }
         if (use) addLog("Applied Telemost cookies")
     }
 
@@ -4235,6 +4283,10 @@ class OlcboxVpnService : VpnService() {
         private const val LOCAL_SOCKS_PORT_BASE = 10818
         private const val LOCAL_SOCKS_PORT_MAX = 10858
         private const val MOBILE_READY_TIMEOUT_MS = 25_000L
+        // Preference-ordered fallback when the active network advertises no usable DNS (see
+        // resolveOlcRtcDnsServer): Yandex first — it stays reachable on RU IPv4-only mobile where
+        // Cloudflare/Google UDP/53 are frequently blocked.
+        private const val FALLBACK_OLCRTC_DNS_SERVERS = "77.88.8.8:53,8.8.8.8:53,1.1.1.1:53"
         private const val PREVIOUS_STOP_WAIT_MS = 12_000L
         private const val JITSI_RESTART_SETTLE_MS = 2_000L
         private const val TUN2SOCKS_STOP_WAIT_MS = 1_000L
@@ -4320,6 +4372,11 @@ class OlcboxVpnService : VpnService() {
         private val LOGCAT_NOISE = listOf(
             // sing-box is double-logged (Go LogWriter → "sb: …" AND android Log tag "sing-box").
             "/sing-box",
+            // То же самое у AmneziaWG и olcRTC: их строки уже уходят в журнал как "awg: …" / "rtc: …",
+            // а Log.v с собственным тегом оставлен ради `adb logcat awg:V`. Без этих двух фильтров
+            // КАЖДАЯ строка ядра попадала в журнал ДВАЖДЫ — на старте AmneziaWG это под сотню дублей
+            // (видно в отчёте пользователя 30.08): нечитаемый лог и лишний расход памяти.
+            "/awg", "/olcrtc",
             // Android view / render / window / input framework — pure UI churn.
             "/View", "/VRI[", "/HWUI", "/ViewRootImpl", "/DecorView", "/SurfaceView",
             "/InputTransport", "/InputMethodManager", "/ImeFocusController", "/ImeTracker",

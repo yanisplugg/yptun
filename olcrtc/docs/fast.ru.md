@@ -9,7 +9,7 @@
 
 </div>
 
-# Быстрый старт (через скрипты)
+# Быстрый старт (через install.sh)
 
 > **Важно:** Обязательно проверяйте, есть ли сервис видеозвонков у вас в белых списках, работает ли он в вашей сети и так далее. Если нет - используйте другой.
 
@@ -59,7 +59,15 @@ sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
 
 ---
 
-## Шаг 1: Скачать репозиторий
+## Шаг 1: Получить install.sh
+
+Можно запустить прямо с GitHub:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/openlibrecommunity/olcrtc/master/install.sh | bash
+```
+
+Или сначала склонировать репозиторий, если хочется иметь исходники рядом:
 
 ```sh
 git clone https://github.com/openlibrecommunity/olcrtc --recurse-submodules
@@ -72,15 +80,11 @@ cd olcrtc
 
 ## Шаг 2: Запустить сервер
 
-На машине, через которую должен идти трафик (VPS, сервер за рубежом, домашний ПК):
+На машине, через которую должен идти трафик (VPS, сервер за рубежом, домашний ПК), запусти однострочник выше или `./install.sh` из клона и выбери **1) server**, когда спросят режим.
 
-```sh
-./script/srv.sh
-```
+Скрипт сам поставит podman при необходимости, склонирует актуальный код, соберёт бинарник в контейнере и запустит. Дальше он задаст вопросы.
 
-Скрипт сам поставит podman при необходимости, склонирует актуальный код, соберёт бинарник в контейнере и запустит сервер. Дальше он задаст вопросы.
-
-#### Флаги `srv.sh`
+#### Флаги `install.sh`
 
 | Флаг | Что делает |
 |---|---|
@@ -88,14 +92,14 @@ cd olcrtc
 | `--no-cache` | Очистить Go-кеш (`~/.cache/olcrtc`) перед сборкой - пересобрать с нуля |
 
 ```sh
-./script/srv.sh --no-cache               # сборка с нуля
-./script/srv.sh --branch=dev --no-cache  # ветка dev, без кеша
+./install.sh --no-cache               # сборка с нуля
+./install.sh --branch=dev --no-cache  # ветка dev, без кеша
 ```
 
-### Carrier (на каком сервисе передавать трафик)
+### Provider (на каком сервисе передавать трафик)
 
 ```
-Select carrier:
+Select provider:
   1) jitsi
   2) telemost
   3) wbstream
@@ -123,16 +127,16 @@ Enter choice [1-4, default: 1]:
 
 **Рекомендуемая комбинация: `jitsi + datachannel`**. Альтернатива: `wbstream + vp8channel`.
 
-### Jitsi-сервер (только для carrier jitsi)
+### Jitsi-сервер (только для provider jitsi)
 
 ```
 Введите URL Jitsi-комнаты (https://HOST/ROOM).
-Выберите HOST из docs/examples/jitsi.instances.yaml и проверьте, что он открывается в браузере.
+Выберите HOST из docs/jitsi.instances.yaml и проверьте, что он открывается в браузере.
 ```
 
 Выбери тот сервер, который **открывается в твоём браузере**. Подойдёт любой публичный или self-hosted Jitsi Meet.
 
-### Room (только для carrier jitsi)
+### Room (только для provider jitsi)
 
 ```
 Room options:
@@ -174,7 +178,7 @@ Enter choice [1-2, default: 1]:
 - **qrcode** - QR-коды, настраиваемое разрешение, стабильный, медленный.
 - **tile** - тайловый кодек, только 1080x1080, поддержка Reed-Solomon, быстрее, но менее стабилен.
 
-Дальше скрипт спросит ширину/высоту, коррекцию ошибок QR, размер фрагмента (или параметры tile), FPS, битрейт и аппаратное ускорение (`none`/`nvenc`). Для значений по умолчанию жми Enter.
+Дальше скрипт спросит ширину/высоту, коррекцию ошибок QR, размер фрагмента (или параметры tile) и FPS. Для значений по умолчанию жми Enter.
 
 ### Параметры транспорта (только vp8channel)
 
@@ -206,13 +210,13 @@ Enter a comment for the config (default: olc - t.me/openlibrecommunity):
 
 ### Результат
 
-После запуска скрипт выведет имя контейнера, carrier, transport, Room ID, **ключ шифрования** и готовый `olcrtc://` URI:
+После запуска скрипт выведет имя контейнера, provider, transport, Room ID, **ключ шифрования** и готовый `olcrtc://` URI:
 
 ```
 [+] Server started successfully!
 
 Container name: olcrtc-server-xxxxxxxx
-Carrier:        jitsi
+Provider:        jitsi
 Transport:      datachannel
 Room ID/URL:    https://meet.example.org/olcrtc-xxxxxxxx
 Encryption key: d823fa01cb3e0609b67322f7cf984c4ee2e294936fc24ef38c9e59f4799...
@@ -231,10 +235,10 @@ uri: olcrtc://jitsi?datachannel@https://meet.example.org/olcrtc-xxxxxxxx#<key>$o
 > Хочешь готовый Android-клиент? Возьми [owenewans/owenclave](https://github.com/owenewans/owenclave) ([src.owenewans.org/owenrtc](https://src.owenewans.org/owenrtc)) - он читает URI `olcrtc://` и подписки напрямую, без бинарника. Ниже - запуск нативного бинарника `cnc` (только SOCKS5).
 
 ```sh
-git clone https://github.com/openlibrecommunity/olcrtc --recurse-submodules
-cd olcrtc
-./script/cnc.sh
+curl -fsSL https://raw.githubusercontent.com/openlibrecommunity/olcrtc/master/install.sh | bash
 ```
+
+Выбери **2) client**, когда спросят режим. Из клона запусти `./install.sh`.
 
 Отвечай на те же вопросы, что и на сервере - **auth, transport и room ID должны совпадать**. Для jitsi скрипт спросит тот же выбор сервера и имя/URL комнаты.
 
@@ -262,7 +266,7 @@ SOCKS5 username (leave empty to disable auth):
 [+] Client started successfully!
 
 Container name: olcrtc-client-xxxxxxxx
-Auth:           jitsi
+Provider:       jitsi
 Transport:      datachannel
 Room ID/URL:    https://meet.example.org/olcrtc-xxxxxxxx
 SOCKS5 proxy:   127.0.0.1:8808
@@ -318,9 +322,9 @@ podman stop $(podman ps -q --filter name=olcrtc)
 
 ```sh
 cd olcrtc
-git pull --recurse-submodules          # обновить локальные скрипты
+git pull --recurse-submodules          # обновить install.sh и исходники
 podman stop olcrtc-server-xxxxxxxx     # остановить старый контейнер
-./script/srv.sh --no-cache             # запустить заново со свежим кодом
+./install.sh --no-cache                # запустить заново со свежим кодом, выбрать server
 ```
 
 `--no-cache` не обязателен, но гарантирует пересборку с нуля. При повторном запуске укажи те же `auth`, `transport`, `room ID` и ключ. Серверный ключ хранится в `~/.olcrtc_key` и переиспользуется автоматически.
@@ -332,15 +336,15 @@ podman stop olcrtc-server-xxxxxxxx     # остановить старый ко�
 Можно запустить несколько серверов или клиентов на одной машине - каждый запуск создаёт контейнер с уникальным именем (`olcrtc-server-<random>`), они не конфликтуют.
 
 ```sh
-./script/srv.sh   # первый инстанс - например jitsi + datachannel
-./script/srv.sh   # второй инстанс - например wbstream + vp8channel
+./install.sh   # первый инстанс - например jitsi + datachannel, режим server
+./install.sh   # второй инстанс - например wbstream + vp8channel, режим server
 ```
 
-На клиенте для каждого инстанса запускай отдельный `cnc.sh` с **разными SOCKS5-портами**, чтобы переключаться между ними:
+На клиенте для каждого инстанса запускай `install.sh` заново, режим client, с **разными SOCKS5-портами**, чтобы переключаться между ними:
 
 ```sh
-./script/cnc.sh   # первый клиент - порт 8808 (по умолчанию)
-./script/cnc.sh   # второй клиент - укажи порт 8809
+./install.sh   # первый клиент - порт 8808 (по умолчанию)
+./install.sh   # второй клиент - укажи порт 8809
 ```
 
 ---

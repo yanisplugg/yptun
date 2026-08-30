@@ -59,12 +59,10 @@ builds:
       - windows_386
       - freebsd_amd64
 
-  # Android client only. Pure Go (CGO=0), packaged as native .so name
-  # for use as Android native library (JNI / standalone shipment).
+  # Android client only. Pure Go (CGO=0), для standalone-запуска в Termux.
   - id: client-android
     main: ./cmd/client
-    binary: libfreeturn.so
-    no_unique_dist_dir: false
+    binary: client
     flags:
       - -trimpath
     ldflags:
@@ -75,14 +73,6 @@ builds:
       - android_arm64
 
 archives:
-  # Android: ship the .so binary directly (no archive wrapper), with
-  # arch suffix so arm64 and arm coexist on the release page.
-  - id: android
-    ids:
-      - client-android
-    formats: [binary]
-    name_template: "libfreeturn-{{ .Version }}-android-{{ .Arch }}"
-
   # Raw, stable-named binaries (no version in filename) so docs and scripts
   # can fetch /releases/latest/download/<binary>-<os>-<arch> directly without
   # unpacking a tarball. Shipped uncompressed — no tar.gz/zip archives.
@@ -96,8 +86,7 @@ archives:
       {{- with .Arm }}v{{ . }}{{ end }}
       {{- with .Mips }}-{{ . }}{{ end }}
 
-  # Android client as a raw, stable-named binary for Termux standalone use
-  # (the libfreeturn-* archive above targets Android-app native-lib shipment).
+  # Android client как raw-бинарь со стабильным именем - для Termux
   - id: raw-android
     ids:
       - client-android
@@ -106,6 +95,12 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  # Mobile artifacts ship via release.extra_files and are not build outputs;
+  # list them here so hosts (Android Gradle fetch) can verify what they download.
+  extra_files:
+    - glob: mobile-dist/freeturn.aar
+    - glob: mobile-dist/freeturn-sources.jar
+    - glob: mobile-dist/Mobile.xcframework.zip
 
 sboms:
   - artifacts: archive

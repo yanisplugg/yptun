@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amnezia-vpn/amneziawg-go/conn"
+	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	"github.com/samosvalishe/free-turn-proxy/internal/netconn"
 	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 )
@@ -120,6 +120,44 @@ func TestSinglePeerBindCloseWakesReceiver(t *testing.T) {
 	// Повторный Close безопасен: его зовут и хост, и устройство.
 	if err := bind.Close(); err != nil {
 		t.Errorf("second Close() error = %v", err)
+	}
+}
+
+// Устройство закрывает Bind и открывает заново на каждом BindUpdate, а первый
+// такой круг проходит ещё в IpcSet (listen_port), до Up. Приёмник после этого
+// обязан читать: иначе handshake уходит, а ответ читать некому.
+func TestSinglePeerBindReopenAfterClose(t *testing.T) {
+	device, relay := netconn.PacketPipe(0, 0)
+	t.Cleanup(func() {
+		_ = device.Close()
+		_ = relay.Close()
+	})
+
+	bind := NewSinglePeerBind(device)
+	if _, _, err := bind.Open(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := bind.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	fns, _, err := bind.Open(0)
+	if err != nil {
+		t.Fatalf("second Open() error = %v", err)
+	}
+
+	in := []byte("response")
+	if _, writeErr := relay.WriteTo(in, nil); writeErr != nil {
+		t.Fatalf("relay.WriteTo: %v", writeErr)
+	}
+	packets := [][]byte{make([]byte, 64)}
+	sizes := make([]int, 1)
+	count, err := fns[0](packets, sizes, make([]conn.Endpoint, 1))
+	if err != nil {
+		t.Fatalf("receive after reopen error = %v", err)
+	}
+	if count != 1 || !bytes.Equal(packets[0][:sizes[0]], in) {
+		t.Fatalf("receive after reopen = %d, %q", count, packets[0][:sizes[0]])
 	}
 }
 

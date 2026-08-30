@@ -29,7 +29,12 @@ class YptunInboundCodecTest {
     fun composeProducesYptunInboundLink() {
         val link = YptunInboundCodec.compose(sample)
         assertTrue(link.startsWith(YptunInboundCodec.PREFIX), "link should start with the scheme: $link")
-        assertTrue(link.contains("d="), "link should carry the base64 payload")
+        // compose() emits the DEFLATE form (?v=2&c=) whenever it is shorter than the plain
+        // ?v=1&d= one, so accept either rather than pinning the test to one encoding.
+        assertTrue(
+            link.contains("?v=2&c=") || link.contains("?v=1&d="),
+            "link should carry the base64 payload: $link"
+        )
     }
 
     @Test
@@ -46,6 +51,15 @@ class YptunInboundCodecTest {
         val payload = link.substringAfter("d=")
         val fragmentForm = "${YptunInboundCodec.PREFIX}#$payload"
         assertEquals(sample.normalized(), YptunInboundCodec.parse(fragmentForm))
+    }
+
+    @Test
+    fun parsesAWrappedLink() {
+        // Chat clients and QR overlays break a long payload across lines; Base64 decoding throws on
+        // the embedded whitespace, so the link used to read as "no valid config".
+        val link = YptunInboundCodec.compose(sample)
+        val wrapped = link.chunked(40).joinToString("\n")
+        assertEquals(sample.normalized(), YptunInboundCodec.parse(wrapped))
     }
 
     @Test

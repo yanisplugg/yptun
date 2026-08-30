@@ -23,6 +23,15 @@
          Google Play, so the QUERY_ALL_PACKAGES policy restriction doesn't apply. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
+    <!-- Перенос данных при смене applicationId (org.olcbox.app -> новый id, см. LegacyMigration).
+         Имя права ОДНО на обе сборки: signature-уровень означает, что читать провайдер старой
+         установки может только APK с нашей подписью. Объявляем и запрашиваем в обеих сборках -
+         вторая установка с тем же именем права и той же подписью системе не мешает. -->
+    <permission
+        android:name="org.olcbox.app.permission.MIGRATION"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="org.olcbox.app.permission.MIGRATION" />
+
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />
@@ -103,6 +112,14 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- Отдаёт состояние приложения новой сборке при переезде на другой applicationId.
+             exported, но за signature-правом: чужой APK его не прочитает. -->
+        <provider
+            android:name="org.olcbox.app.migration.LegacyExportProvider"
+            android:authorities="${applicationId}.migration"
+            android:exported="true"
+            android:permission="org.olcbox.app.permission.MIGRATION" />
 
         <activity
             android:name="org.olcbox.app.vpn.service.CaptchaActivity"

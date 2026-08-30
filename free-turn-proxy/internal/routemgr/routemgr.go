@@ -20,7 +20,7 @@ func New(log logx.Logger) (*Manager, error) {
 		return nil, err
 	}
 	if gw == "" {
-		return nil, nil // unsupported platform
+		return nil, nil
 	}
 	return &Manager{
 		gateway: gw,
@@ -42,7 +42,7 @@ func (m *Manager) EnsureRouteToTURN(ip net.IP) {
 	}
 	v4 := ip.To4()
 	if v4 == nil {
-		return // IPv6 not supported
+		return
 	}
 	key := v4.String()
 

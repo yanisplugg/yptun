@@ -61,7 +61,7 @@ class DesktopProxyModeTest {
             )
             val command = OlcRtcCommand(
                 binary = Path.of("/tmp/olcrtc"),
-                location = LocationConfig("Test", "room-$provider", "b".repeat(64), provider),
+                location = LocationConfig(name = "Test", id = "room-$provider", key = "b".repeat(64), bypassProvider = provider),
                 socksHost = "127.0.0.1",
                 socksPort = 10808
             )
@@ -78,6 +78,9 @@ class DesktopProxyModeTest {
             assertContains(yaml, "transport: '$expectedTransport'")
             assertContains(yaml, "id: 'room-$provider'")
             assertContains(yaml, "port: 10808")
+            // A single pinned resolver had no fallback when it was UDP/53-blocked; the list is
+            // probed by olcrtc and must stay a list (see OlcRtcCommand.DNS_SERVERS).
+            assertContains(yaml, "dns: '77.88.8.8:53,8.8.8.8:53,1.1.1.1:53'")
             if (expectedTransport == LocationConfig.TRANSPORT_VP8CHANNEL) {
                 assertContains(yaml, "vp8:")
                 assertContains(yaml, "fps: 60")

@@ -1,36 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-// Package rtpopus3 - wire-профиль обфускации с улучшенной RTP-мимикрией:
-// три one-byte extension (audio-level, transport-wide-cc, abs-send-time),
-// вариативный шаг timestamp, эмуляция потери пакетов (gaps в seq),
-// VAD-модель с переключением silence/speech.
-//
-// Wire-формат (HeaderLen=40, Overhead=56):
-//
-//	[12B RTP hdr | 16B one-byte ext | 12B explicit nonce | AEAD ciphertext | 16B tag]
-//
-// RTP header (RFC 3550):
-//
-//	byte 0:    0x90        V=2, P=0, X=1, CC=0
-//	byte 1:    M<<7 | 0x6F M=1 на старте talkspurt, PT=111 (opus)
-//	byte 2-3:  seq16 BE    монотонный с пропусками (loss simulation)
-//	byte 4-7:  ts32 BE     вариативный шаг 480/960/1920 (10/20/40ms)
-//	byte 8-11: SSRC        полностью random per conn
-//
-// RTP extension (RFC 8285 one-byte, 12 байт данных -> 3 слова):
-//
-//	byte 12-13: 0xBE 0xDE      профиль one-byte
-//	byte 14-15: 0x0003         длина = 3 слова (12 байт данных)
-//	byte 16:    0x10           ssrc-audio-level: id=1, len=1
-//	byte 17:    0x80|level     VAD + level (-dBov)
-//	byte 18:    0x21           transport-wide-cc: id=2, len=2
-//	byte 19-20: tccSeq16       монотонный transport-cc sequence
-//	byte 21:    0x32           abs-send-time: id=3, len=2
-//	byte 22-24: abs_send_time  24-bit NTP timestamp (mod 64s)
-//	byte 25-27: 0x00           padding до 12 байт данных расширения
-//
-// 12B explicit nonce = 4B sessionID || 8B counter (BE). MSB sessionID
-// кодирует направление. AAD = первые 40 байт (RTP hdr || ext || nonce).
+// Package rtpopus3 реализует wire-профиль обфускации с расширенной RTP-мимикрией (VAD, джиттер timestamp, abs-send-time).
 package rtpopus3
 
 import (
@@ -52,15 +22,15 @@ const (
 	rtpExtLen = 16
 	nonceLen  = 12
 	tagLen    = 16
-	headerLen = rtpHdrLen + rtpExtLen + nonceLen // 40
-	overhead  = headerLen + tagLen               // 56
-	rtpVerExt = 0x90                             // V=2, P=0, X=1, CC=0
-	rtpPT     = 0x6F                             // M=0, PT=111 (opus)
-	rtpMarker = 0x80                             // M=1
+	headerLen = rtpHdrLen + rtpExtLen + nonceLen
+	overhead  = headerLen + tagLen
+	rtpVerExt = 0x90
+	rtpPT     = 0x6F
+	rtpMarker = 0x80
 
-	extAudioLevelHdr  = 0x10 // id=1, len=1
-	extTransportHdr   = 0x21 // id=2, len=2
-	extAbsSendTimeHdr = 0x32 // id=3, len=2
+	extAudioLevelHdr  = 0x10
+	extTransportHdr   = 0x21
+	extAbsSendTimeHdr = 0x32
 
 	speechMinPkts  = 30
 	speechMaxPkts  = 200
@@ -86,7 +56,7 @@ const (
 	stateSpeech
 )
 
-// State хранит AEAD-экземпляр из общего ключа; разделяется многими Conn.
+// State хранит AEAD-экземпляр общего ключа.
 type State struct {
 	aead cipher.AEAD
 }
@@ -102,14 +72,12 @@ func NewState(key []byte) (*State, error) {
 	return &State{aead: aead}, nil
 }
 
-// Conn несёт per-stream RTP-состояние. WrapInPlace/WrapInto могут зваться
-// конкурентно (net.PacketConn-контракт), поэтому send-поля под mu;
-// Unwrap* только читают AEAD.
+// Conn хранит состояние RTP-сессии с имитацией голосовой активности и джиттера.
 type Conn struct {
 	state     *State
-	sessionID [4]byte   // префикс nonce; MSB кодирует направление
-	ssrc      [4]byte   // SSRC для RTP header; полностью random
-	startTime time.Time // база для abs-send-time; immutable после init
+	sessionID [4]byte
+	ssrc      [4]byte
+	startTime time.Time
 
 	mu        sync.Mutex
 	counter   uint64
@@ -194,7 +162,6 @@ func pickTsStep() uint32 {
 	}
 }
 
-// updateAudioState возвращает true на переходе silence->speech (RTP marker).
 func (c *Conn) updateAudioState() bool {
 	c.pktsInState++
 	if c.pktsInState < c.nextStateSwitch {
@@ -211,7 +178,6 @@ func (c *Conn) updateAudioState() bool {
 	return false
 }
 
-// audioLevel: speech несёт V-бит и низкий -dBov, silence наоборот.
 func (c *Conn) audioLevel() byte {
 	if c.audioState == stateSpeech {
 		return 0x80 | byte(20+randRange(31)) //nolint:gosec // level 20..50, fits byte
@@ -219,7 +185,6 @@ func (c *Conn) audioLevel() byte {
 	return byte(100 + randRange(28)) //nolint:gosec // level 100..127, fits byte
 }
 
-// computeSeq возвращает текущий seq, периодически пропуская gapSize (имитация потерь).
 func (c *Conn) computeSeq() uint16 {
 	seq := c.seq
 	c.seq++
@@ -249,7 +214,6 @@ func (c *Conn) WrapInto(dst, payload []byte) (int, error) {
 }
 
 // WrapInPlace кодирует plaintext из buf[HeaderLen:HeaderLen+plainLen] на месте.
-// Send-поля берутся под mu; запись в buf и Seal - без блокировки.
 func (c *Conn) WrapInPlace(buf []byte, plainLen int) (int, error) {
 	wireLen := overhead + plainLen
 	if len(buf) < wireLen {

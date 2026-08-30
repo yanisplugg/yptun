@@ -21,8 +21,8 @@ net:
 
 liveness:
   interval: 10s # how often to send liveness checks
-  timeout: 5s # wait time for a liveness reply
-  failures: 3 # consecutive failures before the link is considered dead
+  timeout: 15s # wait time for a liveness reply
+  failures: 4 # consecutive failures before the link is considered dead
 
 socks: # local socks proxy exposed to apps
   host: "127.0.0.1" # address to listen on
@@ -34,5 +34,4 @@ vp8:
   fps: 30 # frames per second
   batch_size: 64 # frames encoded per batch
 
-data: data # where to store / read data
 debug: false # log actions in more detail

@@ -20,15 +20,13 @@ type TurnCredentials struct {
 	Link        string
 }
 
-// Публичные app_id/secret штатных VK-клиентов (зашиты в сами приложения), не наши приватные креды.
-//
-//nolint:gosec // G101: публичные VK app secrets
+//nolint:gosec
 var DefaultCredentials = []VKCredentials{
-	{ClientID: "6287487", ClientSecret: "QbYic1K3lEV5kTGiqlq2"},  // VK_WEB_APP_ID
-	{ClientID: "7879029", ClientSecret: "aR5NKGmm03GYrCiNKsaw"},  // VK_MVK_APP_ID
-	{ClientID: "2274003", ClientSecret: "hHbZxrka2uZ6jB1inYsH"},  // VK_ANDROID_APP
-	{ClientID: "51453752", ClientSecret: "4UyuCUsdK8pVCNoeQuGi"}, // VK_MESSENGER_DESKTOP
-	{ClientID: "3140623", ClientSecret: "VeWdmVclDCtn6ihuP1nt"},  // VK_IPHONE_APP
+	{ClientID: "6287487", ClientSecret: "QbYic1K3lEV5kTGiqlq2"},
+	{ClientID: "7879029", ClientSecret: "aR5NKGmm03GYrCiNKsaw"},
+	{ClientID: "2274003", ClientSecret: "hHbZxrka2uZ6jB1inYsH"},
+	{ClientID: "51453752", ClientSecret: "4UyuCUsdK8pVCNoeQuGi"},
+	{ClientID: "3140623", ClientSecret: "VeWdmVclDCtn6ihuP1nt"},
 }
 
 const APIVersion = "5.282"
@@ -41,8 +39,6 @@ const (
 
 	DefaultStreamsPerCache = 10
 
-	// maxPersonaBurns ограничивает рестарты цепочки внутри одного fetch: режимов
-	// решения captcha всё равно два (auto, manual).
 	maxPersonaBurns = 2
 )
 
@@ -50,10 +46,8 @@ var (
 	ErrCaptchaWaitRequired   = errors.Join(provider.ErrBackoffActive, errors.New("CAPTCHA_WAIT_REQUIRED"))
 	ErrFatalCaptchaNoStreams = errors.Join(provider.ErrFatalNoStreams, errors.New("FATAL_CAPTCHA_FAILED_NO_STREAMS"))
 	ErrLockoutActive         = errors.New("global lockout active")
-	// ErrPersonaBurned - внутренний сигнал fetch: цепочку надо пройти заново уже
-	// новой личностью. Наружу провайдера не выходит.
-	ErrPersonaBurned    = errors.New("persona burned")
-	ErrInvalidJoinLink  = errors.Join(provider.ErrFatalNoStreams, errors.New("INVALID_JOIN_LINK"))
-	ErrAnonymousBlocked = errors.Join(provider.ErrFatalNoStreams, errors.New("ANON_BLOCKED"))
-	ErrCallFull         = errors.Join(provider.ErrFatalNoStreams, errors.New("CALL_FULL"))
+	ErrPersonaBurned         = errors.New("persona burned")
+	ErrInvalidJoinLink       = errors.Join(provider.ErrFatalNoStreams, errors.New("INVALID_JOIN_LINK"))
+	ErrAnonymousBlocked      = errors.Join(provider.ErrFatalNoStreams, errors.New("ANON_BLOCKED"))
+	ErrCallFull              = errors.Join(provider.ErrFatalNoStreams, errors.New("CALL_FULL"))
 )

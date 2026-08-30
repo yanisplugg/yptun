@@ -18,7 +18,7 @@ func (s *stubTransport) SetEndedCallback(func(string))   {}
 func (s *stubTransport) WatchConnection(context.Context) {}
 func (s *stubTransport) CanSend() bool                   { return true }
 func (s *stubTransport) Reconnect(string)                {}
-func (s *stubTransport) Features() Features              { return Features{Reliable: true} }
+func (s *stubTransport) Features() Features              { return Features{MaxPayloadSize: 1024} }
 
 func snapshotTransportRegistry() map[string]Factory {
 	out := make(map[string]Factory, len(registry))

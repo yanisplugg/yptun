@@ -523,12 +523,19 @@ data class LocationConfig(
             TRANSPORT_SEICHANNEL
         )
 
+        /**
+         * Транспорты ядро olcRTC регистрирует ГЛОБАЛЬНО, провайдер авторизации к ним отношения не
+         * имеет — доступны все и каждому. Порядок здесь = «лучшее первым» по матрице
+         * `docs/settings.md`, то есть ПОДСКАЗКА, а не запрет: панель (olcrtc-inbound) давно даёт
+         * выбирать любую пару, и сервер спокойно ставится, например, в telemost+datachannel.
+         * Раньше клиент вырезал такие пары из списка, и поднятый на VPS сервер было нечем открыть.
+         */
         fun supportedTransportsForProvider(provider: String): List<String> {
             return when (normalizeProvider(provider)) {
-                PROVIDER_TELEMOST -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
-                // The olcRTC core registers transports GLOBALLY and the auth provider is independent, so
-                // Jitsi can carry any of them — offer all three (datachannel stays the default/known-good).
-                PROVIDER_JITSI -> listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
+                PROVIDER_TELEMOST -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
+                PROVIDER_WB_STREAM -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
+                PROVIDER_JITSI, PROVIDER_JAZZ ->
+                    listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
                 else -> supportedTransports
             }
         }

@@ -19,9 +19,9 @@
 | Transport | telemost | wbstream | jitsi |
 |-----------|:--------:|:--------:|:-----:|
 | datachannel | - | ~ | + |
-| vp8channel | + | + | ~ |
-| seichannel | - | + | ~ |
-| videochannel | + | + | ~ |
+| vp8channel | + | + | + |
+| seichannel | - | + | + |
+| videochannel | + | + | + |
 
 **Legend:**
 - `+` - works (passes E2E tests)
@@ -32,13 +32,15 @@
 
 **WBStream:** all transports except datachannel work. DataChannel does not work in the normal guest flow without being granted moderator - WB Stream issues tokens with `canPublishData=false`, and DC does not route data. To use `datachannel` over `wbstream`, set `auth.token` to an account/moderator token (`canPublishData=true`); see `auth.token` in the optional fields below.
 
-**Jitsi:** datachannel passes stably - it is implemented on top of the colibri-ws bridge channel and sends bytes via an `EndpointMessage{raw}` broadcast. It fits self-hosted and public Jitsi Meet instances without authentication (`https://meet.jit.si/...` etc.; instances in docs/examples/jitsi.instances.yaml). Check in a browser which of the servers is reachable in your network. Video transports (vp8channel, seichannel, videochannel) expose a sendable VideoTrack through the pion PeerConnection after the Jingle session-accept, but Jicofo requires additional protocol steps (LastN, ReceiverVideoConstraints, source-add) to route video - that is why they are marked `~`.
+**Jitsi:** datachannel passes stably - it is implemented on top of the colibri-ws bridge channel and sends bytes via an `EndpointMessage{raw}` broadcast. It fits self-hosted and public Jitsi Meet instances without authentication (`https://meet.jit.si/...` etc.; instances in docs/jitsi.instances.yaml). Check in a browser which of the servers is reachable in your network. Video transports (vp8channel, seichannel, videochannel) expose a sendable VideoTrack through the pion PeerConnection after the Jingle session-accept, and the RTP keepalive drives the Jicofo steps (LastN, ReceiverVideoConstraints, source-add) needed to route video, so all four transports pass the E2E matrix.
 
-**Jitsi + seichannel - a separate caveat.** SEI NAL units ride along inside the H.264 video stream, and Jicofo on self-hosted instances (for example `meet.egovm.ru`) periodically cuts/delays upstream video when there is formally no receiver in the room - for us this looks like a `seichannel ack timeout` while the PeerConnection is formally alive. In steady state the transport works, but the e2e matrix marks it `Unstable` (it flaps): a green or red result in CI is enough, the test suite does not fail on it. For reliable data transfer over jitsi, prefer `datachannel` or `vp8channel`.
+**Jitsi + seichannel - a separate caveat.** SEI NAL units ride along inside the H.264 video stream, and Jicofo on self-hosted instances (for example `meet.egovm.ru`) can cut or delay upstream video when there is formally no receiver in the room - for us this looks like a `seichannel ack timeout` while the PeerConnection is formally alive. The periodic RTP keepalive keeps the receiver present, so the E2E matrix now expects it to pass, but on a heavily loaded self-hosted instance `datachannel` or `vp8channel` is still the safer pick.
 
-**Recommended combination: `jitsi + datachannel`** - works stably on any self-hosted or public Jitsi Meet (instances in docs/examples/jitsi.instances.yaml - check which one is reachable), needs no registration, simple room creation. Alternative: `wbstream + vp8channel` - stable for commercial scenarios, needs no special rights.
+**Recommended combination: `jitsi + datachannel`** - works stably on any self-hosted or public Jitsi Meet (instances in docs/jitsi.instances.yaml - check which one is reachable), needs no registration, simple room creation. Alternative: `wbstream + vp8channel` - stable for commercial scenarios, needs no special rights.
 
 Speed in descending order: `datachannel` > `vp8channel` > `seichannel` > `videochannel`
+
+**Wire compatibility:** current builds use OLC2 with directional HKDF keys, separate data/control AAD and replay protection. They cannot connect to builds using the old crypto record format. `seichannel` and `videochannel` use OLVC frame version 5, which adds a per-fragment checksum, and reject older frames.
 
 ---
 
@@ -51,7 +53,6 @@ Speed in descending order: `datachannel` > `vp8channel` > `seichannel` > `videoc
 | `net.transport` | `datachannel`, `vp8channel`, `seichannel` or `videochannel` |
 | `room.id` | Room ID |
 | `crypto.key` or `crypto.key_file` | Encryption key, hex 64 chars. Generate: `openssl rand -hex 32` |
-| `data` | Always `data` |
 | `net.dns` | DNS server, e.g. `8.8.8.8:53` |
 
 ---
@@ -61,16 +62,17 @@ Speed in descending order: `datachannel` > `vp8channel` > `seichannel` > `videoc
 | YAML field | Description |
 |-----------|----------|
 | `debug` | `true` for verbose connection logs |
-| `auth.token` | Pre-issued account token for `wbstream`. When set, the session joins as that account instead of an anonymous guest; empty uses the guest flow. In the guest flow the obtained token is logged once so it can be copied back into this field to keep the same identity. Practical effect for `datachannel`: a guest token carries `canPublishData=false`, so the SCTP data channel opens but routes no bytes (the tunnel is up and silent); an account token with moderator rights carries `canPublishData=true` and routes data normally. So `datachannel` over `wbstream` requires an `auth.token` with publish rights; on the guest flow use `vp8channel`, `seichannel` or `videochannel` instead. To grant moderator: open the participants list, then the three dots next to the client/server entry, then the `Moderator` button (needed on both sides) |
+| `auth.token` | Pre-issued account token for `wbstream`. Obtain it from a trusted account-token source; logs redact tokens and never expose them. When set, the session joins as that account instead of an anonymous guest; empty uses the guest flow. Practical effect for `datachannel`: a guest token carries `canPublishData=false`, so the SCTP data channel opens but routes no bytes (the tunnel is up and silent); an account token with moderator rights carries `canPublishData=true` and routes data normally. So `datachannel` over `wbstream` requires an `auth.token` with publish rights; on the guest flow use `vp8channel`, `seichannel` or `videochannel` instead. To grant moderator: open the participants list, then the three dots next to the client/server entry, then the `Moderator` button (needed on both sides) |
 | `profiles` | List of failover profiles for `srv`/`cnc` |
 | `failover.retry_delay` | Pause before the next profile, e.g. `2s` |
 | `failover.max_cycles` | How many full passes over the profiles to make; `0` = unlimited |
 | `liveness.interval` | Ping interval over the control stream, default `10s` |
-| `liveness.timeout` | How long to wait for a pong, default `5s` |
-| `liveness.failures` | How many pongs may be missed before a rebuild, default `3` |
+| `liveness.timeout` | How long to wait for a pong, default `15s` |
+| `liveness.failures` | How many pongs may be missed before a rebuild, default `4` |
 | `lifecycle.max_session_duration` | Planned session rebuild after the given time, e.g. `6h`; if unset, disabled |
 | `traffic.max_payload_size` | Limit on the encrypted wire-message size; `0` = transport limit |
 | `traffic.min_delay` / `.max_delay` | Optional send pacing, e.g. `5ms` / `30ms` |
+| `data` | Optional directory with `names` and `surnames` display-name dictionaries; embedded dictionaries are the default |
 
 `crypto.key_file` is read relative to the YAML file. Do not set `crypto.key` and `crypto.key_file` at the same time.
 
@@ -100,7 +102,7 @@ Use the same traffic settings on both sides.
 
 ## mode: gen
 
-`gen` is kept for auth providers that can create rooms through an API.
+`gen` is kept for providers that can create rooms through an API.
 Currently the built-in providers do not support room auto-creation through `olcrtc`.
 
 For `telemost` and `wbstream`, create a room through the service site and paste
@@ -126,8 +128,8 @@ If it is set, username/password auth per RFC 1929 is used (`proxy_pass` is optio
 
 | YAML field | Description | Default |
 |-----------|----------|:------------:|
-| `socks.host` | Which address to start SOCKS5 on | `127.0.0.1` |
-| `socks.port` | Which port to start SOCKS5 on | `1080` |
+| `socks.host` | Which address to start SOCKS5 on | required |
+| `socks.port` | Which port to start SOCKS5 on | required |
 | `socks.user` | Login for incoming SOCKS5 connections (optional) | - |
 | `socks.pass` | Password for incoming SOCKS5 connections (optional) | - |
 
@@ -171,7 +173,7 @@ No extra fields - everything is default.
 
 ## videochannel
 
-**Recommended: `codec: qrcode`, `width: 1080`, `height: 1080`, `fps: 30`, `bitrate: "5000k"`, `hw: none`**
+**Recommended: `codec: qrcode`, `width: 1080`, `height: 1080`, `fps: 30`**
 
 | YAML field | Description | Default |
 |-----------|----------|:------------:|
@@ -179,13 +181,10 @@ No extra fields - everything is default.
 | `video.width` | Width in pixels | `1920` |
 | `video.height` | Height in pixels | `1080` |
 | `video.fps` | FPS | `30` |
-| `video.bitrate` | Bitrate, e.g. `"2M"` or `"5000k"` | `"2M"` |
-| `video.hw` | Hardware acceleration: `none` or `nvenc` | `none` |
 | `video.qr_recovery` | QR error correction: `low` / `medium` / `high` / `highest` | `low` |
 | `video.qr_size` | QR fragment size in bytes, `0` = auto | `0` |
 | `video.tile_module` | Tile size in pixels 1..270 (`tile` only) | `4` |
-| `video.tile_rs` | Reed-Solomon parity % 0..200 (`tile` only) | `20` |
-| `ffmpeg` | Path to the ffmpeg executable | `ffmpeg` |
+| `video.tile_rs` | Reed-Solomon parity % 0..200 (`tile` only) | `0` |
 
 For codec `tile` exactly `1080x1080` is required.
 
@@ -228,7 +227,6 @@ crypto:
 net:
   transport: datachannel
   dns: "8.8.8.8:53"
-data: data
 ```
 
 ```yaml
@@ -246,7 +244,6 @@ net:
 socks:
   host: "127.0.0.1"
   port: 8808
-data: data
 ```
 
 ### wbstream + datachannel + SOCKS5 authentication (does not work in the normal guest flow)
@@ -268,7 +265,6 @@ socks:
   port: 8808
   user: myuser
   pass: mypass
-data: data
 ```
 
 Usage:
@@ -297,7 +293,6 @@ net:
 vp8:
   fps: 30
   batch_size: 64
-data: data
 ```
 
 ```yaml
@@ -318,7 +313,6 @@ socks:
 vp8:
   fps: 30
   batch_size: 64
-data: data
 ```
 
 ### telemost + seichannel (does not work)
@@ -342,7 +336,6 @@ sei:
   batch_size: 64
   fragment_size: 900
   ack_timeout_ms: 2000
-data: data
 ```
 
 ```yaml
@@ -365,7 +358,6 @@ sei:
   batch_size: 64
   fragment_size: 900
   ack_timeout_ms: 2000
-data: data
 ```
 
 ### telemost + videochannel (best effort, unstable)
@@ -387,9 +379,6 @@ video:
   width: 1080
   height: 1080
   fps: 30
-  bitrate: "5000k"
-  hw: none
-data: data
 ```
 
 ```yaml
@@ -412,9 +401,6 @@ video:
   width: 1080
   height: 1080
   fps: 30
-  bitrate: "5000k"
-  hw: none
-data: data
 ```
 
 ---

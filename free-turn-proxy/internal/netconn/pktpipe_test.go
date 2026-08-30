@@ -32,7 +32,6 @@ func TestPacketPipeRoundTrip(t *testing.T) {
 	}
 }
 
-// Границы датаграмм не склеиваются: два записанных пакета читаются двумя.
 func TestPacketPipeKeepsDatagramBoundaries(t *testing.T) {
 	a, b := PacketPipe(0, 0)
 	defer func() { _ = a.Close() }()
@@ -56,7 +55,6 @@ func TestPacketPipeKeepsDatagramBoundaries(t *testing.T) {
 	}
 }
 
-// Как UDP: не влезшее в буфер вызывающего отбрасывается, а не переносится.
 func TestPacketPipeTruncatesToCallerBuffer(t *testing.T) {
 	a, b := PacketPipe(0, 0)
 	defer func() { _ = a.Close() }()
@@ -92,8 +90,6 @@ func TestPacketPipeRejectsOversized(t *testing.T) {
 	}
 }
 
-// Полная очередь роняет пакет, но не блокирует писателя - иначе медленный
-// читатель остановил бы весь релей.
 func TestPacketPipeDropsWhenQueueFull(t *testing.T) {
 	a, b := PacketPipe(64, 2)
 	defer func() { _ = a.Close() }()
@@ -122,7 +118,6 @@ func TestPacketPipeDropsWhenQueueFull(t *testing.T) {
 			t.Fatalf("ReadFrom() error = %v", err)
 		}
 	}
-	// Очередь опустела - остальные восемь пакетов потеряны, чтения не будет.
 	if err := b.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
@@ -160,12 +155,10 @@ func TestPacketPipeClose(t *testing.T) {
 	if _, err := a.WriteTo([]byte("x"), nil); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("WriteTo() to closed peer error = %v, want net.ErrClosed", err)
 	}
-	// Повторный Close безопасен: сессия закрывает канал и по отмене ctx, и в defer.
 	if err := b.Close(); err != nil {
 		t.Errorf("second Close() error = %v", err)
 	}
 	_ = a.Close()
 }
 
-// Пара обязана удовлетворять net.PacketConn - udprelay.Run принимает именно его.
 var _ net.PacketConn = func() net.PacketConn { a, _ := PacketPipe(0, 0); return a }()

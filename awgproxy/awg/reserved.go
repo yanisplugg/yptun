@@ -3,7 +3,7 @@ package awg
 import (
 	"errors"
 
-	"github.com/amnezia-vpn/amneziawg-go/conn"
+	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 )
 
 // reservedBind wraps a conn.Bind and stamps Cloudflare WARP's 3 "reserved" header bytes onto every

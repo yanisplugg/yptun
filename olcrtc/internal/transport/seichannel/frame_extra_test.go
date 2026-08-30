@@ -6,33 +6,6 @@ import (
 	"testing"
 )
 
-func TestDecodeTransportFrameErrorsAndAck(t *testing.T) {
-	tests := []struct {
-		data []byte
-		want error
-	}{
-		{data: []byte{1, 2, 3}, want: ErrFrameTooShort},
-		{data: []byte{0, 0, 0, 0, protocolVersion, frameTypeAck}, want: ErrUnexpectedMagic},
-		{data: []byte{0x4f, 0x56, 0x43, 0x31, 9, frameTypeAck}, want: ErrUnexpectedVersion},
-		{data: []byte{0x4f, 0x56, 0x43, 0x31, protocolVersion, frameTypeAck}, want: ErrAckTooShort},
-		{data: []byte{0x4f, 0x56, 0x43, 0x31, protocolVersion, frameTypeData}, want: ErrDataTooShort},
-		{data: []byte{0x4f, 0x56, 0x43, 0x31, protocolVersion, 99}, want: ErrUnexpectedFrameType},
-	}
-	for _, tt := range tests {
-		if _, err := decodeTransportFrame(tt.data); !errors.Is(err, tt.want) {
-			t.Fatalf("decodeTransportFrame(%v) error = %v, want %v", tt.data, err, tt.want)
-		}
-	}
-
-	ack, err := decodeTransportFrame(encodeAckFrame(7, 0x1234))
-	if err != nil {
-		t.Fatalf("decode ack error = %v", err)
-	}
-	if ack.typ != frameTypeAck || ack.seq != 7 || ack.crc != 0x1234 {
-		t.Fatalf("ack = %+v", ack)
-	}
-}
-
 func TestSEIHelpersAndErrors(t *testing.T) {
 	escaped := escapeRBSP([]byte{0, 0, 1, 0, 0, 2, 3})
 	if !bytes.Equal(unescapeRBSP(escaped), []byte{0, 0, 1, 0, 0, 2, 3}) {
@@ -44,16 +17,16 @@ func TestSEIHelpersAndErrors(t *testing.T) {
 	if err != nil || got != 300 || next != len(value) {
 		t.Fatalf("consumeSEIValue() = (%d, %d, %v), want 300", got, next, err)
 	}
-	if _, _, err := consumeSEIValue([]byte{0xff}, 0); !errors.Is(err, ErrSEIValueTruncated) {
-		t.Fatalf("consumeSEIValue() error = %v, want %v", err, ErrSEIValueTruncated)
+	if _, _, truncErr := consumeSEIValue([]byte{0xff}, 0); !errors.Is(truncErr, ErrSEIValueTruncated) {
+		t.Fatalf("consumeSEIValue() error = %v, want %v", truncErr, ErrSEIValueTruncated)
 	}
 
 	rbsp := appendSEIValue(nil, 5)
 	rbsp = append(rbsp, appendSEIValue(nil, len(videoSEIUUID)+5)...)
 	rbsp = append(rbsp, videoSEIUUID[:]...)
 	rbsp = append(rbsp, []byte{1, 2}...)
-	if _, err := extractTransportSEI(rbsp); !errors.Is(err, ErrSEIPayloadTruncated) {
-		t.Fatalf("extractTransportSEI() error = %v, want %v", err, ErrSEIPayloadTruncated)
+	if _, seiErr := extractTransportSEI(rbsp); !errors.Is(seiErr, ErrSEIPayloadTruncated) {
+		t.Fatalf("extractTransportSEI() error = %v, want %v", seiErr, ErrSEIPayloadTruncated)
 	}
 
 	payloads, err := extractTransportSEI([]byte{4, 1, 0, 0x80})
@@ -62,5 +35,23 @@ func TestSEIHelpersAndErrors(t *testing.T) {
 	}
 	if len(payloads) != 0 {
 		t.Fatalf("extractTransportSEI(non-transport) = %v, want none", payloads)
+	}
+}
+
+func TestBuildVideoAccessUnitIntoReusesBuffer(t *testing.T) {
+	payload := make([]byte, 900)
+	first := buildVideoAccessUnitInto(nil, payload)
+	want := bytes.Clone(first)
+	second := buildVideoAccessUnitInto(first[:0], payload)
+	if &first[0] != &second[0] {
+		t.Fatal("buildVideoAccessUnitInto() did not reuse writer-owned storage")
+	}
+	if !bytes.Equal(second, want) {
+		t.Fatal("buildVideoAccessUnitInto() changed output while reusing storage")
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		second = buildVideoAccessUnitInto(second[:0], payload)
+	}); allocs != 0 {
+		t.Fatalf("buildVideoAccessUnitInto() allocations = %v, want 0", allocs)
 	}
 }

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -118,6 +118,7 @@ func (st *CookieChecker) CreateReply(
 	msg []byte,
 	recv uint32,
 	src []byte,
+	msgType uint32,
 ) (*MessageCookieReply, error) {
 	st.RLock()
 
@@ -153,7 +154,7 @@ func (st *CookieChecker) CreateReply(
 	smac1 := smac2 - blake2s.Size128
 
 	reply := new(MessageCookieReply)
-	reply.Type = MessageCookieReplyType
+	reply.Type = msgType
 	reply.Receiver = recv
 
 	_, err := rand.Read(reply.Nonce[:])

@@ -17,9 +17,6 @@ func TestDefaultsAssemble(t *testing.T) {
 	if d.TURN.TransportUDP {
 		t.Error("TransportUDP must be false for default -transport tcp")
 	}
-	if d.Proxy.Mode != ProxyModeUDP {
-		t.Errorf("Mode = %q, want %q", d.Proxy.Mode, ProxyModeUDP)
-	}
 	if d.DNS.Mode != DefaultDNSMode || d.VK.Platform != DefaultPlatform {
 		t.Errorf("DNS.Mode = %q, Platform = %q", d.DNS.Mode, d.VK.Platform)
 	}
@@ -28,8 +25,7 @@ func TestDefaultsAssemble(t *testing.T) {
 	}
 }
 
-// Дефолты флагов и Defaults() обязаны совпадать: расхождение означает, что
-// литерал где-то продублирован в обход defaults.go.
+// Проверка совпадения дефолтов флагов и структуры Defaults().
 func TestFlagDefaultsMatchDefaults(t *testing.T) {
 	parsed, err := ParseClient(validClientArgs(), io.Discard)
 	if err != nil {
@@ -50,7 +46,7 @@ func TestServerDefaults(t *testing.T) {
 	if d.Proxy.Listen != DefaultServerListen {
 		t.Errorf("Listen = %q, want %q", d.Proxy.Listen, DefaultServerListen)
 	}
-	if d.Proxy.Mode != ProxyModeUDP || d.Obf.Enabled() {
+	if d.Obf.Enabled() {
 		t.Errorf("unexpected server defaults: %+v", d)
 	}
 }
@@ -62,7 +58,6 @@ func TestParseServerDefaultsMatchServerDefaults(t *testing.T) {
 	}
 	want := ServerDefaults()
 	want.Proxy.Connect = parsed.Proxy.Connect
-	want.KCP = parsed.KCP
 
 	if !reflect.DeepEqual(*parsed, want) {
 		t.Errorf("ParseServer defaults differ from ServerDefaults():\n got %+v\nwant %+v", *parsed, want)

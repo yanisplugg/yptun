@@ -13,8 +13,8 @@ import (
 )
 
 // deadLinkEnabled gates TestDeadLinkDetectionWindow. It runs a real
-// in-process client/server tunnel over the memory carrier, then silently
-// black-holes the carrier (link stays "up", frames vanish) and measures how
+// in-process client/server tunnel over the memory provider, then silently
+// black-holes the provider (link stays "up", frames vanish) and measures how
 // long the client takes to notice the dead link and trigger a reconnect.
 //
 // This is the exact failure mode behind the jitsi/datachannel regression:
@@ -22,7 +22,7 @@ import (
 // the control-stream liveness timeout. The bad commit widened that timeout to
 // 120s globally; the fix scopes the long window to ControlPlane transports so
 // datachannel detects a dead link on the conservative ~30s smux keepalive.
-var deadLinkEnabled = flag.Bool( //nolint:gochecknoglobals // package-level state intentional
+var deadLinkEnabled = flag.Bool(
 	"olcrtc.deadlink",
 	false,
 	"run TestDeadLinkDetectionWindow (measures dead-link detection latency)",
@@ -30,7 +30,7 @@ var deadLinkEnabled = flag.Bool( //nolint:gochecknoglobals // package-level stat
 
 // TestDeadLinkDetectionWindow proves the datachannel dead-link detection
 // window returned to the conservative band after the fix. It fails if the
-// client does not detect the silently-dead carrier and reconnect within the
+// client does not detect the silently-dead provider and reconnect within the
 // expected window (well under the buggy 120s, comfortably above the
 // conservative 30s keepalive timeout).
 func TestDeadLinkDetectionWindow(t *testing.T) {
@@ -47,7 +47,7 @@ func TestDeadLinkDetectionWindow(t *testing.T) {
 		setupBudget     = 30 * time.Second
 	)
 
-	carrierName, room := registerMemoryCarrier(t)
+	providerName, room := registerMemoryProvider(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -72,7 +72,7 @@ func TestDeadLinkDetectionWindow(t *testing.T) {
 	go func() {
 		serverErr <- server.Run(ctx, server.Config{
 			Transport: transportName,
-			Carrier:   carrierName,
+			Provider:  providerName,
 			RoomURL:   testRoom,
 			KeyHex:    testKeyHex,
 			DNSServer: localDNSServer,
@@ -85,7 +85,7 @@ func TestDeadLinkDetectionWindow(t *testing.T) {
 	go func() {
 		clientErr <- client.RunWithReady(ctx, client.Config{
 			Transport: transportName,
-			Carrier:   carrierName,
+			Provider:  providerName,
 			RoomURL:   testRoom,
 			KeyHex:    testKeyHex,
 			DeviceID:  testClientDeviceID,
@@ -99,7 +99,7 @@ func TestDeadLinkDetectionWindow(t *testing.T) {
 	// Let the control stream settle into a healthy steady state first.
 	time.Sleep(2 * time.Second)
 
-	// Silently kill the carrier: link stays up, frames are dropped. Only the
+	// Silently kill the provider: link stays up, frames are dropped. Only the
 	// control-stream liveness timeout can detect this.
 	t.Logf("[deadlink] enabling blackhole at %s", time.Now().Format("15:04:05"))
 	start := time.Now()
@@ -114,7 +114,7 @@ func TestDeadLinkDetectionWindow(t *testing.T) {
 				elapsed.Round(time.Second), detectionBudget)
 		}
 	case <-time.After(detectionBudget):
-		t.Fatalf("dead link NOT detected within %s (regression: client treats dead carrier as alive)",
+		t.Fatalf("dead link NOT detected within %s (regression: client treats dead provider as alive)",
 			detectionBudget)
 	}
 }

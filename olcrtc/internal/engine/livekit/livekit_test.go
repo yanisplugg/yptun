@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	lksdk "github.com/owenewans/owenlivekit/v2"
 	"github.com/pion/webrtc/v4"
+
+	"github.com/openlibrecommunity/olcrtc/internal/engine"
 )
 
 const (
@@ -140,7 +141,6 @@ func waitFor(t *testing.T, cond func() bool) {
 	t.Fatal("condition was not met before timeout")
 }
 
-//nolint:cyclop // reconnect flow test keeps setup and postconditions in one scenario
 func TestReconnectRefreshesCredentialsAndReplacesRoom(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -165,7 +165,7 @@ func TestReconnectRefreshesCredentialsAndReplacesRoom(t *testing.T) {
 	s.connectRoom = connector.connect
 
 	reconnected := make(chan struct{}, 1)
-	s.SetReconnectCallback(func(*webrtc.DataChannel) {
+	s.SetReconnectCallback(func() {
 		reconnected <- struct{}{}
 	})
 
@@ -212,7 +212,6 @@ func TestReconnectRefreshesCredentialsAndReplacesRoom(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // terminal disconnect test keeps setup and cleanup assertions together
 func TestDisconnectedEndsWhenReconnectDisallowed(t *testing.T) {
 	ctx := context.Background()
 	sess, err := New(ctx, engine.Config{URL: testOldURL, Token: testOldToken})
@@ -272,7 +271,7 @@ func TestDisconnectedEndsWhenReconnectDisallowed(t *testing.T) {
 
 func TestCanSendRequiresConnectedRoomAndQueueHeadroom(t *testing.T) {
 	s := &Session{
-		sendQueue: make(chan []byte, defaultSendQueueSize),
+		sendQueue: make(chan []byte, engine.DefaultSendQueueSize),
 		done:      make(chan struct{}),
 		closeCh:   make(chan struct{}),
 	}
@@ -292,7 +291,7 @@ func TestCanSendRequiresConnectedRoomAndQueueHeadroom(t *testing.T) {
 		t.Fatal("CanSend() = false for connected room")
 	}
 
-	for range defaultSendQueueCapHard {
+	for range engine.DefaultSendQueueCapHard {
 		s.sendQueue <- []byte("x")
 	}
 	if s.CanSend() {
@@ -311,13 +310,93 @@ func TestReconnectFailureRetriesUntilContextDone(t *testing.T) {
 			cancel()
 			return nil, errFakeConnect
 		},
-		reconnectCh: make(chan struct{}, 1),
-		closeCh:     make(chan struct{}),
-		sendQueue:   make(chan []byte, defaultSendQueueSize),
-		done:        make(chan struct{}),
+		closeCh:   make(chan struct{}),
+		sendQueue: make(chan []byte, engine.DefaultSendQueueSize),
+		done:      make(chan struct{}),
 	}
-	if terminal := s.handleReconnectAttempt(ctx); !terminal {
-		t.Fatal("handleReconnectAttempt() = false after context cancellation")
+	s.Configure(engine.ReconnectorConfig{
+		MaxAttempts: maxReconnects,
+		Reconnect:   s.reconnect,
+	})
+	finished := make(chan struct{})
+	go func() {
+		s.WatchConnection(ctx)
+		close(finished)
+	}()
+	s.queueReconnect()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("WatchConnection did not stop after context cancellation")
+	}
+}
+
+func TestWaitForConnectedRoomIsBounded(t *testing.T) {
+	s := &Session{
+		sendQueue: make(chan []byte, engine.DefaultSendQueueSize),
+		done:      make(chan struct{}),
+		closeCh:   make(chan struct{}),
+		roomReady: 30 * time.Millisecond,
+	}
+	room := newFakeRoom()
+	room.state = lksdk.ConnectionStateDisconnected
+	s.setRoom(room)
+
+	got, err := s.waitForConnectedRoom()
+	if got != nil {
+		t.Fatalf("waitForConnectedRoom() = %v, want nil", got)
+	}
+	if !errors.Is(err, ErrRoomNotConnected) {
+		t.Fatalf("waitForConnectedRoom() error = %v, want %v", err, ErrRoomNotConnected)
+	}
+}
+
+func TestWaitForConnectedRoomStopsOnShutdown(t *testing.T) {
+	s := &Session{
+		sendQueue: make(chan []byte, engine.DefaultSendQueueSize),
+		done:      make(chan struct{}),
+		closeCh:   make(chan struct{}),
+	}
+	room := newFakeRoom()
+	room.state = lksdk.ConnectionStateDisconnected
+	s.setRoom(room)
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		close(s.done)
+	}()
+
+	if _, err := s.waitForConnectedRoom(); !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("waitForConnectedRoom() error = %v, want %v", err, ErrSessionClosed)
+	}
+}
+
+func TestGetBufferedAmountTracksQueue(t *testing.T) {
+	s := &Session{
+		sendQueue: make(chan []byte, engine.DefaultSendQueueSize),
+		done:      make(chan struct{}),
+		closeCh:   make(chan struct{}),
+	}
+	if got := s.GetBufferedAmount(); got != 0 {
+		t.Fatalf("GetBufferedAmount() = %d, want 0", got)
+	}
+	if err := s.Send([]byte("0123456789")); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if got := s.GetBufferedAmount(); got != 10 {
+		t.Fatalf("GetBufferedAmount() = %d, want 10", got)
+	}
+}
+
+func TestCloseSignalIsNilSafe(t *testing.T) {
+	engine.CloseSignal(nil)
+	ch := make(chan struct{})
+	engine.CloseSignal(ch)
+	engine.CloseSignal(ch)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("closeSignal() did not close the channel")
 	}
 }
 

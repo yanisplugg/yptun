@@ -80,6 +80,7 @@ import androidx.compose.ui.text.font.FontFamily
 import org.olcbox.app.ui.features.locations.components.SshAuthFields
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
 import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
+import org.olcbox.app.vpn.freeturn.FreeturnExit
 import org.olcbox.app.vpn.freeturn.FreeturnInstallOptions
 import org.olcbox.app.vpn.freeturn.rememberFreeturnServerInstaller
 import org.olcbox.app.vpn.dnstt.DnsttInstallOptions
@@ -185,6 +186,15 @@ fun LocationSettingsScreen(
             draft = viewModel.editingVkTurn,
             onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
             onDismiss = { showFreeturnInstall = false }
+        )
+    }
+
+    var showOlcRtcInstall by remember { mutableStateOf(false) }
+    if (showOlcRtcInstall) {
+        OlcRtcInstallDialog(
+            config = viewModel.editingConfig,
+            onApply = viewModel::applyOlcRtcServerInstall,
+            onDismiss = { showOlcRtcInstall = false }
         )
     }
 
@@ -432,6 +442,17 @@ fun LocationSettingsScreen(
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
                 )
+            }
+
+            if (allowVpsAutoInstall) {
+                item {
+                    // Своя кнопка рядом с комнатой и ключом: у olcRTC сервер задаётся ровно этими
+                    // полями, и установка их же и заполняет.
+                    TextButton(
+                        enabled = !isSaving,
+                        onClick = { showOlcRtcInstall = true }
+                    ) { Text("Установить olcRTC на VPS") }
+                }
             }
 
             item {
@@ -1104,17 +1125,6 @@ private fun LazyListScope.vkTurnSection(
                     }
                 }
             }
-            // Bonding (TCP striping) is only valid for the proxy/tcp exit — freeturn rejects it in
-            // udp mode. For WireGuard/AmneziaWG (udp), aggregation comes from "streams" + multiple
-            // VK call links, so the switch is hidden there to avoid a start failure.
-            if (!isWdtt && draft.outbound == VkTurnConfig.OUTBOUND_PROXY) {
-                VkTurnSwitchRow(
-                    label = LocalStrings.current.bondingMultipath,
-                    checked = draft.bond,
-                    enabled = enabled,
-                    onCheckedChange = { v -> onChange { it.copy(bond = v) } }
-                )
-            }
         }
     }
 
@@ -1316,7 +1326,7 @@ private fun LazyListScope.vkTurnSection(
  * button — so the user can paste the full SSH log when reporting an install problem.
  */
 @Composable
-private fun InstallLogView(log: List<String>, logScroll: ScrollState) {
+internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
     if (log.isEmpty()) return
     val clipboard = LocalClipboardManager.current
     Row(
@@ -1584,6 +1594,8 @@ private fun FreeturnInstallDialog(
     var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Result<String>?>(null) }
+    // Последняя операция была удалением — тогда не врём про «ключи подставлены в локацию».
+    var removed by remember { mutableStateOf(false) }
     val log = remember { mutableStateListOf<String>() }
     val logScroll = rememberScrollState()
 
@@ -1592,7 +1604,13 @@ private fun FreeturnInstallDialog(
     // prefilled from the location draft (default rtpopus). rtpopus2/3 need a freeturn 1.3+/1.4+ server,
     // which the bundled binary is, so all are installable.
     var obfProfile by remember { mutableStateOf(draft.obfProfile.ifBlank { "rtpopus" }) }
+    // Чем поднимать выход на VPS. AmneziaWG прячет сам туннель ВНУТРИ TURN-релея (Jc/S1/S2/H1-H4
+    // генерируются на сервере и приезжают в локацию), ставится userspace-бинарником amneziawg-go —
+    // ядерный модуль и awg-tools не нужны. Требует /dev/net/tun, как и обычный WireGuard.
+    var exit by remember { mutableStateOf(FreeturnExit.WireGuard) }
     val succeeded = result?.isSuccess == true
+    // Установка и удаление требуют одного и того же: адреса и доступа по SSH.
+    val canRun = !running && ip.isNotBlank() && (if (useKey) sshKey.isNotBlank() else password.isNotBlank())
 
     androidx.compose.runtime.LaunchedEffect(log.size) {
         if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
@@ -1607,8 +1625,9 @@ private fun FreeturnInstallDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    "Подключусь к VPS по SSH, подниму WireGuard и запущу free-turn-proxy сервер на " +
-                        "порту $port (obf $obfProfile). Ключи и obf-key подставятся в локацию.",
+                    "Подключусь к VPS по SSH, подниму выход (${if (exit == FreeturnExit.AmneziaWG) "AmneziaWG" else "WireGuard"}) " +
+                        "и запущу free-turn-proxy сервер на порту $port (obf $obfProfile). " +
+                        "Ключи и obf-key подставятся в локацию.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 OutlinedTextField(
@@ -1669,6 +1688,16 @@ private fun FreeturnInstallDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                SettingsDropdown(
+                    label = "Выход на VPS",
+                    selectedValue = exit.name,
+                    options = FreeturnExit.entries.map { it.name },
+                    enabled = !running,
+                    onValueSelected = { picked ->
+                        exit = FreeturnExit.entries.first { it.name == picked }
+                    },
+                    valueLabel = { if (it == FreeturnExit.AmneziaWG.name) "AmneziaWG (обфускация)" else "WireGuard" }
+                )
                 // Обфускация: профиль, с которым стартует сервер (rtpopus / rtpopus2 / rtpopus3).
                 // Должен совпадать с клиентом — на успехе он подставляется в локацию.
                 SettingsDropdown(
@@ -1689,7 +1718,8 @@ private fun FreeturnInstallDialog(
                 }
                 if (succeeded) {
                     Text(
-                        result?.getOrNull().orEmpty() + "\nКлючи подставлены в локацию.",
+                        result?.getOrNull().orEmpty() +
+                            if (removed) "" else "\nКлючи подставлены в локацию.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -1701,10 +1731,11 @@ private fun FreeturnInstallDialog(
                 TextButton(onClick = onDismiss) { Text("Готово") }
             } else {
                 TextButton(
-                    enabled = !running && ip.isNotBlank() && (if (useKey) sshKey.isNotBlank() else password.isNotBlank()),
+                    enabled = canRun,
                     onClick = {
                         running = true
                         result = null
+                        removed = false
                         log.clear()
                         scope.launch {
                             val res = installer.install(
@@ -1718,14 +1749,16 @@ private fun FreeturnInstallDialog(
                                     freeturnPort = port,
                                     obfProfile = obfProfile,
                                     dns = dns.ifBlank { "1.1.1.1" },
+                                    exit = exit,
                                 )
                             ) { line -> log.add(line) }
                             // On success, write the obf key + WireGuard keys into the draft; the composer
                             // rebuilds the freeturn:// link + the WG outbound from these fields.
                             res.getOrNull()?.let { ok ->
                                 onApplyDraft { d ->
-                                    d.copy(
-                                        outbound = VkTurnConfig.OUTBOUND_WIREGUARD,
+                                    val base = d.copy(
+                                        outbound = if (ok.awg != null) VkTurnConfig.OUTBOUND_AMNEZIAWG
+                                        else VkTurnConfig.OUTBOUND_WIREGUARD,
                                         mode = "udp",
                                         obfProfile = obfProfile,
                                         obfKey = ok.obfKey,
@@ -1736,6 +1769,19 @@ private fun FreeturnInstallDialog(
                                         wgAddress = ok.clientWgAddress,
                                         wgDns = dns.ifBlank { "1.1.1.1" },
                                     )
+                                    // Параметры AmneziaWG обязаны совпасть с сервером до единого числа,
+                                    // поэтому берём ровно те, что он сгенерировал, а не дефолты.
+                                    ok.awg?.let { a ->
+                                        base.copy(
+                                            // MTU выставляем явно: туннель едет внутри TURN, и на
+                                            // дефолтных 1420 полноразмерный кадр режется по дороге.
+                                            // Столько же ставит себе сервер и берёт сам freeturn.
+                                            wgMtu = "1280",
+                                            awgJc = a.jc, awgJmin = a.jmin, awgJmax = a.jmax,
+                                            awgS1 = a.s1, awgS2 = a.s2,
+                                            awgH1 = a.h1, awgH2 = a.h2, awgH3 = a.h3, awgH4 = a.h4,
+                                        )
+                                    } ?: base
                                 }
                             }
                             res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
@@ -1753,8 +1799,37 @@ private fun FreeturnInstallDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !running) {
-                Text(if (succeeded) "Закрыть" else "Отмена")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Снос того же порта: служба, туннельный выход (любой из двух), конфиги и правило
+                // фаервола. Локацию не трогаем: ключи в ней ещё пригодятся, если сервер ставят заново.
+                TextButton(
+                    enabled = canRun,
+                    onClick = {
+                        running = true
+                        result = null
+                        removed = true
+                        log.clear()
+                        scope.launch {
+                            val res = installer.uninstall(
+                                FreeturnInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    freeturnPort = port,
+                                )
+                            ) { line -> log.add(line) }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) { Text("Удалить с VPS") }
+                TextButton(onClick = onDismiss, enabled = !running) {
+                    Text(if (succeeded) "Закрыть" else "Отмена")
+                }
             }
         }
     )
@@ -2314,7 +2389,7 @@ private fun TransportPicker(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsDropdown(
+internal fun SettingsDropdown(
     label: String,
     selectedValue: String,
     options: List<String>,

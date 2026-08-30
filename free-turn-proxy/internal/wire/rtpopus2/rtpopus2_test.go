@@ -53,7 +53,7 @@ func TestWrapIntoRoundTrip(t *testing.T) {
 	cli, _ := NewConn(key, false)
 	srv, _ := NewConn(key, true)
 
-	payload := []byte("xray tcp bytes over smux")
+	payload := []byte("wireguard bytes over relay")
 	dst := make([]byte, MaxWire(len(payload)))
 	n, err := cli.WrapInto(dst, payload)
 	if err != nil {
@@ -100,7 +100,6 @@ func TestHeaderShape(t *testing.T) {
 		t.Errorf("client nonce sessionID MSB set, want clear (direction bit)")
 	}
 
-	// Второй пакет того же conn: marker bit снят.
 	buf2 := make([]byte, MaxWire(len(payload)))
 	copy(buf2[headerLen:], payload)
 	if _, err := cli.WrapInPlace(buf2, len(payload)); err != nil {
@@ -137,7 +136,7 @@ func TestTamperDetected(t *testing.T) {
 	copy(buf[headerLen:], payload)
 	n, _ := cli.WrapInPlace(buf, len(payload))
 
-	buf[n-1] ^= 0xFF // портим последний байт tag
+	buf[n-1] ^= 0xFF
 	if _, err := srv.UnwrapInPlace(buf[:n]); err == nil {
 		t.Fatal("expected AEAD open failure on tampered tag")
 	}
@@ -146,7 +145,7 @@ func TestTamperDetected(t *testing.T) {
 func TestWrongKeyFails(t *testing.T) {
 	t.Parallel()
 	cli, _ := NewConn(newKey(t), false)
-	srv, _ := NewConn(newKey(t), true) // другой ключ
+	srv, _ := NewConn(newKey(t), true)
 
 	payload := []byte("secret")
 	buf := make([]byte, MaxWire(len(payload)))

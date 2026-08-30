@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package conn
@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/amnezia-vpn/amneziawg-go/conn/winrio"
+	"github.com/amnezia-vpn/amneziawg-go/v3/conn/winrio"
 )
 
 const (
@@ -580,6 +580,24 @@ func (bind *WinRingBind) BindSocketToInterface6(interfaceIndex uint32, blackhole
 	}
 	bind.v6.blackhole = blackhole
 	return nil
+}
+
+func (bind *WinRingBind) PeekLookAtSocketFd4() (fd int, err error) {
+	bind.mu.RLock()
+	defer bind.mu.RUnlock()
+	if bind.isOpen.Load() != 1 {
+		return -1, net.ErrClosed
+	}
+	return int(bind.v4.sock), nil
+}
+
+func (bind *WinRingBind) PeekLookAtSocketFd6() (fd int, err error) {
+	bind.mu.RLock()
+	defer bind.mu.RUnlock()
+	if bind.isOpen.Load() != 1 {
+		return -1, net.ErrClosed
+	}
+	return int(bind.v6.sock), nil
 }
 
 func bindSocketToInterface4(handle windows.Handle, interfaceIndex uint32) error {

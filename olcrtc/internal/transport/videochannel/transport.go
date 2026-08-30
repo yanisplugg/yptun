@@ -1,179 +1,129 @@
 // Package videochannel provides a byte transport over a visual video stream.
+//
+// Payload fragments are rendered into QR codes or tiles, encoded as ordinary
+// video frames and decoded back on the far side. Framing, fragment
+// acknowledgement and the retransmit loop are the shared ones in
+// internal/transport/common; this package owns the visual codec and the
+// FPS-paced writer.
 package videochannel
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/openlibrecommunity/olcrtc/internal/engine"
-	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
-	"github.com/openlibrecommunity/olcrtc/internal/logger"
-	"github.com/openlibrecommunity/olcrtc/internal/transport"
-	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/samplebuilder"
+
+	"github.com/openlibrecommunity/olcrtc/internal/logger"
+	"github.com/openlibrecommunity/olcrtc/internal/transport"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
 )
 
 const (
 	defaultMaxPayloadSize = 16 * 1024
 	defaultFragmentSize   = 256
 	defaultAckTimeout     = 1 * time.Second
-	defaultFrameInterval  = 40 * time.Millisecond
 	defaultConnectTimeout = 30 * time.Second
-	maxSendAttempts       = 20
-	sampleBuilderMaxLate  = 128
+	// maxSendAttempts bounds retransmission of the fragments still unacked
+	// after one ack budget. The visual path loses individual fragments
+	// routinely, and a retry only re-sends what is missing, so the budget is
+	// generous.
+	maxSendAttempts      = 20
+	sampleBuilderMaxLate = 128
+	// maxRemoteDecoders caps how many remote tracks get a decoder. Every
+	// participant in a shared room publishes one, and each decoder costs two
+	// goroutines plus a queue of full grayscale planes.
+	maxRemoteDecoders = 8
+	// writerBatchSize is how many frames the writer emits per tick. The
+	// visual encoder renders one frame per tick, so the ack budget is sized
+	// against a batch of one.
+	writerBatchSize = 1
 )
 
 var (
-	// ErrVideoTrackUnsupported is returned when a carrier cannot expose video tracks.
-	ErrVideoTrackUnsupported = errors.New("carrier does not support video tracks")
+	// ErrVideoTrackUnsupported is returned when a provider cannot expose video tracks.
+	ErrVideoTrackUnsupported = common.ErrVideoTrackUnsupported
 	// ErrAckTimeout is returned when the peer does not acknowledge a payload in time.
 	ErrAckTimeout = errors.New("videochannel ack timeout")
 	// ErrTransportClosed is returned when operations are attempted on a closed transport.
 	ErrTransportClosed = errors.New("videochannel transport closed")
 )
 
-// videoSession is the subset of engine.Session + engine.VideoTrackCapable
-// the videochannel transport relies on.
-type videoSession interface {
-	Connect(ctx context.Context) error
-	Close() error
-	SetReconnectCallback(cb func())
-	SetShouldReconnect(fn func() bool)
-	SetEndedCallback(cb func(string))
-	WatchConnection(ctx context.Context)
-	CanSend() bool
-	Reconnect(reason string)
-	AddTrack(track webrtc.TrackLocal) error
-	SetTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver))
-}
-
 type streamTransport struct {
-	stream          videoSession
-	track           *webrtc.TrackLocalStaticSample
-	codec           codecSpec
-	encoder         *goEncoder
-	encoderMu       sync.Mutex
-	decoderMu       sync.Mutex
-	decoders        map[*goDecoder]struct{}
-	onData          func([]byte)
-	outbound        chan []byte
-	outboundAck     chan []byte
-	closeCh         chan struct{}
-	writerDone      chan struct{}
-	nextSeq         atomic.Uint32
-	closed          atomic.Bool
-	writerUp        atomic.Bool
-	sendMu          sync.Mutex
-	startWriter     sync.Once
-	fragAcks        *fragAckTracker
-	reassembler     *common.Reassembler
+	common.Lifecycle
+
+	stream      common.VideoSession
+	track       *webrtc.TrackLocalStaticSample
+	codec       codecSpec
+	encoder     *goEncoder
+	encoderMu   sync.Mutex
+	decoderMu   sync.Mutex
+	decoders    map[*goDecoder]struct{}
+	onData      func([]byte)
+	queue       *common.OutboundQueue
+	sender      *common.Sender
+	reassembler *common.Reassembler
+
+	closeCh     chan struct{}
+	writerDone  chan struct{}
+	closed      atomic.Bool
+	writerUp    atomic.Bool
+	startWriter sync.Once
+
 	videoW          int
 	videoH          int
 	videoFPS        int
-	videoBitrate    string
-	videoHW         string
 	videoQRSize     int
 	videoQRRecovery string
 	videoCodec      string
 	videoTileModule int
 	videoTileRS     int
-	localRole       byte
+	visualOnce      sync.Once
+	visual          *visualCodec
+	visualErr       error
 	remoteRole      byte
 	bindingToken    uint32
-	runCtx          context.Context //nolint:containedctx,lll // long-lived context drives idle-frame loops bound to this transport's lifetime
+	shaper          *transport.Shaper
 }
 
-// New creates a visual videochannel transport backed by a carrier engine.
+// New creates a visual videochannel transport backed by a provider engine.
 func New(ctx context.Context, cfg transport.Config) (transport.Transport, error) {
 	opts, err := optionsFrom(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	session, err := enginebuiltin.Open(ctx, cfg.Carrier, enginebuiltin.Config{
-		RoomURL:   cfg.RoomURL,
-		Name:      cfg.Name,
-		OnData:    nil,
-		DNSServer: cfg.DNSServer,
-		Resolver:  cfg.Resolver,
-		ProxyAddr: cfg.ProxyAddr,
-		ProxyPort: cfg.ProxyPort,
-		Engine:    cfg.Engine,
-		URL:       cfg.URL,
-		Token:     cfg.Token,
-		AuthToken: cfg.AuthToken,
-	})
+	// Payloads ride the video track, so the engine stays in pure-video mode:
+	// no data callbacks, otherwise it would gate readiness on a bridge this
+	// transport never uses and deliver provider bytes behind our back.
+	engineCfg := cfg
+	engineCfg.OnData = nil
+	engineCfg.OnPeerData = nil
+
+	session, err := engineCfg.OpenEngine(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("open engine session: %w", err)
+		return nil, err
 	}
 
-	vt, ok := session.(engine.VideoTrackCapable)
-	if !ok || !session.Capabilities().VideoTrack {
-		_ = session.Close()
-		return nil, ErrVideoTrackUnsupported
-	}
-	stream := &engineVideoSession{session: session, vt: vt}
-
-	codec := codecSpecForCarrier(cfg.Carrier)
-	// Stream/track IDs must be unique per peer: Jitsi/Jicofo keys participant
-	// sources by msid (stream-id+track-id) and rejects a session-accept whose
-	// msid collides with one already in the conference.
-	streamID := "videochannel-" + common.RandomID()
-	trackID := "olcrtc-" + common.RandomID()
-	track, err := webrtc.NewTrackLocalStaticSample(codec.capability, streamID, trackID)
+	stream, err := common.NewEngineVideoSession(session)
 	if err != nil {
-		return nil, fmt.Errorf("create local video track: %w", err)
+		return nil, fmt.Errorf("open video session: %w", err)
 	}
 
-	qrSize := opts.QRSize
-	if qrSize <= 0 {
-		qrSize = defaultFragmentSize
+	// Every provider negotiates VP8 outbound; inbound follows whatever the
+	// remote announces (see codecSpecForMime).
+	codec := vp8CodecSpec()
+	track, err := common.NewVideoTrack(codec.capability, "videochannel")
+	if err != nil {
+		return nil, fmt.Errorf("build video track: %w", err)
 	}
 
-	tileModule := opts.TileModule
-	if tileModule <= 0 {
-		tileModule = 4
-	}
-
-	tileRS := opts.TileRS
-	if tileRS < 0 {
-		tileRS = 20
-	}
-
-	tr := &streamTransport{
-		stream:          stream,
-		track:           track,
-		codec:           codec,
-		onData:          cfg.OnData,
-		outbound:        make(chan []byte, 256),
-		outboundAck:     make(chan []byte, 64),
-		closeCh:         make(chan struct{}),
-		writerDone:      make(chan struct{}),
-		decoders:        make(map[*goDecoder]struct{}),
-		fragAcks:        newFragAckTracker(),
-		reassembler:     common.NewReassembler(256),
-		videoW:          opts.Width,
-		videoH:          opts.Height,
-		videoFPS:        opts.FPS,
-		videoBitrate:    opts.Bitrate,
-		videoHW:         opts.HW,
-		videoQRSize:     qrSize,
-		videoQRRecovery: opts.QRRecovery,
-		videoCodec:      opts.Codec,
-		videoTileModule: tileModule,
-		videoTileRS:     tileRS,
-		localRole:       localFrameRole(cfg.DeviceID),
-		remoteRole:      remoteFrameRole(cfg.DeviceID),
-		bindingToken:    bindingToken(cfg.ChannelID),
-		runCtx:          ctx,
-	}
+	tr := newStreamTransport(stream, track, codec, cfg, opts)
 
 	if err := stream.AddTrack(track); err != nil {
 		return nil, fmt.Errorf("attach local video track: %w", err)
@@ -181,6 +131,52 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 	stream.SetTrackHandler(tr.handleRemoteTrack)
 
 	return tr, nil
+}
+
+func newStreamTransport(
+	stream common.VideoSession,
+	track *webrtc.TrackLocalStaticSample,
+	codec codecSpec,
+	cfg transport.Config,
+	opts Options,
+) *streamTransport {
+	closeCh := make(chan struct{})
+	tr := &streamTransport{
+		Lifecycle:       common.NewLifecycle(stream),
+		stream:          stream,
+		track:           track,
+		codec:           codec,
+		onData:          cfg.OnData,
+		queue:           common.NewOutboundQueue(closeCh, ErrTransportClosed),
+		reassembler:     common.NewReassembler(256),
+		closeCh:         closeCh,
+		writerDone:      make(chan struct{}),
+		decoders:        make(map[*goDecoder]struct{}),
+		videoW:          opts.Width,
+		videoH:          opts.Height,
+		videoFPS:        opts.FPS,
+		videoQRSize:     opts.QRSize,
+		videoQRRecovery: opts.QRRecovery,
+		videoCodec:      opts.Codec,
+		videoTileModule: opts.TileModule,
+		videoTileRS:     opts.TileRS,
+		remoteRole:      common.RemoteRole(cfg.DeviceID),
+		bindingToken:    common.BindingToken(cfg.ChannelID, cfg.RoomURL),
+	}
+
+	tr.sender = common.NewSender(common.SenderConfig{
+		Role:          common.LocalRole(cfg.DeviceID),
+		Binding:       tr.bindingToken,
+		FragmentSize:  opts.QRSize,
+		MaxAttempts:   maxSendAttempts,
+		FrameInterval: tr.frameInterval(),
+		BatchSize:     writerBatchSize,
+		AckFloor:      defaultAckTimeout,
+	}, tr.queue)
+
+	tr.shaper = transport.NewShaper(cfg.Traffic, tr.Features())
+
+	return tr
 }
 
 // Connect starts the transport connection.
@@ -191,18 +187,18 @@ func (p *streamTransport) Connect(ctx context.Context) error {
 	encoder := newGoEncoder(p.videoW, p.videoH, p.videoFPS)
 
 	if err := p.stream.Connect(connectCtx); err != nil {
-		_ = encoder.Close()
+		encoder.Close()
 		return fmt.Errorf("connect stream: %w", err)
 	}
 
 	p.encoderMu.Lock()
 	if p.closed.Load() {
 		p.encoderMu.Unlock()
-		_ = encoder.Close()
+		encoder.Close()
 		return ErrTransportClosed
 	}
 	if p.encoder != nil {
-		_ = p.encoder.Close()
+		p.encoder.Close()
 	}
 	p.encoder = encoder
 	p.encoderMu.Unlock()
@@ -216,102 +212,45 @@ func (p *streamTransport) Connect(ctx context.Context) error {
 }
 
 // Send transmits data through the transport with per-fragment retransmits.
-//
-// QR/tile-encoded fragments ride lossy VP8 video frames where any single
-// fragment can be corrupted past ECC recovery. With whole-message ack
-// semantics a single dropped fragment forced a full retransmit; under
-// load that piled fragments into the outbound channel and eventually
-// killed the encoder. Here each fragment is acked independently and only
-// the unacked ones are resent.
 func (p *streamTransport) Send(data []byte) error {
+	return p.shaper.Send(p.send, data)
+}
+
+func (p *streamTransport) send(data []byte) error {
 	if p.closed.Load() {
 		return ErrTransportClosed
 	}
 
-	p.sendMu.Lock()
-	defer p.sendMu.Unlock()
-
-	seq := p.nextSeq.Add(1)
-	crc := crc32.ChecksumIEEE(data)
-	fragments := common.FragmentPayload(data, p.videoQRSize)
-	waiter := p.fragAcks.Register(seq, crc, len(fragments))
-	defer p.fragAcks.Unregister(seq)
-
-	// Per-attempt wait covers one round trip through the FPS-paced writer
-	// and the peer's reassembly + ack path. Scale with fragment count so a
-	// large payload gets enough time to drain on the first attempt before
-	// we retransmit anything.
-	ackTimeout := perAttemptAckTimeout(len(fragments), p.videoFPS)
-
-	// Initial send: every fragment goes out once.
-	pending := make([]int, len(fragments))
-	for i := range pending {
-		pending[i] = i
-	}
-
-	for range maxSendAttempts {
-		for _, idx := range pending {
-			frame := encodeDataFrameForBinding(
-				p.localRole, p.bindingToken, seq, crc,
-				len(data), idx, len(fragments), fragments[idx])
-			if err := p.enqueueFrame(frame, false); err != nil {
-				return err
-			}
-		}
-
-		if ok, err := p.awaitFragments(waiter, ackTimeout); err != nil {
-			return err
-		} else if ok {
-			return nil
-		}
-		pending = waiter.Pending()
-		if len(pending) == 0 {
-			return nil
-		}
-	}
-
-	return ErrAckTimeout
-}
-
-// awaitFragments blocks until the waiter is fully acked, the per-attempt
-// timeout elapses, or the transport closes. Returns (done, err).
-func (p *streamTransport) awaitFragments(waiter *fragWaiter, timeout time.Duration) (bool, error) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	for {
-		if waiter.Done() {
-			return true, nil
-		}
-		select {
-		case <-waiter.Notify():
-			// Re-check Done() at the top of the loop.
-		case <-timer.C:
-			return waiter.Done(), nil
-		case <-p.closeCh:
-			return false, ErrTransportClosed
-		}
+	err := p.sender.Send(data)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, common.ErrAckTimeout):
+		return ErrAckTimeout
+	default:
+		return fmt.Errorf("send fragments: %w", err)
 	}
 }
 
-// perAttemptAckTimeout returns how long to wait for acks of a multi-fragment
-// payload before retransmitting unacked fragments. Floor at defaultAckTimeout
-// for tiny payloads; otherwise scale linearly with fragment count to cover
-// one round trip through the FPS-paced writerLoop plus reassembly on the peer
-// side, with a 3× margin.
+// frameInterval is the writer's tick period. FPS is defaulted by
+// Options.withDefaults, so this only guards hand-built transports in tests.
+func (p *streamTransport) frameInterval() time.Duration {
+	fps := p.videoFPS
+	if fps <= 0 {
+		fps = defaultFPS
+	}
+	return time.Second / time.Duration(fps)
+}
+
+// perAttemptAckTimeout returns how long one send attempt waits for acks of a
+// fragments-sized payload. The writer emits one frame per tick, so the shared
+// batch-aware budget is evaluated at a batch of one.
 func perAttemptAckTimeout(fragments, fps int) time.Duration {
 	if fps <= 0 {
 		fps = 25
 	}
-	frameInterval := time.Second / time.Duration(fps)
-	estimated := time.Duration(fragments) * frameInterval * 3
-	if estimated < defaultAckTimeout {
-		return defaultAckTimeout
-	}
-	const maxAckTimeout = 30 * time.Second
-	if estimated > maxAckTimeout {
-		return maxAckTimeout
-	}
-	return estimated
+	return common.PerAttemptAckTimeout(
+		fragments, writerBatchSize, time.Second/time.Duration(fps), defaultAckTimeout)
 }
 
 // Close terminates the transport.
@@ -321,13 +260,13 @@ func (p *streamTransport) Close() error {
 
 		p.encoderMu.Lock()
 		if p.encoder != nil {
-			_ = p.encoder.Close()
+			p.encoder.Close()
 		}
 		p.encoderMu.Unlock()
 
 		p.decoderMu.Lock()
 		for decoder := range p.decoders {
-			_ = decoder.Close()
+			decoder.Close()
 		}
 		p.decoders = nil
 		p.decoderMu.Unlock()
@@ -347,26 +286,6 @@ func (p *streamTransport) SetReconnectCallback(cb func()) {
 	p.stream.SetReconnectCallback(cb)
 }
 
-// Reconnect forwards to the underlying engine session.
-func (p *streamTransport) Reconnect(reason string) {
-	p.stream.Reconnect(reason)
-}
-
-// SetShouldReconnect configures reconnect policy.
-func (p *streamTransport) SetShouldReconnect(fn func() bool) {
-	p.stream.SetShouldReconnect(fn)
-}
-
-// SetEndedCallback registers end-of-session handling.
-func (p *streamTransport) SetEndedCallback(cb func(string)) {
-	p.stream.SetEndedCallback(cb)
-}
-
-// WatchConnection monitors connection lifecycle.
-func (p *streamTransport) WatchConnection(ctx context.Context) {
-	p.stream.WatchConnection(ctx)
-}
-
 // CanSend reports whether transport is ready for sending.
 func (p *streamTransport) CanSend() bool {
 	return !p.closed.Load() && p.stream.CanSend()
@@ -378,12 +297,7 @@ func (p *streamTransport) Features() transport.Features {
 	if p.videoQRSize*64 > maxPayload {
 		maxPayload = p.videoQRSize * 64
 	}
-	return transport.Features{
-		Reliable:        true,
-		Ordered:         true,
-		MessageOriented: true,
-		MaxPayloadSize:  maxPayload,
-	}
+	return p.shaper.Features(transport.Features{MaxPayloadSize: maxPayload})
 }
 
 func (p *streamTransport) writeIdleFrame(enc *goEncoder, frameDuration time.Duration) {
@@ -392,6 +306,8 @@ func (p *streamTransport) writeIdleFrame(enc *goEncoder, frameDuration time.Dura
 		logger.Debugf("videochannel render idle error: %v", err)
 		return
 	}
+	// The Go encoder copies grayscale input into its own pad buffer before
+	// returning, so the transport's immutable idle frame remains reusable.
 	sample, err := enc.EncodeFrame(rawFrame)
 	if err != nil {
 		logger.Warnf("videochannel encoder idle error: %v", err)
@@ -423,21 +339,20 @@ func (p *streamTransport) writerLoop() {
 		p.encoderMu.Lock()
 		defer p.encoderMu.Unlock()
 		if p.encoder != nil {
-			_ = p.encoder.Close()
+			p.encoder.Close()
 		}
 	}()
 
-	ticker := time.NewTicker(time.Second / time.Duration(p.videoFPS))
+	frameDuration := p.frameInterval()
+	ticker := time.NewTicker(frameDuration)
 	defer ticker.Stop()
-
-	frameDuration := time.Second / time.Duration(p.videoFPS)
 
 	for {
 		select {
 		case <-p.closeCh:
 			return
 		case <-ticker.C:
-			payload, ok := p.nextOutboundFrame()
+			payload, ok := p.queue.Next()
 			if !ok {
 				return
 			}
@@ -460,51 +375,30 @@ func (p *streamTransport) writerLoop() {
 }
 
 func (p *streamTransport) renderFrame(payload []byte) ([]byte, error) {
-	return renderVisualFrame(
-		payload,
-		p.videoW, p.videoH,
-		p.videoCodec, p.videoQRRecovery,
-		p.videoTileModule, p.videoTileRS,
-	)
+	visual, err := p.getVisualCodec()
+	if err != nil {
+		return nil, err
+	}
+	return visual.render(payload)
 }
 
-func (p *streamTransport) nextOutboundFrame() ([]byte, bool) {
-	select {
-	case <-p.closeCh:
-		return nil, false
-	case payload := <-p.outboundAck:
-		return payload, true
-	default:
-	}
-
-	select {
-	case <-p.closeCh:
-		return nil, false
-	case payload := <-p.outboundAck:
-		return payload, true
-	case payload := <-p.outbound:
-		return payload, true
-	default:
-		return nil, true
-	}
+func (p *streamTransport) getVisualCodec() (*visualCodec, error) {
+	p.visualOnce.Do(func() {
+		p.visual, p.visualErr = newVisualCodec(
+			p.videoW, p.videoH,
+			p.videoCodec, p.videoQRRecovery,
+			p.videoTileModule, p.videoTileRS,
+		)
+	})
+	return p.visual, p.visualErr
 }
 
-func (p *streamTransport) enqueueFrame(frame []byte, priority bool) error {
-	if p.closed.Load() {
-		return ErrTransportClosed
+func (p *streamTransport) extractFrame(frame []byte) ([]byte, error) {
+	visual, err := p.getVisualCodec()
+	if err != nil {
+		return nil, err
 	}
-
-	ch := p.outbound
-	if priority {
-		ch = p.outboundAck
-	}
-
-	select {
-	case <-p.closeCh:
-		return ErrTransportClosed
-	case ch <- frame:
-		return nil
-	}
+	return visual.extract(frame)
 }
 
 func (p *streamTransport) popDecoderFrames(decoder *goDecoder) {
@@ -514,7 +408,7 @@ func (p *streamTransport) popDecoderFrames(decoder *goDecoder) {
 			delete(p.decoders, decoder)
 		}
 		p.decoderMu.Unlock()
-		_ = decoder.Close()
+		decoder.Close()
 	}()
 
 	for {
@@ -569,12 +463,16 @@ func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc
 		return
 	}
 
-	decoder := newGoDecoder(p.videoW, p.videoH)
+	decoder := newGoDecoder()
 
 	p.decoderMu.Lock()
-	if p.closed.Load() || p.decoders == nil {
+	if p.closed.Load() || p.decoders == nil || len(p.decoders) >= maxRemoteDecoders {
+		full := len(p.decoders) >= maxRemoteDecoders
 		p.decoderMu.Unlock()
-		_ = decoder.Close()
+		decoder.Close()
+		if full {
+			logger.Warnf("videochannel: %d decoders already running, ignoring remote track", maxRemoteDecoders)
+		}
 		return
 	}
 	p.decoders[decoder] = struct{}{}
@@ -585,9 +483,7 @@ func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc
 }
 
 func (p *streamTransport) handleFrame(frame []byte) {
-	var payload []byte
-	var err error
-	payload, err = extractVisualPayload(frame, p.videoW, p.videoH, p.videoCodec, p.videoTileModule, p.videoTileRS)
+	payload, err := p.extractFrame(frame)
 	if err != nil || len(payload) == 0 {
 		if err != nil {
 			logger.Debugf("videochannel extract visual payload error: %v", err)
@@ -595,7 +491,7 @@ func (p *streamTransport) handleFrame(frame []byte) {
 		return
 	}
 
-	decoded, err := decodeTransportFrame(payload)
+	decoded, err := common.DecodeFrame(payload)
 	if err != nil {
 		logger.Debugf("videochannel decode transport frame error: %v", err)
 		return
@@ -604,74 +500,30 @@ func (p *streamTransport) handleFrame(frame []byte) {
 		return
 	}
 
-	switch decoded.typ {
-	case frameTypeAck:
-		p.resolveAck(decoded.seq, decoded.crc, decoded.fragIdx)
-	case frameTypeData:
+	switch decoded.Type {
+	case common.FrameTypeAck:
+		p.resolveAck(decoded.Seq, decoded.CRC, decoded.FragIdx)
+	case common.FrameTypeData:
 		p.handleInboundFrame(decoded)
+	case common.FrameTypeHello:
+		// videochannel has no idle beacon; nothing to do.
 	}
 }
 
-func (p *streamTransport) handleInboundFrame(frame transportFrame) {
-	result, data := p.reassembler.Push(common.Fragment{
-		Seq:       frame.seq,
-		CRC:       frame.crc,
-		TotalLen:  frame.totalLen,
-		FragIdx:   frame.fragIdx,
-		FragTotal: frame.fragTotal,
-		Payload:   frame.payload,
-	})
-	switch result {
-	case common.ResultDelivered:
-		if p.onData != nil {
-			p.onData(data)
-		}
-		// All fragments of this seq are in; ack this fragment. The sender
-		// learns full delivery once it has accumulated acks for every
-		// fragment it sent.
-		p.sendAck(frame.seq, frame.crc, frame.fragIdx)
-	case common.ResultPartial, common.ResultDuplicate:
-		// Every fragment we successfully decoded gets acked, including
-		// duplicates - under retransmits the sender may have lost the
-		// earlier ack and is waiting on this one.
-		p.sendAck(frame.seq, frame.crc, frame.fragIdx)
-	case common.ResultIgnore:
-		// Malformed or out-of-range; no ack.
-	}
+func (p *streamTransport) handleInboundFrame(frame common.Frame) {
+	common.DeliverFragment(p.reassembler, frame, p.onData, p.sendAck)
 }
 
 func (p *streamTransport) sendAck(seq, crc uint32, fragIdx uint16) {
-	_ = p.enqueueFrame(encodeAckFrameForBinding(p.localRole, p.bindingToken, seq, crc, fragIdx), true)
+	p.sender.Ack(seq, crc, fragIdx)
 }
 
 func (p *streamTransport) resolveAck(seq, crc uint32, fragIdx uint16) {
-	p.fragAcks.Mark(seq, crc, int(fragIdx))
+	p.sender.Resolve(seq, crc, fragIdx)
 }
 
-func localFrameRole(deviceID string) byte {
-	if deviceID == "" {
-		return frameRoleServer
-	}
-	return frameRoleClient
-}
-
-func remoteFrameRole(deviceID string) byte {
-	if deviceID == "" {
-		return frameRoleClient
-	}
-	return frameRoleServer
-}
-
-func bindingToken(channelID string) uint32 {
-	token := crc32.ChecksumIEEE([]byte(channelID))
-	if token == 0 && channelID != "" {
-		token = 1
-	}
-	return token
-}
-
-func (p *streamTransport) acceptFrame(frame transportFrame) bool {
-	roleOK := frame.role == frameRoleAny || frame.role == p.remoteRole
-	bindingOK := frame.binding == 0 || frame.binding == p.bindingToken
-	return roleOK && bindingOK
+// acceptFrame reports whether an inbound frame is addressed to this side:
+// sent by the peer role we expect and carrying our session binding.
+func (p *streamTransport) acceptFrame(frame common.Frame) bool {
+	return frame.AcceptedBy(p.remoteRole, p.bindingToken)
 }

@@ -15,6 +15,9 @@ coverage.out
 .env
 clients.json
 client_config.json
+vk_persona.json
+vk_turn_creds.json
+captcha_page.html
 node_modules
 dist
 /mobile-dist/

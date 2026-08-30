@@ -24,9 +24,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/amnezia-vpn/amneziawg-go/conn"
-	"github.com/amnezia-vpn/amneziawg-go/device"
-	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
+	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	"github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 )
 
 // LogWriter receives log lines; implemented on the Kotlin side.
@@ -44,7 +44,13 @@ var (
 	listener net.Listener
 	logSink  io.Writer = io.Discard
 	debug    atomic.Bool
+	// statsStop закрывается в Stop и глушит репортёр счётчиков (см. reportTransfer).
+	statsStop chan struct{}
 )
+
+// Как часто докладывать rx/tx туннеля. Раз в 10 секунд: этого хватает, чтобы отличить "трафик до нас
+// не доходит" от "мы шлём, а ответа нет", и мало, чтобы не засорять журнал.
+const transferReportInterval = 10 * time.Second
 
 // Protector protects a socket fd from the VPN (implemented in Kotlin via VpnService.protect). It
 // mirrors xraybridge.Protector so the AmneziaWG probe/measure sockets bypass the active system TUN
@@ -162,9 +168,69 @@ func Start(iniConfig, listenAddr string) error {
 	dev = d
 	listener = ln
 	running.Store(true)
+	statsStop = make(chan struct{})
 	go serveSocks(ln, tnet)
-	log.New(logSink, "", 0).Printf("AmneziaWG SOCKS up on %s", listenAddr)
+	go reportTransfer(d, statsStop)
+	log.New(logSink, "", 0).Printf("AmneziaWG SOCKS up on %s (params: %s)", listenAddr, cfg.paramSummary())
 	return nil
+}
+
+// reportTransfer периодически вытаскивает из устройства счётчики пира и пишет их в лог.
+//
+// Без них "туннель не работает" неразличимо: handshake прошёл, дальше в журнале тишина - и непонятно,
+// то ли до AmneziaWG вообще не доходит трафик (тогда виноват тот, кто дальше по цепочке), то ли мы
+// шлём, а сервер молчит (тогда расходятся параметры обфускации или ключи). rx/tx отвечают на это
+// сразу. Пишем только при изменении, чтобы простаивающий туннель не капал в журнал.
+func reportTransfer(d *device.Device, stop <-chan struct{}) {
+	ticker := time.NewTicker(transferReportInterval)
+	defer ticker.Stop()
+	var lastRx, lastTx int64
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			rx, tx, handshake := peerCounters(d)
+			if rx == lastRx && tx == lastTx {
+				continue
+			}
+			lastRx, lastTx = rx, tx
+			since := "никогда"
+			if handshake > 0 {
+				since = fmt.Sprintf("%.0fс назад", time.Since(time.Unix(handshake, 0)).Seconds())
+			}
+			log.New(logSink, "", 0).Printf("transfer: rx=%d B tx=%d B, handshake %s", rx, tx, since)
+		}
+	}
+}
+
+// peerCounters читает rx/tx и время последнего handshake из UAPI-дампа устройства.
+func peerCounters(d *device.Device) (rx, tx, handshake int64) {
+	var buf strings.Builder
+	if err := d.IpcGetOperation(&buf); err != nil {
+		return 0, 0, 0
+	}
+	for _, line := range strings.Split(buf.String(), "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			continue
+		}
+		switch key {
+		case "rx_bytes":
+			rx += n
+		case "tx_bytes":
+			tx += n
+		case "last_handshake_time_sec":
+			if n > handshake {
+				handshake = n
+			}
+		}
+	}
+	return rx, tx, handshake
 }
 
 // Probe measures round-trip latency to the AmneziaWG server WITHOUT a full connection: it brings
@@ -270,6 +336,10 @@ func Stop() {
 		_ = listener.Close()
 		listener = nil
 	}
+	if statsStop != nil {
+		close(statsStop)
+		statsStop = nil
+	}
 	if dev != nil {
 		dev.Close()
 		dev = nil
@@ -299,15 +369,30 @@ type wgConfig struct {
 	hasReserved bool
 }
 
-// awgKnobs are the AmneziaWG obfuscation keys passed through verbatim to the device UAPI.
-// These are exactly the keys amneziawg-go's UAPI accepts (device/uapi.go). S3/S4 are NOT standard
-// AmneziaWG and are rejected by the device — skip them (configs that carry S3/S4 set them to 0).
-var awgKnobs = map[string]bool{
-	"jc": true, "jmin": true, "jmax": true,
-	"s1": true, "s2": true,
-	"h1": true, "h2": true, "h3": true, "h4": true,
-	"i1": true, "i2": true, "i3": true, "i4": true, "i5": true,
-	"j1": true, "j2": true, "j3": true, "itime": true,
+// awgKnobs сопоставляет ключ из .conf с ключом UAPI устройства. Значение "" = имя совпадает.
+//
+// ВАЖНО: список обязан соответствовать тому, что принимает вендоренный amneziawg-go (device/uapi.go).
+// До обновления ядра на v3 устройство не знало S3/S4 и параметров AmneziaWG 2.0, и они здесь
+// намеренно отбрасывались. Теперь принимает — а отбрасывать их СМЕРТЕЛЬНО: S4 - это набивка
+// ТРАНСПОРТНЫХ пакетов, header protection шифрует их заголовок. Если сервер настроен с ними, а
+// клиент молча их потерял, рукопожатие (S1/S2/H1/H2 совпадают) проходит, а каждый пакет данных
+// летит в мусор в обе стороны: туннель «поднят», трафика нет, каждые 15 секунд новый handshake.
+// Ровно это и было видно в логе пользователя 30.08 (rx рос только на 92 байта ответа handshake).
+var awgKnobs = map[string]string{
+	"jc": "", "jmin": "", "jmax": "",
+	"s1": "", "s2": "", "s3": "", "s4": "",
+	"h1": "", "h2": "", "h3": "", "h4": "",
+	"i1": "", "i2": "", "i3": "", "i4": "", "i5": "",
+	"j1": "", "j2": "", "j3": "", "itime": "",
+	// AmneziaWG 2.0: имена в .conf и в UAPI различаются.
+	"contentpaddingaddition": "content_padding_addition",
+	"rekeyaftertime":         "rekey_after_time",
+	"rekeytimeout":           "rekey_timeout",
+	"rejectaftertime":        "reject_after_time",
+	"keepalivetimeout":       "keepalive_timeout",
+	"maxhandshakeattempts":   "max_handshake_attempts",
+	"randomtrailers":         "random_trailers",
+	"disablecookies":         "disable_cookies",
 }
 
 func parseConfig(ini string) (*wgConfig, error) {
@@ -383,9 +468,20 @@ func parseConfig(ini string) (*wgConfig, error) {
 					c.hasReserved = true
 				}
 			}
+		case "headerprotectionkey":
+			// Ключ защиты заголовков в .conf лежит в base64, как и обычные ключи WireGuard,
+			// а UAPI ждёт hex.
+			h, err := keyToHex(val)
+			if err != nil {
+				return nil, fmt.Errorf("headerprotectionkey: %w", err)
+			}
+			c.awgParams = append(c.awgParams, [2]string{"header_protection_key", h})
 		default:
-			if awgKnobs[key] && val != "" {
-				c.awgParams = append(c.awgParams, [2]string{key, val})
+			if uapiKey, ok := awgKnobs[key]; ok && val != "" {
+				if uapiKey == "" {
+					uapiKey = key
+				}
+				c.awgParams = append(c.awgParams, [2]string{uapiKey, val})
 			}
 		}
 	}
@@ -426,6 +522,20 @@ func (c *wgConfig) uapi() (string, error) {
 		fmt.Fprintf(&b, "persistent_keepalive_interval=%d\n", c.keepalive)
 	}
 	return b.String(), nil
+}
+
+// paramSummary перечисляет применённые параметры обфускации. Нужен в логе, потому что конфиг
+// AmneziaWG 2.0 несёт s3/s4 и header_protection_key, а 1.x — нет: по одной строке видно, в каком
+// режиме реально поднялся туннель, и совпадает ли он с тем, что ждёт сервер.
+func (c *wgConfig) paramSummary() string {
+	if len(c.awgParams) == 0 {
+		return "обфускации нет"
+	}
+	names := make([]string, 0, len(c.awgParams))
+	for _, kv := range c.awgParams {
+		names = append(names, kv[0])
+	}
+	return strings.Join(names, ",")
 }
 
 func keyToHex(b64 string) (string, error) {

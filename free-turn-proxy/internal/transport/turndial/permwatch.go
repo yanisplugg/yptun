@@ -11,12 +11,11 @@ const (
 	permFailMarker = "Failed to bind channel"
 	permOKMarker   = "Channel binding successful"
 	turncScope     = "turnc"
-	// ChannelBind refresh идёт ~раз в 5 мин (binding lifetime); 2 провала подряд.
+	// permFailThreshold - число последовательных провалов ChannelBind refresh до срабатывания onDead.
 	permFailThreshold = 2
 )
 
-// permWatchFactory: для scope "turnc" возвращает logger, который зовёт onDead
-// после permFailThreshold проваленных циклов refresh подряд.
+// permWatchFactory перехватывает логи pion-turnc для отслеживания сбоев ChannelBind.
 type permWatchFactory struct {
 	inner     logging.LoggerFactory
 	onDead    func()
@@ -39,7 +38,6 @@ type permWatchLogger struct {
 	fired bool
 }
 
-// Маркеры - литералы в format pion, матчим format до подстановки args.
 func (l *permWatchLogger) note(msg string) {
 	switch {
 	case strings.Contains(msg, permFailMarker):

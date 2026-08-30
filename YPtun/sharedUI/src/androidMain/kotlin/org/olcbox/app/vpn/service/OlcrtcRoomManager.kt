@@ -97,8 +97,8 @@ class OlcrtcRoomManager(
     val roomsUp: Int get() = handles.size
 
     /**
-     * Starts [rooms] (capped at [maxRooms]) on consecutive loopback ports from [basePort], then the
-     * balancer on [listenHost]:[listenPort].
+     * Starts [rooms] (capped at [maxRooms]) — each on an OS-assigned loopback port (see [superviseRoom] /
+     * [Mobile.roomPort]) — then the balancer on [listenHost]:[listenPort].
      *
      * FAST CONNECT: returns as soon as the FIRST room is ready — the main one OR any extra, whichever
      * connects first — and starts the balancer over just that room. The REMAINING rooms keep connecting
@@ -113,7 +113,6 @@ class OlcrtcRoomManager(
         rooms: List<RoomSpec>,
         listenHost: String,
         listenPort: Int,
-        basePort: Int,
         user: String,
         pass: String,
         maxRooms: Int = 5,
@@ -138,7 +137,7 @@ class OlcrtcRoomManager(
         // FAILS, keeps retrying every RETRY_FAILED_MS in the background until it succeeds or we stop.
         // Once up, the core's self-heal keeps the room alive and the supervisor exits.
         specs.forEachIndexed { i, r ->
-            Thread { superviseRoom(i, r, basePort + i, user, pass, readyTimeoutMs, firstReady) }
+            Thread { superviseRoom(i, r, user, pass, readyTimeoutMs, firstReady) }
                 .apply { isDaemon = true; name = "olcrtc-room-${i + 1}" }
                 .start()
         }
@@ -157,14 +156,17 @@ class OlcrtcRoomManager(
     }
 
     /**
-     * Supervises ONE room on [port]: tries [Mobile.startRoom]; on success records its handle, joins the
-     * balancer pool and signals [firstReady] (the core self-heals it from here, so we return); on failure
-     * waits [RETRY_FAILED_MS] and retries until the room comes up or the manager stops.
+     * Supervises ONE room: tries [Mobile.startRoom] with socksPort=0 so the OS assigns a free loopback
+     * port (see [Mobile.roomPort] below — a caller-precomputed port can collide with one a just-stopped
+     * room hasn't fully released yet, since a bind to a busy port fails outright rather than picking
+     * another; letting the OS choose makes that race structurally impossible on rapid stop+restart). On
+     * success records the actual port + handle, joins the balancer pool and signals [firstReady] (the
+     * core self-heals it from here, so we return); on failure waits [RETRY_FAILED_MS] and retries until
+     * the room comes up or the manager stops.
      */
     private fun superviseRoom(
         index: Int,
         r: RoomSpec,
-        port: Int,
         user: String,
         pass: String,
         readyTimeoutMs: Int,
@@ -174,7 +176,7 @@ class OlcrtcRoomManager(
             val handle = try {
                 Mobile.startRoom(
                     r.carrier, r.transport, r.room, r.clientId, r.keyHex,
-                    port.toLong(), user, pass, readyTimeoutMs.toLong(),
+                    0L, user, pass, readyTimeoutMs.toLong(),
                 )
             } catch (e: Exception) {
                 if (stopped) return
@@ -187,6 +189,13 @@ class OlcrtcRoomManager(
             if (stopped) {
                 runCatching { Mobile.stopRoom(handle) }
                 return
+            }
+            val port = runCatching { Mobile.roomPort(handle) }.getOrDefault(0).toInt()
+            if (port <= 0) {
+                log("multiroom: room ${index + 1} (${r.carrier}/${r.room}) came up but reported no port — stopping it, retry in ${RETRY_FAILED_MS / 1000}s")
+                runCatching { Mobile.stopRoom(handle) }
+                if (!sleepUnlessStopped(RETRY_FAILED_MS)) return
+                continue
             }
             synchronized(handles) { handles.add(handle) }
             synchronized(poolLock) {

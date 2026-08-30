@@ -1,7 +1,6 @@
 package seichannel
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
@@ -20,9 +19,7 @@ func (Options) TransportOptions() {}
 
 // withDefaults fills unset Options fields with the package defaults.
 func (o Options) withDefaults() Options {
-	if o.FPS <= 0 {
-		o.FPS = defaultFPS
-	}
+	o.FPS = transport.NormalizeFPS(o.FPS, defaultFPS)
 	if o.BatchSize <= 0 {
 		o.BatchSize = defaultBatchSize
 	}
@@ -36,12 +33,9 @@ func (o Options) withDefaults() Options {
 }
 
 func optionsFrom(cfg transport.Config) (Options, error) {
-	if cfg.Options == nil {
-		return Options{}, nil
+	opts, err := transport.OptionsAs[Options](cfg, "seichannel")
+	if err != nil {
+		return Options{}, err
 	}
-	opts, ok := cfg.Options.(Options)
-	if !ok {
-		return Options{}, fmt.Errorf("%w: seichannel: got %T", transport.ErrOptionsTypeMismatch, cfg.Options)
-	}
-	return opts, nil
+	return opts.withDefaults(), nil
 }

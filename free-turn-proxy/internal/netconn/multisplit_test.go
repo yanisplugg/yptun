@@ -5,27 +5,21 @@ import (
 	"testing"
 )
 
-// u8 - узкое преобразование длины в байт для тестового билдера ClientHello.
-// Длины здесь малы и ограничены, переполнение невозможно.
-//
-//nolint:gosec // G115: тестовые длины малы и ограничены
-func u8(v int) byte { return byte(v) }
+func u8(v int) byte { return byte(v & 0xFF) }
 
-// buildClientHello собирает минимальный валидный TLS ClientHello-record с
-// заданным SNI host_name. Достаточно для проверки парсера и сегментации.
 func buildClientHello(host string) []byte {
 	hn := []byte(host)
-	entry := append([]byte{0x00, u8(len(hn) >> 8), u8(len(hn))}, hn...)        // name_type=host_name + len + host
-	sni := append([]byte{u8(len(entry) >> 8), u8(len(entry))}, entry...)       // server_name_list len + entry
-	ext := append([]byte{0x00, 0x00, u8(len(sni) >> 8), u8(len(sni))}, sni...) // ext type 0 + len + body
+	entry := append([]byte{0x00, u8(len(hn) >> 8), u8(len(hn))}, hn...)
+	sni := append([]byte{u8(len(entry) >> 8), u8(len(entry))}, entry...)
+	ext := append([]byte{0x00, 0x00, u8(len(sni) >> 8), u8(len(sni))}, sni...)
 
 	body := make([]byte, 0, 64)
-	body = append(body, 0x03, 0x03)                    // client_version
-	body = append(body, make([]byte, 32)...)           // random
-	body = append(body, 0x00)                          // session_id len 0
-	body = append(body, 0x00, 0x02, 0x13, 0x01)        // cipher_suites len 2 + TLS_AES_128_GCM_SHA256
-	body = append(body, 0x01, 0x00)                    // compression methods len 1 + null
-	body = append(body, u8(len(ext)>>8), u8(len(ext))) // extensions length
+	body = append(body, 0x03, 0x03)
+	body = append(body, make([]byte, 32)...)
+	body = append(body, 0x00)
+	body = append(body, 0x00, 0x02, 0x13, 0x01)
+	body = append(body, 0x01, 0x00)
+	body = append(body, u8(len(ext)>>8), u8(len(ext)))
 	body = append(body, ext...)
 
 	hs := append([]byte{0x01, u8(len(body) >> 16), u8(len(body) >> 8), u8(len(body))}, body...)

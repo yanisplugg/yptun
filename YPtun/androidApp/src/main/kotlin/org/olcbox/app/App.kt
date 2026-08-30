@@ -10,6 +10,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import org.olcbox.app.migration.LegacyMigration
 import java.util.concurrent.TimeUnit
 
 class App : Application(), Configuration.Provider {
@@ -26,6 +27,11 @@ class App : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         appContext = applicationContext
+        // Переезд со старого applicationId: копируем состояние из прошлой установки ДО того, как
+        // что-либо тронет DataStore (иначе он закеширует пустые настройки, и подложенный файл
+        // подхватится только со следующего запуска). Синхронно и один раз за установку; когда
+        // переезжать не с чего - выходит сразу, ещё до IPC.
+        runCatching { LegacyMigration.runIfNeeded(this) }
         // Use the bundled emoji font so country-flag emojis render everywhere
         // (Compose Text picks up EmojiCompat automatically once initialized).
         EmojiCompat.init(BundledEmojiCompatConfig(this))

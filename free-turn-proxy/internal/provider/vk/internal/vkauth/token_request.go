@@ -14,6 +14,34 @@ import (
 	tlsclient "github.com/bogdanfinn/tls-client"
 )
 
+func (c *Client) openJoinPage(ctx context.Context, httpClient tlsclient.HttpClient, profile browserprofile.Profile, link string) error {
+	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, "https://vk.ru/call/join/"+link, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	browserprofile.ApplyFhttp(req, profile)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			c.log.Warnf("[VK Auth] close join page body: %s", closeErr)
+		}
+	}()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *Client) doRequest(ctx context.Context, httpClient tlsclient.HttpClient, profile browserprofile.Profile, data, url string) (map[string]any, error) {
 	parsedURL, err := neturl.Parse(url)
 	if err != nil {

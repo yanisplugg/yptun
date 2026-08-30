@@ -1,14 +1,20 @@
-// Package names generates display names for Telemost peers.
+// Package names generates human-looking display names for SFU peers so a
+// tunnel participant is indistinguishable from an ordinary attendee.
+//
+// The embedded dictionaries are always available; LoadNameFiles replaces them
+// with on-disk ones when an operator wants a different pool.
 package names
 
 import (
 	"bufio"
 	"crypto/rand"
 	_ "embed"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 //go:embed data/names
@@ -17,25 +23,43 @@ var embeddedNames string
 //go:embed data/surnames
 var embeddedSurnames string
 
-var (
-	firstNames = parseEmbedded(embeddedNames) //nolint:gochecknoglobals // package-level state intentional
-	lastNames  = parseEmbedded(embeddedSurnames) //nolint:gochecknoglobals // package-level state intentional
-)
+// ErrEmptyDictionary reports a dictionary file that contains no usable entries.
+var ErrEmptyDictionary = errors.New("names: dictionary file is empty")
 
-func parseEmbedded(raw string) []string {
-	var names []string
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			names = append(names, line)
+// dictionaries is swapped atomically so LoadNameFiles can run while other
+// goroutines call Generate.
+//
+//nolint:gochecknoglobals // process-wide dictionary pool, swapped atomically
+var dictionaries atomic.Pointer[pool]
+
+type pool struct {
+	first []string
+	last  []string
+}
+
+//nolint:gochecknoinits // seeds the embedded dictionaries before first use
+func init() {
+	dictionaries.Store(&pool{
+		first: parseLines(embeddedNames),
+		last:  parseLines(embeddedSurnames),
+	})
+}
+
+func parseLines(raw string) []string {
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
 		}
 	}
 
-	return names
+	return out
 }
 
-func loadNames(path string) ([]string, error) {
-	file, err := os.Open(path) //nolint:gosec // G304: opens internal asset bundled with the binary
+func loadFile(path string) ([]string, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open names file %q: %w", path, err)
 	}
@@ -43,12 +67,12 @@ func loadNames(path string) ([]string, error) {
 		_ = file.Close()
 	}()
 
-	var names []string
+	var out []string
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			names = append(names, line)
+		if line := strings.TrimSpace(scanner.Text()); line != "" {
+			out = append(out, line)
 		}
 	}
 
@@ -56,29 +80,40 @@ func loadNames(path string) ([]string, error) {
 		return nil, fmt.Errorf("scan names file %q: %w", path, err)
 	}
 
-	return names, nil
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrEmptyDictionary, path)
+	}
+
+	return out, nil
 }
 
-// LoadNameFiles overrides embedded name dictionaries from local files when they are present.
+// LoadNameFiles replaces the embedded dictionaries with the given files.
+// Unlike the embedded fallback these are operator-supplied, so an unreadable
+// or empty file is reported instead of being silently ignored.
 func LoadNameFiles(firstPath, lastPath string) error {
-	if names, err := loadNames(firstPath); err == nil && len(names) > 0 {
-		firstNames = names
+	first, err := loadFile(firstPath)
+	if err != nil {
+		return err
 	}
 
-	if names, err := loadNames(lastPath); err == nil && len(names) > 0 {
-		lastNames = names
+	last, err := loadFile(lastPath)
+	if err != nil {
+		return err
 	}
+
+	dictionaries.Store(&pool{first: first, last: last})
 
 	return nil
 }
 
-// Generate returns a random display name assembled from the currently loaded dictionaries.
+// Generate returns a random display name assembled from the active dictionaries.
 func Generate() string {
-	if len(firstNames) == 0 || len(lastNames) == 0 {
+	p := dictionaries.Load()
+	if p == nil || len(p.first) == 0 || len(p.last) == 0 {
 		return "anonymous user"
 	}
 
-	return firstNames[randomIndex(len(firstNames))] + " " + lastNames[randomIndex(len(lastNames))]
+	return p.first[randomIndex(len(p.first))] + " " + p.last[randomIndex(len(p.last))]
 }
 
 func randomIndex(limit int) int {

@@ -154,6 +154,14 @@ internal class DesktopEngineController(
     fun stopAll() {
         trustTunnel.stop()
         YpTunCore.stopAll()
+        // [start] is the only other place these are reset, and the olcRTC (Stealth) path never calls
+        // it — it runs the olcrtc subprocess instead. So a stale tunHandledInCore=true, left by the
+        // previous sing-box session, made the manager skip tun2socks on the NEXT olcRTC connect: the
+        // log said "Windows TUN owned by sing-box" while nothing owned it and no TUN existed at all.
+        tunHandledInCore = false
+        localSocksNoAuth = false
+        dnsttProxyActive = false
+        singBoxFrontActive = false
     }
 
     fun coreRunning(engine: EngineType): Boolean = when (engine) {
@@ -831,8 +839,8 @@ internal class DesktopEngineController(
                 )
             }
         } else {
-            val freeturnUri = if (outboundType == VkTurnConfig.OUTBOUND_PROXY) vk.uri
-            else vk.uri.replace("&bond=1", "").replace("bond=1&", "").replace("bond=1", "")
+            // bond=1 в старых ссылках ядро 3.2.0 игнорирует — вырезать его больше не нужно.
+            val freeturnUri = vk.uri
             log("Starting VK-TURN freeturn listener on $listenAddr")
             YpTunCore.ftStart(freeturnUri, listenAddr, vk.vkLink, vk.streams)
 

@@ -45,8 +45,6 @@ func TestUAPIVanillaWireGuard(t *testing.T) {
 	}
 }
 
-// Ключевое свойство: без параметров маскировки в поток не уходит ни один
-// awg-ключ, поэтому mode=wg побитово совпадает с обычным WireGuard.
 func TestUAPIOmitsAmneziaWhenDisabled(t *testing.T) {
 	got, err := UAPI(minimalConfig())
 	if err != nil {
@@ -83,7 +81,6 @@ func TestUAPIAmneziaParams(t *testing.T) {
 			t.Errorf("UAPI() missing %q:\n%s", want, got)
 		}
 	}
-	// Нулевые padding'и не печатаются: устройство отвергает неположительные.
 	for _, unwanted := range []string{"s3=", "s4=", "i2=", "i3=", "i4="} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("UAPI() contains %q for zero value:\n%s", unwanted, got)
@@ -177,5 +174,99 @@ func TestModeValid(t *testing.T) {
 func TestDefaultsMTU(t *testing.T) {
 	if got := Defaults().MTU; got != DefaultMTU {
 		t.Errorf("Defaults().MTU = %d, want %d", got, DefaultMTU)
+	}
+}
+
+func TestUAPIAWG3Params(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.Amnezia = AmneziaParams{
+		S1: 12, S2: 12, S3: 12, S4: 12,
+		HeaderProtectionKey:    testKey(0x04),
+		ContentPaddingAddition: "10-40",
+		RekeyAfterTime:         "90-140",
+		RekeyTimeout:           "5",
+		RejectAfterTime:        "180",
+		KeepaliveTimeout:       "10-15",
+		MaxHandshakeAttempts:   "18",
+		RandomTrailers:         true,
+		DisableCookies:         true,
+	}
+
+	got, err := UAPI(cfg)
+	if err != nil {
+		t.Fatalf("UAPI() error = %v", err)
+	}
+	for _, want := range []string{
+		"header_protection_key=" + strings.Repeat("04", KeyLen),
+		"content_padding_addition=10-40",
+		"rekey_after_time=90-140",
+		"rekey_timeout=5",
+		"reject_after_time=180",
+		"keepalive_timeout=10-15",
+		"max_handshake_attempts=18",
+		"random_trailers=true",
+		"disable_cookies=true",
+	} {
+		if !strings.Contains(got, want+"\n") {
+			t.Errorf("UAPI() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestUAPIOmitsAWG3Defaults(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.Amnezia = AmneziaParams{Jc: 4, Jmin: 40, Jmax: 70}
+
+	got, err := UAPI(cfg)
+	if err != nil {
+		t.Fatalf("UAPI() error = %v", err)
+	}
+	for _, unwanted := range []string{
+		"header_protection_key=", "content_padding_addition=",
+		"rekey_after_time=", "rekey_timeout=", "reject_after_time=",
+		"keepalive_timeout=", "max_handshake_attempts=",
+		"random_trailers=", "disable_cookies=",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("UAPI() contains %q for zero value:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestValidateRange(t *testing.T) {
+	for _, ok := range []string{"", "0", "25", "10-40", "7-7"} {
+		if err := ValidateRange(ok); err != nil {
+			t.Errorf("ValidateRange(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"40-10", "a", "-5", "1-", "1-2-3", "off"} {
+		if err := ValidateRange(bad); err == nil {
+			t.Errorf("ValidateRange(%q) = nil, want error", bad)
+		}
+	}
+}
+
+func TestValidateHeaderProtectionNeedsPadding(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.Amnezia = AmneziaParams{
+		S1: MinHeaderProtectionPadding, S2: MinHeaderProtectionPadding,
+		S3: MinHeaderProtectionPadding, S4: MinHeaderProtectionPadding - 1,
+		HeaderProtectionKey: testKey(0x04),
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for short S4")
+	}
+
+	cfg.Amnezia.S4 = MinHeaderProtectionPadding
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestValidateRejectsBadRange(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.Amnezia = AmneziaParams{RekeyTimeout: "40-10"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for inverted range")
 	}
 }

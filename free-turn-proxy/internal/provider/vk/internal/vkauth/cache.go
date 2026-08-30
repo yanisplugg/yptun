@@ -1,9 +1,12 @@
 package vkauth
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/pion/stun/v3"
 )
 
 type StreamCredentialsCache struct {
@@ -30,9 +33,8 @@ func NewStore(streamsPerCache int) *Store {
 }
 
 // CacheID группирует потоки в блоки по streamsPerCache: потоки 1..streamsPerCache
-// делят один кэш реквизитов, streamsPerCache+1.. - следующий. streamID 1-based
-// (единый базис udprelay и tcpfwd); первый поток блока инициирует fetch к VK,
-// остальные переиспользуют тёплый кэш.
+// делят один кэш реквизитов, streamsPerCache+1.. - следующий. streamID 1-based;
+// первый поток блока инициирует fetch к VK, остальные переиспользуют тёплый кэш.
 func (s *Store) CacheID(streamID int) int {
 	if streamID < 1 {
 		return 0
@@ -61,19 +63,33 @@ func (s *Store) Get(streamID int) *StreamCredentialsCache {
 	return cache
 }
 
-func (c *StreamCredentialsCache) Invalidate() {
+func (c *StreamCredentialsCache) Invalidate() bool {
 	c.mutex.Lock()
+	had := c.creds.Username != ""
 	c.creds = TurnCredentials{}
 	c.mutex.Unlock()
 
 	c.errorCount.Store(0)
 	c.lastErrorTime.Store(0)
+	return had
 }
 
 func IsAuthError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Ответ TURN-сервера приходит типизированным - код берём из него, а не из текста.
+	if turnErr, ok := errors.AsType[*stun.TurnError](err); ok {
+		switch turnErr.ErrorCodeAttr.Code {
+		// 486 - квота аллокаций: креды живы, но новую сессию по ним не поднять.
+		case stun.CodeUnauthorized, stun.CodeWrongCredentials,
+			stun.CodeStaleNonce, stun.CodeAllocQuotaReached:
+			return true
+		default:
+			return false
+		}
+	}
+	// Ошибки не от TURN-сервера (получение кредов у провайдера) типа не несут.
 	s := err.Error()
 	return strings.Contains(s, "401") ||
 		strings.Contains(s, "Unauthorized") ||

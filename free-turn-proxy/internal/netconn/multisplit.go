@@ -8,27 +8,16 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
 )
 
-// MultiSplitWriteConn оборачивает TCP net.Conn и разбивает первый Write на
-// несколько сегментов так, чтобы SNI из TLS ClientHello попадал на границу.
-// DPI без TCP-реассемблинга не собирает hostname и не инжектит SNI-based RST.
-//
-// В отличие от SplitFirstWriteConn (один рез на фиксированном offset - рвёт
-// только TLS record header, SNI остаётся целым) парсит ClientHello и режет
-// внутри host_name. Если первый Write не ClientHello или SNI не найден -
-// фоллбэк на одиночный рез FallbackSplitAt (поведение SplitFirstWriteConn).
+// MultiSplitWriteConn разбивает первый Write ClientHello на несколько TCP-сегментов, разрезая SNI.
+// DPI без TCP-реассемблинга не может извлечь hostname для фильтрации.
 type MultiSplitWriteConn struct {
 	net.Conn
-	// Delay - базовая пауза между сегментами.
-	Delay time.Duration
-	// Jitter - верхняя граница случайной добавки к Delay (антифингерпринт тайминга).
-	Jitter time.Duration
-	// FallbackSplitAt - offset одиночного реза, когда SNI не найден. 0 - без реза.
+	Delay           time.Duration
+	Jitter          time.Duration
 	FallbackSplitAt int
 	done            atomic.Bool
 }
 
-// Write на первом вызове дробит ClientHello по границам внутри host_name (SNI),
-// далее проксирует напрямую.
 func (s *MultiSplitWriteConn) Write(b []byte) (int, error) {
 	if !s.done.CompareAndSwap(false, true) {
 		return s.Conn.Write(b)
@@ -61,8 +50,7 @@ func (s *MultiSplitWriteConn) Write(b []byte) (int, error) {
 	return total, nil
 }
 
-// splitOffsets возвращает отсортированные точки реза первого сегмента. Сначала
-// пробует SNI (рез внутри host_name), иначе одиночный FallbackSplitAt.
+// splitOffsets возвращает смещения для разбиения первого сегмента (по SNI или FallbackSplitAt).
 func (s *MultiSplitWriteConn) splitOffsets(b []byte) []int {
 	if start, end, ok := clientHelloSNIRange(b); ok {
 		if offs := sniSplitOffsets(start, end); len(offs) > 0 {
@@ -75,10 +63,7 @@ func (s *MultiSplitWriteConn) splitOffsets(b []byte) []int {
 	return nil
 }
 
-// sniSplitOffsets делит host_name [start,end) на ~трети с джиттером. Гарантирует:
-// registrable-домен (vk.ru и т.п.) пересекает хотя бы одну границу независимо от
-// раскладки лейблов. Короткий hostname (len 2) - один рез посередине; len<2 -
-// без реза (nil, уходит на фоллбэк).
+// sniSplitOffsets вычисляет точки разреза внутри диапазона SNI host_name.
 func sniSplitOffsets(start, end int) []int {
 	l := end - start
 	switch {
@@ -97,9 +82,7 @@ func sniSplitOffsets(start, end int) []int {
 	}
 }
 
-// clientHelloSNIRange парсит TLS ClientHello (b начинается с TLS record header)
-// и возвращает байтовый диапазон [start,end) первого host_name в SNI-расширении.
-// ok=false если b не ClientHello-record либо SNI/host_name отсутствует.
+// clientHelloSNIRange парсит TLS ClientHello и возвращает диапазон байт [start,end) первого SNI host_name.
 func clientHelloSNIRange(b []byte) (int, int, bool) {
 	u16 := func(i int) int { return int(b[i])<<8 | int(b[i+1]) }
 
@@ -149,8 +132,7 @@ func clientHelloSNIRange(b []byte) (int, int, bool) {
 	return 0, 0, false
 }
 
-// parseSNIExtension ищет первый host_name (name_type 0) в server_name_list
-// внутри [p,end). Возвращает абсолютный диапазон host_name в b.
+// parseSNIExtension извлекает границы первого host_name из server_name_list.
 func parseSNIExtension(b []byte, p, end int) (int, int, bool) {
 	u16 := func(i int) int { return int(b[i])<<8 | int(b[i+1]) }
 	if p+2 > end {

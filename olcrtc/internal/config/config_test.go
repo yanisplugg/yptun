@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	testModeSrv      = "srv"
-	testAuthProvider = "wbstream"
-	testRoomID       = "r1"
-	testCryptoKey    = "deadbeef"
-	testDNSServer    = "8.8.8.8:53"
+	testModeSrv   = "srv"
+	testProvider  = "wbstream"
+	testRoomID    = "r1"
+	testCryptoKey = "deadbeef"
+	testDNSServer = "8.8.8.8:53"
 )
 
 func TestLoadAndApply(t *testing.T) {
@@ -22,7 +22,6 @@ func TestLoadAndApply(t *testing.T) {
 	path := filepath.Join(dir, "olcrtc.yaml")
 	body := `
 mode: srv
-link: direct
 auth:
   provider: wbstream
 room:
@@ -64,7 +63,7 @@ debug: true
 	}
 	requireLoadedFile(t, f)
 
-	got := Apply(session.Config{}, f)
+	got := Apply(f)
 	requireAppliedConfig(t, got)
 }
 
@@ -73,8 +72,8 @@ func requireLoadedFile(t *testing.T, f File) {
 	if f.Mode != testModeSrv {
 		t.Fatalf("Mode = %q, want %q", f.Mode, testModeSrv)
 	}
-	if f.Auth.Provider != testAuthProvider {
-		t.Fatalf("Auth.Provider = %q, want %q", f.Auth.Provider, testAuthProvider)
+	if f.Auth.Provider != testProvider {
+		t.Fatalf("Auth.Provider = %q, want %q", f.Auth.Provider, testProvider)
 	}
 	if f.Room.ID != testRoomID {
 		t.Fatalf("Room.ID = %q, want %q", f.Room.ID, testRoomID)
@@ -88,7 +87,7 @@ func requireAppliedConfig(t *testing.T, got session.Config) {
 	t.Helper()
 	want := session.Config{
 		Mode:                  testModeSrv,
-		Auth:                  testAuthProvider,
+		Provider:              testProvider,
 		RoomID:                testRoomID,
 		KeyHex:                testCryptoKey,
 		Transport:             "datachannel",
@@ -112,39 +111,113 @@ func requireAppliedConfig(t *testing.T, got session.Config) {
 	}
 }
 
-func TestApplyCLIWins(t *testing.T) {
-	cli := session.Config{
-		Mode:      "cnc",
-		KeyHex:    "from-cli",
+func TestApplySettingsOverlaysNonZeroFields(t *testing.T) {
+	base := session.Config{
+		KeyHex:    "kept",
+		SOCKSHost: "kept-host",
 		SOCKSPort: 9999,
 	}
-	f := File{
-		Mode:   testModeSrv,
-		Crypto: Crypto{Key: "from-yaml"},
-		SOCKS:  SOCKS{Port: 1234, Host: "0.0.0.0"},
+
+	got := ApplySettings(base, Settings{
+		Crypto: Crypto{Key: "override"},
+		SOCKS:  SOCKS{Port: 1234},
+	})
+
+	if got.KeyHex != "override" {
+		t.Errorf("KeyHex: got %q, want override", got.KeyHex)
 	}
-	got := Apply(cli, f)
-	if got.Mode != "cnc" {
-		t.Errorf("Mode: got %q, want cnc (CLI wins)", got.Mode)
+
+	if got.SOCKSPort != 1234 {
+		t.Errorf("SOCKSPort: got %d, want 1234", got.SOCKSPort)
 	}
-	if got.KeyHex != "from-cli" {
-		t.Errorf("KeyHex: got %q, want from-cli (CLI wins)", got.KeyHex)
-	}
-	if got.SOCKSPort != 9999 {
-		t.Errorf("SOCKSPort: got %d, want 9999 (CLI wins)", got.SOCKSPort)
-	}
-	if got.SOCKSHost != "0.0.0.0" {
-		t.Errorf("SOCKSHost: got %q, want 0.0.0.0 (YAML fills empty CLI)", got.SOCKSHost)
+
+	if got.SOCKSHost != "kept-host" {
+		t.Errorf("SOCKSHost: got %q, want kept-host (zero override keeps base)", got.SOCKSHost)
 	}
 }
 
-//nolint:cyclop // profile merge fixture intentionally checks many mapped fields
+func TestApplyMapsEverySection(t *testing.T) {
+	got := Apply(File{
+		Mode: testModeSrv,
+		Gen:  Gen{Amount: 2},
+		Settings: Settings{
+			Auth:      Auth{Provider: testProvider, Token: "acct"},
+			Room:      Room{ID: testRoomID, Channel: "chan"},
+			Engine:    Engine{Name: "livekit", URL: "wss://x", Token: "tok"},
+			SOCKS:     SOCKS{ProxyAddr: "127.0.0.1", ProxyPort: 1080, ProxyUser: "pu", ProxyPass: "pp"},
+			Video:     Video{Width: 640, Height: 480, QRSize: 128, Codec: "tile", TileModule: 4, TileRS: 2},
+			SEI:       SEI{FPS: 15, BatchSize: 8, FragmentSize: 700, AckTimeoutMS: 1500},
+			Lifecycle: Lifecycle{MaxSessionDuration: "1h"},
+		},
+	})
+
+	want := session.Config{
+		Mode:               testModeSrv,
+		Amount:             2,
+		Provider:           testProvider,
+		ProviderToken:      "acct",
+		RoomID:             testRoomID,
+		ChannelID:          "chan",
+		Engine:             "livekit",
+		URL:                "wss://x",
+		Token:              "tok",
+		SOCKSProxyAddr:     "127.0.0.1",
+		SOCKSProxyPort:     1080,
+		SOCKSProxyUser:     "pu",
+		SOCKSProxyPass:     "pp",
+		Video:              session.VideoConfig{Width: 640, Height: 480, QRSize: 128, Codec: "tile", TileModule: 4, TileRS: 2},
+		SEI:                session.SEIConfig{FPS: 15, BatchSize: 8, FragmentSize: 700, AckTimeoutMS: 1500},
+		MaxSessionDuration: "1h",
+	}
+
+	if got != want {
+		t.Fatalf("Apply() = %+v, want %+v", got, want)
+	}
+}
+
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "olcrtc.yaml")
+	if err := os.WriteFile(path, []byte("mode: srv\nlinnk: direct\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() error = nil, want failure for an unknown key")
+	}
+}
+
+func TestLoadAcceptsIgnoredLegacyFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "olcrtc.yaml")
+	body := `
+mode: cnc
+link: direct
+ffmpeg: /usr/bin/ffmpeg
+video:
+  bitrate: 5000k
+  hw: nvenc
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if file.Link != "direct" || file.FFmpeg != "/usr/bin/ffmpeg" ||
+		file.Video.Bitrate != "5000k" || file.Video.HW != "nvenc" {
+		t.Fatalf("legacy fields = %#v", file)
+	}
+	if got := Apply(file); got != (session.Config{Mode: "cnc"}) {
+		t.Fatalf("Apply() mapped ignored legacy fields: %#v", got)
+	}
+}
+
 func TestLoadAndApplyProfile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "olcrtc.yaml")
 	body := `
 mode: srv
-link: direct
 crypto:
   key: shared-key
 net:
@@ -203,9 +276,9 @@ failover:
 		t.Fatalf("Failover = %+v, want retry_delay 100ms max_cycles 2", f.Failover)
 	}
 
-	base := Apply(session.Config{}, f)
+	base := Apply(f)
 	first := ApplyProfile(base, f.Profiles[0])
-	if first.Auth != "wbstream" || first.Transport != "vp8channel" || first.RoomID != "wb-room" {
+	if first.Provider != "wbstream" || first.Transport != "vp8channel" || first.RoomID != "wb-room" {
 		t.Fatalf("first profile = %+v", first)
 	}
 	if first.KeyHex != "shared-key" || first.DNSServer != testDNSServer || first.VP8.FPS != 30 ||
@@ -215,7 +288,7 @@ failover:
 		t.Fatalf("first inherited/overlaid fields = %+v", first)
 	}
 	second := ApplyProfile(base, f.Profiles[1])
-	if second.Auth != "jitsi" || second.Transport != "datachannel" ||
+	if second.Provider != "jitsi" || second.Transport != "datachannel" ||
 		second.RoomID != "https://meet.example/room" || second.DNSServer != testDNSServer {
 		t.Fatalf("second profile = %+v", second)
 	}

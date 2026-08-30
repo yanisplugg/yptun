@@ -19,8 +19,6 @@ plugins {
 val olcrtcRepoPath = providers.environmentVariable("OLCRTC_REPO")
     .orElse(rootProject.layout.projectDirectory.asFile.parentFile.resolve("olcrtc").absolutePath)
 val olcrtcRepoDir = rootProject.file(olcrtcRepoPath.get())
-val olcrtcAndroidAar = layout.buildDirectory.file("generated/olcrtc/olcrtc.aar")
-val olcrtcAndroidAarFile = olcrtcAndroidAar.get().asFile
 val olcrtcIosXcframework = layout.buildDirectory.dir("generated/olcrtc/ios/OlcRtcMobile.xcframework")
 val olcrtcIosXcframeworkDir = olcrtcIosXcframework.get().asFile
 val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("1.0.0")
@@ -52,43 +50,13 @@ abstract class GenerateAppInfoTask : DefaultTask() {
     }
 }
 
-olcrtcAndroidAarFile.parentFile.mkdirs()
-
-val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
-    group = "build"
-    description = "Builds olcrtc Android AAR from OLCRTC_REPO using gomobile."
-
-    inputs.dir(olcrtcRepoDir.resolve("mobile"))
-    inputs.dir(olcrtcRepoDir.resolve("internal"))
-    inputs.files(olcrtcRepoDir.resolve("go.mod"), olcrtcRepoDir.resolve("go.sum"))
-    outputs.file(olcrtcAndroidAar)
-
-    workingDir = olcrtcRepoDir
-    commandLine(
-        "gomobile",
-        "bind",
-        "-target=android/arm,android/arm64,android/amd64",
-        "-androidapi",
-        "21",
-        "-ldflags",
-        "-s -w -checklinkname=0",
-        "-o",
-        olcrtcAndroidAarFile.absolutePath,
-        "./mobile"
-    )
-}
-
-val olcrtcAndroidAarDependency = files(olcrtcAndroidAarFile).builtBy(buildOlcrtcAndroidAar)
-
-// --- sing-box (libbox) Android AAR, built from SINGBOX_REPO via gomobile ---
-// Mirrors the olcrtc build above. Clone github.com/SagerNet/sing-box (pinned v1.13.18,
+// --- sing-box checkout, consumed by the combined cores AAR below ---
+// Clone github.com/SagerNet/sing-box (pinned v1.13.18,
 // see SingBoxEngine.kt which targets that PlatformInterface/CommandServer) next to this repo,
 // or set SINGBOX_REPO to its path.
 val singboxRepoPath = providers.environmentVariable("SINGBOX_REPO")
     .orElse(rootProject.layout.projectDirectory.asFile.parentFile.resolve("sing-box").absolutePath)
 val singboxRepoDir = rootProject.file(singboxRepoPath.get())
-val libboxAndroidAar = layout.buildDirectory.file("generated/libbox/libbox.aar")
-val libboxAndroidAarFile = libboxAndroidAar.get().asFile
 
 // Build tags must include with_utls (uTLS fingerprints, e.g. fp=firefox) for the user's
 // VLESS profiles; the rest mirror sing-box's own mobile build.
@@ -100,38 +68,20 @@ val libboxBuildTags =
     "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic,with_naive_outbound"
 
 // sing-box version embedded into libbox via ldflags (-X constant.Version); otherwise libbox.Version()
-// reports "unknown". Keep in sync with the pinned sing-box checkout (v1.13.18, see comment above).
-val singboxVersion = "1.13.18"
-
-libboxAndroidAarFile.parentFile.mkdirs()
-
-val buildLibboxAndroidAar by tasks.registering(Exec::class) {
-    group = "build"
-    description = "Builds sing-box libbox Android AAR from SINGBOX_REPO using gomobile."
-
-    inputs.files(singboxRepoDir.resolve("go.mod"), singboxRepoDir.resolve("go.sum"))
-    inputs.property("tags", libboxBuildTags)
-    outputs.file(libboxAndroidAar)
-
-    workingDir = singboxRepoDir
-    commandLine(
-        "gomobile",
-        "bind",
-        "-target=android/arm,android/arm64,android/amd64",
-        "-androidapi",
-        "21",
-        "-tags",
-        libboxBuildTags,
-        "-trimpath",
-        "-ldflags",
-        "-X github.com/sagernet/sing-box/constant.Version=$singboxVersion -s -w -checklinkname=0",
-        "-o",
-        libboxAndroidAarFile.absolutePath,
-        "./experimental/libbox"
-    )
-}
-
-val libboxAndroidAarDependency = files(libboxAndroidAarFile).builtBy(buildLibboxAndroidAar)
+// reports "unknown". Читается ИЗ вендоренного дерева (первый заголовок в docs/changelog.md), а не
+// вбивается руками: константа уже разъехалась однажды — ядро обновили до 1.13.19, а в настройках
+// приложения ещё висела 1.13.18. Через providers.fileContents, чтобы правка чейнджлога честно
+// инвалидировала configuration cache.
+val singboxChangelog = objects.fileProperty().fileValue(singboxRepoDir.resolve("docs/changelog.md"))
+val singboxVersion: String = providers
+    .fileContents(singboxChangelog)
+    .asText
+    .map { text ->
+        text.lineSequence()
+            .mapNotNull { Regex("""^####\s+(\d+\.\d+\.\d+\S*)\s*$""").find(it.trim())?.groupValues?.get(1) }
+            .firstOrNull() ?: "unknown"
+    }
+    .getOrElse("unknown")
 
 // --- Combined cores AAR: olcrtc (mobile) + sing-box (libbox) in ONE gomobile bind ---
 // Two separate gomobile AARs would ship two Go runtimes (duplicate go.* classes + two
@@ -351,3 +301,4 @@ kotlin {
             }
         }
 }
+
