@@ -209,6 +209,34 @@ func TestRetryTransportReplaysRequestBody(t *testing.T) {
 	}
 }
 
+// A bodyless GET (http.NoBody, the shape every provider API call uses) must survive a retry:
+// http.NoBody is non-nil and carries no GetBody, and treating that as unreplayable turned every
+// transient dial timeout into a hard startup failure.
+func TestRetryTransportRetriesBodylessGet(t *testing.T) {
+	attempts := 0
+	transport := &retryTransport{base: roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, &net.DNSError{Name: "cloud-api.test", Err: "temporary"}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
+	})}
+	req, err := http.NewRequestWithContext(
+		context.Background(), http.MethodGet, "https://cloud-api.test/connection", http.NoBody,
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	_ = resp.Body.Close()
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
 func TestNewWebSocketDialer(t *testing.T) {
 	dialer := NewWebSocketDialer(3 * time.Second)
 	if dialer.NetDialContext == nil || dialer.Proxy == nil || dialer.TLSClientConfig == nil ||

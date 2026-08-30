@@ -249,7 +249,12 @@ func requestForAttempt(req *http.Request, attempt int) (*http.Request, error) {
 		return req, nil
 	}
 	retry := req.Clone(req.Context())
-	if req.Body == nil {
+	// ЛОКАЛЬНЫЙ ПАТЧ: http.NoBody is a NON-nil body that carries no GetBody, and every provider
+	// API call is built as NewRequestWithContext(..., http.MethodGet, u, http.NoBody). Without
+	// this case a bodyless GET was declared unreplayable, so the FIRST transient dial timeout
+	// turned into a hard startup failure ("prepare retry: request body is not replayable") and
+	// the real error was never seen. A bodyless request is always replayable.
+	if req.Body == nil || req.Body == http.NoBody {
 		return retry, nil
 	}
 	if req.GetBody == nil {
