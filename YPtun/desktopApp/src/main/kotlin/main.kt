@@ -114,6 +114,7 @@ import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.datasource.JvmLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.JvmLogExporter
+import org.olcbox.app.vpn.desktop.isTilingCompositor
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.importer.JvmConfigImporter
 import org.olcbox.app.data.share.ConfigShareService
@@ -643,7 +644,13 @@ private fun runApp(args: Array<String>) = application {
         // Tiling window managers (niri, Sway, Hyprland) commonly key their auto-float heuristic off
         // this flag — without it the app's fixed-size window gets tiled into whatever slot is next,
         // instead of floating at its intended size.
-        resizable = false,
+        //
+        // Но ТОЛЬКО под тайлингом: окно на самом деле не фиксированное. От 700 dp по ширине
+        // включается широкая раскладка (isWideWindow ниже — список локаций уезжает в левую панель),
+        // и при resizable=false до неё уже никак не дотянуться — фича становится недостижимой на
+        // всех платформах разом. Поэтому размер фиксируем там, где это чинит проблему, и оставляем
+        // как было везде, где её нет.
+        resizable = !isTilingCompositor(),
         onCloseRequest = {
             isWindowVisible = false
         },
