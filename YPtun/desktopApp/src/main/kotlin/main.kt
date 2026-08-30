@@ -640,6 +640,10 @@ private fun runApp(args: Array<String>) = application {
         icon = painterResource("LinuxIcon.png"),
         visible = isWindowVisible,
         state = windowState,
+        // Tiling window managers (niri, Sway, Hyprland) commonly key their auto-float heuristic off
+        // this flag — without it the app's fixed-size window gets tiled into whatever slot is next,
+        // instead of floating at its intended size.
+        resizable = false,
         onCloseRequest = {
             isWindowVisible = false
         },
