@@ -154,6 +154,14 @@ internal class DesktopEngineController(
     fun stopAll() {
         trustTunnel.stop()
         YpTunCore.stopAll()
+        // [start] is the only other place these are reset, and the olcRTC (Stealth) path never calls
+        // it — it runs the olcrtc subprocess instead. So a stale tunHandledInCore=true, left by the
+        // previous sing-box session, made the manager skip tun2socks on the NEXT olcRTC connect: the
+        // log said "Windows TUN owned by sing-box" while nothing owned it and no TUN existed at all.
+        tunHandledInCore = false
+        localSocksNoAuth = false
+        dnsttProxyActive = false
+        singBoxFrontActive = false
     }
 
     fun coreRunning(engine: EngineType): Boolean = when (engine) {
