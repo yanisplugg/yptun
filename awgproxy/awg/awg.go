@@ -369,15 +369,30 @@ type wgConfig struct {
 	hasReserved bool
 }
 
-// awgKnobs are the AmneziaWG obfuscation keys passed through verbatim to the device UAPI.
-// These are exactly the keys amneziawg-go's UAPI accepts (device/uapi.go). S3/S4 are NOT standard
-// AmneziaWG and are rejected by the device — skip them (configs that carry S3/S4 set them to 0).
-var awgKnobs = map[string]bool{
-	"jc": true, "jmin": true, "jmax": true,
-	"s1": true, "s2": true,
-	"h1": true, "h2": true, "h3": true, "h4": true,
-	"i1": true, "i2": true, "i3": true, "i4": true, "i5": true,
-	"j1": true, "j2": true, "j3": true, "itime": true,
+// awgKnobs сопоставляет ключ из .conf с ключом UAPI устройства. Значение "" = имя совпадает.
+//
+// ВАЖНО: список обязан соответствовать тому, что принимает вендоренный amneziawg-go (device/uapi.go).
+// До обновления ядра на v3 устройство не знало S3/S4 и параметров AmneziaWG 2.0, и они здесь
+// намеренно отбрасывались. Теперь принимает — а отбрасывать их СМЕРТЕЛЬНО: S4 - это набивка
+// ТРАНСПОРТНЫХ пакетов, header protection шифрует их заголовок. Если сервер настроен с ними, а
+// клиент молча их потерял, рукопожатие (S1/S2/H1/H2 совпадают) проходит, а каждый пакет данных
+// летит в мусор в обе стороны: туннель «поднят», трафика нет, каждые 15 секунд новый handshake.
+// Ровно это и было видно в логе пользователя 30.08 (rx рос только на 92 байта ответа handshake).
+var awgKnobs = map[string]string{
+	"jc": "", "jmin": "", "jmax": "",
+	"s1": "", "s2": "", "s3": "", "s4": "",
+	"h1": "", "h2": "", "h3": "", "h4": "",
+	"i1": "", "i2": "", "i3": "", "i4": "", "i5": "",
+	"j1": "", "j2": "", "j3": "", "itime": "",
+	// AmneziaWG 2.0: имена в .conf и в UAPI различаются.
+	"contentpaddingaddition": "content_padding_addition",
+	"rekeyaftertime":         "rekey_after_time",
+	"rekeytimeout":           "rekey_timeout",
+	"rejectaftertime":        "reject_after_time",
+	"keepalivetimeout":       "keepalive_timeout",
+	"maxhandshakeattempts":   "max_handshake_attempts",
+	"randomtrailers":         "random_trailers",
+	"disablecookies":         "disable_cookies",
 }
 
 func parseConfig(ini string) (*wgConfig, error) {
@@ -453,9 +468,20 @@ func parseConfig(ini string) (*wgConfig, error) {
 					c.hasReserved = true
 				}
 			}
+		case "headerprotectionkey":
+			// Ключ защиты заголовков в .conf лежит в base64, как и обычные ключи WireGuard,
+			// а UAPI ждёт hex.
+			h, err := keyToHex(val)
+			if err != nil {
+				return nil, fmt.Errorf("headerprotectionkey: %w", err)
+			}
+			c.awgParams = append(c.awgParams, [2]string{"header_protection_key", h})
 		default:
-			if awgKnobs[key] && val != "" {
-				c.awgParams = append(c.awgParams, [2]string{key, val})
+			if uapiKey, ok := awgKnobs[key]; ok && val != "" {
+				if uapiKey == "" {
+					uapiKey = key
+				}
+				c.awgParams = append(c.awgParams, [2]string{uapiKey, val})
 			}
 		}
 	}

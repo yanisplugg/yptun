@@ -269,8 +269,12 @@ class OlcboxVpnService : VpnService() {
         }
 
         override fun onLost(network: Network) {
-            addLog("Network lost")
+            // Колбэк приходит на ЛЮБУЮ исчезнувшую сеть, включая наш собственный VPN-интерфейс и
+            // чужие транзитные. Раньше «Network lost» писалось до проверки, и в журнале оно
+            // появлялось сразу после подъёма туннеля — выглядело как обрыв связи, хотя апстрим
+            // был жив и обработчик тут же выходил. Пишем только про сеть, на которой мы работаем.
             if (network != currentNetwork) return
+            addLog("Network lost")
 
             networkLossJob?.cancel()
             networkLossJob = scope.launch {
