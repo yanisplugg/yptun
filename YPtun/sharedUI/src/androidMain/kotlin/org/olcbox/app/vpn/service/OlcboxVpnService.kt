@@ -4368,6 +4368,11 @@ class OlcboxVpnService : VpnService() {
         private val LOGCAT_NOISE = listOf(
             // sing-box is double-logged (Go LogWriter → "sb: …" AND android Log tag "sing-box").
             "/sing-box",
+            // То же самое у AmneziaWG и olcRTC: их строки уже уходят в журнал как "awg: …" / "rtc: …",
+            // а Log.v с собственным тегом оставлен ради `adb logcat awg:V`. Без этих двух фильтров
+            // КАЖДАЯ строка ядра попадала в журнал ДВАЖДЫ — на старте AmneziaWG это под сотню дублей
+            // (видно в отчёте пользователя 30.08): нечитаемый лог и лишний расход памяти.
+            "/awg", "/olcrtc",
             // Android view / render / window / input framework — pure UI churn.
             "/View", "/VRI[", "/HWUI", "/ViewRootImpl", "/DecorView", "/SurfaceView",
             "/InputTransport", "/InputMethodManager", "/ImeFocusController", "/ImeTracker",
