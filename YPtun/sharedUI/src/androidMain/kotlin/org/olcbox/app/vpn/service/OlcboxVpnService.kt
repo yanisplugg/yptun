@@ -4381,6 +4381,9 @@ class OlcboxVpnService : VpnService() {
             "/View", "/VRI[", "/HWUI", "/ViewRootImpl", "/DecorView", "/SurfaceView",
             "/InputTransport", "/InputMethodManager", "/ImeFocusController", "/ImeTracker",
             "/InsetsSourceConsumer", "/InsetsController", "/WindowOnBackDispatcher", "/WindowManager",
+            // MIUI/HyperOS-specific: logs a [MotionEvent] line per touch/swipe for EVERY app, not
+            // just this one. Absent from AOSP, so it's missing above with the rest of the input stack.
+            "/MIUIInput",
             "/BufferQueueProducer", "/BLASTBufferQueue", "/SurfaceComposerClient", "/Choreographer",
             "/OpenGLRenderer", "/AdrenoVK", "/Dialog", "/Looper", "/CustomFrequencyManager",
             "/NativeCustomFrequencyManager", "/perf_hint", "/Compiler", "/NotificationManager", "/BBA2",
