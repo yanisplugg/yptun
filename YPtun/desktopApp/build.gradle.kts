@@ -32,6 +32,9 @@ dependencies {
     implementation(libs.zxing.core)
     // Material icons used by the custom tray menu (sharedUI keeps them internal).
     implementation(compose.materialIconsExtended)
+    // Native StatusNotifierItem tray on Linux (java.awt.SystemTray only speaks the legacy XEmbed
+    // protocol, which most Wayland-native panels don't implement at all).
+    implementation(libs.compose.native.tray)
 }
 
 abstract class DownloadFileTask : DefaultTask() {

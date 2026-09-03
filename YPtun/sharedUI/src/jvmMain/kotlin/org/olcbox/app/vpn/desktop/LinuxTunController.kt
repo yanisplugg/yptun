@@ -16,37 +16,70 @@ internal class LinuxTunController(
     private var routesInstalled = false
     private var hevBinary: Path? = null
 
-    suspend fun start(
+    /**
+     * Writes hev's config/up/down scripts and returns the command to launch it — does NOT start the
+     * process. Linux TUN needs both hev and olcRTC running as root under the SAME pkexec
+     * authorization (see DesktopVpnManager.startOlcRtcProcess's combined launch), so the caller
+     * backgrounds this command inside its own privileged process instead of us spawning it directly
+     * under a second, separate pkexec.
+     */
+    fun prepareHevLaunch(
         hevBinary: Path,
         socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
         socksUsername: String = "",
         socksPassword: String = ""
-    ): Process {
+    ): List<String> {
         this.hevBinary = hevBinary
         val upScript = writeUpScript()
         val downScript = writeDownScript()
         val config = writeConfig(socksPort, upScript, downScript, socksUsername, socksPassword)
-        val process = startPrivilegedProcess(listOf(hevBinary.toString(), config.toString()))
-        try {
-            waitForTunReady(process)
-            routesInstalled = true
-            addLog("Linux TUN connected on $TUN_NAME")
-            return process
-        } catch (e: Exception) {
-            stop(process)
-            throw e
-        }
+        return listOf(hevBinary.toString(), config.toString())
     }
 
-    suspend fun stop(process: Process?) {
-        stopProcess(process)
+    /**
+     * Polls for the TUN interface + route rule hev's up-script installs. olcRTC's own SOCKS5
+     * readiness check runs first and takes several seconds (WebRTC handshake) — hev, started earlier
+     * in the same combined launch well before olcRTC's exec, has had a comfortable head start by the
+     * time we get here, so this rarely waits long in practice.
+     */
+    suspend fun awaitReady() {
+        val deadline = System.currentTimeMillis() + TUN_READY_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (interfaceExists() && routeRuleExists()) {
+                routesInstalled = true
+                addLog("Linux TUN connected on $TUN_NAME")
+                return
+            }
+            delay(TUN_READY_POLL_MS)
+        }
+        error("$TUN_NAME routes were not installed")
+    }
 
+    /**
+     * Shell fragments to clean up hev + its routes as root — pkill by binary path (hev double-forks
+     * and detaches, so there is never a Process handle left to destroy()) and, if the route rule is
+     * still there, the down-script as a fallback for when hev's own pre-down-script didn't run.
+     * Returns commands only, doesn't invoke pkexec itself — the caller bundles these with olcRTC's
+     * own privileged kill into ONE combined pkexec call instead of each of us prompting separately.
+     * Best-effort by design (`|| true` throughout): always included, never gates on whether hev is
+     * actually still around, because the caller's pkexec call is happening either way (olcRTC runs
+     * as root in this mode, so an unprivileged kill can never reach it) — bundling this in is free.
+     */
+    fun privilegedCleanupCommands(): List<String> {
+        val commands = mutableListOf<String>()
+        hevBinary?.let { binary ->
+            commands += "pkill -f ${shellQuoted(binary.toString())} >/dev/null 2>&1 || true"
+        }
+        if (routesInstalled) {
+            commands += "sh ${shellQuoted(writeDownScript().toString())} >/dev/null 2>&1 || true"
+        }
+        return commands
+    }
+
+    /** Call once the combined privileged cleanup from [privilegedCleanupCommands] has actually run. */
+    suspend fun onStopped() {
         if (routesInstalled) {
             waitForRoutesRemoved()
-            if (routeRuleExists()) {
-                runCatching { runPrivilegedScript(writeDownScript()) }
-                    .onFailure { addLog("Linux TUN route cleanup failed: ${it.message}") }
-            }
             routesInstalled = false
         }
     }
@@ -93,33 +126,6 @@ internal class LinuxTunController(
         return script
     }
 
-    private suspend fun waitForTunReady(process: Process) {
-        val deadline = System.currentTimeMillis() + TUN_READY_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            if (!process.isAlive) {
-                val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
-                error(
-                    buildString {
-                        append("hev-socks5-tunnel exited before $TUN_NAME was ready")
-                        if (output.isNotBlank()) append(": ").append(output)
-                    }
-                )
-            }
-            if (interfaceExists() && routeRuleExists()) return
-            delay(TUN_READY_POLL_MS)
-        }
-        error("$TUN_NAME routes were not installed")
-    }
-
-    private suspend fun processMatchingBinaryExists(binary: Path): Boolean = withContext(Dispatchers.IO) {
-        runCatching {
-            val process = ProcessBuilder("pgrep", "-f", binary.toString())
-                .redirectErrorStream(true)
-                .start()
-            process.waitFor(1, TimeUnit.SECONDS) && process.exitValue() == 0
-        }.getOrDefault(false)
-    }
-
     private suspend fun interfaceExists(): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             val process = ProcessBuilder("ip", "link", "show", TUN_NAME)
@@ -156,52 +162,8 @@ internal class LinuxTunController(
         }
     }
 
-    private suspend fun runPrivilegedScript(script: Path) {
-        runPrivilegedCommand(listOf(script.toString()))
-    }
-
-    private suspend fun runPrivilegedCommand(command: List<String>): String = withContext(Dispatchers.IO) {
-        val process = ProcessBuilder(LinuxPrivilege.command(command))
-            .redirectErrorStream(true)
-            .start()
-        val output = process.inputStream.bufferedReader().use { it.readText() }
-        val exitCode = process.waitFor()
-        if (exitCode != 0) {
-            error("${command.joinToString(" ")} failed with code $exitCode: $output")
-        }
-        output
-    }
-
-    private fun startPrivilegedProcess(command: List<String>): Process {
-        return ProcessBuilder(LinuxPrivilege.command(command))
-            .redirectErrorStream(true)
-            .start()
-    }
-
-    private suspend fun stopProcess(process: Process?) {
-        if (process != null && process.isAlive) {
-            process.toHandle().descendants().forEach { it.destroy() }
-            process.destroy()
-            if (!process.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                process.toHandle().descendants().forEach { it.destroyForcibly() }
-                process.destroyForcibly()
-                process.waitFor(PROCESS_KILL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            }
-        }
-        // hev-socks5-tunnel daemonizes itself (double-forks and detaches), so by the time we get here
-        // the Process handle above is often already !isAlive and the block does nothing - the real
-        // privileged process has been reparented to init, still holding the TUN device open. Check
-        // unprivileged first (pgrep reads another user's /proc/*/cmdline fine, no root needed) and only
-        // escalate to a pkexec kill when something is actually still there - stop() runs on every
-        // disconnect AND on every failed connect attempt's cleanup (sometimes twice), so an unconditional
-        // pkexec call here would prompt for a second, unrelated authorization on the common path where
-        // there is nothing left to clean up.
-        hevBinary?.let { binary ->
-            if (processMatchingBinaryExists(binary)) {
-                runCatching { runPrivilegedCommand(listOf("pkill", "-f", binary.toString())) }
-            }
-        }
-    }
+    /** POSIX single-quoted: the only escape inside is closing the quote, inserting a literal ', reopening. */
+    private fun shellQuoted(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     internal companion object {
         const val TUN_NAME = "olcbox0"
@@ -216,8 +178,6 @@ internal class LinuxTunController(
         const val TUN_READY_TIMEOUT_MS = 10_000L
         const val TUN_READY_POLL_MS = 100L
         const val ROUTE_CLEANUP_TIMEOUT_MS = 2_000L
-        const val PROCESS_STOP_TIMEOUT_MS = 3_000L
-        const val PROCESS_KILL_TIMEOUT_MS = 1_000L
 
         /**
          * hev-socks5-tunnel bridges the TUN into the core's local SOCKS inbound. That inbound is

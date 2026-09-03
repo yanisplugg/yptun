@@ -37,6 +37,7 @@ import org.olcbox.app.vpn.desktop.LinuxTunController
 import org.olcbox.app.vpn.desktop.OlcRtcCommand
 import org.olcbox.app.vpn.desktop.PacServer
 import org.olcbox.app.vpn.desktop.WindowsTunController
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.charset.StandardCharsets
@@ -715,12 +716,7 @@ class DesktopVpnManager private constructor(
             }
 
             when (desktopMode) {
-                DesktopMode.LinuxTun -> startLinuxTun(
-                    socksPort = bridgeSettings.port,
-                    requestGeneration = requestGeneration,
-                    socksUsername = bridgeSettings.username,
-                    socksPassword = bridgeSettings.password
-                )
+                DesktopMode.LinuxTun -> startLinuxTun(requestGeneration = requestGeneration)
                 DesktopMode.WindowsTun -> if (engineController.tunHandledInCore) {
                     // sing-box raised the wintun adapter itself (per-process split tunneling);
                     // no external tun2socks needed.
@@ -754,12 +750,9 @@ class DesktopVpnManager private constructor(
             }
 
             when (activeDesktopMode ?: DesktopMode.current()) {
+                // Cleanup (hev + routes, bundled with olcRTC's own kill into one pkexec call) happens
+                // below via stopProcess(process, privileged = ...) — see LinuxTunController.onStopped.
                 DesktopMode.LinuxTun -> {
-                    runCatching {
-                        linuxTunController.stop(tunProcess)
-                    }.onFailure {
-                        addLog("Linux TUN cleanup failed: ${it.message}")
-                    }
                     tunProcess = null
                 }
                 DesktopMode.WindowsTun -> {
@@ -837,20 +830,19 @@ class DesktopVpnManager private constructor(
         }
     }
 
-    private suspend fun startLinuxTun(
-        socksPort: Int,
-        requestGeneration: Long,
-        socksUsername: String = "",
-        socksPassword: String = ""
-    ) {
-        val hevBinary = DesktopNativeAssets.resolveHevSocks5TunnelBinary()
-        tunProcess = linuxTunController.start(hevBinary, socksPort, socksUsername, socksPassword)
+    /**
+     * hev itself was already launched — backgrounded inside the SAME combined pkexec call that
+     * started olcRTC (see startOlcRtcProcess/writeLinuxTunLaunchScript) — so all that's left here is
+     * waiting for its up-script to actually install the TUN interface + route. [tunProcess] stays
+     * null in this mode: there is no separate Process handle for hev, its output already rides
+     * olcRTC's own (tagged "tun: ", split out in the reader loop there).
+     */
+    private suspend fun startLinuxTun(requestGeneration: Long) {
+        linuxTunController.awaitReady()
 
         if (requestGeneration != generation) {
             throw CancellationException("Desktop start superseded")
         }
-
-        startTunLogReader(tunProcess ?: error("hev-socks5-tunnel process is missing"))
     }
 
     private suspend fun startWindowsTun(
@@ -1010,12 +1002,9 @@ class DesktopVpnManager private constructor(
 
         val stoppingDesktopMode = activeDesktopMode ?: DesktopMode.current()
         when (stoppingDesktopMode) {
+            // Cleanup (hev + routes, bundled with olcRTC's own kill into one pkexec call) happens
+            // below via stopProcess(process, privileged = ...) — see LinuxTunController.onStopped.
             DesktopMode.LinuxTun -> {
-                runCatching {
-                    linuxTunController.stop(tunProcess)
-                }.onFailure {
-                    addLog("Linux TUN stop failed: ${it.message}")
-                }
                 tunProcess = null
             }
             DesktopMode.WindowsTun -> {
@@ -1094,17 +1083,29 @@ class DesktopVpnManager private constructor(
             dataDir = dataDir
         )
         val configPath = writeOlcRtcClientConfig(olcRtcCommand)
-        val command = olcRtcCommand.args(configPath)
+        val olcRtcCommandArgs = olcRtcCommand.args(configPath)
 
         addLog("Starting olcRTC provider=$provider, transport=${config.transport}, room=${config.id}, port=${socksSettings.port}")
 
-        if (privileged) {
-            addLog("Linux TUN mode starts olcRTC with elevated privileges to bypass the TUN route")
+        // Linux TUN mode needs hev-socks5-tunnel running as root too (to bypass its own TUN route) —
+        // launched together under this SAME pkexec authorization instead of its own separate one (see
+        // writeLinuxTunLaunchScript). hev's own output rides the same pipe, tagged, and gets split back
+        // out in the reader loop below — there's no separate Process handle for it to read from, since
+        // the wrapper script (not this JVM) is what actually spawns it.
+        val command = if (privileged) {
+            addLog("Linux TUN mode starts olcRTC and hev-socks5-tunnel together under one elevated authorization")
+            val hevCommand = linuxTunController.prepareHevLaunch(
+                hevBinary = DesktopNativeAssets.resolveHevSocks5TunnelBinary(),
+                socksPort = socksSettings.port,
+                socksUsername = socksSettings.username,
+                socksPassword = socksSettings.password
+            )
+            LinuxPrivilege.command(listOf("sh", writeLinuxTunLaunchScript(hevCommand, olcRtcCommandArgs).toString()))
+        } else {
+            olcRtcCommandArgs
         }
 
-        val processBuilder = ProcessBuilder(
-            if (privileged) LinuxPrivilege.command(command) else command
-        ).redirectErrorStream(true)
+        val processBuilder = ProcessBuilder(command).redirectErrorStream(true)
 
         processBuilder.environment()["NO_PROXY"] = "127.0.0.1,localhost"
         processBuilder.environment()["no_proxy"] = "127.0.0.1,localhost"
@@ -1120,22 +1121,39 @@ class DesktopVpnManager private constructor(
         }
 
         val readerJob = scope.launch {
-            startedProcess.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    if (!isActive) return@forEach
+            try {
+                startedProcess.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (!isActive) return@forEach
 
-                    if (logOutput) {
-                        addLog("rtc: $line")
-                    }
+                        // hev-socks5-tunnel's tagged lines (see writeLinuxTunLaunchScript) — a
+                        // different process, so none of olcRTC's own readiness/fatal-line checks
+                        // below apply to them.
+                        if (line.startsWith(HEV_LOG_PREFIX)) {
+                            if (logOutput) addLog("tun: ${line.removePrefix(HEV_LOG_PREFIX)}")
+                            return@forEach
+                        }
 
-                    if (line.contains("SOCKS5 server listening", ignoreCase = true)) {
-                        ready.complete(Unit)
-                    }
+                        if (logOutput) {
+                            addLog("rtc: $line")
+                        }
 
-                    if (isFatalOlcRtcStartupLine(line)) {
-                        startupFailure.complete(line)
+                        if (line.contains("SOCKS5 server listening", ignoreCase = true)) {
+                            ready.complete(Unit)
+                        }
+
+                        if (isFatalOlcRtcStartupLine(line)) {
+                            startupFailure.complete(line)
+                        }
                     }
                 }
+            } catch (e: IOException) {
+                // stopProcess()'s target.destroy()/destroyForcibly() closes this stream to unblock a
+                // readLine() parked waiting for more output — a plain synchronous blocking call, the
+                // only way to interrupt it. Expected on every normal disconnect, not a failure — but
+                // matched on the exact message so any OTHER IOException (a genuine read failure) still
+                // surfaces instead of being silently swallowed here too.
+                if (e.message != "Stream closed") throw e
             }
         }
 
@@ -1146,6 +1164,35 @@ class DesktopVpnManager private constructor(
 
         return startedProcess
     }
+
+    /**
+     * Backgrounds hev, tags its output, then execs into olcRTC — same pid throughout (pkexec itself
+     * already execs rather than forking; this just adds one more hop), so every existing PID-based
+     * lifecycle assumption downstream (isAlive/waitFor/pid() in stopProcess) keeps working unchanged.
+     * hev double-forks and detaches on its own regardless of what happens to this wrapper afterward,
+     * so it survives the exec with no `disown`/`nohup` needed.
+     */
+    private fun writeLinuxTunLaunchScript(hevCommand: List<String>, olcRtcCommand: List<String>): Path {
+        val runtimeDir = DesktopPaths.appDataDir().resolve("runtime")
+        Files.createDirectories(runtimeDir)
+        val script = runtimeDir.resolve("linux-tun-launch.sh")
+        Files.writeString(
+            script,
+            buildString {
+                appendLine("#!/bin/sh")
+                append(shellQuotedCommand(hevCommand))
+                appendLine(" 2>&1 | sed -u 's/^/$HEV_LOG_PREFIX/' &")
+                append("exec ")
+                appendLine(shellQuotedCommand(olcRtcCommand))
+            }
+        )
+        script.toFile().setExecutable(true, true)
+        return script
+    }
+
+    /** POSIX single-quoted: the only escape inside is closing the quote, inserting a literal ', reopening. */
+    private fun shellQuotedCommand(command: List<String>): String =
+        command.joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
 
     private fun writeOlcRtcClientConfig(command: OlcRtcCommand): Path {
         val runtimeDir = DesktopPaths.appDataDir().resolve("runtime")
@@ -1246,22 +1293,21 @@ class DesktopVpnManager private constructor(
     }
 
     private suspend fun stopProcess(target: Process?, privileged: Boolean = false) {
-        if (target == null) return
-        if (!target.isAlive) return
-
-        target.toHandle().descendants().forEach {
-            it.destroy()
-        }
-
-        target.destroy()
-
-        if (!target.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+        if (target != null && target.isAlive) {
             target.toHandle().descendants().forEach {
-                it.destroyForcibly()
+                it.destroy()
             }
 
-            target.destroyForcibly()
-            target.waitFor(PROCESS_KILL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            target.destroy()
+
+            if (!target.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                target.toHandle().descendants().forEach {
+                    it.destroyForcibly()
+                }
+
+                target.destroyForcibly()
+                target.waitFor(PROCESS_KILL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            }
         }
 
         // A pkexec-elevated olcRTC now runs as root, and this JVM does not: destroy()/destroyForcibly()
@@ -1269,26 +1315,57 @@ class DesktopVpnManager private constructor(
         // privileged one - even one we originally spawned. Confirmed live (2026-08-29): a plain `kill`
         // on such a pid fails with EPERM, and the process survives every disconnect untouched, then goes
         // on to fool the NEXT connect's canConnectToSocks() readiness check into firing early. Escalate.
-        // Ждём смерти САМОГО процесса, а не команды kill, и добиваем -KILL: иначе stopProcess вернётся,
-        // пока olcRTC ещё разбирает SIGTERM (или игнорирует его), фиксированный SOCKS-порт останется
-        // занятым - и следующий connect снова пройдёт canConnectToSocks() мгновенно, ровно тот баг,
-        // который этот фикс и закрывает.
-        if (privileged && target.isAlive) {
-            val pid = target.pid()
+        //
+        // hev-socks5-tunnel needs the exact same treatment (see LinuxTunController.privilegedCleanupCommands)
+        // — it double-forks at its own startup, so by now there is no Process handle for it here either,
+        // privileged or not. Both are ALWAYS true on a Linux TUN disconnect, not rare fallbacks, so this
+        // whole block bundles olcRTC's kill AND hev/route cleanup into ONE pkexec-authorized script
+        // instead of prompting for authorization once per process.
+        if (privileged) {
             withContext(Dispatchers.IO) {
-                for (signal in listOf("-TERM", "-KILL")) {
-                    runCatching {
-                        ProcessBuilder(LinuxPrivilege.command(listOf("kill", signal, pid.toString())))
-                            .redirectErrorStream(true)
-                            .start()
-                            .waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                    }
-                    // waitpid по своему ребёнку работает и когда тот стал root'ом.
-                    if (target.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) return@withContext
+                val pid = target?.takeIf { it.isAlive }?.pid()
+                val script = buildString {
+                    if (pid != null) appendLine(killWithEscalationScript(pid))
+                    linuxTunController.privilegedCleanupCommands().forEach { appendLine(it) }
                 }
-                addLog("Failed to stop the elevated olcRTC process (pid $pid)")
+                val runtimeDir = DesktopPaths.appDataDir().resolve("runtime")
+                Files.createDirectories(runtimeDir)
+                val scriptFile = Files.createTempFile(runtimeDir, "linux-tun-stop-", ".sh")
+                runCatching {
+                    Files.writeString(scriptFile, script)
+                    ProcessBuilder(LinuxPrivilege.command(listOf("sh", scriptFile.toString())))
+                        .redirectErrorStream(true)
+                        .start()
+                        .waitFor(PROCESS_STOP_TIMEOUT_MS * 2, TimeUnit.MILLISECONDS)
+                    if (pid != null && target.isAlive) {
+                        addLog("Failed to stop the elevated olcRTC process (pid $pid)")
+                    }
+                }.onFailure {
+                    addLog("Failed to stop the elevated Linux TUN processes: ${it.message}")
+                }
+                runCatching { Files.deleteIfExists(scriptFile) }
             }
+            linuxTunController.onStopped()
         }
+    }
+
+    /**
+     * Waits up to [PROCESS_STOP_TIMEOUT_MS] (polling — `kill -0` checks whether the pid still exists
+     * without signaling it, the standard portable way) for a SIGTERM to take effect, escalating to
+     * SIGKILL if it doesn't. Runs entirely inside the privileged script so ONE pkexec call covers the
+     * whole escalation, instead of a second authorization prompt only for the SIGKILL step.
+     */
+    private fun killWithEscalationScript(pid: Long): String {
+        val pollIterations = PROCESS_STOP_TIMEOUT_MS / 100
+        return """
+            kill -TERM $pid 2>/dev/null || true
+            i=0
+            while kill -0 $pid 2>/dev/null; do
+                i=${'$'}((i + 1))
+                if [ ${'$'}i -ge $pollIterations ]; then kill -KILL $pid 2>/dev/null || true; break; fi
+                sleep 0.1
+            done
+        """.trimIndent()
     }
 
     /**
@@ -1520,6 +1597,9 @@ class DesktopVpnManager private constructor(
         const val TCP_CONNECT_TIMEOUT_MS = 250L
         const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
+
+        /** Tags hev-socks5-tunnel's lines on the combined Linux TUN pipe — see startOlcRtcProcess. */
+        const val HEV_LOG_PREFIX = "[hev] "
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
 
         /**

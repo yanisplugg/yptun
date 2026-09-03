@@ -6,6 +6,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -66,6 +67,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import dev.nucleusframework.composenativetray.tray.api.Tray as NativeTray
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
@@ -417,12 +419,92 @@ private fun runApp(args: Array<String>) = application {
         trayLoading -> if (trayRussian) "○ Подключение…" else "○ Connecting…"
         else -> if (trayRussian) "○ Отключено" else "○ Disconnected"
     }
+    // java.awt.SystemTray only speaks the legacy XEmbed tray protocol on Linux, which most
+    // Wayland-native panels (Noctalia, most GTK4/QtQuick shells) never implemented - the icon just
+    // silently never appears there. Detect a StatusNotifierWatcher on the session bus and switch to
+    // ComposeNativeTray (native SNI, drawn by the desktop's own panel) when one is present; AWT stays
+    // the fallback for the older XEmbed-only panels ComposeNativeTray's Linux backend doesn't cover.
+    val useSniTray = remember {
+        System.getProperty("os.name").orEmpty().lowercase().contains("linux") && hasStatusNotifierWatcher()
+    }
+
+    if (useSniTray) {
+        NativeTray(
+            iconContent = {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Image(
+                        painter = painterResource("LinuxIcon.png"),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val badgeColor = when {
+                            trayConnected -> Color(0xFF34C759)
+                            trayLoading -> Color(0xFFFF9F0A)
+                            else -> Color(0xFF8E8E93)
+                        }
+                        val d = size.minDimension * (13f / 32f)
+                        val inset = size.minDimension * (1f / 32f)
+                        val center = Offset(
+                            size.width - d / 2f - inset,
+                            size.height - d / 2f - inset,
+                        )
+                        drawCircle(color = Color(0, 0, 0, 180), radius = d / 2f + inset, center = center)
+                        drawCircle(color = badgeColor, radius = d / 2f, center = center)
+                    }
+                }
+            },
+            tooltip = trayStatusText.removePrefix("● ").removePrefix("○ "),
+            primaryAction = { isWindowVisible = true },
+        ) {
+            Item(
+                label = when {
+                    trayConnected -> if (trayRussian) "Подключено" else "Connected"
+                    trayLoading -> if (trayRussian) "Подключение…" else "Connecting…"
+                    else -> if (trayRussian) "Отключено" else "Disconnected"
+                } + (trayLocationName?.let { " · $it" } ?: ""),
+                isEnabled = false,
+            )
+            Divider()
+            Item(
+                label = if (trayRussian) "Открыть" else "Open",
+                icon = Icons.Outlined.Home,
+            ) { isWindowVisible = true }
+            Item(
+                label = when {
+                    trayConnected || trayLoading -> if (trayRussian) "Отключиться" else "Disconnect"
+                    else -> if (trayRussian) "Подключиться" else "Connect"
+                },
+                icon = Icons.Outlined.PowerSettingsNew,
+                isEnabled = trayConnected || trayLoading || trayHomeState.canStartVpn,
+            ) { dependencies.homeViewModel.ToggleVpn() }
+            Item(
+                label = if (trayRussian) "Мой IP" else "My IP",
+                icon = Icons.Outlined.Public,
+            ) { showMyIpDialog = true }
+            Item(
+                label = if (trayRussian) "Горячая клавиша" else "Global hotkey",
+                icon = Icons.Outlined.Keyboard,
+            ) { hotkeyDialogVisible = true }
+            Item(
+                label = if (trayRussian) "Настройки" else "Settings",
+                icon = Icons.Outlined.Settings,
+            ) { isWindowVisible = true; showDesktopSettings = true }
+            Divider()
+            Item(
+                label = if (trayRussian) "Выход" else "Quit",
+                icon = Icons.Outlined.Close,
+            ) { quitApplication(dependencies) }
+        }
+    }
+
     // Raw AWT tray icon so we can open OUR custom menu on RIGHT-click (Compose's Tray only exposes a
     // left-click action + a native right-click menu). Left-click shows/focuses the main window.
     val trayAnchor = remember { java.awt.Point(0, 0) }
     val awtTrayIcon = remember { mutableStateOf<java.awt.TrayIcon?>(null) }
     val trayBaseImage = remember { loadTrayBaseImage() }
-    DisposableEffect(Unit) {
+    DisposableEffect(useSniTray) {
+        if (useSniTray) return@DisposableEffect onDispose {}
         val systemTray = runCatching { java.awt.SystemTray.getSystemTray() }.getOrNull()
         var icon: java.awt.TrayIcon? = null
         if (systemTray != null) {
@@ -1556,6 +1638,46 @@ private fun TrayMenuItem(
 
 // ---------------------------------------------------------------------------------------
 // Tray icon helpers: a status-colored dot badge composited onto the brand icon.
+
+/**
+ * Whether a StatusNotifierWatcher is registered on the session D-Bus - i.e. whether the desktop's
+ * own panel/shell understands the modern SNI tray protocol that ComposeNativeTray speaks on Linux.
+ * java.awt.SystemTray only speaks the legacy XEmbed protocol instead, which most Wayland-native
+ * panels (Noctalia, most GTK4/QtQuick shells) don't implement at all - the icon silently never
+ * appears. Probed via gdbus (ships with glib, near-universal), falling back to dbus-send; defaults
+ * to false (AWT) if neither tool is present or the probe fails for any reason.
+ */
+private fun hasStatusNotifierWatcher(): Boolean {
+    val probes = listOf(
+        listOf(
+            "gdbus", "call", "--session",
+            "--dest", "org.freedesktop.DBus",
+            "--object-path", "/org/freedesktop/DBus",
+            "--method", "org.freedesktop.DBus.NameHasOwner",
+            "org.kde.StatusNotifierWatcher",
+        ),
+        listOf(
+            "dbus-send", "--session", "--dest=org.freedesktop.DBus",
+            "--type=method_call", "--print-reply",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus.NameHasOwner",
+            "string:org.kde.StatusNotifierWatcher",
+        ),
+    )
+    for (probe in probes) {
+        val output = runCatching {
+            val process = ProcessBuilder(probe).redirectErrorStream(true).start()
+            val text = process.inputStream.bufferedReader().use { it.readText() }
+            if (process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) && process.exitValue() == 0) {
+                text
+            } else {
+                null
+            }
+        }.getOrNull() ?: continue
+        return output.contains("true")
+    }
+    return false
+}
 
 private fun loadTrayBaseImage(): java.awt.image.BufferedImage? = runCatching {
     javax.imageio.ImageIO.read(DesktopAppDependencies::class.java.getResource("/LinuxIcon.png"))
