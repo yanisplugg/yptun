@@ -467,8 +467,35 @@ object SingBoxConfig {
                 putJsonArray("endpoints") { wgEndpoints.forEach { add(it) } }
             }
 
+            // A sing-box JSON subscription carries its OWN `route` (normalized onto our tags at import
+            // time, see LocationsDatasource.normalizeSingBoxRoute). It takes PRECEDENCE over the app's
+            // routing profile and toggles — the same rule the Xray core applies to a verbatim
+            // rawXrayConfig. The safety rules around it (sniff, DNS hijack, QUIC/DoH blocks, fakeip,
+            // family enforcement) still run: they are what makes the tunnel itself work.
+            val embeddedRoute = profile.rawSingBoxRoute
+                ?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() }
+            val embeddedRules = embeddedRoute?.get("rules")
+                ?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?.mapNotNull { it as? JsonObject }
+                .orEmpty()
+            val hasEmbeddedRoute = embeddedRules.isNotEmpty()
+            // Its geo/IP rules only match a connection that already carries an IP, so they need the
+            // sniffed domain resolved first — exactly like the app's own profile rules.
+            val embeddedUsesIpRules = embeddedRules.any {
+                it["ip_cidr"] != null || it["rule_set"] != null || it["ip_is_private"] != null
+            }
+
             putJsonObject("route") {
-                put("final", if (routingProfile != null) SingBoxRouting.finalOutbound(routingProfile) else PROXY_TAG)
+                put(
+                    "final",
+                    when {
+                        hasEmbeddedRoute ->
+                            embeddedRoute?.get("final")?.jsonPrimitive?.contentOrNull ?: PROXY_TAG
+                        routingProfile != null -> SingBoxRouting.finalOutbound(routingProfile)
+                        else -> PROXY_TAG
+                    }
+                )
                 put("auto_detect_interface", autoDetectInterface)
 
                 putJsonArray("rules") {
@@ -607,7 +634,8 @@ object SingBoxConfig {
                     val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
                     if (allowLocalResolve &&
                         (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
-                            manualRulesUseIp || (sbExpert && routingProfile!!.singboxResolve))
+                            manualRulesUseIp || embeddedUsesIpRules ||
+                            (sbExpert && routingProfile!!.singboxResolve))
                     ) {
                         addJsonObject {
                             put("action", "resolve")
@@ -639,6 +667,11 @@ object SingBoxConfig {
                             }
                         }
                     }
+                    // The JSON subscription's own routing REPLACES the app's rules (profile, toggles,
+                    // manual and verbatim) — that's what "the config's routing comes first" means.
+                    if (hasEmbeddedRoute) {
+                        embeddedRules.forEach { add(it) }
+                    } else {
                     // Advanced verbatim user rules (highest precedence).
                     parseJsonArray(routing.customRulesJson).forEach { add(it) }
                     // Structured v2rayNG-style rules (in user-defined order, after verbatim JSON).
@@ -687,16 +720,25 @@ object SingBoxConfig {
                             put("outbound", "direct")
                         }
                     }
+                    }
                 }
 
                 // rule_set definitions, merged from the profile + the toggles, de-duplicated by tag
                 // (a profile `geoip:ru` and the bypassRussia toggle both want a `geoip-ru` set, and a
                 // duplicate tag is a hard config error in sing-box).
                 val mergedRuleSets = buildList {
-                    if (routingProfile != null) {
+                    // Rule-sets the embedded routing references (remote .srs) must be declared too.
+                    embeddedRoute?.get("rule_set")
+                        ?.let { runCatching { it.jsonArray }.getOrNull() }
+                        ?.forEach { (it as? JsonObject)?.let(::add) }
+                    // With embedded routing in charge, none of the app's rules are emitted — declaring
+                    // their rule-sets would be dead weight, and a same-tag set (geosite-ru!) would
+                    // override the one the config actually asked for.
+                    if (routingProfile != null && !hasEmbeddedRoute) {
                         SingBoxRouting.ruleSets(routingProfile, singboxGeositeBase, singboxGeoipBase)
                             .forEach { (it as? JsonObject)?.let(::add) }
                     }
+                    if (!hasEmbeddedRoute) {
                     parseJsonArray(routing.customRuleSetsJson).forEach { (it as? JsonObject)?.let(::add) }
                     // Geo rule-sets referenced by the structured v2rayNG rules.
                     SingBoxRouting.manualRuleSets(routing.rules, singboxGeositeBase, singboxGeoipBase)
@@ -725,6 +767,7 @@ object SingBoxConfig {
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs")
                             put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
                         })
+                    }
                     }
                 }.associateBy { it["tag"]?.jsonPrimitive?.contentOrNull ?: it.toString() }.values
                 if (mergedRuleSets.isNotEmpty()) {

@@ -129,6 +129,15 @@ data class ProxyProfile(
     @SerialName("raw_xray_config")
     val rawXrayConfig: String? = null,
     /**
+     * The `route` block of a full sing-box JSON subscription, normalized at import time: every rule's
+     * outbound is already rewritten to this app's own tags ("proxy"/"direct", or an `action: reject`),
+     * and `rule_set` definitions come along. When set, [SingBoxConfig] uses THESE rules instead of the
+     * app's routing profile/toggles — a JSON subscription's own routing takes precedence, the same way
+     * [rawXrayConfig] wins on the Xray core. Null = the config shipped no routing of its own.
+     */
+    @SerialName("raw_singbox_route")
+    val rawSingBoxRoute: String? = null,
+    /**
      * AmneziaWG wg-quick INI (with the Jc/Jmin/Jmax/S1/S2/H1..H4 obfuscation knobs) for
      * [TYPE_AMNEZIAWG]. The awgproxy module raises a local SOCKS5 from it that the proxy is
      * routed through — works as a standalone outbound and as a chain hop.
