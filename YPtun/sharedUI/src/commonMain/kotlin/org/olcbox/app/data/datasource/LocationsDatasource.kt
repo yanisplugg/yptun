@@ -1963,7 +1963,26 @@ class LocationsRepositoryImpl(
         // EITHER core — sing-box reproduces FakeDNS natively (dns.fakeip), so FakeDNS no longer needs
         // xray-core. Only an xhttp/splithttp transport (sing-box can't serve it) keeps the verbatim
         // Xray template + forced Xray core.
-        val typed = typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
+        // …UNLESS the config carries routing/DNS of its own. That is the whole point of a JSON
+        // subscription: its `routing.rules` and per-domain `dns.servers` express where traffic must go,
+        // and NEITHER survives the typed translation (a typed location gets the APP's routing profile
+        // instead). So whenever the JSON brings its own, keep the template verbatim on Xray —
+        // XrayConfig.prepareRaw then honors it and skips overlaying the app profile.
+        val ownRouting = root["routing"]?.jsonObjectOrNull()
+            ?.get("rules")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.isNotEmpty() == true
+        // Scoped DNS = a `dns.servers` entry that is an OBJECT (address + domains/expectIPs), i.e. a
+        // per-domain resolver split. Plain string servers are reproduced by the typed path just fine.
+        val ownScopedDns = root["dns"]?.jsonObjectOrNull()
+            ?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.any { it.jsonObjectOrNull() != null } == true
+        val bringsOwnRouting = ownRouting || ownScopedDns
+
+        val typed = if (bringsOwnRouting) {
+            null
+        } else {
+            typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
+        }
         val location = if (typed != null) {
             LocationConfig(
                 name = name,
@@ -1974,7 +1993,8 @@ class LocationsRepositoryImpl(
                 fakeDns = fakeDnsSpecFromXray(root),
             ).normalized()
         } else {
-            // Untranslatable (xhttp / unknown transport) → run the whole template verbatim on Xray.
+            // Untranslatable (xhttp / unknown transport) OR carrying its own routing/DNS → run the whole
+            // template verbatim on Xray.
             LocationConfig(
                 name = name,
                 description = description,
