@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="card head">
+    <button id="power" class="power" title="">
+      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+        <path d="M12 3v9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+        <path d="M6.5 6.6a8 8 0 1 0 11 0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+      </svg>
+    </button>
+    <div class="head-text">
+      <div id="active-name" class="name">YPtun VPN</div>
+      <div id="state" class="sub">…</div>
+    </div>
+  </header>
+
+  <section id="host-warning" class="card warn" hidden>
+    <div class="warn-title" id="warn-title"></div>
+    <div class="warn-hint" id="warn-hint"></div>
+    <code id="install-cmd"></code>
+    <button id="copy-cmd" class="ghost"></button>
+  </section>
+
+  <section class="card">
+    <div class="row-head">
+      <span id="lbl-servers"></span>
+      <button id="add" class="ghost">+</button>
+    </div>
+    <ul id="servers" class="servers"></ul>
+    <p id="empty" class="empty" hidden></p>
+  </section>
+
+  <section id="editor" class="card" hidden>
+    <input id="f-name" class="input" type="text">
+    <select id="f-kind" class="input">
+      <option value="vless">VLESS</option>
+      <option value="awg">AmneziaWG</option>
+    </select>
+    <textarea id="f-config" class="input mono" rows="4"></textarea>
+    <div class="row-end">
+      <button id="cancel" class="ghost"></button>
+      <button id="save" class="primary"></button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="row-head"><span id="lbl-settings"></span></div>
+    <label class="field"><span id="lbl-language"></span>
+      <select id="lang" class="input">
+        <option value="auto"></option>
+        <option value="ru">Русский</option>
+        <option value="en">English</option>
+      </select>
+    </label>
+    <label class="field"><span id="lbl-bypass"></span>
+      <textarea id="bypass" class="input mono" rows="2"></textarea>
+    </label>
+  </section>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
