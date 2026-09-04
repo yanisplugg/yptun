@@ -72,6 +72,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
+import org.olcbox.app.ui.i18n.AppLocale
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.data.importer.ShareLinkParser
@@ -368,6 +369,9 @@ class OlcboxVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Boot / QS tile / widget can start this service with no Activity ever created, and the
+        // language then never leaves its default -> notifications in the wrong language.
+        AppLocale.ensureLoaded(applicationContext)
         connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Olcbox::VpnWakeLock")

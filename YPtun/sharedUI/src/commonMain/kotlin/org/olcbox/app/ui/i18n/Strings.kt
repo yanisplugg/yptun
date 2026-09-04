@@ -531,6 +531,24 @@ interface Strings {
     val notifSplitTunnelError: String
     val notifStop: String
     val notifVkCaptcha: String
+
+    // Home-screen widget (rendered from a BroadcastReceiver, so it reads these instead of R.string).
+    val widgetDisconnected: String
+    val widgetNoLocation: String
+    val widgetSettingsTitle: String
+    val widgetTheme: String
+    val widgetThemeDark: String
+    val widgetThemeLight: String
+    val widgetThemeTransparent: String
+    val widgetOpacity: String
+    val widgetCorners: String
+    val widgetCornersSmall: String
+    val widgetCornersMedium: String
+    val widgetCornersRound: String
+    val widgetAccent: String
+    val widgetShowSpeed: String
+    val widgetShowControls: String
+    val widgetDone: String
     val vkCaptchaTitle: String
     val noFileSelected: String
     val qrImported: String
@@ -1144,6 +1162,23 @@ object RuStrings : Strings {
     override val notifSplitTunnelError = "Ошибка раздельного туннелирования"
     override val notifStop = "Стоп"
     override val notifVkCaptcha = "VK просит капчу — нажмите, чтобы решить"
+
+    override val widgetDisconnected = "Отключено"
+    override val widgetNoLocation = "Локация не выбрана"
+    override val widgetSettingsTitle = "Оформление виджета"
+    override val widgetTheme = "Тема"
+    override val widgetThemeDark = "Тёмная"
+    override val widgetThemeLight = "Светлая"
+    override val widgetThemeTransparent = "Прозрачная"
+    override val widgetOpacity = "Непрозрачность фона"
+    override val widgetCorners = "Скругление углов"
+    override val widgetCornersSmall = "Малое"
+    override val widgetCornersMedium = "Среднее"
+    override val widgetCornersRound = "Круглое"
+    override val widgetAccent = "Акцент"
+    override val widgetShowSpeed = "Показывать скорость"
+    override val widgetShowControls = "Кнопки «Авто» и ‹ ›"
+    override val widgetDone = "Готово"
     override val vkCaptchaTitle = "Капча VK"
     override val noFileSelected = "Файл не выбран"
     override val qrImported = "QR-код импортирован"
@@ -1740,6 +1775,23 @@ object EnStrings : Strings {
     override val notifSplitTunnelError = "Split tunneling error"
     override val notifStop = "Stop"
     override val notifVkCaptcha = "VK asks for a captcha — tap to solve"
+
+    override val widgetDisconnected = "Disconnected"
+    override val widgetNoLocation = "No server selected"
+    override val widgetSettingsTitle = "Widget appearance"
+    override val widgetTheme = "Theme"
+    override val widgetThemeDark = "Dark"
+    override val widgetThemeLight = "Light"
+    override val widgetThemeTransparent = "Transparent"
+    override val widgetOpacity = "Background opacity"
+    override val widgetCorners = "Corner radius"
+    override val widgetCornersSmall = "Small"
+    override val widgetCornersMedium = "Medium"
+    override val widgetCornersRound = "Round"
+    override val widgetAccent = "Accent"
+    override val widgetShowSpeed = "Show speed"
+    override val widgetShowControls = "Auto and ‹ › buttons"
+    override val widgetDone = "Done"
     override val vkCaptchaTitle = "VK captcha"
     override val noFileSelected = "No file selected"
     override val qrImported = "QR imported"
@@ -2336,6 +2388,23 @@ object FaStrings : Strings {
     override val notifSplitTunnelError = "خطای تونل‌سازی تفکیکی"
     override val notifStop = "توقف"
     override val notifVkCaptcha = "VK کپچا می‌خواهد — برای حل ضربه بزنید"
+
+    override val widgetDisconnected = "قطع شده"
+    override val widgetNoLocation = "سروری انتخاب نشده"
+    override val widgetSettingsTitle = "ظاهر ابزارک"
+    override val widgetTheme = "پوسته"
+    override val widgetThemeDark = "تیره"
+    override val widgetThemeLight = "روشن"
+    override val widgetThemeTransparent = "شفاف"
+    override val widgetOpacity = "کدری پس‌زمینه"
+    override val widgetCorners = "گردی گوشه‌ها"
+    override val widgetCornersSmall = "کم"
+    override val widgetCornersMedium = "متوسط"
+    override val widgetCornersRound = "گرد"
+    override val widgetAccent = "رنگ تأکید"
+    override val widgetShowSpeed = "نمایش سرعت"
+    override val widgetShowControls = "دکمه‌های خودکار و ‹ ›"
+    override val widgetDone = "تمام"
     override val vkCaptchaTitle = "کپچای VK"
     override val noFileSelected = "پرونده‌ای انتخاب نشد"
     override val qrImported = "QR وارد شد"
@@ -2932,6 +3001,23 @@ object ZhStrings : Strings {
     override val notifSplitTunnelError = "分应用代理错误"
     override val notifStop = "停止"
     override val notifVkCaptcha = "VK 要求验证码 — 点按解决"
+
+    override val widgetDisconnected = "已断开"
+    override val widgetNoLocation = "未选择服务器"
+    override val widgetSettingsTitle = "小组件外观"
+    override val widgetTheme = "主题"
+    override val widgetThemeDark = "深色"
+    override val widgetThemeLight = "浅色"
+    override val widgetThemeTransparent = "透明"
+    override val widgetOpacity = "背景不透明度"
+    override val widgetCorners = "圆角"
+    override val widgetCornersSmall = "小"
+    override val widgetCornersMedium = "中"
+    override val widgetCornersRound = "圆形"
+    override val widgetAccent = "强调色"
+    override val widgetShowSpeed = "显示速度"
+    override val widgetShowControls = "自动与 ‹ › 按钮"
+    override val widgetDone = "完成"
     override val vkCaptchaTitle = "VK 验证码"
     override val noFileSelected = "未选择文件"
     override val qrImported = "二维码已导入"
