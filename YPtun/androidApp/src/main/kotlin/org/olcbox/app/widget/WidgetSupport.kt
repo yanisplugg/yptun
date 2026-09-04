@@ -7,8 +7,11 @@ import android.content.Intent
 import android.net.Uri
 import android.net.VpnService
 import android.widget.RemoteViews
+import android.view.View
 import androidx.core.content.ContextCompat
 import org.olcbox.app.R
+import org.olcbox.app.ui.i18n.AppLocale
+import org.olcbox.app.ui.i18n.Strings
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.ui.features.locations.components.SpeedSample
@@ -36,12 +39,13 @@ object WidgetSupport {
     private const val TOGGLE_PROVIDER = "org.olcbox.app.widget.ToggleWidgetProvider"
     private const val STATUS_PROVIDER = "org.olcbox.app.widget.StatusWidgetProvider"
 
-    // Colours — kept in sync with the app's dark theme (OlcboxDarkColorScheme) and the notification.
-    private const val COLOR_CONNECTED = 0xFF2E7D32.toInt()   // green (same as the notif speed arrow)
+    // State colours — kept in sync with the app's theme and the notification. Everything else
+    // (background, text, idle icons) comes from the per-widget [WidgetStyle].
+    private const val COLOR_CONNECTED = 0xFF46C26B.toInt()   // green
     private const val COLOR_CONNECTING = 0xFFE0A030.toInt()  // amber
     private const val COLOR_IDLE = 0xFF6E7176.toInt()        // muted grey
-    private const val COLOR_TEXT_SECONDARY = 0xFFAEB1B6.toInt()
-    private const val COLOR_ACCENT = 0xFF3B8EF7.toInt()      // app primary (blue)
+    /** Alpha of the halo behind the power glyph — a tint of the state colour, not a solid disc. */
+    private const val HALO_ALPHA = 46
 
     // Distinct PendingIntent request codes so the entries never overwrite each other.
     private const val RC_TOGGLE_SIMPLE = 1001
@@ -68,10 +72,10 @@ object WidgetSupport {
         else -> COLOR_IDLE
     }
 
-    private fun stateLabel(context: Context): String = when {
-        isConnected -> context.getString(R.string.widget_state_connected)
-        isConnecting -> context.getString(R.string.widget_state_connecting)
-        else -> context.getString(R.string.widget_state_disconnected)
+    private fun stateLabel(s: Strings): String = when {
+        isConnected -> s.notifConnected
+        isConnecting -> s.notifConnecting
+        else -> s.widgetDisconnected
     }
 
     private fun speedLine(sample: SpeedSample): String =
@@ -90,7 +94,14 @@ object WidgetSupport {
     // Rendering
     // ──────────────────────────────────────────────────────────────────────
 
-    fun renderToggle(context: Context, views: RemoteViews) {
+    /** Tints an ImageView acting as a background/halo: colour first, then overall opacity. */
+    private fun RemoteViews.paint(viewId: Int, color: Int, alpha: Int = 255) {
+        setInt(viewId, "setColorFilter", color)
+        setInt(viewId, "setImageAlpha", alpha)
+    }
+
+    fun renderToggle(context: Context, views: RemoteViews, style: WidgetStyle) {
+        views.paint(R.id.widget_toggle_bg, style.backgroundColor, style.backgroundAlpha)
         views.setInt(R.id.widget_toggle_power, "setColorFilter", stateColor())
         views.setOnClickPendingIntent(
             R.id.widget_toggle_root,
@@ -101,28 +112,41 @@ object WidgetSupport {
     /**
      * Paints the status widget. [index] is the persisted location view-index (cheap to decode); the
      * active server's display name comes from it so the widget shows the right node even while down.
+     * [style] is this instance's look, [s] the strings for the language the user picked in the app
+     * (NOT the device locale — a widget repaint can be the first thing that starts the process).
      */
-    fun renderStatus(context: Context, views: RemoteViews, index: LocationViewIndex?) {
+    fun renderStatus(
+        context: Context,
+        views: RemoteViews,
+        index: LocationViewIndex?,
+        style: WidgetStyle,
+        s: Strings,
+    ) {
+        views.setImageViewResource(R.id.widget_status_bg, style.backgroundDrawable)
+        views.paint(R.id.widget_status_bg, style.backgroundColor, style.backgroundAlpha)
+        views.paint(R.id.widget_status_power_bg, stateColor(), HALO_ALPHA)
         views.setInt(R.id.widget_status_power, "setColorFilter", stateColor())
 
         val activeName = index?.items
             ?.firstOrNull { it.storageId == index.activeLocationId }
             ?.name
             ?.takeIf { it.isNotBlank() }
-        views.setTextViewText(
-            R.id.widget_status_name,
-            activeName ?: context.getString(R.string.widget_state_no_location)
-        )
+        views.setTextViewText(R.id.widget_status_name, activeName ?: s.widgetNoLocation)
+        views.setTextColor(R.id.widget_status_name, style.textPrimary)
 
-        val sub: String = if (isConnected) {
-            val speed = OlcboxVpnState.speed.value
-            if (speed.downBytesPerSec > 0 || speed.upBytesPerSec > 0) speedLine(speed)
-            else context.getString(R.string.widget_state_connected)
+        val speed = OlcboxVpnState.speed.value
+        val sub: String = if (isConnected && style.showSpeed &&
+            (speed.downBytesPerSec > 0 || speed.upBytesPerSec > 0)
+        ) {
+            speedLine(speed)
         } else {
-            stateLabel(context)
+            stateLabel(s)
         }
         views.setTextViewText(R.id.widget_status_sub, sub)
-        views.setTextColor(R.id.widget_status_sub, if (isConnected) COLOR_CONNECTED else COLOR_TEXT_SECONDARY)
+        views.setTextColor(
+            R.id.widget_status_sub,
+            if (isConnected) COLOR_CONNECTED else style.textSecondary
+        )
 
         views.setOnClickPendingIntent(
             R.id.widget_status_power,
@@ -130,25 +154,34 @@ object WidgetSupport {
         )
         views.setOnClickPendingIntent(R.id.widget_status_name, openAppIntent(context))
 
+        views.setViewVisibility(
+            R.id.widget_status_controls,
+            if (style.showControls) View.VISIBLE else View.GONE
+        )
+        if (!style.showControls) return
+
         // Auto = fastest server — runs entirely in the VPN service (ping pass + connect), no app
         // launch; the app is only opened when VPN consent is still missing.
-        views.setInt(R.id.widget_status_auto, "setColorFilter", COLOR_ACCENT)
+        views.setInt(R.id.widget_status_auto, "setColorFilter", style.accent)
         views.setOnClickPendingIntent(R.id.widget_status_auto, autoPendingIntent(context))
 
         val hasNodes = (index?.items?.size ?: 0) > 1
         if (hasNodes) {
             views.setOnClickPendingIntent(R.id.widget_status_prev, switchNodeIntent(context, forward = false))
             views.setOnClickPendingIntent(R.id.widget_status_next, switchNodeIntent(context, forward = true))
-            views.setInt(R.id.widget_status_prev, "setColorFilter", COLOR_TEXT_SECONDARY)
-            views.setInt(R.id.widget_status_next, "setColorFilter", COLOR_TEXT_SECONDARY)
+            views.setInt(R.id.widget_status_prev, "setColorFilter", style.textSecondary)
+            views.setInt(R.id.widget_status_next, "setColorFilter", style.textSecondary)
         } else {
             // Single (or no) server → dim the arrows and route taps to the app instead.
             views.setOnClickPendingIntent(R.id.widget_status_prev, openAppIntent(context))
             views.setOnClickPendingIntent(R.id.widget_status_next, openAppIntent(context))
-            views.setInt(R.id.widget_status_prev, "setColorFilter", COLOR_IDLE)
-            views.setInt(R.id.widget_status_next, "setColorFilter", COLOR_IDLE)
+            views.setInt(R.id.widget_status_prev, "setColorFilter", style.iconIdle)
+            views.setInt(R.id.widget_status_next, "setColorFilter", style.iconIdle)
         }
     }
+
+    /** Strings in the language chosen in the app, loading it from disk on first use in this process. */
+    fun strings(context: Context): Strings = AppLocale.strings(context)
 
     // ──────────────────────────────────────────────────────────────────────
     // PendingIntents
