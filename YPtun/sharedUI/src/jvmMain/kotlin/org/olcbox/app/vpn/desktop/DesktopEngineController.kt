@@ -432,8 +432,27 @@ internal class DesktopEngineController(
             val rawXray = effectiveProfile.rawXrayConfig
             var assetPath = ""
             val json = if (!rawXray.isNullOrBlank()) {
-                if (routingProfile != null) assetPath = ensureGeoAssetPath(routingProfile)
-                log("Starting Xray with custom config")
+                // A full user Xray config (JSON subscription) runs VERBATIM and its OWN routing wins —
+                // prepareRaw overlays the app's routing profile only into configs that ship none. To
+                // actually honor geosite:/geoip: selectors xray needs the geo .dat, so download it when
+                // the config references them (regardless of whether an app routing profile is active —
+                // that was the desktop bug: with no profile the asset path stayed empty and the config
+                // either failed to load or silently lost its geo rules). Stripping the selectors is the
+                // last-resort fallback for when the db genuinely can't be fetched, so it still loads.
+                val rawNeedsGeo = rawXray.contains("geosite:") || rawXray.contains("geoip:")
+                assetPath = when {
+                    rawNeedsGeo -> ensureRawConfigGeoAssetPath(routingProfile)
+                    routingProfile != null -> ensureGeoAssetPath(routingProfile)
+                    else -> ""
+                }
+                val stripGeo = rawNeedsGeo && assetPath.isEmpty()
+                log(
+                    "Starting Xray with custom config (embedded routing honored" +
+                        (if (rawNeedsGeo && assetPath.isNotEmpty()) ", geo db loaded for its geosite:/geoip:" else "") +
+                        (if (stripGeo) ", geo db unavailable -> geo selectors stripped" else "") +
+                        (if (routingProfile != null) " + routing profile '${routingProfile.displayName()}'" else "") +
+                        ")"
+                )
                 XrayConfig.prepareRaw(
                     rawConfigJson = rawXray,
                     listenPort = xrayPort,
@@ -442,6 +461,13 @@ internal class DesktopEngineController(
                     socksPassword = socksPassword,
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     fakeDnsEnabled = traffic.fakeDnsEnabled,
+                    stripGeoSelectors = stripGeo,
+                    // ipv4_only/prefer_ipv4 -> force the verbatim config's freedom outbounds + DNS to
+                    // IPv4, or a DIRECT-routed site still dials real IPv6 past the tunnel.
+                    forceIpv4 = traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
+                    // Cascade over a verbatim config: desktop LOGGED it but never passed it, so the 2nd
+                    // proxy was silently dropped for every raw config.
+                    secondProfile = secondProfile,
                 )
             } else {
                 assetPath = ensureGeoAssetPath(routingProfile)
@@ -1163,6 +1189,20 @@ internal class DesktopEngineController(
 
     // ---------------------------------------------------------------------------------------
     // Geo assets / routing-profile degradation (mirrors Android helpers)
+
+    /**
+     * Geo .dat for a VERBATIM user config's own geosite:/geoip: selectors. Unlike [ensureGeoAssetPath]
+     * this is NOT gated on an app routing profile — the config asked for geo matching itself, so the db
+     * is fetched from the profile's sources or the global defaults. Empty string = download failed
+     * (blocked network, nothing cached), and the caller then strips the selectors so the config loads.
+     */
+    private fun ensureRawConfigGeoAssetPath(profile: RoutingProfile?): String {
+        val state = JvmVpnSettings.loadRoutingProfiles()
+        val geoip = profile?.geoipUrl?.takeIf { it.isNotBlank() } ?: state.geoipUrl
+        val geosite = profile?.geositeUrl?.takeIf { it.isNotBlank() } ?: state.geositeUrl
+        val ok = runCatching { JvmGeoAssets.ensureAssets(geoip, geosite) }.getOrDefault(false)
+        return if (ok) JvmGeoAssets.assetDir().absolutePath else ""
+    }
 
     private fun ensureGeoAssetPath(profile: RoutingProfile?): String {
         if (profile == null || !profile.needsGeoFiles()) return ""
