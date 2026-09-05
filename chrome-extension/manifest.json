@@ -3,12 +3,30 @@
   "name": "YPtun VPN",
   "version": "3.4.2",
   "description": "Your VLESS location in Chrome — paste the link, the browser goes through the server. Nothing to install.",
-  "permissions": ["proxy", "storage", "webRequest", "webRequestAuthProvider"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js" },
+  "permissions": [
+    "proxy",
+    "storage",
+    "webRequest",
+    "webRequestAuthProvider"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_icon": { "16": "icons/16.png", "32": "icons/32.png", "128": "icons/128.png" }
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "128": "icons/128.png"
+    }
   },
-  "icons": { "16": "icons/16.png", "32": "icons/32.png", "128": "icons/128.png" }
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "128": "icons/128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5JrZDM4sl//laOKPg4vwIF8UtCkxgpEfTQE+SqjeFWw8ufdopOH2Cp/SC9WxJ3j0aXmsJWCZaPFJck7aDw4j4fDb5xZfkuI9D1/Y3cjO1vc2CuYkkWul2pQouLxRe5Vs7vpu0sWnOWFaKJiOSm9xMRag5Qxd7Zlz2ZY5147J7J4bVQMIyV7csEcY1fH2arWilU/Wx17oZygsmZtIqvLLAuHnGNwDzXowJCRlsKiSJ9uUxHq4svt36uOLZuyeqdsLsq0noPIF3dhESs4ux9EN/tS3n1bqEKuvLkuZHjlWK190XuZj9hn1RMJpXtk9b6gLjIt9YSAo2YOhjRatjrBY1wIDAQAB"
 }
