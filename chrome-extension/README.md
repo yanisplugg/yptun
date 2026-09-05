@@ -54,19 +54,14 @@
 
 ## Установка расширения
 
-Одним файлом: `python chrome-extension/pack.py` собирает `dist/YPtun-chrome-install.bat` —
-самораспаковывающийся установщик (распаковывает в `%LOCALAPPDATA%\YPtun\chrome-extension`,
-кладёт путь в буфер обмена и открывает `chrome://extensions`). Дальше три клика:
-«Режим разработчика» → «Загрузить распакованное» → Ctrl+V.
+Архив релиза (`python chrome-extension/pack.py` → `dist/yptun-chrome-<версия>.zip`) распаковать в
+любую постоянную папку, затем: `chrome://extensions` → «Режим разработчика» → «Загрузить
+распакованное» → указать эту папку. Папку не удалять и не переименовывать — расширение живёт в ней.
 
-Из исходников — то же самое вручную: `chrome://extensions` → «Режим разработчика» →
-«Загрузить распакованное» → папка `chrome-extension/`.
-
-**Почему не .crx одним кликом:** с Chrome 73 пакет ставится, только если подписан Chrome Web Store —
-самоподписанный даёт `CRX_REQUIRED_PROOF_MISSING`; локальный .crx через реестр Chrome тоже больше не
-берёт, а флаг `--load-extension` вырезан в Chrome 137. Бесплатно и без своего сайта остаётся только
-распакованная загрузка. Один клик = либо публикация в Web Store (разово $5), либо корпоративная
-политика `ExtensionInstallForcelist` со своим `update.xml` на своём домене.
+**Почему не установщик в один клик:** с Chrome 73 пакет ставится, только если подписан Chrome Web
+Store (иначе `CRX_REQUIRED_PROOF_MISSING`), локальный `.crx` через реестр Chrome тоже больше не
+берёт, а флаг `--load-extension` вырезан в Chrome 137. Один клик = либо публикация в Web Store
+(разово $5), либо корпоративная политика `ExtensionInstallForcelist` со своим `update.xml`.
 
 ID расширения зафиксирован полем `key` в манифесте: `liobljilajeajepjcoppcjghalnlgcjf`.
 
