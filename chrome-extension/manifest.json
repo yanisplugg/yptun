@@ -2,8 +2,9 @@
   "manifest_version": 3,
   "name": "YPtun VPN",
   "version": "3.4.2",
-  "description": "VLESS and AmneziaWG straight in Chrome — the tunnel runs in the YPtun native host, the browser goes through it.",
-  "permissions": ["proxy", "storage", "nativeMessaging", "alarms"],
+  "description": "Your VLESS location in Chrome — paste the link, the browser goes through the server. Nothing to install.",
+  "permissions": ["proxy", "storage", "webRequest", "webRequestAuthProvider"],
+  "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "action": {
     "default_popup": "popup.html",

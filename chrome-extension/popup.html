@@ -18,13 +18,6 @@
     </div>
   </header>
 
-  <section id="host-warning" class="card warn" hidden>
-    <div class="warn-title" id="warn-title"></div>
-    <div class="warn-hint" id="warn-hint"></div>
-    <code id="install-cmd"></code>
-    <button id="copy-cmd" class="ghost"></button>
-  </section>
-
   <section class="card">
     <div class="row-head">
       <span id="lbl-servers"></span>
@@ -36,11 +29,11 @@
 
   <section id="editor" class="card" hidden>
     <input id="f-name" class="input" type="text">
-    <select id="f-kind" class="input">
-      <option value="vless">VLESS</option>
-      <option value="awg">AmneziaWG</option>
-    </select>
-    <textarea id="f-config" class="input mono" rows="4"></textarea>
+    <textarea id="f-link" class="input mono" rows="3"></textarea>
+    <label class="field"><span id="lbl-port"></span>
+      <input id="f-port" class="input" type="number" min="1" max="65535" value="8443">
+    </label>
+    <p id="editor-error" class="empty" hidden></p>
     <div class="row-end">
       <button id="cancel" class="ghost"></button>
       <button id="save" class="primary"></button>

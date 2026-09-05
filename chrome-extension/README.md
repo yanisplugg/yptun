@@ -1,54 +1,83 @@
 # YPtun VPN — Chrome extension
 
-VLESS and AmneziaWG inside the browser. Chrome has no raw sockets, so an extension can never speak
-those protocols itself — it can only point `chrome.proxy` at a proxy. This extension therefore ships
-in two halves:
+**Ничего не нужно доустанавливать.** Расширение — чистый JS: ни нативного хоста, ни бинарников,
+ни команд в консоли. Пользователь вставляет свою ссылку `vless://…` и жмёт кнопку.
 
-| Part | What it does |
-| --- | --- |
-| `chrome-extension/` (this folder) | popup UI, server list, `chrome.proxy` control |
-| `cores/cmd/yptunhost` (Go binary) | runs xray (VLESS) or AmneziaWG locally, exposes ONE loopback SOCKS5 port |
+## Почему так, а не VLESS прямо в браузере
 
-Only the browser goes through the tunnel — the rest of the system is untouched (that's the point;
-for system-wide use, run the YPtun desktop app).
+У MV3-расширения нет сырых сокетов: ни TCP, ни UDP. Поэтому
 
-## Install
+* **VLESS в самом браузере невозможен** — `chrome.proxy` умеет только указать на прокси, до которого
+  Chrome дойдёт сам (HTTP/HTTPS/SOCKS). Раньше эту роль играл локальный `yptunhost` — он и был той
+  самой «доустановкой», теперь его нет.
+* **AmneziaWG невозможен в принципе** — это UDP, а UDP браузеру недоступен вообще
+  (Direct Sockets API есть только у Isolated Web Apps, а это тоже установка). Для AWG — приложение YPtun.
 
-1. Build the native host (needs the Go toolchain):
+Вместо локального туннеля прокси поднимается **на том же сервере**, где живёт VLESS: xray-инбаунд
+`http` под TLS. Chrome ходит в такой прокси нативно, трафик до сервера зашифрован TLS.
 
-   ```
-   cd cores
-   go build -o yptunhost.exe ./cmd/yptunhost      # Linux/macOS: -o yptunhost
-   ```
+## Что нужно на сервере (один раз)
 
-2. Load the extension: `chrome://extensions` → *Developer mode* → *Load unpacked* →
-   pick `chrome-extension/`.
+Рядом с VLESS-инбаундом добавить в `config.json`:
 
-3. Open the popup. It shows the exact registration command with its own extension ID:
+```json
+{
+  "tag": "browser-proxy",
+  "listen": "0.0.0.0",
+  "port": 8443,
+  "protocol": "http",
+  "settings": { "accounts": [{ "user": "ВАШ-UUID", "pass": "ВАШ-UUID" }] },
+  "streamSettings": {
+    "network": "tcp",
+    "security": "tls",
+    "tlsSettings": {
+      "certificates": [{
+        "certificateFile": "/etc/letsencrypt/live/ВАШ-ДОМЕН/fullchain.pem",
+        "keyFile": "/etc/letsencrypt/live/ВАШ-ДОМЕН/privkey.pem"
+      }]
+    }
+  }
+}
+```
 
-   ```
-   yptunhost.exe --install <extension-id>
-   ```
+Логин и пароль = UUID из `vless://` ссылки — по этой договорённости расширению хватает одной ссылки
+и ничего больше спрашивать не нужно.
 
-   Run it once (writes `org.yptun.host.json` next to the binary and registers it for
-   Chrome/Chromium/Edge/Yandex). Reopen the popup — the warning is gone.
+Требования:
 
-`yptunhost --uninstall` removes the registration.
+* **настоящий сертификат** на тот же домен, что стоит в ссылке. REALITY тут не годится — Chrome
+  проверяет цепочку по-честному;
+* порт по умолчанию **8443**; другой — либо в поле «Порт прокси» в попапе, либо прямо в ссылке:
+  `vless://uuid@host:443?...&proxyPort=9443#Berlin`.
 
-## Use
+Если сервер настроен иначе, можно вставить прокси-ссылку как есть: `https://логин:пароль@хост:порт`.
 
-Add a server (`+`): paste a `vless://…` link, or an AmneziaWG `[Interface] … [Peer] …` config.
-Pick it in the list, hit the power button. The badge turns green and the status line shows the
-local SOCKS5 port the browser is using.
+## Установка расширения
 
-**Bypass list** (Settings) — hosts that skip the tunnel, one per line; `localhost`, `127.0.0.1`,
-`[::1]` and `<local>` are always bypassed.
+`chrome://extensions` → «Режим разработчика» → «Загрузить распакованное» → папка `chrome-extension/`.
+Всё.
 
-**Language** — Auto (browser UI language) / Русский / English.
+## Как пользоваться
 
-## How it holds together
+`+` → вставить ссылку `vless://…` → «Сохранить» → выбрать локацию → кнопка питания.
+После включения расширение **проверяет прокси реальным запросом** и, если ответа нет, сразу снимает
+настройку — браузер никогда не остаётся с нерабочим прокси.
 
-The tunnel lives in the native host process, which Chrome starts and owns. When the extension's
-service worker is suspended the port closes and the host exits, so the extension pings it every 20 s
-(plus a 30 s alarm) to stay resident, and clears the proxy setting the moment the port drops — the
-browser is never left proxying into a dead port.
+**Исключения** (Настройки) — хосты мимо туннеля, по одному в строке; `localhost`, `127.0.0.1`,
+`[::1]` и `<local>` исключены всегда.
+**Язык** — Авто / Русский / English.
+
+## Известные ограничения
+
+* через тоннель идёт только трафик браузера (в этом и смысл; для системы — приложение YPtun);
+* WebRTC может ходить мимо прокси и светить реальный IP — при необходимости добавляется
+  `chrome.privacy.network.webRTCIPHandlingPolicy`;
+* QUIC/HTTP3 через HTTP-прокси не идёт — Chrome сам откатится на TCP.
+
+## Тест
+
+```
+node link.test.mjs
+```
+
+Проверяет разбор ссылок (`vless://`, `https://user:pass@…`, `proxyPort`, IPv6, мусор).

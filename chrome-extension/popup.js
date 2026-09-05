@@ -1,10 +1,11 @@
 import { strings } from "./i18n.js";
+import { parseLink } from "./link.js";
 
 const $ = (id) => document.getElementById(id);
 let S = strings("auto");
 let servers = [];
 let selected = null;
-let state = { connected: false, port: 0, serverId: null, error: "" };
+let state = { connected: false, serverId: null, via: "", error: "" };
 
 const ask = (msg) => chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: String(e) }));
 
@@ -15,14 +16,13 @@ function paintLabels() {
   $("lbl-settings").textContent = S.settings;
   $("lbl-language").textContent = S.language;
   $("lbl-bypass").textContent = S.bypass;
+  $("lbl-port").textContent = S.proxyPort;
   $("empty").textContent = S.noServers;
   $("add").title = S.add;
   $("save").textContent = S.save;
   $("cancel").textContent = S.cancel;
-  $("copy-cmd").textContent = S.copy;
-  $("warn-title").textContent = S.hostMissing;
-  $("warn-hint").textContent = S.hostHint;
   $("f-name").placeholder = S.name;
+  $("f-link").placeholder = S.link;
   $("lang").options[0].textContent = S.auto;
   paintState();
 }
@@ -37,7 +37,7 @@ function paintState() {
   sub.textContent = state.error
     ? state.error
     : state.connected
-      ? `${S.connected} · ${S.socksPort}${state.port}`
+      ? `${S.connected} · ${S.via} ${state.via}`
       : S.disconnected;
   power.title = state.connected ? S.disconnect : S.connect;
 }
@@ -49,7 +49,7 @@ function paintServers() {
   for (const srv of servers) {
     const li = document.createElement("li");
     li.className = srv.id === selected ? "active" : "";
-    li.onclick = () => { selected = srv.id; chrome.storage.local.set({ lastServerId: srv.id }); paintServers(); paintState(); };
+    li.onclick = () => { selected = srv.id; paintServers(); paintState(); };
 
     const name = document.createElement("span");
     name.className = "srv-name";
@@ -57,7 +57,7 @@ function paintServers() {
 
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.textContent = srv.kind === "awg" ? S.awg : S.vless;
+    chip.textContent = `${srv.host}:${srv.port}`;
 
     const del = document.createElement("button");
     del.className = "del";
@@ -65,11 +65,12 @@ function paintServers() {
     del.title = S.remove;
     del.onclick = async (e) => {
       e.stopPropagation();
+      if (state.connected && state.serverId === srv.id) await ask({ type: "disconnect" });
       servers = servers.filter((s) => s.id !== srv.id);
       if (selected === srv.id) selected = servers[0]?.id ?? null;
       await chrome.storage.local.set({ servers });
       paintServers();
-      paintState();
+      await refresh();
     };
 
     li.append(name, chip, del);
@@ -79,41 +80,22 @@ function paintServers() {
 
 // ── editor ─────────────────────────────────────────────────────────────────────
 
-function openEditor() {
-  $("editor").hidden = false;
-  $("f-name").value = "";
-  $("f-config").value = "";
-  syncConfigPlaceholder();
-  $("f-name").focus();
-}
-
-function syncConfigPlaceholder() {
-  $("f-config").placeholder = $("f-kind").value === "awg" ? S.configAwg : S.configVless;
-}
-
 async function saveServer() {
-  const config = $("f-config").value.trim();
-  if (!config) return;
-  const kind = $("f-kind").value;
-  const name = $("f-name").value.trim() || guessName(config, kind);
-  const srv = { id: crypto.randomUUID(), name, kind, config };
+  let parsed;
+  try {
+    parsed = parseLink($("f-link").value, Number($("f-port").value) || 8443);
+  } catch {
+    $("editor-error").textContent = S.badLink;
+    $("editor-error").hidden = false;
+    return;
+  }
+  const srv = { id: crypto.randomUUID(), ...parsed, name: $("f-name").value.trim() || parsed.name };
   servers.push(srv);
   selected = srv.id;
   await chrome.storage.local.set({ servers });
   $("editor").hidden = true;
   paintServers();
   paintState();
-}
-
-/** A readable fallback name: the vless:// fragment, or the AmneziaWG endpoint host. */
-function guessName(config, kind) {
-  if (kind === "vless") {
-    const hash = config.indexOf("#");
-    if (hash >= 0) return decodeURIComponent(config.slice(hash + 1)) || "VLESS";
-    return config.replace(/^vless:\/\/[^@]*@/, "").split(/[?#]/)[0] || "VLESS";
-  }
-  const ep = /Endpoint\s*=\s*(\S+)/i.exec(config);
-  return ep ? ep[1] : "AmneziaWG";
 }
 
 // ── wiring ─────────────────────────────────────────────────────────────────────
@@ -128,15 +110,20 @@ $("power").onclick = async () => {
     $("state").textContent = S.connecting;
     const reply = await ask({ type: "connect", serverId: selected });
     power.classList.remove("busy");
-    if (!reply?.ok) state = { ...state, connected: false, error: reply?.error || "" };
+    if (reply?.state) { state = reply.state; paintState(); return; }
   }
   await refresh();
 };
 
-$("add").onclick = openEditor;
+$("add").onclick = () => {
+  $("editor").hidden = false;
+  $("editor-error").hidden = true;
+  $("f-name").value = "";
+  $("f-link").value = "";
+  $("f-link").focus();
+};
 $("cancel").onclick = () => { $("editor").hidden = true; };
 $("save").onclick = saveServer;
-$("f-kind").onchange = syncConfigPlaceholder;
 
 $("lang").onchange = async () => {
   await chrome.storage.local.set({ lang: $("lang").value });
@@ -147,42 +134,20 @@ $("lang").onchange = async () => {
 
 $("bypass").onchange = () => chrome.storage.local.set({ bypass: $("bypass").value });
 
-$("copy-cmd").onclick = async () => {
-  await navigator.clipboard.writeText($("install-cmd").textContent);
-  $("copy-cmd").textContent = S.copied;
-  setTimeout(() => ($("copy-cmd").textContent = S.copy), 1500);
-};
-
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "state") { state = msg.state; paintState(); }
-});
-
 async function refresh() {
-  const fresh = await ask({ type: "state" });
-  if (fresh && typeof fresh.connected === "boolean") state = fresh;
+  const reply = await ask({ type: "state" });
+  if (reply?.state) state = reply.state;
   paintState();
 }
 
-/** The host is only reachable once it's registered; until then show the one-liner that does it. */
-async function checkHost() {
-  const probe = await ask({ type: "probe" });
-  const missing = !probe?.ok;
-  $("host-warning").hidden = !missing;
-  if (missing) {
-    const exe = navigator.userAgent.includes("Windows") ? "yptunhost.exe" : "./yptunhost";
-    $("install-cmd").textContent = `${exe} --install ${chrome.runtime.id}`;
-  }
-}
-
 (async function init() {
-  const store = await chrome.storage.local.get(["servers", "lastServerId", "lang", "bypass"]);
+  const store = await chrome.storage.local.get(["servers", "activeId", "lang", "bypass"]);
   servers = store.servers || [];
-  selected = store.lastServerId || servers[0]?.id || null;
+  selected = store.activeId || servers[0]?.id || null;
   $("lang").value = store.lang || "auto";
   $("bypass").value = store.bypass || "";
   S = strings($("lang").value);
   paintLabels();
   paintServers();
   await refresh();
-  await checkHost();
 })();

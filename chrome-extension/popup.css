@@ -98,14 +98,3 @@ body {
 .primary { background: var(--accent); border: 0; color: #fff; font-weight: 600; }
 .ghost { background: transparent; border: 1px solid var(--outline); color: var(--muted); }
 .ghost:hover { color: var(--text); border-color: var(--muted); }
-
-.warn { border-color: #5a4a1e; background: #201c12; }
-.warn-title { font-weight: 600; color: var(--amber); margin-bottom: 4px; }
-.warn-hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
-code {
-  display: block;
-  background: #101112; border: 1px solid var(--outline); border-radius: 8px;
-  padding: 7px 9px; margin-bottom: 8px;
-  font-family: Consolas, "Courier New", monospace; font-size: 11px;
-  word-break: break-all; color: var(--text);
-}
