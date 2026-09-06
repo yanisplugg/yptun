@@ -1040,7 +1040,8 @@ private fun runApp(args: Array<String>) = application {
                             host = socksProxySettings.host,
                             port = socksProxySettings.port,
                             username = socksProxySettings.username,
-                            password = socksProxySettings.password
+                            password = socksProxySettings.password,
+                            secured = socksProxySettings.secured
                         ),
                         splitTunnelSettings = splitTunnelSettings,
                         installedApps = installedApps,
@@ -1140,6 +1141,24 @@ private fun runApp(args: Array<String>) = application {
                                 dependencies.socksProxySettingsStore.save(newSettings)
                             }
                             desktopNotice = "SOCKS proxy saved"
+                            if (homeState.isVpnConnected) {
+                                dependencies.homeViewModel.restartVpnIfRunning()
+                            }
+                        },
+                        onSecuredProxyChanged = { on ->
+                            // Turning it off drops the credentials and moves the listener to the
+                            // standard proxy port (normalized() does both); turning it on seeds a
+                            // password so the form isn't empty.
+                            val newSettings = socksProxySettings.copy(
+                                secured = on,
+                                password = socksProxySettings.password.ifBlank {
+                                    if (on) generateDesktopProxyPassword() else ""
+                                }
+                            ).normalized()
+                            dependencies.vpnManager.updateSocksProxySettings(newSettings)
+                            scope.launch {
+                                dependencies.socksProxySettingsStore.save(newSettings)
+                            }
                             if (homeState.isVpnConnected) {
                                 dependencies.homeViewModel.restartVpnIfRunning()
                             }

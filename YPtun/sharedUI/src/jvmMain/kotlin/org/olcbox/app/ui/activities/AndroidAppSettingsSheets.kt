@@ -201,6 +201,7 @@ fun AppSettingsSheet(
     onModeSelected: (AndroidConnectionMode) -> Unit,
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
+    onSecuredProxyChanged: (Boolean) -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
     onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
@@ -372,7 +373,8 @@ fun AppSettingsSheet(
                     isConnectionActive = isConnectionActive,
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onProxySettingsSaved = onProxySettingsSaved,
-                    onProxyPasswordRegenerated = onProxyPasswordRegenerated
+                    onProxyPasswordRegenerated = onProxyPasswordRegenerated,
+                    onSecuredProxyChanged = onSecuredProxyChanged
                 )
 
                 AppSettingsRoute.SplitTunneling -> SplitTunnelingSettingsContent(
@@ -1147,7 +1149,8 @@ private fun SocksProxySettingsContent(
     isConnectionActive: Boolean,
     onBack: () -> Unit,
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
-    onProxyPasswordRegenerated: () -> Unit
+    onProxyPasswordRegenerated: () -> Unit,
+    onSecuredProxyChanged: (Boolean) -> Unit
 ) {
     var editedHost by remember(proxySettings.host) { mutableStateOf(proxySettings.host) }
     var editedPort by remember(proxySettings.port) { mutableStateOf(proxySettings.port.toString()) }
@@ -1179,6 +1182,26 @@ private fun SocksProxySettingsContent(
             subtitle = proxySettings.host,
             onBack = onBack
         )
+
+        Spacer(Modifier.height(20.dp))
+
+        // The local proxy is a SERVER the OS and browsers point at, and neither can answer a SOCKS
+        // auth challenge — so authentication is OFF by default and the listener sits on the standard
+        // proxy port. Turn it on only for clients that do speak SOCKS auth.
+        SettingsSwitchRow(
+            title = LocalStrings.current.securedSocksProxy,
+            value = if (proxySettings.secured) {
+                LocalStrings.current.securedSocksProxySubtitle
+            } else {
+                LocalStrings.current.securedSocksProxyOff
+            },
+            icon = Icons.Rounded.Key,
+            checked = proxySettings.secured,
+            enabled = enabled,
+            onCheckedChange = onSecuredProxyChanged
+        )
+
+        if (!proxySettings.secured) return@Column
 
         Spacer(Modifier.height(20.dp))
 

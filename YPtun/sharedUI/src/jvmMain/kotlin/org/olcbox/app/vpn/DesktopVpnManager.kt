@@ -536,21 +536,6 @@ class DesktopVpnManager private constructor(
         )
     }
 
-    fun updateSocksProxySettings(username: String, password: String, port: Int) {
-        val settings = DesktopSocksProxySettings(
-            port = port,
-            username = username,
-            password = password
-        ).normalized()
-        _socksProxySettings.value = settings
-        pacServer.updateSocksTarget(
-            socksHost = settings.host,
-            socksPort = settings.port,
-            socksUsername = settings.username,
-            socksPassword = settings.password
-        )
-    }
-
     fun updateSocksProxySettings(settings: DesktopSocksProxySettings) {
         val normalized = settings.normalized()
         _socksProxySettings.value = normalized

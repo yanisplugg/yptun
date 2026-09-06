@@ -358,6 +358,9 @@ interface Strings {
     // Connection / split tunneling
     val connectionMode: String
     val socks5Proxy: String
+    val securedSocksProxy: String
+    val securedSocksProxySubtitle: String
+    val securedSocksProxyOff: String
     val splitTunneling: String
     val routingBehavior: String
     val appsUsingYptun: String
@@ -1010,6 +1013,9 @@ object RuStrings : Strings {
     override val createCustomLocationSubtitle = "Комната, ключ, провайдер и транспорт"
     override val connectionMode = "Режим подключения"
     override val socks5Proxy = "SOCKS5-прокси"
+    override val securedSocksProxy = "Защищённый SOCKS-прокси"
+    override val securedSocksProxySubtitle = "Логин и пароль на своём порту"
+    override val securedSocksProxyOff = "Выключен · 127.0.0.1:8080 без авторизации"
     override val splitTunneling = "Раздельное туннелирование"
     override val routingBehavior = "Поведение маршрутизации"
     override val appsUsingYptun = "Приложения через YPtun"
@@ -1624,6 +1630,9 @@ object EnStrings : Strings {
     override val createCustomLocationSubtitle = "Enter room, key, provider, and transport"
     override val connectionMode = "Connection Mode"
     override val socks5Proxy = "SOCKS5 Proxy"
+    override val securedSocksProxy = "Secured SOCKS proxy"
+    override val securedSocksProxySubtitle = "Username and password on a port of your choosing"
+    override val securedSocksProxyOff = "Off · 127.0.0.1:8080, no authentication"
     override val splitTunneling = "Split Tunneling"
     override val routingBehavior = "Routing Behavior"
     override val appsUsingYptun = "Apps Using YPtun"
@@ -2238,6 +2247,9 @@ object FaStrings : Strings {
     override val createCustomLocationSubtitle = "اتاق، کلید، ارائه‌دهنده و حامل"
     override val connectionMode = "حالت اتصال"
     override val socks5Proxy = "پراکسی SOCKS5"
+    override val securedSocksProxy = "پراکسی SOCKS محافظت‌شده"
+    override val securedSocksProxySubtitle = "نام کاربری و رمز عبور روی پورت دلخواه"
+    override val securedSocksProxyOff = "خاموش · 127.0.0.1:8080 بدون احراز هویت"
     override val splitTunneling = "تونل‌سازی تفکیکی"
     override val routingBehavior = "رفتار مسیریابی"
     override val appsUsingYptun = "برنامه‌های استفاده‌کننده از YPtun"
@@ -2852,6 +2864,9 @@ object ZhStrings : Strings {
     override val createCustomLocationSubtitle = "输入房间、密钥、提供商和传输方式"
     override val connectionMode = "连接模式"
     override val socks5Proxy = "SOCKS5 代理"
+    override val securedSocksProxy = "受保护的 SOCKS 代理"
+    override val securedSocksProxySubtitle = "在自选端口上使用用户名和密码"
+    override val securedSocksProxyOff = "已关闭 · 127.0.0.1:8080，无需认证"
     override val splitTunneling = "分应用代理"
     override val routingBehavior = "分流行为"
     override val appsUsingYptun = "使用 YPtun 的应用"
