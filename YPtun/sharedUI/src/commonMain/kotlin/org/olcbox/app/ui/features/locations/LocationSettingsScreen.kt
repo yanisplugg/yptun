@@ -448,10 +448,15 @@ fun LocationSettingsScreen(
                 item {
                     // Своя кнопка рядом с комнатой и ключом: у olcRTC сервер задаётся ровно этими
                     // полями, и установка их же и заполняет.
-                    TextButton(
+                    OutlinedButton(
+                        onClick = { showOlcRtcInstall = true },
                         enabled = !isSaving,
-                        onClick = { showOlcRtcInstall = true }
-                    ) { Text("Установить olcRTC на VPS") }
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Установить olcRTC на VPS")
+                    }
                 }
             }
 
