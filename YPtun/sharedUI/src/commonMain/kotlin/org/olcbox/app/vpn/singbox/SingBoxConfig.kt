@@ -875,7 +875,12 @@ object SingBoxConfig {
                 put("inet6_range", fake6Range ?: "fc00::/18")
             }
             // `local` and `fakeip` answer without dialling anything — a detour there is meaningless.
-            if (detour != null && type != "local" && type != "fakeip") put("detour", detour)
+            // So is a detour to the bare `direct` outbound: 1.14 REFUSES to start on it ("detour to an
+            // empty direct outbound makes no sense"), and it was always a no-op anyway. Dropped here,
+            // at the one choke point every caller goes through, so no call site can reintroduce it.
+            if (detour != null && detour != "direct" && type != "local" && type != "fakeip") {
+                put("detour", detour)
+            }
         }
     }
 

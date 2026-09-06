@@ -302,3 +302,12 @@ kotlin {
         }
 }
 
+
+// Forwards -Dyptun.dumpConfigs=<dir> into the test JVM, so DumpDesktopConfigsTest can write the
+// generated sing-box configs out for a real `sing-box check` sweep (see singbox-114 notes).
+tasks.withType<Test>().configureEach {
+    System.getProperty("yptun.dumpConfigs")?.let {
+        systemProperty("yptun.dumpConfigs", it)
+        outputs.upToDateWhen { false } // a dump run must re-run even when nothing changed
+    }
+}

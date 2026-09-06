@@ -73,4 +73,25 @@ class SingBoxDnsFormatTest {
             .first { it["ip_is_private"] != null }
         assertEquals("olcrtc-out", privateRule["outbound"]!!.jsonPrimitive.content)
     }
+
+    /**
+     * The plain shape (no base tunnel) pointed the bootstrap resolver at the bare `direct` outbound.
+     * 1.14 refuses to start on that — "start dns/udp[direct]: detour to an empty direct outbound
+     * makes no sense" — which took down every desktop engine at once, since Xray is fronted by a
+     * sing-box TUN there.
+     */
+    @Test
+    fun noDnsServerDetoursToTheBareDirectOutbound() {
+        for (root in listOf(build(), build(olcrtcPort = 10811))) {
+            val servers = root["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+            assertTrue(
+                servers.none { it["detour"]?.jsonPrimitive?.content == "direct" },
+                "a DNS detour to the empty direct outbound is a fatal start error on 1.14",
+            )
+        }
+        // The never-bypass shape must still keep its bootstrap lookups inside the tunnel.
+        val chained = build(olcrtcPort = 10811)["dns"]!!.jsonObject["servers"]!!.jsonArray
+            .map { it.jsonObject }.first { it["tag"]!!.jsonPrimitive.content == "direct" }
+        assertEquals("olcrtc-out", chained["detour"]!!.jsonPrimitive.content)
+    }
 }
