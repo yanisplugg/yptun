@@ -885,7 +885,9 @@ internal class DesktopEngineController(
         val profilesState = JvmVpnSettings.loadRoutingProfiles()
         val routingProfile: RoutingProfile? = null
 
-        val chainProxy = if (outboundType == VkTurnConfig.OUTBOUND_WIREGUARD) {
+        // Chained exit proxy on top of the tunnel — WireGuard/WDTT AND AmneziaWG (the AWG branch
+        // below cascades it over the local AWG SOCKS, same as [wireguardBase] does for WG).
+        val chainProxy = if (outboundType != VkTurnConfig.OUTBOUND_PROXY) {
             vk.chainProxyLink.takeIf { it.isNotBlank() }
                 ?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
         } else null
@@ -951,10 +953,15 @@ internal class DesktopEngineController(
         } else {
             val json = when (outboundType) {
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
-                    log("VK-TURN exit: AmneziaWG over VK")
                     val awgSocks = prepareAmneziaWgProxy(exitProfile, listenPort)
+                    if (chainProxy != null) {
+                        log("VK-TURN chaining proxy ${chainProxy.displayName()} over AmneziaWG")
+                    } else {
+                        log("VK-TURN exit: AmneziaWG over VK")
+                    }
                     SingBoxConfig.build(
                         profile = awgSocks,
+                        secondProfile = chainProxy,
                         listenPort = listenPort,
                         listenHost = listenHost,
                         socksUsername = socksUsername,

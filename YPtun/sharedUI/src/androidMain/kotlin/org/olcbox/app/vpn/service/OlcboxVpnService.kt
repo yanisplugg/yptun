@@ -1901,10 +1901,10 @@ class OlcboxVpnService : VpnService() {
                 return true
             }
 
-            // Chained proxy on top of WireGuard (parsed once; reused by both cores). Applies to plain
-            // WireGuard AND to WDTT (which also exits via WireGuard) — a vless/trojan/ss link dialled
-            // THROUGH the WG-over-VK tunnel so the public exit is the proxy, not the VK/WDTT server.
-            val chainProxy = if (outboundType == VkTurnConfig.OUTBOUND_WIREGUARD) {
+            // Chained proxy on top of the tunnel (parsed once; reused by both cores). Applies to plain
+            // WireGuard, to WDTT (which also exits via WireGuard) AND to AmneziaWG — a vless/trojan/ss
+            // link dialled THROUGH the tunnel so the public exit is the proxy, not the VK/WDTT server.
+            val chainProxy = if (outboundType != VkTurnConfig.OUTBOUND_PROXY) {
                 val raw = vk.chainProxyLink.takeIf { it.isNotBlank() }
                 // Accept a normal share link (vless/vmess/trojan/ss) OR a yptun://inbound link (a whole
                 // shared LocationConfig) — pulling its EXIT proxy (proxy2 ?: proxy). Previously only
@@ -1929,9 +1929,13 @@ class OlcboxVpnService : VpnService() {
             // on a local SOCKS and the profile can split (proxy bucket over VK, direct bucket straight
             // out). Plain WireGuard / AmneziaWG / WDTT (no proxy) stay EXCLUDED (like olcRTC): they
             // tunnel everything through the WG-over-VK path with nothing to route against.
+            // AmneziaWG is excluded even with a chain proxy: its base is a local SOCKS, not a WG
+            // endpoint, so [directViaBase] has nothing to detour to and the profile's `direct` bucket
+            // would leak straight out of the tunnel.
             val routingProfile: RoutingProfile? =
-                if (outboundType == VkTurnConfig.OUTBOUND_PROXY || chainProxy != null)
-                    resolveProfileExpandingAsn(profilesState, config.routingProfileId)
+                if (outboundType == VkTurnConfig.OUTBOUND_PROXY ||
+                    (chainProxy != null && outboundType != VkTurnConfig.OUTBOUND_AMNEZIAWG)
+                ) resolveProfileExpandingAsn(profilesState, config.routingProfileId)
                 else null
 
             // The proxy whose core choice matters: the PROXY exit, or the WG chain proxy. AmneziaWG /
@@ -2004,10 +2008,17 @@ class OlcboxVpnService : VpnService() {
 
             val json = when (outboundType) {
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
-                    addLog("VK-TURN exit: AmneziaWG over VK")
                     val awgSocks = prepareAmneziaWgProxy(exitProfile)
+                    if (chainProxy != null) {
+                        addLog("VK-TURN chaining proxy ${chainProxy.displayName()} over AmneziaWG")
+                    } else {
+                        addLog("VK-TURN exit: AmneziaWG over VK")
+                    }
                     SingBoxConfig.build(
                         profile = awgSocks,
+                        // The chain proxy becomes the real exit and dials THROUGH the AWG SOCKS, same
+                        // cascade the WireGuard branch below gets via [wireguardBase].
+                        secondProfile = chainProxy,
                         listenPort = socksListenPort,
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,

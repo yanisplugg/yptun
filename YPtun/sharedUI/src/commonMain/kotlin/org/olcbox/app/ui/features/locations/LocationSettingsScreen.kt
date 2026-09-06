@@ -1282,9 +1282,10 @@ private fun LazyListScope.vkTurnSection(
         }
     }
 
-    // Optional proxy chained ON TOP of the WireGuard tunnel (WG outbound only). A toggle enables or
-    // disables it; turning it off clears the link so the composer falls back to plain WireGuard.
-    if (draft.outbound == VkTurnConfig.OUTBOUND_WIREGUARD) item {
+    // Optional proxy chained ON TOP of the tunnel — WireGuard AND AmneziaWG (a proxy exit needs no
+    // second hop). A toggle enables or disables it; turning it off clears the link so the composer
+    // falls back to the plain tunnel.
+    if (draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
         var proxyEnabled by remember(draft.chainProxyLink.isNotBlank()) {
             mutableStateOf(draft.chainProxyLink.isNotBlank())
         }
