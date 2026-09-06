@@ -9,12 +9,19 @@ let state = { connected: false, serverId: null, via: "", error: "" };
 
 const ask = (msg) => chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: String(e) }));
 
-/** Turns a probe code from the service worker into a sentence that names the actual problem. */
-function errorText(code, srv) {
-  const where = srv ? `${srv.host}:${srv.port}` : "";
-  if (code === "auth") return S.errAuth;
-  if (code === "unreachable") return S.errUnreachable.replace("%s", where);
+/** Turns an error code from the app or the probe into a sentence that names the actual problem. */
+function errorText(code) {
+  const known = {
+    "not-running": S.errNotRunning,
+    "bad-link": S.errBadLink,
+    "no-location": S.errNoLocation,
+    timeout: S.errTimeout,
+    "proxy-port-busy": S.errPortBusy,
+    "no-traffic": S.errNoTraffic,
+  };
+  if (known[code]) return known[code];
   const http = /^http:(\d+)$/.exec(code);
+  // Anything else is the app's own start failure, already a sentence (e.g. a core error).
   return http ? S.errHttp.replace("%s", http[1]) : code;
 }
 
@@ -43,10 +50,12 @@ function paintState() {
   const sub = $("state");
   sub.classList.toggle("on", state.connected);
   sub.textContent = state.error
-    ? errorText(state.error, active)
+    ? errorText(state.error)
     : state.connected
-      ? `${S.connected} · ${S.via} ${state.via}`
-      : S.disconnected;
+      ? `${S.connected}${state.location ? ` · ${state.location}` : ""}`
+      : state.app
+        ? `${S.disconnected} · ${state.app}`
+        : S.disconnected;
   power.title = state.connected ? S.disconnect : S.connect;
 }
 
@@ -65,7 +74,7 @@ function paintServers() {
 
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.textContent = `${srv.host}:${srv.port}`;
+    chip.textContent = srv.port ? `${srv.host}:${srv.port}` : srv.host;
 
     const del = document.createElement("button");
     del.className = "del";

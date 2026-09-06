@@ -116,6 +116,7 @@ import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.datasource.JvmLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.JvmLogExporter
+import org.olcbox.app.vpn.desktop.DesktopExtensionBridge
 import org.olcbox.app.vpn.desktop.isTilingCompositor
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.importer.JvmConfigImporter
@@ -185,7 +186,19 @@ private class DesktopAppDependencies {
 
     val locationViewModel = LocationViewModel(locationsRepository)
 
+    /**
+     * Loopback control API the Chrome extension drives. A browser extension has no sockets of its
+     * own, so this app IS the extension's engine: it pastes a link here and points chrome.proxy at
+     * the HTTP port the bridge raises. See [DesktopExtensionBridge].
+     */
+    val extensionBridge = DesktopExtensionBridge(
+        repository = locationsRepository,
+        vpnManager = vpnManager,
+        log = { line -> vpnManager.appendLog(line) },
+    ).also { it.start() }
+
     fun close() {
+        extensionBridge.stop()
         telegramProxy.close()
         vpnManager.close()
     }

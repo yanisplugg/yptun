@@ -1,37 +1,28 @@
-// A pasted link -> the proxy record Chrome can use directly.
+// A pasted link -> a display record. The link itself is what matters: it goes to the YPtun app
+// verbatim, which is the only thing that can actually speak it.
 //
-// `vless://uuid@host:443?...#name` names a server, not a proxy Chrome can speak to, so we apply the
-// convention the server side is set up with: the SAME host:port also answers as an xray `http`
-// inbound with the UUID as login AND password. Nothing for the user to pick — the port comes from
-// the link itself; `&proxyPort=` overrides it for a server that puts the http inbound elsewhere.
-// A plain `http(s)://user:pass@host:port` link is taken literally, for servers set up differently.
+// Nothing here decides how to connect any more. The old version derived an HTTP-proxy record from
+// the link by convention (same host, port 8443, UUID as user AND password) because Chrome could
+// only ever reach a proxy ON THE SERVER — which needed a second xray inbound with a real
+// certificate, and could never carry REALITY. Now the app connects and Chrome just uses the
+// loopback proxy it publishes, so every transport the app supports works unchanged.
+
+const SCHEMES = /^(vless|vmess|trojan|ss|ssh|hy2|hysteria2|tuic|wireguard|warp|yptun):\/\//i;
 
 export function parseLink(text) {
   const raw = String(text || "").trim();
-  const vless = /^vless:\/\//i.test(raw);
-  if (!vless && !/^https?:\/\//i.test(raw)) throw new Error("bad link");
+  if (!SCHEMES.test(raw)) throw new Error("bad link");
 
-  // Reparse under `yptun:` (a NON-special scheme) on purpose: the URL parser swallows an explicit
-  // `:443` on an `https:` URL as the scheme default, and we need the number the user actually wrote.
-  const u = new URL(raw.replace(/^[a-z]+:\/\//i, "yptun://"));
-  if (!u.hostname) throw new Error("bad link");
-
-  const secure = vless || /^https:/i.test(raw);
-  const override = Number(u.searchParams.get("proxyPort"));
-  const port = override || Number(u.port) || (secure ? 443 : 80);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("bad port");
-
-  const uuid = decodeURIComponent(u.username || "");
-  if (vless && !uuid) throw new Error("no uuid");
+  // Reparse under `yptun:` (a NON-special scheme) so an explicit `:443` survives — the URL parser
+  // swallows a default port on a special scheme, and the display chip would then lose it.
+  const u = new URL(raw.replace(/^[a-z0-9]+:\/\//i, "yptun://"));
+  const host = u.hostname.replace(/^\[|\]$/g, "");
+  if (!host) throw new Error("bad link");
 
   return {
-    name: decodeURIComponent(u.hash.slice(1)) || u.hostname,
-    // Only a starting guess: the same host:port may be a plain HTTP proxy, and connect() falls back
-    // to the other scheme on its own rather than asking.
-    scheme: secure ? "https" : "http",
-    host: u.hostname.replace(/^\[|\]$/g, ""), // chrome.proxy wants a bare IPv6 literal
-    port,
-    user: uuid,
-    pass: vless ? uuid : decodeURIComponent(u.password || ""),
+    name: decodeURIComponent(u.hash.slice(1)) || host,
+    host,
+    port: Number(u.port) || 0,
+    link: raw,
   };
 }

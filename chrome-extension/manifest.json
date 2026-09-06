@@ -2,14 +2,13 @@
   "manifest_version": 3,
   "name": "YPtun VPN",
   "version": "3.4.3",
-  "description": "Your VLESS location in Chrome — paste the link, the browser goes through the server. Nothing to install.",
+  "description": "Paste a link, switch it on: Chrome goes through your YPtun location — tcp, xhttp, TLS and REALITY included.",
   "permissions": [
     "proxy",
-    "storage",
-    "webRequest",
-    "webRequestAuthProvider"
+    "storage"
   ],
   "host_permissions": [
+    "http://127.0.0.1/*",
     "<all_urls>"
   ],
   "background": {
