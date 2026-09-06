@@ -18,6 +18,7 @@ function errorText(code) {
     timeout: S.errTimeout,
     "proxy-port-busy": S.errPortBusy,
     "no-traffic": S.errNoTraffic,
+    relink: S.errRelink,
   };
   if (known[code]) return known[code];
   const http = /^http:(\d+)$/.exec(code);

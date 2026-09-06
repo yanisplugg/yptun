@@ -29,6 +29,7 @@ const DICT = {
     errTimeout: "YPtun did not come up in time. Open the app and look at the log.",
     errPortBusy: "Port 47640 is taken by another program, so the extension has nowhere to send traffic.",
     errNoTraffic: "The tunnel is up but nothing goes through it. Check the location in YPtun itself.",
+    errRelink: "This location was saved by an older version and has no link — remove it and paste the link again.",
     errHttp: "The proxy answered HTTP %s.",
   },
   ru: {
@@ -59,6 +60,7 @@ const DICT = {
     errTimeout: "YPtun не поднялся вовремя. Откройте приложение и посмотрите журнал.",
     errPortBusy: "Порт 47640 занят другой программой — расширению некуда отправлять трафик.",
     errNoTraffic: "Туннель поднят, но трафик через него не идёт. Проверьте локацию в самом YPtun.",
+    errRelink: "Эта локация сохранена старой версией и не хранит ссылку — удалите её и вставьте ссылку заново.",
     errHttp: "Прокси ответил HTTP %s.",
   },
 };

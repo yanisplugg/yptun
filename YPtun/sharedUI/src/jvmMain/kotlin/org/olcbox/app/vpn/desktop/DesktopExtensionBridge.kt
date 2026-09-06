@@ -54,6 +54,12 @@ class DesktopExtensionBridge(
             return
         }
         srv.createContext("/") { ex -> handle(ex) }
+        // A cold /connect blocks for as long as the core takes to come up. On the default (single,
+        // dispatcher-thread) executor that would also stall the popup's /status polls, so give it a
+        // few threads: the extension never has more than a couple of requests in flight.
+        srv.executor = java.util.concurrent.Executors.newFixedThreadPool(4) { r ->
+            Thread(r, "YPtunExtensionBridge").apply { isDaemon = true }
+        }
         srv.start()
         server = srv
         log("Extension bridge listening on $LOOPBACK:$CONTROL_PORT")

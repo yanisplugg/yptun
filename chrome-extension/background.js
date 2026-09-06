@@ -77,6 +77,9 @@ async function connect(serverId) {
   const { servers = [] } = await chrome.storage.local.get("servers");
   const srv = servers.find((s) => s.id === serverId) || servers[0];
   if (!srv) return { ok: false, error: "no-location" };
+  // Records saved by the server-proxy version kept only host/port/user/pass, never the link itself —
+  // and the link is the only thing the app can act on now.
+  if (!srv.link) return { ok: false, error: "relink", state: await state("relink") };
   await chrome.storage.local.set({ activeId: srv.id });
 
   const reply = await call("/connect", srv.link);
