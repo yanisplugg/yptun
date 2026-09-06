@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YPtun VPN",
-  "version": "3.4.2",
+  "version": "3.4.3",
   "description": "Your VLESS location in Chrome — paste the link, the browser goes through the server. Nothing to install.",
   "permissions": [
     "proxy",
