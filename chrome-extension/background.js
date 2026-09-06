@@ -44,15 +44,20 @@ async function applyProxy(srv) {
 const clearProxy = () =>
   new Promise((r) => chrome.proxy.settings.clear({ scope: "regular" }, () => r(void chrome.runtime.lastError)));
 
-/** The only honest test that the server side is really there: fetch through the proxy we just set. */
+/**
+ * The only honest test that the server side is really there: fetch through the proxy we just set.
+ * Returns "" on success, else a CODE the popup turns into a sentence — the raw exception is always
+ * the useless "Failed to fetch", which is what made every failure here undiagnosable.
+ */
 async function probe() {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), PROBE_MS);
   try {
     const r = await fetch(PROBE_URL, { cache: "no-store", signal: ctl.signal });
-    return r.status < 400 ? "" : `HTTP ${r.status}`;
-  } catch (e) {
-    return String(e.message || e);
+    if (r.status < 400) return "";
+    return r.status === 407 ? "auth" : `http:${r.status}`;
+  } catch {
+    return "unreachable";
   } finally {
     clearTimeout(timer);
   }
@@ -83,13 +88,29 @@ async function connect(serverId) {
   if (!srv) return { ok: false, error: "no server" };
 
   await chrome.storage.local.set({ activeId: srv.id });
-  await applyProxy(srv);
-  const err = await probe();
-  if (err) {
-    await clearProxy(); // never leave the browser pointed at a proxy that doesn't answer
-    return { ok: false, error: err, state: await state(err) };
+
+  // The same host:port may serve the http inbound behind TLS or in the clear, and the vless link
+  // says nothing about it. Try the guess from the link, then the other one — cheaper than another
+  // field in the popup, and it's the whole reason "I set the right port and it still didn't
+  // connect" used to be a dead end.
+  const schemes = srv.scheme === "http" ? ["http", "https"] : ["https", "http"];
+  let err = "";
+  for (const scheme of schemes) {
+    await applyProxy({ ...srv, scheme });
+    err = await probe();
+    if (!err) {
+      if (scheme !== srv.scheme) {
+        // Remember what actually answered so the next connect gets it right on the first try.
+        await chrome.storage.local.set({
+          servers: servers.map((s) => (s.id === srv.id ? { ...s, scheme } : s)),
+        });
+      }
+      return { ok: true, state: await state() };
+    }
+    if (err === "auth") break; // we reached the proxy; the credentials are what's wrong
   }
-  return { ok: true, state: await state() };
+  await clearProxy(); // never leave the browser pointed at a proxy that doesn't answer
+  return { ok: false, error: err, state: await state(err) };
 }
 
 async function disconnect() {

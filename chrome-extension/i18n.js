@@ -12,7 +12,6 @@ const DICT = {
     add: "Add location",
     name: "Name (optional)",
     link: "vless://… link for your location",
-    proxyPort: "Proxy port on the server",
     save: "Save",
     cancel: "Cancel",
     remove: "Remove",
@@ -23,6 +22,9 @@ const DICT = {
     auto: "Auto",
     via: "via",
     badLink: "Not a vless:// or https:// link",
+    errAuth: "The proxy rejected the login — the server must accept the link's UUID as user and password.",
+    errUnreachable: "%s does not answer. The server needs an xray http inbound on that port, and over TLS it needs a real certificate (Chrome will not accept REALITY or a self-signed one).",
+    errHttp: "The proxy answered HTTP %s.",
   },
   ru: {
     title: "YPtun VPN",
@@ -35,7 +37,6 @@ const DICT = {
     add: "Добавить локацию",
     name: "Название (необязательно)",
     link: "Ссылка vless://… на вашу локацию",
-    proxyPort: "Порт прокси на сервере",
     save: "Сохранить",
     cancel: "Отмена",
     remove: "Удалить",
@@ -46,6 +47,9 @@ const DICT = {
     auto: "Авто",
     via: "через",
     badLink: "Это не ссылка vless:// или https://",
+    errAuth: "Прокси отклонил логин — сервер должен принимать UUID из ссылки как логин и пароль.",
+    errUnreachable: "%s не отвечает. На сервере нужен http-inbound xray на этом порту, а под TLS — настоящий сертификат (REALITY и самоподписанный Chrome не примет).",
+    errHttp: "Прокси ответил HTTP %s.",
   },
 };
 

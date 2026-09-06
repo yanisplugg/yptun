@@ -9,6 +9,15 @@ let state = { connected: false, serverId: null, via: "", error: "" };
 
 const ask = (msg) => chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: String(e) }));
 
+/** Turns a probe code from the service worker into a sentence that names the actual problem. */
+function errorText(code, srv) {
+  const where = srv ? `${srv.host}:${srv.port}` : "";
+  if (code === "auth") return S.errAuth;
+  if (code === "unreachable") return S.errUnreachable.replace("%s", where);
+  const http = /^http:(\d+)$/.exec(code);
+  return http ? S.errHttp.replace("%s", http[1]) : code;
+}
+
 // ── rendering ──────────────────────────────────────────────────────────────────
 
 function paintLabels() {
@@ -16,7 +25,6 @@ function paintLabels() {
   $("lbl-settings").textContent = S.settings;
   $("lbl-language").textContent = S.language;
   $("lbl-bypass").textContent = S.bypass;
-  $("lbl-port").textContent = S.proxyPort;
   $("empty").textContent = S.noServers;
   $("add").title = S.add;
   $("save").textContent = S.save;
@@ -35,7 +43,7 @@ function paintState() {
   const sub = $("state");
   sub.classList.toggle("on", state.connected);
   sub.textContent = state.error
-    ? state.error
+    ? errorText(state.error, active)
     : state.connected
       ? `${S.connected} · ${S.via} ${state.via}`
       : S.disconnected;
@@ -83,7 +91,7 @@ function paintServers() {
 async function saveServer() {
   let parsed;
   try {
-    parsed = parseLink($("f-link").value, Number($("f-port").value) || 8443);
+    parsed = parseLink($("f-link").value);
   } catch {
     $("editor-error").textContent = S.badLink;
     $("editor-error").hidden = false;
