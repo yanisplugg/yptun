@@ -1,7 +1,9 @@
 package org.olcbox.app.vpn.singbox
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -215,6 +217,18 @@ object SingBoxConfig {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
         val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
+        // Base tunnel exit tag (WG for VK-TURN, olcRTC SOCKS for Chain/dnstt) — the transport that
+        // [directViaBase] traffic must ride instead of the real network.
+        val baseExitTag = when {
+            wireguardBase != null -> WG_BASE_TAG
+            olcrtcChainPort != null -> OLCRTC_TAG
+            else -> null
+        }
+        val directDialsBase = directViaBase && baseExitTag != null
+        // sing-box 1.14 refuses a `detour` on the `direct` outbound ("`detour` is not supported in
+        // direct context"), which is how the never-bypass tunnels used to keep their `direct` bucket
+        // inside the tunnel. Same effect, legal shape: point that bucket at the base tunnel BY TAG.
+        val directTag = if (directDialsBase) baseExitTag!! else "direct"
         // FakeDNS is on when either the (legacy global) traffic toggle is set OR this location carries a
         // translated spec. The pool ranges come from the spec when present, else the defaults.
         val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null || forceFakeDns
@@ -235,49 +249,39 @@ object SingBoxConfig {
                     val remoteDnsAddress =
                         if (remoteDnsOverHttps && !traffic.remoteDns.contains("://")) "https://${traffic.remoteDns}/dns-query"
                         else traffic.remoteDns
-                    // Under a strict family (ipv4_only/ipv6_only) pin the server strategy so it never
-                    // fires the opposite-family query at all. Without this every connection wastes an
-                    // extra AAAA round-trip that's then "strategy rejected" — doubling DNS load over the
-                    // single DoT channel and slowing page loads. FakeDNS keeps both families (it fakes
-                    // AAAA deliberately), so skip the pin then.
-                    val familyStrategy = effectiveStrategy
-                        .takeIf { !fakeEnabled && (it == "ipv4_only" || it == "ipv6_only") }
-                    addJsonObject {
-                        put("tag", "remote")
-                        // Compose both: DoH-ify (desktop) THEN rewrite a bare-IP/udp resolver to TCP
-                        // (Beta). maybeTcpDns is a no-op for a `https://…` DoH address, so order is safe.
-                        put("address", maybeTcpDns(remoteDnsAddress, preferTcpRemoteDns))
-                        put("detour", PROXY_TAG)
-                        if (familyStrategy != null) put("strategy", familyStrategy)
-                    }
+                    // Compose both: DoH-ify (desktop) THEN rewrite a bare-IP/udp resolver to TCP
+                    // (Beta). maybeTcpDns is a no-op for a `https://…` DoH address, so order is safe.
+                    // Under a strict family the per-server `strategy` pin used to stop the wasted
+                    // AAAA round-trip; 1.14 dropped that field from the typed servers, and the global
+                    // `dns.strategy` below (same value) is what pins it now.
+                    addDnsServer(
+                        tag = "remote",
+                        address = maybeTcpDns(remoteDnsAddress, preferTcpRemoteDns),
+                        detour = PROXY_TAG,
+                    )
                     // Optional second remote resolver (also via the proxy) — a fallback for "remote".
                     if (traffic.remoteDns2.isNotBlank()) {
-                        addJsonObject {
-                            put("tag", "remote2")
-                            put("address", maybeTcpDns(traffic.remoteDns2, preferTcpRemoteDns))
-                            put("detour", PROXY_TAG)
-                        }
+                        addDnsServer(
+                            tag = "remote2",
+                            address = maybeTcpDns(traffic.remoteDns2, preferTcpRemoteDns),
+                            detour = PROXY_TAG,
+                        )
                     }
                     // Bootstrap: resolve the proxy server's own domain directly.
-                    addJsonObject {
-                        put("tag", "direct")
-                        put("address", traffic.directDns)
-                        put("detour", "direct")
-                    }
+                    addDnsServer(tag = "direct", address = traffic.directDns, detour = directTag)
                     // FakeDNS equivalent: hand out synthetic IPs so apps never see the real address;
-                    // the sniffed domain is resolved behind the proxy.
+                    // the sniffed domain is resolved behind the proxy. In 1.14 the pool ranges live on
+                    // the server itself — the top-level `dns.fakeip` block is gone with the legacy format.
                     if (fakeEnabled) {
-                        addJsonObject {
-                            put("tag", "fake")
-                            put("address", "fakeip")
-                        }
+                        addDnsServer(
+                            tag = "fake",
+                            address = "fakeip",
+                            fake4Range = fake4Range,
+                            fake6Range = fake6Range,
+                        )
                     }
                 }
                 putJsonArray("rules") {
-                    addJsonObject {
-                        put("outbound", "any")
-                        put("server", "direct")
-                    }
                     // Route BOTH A and AAAA to the fake server. Faking AAAA even under ipv4_only is
                     // deliberate: it hands the app a fake IPv6 (fc00::/18) instead of letting it learn the
                     // server's REAL IPv6, which the strict `::/0 reject` would then kill ("ERR_CONNECTION"
@@ -293,15 +297,6 @@ object SingBoxConfig {
                             put("server", "fake")
                         }
                     }
-                }
-                if (fakeEnabled) {
-                    putJsonObject("fakeip") {
-                        put("enabled", true)
-                        put("inet4_range", fake4Range)
-                        put("inet6_range", fake6Range)
-                    }
-                    // Separate fake/real caches so a fakeip answer never poisons a direct lookup.
-                    put("independent_cache", true)
                 }
                 put("final", "remote")
                 // ipv4_only override (VK-TURN): the WireGuard tunnel is IPv4-only, so resolving
@@ -390,14 +385,6 @@ object SingBoxConfig {
             putJsonArray("outbounds") {
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
                 val baseDetour = if (wgBaseEndpoint != null) WG_BASE_TAG else null
-                // Base tunnel exit tag (WG for VK-TURN, dnstt SOCKS for dnstt) — keeps `direct` traffic on
-                // the tunnel when [directViaBase].
-                val baseExitTag = when {
-                    wgBaseEndpoint != null -> WG_BASE_TAG
-                    olcrtcChainPort != null -> OLCRTC_TAG
-                    else -> null
-                }
-                val directDialsBase = directViaBase && baseExitTag != null
                 val second = secondProfile?.takeIf { it.isComplete() }
                 if (second != null) {
                     // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG), which dials THROUGH the
@@ -444,9 +431,8 @@ object SingBoxConfig {
                 addJsonObject {
                     put("type", "direct")
                     put("tag", "direct")
-                    // VK-TURN / dnstt: route `direct` traffic THROUGH the base tunnel (dnstt-server / VK
-                    // exit) instead of the real interface, so routing never bypasses the tunnel.
-                    if (directDialsBase) put("detour", baseExitTag)
+                    // (VK-TURN / dnstt keep `direct` traffic inside the tunnel by routing it to
+                    // [directTag] — this outbound stays a plain, detour-free direct.)
                     // IPv6-leak guard for HYBRID modes (prefer_ipv4/prefer_ipv6): the direct/bypass path
                     // (domain:ru → direct) would otherwise dial the user's REAL IPv6 for dual-stack sites,
                     // exposing it on a leak check ("domain:ru goes direct only over IPv4, IPv6 leaks").
@@ -455,8 +441,13 @@ object SingBoxConfig {
                     // connection is dialed as IPv4. Proxied traffic is untouched (still dual-stack via the
                     // proxy's own IP — no user-IP leak there). ipv4_only/ipv6_only already pin a family
                     // globally (route reject), so only the prefer_* hybrids need this.
+                    // A bare dial-field `domain_strategy` is the legacy form (deprecated since 1.12);
+                    // 1.14 wants it inside `domain_resolver`.
                     if (effectiveStrategy == "prefer_ipv4" || effectiveStrategy == "prefer_ipv6") {
-                        put("domain_strategy", "ipv4_only")
+                        putJsonObject("domain_resolver") {
+                            put("server", "direct")
+                            put("strategy", "ipv4_only")
+                        }
                     }
                 }
             }
@@ -492,11 +483,15 @@ object SingBoxConfig {
                     when {
                         hasEmbeddedRoute ->
                             embeddedRoute?.get("final")?.jsonPrimitive?.contentOrNull ?: PROXY_TAG
-                        routingProfile != null -> SingBoxRouting.finalOutbound(routingProfile)
+                        routingProfile != null -> SingBoxRouting.finalOutbound(routingProfile, directTag)
                         else -> PROXY_TAG
                     }
                 )
                 put("auto_detect_interface", autoDetectInterface)
+                // Bootstrap for outbounds dialling a DOMAIN (the proxy server's own hostname): resolve
+                // it with the direct resolver, never through the tunnel we haven't built yet. Replaces
+                // the legacy `{"outbound":"any","server":"direct"}` DNS rule, deprecated since 1.12.
+                putJsonObject("default_domain_resolver") { put("server", "direct") }
 
                 putJsonArray("rules") {
                     // Expert per-core overrides (sing-box): explicit sniff/resolve/strategy control.
@@ -526,12 +521,12 @@ object SingBoxConfig {
                         when (splitTunnelMode) {
                             SPLIT_TUNNEL_BYPASS -> addJsonObject {
                                 putJsonArray("process_name") { splitProcesses.forEach { add(it) } }
-                                put("outbound", "direct")
+                                put("outbound", directTag)
                             }
                             SPLIT_TUNNEL_PROXY -> addJsonObject {
                                 putJsonArray("process_name") { splitProcesses.forEach { add(it) } }
                                 put("invert", true)
-                                put("outbound", "direct")
+                                put("outbound", directTag)
                             }
                         }
                     }
@@ -614,7 +609,7 @@ object SingBoxConfig {
                     if (routingProfile != null || routing.bypassLan) {
                         addJsonObject {
                             put("ip_is_private", true)
-                            put("outbound", "direct")
+                            put("outbound", directTag)
                         }
                     }
                     // sing-box 1.11+: ip_cidr/geoip rules only match a connection that already carries
@@ -670,12 +665,23 @@ object SingBoxConfig {
                     // The JSON subscription's own routing REPLACES the app's rules (profile, toggles,
                     // manual and verbatim) — that's what "the config's routing comes first" means.
                     if (hasEmbeddedRoute) {
-                        embeddedRules.forEach { add(it) }
+                        // Its `direct` bucket must ride the base tunnel too when the tunnel is
+                        // mandatory — the detoured `direct` outbound that used to do this is illegal
+                        // on 1.14, so retag here exactly like the app's own rules above.
+                        embeddedRules.forEach { rule ->
+                            add(
+                                if (directTag != "direct" &&
+                                    rule["outbound"]?.jsonPrimitive?.contentOrNull == "direct"
+                                ) {
+                                    JsonObject(rule + ("outbound" to JsonPrimitive(directTag)))
+                                } else rule
+                            )
+                        }
                     } else {
                     // Advanced verbatim user rules (highest precedence).
                     parseJsonArray(routing.customRulesJson).forEach { add(it) }
                     // Structured v2rayNG-style rules (in user-defined order, after verbatim JSON).
-                    SingBoxRouting.manualRules(routing.rules, matchAppsByProcess).forEach { add(it) }
+                    SingBoxRouting.manualRules(routing.rules, matchAppsByProcess, directTag).forEach { add(it) }
                     // Blocking toggles first so ads/blocked domains die even if a profile bucket would proxy them.
                     if (routing.blockDomains.isNotEmpty()) {
                         addJsonObject {
@@ -705,19 +711,20 @@ object SingBoxConfig {
                     // sites never egress over the user's real IPv6 (proxied traffic keeps dual-stack).
                     if (routingProfile != null) {
                         val hideDirectV6 = effectiveStrategy == "prefer_ipv4" || effectiveStrategy == "prefer_ipv6"
-                        SingBoxRouting.rules(routingProfile, hideDirectIpv6 = hideDirectV6).forEach { add(it) }
+                        SingBoxRouting.rules(routingProfile, hideDirectIpv6 = hideDirectV6, directTag = directTag)
+                            .forEach { add(it) }
                     }
                     // Direct conveniences last (a profile proxy rule above still wins on first match).
                     if (routing.directDomains.isNotEmpty()) {
                         addJsonObject {
                             putJsonArray("domain_suffix") { routing.directDomains.forEach { add(it) } }
-                            put("outbound", "direct")
+                            put("outbound", directTag)
                         }
                     }
                     if (routing.bypassRussia) {
                         addJsonObject {
                             putJsonArray("rule_set") { add("geoip-ru"); add("geosite-ru") }
-                            put("outbound", "direct")
+                            put("outbound", directTag)
                         }
                     }
                     }
@@ -808,6 +815,70 @@ object SingBoxConfig {
      * addresses are left untouched; special keywords ("fakeip"/"local") too.
      *   "8.8.8.8" → "tcp://8.8.8.8"  ·  "udp://1.1.1.1" → "tcp://1.1.1.1"  ·  "https://…" → unchanged
      */
+    /**
+     * Emits ONE `dns.servers` entry in the sing-box 1.14 form.
+     *
+     * 1.14.0 hard-rejects the legacy `{"address": "tls://1.1.1.1"}` shape ("legacy DNS server formats
+     * … removed in sing-box 1.14.0"), so the scheme that used to live in the address string is now the
+     * `type` field and the rest is split into `server` / `server_port` / `path`. Everything the app
+     * can put in a resolver box goes through here: bare IP/host (udp), udp/tcp/tls/quic/h3/https URLs,
+     * `local`, `fakeip`, and `dhcp://<iface>`.
+     */
+    private fun JsonArrayBuilder.addDnsServer(
+        tag: String,
+        address: String,
+        detour: String? = null,
+        fake4Range: String? = null,
+        fake6Range: String? = null,
+    ) {
+        val raw = address.trim()
+        val scheme = raw.substringBefore("://", "").lowercase()
+        val rest = if (scheme.isEmpty()) raw else raw.substringAfter("://")
+        val hostPart = rest.substringBefore("/")
+        val path = rest.substringAfter("/", "").let { if (it.isBlank()) null else "/$it" }
+        // Split host:port. A bare IPv6 literal has many colons and no port; a bracketed one has its
+        // port after the closing bracket.
+        val bracketEnd = hostPart.lastIndexOf(']')
+        val portSep = when {
+            bracketEnd >= 0 -> hostPart.indexOf(':', bracketEnd)
+            hostPart.count { it == ':' } == 1 -> hostPart.indexOf(':')
+            else -> -1
+        }
+        val host = if (portSep > 0) hostPart.substring(0, portSep) else hostPart
+        val port = if (portSep > 0) hostPart.substring(portSep + 1).toIntOrNull() else null
+
+        val type = when {
+            scheme.isNotEmpty() -> scheme
+            raw.equals("local", true) || raw.equals("localhost", true) -> "local"
+            raw.equals("fakeip", true) -> "fakeip"
+            raw.isBlank() -> "local"
+            else -> "udp"
+        }
+        addJsonObject {
+            put("tag", tag)
+            put("type", type)
+            when (type) {
+                "local", "fakeip" -> Unit // no server address at all
+                "dhcp" -> if (host.isNotBlank() && !host.equals("auto", true)) put("interface", host)
+                else -> {
+                    put("server", host.removePrefix("[").removeSuffix("]"))
+                    if (port != null) put("server_port", port)
+                    // Only DoH/DoH3 carry a URL path; the default is /dns-query, so emit it only when
+                    // the user's address actually names a different one.
+                    if (path != null && path != "/dns-query" && (type == "https" || type == "h3")) {
+                        put("path", path)
+                    }
+                }
+            }
+            if (type == "fakeip") {
+                put("inet4_range", fake4Range ?: "198.18.0.0/15")
+                put("inet6_range", fake6Range ?: "fc00::/18")
+            }
+            // `local` and `fakeip` answer without dialling anything — a detour there is meaningless.
+            if (detour != null && type != "local" && type != "fakeip") put("detour", detour)
+        }
+    }
+
     private fun maybeTcpDns(address: String, preferTcp: Boolean): String {
         if (!preferTcp) return address
         val a = address.trim()

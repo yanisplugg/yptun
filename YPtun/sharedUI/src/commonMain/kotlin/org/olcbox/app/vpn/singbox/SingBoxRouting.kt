@@ -66,7 +66,16 @@ object SingBoxRouting {
      * proxied traffic keeps its dual-stack. (ipv4_only already rejects ::/0 globally; ipv6_only wants
      * v6 — so the caller only sets this for the prefer_* hybrids.)
      */
-    fun rules(profile: RoutingProfile, hideDirectIpv6: Boolean = false): JsonArray = buildJsonArray {
+    /**
+     * [directTag] is normally [DIRECT_TAG], but a tunnel that must never be bypassed (VK-TURN /
+     * dnstt / olcRTC with `directViaBase`) passes its base tunnel's tag instead: sing-box 1.14 forbids
+     * a `detour` on the `direct` outbound, so the "direct" bucket is pointed at the tunnel by TAG.
+     */
+    fun rules(
+        profile: RoutingProfile,
+        hideDirectIpv6: Boolean = false,
+        directTag: String = DIRECT_TAG,
+    ): JsonArray = buildJsonArray {
         val order = profile.routeOrder.split('-')
             .map { it.trim().lowercase() }
             .filter { it in RoutingProfile.DEFAULT_ORDER }
@@ -80,7 +89,7 @@ object SingBoxRouting {
                     if (hideDirectIpv6) {
                         emitBucket(profile.directSites, profile.directIp, reject = true, outbound = null, ipVersion = 6)
                     }
-                    emitBucket(profile.directSites, profile.directIp, reject = false, outbound = DIRECT_TAG)
+                    emitBucket(profile.directSites, profile.directIp, reject = false, outbound = directTag)
                 }
                 "proxy" -> emitBucket(profile.proxySites, profile.proxyIp, reject = false, outbound = PROXY_TAG)
             }
@@ -88,8 +97,8 @@ object SingBoxRouting {
     }
 
     /** The final outbound when nothing matches: proxy for a global proxy, direct otherwise. */
-    fun finalOutbound(profile: RoutingProfile): String =
-        if (profile.globalProxy) PROXY_TAG else DIRECT_TAG
+    fun finalOutbound(profile: RoutingProfile, directTag: String = DIRECT_TAG): String =
+        if (profile.globalProxy) PROXY_TAG else directTag
 
     /**
      * The `rule_set` definitions for every geo tag the profile references, as remote `.srs` entries.
@@ -136,7 +145,11 @@ object SingBoxRouting {
      * are combined into a single object (sing-box ANDs the fields), mirroring v2rayNG semantics.
      * Caller inserts these into `route.rules`.
      */
-    fun manualRules(rules: List<SingBoxRule>, matchAppsByProcess: Boolean = false): JsonArray = buildJsonArray {
+    fun manualRules(
+        rules: List<SingBoxRule>,
+        matchAppsByProcess: Boolean = false,
+        directTag: String = DIRECT_TAG,
+    ): JsonArray = buildJsonArray {
         rules.filter { it.enabled && it.hasMatcher() }.forEach { rule ->
             val s = parse(rule.domains)
             val i = parseIp(rule.ip)
@@ -189,7 +202,7 @@ object SingBoxRouting {
                     // ACTION_ROUTE (default): route to the chosen outbound (block → reject).
                     else -> when (rule.outbound) {
                         SingBoxRule.OUT_BLOCK -> put("action", "reject")
-                        SingBoxRule.OUT_DIRECT -> put("outbound", DIRECT_TAG)
+                        SingBoxRule.OUT_DIRECT -> put("outbound", directTag)
                         else -> put("outbound", PROXY_TAG)
                     }
                 }

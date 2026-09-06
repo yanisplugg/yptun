@@ -51,7 +51,7 @@ abstract class GenerateAppInfoTask : DefaultTask() {
 }
 
 // --- sing-box checkout, consumed by the combined cores AAR below ---
-// Clone github.com/SagerNet/sing-box (pinned v1.13.18,
+// Clone github.com/SagerNet/sing-box (pinned v1.14.0,
 // see SingBoxEngine.kt which targets that PlatformInterface/CommandServer) next to this repo,
 // or set SINGBOX_REPO to its path.
 val singboxRepoPath = providers.environmentVariable("SINGBOX_REPO")

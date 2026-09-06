@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.util.Log
+import libbox.BridgeOptions
+import libbox.BridgeSession
 import libbox.CommandServer
 import libbox.CommandServerHandler
 import libbox.ConnectionOwner
@@ -11,10 +13,13 @@ import libbox.InterfaceUpdateListener
 import libbox.Libbox
 import libbox.LocalDNSTransport
 import libbox.NetworkInterface as LibboxNetworkInterface
+import libbox.NeighborUpdateListener
 import libbox.NetworkInterfaceIterator
 import libbox.Notification
 import libbox.OverrideOptions
 import libbox.PlatformInterface
+import libbox.PlatformUser
+import libbox.ShellSession
 import libbox.SetupOptions
 import libbox.StringIterator
 import libbox.SystemProxyStatus
@@ -129,6 +134,15 @@ class SingBoxEngine(
             log("sb: ${message.trimEnd()}")
             Log.v("sing-box", message)
         }
+
+        // sing-box 1.14 additions — both belong to its own desktop/SSH tooling, which this app
+        // does not run.
+        override fun connectSSHAgent(): Int =
+            throw UnsupportedOperationException("no SSH agent on Android")
+
+        override fun triggerNativeCrash() {
+            throw UnsupportedOperationException("crash reporting is not wired up")
+        }
     }
 
     private inner class PlatformBridge : PlatformInterface {
@@ -172,11 +186,59 @@ class SingBoxEngine(
 
         override fun readWIFIState(): WIFIState? = null
 
-        override fun systemCertificates(): StringIterator? = null
-
         override fun clearDNSCache() {}
 
         override fun sendNotification(notification: Notification?) {}
+
+        // --- sing-box 1.14 additions -------------------------------------------------------
+        // 1.14 grew the platform interface for its own desktop client (SSH/SFTP shell, Tailscale,
+        // L3 bridge, neighbour discovery) and dropped systemCertificates(). None of it applies to a
+        // VpnService that only wants a SOCKS listener, so everything here declines: `false` where
+        // sing-box asks whether to use a platform implementation (it then uses its own or skips the
+        // feature), and a throw where it would only call after such a `false`.
+
+        override fun cancelNotification(identifier: String?, typeID: Int) {}
+
+        override fun registerMyInterface(name: String?) {}
+
+        override fun usePlatformShell(): Boolean = false
+
+        override fun checkPlatformShell() {
+            throw UnsupportedOperationException("platform shell is not supported")
+        }
+
+        override fun openShellSession(
+            user: PlatformUser?,
+            command: String?,
+            environ: StringIterator?,
+            term: String?,
+            rows: Int,
+            cols: Int,
+        ): ShellSession = throw UnsupportedOperationException("platform shell is not supported")
+
+        override fun lookupUser(username: String?): PlatformUser =
+            throw UnsupportedOperationException("platform shell is not supported")
+
+        override fun lookupSFTPServer(): String =
+            throw UnsupportedOperationException("no SFTP server on Android")
+
+        override fun readSystemSSHHostKey(): String =
+            throw UnsupportedOperationException("no system SSH host key on Android")
+
+        override fun tailscaleHostname(): String = ""
+
+        // Neighbour (ARP/NDP) discovery backs the 1.14 mDNS/neighbor resolver; we never enable it.
+        override fun startNeighborMonitor(listener: NeighborUpdateListener?) {
+            throw UnsupportedOperationException("neighbor monitor is not supported")
+        }
+
+        override fun closeNeighborMonitor(listener: NeighborUpdateListener?) {}
+
+        // L3 bridge outbound: needs a raw interface, which a VpnService cannot hand out.
+        override fun usePlatformBridge(): Boolean = false
+
+        override fun createBridge(options: BridgeOptions?): BridgeSession =
+            throw UnsupportedOperationException("bridge outbound is not supported")
     }
 
     /** Reports the current upstream interface so sing-box has a default to bind sockets to. */
