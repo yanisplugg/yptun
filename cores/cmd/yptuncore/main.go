@@ -415,6 +415,9 @@ func YpAwgStart(iniConfig, listenAddr *C.char) *C.char {
 	return errOut(awg.Start(C.GoString(iniConfig), C.GoString(listenAddr)))
 }
 
+//export YpAwgVersion
+func YpAwgVersion() *C.char { return cs(awg.Version()) }
+
 //export YpAwgStop
 func YpAwgStop() { awg.Stop() }
 

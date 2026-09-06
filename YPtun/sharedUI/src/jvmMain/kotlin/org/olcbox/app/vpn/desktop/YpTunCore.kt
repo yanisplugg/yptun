@@ -34,6 +34,7 @@ internal interface YpTunCoreLib : Library {
     fun YpXrayRunning(): Int
     fun YpXrayMeasureDelay(configJson: String, url: String, method: String, timeoutMs: Int): Long
 
+    fun YpAwgVersion(): Pointer?
     fun YpAwgStart(iniConfig: String, listenAddr: String): Pointer?
     fun YpAwgStop()
     fun YpAwgRunning(): Int
@@ -246,6 +247,7 @@ internal object YpTunCore {
     fun awgStart(iniConfig: String, listenAddr: String) =
         check(lib().YpAwgStart(iniConfig, listenAddr), "AmneziaWG start failed")
 
+    fun awgVersion(): String = takeString(lib().YpAwgVersion()).orEmpty()
     fun awgStop() = libOrNull?.YpAwgStop() ?: Unit
     fun awgRunning(): Boolean = libOrNull?.YpAwgRunning() == 1
     fun awgProbe(iniConfig: String): Long = lib().YpAwgProbe(iniConfig)

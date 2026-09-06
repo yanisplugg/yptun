@@ -109,6 +109,13 @@ func SetLogWriter(w LogWriter) {
 	logSink = logBridge{w: w}
 }
 
+// awgVersion is the amneziawg-go tag vendored at olcvpn-client/amneziawg-go. Bump it on every
+// re-vendor — the settings screen shows it and it's the only way to tell which AWG is inside.
+const awgVersion = "3.1.20260828"
+
+// Version reports the vendored AmneziaWG core version (shown in the app's settings).
+func Version() string { return awgVersion }
+
 // SetDebug toggles verbose device logging.
 func SetDebug(enabled bool) { debug.Store(enabled) }
 

@@ -820,6 +820,7 @@ private fun AppSettingsHubContent(
             val singboxVer = remember { runCatching { libbox.Libbox.version() }.getOrNull()?.ifBlank { null } ?: "—" }
             val vkturnVer = remember { runCatching { freeturn.Freeturn.version() }.getOrNull()?.ifBlank { null } ?: "—" }
             val wdttVer = remember { runCatching { wdttmobile.Wdttmobile.version() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val awgVer = remember { runCatching { awg.Awg.version() }.getOrNull()?.ifBlank { null } ?: "—" }
             val olcrtcVer = remember { runCatching { mobile.Mobile.version() }.getOrNull()?.ifBlank { null } ?: "—" }
             SettingsGroupRow(
                 title = s.xrayVersion(xrayVer),
@@ -851,6 +852,13 @@ private fun AppSettingsHubContent(
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.wdttVersion(wdttVer),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.awgVersion(awgVer),
                 icon = Icons.Outlined.Tune,
                 enabled = true,
                 showChevron = false
