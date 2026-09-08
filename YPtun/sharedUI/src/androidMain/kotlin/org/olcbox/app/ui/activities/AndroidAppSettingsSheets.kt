@@ -33,6 +33,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.LightMode
 import org.olcbox.app.DonationInfo
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
@@ -173,6 +174,7 @@ internal fun AppSettingsSheet(
     installedApps: List<AndroidInstalledApp>,
     logs: List<String>,
     dynamicThemeEnabled: Boolean,
+    lightThemeEnabled: Boolean,
     hwid: String,
     routing: RoutingRules,
     onRoutingChanged: (RoutingRules) -> Unit,
@@ -206,6 +208,7 @@ internal fun AppSettingsSheet(
     onSubscriptionShareClick: (String) -> Unit,
     onSubscriptionRefreshClick: (String) -> Unit,
     onDynamicThemeChanged: (Boolean) -> Unit,
+    onLightThemeChanged: (Boolean) -> Unit,
     onAccentColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onTextColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onBackgroundColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
@@ -285,11 +288,13 @@ internal fun AppSettingsSheet(
                 AppSettingsRoute.Hub -> AppSettingsHubContent(
                     selectedMode = selectedMode,
                     dynamicThemeEnabled = dynamicThemeEnabled,
+                    lightThemeEnabled = lightThemeEnabled,
                     updateSettings = updateSettings,
                     subscriptionsCount = subscriptions.size,
                     enabled = enabled,
                     hwid = hwid,
                     onDynamicThemeChanged = onDynamicThemeChanged,
+                    onLightThemeChanged = onLightThemeChanged,
                     onAccentColorSelected = onAccentColorSelected,
                     onTextColorSelected = onTextColorSelected,
                     onBackgroundColorSelected = onBackgroundColorSelected,
@@ -446,6 +451,9 @@ internal enum class AppSettingsInitialRoute {
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ThemeColorSection(
+    // The background/text swatches are dark-canvas colors; with the white theme on they are ignored
+    // by AppTheme, so the rows are hidden instead of offering settings that do nothing.
+    lightMode: Boolean,
     onAccentColorSelected: (Color?) -> Unit,
     onTextColorSelected: (Color?) -> Unit,
     onBackgroundColorSelected: (Color?) -> Unit
@@ -458,26 +466,28 @@ private fun ThemeColorSection(
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            text = s.themeColor,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val currentBg = ThemeState.background
-            val isBgPreset = currentBg == null || ThemeState.backgroundPresets.contains(currentBg)
-            ThemeState.backgroundPresets.forEachIndexed { index, color ->
-                val selected = currentBg == color || (currentBg == null && index == 0)
-                ColorSwatch(color = color, selected = selected) { onBackgroundColorSelected(color) }
-            }
-            CustomColorSwatch(
-                current = if (!isBgPreset) currentBg else null,
-                onClick = { showBackgroundPicker = true }
+        if (!lightMode) {
+            Text(
+                text = s.themeColor,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
             )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val currentBg = ThemeState.background
+                val isBgPreset = currentBg == null || ThemeState.backgroundPresets.contains(currentBg)
+                ThemeState.backgroundPresets.forEachIndexed { index, color ->
+                    val selected = currentBg == color || (currentBg == null && index == 0)
+                    ColorSwatch(color = color, selected = selected) { onBackgroundColorSelected(color) }
+                }
+                CustomColorSwatch(
+                    current = if (!isBgPreset) currentBg else null,
+                    onClick = { showBackgroundPicker = true }
+                )
+            }
         }
 
         Text(
@@ -502,23 +512,25 @@ private fun ThemeColorSection(
             )
         }
 
-        Text(
-            text = s.textColor,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val currentText = ThemeState.textColor
-            ThemeState.textPresets.forEach { color ->
-                val selected = currentText == color
-                ColorSwatch(
-                    color = color ?: MaterialTheme.colorScheme.onSurface,
-                    selected = selected
-                ) { onTextColorSelected(color) }
+        if (!lightMode) {
+            Text(
+                text = s.textColor,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val currentText = ThemeState.textColor
+                ThemeState.textPresets.forEach { color ->
+                    val selected = currentText == color
+                    ColorSwatch(
+                        color = color ?: MaterialTheme.colorScheme.onSurface,
+                        selected = selected
+                    ) { onTextColorSelected(color) }
+                }
             }
         }
     }
@@ -660,11 +672,13 @@ private fun ColorSwatch(
 private fun AppSettingsHubContent(
     selectedMode: AndroidConnectionMode,
     dynamicThemeEnabled: Boolean,
+    lightThemeEnabled: Boolean,
     updateSettings: AppUpdateSettings,
     subscriptionsCount: Int,
     enabled: Boolean,
     hwid: String,
     onDynamicThemeChanged: (Boolean) -> Unit,
+    onLightThemeChanged: (Boolean) -> Unit,
     onAccentColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onTextColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onBackgroundColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
@@ -707,8 +721,18 @@ private fun AppSettingsHubContent(
             onCheckedChange = onDynamicThemeChanged
         )
 
+        SettingsSwitchRow(
+            title = s.lightTheme,
+            value = if (lightThemeEnabled) s.lightThemeOn else s.lightThemeOff,
+            icon = Icons.Outlined.LightMode,
+            checked = lightThemeEnabled,
+            enabled = true,
+            onCheckedChange = onLightThemeChanged
+        )
+
         if (!dynamicThemeEnabled) {
             ThemeColorSection(
+                lightMode = lightThemeEnabled,
                 onAccentColorSelected = onAccentColorSelected,
                 onTextColorSelected = onTextColorSelected,
                 onBackgroundColorSelected = onBackgroundColorSelected

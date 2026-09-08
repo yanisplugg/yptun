@@ -783,6 +783,7 @@ private fun runApp(args: Array<String>) = application {
         }
 
         val dynamicTheme by dependencies.settings.dynamicTheme.collectAsState()
+        val lightTheme by dependencies.settings.lightTheme.collectAsState()
 
         AppTheme(useDynamicColor = dynamicTheme) {
             // The AWT frame under the Compose surface is white by default; it is what shows during a
@@ -1060,6 +1061,7 @@ private fun runApp(args: Array<String>) = application {
                         installedApps = installedApps,
                         logs = logs,
                         dynamicThemeEnabled = dynamicTheme,
+                        lightThemeEnabled = lightTheme,
                         hwid = hwid,
                         routing = routing,
                         onRoutingChanged = dependencies.settings::setRouting,
@@ -1129,6 +1131,7 @@ private fun runApp(args: Array<String>) = application {
                             }
                         },
                         onDynamicThemeChanged = dependencies.settings::setDynamicTheme,
+                        onLightThemeChanged = dependencies.settings::setLightTheme,
                         onAccentColorSelected = dependencies.settings::setAccentColor,
                         onTextColorSelected = dependencies.settings::setTextColor,
                         onBackgroundColorSelected = dependencies.settings::setBackgroundColor,

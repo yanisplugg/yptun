@@ -15,7 +15,10 @@ actual fun AppTheme(
     content: @Composable () -> Unit
 ) {
     val systemIsDark = isSystemInDarkTheme()
-    val isDarkState = remember { mutableStateOf(systemIsDark) }
+    // The white theme is an explicit user choice and outranks the OS setting: it stays light with a
+    // dark system theme on.
+    val lightMode = ThemeState.lightMode
+    val isDarkState = remember(lightMode, systemIsDark) { mutableStateOf(!lightMode && systemIsDark) }
     val typography = getAppTypography()
 
     CompositionLocalProvider(

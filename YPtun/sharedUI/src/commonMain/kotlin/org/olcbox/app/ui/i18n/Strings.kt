@@ -144,6 +144,9 @@ interface Strings {
     val dynamicTheme: String
     val dynamicThemeOn: String
     val dynamicThemeOff: String
+    val lightTheme: String
+    val lightThemeOn: String
+    val lightThemeOff: String
     val routing: String
     val routingSubtitle: String
     val trafficSettings: String
@@ -808,6 +811,9 @@ object RuStrings : Strings {
     override val dynamicTheme = "Динамическая тема"
     override val dynamicThemeOn = "Системные цвета Android"
     override val dynamicThemeOff = "Цвета YPtun"
+    override val lightTheme = "Светлая тема"
+    override val lightThemeOn = "Белый фон, тёмная тема системы игнорируется"
+    override val lightThemeOff = "Тёмный фон"
     override val routing = "Маршрутизация"
     override val routingSubtitle = "Обход LAN/России, блокировка рекламы, домены"
     override val trafficSettings = "Настройки трафика"
@@ -1425,6 +1431,9 @@ object EnStrings : Strings {
     override val dynamicTheme = "Dynamic theme"
     override val dynamicThemeOn = "Using Android system colors"
     override val dynamicThemeOff = "Using YPtun colors"
+    override val lightTheme = "Light theme"
+    override val lightThemeOn = "White canvas, system dark theme ignored"
+    override val lightThemeOff = "Dark canvas"
     override val routing = "Routing"
     override val routingSubtitle = "Bypass LAN/Russia, block ads, custom domains"
     override val trafficSettings = "Traffic settings"
@@ -2042,6 +2051,9 @@ object FaStrings : Strings {
     override val dynamicTheme = "پوستهٔ پویا"
     override val dynamicThemeOn = "استفاده از رنگ‌های سیستم اندروید"
     override val dynamicThemeOff = "استفاده از رنگ‌های YPtun"
+    override val lightTheme = "پوستهٔ روشن"
+    override val lightThemeOn = "زمینهٔ سفید، پوستهٔ تیرهٔ سیستم نادیده گرفته می‌شود"
+    override val lightThemeOff = "زمینهٔ تیره"
     override val routing = "مسیریابی"
     override val routingSubtitle = "دور زدن LAN/روسیه، مسدودسازی تبلیغات، دامنه‌ها"
     override val trafficSettings = "تنظیمات ترافیک"
@@ -2659,6 +2671,9 @@ object ZhStrings : Strings {
     override val dynamicTheme = "动态主题"
     override val dynamicThemeOn = "使用 Android 系统配色"
     override val dynamicThemeOff = "使用 YPtun 配色"
+    override val lightTheme = "浅色主题"
+    override val lightThemeOn = "白色背景，忽略系统深色主题"
+    override val lightThemeOff = "深色背景"
     override val routing = "分流"
     override val routingSubtitle = "绕过局域网/俄罗斯、拦截广告、自定义域名"
     override val trafficSettings = "流量设置"

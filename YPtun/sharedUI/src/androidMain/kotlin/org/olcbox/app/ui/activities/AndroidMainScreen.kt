@@ -87,6 +87,7 @@ fun AndroidMainScreen(
     val proxySettings by vpnManager.proxySettings.collectAsState()
     val splitTunnelSettings by vpnManager.splitTunnelSettings.collectAsState()
     val dynamicThemeEnabled by vpnManager.dynamicThemeEnabled.collectAsState()
+    val lightThemeEnabled by vpnManager.lightThemeEnabled.collectAsState()
     val hwid by vpnManager.hwid.collectAsState()
     val routing by vpnManager.routing.collectAsState()
     val routingProfilesState by vpnManager.routingProfiles.collectAsState()
@@ -651,6 +652,7 @@ fun AndroidMainScreen(
             installedApps = installedApps,
             logs = logs,
             dynamicThemeEnabled = dynamicThemeEnabled,
+            lightThemeEnabled = lightThemeEnabled,
             hwid = hwid,
             routing = routing,
             onRoutingChanged = vpnManager::setRouting,
@@ -728,6 +730,7 @@ fun AndroidMainScreen(
                 }
             },
             onDynamicThemeChanged = vpnManager::setDynamicThemeEnabled,
+            onLightThemeChanged = vpnManager::setLightThemeEnabled,
             onAccentColorSelected = vpnManager::setAccentColor,
             onTextColorSelected = vpnManager::setTextColor,
             onBackgroundColorSelected = vpnManager::setBackgroundColor,
