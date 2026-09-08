@@ -1557,7 +1557,13 @@ class OlcboxVpnService : VpnService() {
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                         secondProfile = secondProfile,
                         bypassLan = loadRouting(expandAsn = false).bypassLan,
+                        // FakeDNS translated from the imported JSON config — the sing-box branch below
+                        // has always honored it; on Xray it used to be dropped on the floor.
+                        fakeDnsSpec = config.fakeDns,
                     )
+                }
+                if (config.fakeDns != null && rawXray.isNullOrBlank()) {
+                    addLog("FakeDNS spec present → enabling Xray fakedns (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
                 }
                 addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
                 xrayEngine().start(json, assetPath)

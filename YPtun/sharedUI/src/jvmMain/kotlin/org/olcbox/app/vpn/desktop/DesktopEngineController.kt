@@ -495,7 +495,12 @@ internal class DesktopEngineController(
                     // The "Обход LAN" toggle. Android passes it; desktop did not, so on the Xray core
                     // LAN bypass silently ran on the default no matter what the user set.
                     bypassLan = routing.bypassLan,
+                    // FakeDNS from the imported JSON config — honored on sing-box, dropped on Xray.
+                    fakeDnsSpec = config.fakeDns,
                 )
+            }
+            if (config.fakeDns != null && rawXray.isNullOrBlank()) {
+                log("FakeDNS spec present -> enabling Xray fakedns (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
             }
             log("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
             if (assetPath.isNotEmpty()) YpTunCore.xraySetAssetPath(assetPath)

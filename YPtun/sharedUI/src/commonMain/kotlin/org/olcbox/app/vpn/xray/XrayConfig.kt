@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.TrafficSettings
 
@@ -113,10 +114,24 @@ object XrayConfig {
 
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
 
-    /** Routing rules that hijack DNS (UDP/53, TCP/853 DoT) to the `dns-out` outbound. */
+    /**
+     * Routing rules that hijack DNS (port 53 both networks, TCP/853 DoT) to the `dns-out` outbound.
+     *
+     * Scoped to the app's own SOCKS inbound: xray's DNS client dials its upstreams from NO inbound, and
+     * [proxiedDns] hands it `tcp://<ip>` servers — an unscoped tcp/53 rule would hijack those back into
+     * `dns-out` and loop. TCP/53 has to be covered because desktop fronts xray with a sing-box TUN that
+     * forwards the hijacked system DNS as a SOCKS5 CONNECT to port 53 (`preferTcpRemoteDns`), never as
+     * UDP — so with UDP-only hijacking the config's FakeDNS was simply never consulted on PC.
+     */
     private fun dnsHijackRules(): List<JsonObject> = listOf(
-        buildJsonObject { put("type", "field"); put("network", "udp"); put("port", 53); put("outboundTag", "dns-out") },
-        buildJsonObject { put("type", "field"); put("network", "tcp"); put("port", 853); put("outboundTag", "dns-out") },
+        buildJsonObject {
+            put("type", "field"); putJsonArray("inboundTag") { add("socks-in") }
+            put("port", 53); put("outboundTag", "dns-out")
+        },
+        buildJsonObject {
+            put("type", "field"); putJsonArray("inboundTag") { add("socks-in") }
+            put("network", "tcp"); put("port", 853); put("outboundTag", "dns-out")
+        },
     )
 
     /** The `dns` protocol outbound that answers hijacked queries (tag `dns-out`). */
@@ -127,8 +142,8 @@ object XrayConfig {
     }
 
     /** A single synthetic-IP pool entry for the top-level `fakedns` array. */
-    private fun fakeDnsPool(): JsonObject = buildJsonObject {
-        put("ipPool", FAKEDNS_POOL)
+    private fun fakeDnsPool(ipPool: String? = null): JsonObject = buildJsonObject {
+        put("ipPool", ipPool?.takeIf { it.isNotBlank() } ?: FAKEDNS_POOL)
         put("poolSize", FAKEDNS_POOL_SIZE)
     }
 
@@ -195,6 +210,12 @@ object XrayConfig {
         // the main (tag [PROXY_BASE_TAG]); the main dials through olcRTC/WG. So: client → [olcRTC/WG] →
         // main → second → internet. Null = the main proxy is the single exit (PROXY_TAG), as before.
         secondProfile: ProxyProfile? = null,
+        // FakeDNS translated from an imported JSON config (fakeip pool + dns.hosts blackholes) — the
+        // PER-LOCATION spec the sing-box path already honors via SingBoxConfig.fakeDnsSpec. Without it
+        // this path saw only the (removed, always-false) global [TrafficSettings.fakeDnsEnabled], so a
+        // subscription's FakeDNS silently vanished whenever the location ran on Xray instead of
+        // sing-box (explicit core choice, the app-wide default, blockRuDomains or a dnsHosts profile).
+        fakeDnsSpec: FakeDnsSpec? = null,
         // Outbound handshake budget (seconds). Xray's default is only 4s — far too short when the proxy
         // is chained over an ultra-slow tunnel (dnstt: SOCKS5 greeting+CONNECT to the VPS, then the VPS's
         // dial to the proxy server, then the vless/TLS handshake, all round-tripping over DNS TXT). Xray
@@ -207,6 +228,10 @@ object XrayConfig {
         // "xhttp + 2nd tcp proxy = нет соединения"). Route the exit through a local SOCKS loopback
         // instead; the main ([PROXY_BASE_TAG]) then runs as an ORDINARY outbound that just proxies the
         // TCP to the 2nd server. Same fix as prepareRaw(). Non-xhttp mains keep the direct dialerProxy.
+        // Either the (legacy) global toggle or a per-location spec turns the FakeDNS plumbing on.
+        val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null
+        // The spec's dns.hosts blackholes (domain -> 0.0.0.0), reproduced as Xray `regexp:` hosts.
+        val fakeBlockRegex = fakeDnsSpec?.blockRegex.orEmpty().filter { it.isNotBlank() }
         val cascadeMainIsXhttp = profile.network == ProxyProfile.NETWORK_XHTTP
         val cascadeLoopActive = secondProfile?.isComplete() == true && cascadeMainIsXhttp
         // Internal loopback SOCKS port: one above the app's listen port (127.0.0.1 only, not exposed).
@@ -233,15 +258,17 @@ object XrayConfig {
 
             putJsonObject("dns") {
                 val profileHosts = routingProfile?.dnsHosts ?: emptyMap()
-                if (traffic.blockRuDomains || profileHosts.isNotEmpty()) {
+                if (traffic.blockRuDomains || profileHosts.isNotEmpty() || fakeBlockRegex.isNotEmpty()) {
                     putJsonObject("hosts") {
                         if (traffic.blockRuDomains) RuBlocklist.hostRegexps.forEach { put(it, "0.0.0.0") }
+                        // The imported config's own blackholes, back in Xray's own schema.
+                        fakeBlockRegex.forEach { put("regexp:$it", "0.0.0.0") }
                         profileHosts.forEach { (k, v) -> put(k, v) }
                     }
                 }
                 putJsonArray("servers") {
                     // FakeDNS first so sniffed domains get a synthetic IP before the real resolvers.
-                    if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
+                    if (fakeEnabled) add(FAKEDNS_SERVER)
                     // Remote resolvers ride the proxy/cascade → DoH-over-443 (major IPs) or DNS-over-TCP
                     // so they aren't dropped by an exit that blocks port 53 (the 4s-serial-timeout →
                     // ERR_CONNECTION_ABORTED bug).
@@ -254,8 +281,8 @@ object XrayConfig {
 
             // Synthetic-IP pool for FakeDNS (apps see 198.18.x.x; the domain is recovered via the
             // socks inbound's `fakedns` sniffing and resolved behind the proxy).
-            if (traffic.fakeDnsEnabled) {
-                putJsonArray("fakedns") { add(fakeDnsPool()) }
+            if (fakeEnabled) {
+                putJsonArray("fakedns") { add(fakeDnsPool(fakeDnsSpec?.inet4Range)) }
             }
 
             putJsonArray("inbounds") {
@@ -287,7 +314,7 @@ object XrayConfig {
                         putJsonArray("destOverride") {
                             add("http"); add("tls"); add("quic")
                             // Recover the real domain from a FakeDNS synthetic-IP connection.
-                            if (traffic.fakeDnsEnabled) add("fakedns")
+                            if (fakeEnabled) add("fakedns")
                         }
                         if (expert && routingProfile!!.xrayRouteOnly) put("routeOnly", true)
                     }
@@ -408,7 +435,7 @@ object XrayConfig {
                 }
                 // FakeDNS: DNS queries (port 53/853) are hijacked to this dns outbound so the core
                 // answers them from the fake pool / upstream instead of leaking them out.
-                if (traffic.fakeDnsEnabled) add(dnsOutOutbound())
+                if (fakeEnabled) add(dnsOutOutbound())
                 // TLS fragmentation outbound (DPI evasion); proxy dials through it via dialerProxy.
                 if (traffic.fragmentEnabled && olcrtcChainPort == null) {
                     addJsonObject {
@@ -438,8 +465,9 @@ object XrayConfig {
                 put("outboundTag", "block")
             }
             // FakeDNS: route DNS queries to the dns outbound so they're answered from the fake pool.
-            val dnsOutRules = if (traffic.fakeDnsEnabled) dnsHijackRules() else emptyList()
-            // Blocked RU hosts resolve to 0.0.0.0 (dns.hosts above); blackhole anything aimed there.
+            val dnsOutRules = if (fakeEnabled) dnsHijackRules() else emptyList()
+            // Blocked hosts resolve to 0.0.0.0 (dns.hosts above); blackhole anything aimed there.
+            val blockZero = traffic.blockRuDomains || fakeBlockRegex.isNotEmpty()
             val blockZeroRule = buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") { add("0.0.0.0") }
@@ -485,11 +513,11 @@ object XrayConfig {
             // interception of the real destination as "недоверенный SSL-сертификат". Normally the
             // sniffed SNI replaces the fake address first; when sniffing cannot see it (ECH, or
             // anything that is not TLS/HTTP) the fake address is all the router has to go on.
-            val fakeDnsProxyRule = if (traffic.fakeDnsEnabled) buildJsonObject {
+            val fakeDnsProxyRule = if (fakeEnabled) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
-                    add(FAKEDNS_POOL)
-                    add(FAKEDNS_POOL6)
+                    add(fakeDnsSpec?.inet4Range?.takeIf { it.isNotBlank() } ?: FAKEDNS_POOL)
+                    add(fakeDnsSpec?.inet6Range?.takeIf { it.isNotBlank() } ?: FAKEDNS_POOL6)
                 }
                 put("outboundTag", if (directViaBase) PROXY_BASE_TAG else PROXY_TAG)
             } else null
@@ -517,7 +545,7 @@ object XrayConfig {
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
-                        if (traffic.blockRuDomains) add(blockZeroRule)
+                        if (blockZero) add(blockZeroRule)
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
@@ -529,7 +557,7 @@ object XrayConfig {
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
-                        if (traffic.blockRuDomains) add(blockZeroRule)
+                        if (blockZero) add(blockZeroRule)
                     }
                 }
             }
