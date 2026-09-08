@@ -24,7 +24,7 @@ type Peer struct {
 	PresharedKey Key
 	AllowedIPs   []netip.Prefix
 	Endpoint     string
-	Keepalive    int
+	Keepalive    string
 }
 
 type Config struct {
@@ -95,8 +95,8 @@ func (c *Config) Validate() error {
 		if len(p.AllowedIPs) == 0 {
 			return fmt.Errorf("tunnel: peer[%d]: AllowedIPs is required", i)
 		}
-		if p.Keepalive < 0 {
-			return fmt.Errorf("tunnel: peer[%d]: negative keepalive", i)
+		if err := ValidateRange(p.Keepalive); err != nil {
+			return fmt.Errorf("tunnel: peer[%d]: keepalive: %w", i, err)
 		}
 	}
 	if c.MTU <= 0 {

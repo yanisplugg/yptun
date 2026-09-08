@@ -1,24 +1,35 @@
 // Package netctl предоставляет глобальный Control-хук для сокетов (VpnService.protect).
 //
-// ЛОКАЛЬНЫЙ ПАТЧ: у upstream этого пакета НЕТ. Хост ставит хук, чтобы исходящие
-// сокеты клиента (netconn.DirectNet, dnsdial, turndial) шли МИМО туннеля - иначе
-// собственный TURN/VK/DNS-трафик заворачивается сам в себя и всё виснет. Не терять
-// при ре-вендоре: нужны и сам пакет, и вызовы Apply в диалерах.
+// БЫЛ ЛОКАЛЬНЫМ ПАТЧЕМ: upstream ПРИНЯЛ пакет к себе и с 3.4.0 держит хук в
+// atomic.Pointer (гонки при переустановке хука на живом клиенте). Сам файл теперь
+// апстримовский - брать его версию при ре-вендоре. Локальным остаётся только то,
+// ради чего пакет заводился: вызовы netctl.Apply в диалерах, чтобы исходящие сокеты
+// клиента (netconn.DirectNet, dnsdial, turndial) шли МИМО туннеля - иначе собственный
+// TURN/VK/DNS-трафик заворачивается сам в себя и всё виснет. ИХ не терять.
 package netctl
 
-import "syscall"
+import (
+	"sync/atomic"
+	"syscall"
+)
 
-var control func(network, address string, c syscall.RawConn) error
+type ControlFunc func(network, address string, c syscall.RawConn) error
+
+var control atomic.Pointer[ControlFunc]
 
 // SetControl регистрирует функцию защиты сокетов хоста (nil - no-op).
-func SetControl(fn func(network, address string, c syscall.RawConn) error) {
-	control = fn
+func SetControl(fn ControlFunc) {
+	if fn == nil {
+		control.Store(nil)
+		return
+	}
+	control.Store(&fn)
 }
 
 // Apply вызывается из net.Dialer и net.ListenConfig для защиты создаваемых сокетов.
 func Apply(network, address string, c syscall.RawConn) error {
-	if control != nil {
-		return control(network, address, c)
+	if fn := control.Load(); fn != nil {
+		return (*fn)(network, address, c)
 	}
 	return nil
 }

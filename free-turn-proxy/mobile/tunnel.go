@@ -3,6 +3,7 @@ package mobile
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/netip"
 	"strings"
@@ -174,4 +175,98 @@ func checkTunFD(fd int) error {
 		return fmt.Errorf("bad tun fd %d", fd)
 	}
 	return nil
+}
+
+const directHandshakeStale = 180 * time.Second
+
+func StartDirectTunnel(wgText string, mtu int, tunFD int) error {
+	if err := checkTunFD(tunFD); err != nil {
+		return err
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if current.Load() != nil {
+		awg.CloseTUNFD(tunFD)
+		return errors.New("already running")
+	}
+
+	cfg, err := directConfig(wgText, mtu)
+	if err != nil {
+		awg.CloseTUNFD(tunFD)
+		return err
+	}
+
+	if protector.Load() == nil {
+		coreLog().Warnf("tunnel: SetProtect не задан - сокеты прямого туннеля не защищены")
+	}
+
+	backend := awg.New(awg.Deps{Log: coreLog(), Protect: protectFD})
+
+	if err := backend.Up(cfg, tunFD); err != nil {
+		return fmt.Errorf("start direct tunnel: %w", err)
+	}
+
+	done := make(chan struct{})
+	close(done)
+	current.Store(&live{
+		cancel: func() {},
+		done:   done,
+		tunnel: &tunnelParts{backend: backend},
+	})
+	finishing.Store(nil)
+	lastStop.Store(nil)
+	return nil
+}
+
+func directConfig(wgText string, mtu int) (*tunnel.Config, error) {
+	cfg, err := wgconf.Parse(wgText)
+	if err != nil {
+		return nil, fmt.Errorf("parse tunnel config: %w", err)
+	}
+	if mtu > 0 {
+		cfg.MTU = mtu
+	}
+	for i := range cfg.Peers {
+		if _, err := netip.ParseAddrPort(cfg.Peers[i].Endpoint); err != nil {
+			return nil, fmt.Errorf("peer[%d]: Endpoint must be ip:port for a direct tunnel, got %q", i, cfg.Peers[i].Endpoint)
+		}
+	}
+	return cfg, nil
+}
+
+func directSnapshot(l *live) *Snapshot {
+	st, err := l.tunnel.backend.Stats()
+	if err != nil {
+		return &Snapshot{State: StateError, ErrMsg: err.Error(), Streams: 1, Total: 1}
+	}
+	snap := &Snapshot{
+		State:   StateConnecting,
+		Streams: 1,
+		Total:   1,
+		TxTotal: st.TxBytes,
+		RxTotal: st.RxBytes,
+	}
+	if !st.LastHandshake.IsZero() {
+		snap.State = StateConnected
+	}
+	l.fillRates(snap)
+	if snap.State == StateConnected && snap.TxRate > 0 && time.Since(st.LastHandshake) > directHandshakeStale {
+		snap.State = StateConnecting
+	}
+	return snap
+}
+
+func (l *live) fillRates(s *Snapshot) {
+	l.fillRatesAt(s, time.Now())
+}
+
+func (l *live) fillRatesAt(s *Snapshot, now time.Time) {
+	l.rateMu.Lock()
+	defer l.rateMu.Unlock()
+
+	if dt := now.Sub(l.prevAt).Seconds(); !l.prevAt.IsZero() && dt > 0 {
+		s.TxRate = int64(math.Round(float64(s.TxTotal-l.prevTx) / dt))
+		s.RxRate = int64(math.Round(float64(s.RxTotal-l.prevRx) / dt))
+	}
+	l.prevTx, l.prevRx, l.prevAt = s.TxTotal, s.RxTotal, now
 }

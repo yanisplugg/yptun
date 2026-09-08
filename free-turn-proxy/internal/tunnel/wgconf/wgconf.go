@@ -136,7 +136,7 @@ func applyInterface(cfg *tunnel.Config, key, value string) error {
 		}
 		setAmneziaRange(&cfg.Amnezia, key, value)
 	case "randomtrailers", "disablecookies":
-		b, err := strconv.ParseBool(value)
+		b, err := parseBool(value)
 		if err != nil {
 			return fmt.Errorf("%s: %w", key, err)
 		}
@@ -149,6 +149,17 @@ func applyInterface(cfg *tunnel.Config, key, value string) error {
 		return fmt.Errorf("unknown [Interface] key %q", key)
 	}
 	return nil
+}
+
+// AmneziaWG пишет булевы как on/off и yes/no.
+func parseBool(value string) (bool, error) {
+	switch strings.ToLower(value) {
+	case "on", "yes":
+		return true, nil
+	case "off", "no":
+		return false, nil
+	}
+	return strconv.ParseBool(value)
 }
 
 func setAmneziaRange(p *tunnel.AmneziaParams, key, value string) {
@@ -211,14 +222,13 @@ func applyPeer(peer *tunnel.Peer, key, value string) error {
 		peer.Endpoint = value
 	case "persistentkeepalive":
 		if strings.EqualFold(value, "off") {
-			peer.Keepalive = 0
+			peer.Keepalive = ""
 			return nil
 		}
-		seconds, err := strconv.Atoi(value)
-		if err != nil {
+		if err := tunnel.ValidateRange(value); err != nil {
 			return fmt.Errorf("persistentkeepalive: %w", err)
 		}
-		peer.Keepalive = seconds
+		peer.Keepalive = value
 	default:
 		return fmt.Errorf("unknown [Peer] key %q", key)
 	}

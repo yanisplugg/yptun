@@ -92,7 +92,7 @@ func TestUAPIFullPeer(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.Peers[0].PresharedKey = testKey(0x03)
 	cfg.Peers[0].Endpoint = "1.2.3.4:51820"
-	cfg.Peers[0].Keepalive = 25
+	cfg.Peers[0].Keepalive = "25"
 	cfg.Peers[0].AllowedIPs = []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/24"),
 		netip.MustParsePrefix("::/0"),
@@ -144,7 +144,7 @@ func TestUAPIRejectsInvalidConfig(t *testing.T) {
 		{"no public key", func(c *Config) { c.Peers[0].PublicKey = Key{} }},
 		{"no allowed ips", func(c *Config) { c.Peers[0].AllowedIPs = nil }},
 		{"zero mtu", func(c *Config) { c.MTU = 0 }},
-		{"negative keepalive", func(c *Config) { c.Peers[0].Keepalive = -1 }},
+		{"bad keepalive range", func(c *Config) { c.Peers[0].Keepalive = "35-25" }},
 		{"partial junk", func(c *Config) { c.Amnezia = AmneziaParams{Jc: 4} }},
 		{"junk range", func(c *Config) { c.Amnezia = AmneziaParams{Jc: 4, Jmin: 70, Jmax: 40} }},
 		{"negative padding", func(c *Config) { c.Amnezia = AmneziaParams{S1: -1} }},

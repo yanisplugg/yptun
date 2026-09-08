@@ -78,7 +78,7 @@ PersistentKeepalive = 25
 		t.Errorf("DNS = %v, want two addresses", cfg.DNS)
 	}
 	peer := cfg.Peers[0]
-	if peer.PresharedKey.IsZero() || peer.Endpoint != "1.2.3.4:51820" || peer.Keepalive != 25 {
+	if peer.PresharedKey.IsZero() || peer.Endpoint != "1.2.3.4:51820" || peer.Keepalive != "25" {
 		t.Errorf("peer = %+v", peer)
 	}
 	if len(peer.AllowedIPs) != 2 {
@@ -155,8 +155,8 @@ func TestParseKeepaliveOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if cfg.Peers[0].Keepalive != 0 {
-		t.Errorf("Keepalive = %d, want 0", cfg.Peers[0].Keepalive)
+	if cfg.Peers[0].Keepalive != "" {
+		t.Errorf("Keepalive = %q, want empty", cfg.Peers[0].Keepalive)
 	}
 }
 
@@ -239,6 +239,36 @@ func TestParseAWG3Params(t *testing.T) {
 	}
 }
 
+// Конфиг в том виде, в каком его выдаёт AmneziaVPN: булевы on/off, keepalive диапазоном.
+func TestParseAmneziaClientConf(t *testing.T) {
+	hpKey := base64.StdEncoding.EncodeToString(bytesOf(0x04))
+	text := "[Interface]\nPrivateKey = " + privKey + "\nAddress = 10.8.0.2/32\n" +
+		"S1 = 12\nS2 = 12\nS3 = 12\nS4 = 12\n" +
+		"HeaderProtectionKey = " + hpKey + "\n" +
+		"RandomTrailers = on\nDisableCookies = off\n\n" +
+		"[Peer]\nPublicKey = " + pubKey + "\nAllowedIPs = 0.0.0.0/0\n" +
+		"Endpoint = 1.2.3.4:55424\nPersistentKeepalive = 25-35\n"
+
+	cfg, err := Parse(text)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !cfg.Amnezia.RandomTrailers || cfg.Amnezia.DisableCookies {
+		t.Errorf("bool flags = %v/%v, want true/false",
+			cfg.Amnezia.RandomTrailers, cfg.Amnezia.DisableCookies)
+	}
+	if cfg.Peers[0].Keepalive != "25-35" {
+		t.Errorf("Keepalive = %q, want 25-35", cfg.Peers[0].Keepalive)
+	}
+	uapi, err := tunnel.UAPI(cfg)
+	if err != nil {
+		t.Fatalf("UAPI() error = %v", err)
+	}
+	if !strings.Contains(uapi, "persistent_keepalive_interval=25-35\n") {
+		t.Errorf("UAPI() = %s, want keepalive range passed through", uapi)
+	}
+}
+
 func TestParseAWG3Errors(t *testing.T) {
 	base := "[Interface]\nPrivateKey = " + privKey + "\nAddress = 10.8.0.2/32\n"
 	peer := "\n[Peer]\nPublicKey = " + pubKey + "\nAllowedIPs = 0.0.0.0/0\n"
@@ -251,6 +281,18 @@ func TestParseAWG3Errors(t *testing.T) {
 		"hp without pad": "HeaderProtectionKey = " + base64.StdEncoding.EncodeToString(bytesOf(0x04)) + "\n",
 	} {
 		if _, err := Parse(base + line + peer); err == nil {
+			t.Errorf("%s: Parse() = nil, want error", name)
+		}
+	}
+}
+
+func TestParseKeepaliveErrors(t *testing.T) {
+	for name, value := range map[string]string{
+		"non-numeric":   "soon",
+		"reversed":      "35-25",
+		"broken bounds": "25-",
+	} {
+		if _, err := Parse(minimalConf() + "PersistentKeepalive = " + value + "\n"); err == nil {
 			t.Errorf("%s: Parse() = nil, want error", name)
 		}
 	}

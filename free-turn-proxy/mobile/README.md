@@ -23,6 +23,7 @@ task build:android
 ```go
 func Start(configJSON string) error                 // Запуск в режиме прокси
 func StartTunnel(configJSON string, tunFD int) error // Запуск прокси + WireGuard/AmneziaWG
+func StartDirectTunnel(wgText string, mtu, tunFD int) error // WireGuard/AmneziaWG напрямую, без релея
 func Restart(configJSON string, tunFD int) error     // Перезапуск с ожиданием остановки (tunFD 0 - без туннеля)
 func Stop()                                         // Остановка сессии
 func GetState() *Snapshot                           // Метрики сессии (State, Rates, Streams)
@@ -117,6 +118,26 @@ Mobile.startTunnel(configJson, pfd.dup().detachFd().toLong())
 `Restart(configJSON, 0)` - перезапуск в режиме прокси: ядро дескриптор не берёт и ничего не закрывает. Конфиг с `tunnel.mode` `wg`/`awg` в этом виде отклоняется (`ErrTunnelRequiresStartTunnel`) - для туннеля передаётся `tunFD > 0`.
 
 WireGuard общается с релеем через in-memory `netconn.PacketPipe` напрямую. Петля `127.0.0.1:9000` не используется, поэтому исключать приложение из VPN-маршрутов не требуется. Защите через `SetProtect` подлежат только сокеты релея.
+
+### Прямой туннель (без релея)
+
+`StartDirectTunnel(wgText, mtu, tunFD)` поднимает тот же WireGuard/AmneziaWG, но пакеты идут прямо на сервер, минуя TURN. Конфиг - текст wg-quick, а не JSON: полей релея тут нет.
+
+```kotlin
+pfd = builder.establish()!!
+Mobile.startDirectTunnel(wgConf, 1376L, pfd.dup().detachFd().toLong())
+```
+
+Отличия от `StartTunnel`:
+
+*   каждый `[Peer]` обязан нести `Endpoint` в виде `ip:port` - bind устройства не резолвит имена (если в конфиге указан домен, хост должен отрезолвить его до вызова);
+*   `SetProtect` обязателен: сокеты открывает bind устройства, без защиты трафик заворачивается обратно в туннель;
+*   состояние и метрики отслеживаются через `GetState()` (polling); push-события `OnState` в `EventSink` генерируются только для релейных сессий;
+*   `GetState()` держит `connected` с первого handshake и уходит в `connecting`, только если handshake старше 180 с при идущем tx; `Streams`/`Total` всегда 1;
+*   `Wake()` в прямом режиме - no-op; при смене сети или выходе устройства из сна вызывается `Reconnect()`;
+*   `Reconnect()` пересоздаёт и заново защищает сокеты - этого хватает при смене сети, перезапуск не нужен;
+*   `Restart` работает только с JSON-конфигурацией: для смены параметров прямого туннеля нужен `Stop` и новый `StartDirectTunnel`;
+*   `mtu` идёт только в валидацию и логи: tun создаёт платформа, MTU для неё даёт `ParseTunnelConfig`.
 
 ### Обработка событий
 
