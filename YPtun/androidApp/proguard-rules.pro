@@ -8,6 +8,14 @@
 -keep class libbox.** { *; }
 -keep class xraybridge.** { *; }
 -keep class mobile.** { *; }
+# The rest of the packages bound into the same cores AAR. Go instantiates the generated proxy classes
+# (e.g. Mdnsmobile$proxySocketProtector) and calls their methods by NAME through Seq/JNI, so nothing
+# here is reachable from Kotlin's point of view and R8 is free to rename or drop it — which only ever
+# shows up in a release build, as a callback that silently never fires.
+-keep class mdnsmobile.** { *; }
+-keep class freeturn.** { *; }
+-keep class wdttmobile.** { *; }
+-keep class awg.** { *; }
 
 # --- Trust Tunnel (AdGuard) client AAR — JNI bridge (native <-> Kotlin by class/method name) ---
 # libtrusttunnel_android.so calls back into VpnClient/DeepLink/VpnClientListener by name (native
@@ -18,7 +26,7 @@
 # inside the client). Silence R8's missing-class error for that unused code path.
 -dontwarn com.akuleshov7.ktoml.**
 
-# --- JSch (mwiede fork) — VPS SSH installer (WDTT / DNSTT auto-install) ---
+# --- JSch (mwiede fork) — VPS SSH installer (WDTT / MasterDNS auto-install) ---
 # JSch instantiates its cipher/kex/MAC/random implementations by fully-qualified class name pulled
 # from an internal config map (reflection via Class.forName). R8 sees no static references to those
 # classes and strips them, so connecting throws ClassNotFoundException (e.g.
