@@ -395,7 +395,20 @@ class DesktopVpnManager private constructor(
             }
             if (profile.server.isBlank()) return@withContext null
             val listenPort = (20_000..60_000).random()
-            val configJson = runCatching {
+            // A verbatim raw config (xhttp/splithttp/reality) can't be rebuilt from type/server/port —
+            // its transport lives only in rawXrayConfig. Probe THROUGH that verbatim proxy outbound, or
+            // the test dials a plain vless and falsely reports the server unreachable. Mirrors Android.
+            val rawXray = profile.rawXrayConfig
+            val configJson = if (!rawXray.isNullOrBlank()) {
+                org.olcbox.app.vpn.xray.XrayConfig.buildRawProxyPingConfig(
+                    rawConfigJson = rawXray,
+                    listenPort = listenPort,
+                    listenHost = "127.0.0.1",
+                ) ?: run {
+                    addLog("Proxy $method ping: no proxy outbound in verbatim config for ${profile.server}")
+                    return@withContext null
+                }
+            } else runCatching {
                 org.olcbox.app.vpn.xray.XrayConfig.build(
                     profile = profile,
                     listenPort = listenPort,
