@@ -18,7 +18,7 @@ actual fun rememberOlcRtcServerInstaller(): OlcRtcServerInstaller {
 }
 
 /**
- * SSH-установщик olcRTC-сервера. Тот же приём, что у freeturn/WDTT/dnstt: определяем архитектуру,
+ * SSH-установщик olcRTC-сервера. Тот же приём, что у freeturn/WDTT/MasterDNS: определяем архитектуру,
  * заливаем бандленный бинарник кусками через exec-канал (SFTP на голых VPS-образах часто нет), а
  * дальше одна команда раскладывает конфиги и systemd-юниты — по одному на комнату.
  *

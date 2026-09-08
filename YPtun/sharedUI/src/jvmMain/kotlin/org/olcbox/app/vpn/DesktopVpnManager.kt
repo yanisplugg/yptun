@@ -461,9 +461,11 @@ class DesktopVpnManager private constructor(
                 // token it re-authenticates with; carve those out too or the relay dies mid-session.
                 addAll(VK_TURN_CONTROL_HOSTS)
             }
-            // dnstt speaks plain UDP DNS to this resolver; looping that into the TUN deadlocks the
-            // tunnel it is carrying (Android protects the socket instead).
-            config.dnstt?.resolver?.substringBefore(':')?.takeIf { it.isNotBlank() }?.let { add(it) }
+            // MasterDNS speaks plain UDP DNS to its resolvers; looping those into the TUN deadlocks the
+            // tunnel they are carrying (Android protects the sockets instead). It balances across ALL of
+            // them and reactivates ones it had dropped, so every resolver has to be carved out, not just
+            // the one in use.
+            config.masterDns?.resolverHosts()?.forEach { add(it) }
             // The Telegram-over-WARP proxy is a SECOND tunnel living in this same process. Android
             // keeps its UDP off the VPN with VpnService.protect(); desktop has no protect, so route
             // WARP around the TUN instead — otherwise enabling the main VPN kills the Telegram proxy.
@@ -705,13 +707,7 @@ class DesktopVpnManager private constructor(
                 throw CancellationException("Desktop start superseded")
             }
 
-            // A bare dnstt tunnel leaves a transparent forwarder — not a real SOCKS server — on the
-            // local port, so nothing downstream may send an auth handshake to it.
-            val bridgeSettings = if (useEngineController && engineController.localSocksNoAuth) {
-                socksSettings.copy(username = "", password = "")
-            } else {
-                socksSettings
-            }
+            val bridgeSettings = socksSettings
 
             when (desktopMode) {
                 DesktopMode.LinuxTun -> startLinuxTun(requestGeneration = requestGeneration)
@@ -868,7 +864,7 @@ class DesktopVpnManager private constructor(
     ) {
         // The system HTTP proxy must NOT be pointed at the core's local port: only sing-box answers
         // HTTP there (its "mixed" inbound). xray-core — which every routing profile, raw
-        // subscription config and xhttp cascade forces — plus olcRTC and dnstt all publish a
+        // subscription config and xhttp cascade forces — plus olcRTC and MasterDNS all publish a
         // SOCKS-only listener, so WinINET's absolute-form GET was never understood and the browser
         // silently went direct. Our own HTTP bridge in front of the SOCKS gives one stable HTTP port
         // that behaves identically on every engine.

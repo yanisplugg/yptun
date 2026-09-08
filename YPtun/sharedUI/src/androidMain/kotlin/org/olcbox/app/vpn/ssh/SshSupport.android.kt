@@ -15,7 +15,7 @@ internal const val SSH_CONNECT_TIMEOUT_MS = 25_000
 
 /**
  * Opens an authenticated SSH [Session] with password auth, mirroring what OpenSSH/paramiko do so a
- * password that logs in fine from a terminal also logs in here. This is shared by the WDTT and DNSTT
+ * password that logs in fine from a terminal also logs in here. This is shared by the WDTT and MasterDNS
  * VPS auto-installers (which were each carrying their own slightly-different copy).
  *
  * What makes it robust:

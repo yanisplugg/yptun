@@ -778,12 +778,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         // now the default) but this location has no proxy, fall through to the engine-default probe
         // instead of reporting a false "Offline".
         val hasProxy = locationConfig.proxy != null
-        // VK-TURN / dnstt are obfuscated tunnels with no directly-probeable endpoint: a TCP/ICMP hit or
+        // VK-TURN / MasterDNS are obfuscated tunnels with no directly-probeable endpoint: a TCP/ICMP hit or
         // an xray proxy-URL test can't reach them (xray can't build a throwaway outbound for a DNS
         // tunnel, so proxy GET/HEAD failed INSTANTLY). They ONLY measure end-to-end through the live
         // tunnel, so ignore the manual ping-mode override and fall through to the tunnelPing branch below.
         val tunnelOnlyEngine =
-            locationConfig.engine == EngineType.VkTurn || locationConfig.engine == EngineType.Dnstt
+            locationConfig.engine == EngineType.VkTurn || locationConfig.engine == EngineType.MasterDns
         if (!tunnelOnlyEngine) {
             when (behavior.pingMode) {
                 AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
@@ -798,9 +798,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Obfuscated transports whose real endpoint is blocked/hidden (VK-TURN, AmneziaWG):
             // the only meaningful probe is end-to-end through the live tunnel.
             locationConfig.engine == EngineType.VkTurn -> tunnelPing()
-            // dnstt has no TCP endpoint (its "server" is a DNS resolver), so it only measures
+            // MasterDNS has no TCP endpoint (its "server" is a DNS resolver), so it only measures
             // end-to-end through the live tunnel once connected.
-            locationConfig.engine == EngineType.Dnstt -> tunnelPing()
+            locationConfig.engine == EngineType.MasterDns -> tunnelPing()
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
                 // Connected → measure through the live tunnel; otherwise a standalone WG-handshake
                 // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).

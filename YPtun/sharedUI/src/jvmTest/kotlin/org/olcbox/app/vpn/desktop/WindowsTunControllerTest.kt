@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
  * Готовность TUN проверяется по ДРУЖЕСТВЕННОМУ имени адаптера («YPtun», его же получает tun2socks
  * через `--device`), а не по описанию («tun2socks Tunnel»). `NetworkInterface` отдаёт только
  * описание, поэтому прежняя проверка не совпадала НИКОГДА: любой сеанс поверх tun2socks (olcRTC,
- * DNSTT — всё, где TUN не держит сам sing-box) досиживал таймаут и падал с «YPtun adapter was not
+ * MasterDNS — всё, где TUN не держит сам sing-box) досиживал таймаут и падал с «YPtun adapter was not
  * created», хотя адаптер был поднят. Ошибка тихая, ловится только тестом.
  */
 class WindowsTunControllerTest {

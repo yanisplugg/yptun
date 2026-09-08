@@ -85,8 +85,8 @@ class DumpDesktopConfigsTest {
             autoDetectInterface = true, matchAppsByProcess = true, directViaBase = true,
             mixedInbound = true, hijackDns = true, tunMode = true,
         ))
-        // 9. dnstt (directViaBase, no local resolve)
-        w("09-dnstt", SingBoxConfig.build(
+        // 9. MasterDNS (directViaBase, no local resolve)
+        w("09-masterdns", SingBoxConfig.build(
             profile = vless, listenPort = 10808, olcrtcChainPort = 10812,
             autoDetectInterface = true, matchAppsByProcess = true, blockQuic = true,
             forceFamilyResolve = false, allowLocalResolve = false, directViaBase = true,

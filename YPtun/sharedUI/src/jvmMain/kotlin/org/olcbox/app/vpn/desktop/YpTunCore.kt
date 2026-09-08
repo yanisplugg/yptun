@@ -69,9 +69,24 @@ internal interface YpTunCoreLib : Library {
     fun YpWdttPushCaptcha(token: String)
     fun YpWdttVersion(): Pointer?
 
-    fun YpDnsttStart(resolver: String, domain: String, pubKeyHex: String, listenAddr: String): Pointer?
-    fun YpDnsttStop()
-    fun YpDnsttRunning(): Int
+    fun YpMasterDnsStart(
+        workDir: String,
+        domains: String,
+        encryptionKey: String,
+        encryptionMethod: Int,
+        resolvers: String,
+        listenAddr: String,
+        socksUser: String,
+        socksPass: String,
+        balancingStrategy: Int,
+        packetDuplication: Int,
+        uploadCompression: Int,
+        downloadCompression: Int,
+    ): Pointer?
+    fun YpMasterDnsStop()
+    fun YpMasterDnsRunning(): Int
+    fun YpMasterDnsLastError(): Pointer?
+    fun YpMasterDnsVersion(): Pointer?
 
     fun YpRtcVersion(): Pointer?
     fun YpRtcSetTransport(transport: String)
@@ -298,12 +313,37 @@ internal object YpTunCore {
 
     fun wdttVersion(): String = takeString(lib().YpWdttVersion()).orEmpty()
 
-    // dnstt ---------------------------------------------------------------------------------
-    fun dnsttStart(resolver: String, domain: String, pubKeyHex: String, listenAddr: String) =
-        check(lib().YpDnsttStart(resolver, domain, pubKeyHex, listenAddr), "DNSTT start failed")
+    // MasterDNS ---------------------------------------------------------------------------------
+    /** Zero for any of the tuning knobs keeps the MasterDnsVPN default. */
+    fun masterDnsStart(
+        workDir: String,
+        domains: String,
+        encryptionKey: String,
+        encryptionMethod: Int,
+        resolvers: String,
+        listenAddr: String,
+        socksUser: String,
+        socksPass: String,
+        balancingStrategy: Int = 0,
+        packetDuplication: Int = 0,
+        uploadCompression: Int = 0,
+        downloadCompression: Int = 0,
+    ) = check(
+        lib().YpMasterDnsStart(
+            workDir, domains, encryptionKey, encryptionMethod, resolvers, listenAddr,
+            socksUser, socksPass, balancingStrategy, packetDuplication,
+            uploadCompression, downloadCompression,
+        ),
+        "MasterDNS start failed"
+    )
 
-    fun dnsttStop() = libOrNull?.YpDnsttStop() ?: Unit
-    fun dnsttRunning(): Boolean = libOrNull?.YpDnsttRunning() == 1
+    fun masterDnsStop() = libOrNull?.YpMasterDnsStop() ?: Unit
+    fun masterDnsRunning(): Boolean = libOrNull?.YpMasterDnsRunning() == 1
+
+    /** Why the tunnel's run loop exited, when it did; empty while it is alive. */
+    fun masterDnsLastError(): String = takeString(libOrNull?.YpMasterDnsLastError()).orEmpty()
+
+    fun masterDnsVersion(): String = takeString(lib().YpMasterDnsVersion()).orEmpty()
 
     // olcrtc --------------------------------------------------------------------------------
     fun rtcVersion(): String = takeString(lib().YpRtcVersion()).orEmpty()
@@ -346,7 +386,7 @@ internal object YpTunCore {
         runCatching { xrayStop() }
         runCatching { ftStop() }
         runCatching { wdttStop() }
-        runCatching { dnsttStop() }
+        runCatching { masterDnsStop() }
         runCatching { awgStop() }
         runCatching { rtcStop() }
     }

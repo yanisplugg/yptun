@@ -20,7 +20,7 @@ import java.net.Socket
  * **HTTP**, not SOCKS. `startSystemProxy` pointed it straight at the core's local port, which only
  * answers HTTP when the core happens to be sing-box with a `mixed` inbound. Every other path —
  * xray-core (any routing profile, any raw config from a subscription, an xhttp cascade), olcRTC
- * Stealth, dnstt — publishes a SOCKS-only listener, so WinINET's `GET http://… HTTP/1.1` was
+ * Stealth, MasterDNS — publishes a SOCKS-only listener, so WinINET's `GET http://… HTTP/1.1` was
  * answered by a SOCKS greeting parser, every request failed, and the browser silently fell back to
  * a direct connection. That is "режим прокси вообще не работает".
  *

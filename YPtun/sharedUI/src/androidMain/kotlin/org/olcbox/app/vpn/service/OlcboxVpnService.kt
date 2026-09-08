@@ -53,9 +53,9 @@ import freeturn.Freeturn
 import freeturn.LogWriter as FreeturnLogWriter
 import wdttmobile.Wdttmobile
 import wdttmobile.ConfigSink as WdttConfigSink
-import dnsttmobile.Dnsttmobile
-import dnsttmobile.DnsttClient
-import dnsttmobile.SocketProtector as DnsttSocketProtector
+import mdnsmobile.Mdnsmobile
+import mdnsmobile.MasterDnsClient
+import mdnsmobile.SocketProtector as MasterDnsSocketProtector
 import com.adguard.trusttunnel.DeepLink as TrustTunnelDeepLink
 import com.adguard.trusttunnel.VpnClient as TrustTunnelVpnClient
 import com.adguard.trusttunnel.VpnClientListener as TrustTunnelListener
@@ -69,6 +69,7 @@ import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
@@ -191,10 +192,10 @@ class OlcboxVpnService : VpnService() {
     private var lastJitsiStopCompletedAtMs = 0L
 
     private var vpnInterface: ParcelFileDescriptor? = null
-    /** Active dnstt (DNS tunnel) client for [EngineType.Dnstt]; null when another engine is running. */
-    private var dnsttClient: DnsttClient? = null
-    /** True when the active dnstt engine also fronts a proxy core (proxy-over-dnstt). */
-    private var dnsttProxyActive: Boolean = false
+    /** Active MasterDNS (DNS tunnel) client for [EngineType.MasterDns]; null when another engine is running. */
+    private var masterDnsClient: MasterDnsClient? = null
+    /** True when the active MasterDNS engine also fronts a proxy core (proxy-over-MasterDNS). */
+    private var masterDnsProxyActive: Boolean = false
     /** Active Trust Tunnel client (SOCKS-only) for a [ProxyProfile.TYPE_TRUSTTUNNEL] proxy; null otherwise. */
     private var trustTunnelClient: TrustTunnelVpnClient? = null
     private var tun2socksThread: Thread? = null
@@ -238,7 +239,7 @@ class OlcboxVpnService : VpnService() {
     // Snapshotted from the (suspend) routing settings in [startMobile] so the non-suspend
     // [establishSystemVpnTunnel] can decide whether to carve the private/LAN ranges OUT of the TUN
     // routes. Carving them out makes "Обход LAN" work for EVERY engine — including olcRTC(Stealth),
-    // VK-TURN and dnstt, whose cores tunnel everything and have no routing-engine "direct" bucket. LAN
+    // VK-TURN and MasterDNS, whose cores tunnel everything and have no routing-engine "direct" bucket. LAN
     // packets then never enter the tunnel and reach the local network on the real interface directly.
     private var activeBypassLan: Boolean = false
     // Energy-saver mode snapshot: trims background work while connected (no logcat journal capture, a
@@ -963,7 +964,7 @@ class OlcboxVpnService : VpnService() {
             EngineType.Standard,
             EngineType.Chain -> startSingBoxCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.VkTurn -> startVkTurnCore(location, upstream, requestedGeneration, setErrorOnFailure)
-            EngineType.Dnstt -> startDnsttCore(location, upstream, requestedGeneration, setErrorOnFailure)
+            EngineType.MasterDns -> startMasterDnsCore(location, upstream, requestedGeneration, setErrorOnFailure)
         }
     }
 
@@ -1104,46 +1105,46 @@ class OlcboxVpnService : VpnService() {
     }
 
     /**
-     * dnstt (DNS tunnel): the dnstt client raises a transparent TCP forwarder on [socksListenPort];
-     * the dnstt-server relays each connection to its upstream SOCKS5, so the local port behaves as
-     * that SOCKS5 and the TUN bridge consumes it directly. dnstt carries only TCP (KCP + Noise over
-     * DNS TXT), and the forwarder can't terminate SOCKS auth, so the bridge runs no-auth (creds
-     * cleared). The dnstt UDP socket is protected so DNS queries egress the real network rather than
-     * looping back into the TUN.
+     * MasterDNS (DNS tunnel): the client serves a REAL SOCKS5 on [socksListenPort] whose traffic rides
+     * inside ordinary DNS queries to the MasterDnsVPN server, which is the internet exit — so the TUN
+     * bridge consumes that port directly. Unlike the dnstt forwarder this replaced, the listener speaks
+     * full SOCKS5 including username/password, so the per-session credentials are kept rather than
+     * cleared. The tunnel carries TCP only, hence udp-over-tcp on the bridge. Its resolver sockets are
+     * protected so the DNS queries egress the real network instead of looping back into the TUN.
      */
-    private suspend fun startDnsttCore(
+    private suspend fun startMasterDnsCore(
         location: LocationConfig,
         upstream: Network,
         requestedGeneration: Long,
         setErrorOnFailure: Boolean
     ): Boolean {
         val config = location.normalized()
-        val dnstt = config.dnstt
-        if (dnstt == null || !dnstt.isComplete()) {
+        val masterDns = config.masterDns
+        if (masterDns == null || !masterDns.isComplete()) {
             if (setErrorOnFailure) {
-                setStatus(VpnStatus.Error("DNSTT not configured"))
+                setStatus(VpnStatus.Error("MasterDNS not configured"))
                 updateNotification(ns.notifConnectionFailed)
             }
             return false
         }
-        // Optional proxy chained ON TOP of the dnstt tunnel: the proxy server is dialled THROUGH the
-        // dnstt local SOCKS, so the public exit is the proxy, not the dnstt-server. When present, dnstt
+        // Optional proxy chained ON TOP of the MasterDNS tunnel: the proxy server is dialled THROUGH the
+        // MasterDNS local SOCKS, so the public exit is the proxy, not the MasterDNS-сервер. When present, MasterDNS
         // moves to an internal port and a proxy core (Xray/sing-box) fronts the bridge on socksListenPort.
         // Accept a normal share link (vless/vmess/trojan/ss) OR a yptun://inbound link (a whole shared
         // LocationConfig) — pulling its main/second proxy out — so the same paste that works for the
         // Standard "additional proxy" field works here too.
-        val proxy = dnstt.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+        val proxy = masterDns.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
             (ShareLinkParser.parse(link)
                 ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
                 ?.takeIf { it.isComplete() }
         }
-        if (dnstt.proxyLink.isNotBlank() && proxy == null) {
-            addLog("DNSTT: proxy link present but could not be parsed — exiting via dnstt SOCKS directly (no proxy)")
+        if (masterDns.proxyLink.isNotBlank() && proxy == null) {
+            addLog("MasterDNS: proxy link present but could not be parsed — exiting via the MasterDNS SOCKS directly (no proxy)")
         }
         val useProxy = proxy != null
-        dnsttProxyActive = useProxy
-        // With a proxy, dnstt listens on the internal chain port and the proxy dials through it.
-        val dnsttPort = if (useProxy) chainOlcrtcPort else socksListenPort
+        masterDnsProxyActive = useProxy
+        // With a proxy, MasterDNS listens on the internal chain port and the proxy dials through it.
+        val masterDnsPort = if (useProxy) chainOlcrtcPort else socksListenPort
         return try {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
             waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
@@ -1151,47 +1152,62 @@ class OlcboxVpnService : VpnService() {
                 throw IllegalStateException("SOCKS port $socksListenPort is still in use")
             }
             if (useProxy) {
-                waitForSocksPortReleased(dnsttPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
-                if (isLocalSocksPortOpen(dnsttPort)) {
-                    throw IllegalStateException("DNSTT internal port $dnsttPort is still in use")
+                waitForSocksPortReleased(masterDnsPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+                if (isLocalSocksPortOpen(masterDnsPort)) {
+                    throw IllegalStateException("MasterDNS internal port $masterDnsPort is still in use")
                 }
             }
-            val dnsttAddr = "$socksListenHost:$dnsttPort"
-            addLog("Starting DNSTT on $dnsttAddr (domain=${dnstt.domain}, resolver=${dnstt.resolver})")
-            val client = Dnsttmobile.newClient(dnstt.resolver, dnstt.domain, dnstt.pubKey, dnsttAddr)
-            client.setProtectSocket(object : DnsttSocketProtector {
+            val masterDnsAddr = "$socksListenHost:$masterDnsPort"
+            addLog(
+                "Starting MasterDNS on $masterDnsAddr (domains=${masterDns.domains}, " +
+                    "resolvers=${masterDns.resolverList().size}, " +
+                    "encryption=${MasterDnsConfig.ENCRYPTION_LABELS.getOrElse(masterDns.encryptionMethod) { "?" }})"
+            )
+            // With a proxy core in front, the core dials this listener through the chain detour with NO
+            // credentials (olcrtcChainUser stays blank), so the internal port must run no-auth. Without
+            // one, the hev bridge is the only client and it offers the per-session token, so the tunnel's
+            // own SOCKS5 authenticates with exactly that pair.
+            val client = Mdnsmobile.newClient(
+                filesDir.resolve("masterdns").absolutePath,
+                masterDns.domains,
+                masterDns.encryptionKey,
+                masterDns.encryptionMethod.toLong(),
+                masterDns.resolvers,
+                masterDnsAddr,
+                if (useProxy) "" else socksUsername,
+                if (useProxy) "" else socksPassword,
+            )
+            client.setProtectSocket(object : MasterDnsSocketProtector {
                 override fun protect(fd: Long): Boolean = this@OlcboxVpnService.protect(fd.toInt())
             })
-            client.setShareProxy(false)
+            client.setResolverBalancingStrategy(masterDns.balancingStrategy.toLong())
+            client.setPacketDuplication(masterDns.packetDuplication.toLong())
             client.start()
-            dnsttClient = client
+            masterDnsClient = client
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) {
-                addLog("DNSTT start superseded")
+                addLog("MasterDNS start superseded")
                 return false
             }
-            if (!awaitSocksPortOpen(dnsttPort, MOBILE_READY_TIMEOUT_MS)) {
-                throw IllegalStateException("DNSTT SOCKS port $dnsttPort did not open")
+            if (!awaitSocksPortOpen(masterDnsPort, MOBILE_READY_TIMEOUT_MS)) {
+                throw IllegalStateException("MasterDNS SOCKS port $masterDnsPort did not open")
             }
-            addLog("DNSTT ready on $dnsttAddr")
+            addLog("MasterDNS ready on $masterDnsAddr")
 
             if (!useProxy) {
-                // No proxy core in front: the hev bridge talks straight to the dnstt forwarder, which
-                // pipes to the dnstt-server's own SOCKS5 end-to-end. That transparent path can't terminate
-                // a SOCKS auth handshake, so the bridge must run no-auth.
-                socksUsername = ""
-                socksPassword = ""
+                // No proxy core in front: the hev bridge talks straight to the tunnel's own SOCKS5, which
+                // was just configured with these very credentials — so they stay as they are.
                 publishActiveSocks()
                 return true
             }
             // Proxy case: the bridge now talks to the Xray/sing-box SOCKS inbound (not the forwarder), so
             // KEEP the per-session credentials — both the bridge and that inbound use them and must match,
             // else the core rejects every connection ("proxy/socks: no matching auth method"). The
-            // core→dnstt detour is no-auth (olcrtcChainUser left blank), matching the transparent forwarder.
+            // core→MasterDNS detour is no-auth (olcrtcChainUser left blank), matching the internal listener.
 
-            // Front the dnstt tunnel with the proxy core: TUN → core (socksListenPort) → proxy →
-            // dnstt SOCKS (dnsttPort) → dnstt-server → internet. Reuses the olcRTC-chain dialer wiring
-            // (the proxy dials its server through the local dnstt SOCKS). dnstt is TCP-only → block QUIC.
+            // Front the MasterDNS tunnel with the proxy core: TUN → core (socksListenPort) → proxy →
+            // MasterDNS SOCKS (masterDnsPort) → MasterDNS-сервер → internet. Reuses the olcRTC-chain dialer wiring
+            // (the proxy dials its server through the local MasterDNS SOCKS). MasterDNS is TCP-only → block QUIC.
             val traffic = loadTrafficSettings()
             val profilesState = loadRoutingProfilesState()
             val routingProfile = resolveProfileExpandingAsn(profilesState, config.routingProfileId)
@@ -1199,8 +1215,8 @@ class OlcboxVpnService : VpnService() {
             val profileWantsXray = routingProfile != null &&
                 (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
                 proxy!!.type in XRAY_SUPPORTED_TYPES
-            val useXray = dnstt.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
-            addLog("DNSTT chaining proxy ${proxy!!.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+            val useXray = masterDns.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
+            addLog("MasterDNS chaining proxy ${proxy!!.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
             if (useXray) {
                 val assetPath = ensureGeoAssetPath(routingProfile)
                 val xrayJson = XrayConfig.build(
@@ -1209,16 +1225,16 @@ class OlcboxVpnService : VpnService() {
                     listenHost = socksListenHost,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
-                    olcrtcChainPort = dnsttPort,
+                    olcrtcChainPort = masterDnsPort,
                     logLevel = "debug",
                     traffic = traffic,
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     blockQuic = true,
-                    // Don't force per-connection domain resolution (IPIfNonMatch) over the slow dnstt
+                    // Don't force per-connection domain resolution (IPIfNonMatch) over the slow MasterDNS
                     // tunnel — it stalls all traffic. The bridge's v6 drop keeps ipv4 pinned. See the
                     // matching forceFamilyResolve/allowLocalResolve opt-out on the sing-box path below.
                     forceFamilyResolve = false,
-                    // Chain the vless/trojan exit through the dnstt SOCKS at the SOCKET level (dialerProxy),
+                    // Chain the vless/trojan exit through the MasterDNS SOCKS at the SOCKET level (dialerProxy),
                     // not proxySettings — otherwise a vless reality/xtls-vision exit loses its transport and
                     // the server resets it ("если vless то connection reset").
                     chainViaDialerProxy = true,
@@ -1227,13 +1243,13 @@ class OlcboxVpnService : VpnService() {
                     // killed every connection mid-handshake. The no-proxy path survives because the hev
                     // bridge waits 10s. Give the chained handshake 30s.
                     handshakeTimeoutSec = 30,
-                    // Routing must NOT bypass the dnstt tunnel: a `direct` rule (e.g. Россия напрямую)
-                    // exits via the dnstt-server, not the real network. Routing only picks base-exit
+                    // Routing must NOT bypass the MasterDNS tunnel: a `direct` rule (e.g. Россия напрямую)
+                    // exits via the MasterDNS-сервер, not the real network. Routing only picks base-exit
                     // (direct) vs second-proxy-exit (proxy); the tunnel itself is never routed around.
                     directViaBase = true,
                 )
                 activeProxyCore = ProxyCore.Xray
-                addLog("Starting Xray (DNSTT proxy) via $socksListenHost:$socksListenPort")
+                addLog("Starting Xray (MasterDNS proxy) via $socksListenHost:$socksListenPort")
                 xrayEngine().start(xrayJson, assetPath)
             } else {
                 val json = SingBoxConfig.build(
@@ -1242,7 +1258,7 @@ class OlcboxVpnService : VpnService() {
                     listenHost = socksListenHost,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
-                    olcrtcChainPort = dnsttPort,
+                    olcrtcChainPort = masterDnsPort,
                     autoDetectInterface = true,
                     routing = loadRouting(),
                     traffic = traffic,
@@ -1251,51 +1267,51 @@ class OlcboxVpnService : VpnService() {
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     logLevel = "debug",
                     blockQuic = true,
-                    // dnstt is the slowest tunnel we have (DNS TXT, tiny MTU). With forceFamilyResolve on
+                    // MasterDNS is the slowest tunnel we have (payload chopped into DNS queries, tiny MTU). With forceFamilyResolve on
                     // (the default), a strict ipv4_only/ipv6_only strategy makes sing-box add a per-connection
                     // `resolve` action that resolves EVERY destination via the `remote` DNS server — whose
-                    // detour is PROXY_TAG, i.e. a DNS query THROUGH the vless proxy THROUGH the dnstt tunnel.
+                    // detour is PROXY_TAG, i.e. a DNS query THROUGH the vless proxy THROUGH the MasterDNS tunnel.
                     // Every connection then blocks on a DNS round-trip over the DNS tunnel and stalls out
                     // ("traffic doesn't flow"). Opt out exactly like the AmneziaWG/VK-TURN constrained
                     // tunnels: domains pass straight to the proxy (resolved server-side on the VPS), and the
-                    // ipv4 family is still enforced by the bridge's IPv6 drop — so no per-hop DNS over dnstt
+                    // ipv4 family is still enforced by the bridge's IPv6 drop — so no per-hop DNS over MasterDNS
                     // and no v6 leak.
                     forceFamilyResolve = false,
                     // Same reason for the geo/bypass-RU `resolve` action: resolving destinations through
                     // the proxy over the DNS tunnel adds a fatal round-trip per connection. Skip it — over
-                    // dnstt all traffic rides the tunnel anyway (direct is censored), so IP-based RU-direct
+                    // MasterDNS all traffic rides the tunnel anyway (direct is censored), so IP-based RU-direct
                     // is moot; domain/geosite rules still work.
                     allowLocalResolve = false,
-                    // `direct` traffic exits via the dnstt-server (base tunnel), never the real network —
+                    // `direct` traffic exits via the MasterDNS-сервер (base tunnel), never the real network —
                     // routing only governs the second proxy, the tunnel itself is never bypassed.
                     directViaBase = true,
                     cacheFilePath = singBoxCachePath(),
                 )
                 activeProxyCore = ProxyCore.SingBox
-                addLog("Starting sing-box (DNSTT proxy) via $socksListenHost:$socksListenPort")
+                addLog("Starting sing-box (MasterDNS proxy) via $socksListenHost:$socksListenPort")
                 singBoxEngine().start(json)
             }
             if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
-                throw IllegalStateException("DNSTT proxy SOCKS port $socksListenPort did not open")
+                throw IllegalStateException("MasterDNS proxy SOCKS port $socksListenPort did not open")
             }
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) {
-                addLog("DNSTT proxy start superseded")
+                addLog("MasterDNS proxy start superseded")
                 return false
             }
-            addLog("DNSTT proxy ready on $socksListenHost:$socksListenPort")
+            addLog("MasterDNS proxy ready on $socksListenHost:$socksListenPort")
             publishActiveSocks()
             true
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
-                addLog("DNSTT start canceled")
+                addLog("MasterDNS start canceled")
                 stopMobileAndWait()
             }
             throw e
         } catch (e: Exception) {
             val staleRequest = requestedGeneration != generation
             val message = e.message ?: "Transport failed"
-            addLog(if (staleRequest) "DNSTT start canceled: $message" else "DNSTT start failed: $message")
+            addLog(if (staleRequest) "MasterDNS start canceled: $message" else "MasterDNS start failed: $message")
             stopMobileAndWait()
             if (!staleRequest && setErrorOnFailure) {
                 setStatus(VpnStatus.Error(message))
@@ -1915,7 +1931,7 @@ class OlcboxVpnService : VpnService() {
                 // Accept a normal share link (vless/vmess/trojan/ss) OR a yptun://inbound link (a whole
                 // shared LocationConfig) — pulling its EXIT proxy (proxy2 ?: proxy). Previously only
                 // ShareLinkParser was tried, so a yptun:// chain proxy returned null and we silently
-                // exited via plain WireGuard ("2 прокси у VK-TURN мимо летит"). Mirrors the dnstt path
+                // exited via plain WireGuard ("2 прокси у VK-TURN мимо летит"). Mirrors the MasterDNS path
                 // and the Standard "additional proxy" field (proxyFromAnyLink).
                 val parsed = raw?.let { link ->
                     (ShareLinkParser.parse(link)
@@ -2244,8 +2260,8 @@ class OlcboxVpnService : VpnService() {
         EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
         // VK-TURN runs either the freeturn OR the WDTT transport core (mutually exclusive per location).
         EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
-        // dnstt raises its own local SOCKS listener; with a proxy-over-dnstt a proxy core fronts it.
-        EngineType.Dnstt -> dnsttClient?.isRunning == true && (!dnsttProxyActive || proxyCoreRunning())
+        // MasterDNS raises its own local SOCKS listener; with a proxy-over-MasterDNS a proxy core fronts it.
+        EngineType.MasterDns -> masterDnsClient?.isRunning == true && (!masterDnsProxyActive || proxyCoreRunning())
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -2482,7 +2498,7 @@ class OlcboxVpnService : VpnService() {
                 .setBlocking(true)
             // IPv4 capture. With "Обход LAN" on, route everything EXCEPT the private/LAN ranges into
             // the tunnel (so local-network traffic exits on the real interface — works for every engine,
-            // including the ones whose core can't route "direct": olcRTC/VK-TURN/dnstt). The mapped-DNS
+            // including the ones whose core can't route "direct": olcRTC/VK-TURN/MasterDNS). The mapped-DNS
             // pool 100.64.0.0/10 is deliberately NOT excluded so synthetic DNS IPs still enter the tun.
             // Off → capture all of 0.0.0.0/0 exactly as before.
             if (activeBypassLan) {
@@ -2667,7 +2683,7 @@ class OlcboxVpnService : VpnService() {
             socks5:
               address: ${socksConnectHost()}
               port: $socksListenPort
-              udp: '${if (engineType == EngineType.Stealth || engineType == EngineType.Dnstt) "tcp" else "udp"}'
+              udp: '${if (engineType == EngineType.Stealth || engineType == EngineType.MasterDns) "tcp" else "udp"}'
               pipeline: false
               username: '$socksUsername'
               password: '$socksPassword'
@@ -2683,7 +2699,7 @@ class OlcboxVpnService : VpnService() {
               task-stack-size: 24576
               tcp-buffer-size: 4096
               max-session-count: 1200
-              connect-timeout: ${if (engineType == EngineType.Dnstt) 30000 else 10000}
+              connect-timeout: ${if (engineType == EngineType.MasterDns) 30000 else 10000}
               tcp-read-write-timeout: 300000
               udp-read-write-timeout: 60000
               log-file: stderr
@@ -2953,9 +2969,9 @@ class OlcboxVpnService : VpnService() {
         OlcboxVpnState.setVkCaptchaUrl(null)
         cancelVkCaptchaNotification()
         runCatching { Wdttmobile.stop() }
-        runCatching { dnsttClient?.stop() }
-        dnsttClient = null
-        dnsttProxyActive = false
+        runCatching { masterDnsClient?.stop() }
+        masterDnsClient = null
+        masterDnsProxyActive = false
         runCatching { Awg.stop() }
         runCatching { trustTunnelClient?.stop() }
         runCatching { trustTunnelClient?.close() }

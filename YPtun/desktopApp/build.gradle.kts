@@ -564,7 +564,7 @@ fun registerYpTunCoreBuildTask(
     // переиспользовал старую .so/.dll, и починка, уже уехавшая в Android, до ПК не доезжала вовсе.
     // Тот же класс граблей, что был с olcrtc (строкой выше). Только .go/go.mod — остальное в сборку
     // не попадает и хеширование не удорожает.
-    listOf("free-turn-proxy", "awgproxy", "wdtt", "dnstt", "sing-box", "xray-core", "amneziawg-go")
+    listOf("free-turn-proxy", "awgproxy", "wdtt", "masterdns", "sing-box", "xray-core", "amneziawg-go")
         .map { coresRepoDir.resolveSibling(it) }
         .filter { it.isDirectory }
         .forEach { module ->

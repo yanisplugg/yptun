@@ -4,6 +4,7 @@ import kotlinx.coroutines.delay
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
@@ -70,15 +71,6 @@ internal class DesktopEngineController(
     var tunHandledInCore: Boolean = false
         private set
 
-    /**
-     * True when the endpoint left on `listenHost:listenPort` accepts NO SOCKS credentials. Only the
-     * bare dnstt path sets it: that local port is a transparent forwarder to the dnstt-server's own
-     * SOCKS5, and a pipe cannot terminate an auth handshake. The TUN bridge / system proxy must then
-     * connect anonymously.
-     */
-    var localSocksNoAuth: Boolean = false
-        private set
-
     private val requestedTun: Boolean get() = tunRequest != null
 
     /**
@@ -108,8 +100,7 @@ internal class DesktopEngineController(
             null
         }
         tunHandledInCore = false
-        localSocksNoAuth = false
-        dnsttProxyActive = false
+        masterDnsProxyActive = false
         singBoxFrontActive = false
         val config = location.normalized()
         when (config.engine) {
@@ -118,7 +109,7 @@ internal class DesktopEngineController(
             EngineType.Chain -> startSingBoxOrXray(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.VkTurn ->
                 startVkTurn(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
-            EngineType.Dnstt -> startDnstt(config, listenHost, listenPort, socksUsername, socksPassword)
+            EngineType.MasterDns -> startMasterDns(config, listenHost, listenPort, socksUsername, socksPassword)
         }
         if (requestedTun && !tunHandledInCore) {
             log("Per-process split tunneling unavailable (core is ${activeProxyCore}); falling back to tun2socks for all apps")
@@ -159,8 +150,7 @@ internal class DesktopEngineController(
         // previous sing-box session, made the manager skip tun2socks on the NEXT olcRTC connect: the
         // log said "Windows TUN owned by sing-box" while nothing owned it and no TUN existed at all.
         tunHandledInCore = false
-        localSocksNoAuth = false
-        dnsttProxyActive = false
+        masterDnsProxyActive = false
         singBoxFrontActive = false
     }
 
@@ -169,12 +159,12 @@ internal class DesktopEngineController(
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> YpTunCore.rtcRunning() && proxyCoreRunning()
         EngineType.VkTurn -> (YpTunCore.ftRunning() || YpTunCore.wdttRunning()) && proxyCoreRunning()
-        // dnstt raises its own local forwarder; with a proxy-over-dnstt a proxy core fronts it.
-        EngineType.Dnstt -> YpTunCore.dnsttRunning() && (!dnsttProxyActive || proxyCoreRunning())
+        // MasterDNS raises its own local forwarder; with a proxy-over-MasterDNS a proxy core fronts it.
+        EngineType.MasterDns -> YpTunCore.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
     }
 
-    /** True when the active dnstt engine also fronts a proxy core (proxy-over-dnstt). */
-    private var dnsttProxyActive: Boolean = false
+    /** True when the active MasterDNS engine also fronts a proxy core (proxy-over-MasterDNS). */
+    private var masterDnsProxyActive: Boolean = false
 
     /** True while a sing-box front owns the TUN in front of the Xray core (see [startSingBoxFront]). */
     private var singBoxFrontActive: Boolean = false
@@ -664,52 +654,68 @@ internal class DesktopEngineController(
     }
 
     // ---------------------------------------------------------------------------------------
-    // dnstt (mirrors OlcboxVpnService.startDnsttCore)
+    // MasterDNS (mirrors OlcboxVpnService.startMasterDnsCore)
 
     /**
-     * dnstt (DNS tunnel): the client raises a transparent TCP forwarder on the local port; the
-     * dnstt-server relays each connection to its own upstream SOCKS5, so that port behaves as that
-     * SOCKS5 and the TUN bridge can consume it directly. The forwarder cannot terminate a SOCKS auth
-     * handshake, so without a proxy core in front the local endpoint must run no-auth — see
-     * [localSocksNoAuth]. With a proxy link, dnstt moves to the internal chain port and an Xray/
-     * sing-box core fronts it on [listenPort], keeping the credentials.
+     * MasterDNS (DNS tunnel): the client serves a real SOCKS5 on the local port whose traffic rides
+     * inside DNS queries to the MasterDnsVPN server, which is the internet exit — so the TUN bridge
+     * consumes that port directly, credentials and all (unlike the dnstt forwarder this replaced, the
+     * listener does terminate a SOCKS auth handshake). With a proxy link, MasterDNS moves to the
+     * internal chain port — no-auth there, matching the core's credential-less chain detour — and an
+     * Xray/sing-box core fronts it on [listenPort].
      */
-    private suspend fun startDnstt(
+    private suspend fun startMasterDns(
         config: LocationConfig,
         listenHost: String,
         listenPort: Int,
         socksUsername: String,
         socksPassword: String,
     ) {
-        val dnstt = config.dnstt
-        check(dnstt != null && dnstt.isComplete()) { "DNSTT not configured" }
+        val masterDns = config.masterDns
+        check(masterDns != null && masterDns.isComplete()) { "MasterDNS not configured" }
 
-        val proxy = dnstt.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+        val proxy = masterDns.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
             (ShareLinkParser.parse(link)
                 ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
                 ?.takeIf { it.isComplete() }
         }
-        if (dnstt.proxyLink.isNotBlank() && proxy == null) {
-            log("DNSTT: proxy link present but could not be parsed — exiting via dnstt SOCKS directly (no proxy)")
+        if (masterDns.proxyLink.isNotBlank() && proxy == null) {
+            log("MasterDNS: proxy link present but could not be parsed — exiting via the MasterDNS SOCKS directly (no proxy)")
         }
         val useProxy = proxy != null
-        dnsttProxyActive = useProxy
-        localSocksNoAuth = !useProxy
-        val dnsttPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
+        masterDnsProxyActive = useProxy
+        val masterDnsPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
 
         require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
         if (useProxy) {
-            require(!isLocalSocksPortOpen(dnsttPort)) { "DNSTT internal port $dnsttPort is still in use" }
+            require(!isLocalSocksPortOpen(masterDnsPort)) { "MasterDNS internal port $masterDnsPort is still in use" }
         }
 
-        val dnsttAddr = "$listenHost:$dnsttPort"
-        log("Starting DNSTT on $dnsttAddr (domain=${dnstt.domain}, resolver=${dnstt.resolver})")
-        runCatching { YpTunCore.dnsttStop() }
-        YpTunCore.dnsttStart(dnstt.resolver, dnstt.domain, dnstt.pubKey, dnsttAddr)
-        if (!awaitSocksPortOpen(dnsttPort, MOBILE_READY_TIMEOUT_MS)) {
-            throw IllegalStateException("DNSTT SOCKS port $dnsttPort did not open")
+        val masterDnsAddr = "$listenHost:$masterDnsPort"
+        log(
+            "Starting MasterDNS on $masterDnsAddr (domains=${masterDns.domains}, " +
+                "resolvers=${masterDns.resolverList().size}, " +
+                "encryption=${MasterDnsConfig.ENCRYPTION_LABELS.getOrElse(masterDns.encryptionMethod) { "?" }})"
+        )
+        runCatching { YpTunCore.masterDnsStop() }
+        YpTunCore.masterDnsStart(
+            workDir = DesktopPaths.appDataDir().resolve("masterdns").toString(),
+            domains = masterDns.domains,
+            encryptionKey = masterDns.encryptionKey,
+            encryptionMethod = masterDns.encryptionMethod,
+            resolvers = masterDns.resolvers,
+            listenAddr = masterDnsAddr,
+            // The chain detour dials the internal port with no credentials, so it must run no-auth;
+            // the user-facing port keeps the session credentials the bridge already offers.
+            socksUser = if (useProxy) "" else socksUsername,
+            socksPass = if (useProxy) "" else socksPassword,
+            balancingStrategy = masterDns.balancingStrategy,
+            packetDuplication = masterDns.packetDuplication,
+        )
+        if (!awaitSocksPortOpen(masterDnsPort, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("MasterDNS SOCKS port $masterDnsPort did not open")
         }
-        log("DNSTT ready on $dnsttAddr")
+        log("MasterDNS ready on $masterDnsAddr")
         if (!useProxy) return
 
         val traffic = JvmVpnSettings.loadTraffic()
@@ -720,8 +726,8 @@ internal class DesktopEngineController(
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
             proxy.type in XRAY_SUPPORTED_TYPES
-        val useXray = dnstt.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
-        log("DNSTT chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+        val useXray = masterDns.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
+        log("MasterDNS chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
 
         if (useXray) {
             // xray owns no TUN — a sing-box front does, so the external tun2socks bridge (and its
@@ -736,7 +742,7 @@ internal class DesktopEngineController(
                 listenHost = xrayHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                olcrtcChainPort = dnsttPort,
+                olcrtcChainPort = masterDnsPort,
                 traffic = traffic,
                 routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                 blockQuic = true,
@@ -749,7 +755,7 @@ internal class DesktopEngineController(
                 // Xray's default 4s handshake budget is far too short for SOCKS5→VPS→proxy→TLS over a
                 // DNS tunnel, and it killed every connection mid-handshake.
                 handshakeTimeoutSec = 30,
-                // A `direct` rule must still exit via the dnstt-server, never the real network.
+                // A `direct` rule must still exit via the MasterDNS-сервер, never the real network.
                 directViaBase = true,
             )
             activeProxyCore = ProxyCore.Xray
@@ -774,7 +780,7 @@ internal class DesktopEngineController(
                 listenHost = listenHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                olcrtcChainPort = dnsttPort,
+                olcrtcChainPort = masterDnsPort,
                 autoDetectInterface = true,
                 routing = routing,
                 matchAppsByProcess = true,
@@ -803,9 +809,9 @@ internal class DesktopEngineController(
         }
 
         if (!awaitSocksPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
-            throw IllegalStateException("DNSTT proxy SOCKS port $listenPort did not open")
+            throw IllegalStateException("MasterDNS proxy SOCKS port $listenPort did not open")
         }
-        log("DNSTT proxy ready on $listenHost:$listenPort")
+        log("MasterDNS proxy ready on $listenHost:$listenPort")
     }
 
     // ---------------------------------------------------------------------------------------

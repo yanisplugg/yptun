@@ -4,7 +4,7 @@
 
 ### Fast censorship-resistant VPN · Android and Windows
 
-*VLESS · Reality · XHTTP over **Xray** and **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **DNSTT** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, which disguises traffic as a video call.*
+*VLESS · Reality · XHTTP over **Xray** and **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **MasterDNS** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, which disguises traffic as a video call.*
 
 <br>
 
@@ -28,11 +28,11 @@
 
 Most VPN clients give you one core and one way to connect. **YPtun gives you a toolbox.** Several censorship-bypass engines in a single app: when one method gets blocked, switch to another and keep going.
 
-> **The point is versatility.** Xray and sing-box with every common protocol and transport, obfuscated WireGuard via AmneziaWG, tunnelling through real calls (VK-TURN and olcRTC), the DNSTT DNS tunnel, import of basically anything, and Happ-compatible routing profiles. Kill one path — there are several more next to it.
+> **The point is versatility.** Xray and sing-box with every common protocol and transport, obfuscated WireGuard via AmneziaWG, tunnelling through real calls (VK-TURN and olcRTC), the MasterDNS DNS tunnel, import of basically anything, and Happ-compatible routing profiles. Kill one path — there are several more next to it.
 
 > Built for places where the internet fights back — Russia, Iran, and any country where sites vanish without warning.
 
-> **Windows is here** — an installer and a portable build as a single `.exe`, x64 and native ARM64. The same app and the same engines as on the phone: subscriptions, routing profiles, cascade, VK-TURN, olcRTC, DNSTT, Trust Tunnel.
+> **Windows is here** — an installer and a portable build as a single `.exe`, x64 and native ARM64. The same app and the same engines as on the phone: subscriptions, routing profiles, cascade, VK-TURN, olcRTC, MasterDNS, Trust Tunnel.
 
 ---
 
@@ -54,10 +54,10 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 
 | | |
 |---|---|
-| **Multiple engines** | Xray, sing-box, AmneziaWG, VK-TURN, DNSTT — the core is picked per protocol automatically or by hand. |
+| **Multiple engines** | Xray, sing-box, AmneziaWG, VK-TURN, MasterDNS — the core is picked per protocol automatically or by hand. |
 | **Protocols** | VLESS · VMess · Trojan · Shadowsocks · Hysteria2 · WireGuard / AmneziaWG |
 | **Transports** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · uTLS fingerprints |
-| **DNSTT (DNS tunnel)** | A tunnel over DNS queries (KCP + Noise) — works where all other traffic is blocked but DNS still flows. One-tap server install on a VPS over SSH. |
+| **MasterDNS (DNS tunnel)** | A tunnel over DNS queries (MasterDnsVPN: custom ARQ transport, several resolvers at once, packet duplication) — works where all other traffic is blocked but DNS still flows. One-tap server install on a VPS over SSH. |
 | **Telegram proxy over WARP** | A lightweight background service: a WARP tunnel + a local SOCKS5 for Telegram, independent of the main connection. |
 | **olcRTC** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport — traffic rides real video-call services (Jazz, Telemost, WB Stream, Jitsi); to DPI it looks like a live call, not a proxy. |
 | **Smart import** | vless/vmess/trojan/ss links, base64, JSON panels, **full raw Xray / sing-box configs** (applied as-is), AmneziaWG `.conf`/QR, olcRTC URIs, Happ profiles, bulk link-list import. |
@@ -94,14 +94,14 @@ Minimum is **Android 6.0** (API 23).
 └──────────────┘            │  (IPv4+IPv6)  │            │  ┌──────────────────────┐  │
                             └───────────────┘            │  │  Xray / sing-box     │  │
                                                          │  │  AmneziaWG / VK-TURN │  │
-                                                         │  │  DNSTT / olcRTC      │  │
+                                                         │  │  MasterDNS / olcRTC      │  │
                                                          │  └──────────────────────┘  │
                                                          └─────────────┬──────────────┘
                                                                        ▼
                                                                  open internet
 ```
 
-Every native core is built into **one** `gomobile` library (a single Go runtime), so Xray, sing-box, AmneziaWG, VK-TURN, DNSTT and olcRTC coexist in one process without conflicts. The app raises a `VpnService`, feeds packets into the TUN, and wraps them in the chosen engine through a local SOCKS5.
+Every native core is built into **one** `gomobile` library (a single Go runtime), so Xray, sing-box, AmneziaWG, VK-TURN, MasterDNS and olcRTC coexist in one process without conflicts. The app raises a `VpnService`, feeds packets into the TUN, and wraps them in the chosen engine through a local SOCKS5.
 
 ---
 
@@ -111,7 +111,7 @@ Every native core is built into **one** `gomobile` library (a single Go runtime)
 - **AmneziaWG** — WireGuard with obfuscation: the handshake and packets don't look like "plain" WireGuard, which is often cut by signature.
 - **Hysteria2** — a fast QUIC-based protocol with Salamander obfuscation and port hopping; holds speed well on lossy links.
 - **VK-TURN** — raises a local WireGuard and pushes it through VK's call TURN servers; several "calls" are bonded for throughput.
-- **DNSTT** — a tunnel over DNS queries; works where only DNS is open.
+- **MasterDNS** — a tunnel over DNS queries; works where only DNS is open.
 - **olcRTC** — video-call disguise: traffic rides real conferencing services and looks like a live call to DPI.
 - **Telegram proxy over WARP** — a standalone background proxy for Telegram on top of Cloudflare WARP.
 
@@ -119,7 +119,7 @@ Every native core is built into **one** `gomobile` library (a single Go runtime)
 
 ## Build from source
 
-Everything needed is already vendored (`cores`, `olcrtc`, `sing-box`, `awgproxy`, `hysteria2proxy`, `free-turn-proxy`, `dnstt`, `wdtt`, `amneziawg-go`). You'll need:
+Everything needed is already vendored (`cores`, `olcrtc`, `sing-box`, `awgproxy`, `hysteria2proxy`, `free-turn-proxy`, `masterdns`, `wdtt`, `amneziawg-go`). You'll need:
 
 - **JDK 17** (the one bundled with Android Studio works)
 - **Android SDK** (set `sdk.dir` in `YPtun/local.properties`) + **NDK `28.2.13676358`**
@@ -174,13 +174,13 @@ Found a bug or want a feature? Open an issue or PR — see **[CONTRIBUTING.md](C
 
 ```
 YPtun/            Kotlin Multiplatform app — Compose UI, Android VpnService, engines
-cores/            Go glue: one gomobile AAR from sing-box + olcRTC + Xray + AmneziaWG + VK-TURN + DNSTT
+cores/            Go glue: one gomobile AAR from sing-box + olcRTC + Xray + AmneziaWG + VK-TURN + MasterDNS
 olcrtc/           olcRTC — video-call disguise transport          (third-party, vendored)
 sing-box/         sing-box / libbox                                (vendored)
 awgproxy/         AmneziaWG wrapper → local SOCKS5                 (Go module)
 hysteria2proxy/   Hysteria2 (apernet) wrapper → local SOCKS5       (Go module)
 free-turn-proxy/  VK-TURN — tunnel through VK calls                (Go module)
-dnstt/            DNSTT — tunnel over DNS                           (client + server)
+masterdns/        MasterDNS — tunnel over DNS                       (client + server)
 wdtt/             WDTT — tunnel variant                            (client + server)
 amneziawg-go/     AmneziaWG implementation                         (vendored)
 ```
@@ -190,7 +190,7 @@ amneziawg-go/     AmneziaWG implementation                         (vendored)
 ## Roadmap
 
 - [x] Android release
-- [x] AmneziaWG, VK-TURN and DNSTT engines
+- [x] AmneziaWG, VK-TURN and MasterDNS engines
 - [x] Routing profiles (Happ-compatible) + ASN
 - [x] **Windows** build (x64 and ARM64)
 - [ ] **Linux** build — *in progress*

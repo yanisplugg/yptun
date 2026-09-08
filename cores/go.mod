@@ -9,8 +9,8 @@ require (
 	github.com/sagernet/sing-box v1.14.0
 	github.com/samosvalishe/free-turn-proxy v0.0.0
 	github.com/xtls/xray-core v1.260908.0
+	masterdnsvpn-go v0.0.0
 	wg-turn-client v0.0.0
-	www.bamsoftware.com/git/dnstt.git v0.0.0
 )
 
 require (
@@ -22,6 +22,7 @@ require (
 	filippo.io/age v1.3.1 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
+	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
@@ -64,7 +65,6 @@ require (
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/florianl/go-nfqueue/v2 v2.1.0 // indirect
-	github.com/flynn/noise v1.0.0 // indirect
 	github.com/frostbyte73/core v0.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
@@ -306,4 +306,8 @@ replace github.com/amnezia-vpn/amneziawg-go/v3 => ../amneziawg-go
 
 replace wg-turn-client => ../wdtt
 
-replace www.bamsoftware.com/git/dnstt.git => ../dnstt
+// Vendored MasterDnsVPN (github.com/masterking32/MasterDnsVPN), the DNS tunnel that replaced
+// dnstt. One local patch: internal/client/tunnel_runtime.go dials resolvers through
+// internal/netutil.DialUDPProtected so Android can VpnService.protect() the UDP socket.
+// The wrapper both platforms drive is mdnsmobile/.
+replace masterdnsvpn-go => ../masterdns

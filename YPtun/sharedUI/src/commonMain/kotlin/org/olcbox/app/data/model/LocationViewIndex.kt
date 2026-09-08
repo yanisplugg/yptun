@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
  * A tiny projection of [LocationBundleV4] carrying ONLY what the location list needs to paint a row:
  * the storage id, display name, subscription grouping + metadata (traffic/expiry/name) and the engine
  * / provider / transport labels. The heavy connection payloads (proxy / proxy2 / raw Xray & sing-box
- * configs / AmneziaWG / vkturn / dnstt / fakedns) are deliberately LEFT OUT.
+ * configs / AmneziaWG / vkturn / MasterDNS / fakedns) are deliberately LEFT OUT.
  *
  * Why it exists: with hundreds of saved configs the full kotlinx.serialization decode of the bundle
  * takes a couple of seconds on a cold start, during which the list sat blank/spinning. This index is

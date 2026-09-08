@@ -110,8 +110,9 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
     inputs.dir(coresRepoDir.resolve("../free-turn-proxy/internal"))
     // WDTT VK-TURN core (sibling replace module wg-turn-client); track its sources.
     inputs.dir(coresRepoDir.resolve("../wdtt"))
-    // dnstt DNS-tunnel core (sibling replace module www.bamsoftware.com/git/dnstt.git); track its sources.
-    inputs.dir(coresRepoDir.resolve("../dnstt"))
+    // MasterDNS DNS-tunnel core (sibling replace module masterdnsvpn-go); track its sources.
+    inputs.dir(coresRepoDir.resolve("../masterdns/internal"))
+    inputs.dir(coresRepoDir.resolve("../masterdns/mdnsmobile"))
     // AmneziaWG SOCKS bridge (sibling module) + its local amneziawg-go fork.
     inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
     // NOTE: the old hysteria2proxy SOCKS bridge is gone — hysteria2 is native in sing-box
@@ -142,7 +143,7 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         "github.com/sagernet/sing-box/experimental/libbox",
         "github.com/samosvalishe/free-turn-proxy/freeturn",
         "wg-turn-client/wdttmobile",
-        "www.bamsoftware.com/git/dnstt.git/dnsttmobile",
+        "masterdnsvpn-go/mdnsmobile",
         "github.com/olc/awgproxy/awg",
         "kazcores/xraybridge"
     )

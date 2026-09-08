@@ -338,7 +338,7 @@ internal class WindowsTunController(
          * `java.net.NetworkInterface` NEVER reports the friendly name: `name` is a synthetic
          * `iftype53_32770` and `displayName` is the adapter DESCRIPTION ("tun2socks Tunnel"), so
          * matching [TUN_NAME] against them could not be true even once. Every tun2socks-backed
-         * session — olcRTC, DNSTT, anything whose core is not the sing-box that owns the TUN
+         * session — olcRTC, MasterDNS, anything whose core is not the sing-box that owns the TUN
          * itself — therefore waited out [TUN_READY_TIMEOUT_MS] and died with "YPtun adapter was
          * not created" while the adapter was in fact up.
          *

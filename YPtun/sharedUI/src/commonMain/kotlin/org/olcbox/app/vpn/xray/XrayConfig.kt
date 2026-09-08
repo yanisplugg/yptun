@@ -183,26 +183,26 @@ object XrayConfig {
         blockQuic: Boolean = true,
         // Family enforcement (the opposite-family blackhole + IPIfNonMatch routing-resolve that ipv4_only/
         // prefer_ipv4/ipv6_only turn on). IPIfNonMatch makes Xray resolve EVERY domain for routing, and
-        // those DNS lookups egress via the proxy — i.e. through the tunnel. On a very slow tunnel (dnstt:
-        // DNS TXT) that adds a tunnel round-trip to every connection and stalls all traffic. Pass false
+        // those DNS lookups egress via the proxy — i.e. through the tunnel. On a very slow tunnel (MasterDNS:
+        // payload inside DNS queries) that adds a tunnel round-trip to every connection and stalls all traffic. Pass false
         // there: the bridge already drops client IPv6 for ipv4 modes, so the family stays pinned without
         // forcing per-connection resolution over the tunnel.
         forceFamilyResolve: Boolean = true,
         // Chain the main proxy through its detour with sockopt.dialerProxy (socket-level) instead of
         // proxySettings (proxy-level). proxySettings re-wraps the outbound and DROPS its own transport —
         // a vless+reality / xtls-vision exit then sends a malformed handshake and the server resets the
-        // connection ("vless → connection reset" over dnstt). dialerProxy keeps the full vless/TLS/flow
-        // intact and only routes the underlying socket through the detour. Set for the dnstt chain.
+        // connection ("vless → connection reset" over MasterDNS). dialerProxy keeps the full vless/TLS/flow
+        // intact and only routes the underlying socket through the detour. Set for the MasterDNS chain.
         chainViaDialerProxy: Boolean = false,
-        // For VK-TURN / dnstt: the base tunnel (WireGuard / dnstt SOCKS) is the MANDATORY transport, so a
+        // For VK-TURN / MasterDNS: the base tunnel (WireGuard / MasterDNS SOCKS) is the MANDATORY transport, so a
         // routing rule's `direct` bucket must NOT leak to the real network — it should still exit through
-        // the base tunnel (at the VK / dnstt-server). When true, the `direct` outbound dials through the
+        // the base tunnel (at the VK / MasterDNS-сервер). When true, the `direct` outbound dials through the
         // base detour instead of dialing the destination on the real interface. So routing only chooses
         // base-tunnel-exit (direct) vs second-proxy-exit (proxy); nothing ever bypasses the tunnel.
         directViaBase: Boolean = false,
         // Send LAN/private ranges straight out (not through the proxy) so local-network devices stay
         // reachable — the global "Обход LAN" toggle. Only applied when the `direct` outbound is the
-        // REAL network ([directViaBase] == false); for VK-TURN/dnstt base-detour exits LAN must keep
+        // REAL network ([directViaBase] == false); for VK-TURN/MasterDNS base-detour exits LAN must keep
         // tunnelling, so this is ignored there (the toggle still governs the sing-box path the same way).
         bypassLan: Boolean = true,
         // Optional SECOND proxy chained ON TOP of [profile] (the main). When present, traffic exits via
@@ -217,8 +217,8 @@ object XrayConfig {
         // sing-box (explicit core choice, the app-wide default, blockRuDomains or a dnsHosts profile).
         fakeDnsSpec: FakeDnsSpec? = null,
         // Outbound handshake budget (seconds). Xray's default is only 4s — far too short when the proxy
-        // is chained over an ultra-slow tunnel (dnstt: SOCKS5 greeting+CONNECT to the VPS, then the VPS's
-        // dial to the proxy server, then the vless/TLS handshake, all round-tripping over DNS TXT). Xray
+        // is chained over an ultra-slow tunnel (MasterDNS: SOCKS5 greeting+CONNECT to the VPS, then the VPS's
+        // dial to the proxy server, then the vless/TLS handshake, all round-tripping over DNS). Xray
         // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
         handshakeTimeoutSec: Int? = null,
     ): String {
@@ -240,7 +240,7 @@ object XrayConfig {
             putJsonObject("log") { put("loglevel", logLevel) }
 
             // Stretch the handshake (and idle) budget for slow chained tunnels so Xray doesn't kill a
-            // still-completing handshake. Only emitted when a caller asks for it (e.g. dnstt).
+            // still-completing handshake. Only emitted when a caller asks for it (e.g. MasterDNS).
             if (handshakeTimeoutSec != null) {
                 putJsonObject("policy") {
                     putJsonObject("levels") {
@@ -333,7 +333,7 @@ object XrayConfig {
             val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
             // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
             val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
-            // The base tunnel's exit tag (WG for VK-TURN, dnstt SOCKS for dnstt). Used to keep `direct`
+            // The base tunnel's exit tag (WG for VK-TURN, MasterDNS SOCKS for MasterDNS). Used to keep `direct`
             // traffic on the tunnel when [directViaBase].
             val baseExitTag = when {
                 wgBaseOutbound != null -> WG_BASE_TAG
@@ -419,7 +419,7 @@ object XrayConfig {
                         // Resolve direct destinations via xray's own DNS, not Go's (broken on Android).
                         put("domainStrategy", directDomainStrategy(traffic))
                     }
-                    // VK-TURN / dnstt: send `direct` traffic THROUGH the base tunnel (the dnstt-server /
+                    // VK-TURN / MasterDNS: send `direct` traffic THROUGH the base tunnel (the MasterDNS-сервер /
                     // VK exit) instead of the real interface, so routing never bypasses the tunnel.
                     if (directDialsBase) {
                         putJsonObject("streamSettings") {
@@ -1318,12 +1318,12 @@ object XrayConfig {
         // when a second/cascade proxy exits in front of it.
         tag: String = PROXY_TAG,
         // Force socket-level (dialerProxy) chaining over the detour even for non-xhttp transports — keeps
-        // a vless reality/vision exit intact over the dnstt chain (see [build]'s chainViaDialerProxy).
+        // a vless reality/vision exit intact over the MasterDNS chain (see [build]'s chainViaDialerProxy).
         chainViaDialerProxy: Boolean = false,
         // Keep XTLS Vision `flow` even though this is a chained hop. Set for the cascade SOCKS loopback,
         // which hands the exit a CLEAN transparent TCP stream Vision can traverse — and the 2nd server's
         // vless inbound REQUIRES the flow it was configured with (drop it → "EOF"/reset). The generic
-        // olcRTC/WG/dnstt detours still drop flow (they can't carry Vision's raw-TLS splice reliably).
+        // olcRTC/WG/MasterDNS detours still drop flow (they can't carry Vision's raw-TLS splice reliably).
         preserveFlow: Boolean = false,
         // Cascade base (xhttp main): give its xhttp transport a high-concurrency xmux so the loopback's
         // per-app-flow connections collapse onto a couple of H2 tunnels (see buildStreamSettings).
@@ -1354,7 +1354,7 @@ object XrayConfig {
                                         // XTLS Vision (xtls-rprx-vision) splices the RAW TLS connection to
                                         // ITS OWN server — it can't ride a chain. When this vless dials
                                         // through a detour (cascade exit over the main, an olcRTC/VK-TURN/
-                                        // dnstt base hop), keeping the flow makes the exit hang = "no
+                                        // MasterDNS base hop), keeping the flow makes the exit hang = "no
                                         // connection" (e.g. a tcp vless-reality 2nd proxy over an xhttp
                                         // main). Drop it on chained hops; plain vless tunnels fine. The
                                         // direct (un-chained) hop keeps its flow so Vision still works there.

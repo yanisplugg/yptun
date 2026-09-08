@@ -113,12 +113,12 @@ object SingBoxConfig {
         forceFamilyResolve: Boolean = true,
         // Whether the sniffed-domain `resolve` action may run. It resolves app destinations via the
         // `remote` DNS server, whose detour is the proxy — i.e. a DNS lookup THROUGH the tunnel. On a
-        // very slow tunnel (dnstt: DNS TXT, tiny MTU) that adds a tunnel round-trip to EVERY connection
-        // and stalls browsing, so the dnstt-proxy path passes false: domains then go straight to the
+        // very slow tunnel (MasterDNS: payload inside DNS queries, tiny MTU) that adds a tunnel round-trip to EVERY connection
+        // and stalls browsing, so the MasterDNS-proxy path passes false: domains then go straight to the
         // proxy (resolved server-side). Costs only IP-based geo rules (geoip:ru → direct); domain/geosite
         // rules still match without a local IP, and the family is still pinned by the bridge's v6 drop.
         allowLocalResolve: Boolean = true,
-        // VK-TURN / dnstt: the base tunnel (WireGuard / dnstt SOCKS) is the MANDATORY transport, so a
+        // VK-TURN / MasterDNS: the base tunnel (WireGuard / MasterDNS SOCKS) is the MANDATORY transport, so a
         // routing rule's `direct` bucket must NOT leak to the real network — it should still exit through
         // the base tunnel. When true, the `direct` outbound dials through the base detour (WG / olcRTC),
         // so routing only chooses base-tunnel-exit (direct) vs second-proxy-exit (proxy); the tunnel is
@@ -217,7 +217,7 @@ object SingBoxConfig {
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
         val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy
-        // Base tunnel exit tag (WG for VK-TURN, olcRTC SOCKS for Chain/dnstt) — the transport that
+        // Base tunnel exit tag (WG for VK-TURN, olcRTC SOCKS for Chain/MasterDNS) — the transport that
         // [directViaBase] traffic must ride instead of the real network.
         val baseExitTag = when {
             wireguardBase != null -> WG_BASE_TAG
@@ -431,7 +431,7 @@ object SingBoxConfig {
                 addJsonObject {
                     put("type", "direct")
                     put("tag", "direct")
-                    // (VK-TURN / dnstt keep `direct` traffic inside the tunnel by routing it to
+                    // (VK-TURN / MasterDNS keep `direct` traffic inside the tunnel by routing it to
                     // [directTag] — this outbound stays a plain, detour-free direct.)
                     // IPv6-leak guard for HYBRID modes (prefer_ipv4/prefer_ipv6): the direct/bypass path
                     // (domain:ru → direct) would otherwise dial the user's REAL IPv6 for dual-stack sites,

@@ -194,51 +194,83 @@ data class FakeDnsSpec(
 )
 
 /**
- * dnstt (DNS tunnel) transport parameters for [EngineType.Dnstt]. The dnstt client raises a local
- * listener that transparently forwards each TCP connection through DNS TXT queries to the
- * dnstt-server, which relays to its upstream (typically a SOCKS5) — so the local port behaves as
- * that SOCKS5 and the TUN bridge consumes it directly. KCP transport + Noise_NK encryption.
+ * MasterDNS (DNS tunnel) transport parameters for [EngineType.MasterDns]. The client carries TCP
+ * inside ordinary DNS queries to the MasterDnsVPN server and serves the result as a local SOCKS5,
+ * which the TUN bridge consumes directly. Custom ARQ transport, multi-resolver with duplication and
+ * per-resolver health checks — see github.com/masterking32/MasterDnsVPN.
  */
 @Serializable
-data class DnsttConfig(
-    /** Tunnel domain delegated to the dnstt-server, e.g. `t.example.com`. */
-    @SerialName("domain")
-    val domain: String = "",
-    /** Server Noise public key in hex (required — the Noise_NK responder key). */
-    @SerialName("pubkey")
-    val pubKey: String = "",
+data class MasterDnsConfig(
     /**
-     * UDP DNS resolver that reaches the tunnel domain's authoritative server, e.g. `1.1.1.1:53`,
-     * `8.8.8.8`, or a local/ISP resolver. Port defaults to 53 if omitted. The mobile dnstt client
-     * speaks plain UDP DNS (no DoH/DoT), so this must be a UDP resolver address.
+     * Tunnel domain(s) delegated to the MasterDnsVPN server, e.g. `v.example.com`. Comma or newline
+     * separated; every one of them must belong to the same server.
      */
-    @SerialName("resolver")
-    val resolver: String = "",
+    @SerialName("domains")
+    val domains: String = "",
+    /** Shared secret — the contents of the server's `encrypt_key.txt`. Must match exactly. */
+    @SerialName("key")
+    val encryptionKey: String = "",
     /**
-     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the dnstt tunnel: the proxy
-     * server is dialed THROUGH the dnstt local SOCKS, so the public exit is the proxy, not the
-     * dnstt-server. Blank = exit straight via the dnstt-server's own SOCKS5.
+     * Payload cipher, must match the server's DATA_ENCRYPTION_METHOD:
+     * 0=none, 1=XOR, 2=ChaCha20, 3=AES-128-GCM, 4=AES-192-GCM, 5=AES-256-GCM.
+     */
+    @SerialName("encryption")
+    val encryptionMethod: Int = DEFAULT_ENCRYPTION_METHOD,
+    /**
+     * DNS resolvers that reach the tunnel domain, comma or newline separated, each `ip` or `ip:port`
+     * (53 when omitted). Several resolvers are the point: the client spreads traffic over all of them
+     * and drops the ones that stop answering. In direct mode this is simply the VPS itself.
+     */
+    @SerialName("resolvers")
+    val resolvers: String = "",
+    /** How resolvers are picked (RESOLVER_BALANCING_STRATEGY 0..8); 0 = upstream default. */
+    @SerialName("balancing")
+    val balancingStrategy: Int = 0,
+    /** Copies of each outgoing packet — more survives a lossy link at the cost of traffic; 0 = default. */
+    @SerialName("duplication")
+    val packetDuplication: Int = 0,
+    /**
+     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the tunnel: the proxy server
+     * is dialed THROUGH the local MasterDNS SOCKS, so the public exit is the proxy, not the
+     * MasterDnsVPN server. Blank = exit straight through the server itself.
      */
     @SerialName("proxy_link")
     val proxyLink: String = "",
     /**
-     * Which core runs the over-dnstt proxy (same choice as the Standard engine). [ProxyCore.Auto]
+     * Which core runs the over-tunnel proxy (same choice as the Standard engine). [ProxyCore.Auto]
      * picks Xray for raw-Xray/xhttp transports, otherwise sing-box.
      */
     @SerialName("proxy_core")
     val proxyCore: ProxyCore = ProxyCore.Auto,
 ) {
-    /** True when the dnstt tunnel has everything it needs to connect. */
+    /** True when the tunnel has everything it needs to connect. */
     fun isComplete(): Boolean =
-        domain.isNotBlank() && pubKey.isNotBlank() && resolver.isNotBlank()
+        domainList().isNotEmpty() && encryptionKey.isNotBlank() && resolverList().isNotEmpty()
 
-    /** True when a proxy is chained on top of the dnstt tunnel. */
+    /** True when a proxy is chained on top of the tunnel. */
     fun hasProxy(): Boolean = proxyLink.isNotBlank()
 
-    /** Resolves [proxyCore]==Auto to a concrete backend for the over-dnstt [profile]. Mirrors
-     *  [VkTurnConfig.resolvedProxyCore], but defaults to Xray: chaining the exit over the dnstt SOCKS
-     *  needs socket-level dialerProxy chaining (Xray) to keep a vless reality/xtls-vision transport
-     *  intact — proxySettings/other paths reset it. An explicit per-location or global core still wins. */
+    /** [domains] split into individual entries. */
+    fun domainList(): List<String> = splitEntries(domains)
+
+    /** [resolvers] split into individual entries. */
+    fun resolverList(): List<String> = splitEntries(resolvers)
+
+    /** Resolver host parts only — what the desktop TUN must route around the tunnel. */
+    fun resolverHosts(): List<String> = resolverList().map { entry ->
+        // "1.2.3.4", "1.2.3.4:5300", "[2001:db8::1]:53" — the bracketed IPv6 form is the only one
+        // where a colon is not the port separator.
+        when {
+            entry.startsWith("[") -> entry.substringAfter('[').substringBefore(']')
+            entry.count { it == ':' } == 1 -> entry.substringBefore(':')
+            else -> entry
+        }
+    }.filter { it.isNotBlank() }
+
+    /** Resolves [proxyCore]==Auto to a concrete backend for the over-tunnel [profile]. Mirrors
+     *  [VkTurnConfig.resolvedProxyCore], but defaults to Xray: chaining the exit over the tunnel's
+     *  SOCKS needs socket-level dialerProxy chaining (Xray) to keep a vless reality/xtls-vision
+     *  transport intact — other paths reset it. An explicit per-location or global core still wins. */
     fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
         proxyCore != ProxyCore.Auto -> proxyCore
         !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
@@ -247,13 +279,35 @@ data class DnsttConfig(
         else -> ProxyCore.Xray
     }
 
-    fun normalized(): DnsttConfig = DnsttConfig(
-        domain = domain.trim(),
-        pubKey = pubKey.trim(),
-        resolver = resolver.trim(),
+    fun normalized(): MasterDnsConfig = MasterDnsConfig(
+        domains = domainList().joinToString(","),
+        encryptionKey = encryptionKey.trim(),
+        encryptionMethod = encryptionMethod.coerceIn(0, 5),
+        resolvers = resolverList().joinToString(","),
+        balancingStrategy = balancingStrategy.coerceIn(0, 8),
+        packetDuplication = packetDuplication.coerceIn(0, 10),
         proxyLink = proxyLink.trim(),
         proxyCore = proxyCore,
     )
+
+    companion object {
+        /** XOR — the upstream default: cheapest, and the auto-installed server is set to match. */
+        const val DEFAULT_ENCRYPTION_METHOD = 1
+
+        /** Human labels for [encryptionMethod], indexed by value. */
+        val ENCRYPTION_LABELS = listOf(
+            "Без шифрования", "XOR", "ChaCha20", "AES-128-GCM", "AES-192-GCM", "AES-256-GCM"
+        )
+
+        private fun splitEntries(value: String): List<String> =
+            value.split(SEPARATORS)
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+
+        /** Comma, semicolon or any whitespace all read as "next entry" in the list fields. */
+        private val SEPARATORS = Regex("[,;\\s]+")
+    }
 }
 
 /** One additional olcRTC room for the multi-room (aggregation) feature. */
@@ -310,8 +364,9 @@ data class LocationConfig(
      * inside the link lives in [proxy].rawOutbound. Null for other engines.
      */
     val vkturn: VkTurnConfig? = null,
-    /** dnstt (DNS tunnel) transport for the [EngineType.Dnstt] engine. Null for other engines. */
-    val dnstt: DnsttConfig? = null,
+    /** MasterDNS (DNS tunnel) transport for the [EngineType.MasterDns] engine. Null for other engines. */
+    @SerialName("masterdns")
+    val masterDns: MasterDnsConfig? = null,
     /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
     val advanced: AdvancedCoreConfig? = null,
     /**
@@ -383,7 +438,7 @@ data class LocationConfig(
             proxy2 = proxy2,
             core = core,
             vkturn = vkturn,
-            dnstt = dnstt?.normalized(),
+            masterDns = masterDns?.normalized(),
             routingProfileId = routingProfileId.trim(),
             fakeDns = fakeDns,
         )
@@ -451,8 +506,8 @@ data class LocationConfig(
         EngineType.Chain -> proxy?.isComplete() == true && id.isNotBlank() && key.isNotBlank()
         // VK-TURN needs the freeturn link, the per-client VK call link and the chosen exit artifact.
         EngineType.VkTurn -> vkturn?.isComplete() == true && vkTurnExitPresent()
-        // dnstt needs the tunnel domain, server public key and a DNS resolver.
-        EngineType.Dnstt -> dnstt?.isComplete() == true
+        // MasterDNS needs the tunnel domain(s), the shared encryption key and at least one resolver.
+        EngineType.MasterDns -> masterDns?.isComplete() == true
     }
 
     /**
@@ -864,7 +919,8 @@ data class LocationEntry(
     val proxyEnabled: Boolean = true,
     val core: ProxyCore? = null,
     val vkturn: VkTurnConfig? = null,
-    val dnstt: DnsttConfig? = null,
+    @SerialName("masterdns")
+    val masterDns: MasterDnsConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
@@ -947,7 +1003,7 @@ data class LocationEntry(
                 proxyEnabled = proxyEnabled,
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
-                dnstt = dnstt,
+                masterDns = masterDns,
                 advanced = advanced,
                 fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
@@ -978,7 +1034,7 @@ data class LocationEntry(
             proxyEnabled = config.proxyEnabled,
             core = config.core,
             vkturn = config.vkturn,
-            dnstt = config.dnstt,
+            masterDns = config.masterDns,
             advanced = config.advanced,
             fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
@@ -1017,7 +1073,7 @@ data class LocationEntry(
                 proxyEnabled = config.proxyEnabled,
                 core = config.core,
                 vkturn = config.vkturn,
-                dnstt = config.dnstt,
+                masterDns = config.masterDns,
                 advanced = config.advanced,
                 fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },

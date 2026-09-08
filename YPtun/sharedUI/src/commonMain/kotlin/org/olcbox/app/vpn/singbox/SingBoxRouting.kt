@@ -68,7 +68,7 @@ object SingBoxRouting {
      */
     /**
      * [directTag] is normally [DIRECT_TAG], but a tunnel that must never be bypassed (VK-TURN /
-     * dnstt / olcRTC with `directViaBase`) passes its base tunnel's tag instead: sing-box 1.14 forbids
+     * MasterDNS / olcRTC with `directViaBase`) passes its base tunnel's tag instead: sing-box 1.14 forbids
      * a `detour` on the `direct` outbound, so the "direct" bucket is pointed at the tunnel by TAG.
      */
     fun rules(

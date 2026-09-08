@@ -4,7 +4,7 @@
 
 ### 快速抗审查 VPN · Android 与 Windows
 
-*基于 **Xray** 与 **sing-box** 的 VLESS · Reality · XHTTP，**Hysteria2**（QUIC），混淆的 **AmneziaWG**，通过 **VK-TURN** 通话的隧道，**DNSTT** DNS 隧道，基于 **WARP** 的独立 Telegram 代理 —— 以及把流量伪装成视频通话的 **olcRTC**。*
+*基于 **Xray** 与 **sing-box** 的 VLESS · Reality · XHTTP，**Hysteria2**（QUIC），混淆的 **AmneziaWG**，通过 **VK-TURN** 通话的隧道，**MasterDNS** DNS 隧道，基于 **WARP** 的独立 Telegram 代理 —— 以及把流量伪装成视频通话的 **olcRTC**。*
 
 <br>
 
@@ -28,11 +28,11 @@
 
 大多数 VPN 客户端只给你一个内核、一种连接方式。**YPtun 给你一整套工具箱。** 一个应用里集成了多种翻墙引擎：一种方式被封，就切换到另一种继续用。
 
-> **核心在于多样性。** Xray 与 sing-box 支持所有常见协议与传输，通过 AmneziaWG 实现混淆的 WireGuard，通过真实通话隧道（VK-TURN 与 olcRTC），DNSTT 的 DNS 隧道，几乎可导入任何东西，以及兼容 Happ 的分流配置。封掉一条路，旁边还有好几条。
+> **核心在于多样性。** Xray 与 sing-box 支持所有常见协议与传输，通过 AmneziaWG 实现混淆的 WireGuard，通过真实通话隧道（VK-TURN 与 olcRTC），MasterDNS 的 DNS 隧道，几乎可导入任何东西，以及兼容 Happ 的分流配置。封掉一条路，旁边还有好几条。
 
 > 为互联网受阻的地方而生 —— 俄罗斯、伊朗，以及任何网站会无预警消失的国家。
 
-> **Windows 版已发布** —— 安装程序与单文件 `.exe` 便携版，支持 x64 与原生 ARM64。与手机端完全相同的应用和内核：订阅、路由配置、链式代理、VK-TURN、olcRTC、DNSTT、Trust Tunnel。
+> **Windows 版已发布** —— 安装程序与单文件 `.exe` 便携版，支持 x64 与原生 ARM64。与手机端完全相同的应用和内核：订阅、路由配置、链式代理、VK-TURN、olcRTC、MasterDNS、Trust Tunnel。
 
 ---
 
@@ -54,10 +54,10 @@
 
 | | |
 |---|---|
-| **多引擎** | Xray、sing-box、AmneziaWG、VK-TURN、DNSTT —— 内核按协议自动或手动选择。 |
+| **多引擎** | Xray、sing-box、AmneziaWG、VK-TURN、MasterDNS —— 内核按协议自动或手动选择。 |
 | **协议** | VLESS · VMess · Trojan · Shadowsocks · Hysteria2 · WireGuard / AmneziaWG |
 | **传输** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · uTLS 指纹 |
-| **DNSTT（DNS 隧道）** | 基于 DNS 查询的隧道（KCP + Noise）—— 在其他流量都被封、仅 DNS 可用时仍能工作。可通过 SSH 一键在 VPS 上安装服务端。 |
+| **MasterDNS（DNS 隧道）** | 基于 DNS 查询的隧道（MasterDnsVPN：自研 ARQ 传输、同时使用多个解析器、数据包冗余）—— 在其他流量都被封、仅 DNS 可用时仍能工作。可通过 SSH 一键在 VPS 上安装服务端。 |
 | **基于 WARP 的 Telegram 代理** | 轻量后台服务：WARP 隧道 + 供 Telegram 使用的本地 SOCKS5，独立于主连接。 |
 | **olcRTC** | [olcRTC](https://github.com/openlibrecommunity/olcrtc) 传输 —— 流量经过真实视频通话服务（Jazz、Telemost、WB Stream、Jitsi）；对 DPI 而言像一次真实通话，而非代理。 |
 | **智能导入** | vless/vmess/trojan/ss 链接、base64、JSON 面板、**完整的原始 Xray / sing-box 配置**（原样应用）、AmneziaWG `.conf`/二维码、olcRTC URI、Happ 配置、批量链接导入。 |
@@ -94,14 +94,14 @@
 └──────────────┘            │  (IPv4+IPv6)  │            │  ┌──────────────────────┐  │
                             └───────────────┘            │  │  Xray / sing-box     │  │
                                                          │  │  AmneziaWG / VK-TURN │  │
-                                                         │  │  DNSTT / olcRTC      │  │
+                                                         │  │  MasterDNS / olcRTC      │  │
                                                          │  └──────────────────────┘  │
                                                          └─────────────┬──────────────┘
                                                                        ▼
                                                                  open internet
 ```
 
-所有原生内核都被构建进**同一个** `gomobile` 库（单一 Go 运行时），因此 Xray、sing-box、AmneziaWG、VK-TURN、DNSTT 与 olcRTC 在同一进程中互不冲突。应用启动 `VpnService`，把数据包送入 TUN，再通过本地 SOCKS5 包进所选引擎。
+所有原生内核都被构建进**同一个** `gomobile` 库（单一 Go 运行时），因此 Xray、sing-box、AmneziaWG、VK-TURN、MasterDNS 与 olcRTC 在同一进程中互不冲突。应用启动 `VpnService`，把数据包送入 TUN，再通过本地 SOCKS5 包进所选引擎。
 
 ---
 
@@ -111,7 +111,7 @@
 - **AmneziaWG** —— 带混淆的 WireGuard：握手与数据包不像「普通」WireGuard（后者常按特征被切断）。
 - **Hysteria2** —— 基于 QUIC 的高速协议，带 Salamander 混淆与端口跳跃；在不稳定线路上速度保持好。
 - **VK-TURN** —— 启动本地 WireGuard 并经 VK 通话的 TURN 服务器转发；多路「通话」绑定以提升带宽。
-- **DNSTT** —— 基于 DNS 查询的隧道；在只有 DNS 可用时仍可工作。
+- **MasterDNS** —— 基于 DNS 查询的隧道；在只有 DNS 可用时仍可工作。
 - **olcRTC** —— 视频通话伪装：流量经过真实会议服务，对 DPI 而言像一次真实通话。
 - **基于 WARP 的 Telegram 代理** —— 在 Cloudflare WARP 之上为 Telegram 提供的独立后台代理。
 
@@ -119,7 +119,7 @@
 
 ## 从源码构建
 
-所需的一切都已随仓库提供（`cores`、`olcrtc`、`sing-box`、`awgproxy`、`hysteria2proxy`、`free-turn-proxy`、`dnstt`、`wdtt`、`amneziawg-go`）。需要：
+所需的一切都已随仓库提供（`cores`、`olcrtc`、`sing-box`、`awgproxy`、`hysteria2proxy`、`free-turn-proxy`、`masterdns`、`wdtt`、`amneziawg-go`）。需要：
 
 - **JDK 17**（Android Studio 自带的即可）
 - **Android SDK**（在 `YPtun/local.properties` 中设置 `sdk.dir`）+ **NDK `28.2.13676358`**
@@ -174,13 +174,13 @@ YPtun 采用 **Kotlin Multiplatform**：所有逻辑（导入、配置生成、�
 
 ```
 YPtun/            Kotlin Multiplatform 应用 —— Compose UI、Android VpnService、引擎
-cores/            Go 胶水层：由 sing-box + olcRTC + Xray + AmneziaWG + VK-TURN + DNSTT 构成的单个 gomobile AAR
+cores/            Go 胶水层：由 sing-box + olcRTC + Xray + AmneziaWG + VK-TURN + MasterDNS 构成的单个 gomobile AAR
 olcrtc/           olcRTC —— 视频通话伪装传输                       (第三方，已 vendored)
 sing-box/         sing-box / libbox                                (已 vendored)
 awgproxy/         AmneziaWG 封装 → 本地 SOCKS5                     (Go 模块)
 hysteria2proxy/   Hysteria2 (apernet) 封装 → 本地 SOCKS5           (Go 模块)
 free-turn-proxy/  VK-TURN —— 经 VK 通话的隧道                      (Go 模块)
-dnstt/            DNSTT —— DNS 之上的隧道                          (客户端 + 服务端)
+masterdns/        MasterDNS —— DNS 之上的隧道                          (客户端 + 服务端)
 wdtt/             WDTT —— 隧道变体                                 (客户端 + 服务端)
 amneziawg-go/     AmneziaWG 实现                                   (已 vendored)
 ```
@@ -190,7 +190,7 @@ amneziawg-go/     AmneziaWG 实现                                   (已 vendor
 ## 路线图
 
 - [x] Android 发布
-- [x] AmneziaWG、VK-TURN 与 DNSTT 引擎
+- [x] AmneziaWG、VK-TURN 与 MasterDNS 引擎
 - [x] 分流配置（兼容 Happ）+ ASN
 - [x] **Windows** 版本（x64 与 ARM64）
 - [ ] **Linux** 版本 —— *开发中*
