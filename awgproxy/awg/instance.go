@@ -366,7 +366,7 @@ func (i *Instance) Start(iniConfig, listenAddr string) error {
 
 	bind := bindFor(cfg)
 	d := device.NewDevice(tunDev, bind, logger)
-	if err := d.IpcSet(uapi); err != nil {
+	if err := ipcSetTolerant(d, uapi); err != nil {
 		d.Close()
 		return fmt.Errorf("awg ipc: %w", err)
 	}

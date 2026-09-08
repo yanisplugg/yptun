@@ -1265,6 +1265,9 @@ private fun LazyListScope.vkTurnSection(
             }
             if (isAwg) {
                 // AmneziaWG obfuscation knobs (Jc/Jmin/Jmax/S1/S2/H1..H4) — must match the server.
+                // H1..H4 are magic-header VALUES OR RANGES ("1000000-2000000"), which is what
+                // AmneziaWG 2.0 generates, so those four fields must keep the dash — a digits-only
+                // filter silently turned a pasted range into one giant number that matches nothing.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1284,10 +1287,10 @@ private fun LazyListScope.vkTurnSection(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    VkTurnField(draft.awgH1, { v -> onChange { it.copy(awgH1 = v.filter(Char::isDigit)) } }, "H1", "1", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
-                    VkTurnField(draft.awgH2, { v -> onChange { it.copy(awgH2 = v.filter(Char::isDigit)) } }, "H2", "2", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
-                    VkTurnField(draft.awgH3, { v -> onChange { it.copy(awgH3 = v.filter(Char::isDigit)) } }, "H3", "3", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
-                    VkTurnField(draft.awgH4, { v -> onChange { it.copy(awgH4 = v.filter(Char::isDigit)) } }, "H4", "4", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH1, { v -> onChange { it.copy(awgH1 = v.filter { c -> c.isDigit() || c == '-' }) } }, "H1", "1", enabled, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH2, { v -> onChange { it.copy(awgH2 = v.filter { c -> c.isDigit() || c == '-' }) } }, "H2", "2", enabled, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH3, { v -> onChange { it.copy(awgH3 = v.filter { c -> c.isDigit() || c == '-' }) } }, "H3", "3", enabled, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH4, { v -> onChange { it.copy(awgH4 = v.filter { c -> c.isDigit() || c == '-' }) } }, "H4", "4", enabled, modifier = Modifier.weight(1f))
                 }
             }
         }

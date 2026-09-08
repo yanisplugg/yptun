@@ -156,7 +156,7 @@ func Start(iniConfig, listenAddr string) error {
 
 	bind := bindFor(cfg)
 	d := device.NewDevice(tunDev, bind, logger)
-	if err := d.IpcSet(uapi); err != nil {
+	if err := ipcSetTolerant(d, uapi); err != nil {
 		d.Close()
 		return fmt.Errorf("awg ipc: %w", err)
 	}
@@ -260,7 +260,7 @@ func Probe(iniConfig string) int64 {
 	bind := bindFor(cfg)
 	d := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "[awg-probe] "))
 	defer d.Close()
-	if err := d.IpcSet(uapi); err != nil {
+	if err := ipcSetTolerant(d, uapi); err != nil {
 		return -1
 	}
 	if err := d.Up(); err != nil {
@@ -298,7 +298,7 @@ func MeasureDelay(iniConfig, url, method string, timeoutMs int) int64 {
 	bind := bindFor(cfg)
 	d := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "[awg-urltest] "))
 	defer d.Close()
-	if err := d.IpcSet(uapi); err != nil {
+	if err := ipcSetTolerant(d, uapi); err != nil {
 		return -1
 	}
 	if err := d.Up(); err != nil {
@@ -520,6 +520,9 @@ func (c *wgConfig) uapi() (string, error) {
 	for _, kv := range c.awgParams {
 		fmt.Fprintf(&b, "%s=%s\n", kv[0], kv[1])
 	}
+	// Повтор в [ipcSetTolerant] переотправляет конфиг целиком, поэтому секция пира должна быть
+	// идемпотентной: без replace_peers каждая попытка добавляла бы пиру ещё один allowed_ip.
+	b.WriteString("replace_peers=true\n")
 	fmt.Fprintf(&b, "public_key=%s\n", c.peerPublicHex)
 	fmt.Fprintf(&b, "endpoint=%s\n", ep)
 	for _, a := range c.allowedIPs {
@@ -529,6 +532,83 @@ func (c *wgConfig) uapi() (string, error) {
 		fmt.Fprintf(&b, "persistent_keepalive_interval=%d\n", c.keepalive)
 	}
 	return b.String(), nil
+}
+
+// ipcSetTolerant загружает конфиг в устройство, ВЫБРАСЫВАЯ обфускационные ключи, которых
+// вендоренный amneziawg-go ещё не знает, вместо отказа поднимать туннель целиком.
+//
+// Зачем: клиент Amnezia пишет в .conf весь набор своей версии, а ядро принимает только то, что
+// реализовано. Один незнакомый ключ — и IpcSet возвращает «invalid UAPI device key: j1», Start
+// падает, локация не подключается вообще. Ровно так и было: конфиги с J1..J3/Itime (мусорные
+// пакеты по таймеру из AmneziaWG 2.0) не работали НИ ОДИН, а WARP-конфиги, у которых этих ключей
+// нет, поднимались — отсюда «работает только warp».
+//
+// Почему выбрасывать безопасно ИМЕННО ТАК: отбрасывается только то, что ядро не умеет, и только
+// после того, как оно само об этом сказало. Ключи, которые ядро понимает (в том числе S3/S4 и
+// header_protection_key — набивка и заголовки ТРАНСПОРТНЫХ пакетов, без них туннель «поднят», а
+// трафика нет), проходят как раньше. J-пакеты — односторонний мусор: получатель их всё равно
+// отбрасывает, поэтому их отсутствие стоит только слабее замаскированного профиля трафика, а не
+// связи. Каждый отброшенный ключ пишется в журнал: если сервер на него рассчитывает, причина
+// будет видна сразу, а не превратится в очередное «просто не работает».
+//
+// Список ключей не захардкожен намеренно: на следующем обновлении ядра то, что оно научится
+// принимать, поедет само, а новый неизвестный ключ снова не уронит туннель.
+func ipcSetTolerant(d *device.Device, uapi string) error {
+	const maxDrops = 16
+	dropped := make([]string, 0, 4)
+	current := uapi
+	for i := 0; i <= maxDrops; i++ {
+		err := d.IpcSet(current)
+		if err == nil {
+			if len(dropped) > 0 {
+				log.New(logSink, "", 0).Printf(
+					"AmneziaWG: ядро не знает параметров %s — они пропущены (обфускация слабее, связь не затронута)",
+					strings.Join(dropped, ","))
+			}
+			return nil
+		}
+		key := unknownUapiKey(err)
+		if key == "" {
+			return err
+		}
+		next := stripUapiKey(current, key)
+		if next == current {
+			return err
+		}
+		dropped = append(dropped, key)
+		current = next
+	}
+	return d.IpcSet(current)
+}
+
+// unknownUapiKey достаёт имя ключа из ошибки устройства «invalid UAPI device key: <key>».
+// Пустая строка — ошибка другая, её глотать нельзя.
+func unknownUapiKey(err error) string {
+	const marker = "invalid UAPI device key: "
+	msg := err.Error()
+	idx := strings.Index(msg, marker)
+	if idx < 0 {
+		return ""
+	}
+	key := strings.TrimSpace(msg[idx+len(marker):])
+	if cut := strings.IndexAny(key, " \t\r\n"); cut >= 0 {
+		key = key[:cut]
+	}
+	return key
+}
+
+// stripUapiKey убирает из конфига строки `<key>=...`. Значение может быть любым (в том числе
+// «<b 0x...>»), поэтому сравнивается только имя до первого «=».
+func stripUapiKey(uapi, key string) string {
+	lines := strings.Split(uapi, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if eq := strings.IndexByte(line, '='); eq > 0 && line[:eq] == key {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // paramSummary перечисляет применённые параметры обфускации. Нужен в логе, потому что конфиг
