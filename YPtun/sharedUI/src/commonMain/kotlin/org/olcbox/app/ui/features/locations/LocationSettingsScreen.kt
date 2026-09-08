@@ -160,6 +160,10 @@ fun LocationSettingsScreen(
     viewModel: LocationViewModel,
     homeViewModel: HomeScreenViewModel,
     allowVpsAutoInstall: Boolean = false,
+    // "Подтверждение удаления" from app settings. The home screen already honours it for
+    // subscriptions and bulk deletes; the per-config delete button below is the one place that used
+    // to wipe a location on the first tap regardless of the setting.
+    confirmBeforeDelete: Boolean = true,
     onShareLocationRequested: (LocationConfig) -> Unit = {},
     onBack: () -> Unit
 ) {
@@ -201,6 +205,26 @@ fun LocationSettingsScreen(
         )
     }
 
+    var confirmDelete by remember { mutableStateOf(false) }
+    fun deleteNow() {
+        viewModel.editingId?.let { id -> viewModel.deleteLocation(id) { onBack() } } ?: onBack()
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(s.deleteLocationTitle) },
+            text = { Text(s.deleteLocationMessage) },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; deleteNow() }) {
+                    Text(s.delete, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text(s.cancel) }
+            }
+        )
+    }
+
     var showMasterDnsInstall by remember { mutableStateOf(false) }
     if (showMasterDnsInstall) {
         MasterDnsInstallDialog(
@@ -230,11 +254,7 @@ fun LocationSettingsScreen(
                         showDelete = viewModel.editingId != null,
                         isSaving = isSaving,
                         isFormValid = viewModel.isFormValid,
-                        onDelete = {
-                            viewModel.editingId?.let { id ->
-                                viewModel.deleteLocation(id) { onBack() }
-                            } ?: onBack()
-                        },
+                        onDelete = { if (confirmBeforeDelete) confirmDelete = true else deleteNow() },
                         onSave = {
                             viewModel.saveEditing {
                                 homeViewModel.loadCurrentConfig()

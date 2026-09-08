@@ -104,6 +104,8 @@ interface Strings {
     val deleteAllSubscriptionsTitle: String
     val deleteAllSubscriptionsMessage: String
     val deleteAllConfigsTitle: String
+    val deleteLocationTitle: String
+    val deleteLocationMessage: String
     val deleteAllConfigsMessage: String
     val menuDeleteAllSubscriptions: String
     val menuDeleteAllConfigs: String
@@ -771,6 +773,8 @@ object RuStrings : Strings {
     override val deleteAllSubscriptionsMessage =
         "Будут удалены все конфигурации из подписок. Собственные локации сохранятся."
     override val deleteAllConfigsTitle = "Удалить все конфигурации?"
+    override val deleteLocationTitle = "Удалить конфигурацию?"
+    override val deleteLocationMessage = "Эта локация будет удалена. Действие необратимо."
     override val deleteAllConfigsMessage =
         "Будут удалены все конфигурации и подписки. Это действие необратимо."
     override val menuDeleteAllSubscriptions = "Удалить все подписки"
@@ -1391,6 +1395,8 @@ object EnStrings : Strings {
     override val deleteAllSubscriptionsMessage =
         "All subscription configurations will be removed. Custom locations are kept."
     override val deleteAllConfigsTitle = "Delete all configs?"
+    override val deleteLocationTitle = "Delete config?"
+    override val deleteLocationMessage = "This location will be removed. This cannot be undone."
     override val deleteAllConfigsMessage =
         "All configurations and subscriptions will be removed. This cannot be undone."
     override val menuDeleteAllSubscriptions = "Delete all subscriptions"
@@ -2011,6 +2017,8 @@ object FaStrings : Strings {
     override val deleteAllSubscriptionsMessage =
         "همهٔ پیکربندی‌های اشتراک‌ها حذف می‌شوند. موقعیت‌های سفارشی حفظ خواهند شد."
     override val deleteAllConfigsTitle = "همهٔ پیکربندی‌ها حذف شوند؟"
+    override val deleteLocationTitle = "پیکربندی حذف شود؟"
+    override val deleteLocationMessage = "این موقعیت حذف می‌شود. این کار بازگشت‌پذیر نیست."
     override val deleteAllConfigsMessage =
         "همهٔ پیکربندی‌ها و اشتراک‌ها حذف می‌شوند. این کار بازگشت‌ناپذیر است."
     override val menuDeleteAllSubscriptions = "حذف همهٔ اشتراک‌ها"
@@ -2631,6 +2639,8 @@ object ZhStrings : Strings {
     override val deleteAllSubscriptionsMessage =
         "所有订阅配置都将被删除，自定义节点会保留。"
     override val deleteAllConfigsTitle = "删除所有配置？"
+    override val deleteLocationTitle = "删除配置？"
+    override val deleteLocationMessage = "该节点将被删除，此操作无法撤销。"
     override val deleteAllConfigsMessage =
         "所有配置和订阅都将被删除，此操作无法撤销。"
     override val menuDeleteAllSubscriptions = "删除所有订阅"
