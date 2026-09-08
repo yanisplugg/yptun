@@ -15,6 +15,7 @@ import (
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/proxy/freedom"
 	"github.com/xtls/xray-core/transport/internet"
 )
 
@@ -140,7 +141,7 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
 	// TUN inbound doesn't need port configuration as it uses network interface instead
 	if strings.ToLower(c.Protocol) == "tun" {
 		// Skip port validation for TUN
-	} else if c.ListenOn == nil {
+	} else if c.ListenOn == nil || len(c.ListenOn.String()) == 0 {
 		// Listen on anyip, must set PortList
 		if c.PortList == nil {
 			return nil, errors.New("Listen on AnyIP but no Port(s) set in InboundDetour.")
@@ -216,19 +217,9 @@ type OutboundDetourConfig struct {
 	Tag            string           `json:"tag"`
 	Settings       *json.RawMessage `json:"settings"`
 	StreamSetting  *StreamConfig    `json:"streamSettings"`
-	ProxySettings  *ProxyConfig     `json:"proxySettings"`
+	ProxySettings  *json.RawMessage `json:"proxySettings"`
 	MuxSettings    *MuxConfig       `json:"mux"`
 	TargetStrategy string           `json:"targetStrategy"`
-}
-
-func (c *OutboundDetourConfig) checkChainProxyConfig() error {
-	if c.StreamSetting == nil || c.ProxySettings == nil || c.StreamSetting.SocketSettings == nil {
-		return nil
-	}
-	if len(c.ProxySettings.Tag) > 0 && len(c.StreamSetting.SocketSettings.DialerProxy) > 0 {
-		return errors.New("proxySettings.tag is conflicted with sockopt.dialerProxy").AtWarning()
-	}
-	return nil
 }
 
 func requiresTransportSecurity(address *Address) bool {
@@ -251,10 +242,10 @@ func validateOutboundTransportSecurity(rawConfig interface{}, senderSettings *pr
 		if vlessCfg.Encryption != "" && vlessCfg.Encryption != "none" {
 			return nil
 		}
-		if requiresTransportSecurity(vlessCfg.Address) {
+		if requiresTransportSecurity(vlessCfg.Vnext[0].Address) {
 			// LOCAL PATCH: upstream #6303 turns this into a hard error. In this client a plain VLESS
 			// outbound to a public address is a legitimate, already-working topology — it is routinely
-			// the inner leg of a cascade whose outer leg (olcRTC / VK-TURN / dnstt / an edge that
+			// the inner leg of a cascade whose outer leg (olcRTC / VK-TURN / MasterDNS / an edge that
 			// terminates TLS) is what carries the encryption, and the outer address is what the config
 			// names. Refusing to build such an outbound would break subscriptions that worked in 3.1.2,
 			// so warn and continue instead of failing the whole config.
@@ -263,7 +254,7 @@ func validateOutboundTransportSecurity(rawConfig interface{}, senderSettings *pr
 	}
 
 	if tjCfg, ok := rawConfig.(*TrojanClientConfig); ok {
-		if requiresTransportSecurity(tjCfg.Address) {
+		if requiresTransportSecurity(tjCfg.Servers[0].Address) {
 			// LOCAL PATCH: see the VLESS case above.
 			errors.LogWarning(context.Background(), "trojan outbound to a public address has no TLS")
 		}
@@ -274,6 +265,24 @@ func validateOutboundTransportSecurity(rawConfig interface{}, senderSettings *pr
 
 // Build implements Buildable.
 func (c *OutboundDetourConfig) Build() (*core.OutboundHandlerConfig, error) {
+	// LOCAL PATCH: 26.9.8 dropped proxy-level chaining outright and turns any leftover
+	// outbound "proxySettings" into a hard config error. Subscriptions and hand-written raw Xray
+	// configs in the wild still carry it, and this client happily ran them until now, so migrate the
+	// tag onto its documented replacement (socket-level sockopt.dialerProxy) and warn instead of
+	// refusing to build the whole config. Applied below, once streamSettings exist.
+	migratedDialerProxy := ""
+	if c.ProxySettings != nil {
+		legacy := struct {
+			Tag string `json:"tag"`
+		}{}
+		if err := json.Unmarshal(*c.ProxySettings, &legacy); err != nil || legacy.Tag == "" {
+			return nil, errors.PrintRemovedFeatureError(`outbound "proxySettings"`, `"streamSettings.sockopt.dialerProxy"`)
+		}
+		migratedDialerProxy = legacy.Tag
+		errors.LogWarning(context.Background(), `outbound "proxySettings" was removed upstream; migrated tag "`+
+			migratedDialerProxy+`" to "streamSettings.sockopt.dialerProxy"`)
+	}
+
 	senderSettings := &proxyman.SenderConfig{}
 	switch strings.ToLower(c.TargetStrategy) {
 	case "asis", "":
@@ -301,9 +310,6 @@ func (c *OutboundDetourConfig) Build() (*core.OutboundHandlerConfig, error) {
 	default:
 		return nil, errors.New("unsupported target domain strategy: ", c.TargetStrategy)
 	}
-	if err := c.checkChainProxyConfig(); err != nil {
-		return nil, err
-	}
 
 	if c.SendThrough != nil {
 		address := ParseSendThough(c.SendThrough)
@@ -329,24 +335,18 @@ func (c *OutboundDetourConfig) Build() (*core.OutboundHandlerConfig, error) {
 		senderSettings.StreamSettings = ss
 	}
 
-	if c.ProxySettings != nil {
-		ps, err := c.ProxySettings.Build()
-		if err != nil {
-			return nil, errors.New("invalid outbound detour proxy settings").Base(err)
+	// LOCAL PATCH (see above): land the migrated proxySettings tag on sockopt.dialerProxy. An explicit
+	// dialerProxy in the config always wins — it is the newer, intended spelling.
+	if migratedDialerProxy != "" {
+		if senderSettings.StreamSettings == nil {
+			senderSettings.StreamSettings = &internet.StreamConfig{}
 		}
-		if ps.TransportLayerProxy {
-			if senderSettings.StreamSettings != nil {
-				if senderSettings.StreamSettings.SocketSettings != nil {
-					senderSettings.StreamSettings.SocketSettings.DialerProxy = ps.Tag
-				} else {
-					senderSettings.StreamSettings.SocketSettings = &internet.SocketConfig{DialerProxy: ps.Tag}
-				}
-			} else {
-				senderSettings.StreamSettings = &internet.StreamConfig{SocketSettings: &internet.SocketConfig{DialerProxy: ps.Tag}}
-			}
-			ps = nil
+		if senderSettings.StreamSettings.SocketSettings == nil {
+			senderSettings.StreamSettings.SocketSettings = &internet.SocketConfig{}
 		}
-		senderSettings.ProxySettings = ps
+		if senderSettings.StreamSettings.SocketSettings.DialerProxy == "" {
+			senderSettings.StreamSettings.SocketSettings.DialerProxy = migratedDialerProxy
+		}
 	}
 
 	if c.MuxSettings != nil {
@@ -365,12 +365,37 @@ func (c *OutboundDetourConfig) Build() (*core.OutboundHandlerConfig, error) {
 	if err != nil {
 		return nil, errors.New("failed to load outbound detour config for protocol ", c.Protocol).Base(err)
 	}
-	if err := validateOutboundTransportSecurity(rawConfig, senderSettings); err != nil {
-		return nil, err
-	}
 	ts, err := rawConfig.(Buildable).Build()
 	if err != nil {
 		return nil, errors.New("failed to build outbound handler for protocol ", c.Protocol).Base(err)
+	}
+	if err := validateOutboundTransportSecurity(rawConfig, senderSettings); err != nil {
+		return nil, err
+	}
+
+	if fc, ok := ts.(*freedom.Config); ok {
+		if senderSettings.StreamSettings != nil &&
+			senderSettings.StreamSettings.SocketSettings != nil &&
+			senderSettings.StreamSettings.SocketSettings.AddressPortStrategy != internet.AddressPortStrategy_None {
+			return nil, errors.New(`freedom outbound does not support "sockopt.addressPortStrategy"`)
+		}
+
+		var strategy internet.DomainStrategy
+		if strategy = senderSettings.TargetStrategy; strategy != internet.DomainStrategy_AS_IS {
+			errors.LogWarning(context.Background(), `The "outbound.targetStrategy" setting is not supported directly by freedom and has been automatically migrated to "sockopt.domainStrategy" with no behavior change.`)
+			senderSettings.TargetStrategy = internet.DomainStrategy_AS_IS
+		} else if strategy = fc.DomainStrategy; strategy != internet.DomainStrategy_AS_IS {
+			errors.LogWarning(context.Background(), `The "freedom.domainStrategy" setting is deprecated and will be removed. For compatibility, its value has been automatically migrated to "sockopt.domainStrategy". Please update your config before removal.`)
+		}
+		if strategy != internet.DomainStrategy_AS_IS {
+			if senderSettings.StreamSettings == nil {
+				senderSettings.StreamSettings = &internet.StreamConfig{}
+			}
+			if senderSettings.StreamSettings.SocketSettings == nil {
+				senderSettings.StreamSettings.SocketSettings = &internet.SocketConfig{}
+			}
+			senderSettings.StreamSettings.SocketSettings.DomainStrategy = strategy
+		}
 	}
 
 	return &core.OutboundHandlerConfig{

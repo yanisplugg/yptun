@@ -1,6 +1,6 @@
 module kazcores
 
-go 1.26.7
+go 1.27
 
 require (
 	github.com/olc/awgproxy v0.0.0
@@ -8,7 +8,7 @@ require (
 	github.com/sagernet/sing v0.9.0-beta.4
 	github.com/sagernet/sing-box v1.14.0
 	github.com/samosvalishe/free-turn-proxy v0.0.0
-	github.com/xtls/xray-core v1.260728.0
+	github.com/xtls/xray-core v1.260908.0
 	wg-turn-client v0.0.0
 	www.bamsoftware.com/git/dnstt.git v0.0.0
 )
@@ -33,7 +33,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/anytls/sing-anytls v0.0.11 // indirect
-	github.com/apernet/quic-go v0.59.1-0.20260425001925-6c6cc9bcb716 // indirect
+	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e // indirect
 	github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect
@@ -50,7 +50,7 @@ require (
 	github.com/cbeuw/connutil v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cilium/ebpf v0.17.3 // indirect
-	github.com/cloudflare/circl v1.6.4 // indirect
+	github.com/cloudflare/circl v1.6.5 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6 // indirect
 	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
@@ -239,7 +239,7 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xtaci/kcp-go/v5 v5.6.72 // indirect
 	github.com/xtaci/smux v1.5.57 // indirect
-	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
+	github.com/xtls/reality v0.0.0-20260908062103-8cdf7bf9c7f0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/zarazaex69/gr v0.1.5 // indirect
 	github.com/zarazaex69/j v0.1.0 // indirect
@@ -250,7 +250,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.55.0 // indirect
@@ -273,8 +273,8 @@ require (
 	google.golang.org/genproto v0.0.0-20260523011958-0a33c5d7ca68 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/grpc v1.82.1 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/grpc v1.83.2 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20260122175437-89a5d21be8f0 // indirect
@@ -285,11 +285,15 @@ require (
 
 replace github.com/openlibrecommunity/olcrtc => ../olcrtc
 
-// Vendored xray-core v26.7.28, now UNPATCHED. It used to carry one local fix (proxy/wireguard
-// netBind.Close made idempotent, against a "close of closed channel" panic when handler shutdown
-// raced an in-flight processWireGuard on VK-TURN stop/reconnect). v26.7.28 rewrote bind.go with a
-// mutex guarding Open/Close and clears PacketConn on close, so Close is idempotent upstream and the
-// patch was dropped. Keep the checkout local anyway — the gomobile build needs a path-replace.
+// Vendored xray-core v26.9.8, carrying three local patches (see ../xray-core):
+//   1. infra/conf/xray.go        - VLESS/Trojan without TLS to a public address warns instead of
+//                                  failing the whole config (upstream #6303 made it a hard error).
+//   2. infra/conf/transport_method.go - xhttp "sessionPlacement"/"sessionKey" kept as read-only
+//                                  aliases of the renamed "sessionID*" keys (upstream #6258).
+//   3. infra/conf/xray.go        - outbound "proxySettings" (removed in 26.9.8) is migrated onto
+//                                  "streamSettings.sockopt.dialerProxy" instead of erroring out.
+// Re-apply all three on the next re-vendor. The checkout stays local: the gomobile build needs a
+// path-replace anyway.
 replace github.com/xtls/xray-core => ../xray-core
 
 replace github.com/sagernet/sing-box => ../sing-box
