@@ -109,6 +109,46 @@ class EmbeddedSingBoxRouteTest {
         )
     }
 
+    /**
+     * A config's fakeip pool used to be dropped on import (only the outbound and, since the route fix,
+     * the routing survived) — while the same subscription in Xray form kept it. Both sing-box shapes
+     * are accepted: the legacy `dns.fakeip` block and the 1.12+ `type: "fakeip"` server.
+     */
+    @Test
+    fun importKeepsTheConfigsFakeIpPool() = runTest {
+        suspend fun importedFakeDns(dns: String) = FakeDataSource().let { source ->
+            val text = """
+                { "dns": $dns,
+                  "outbounds": [ { "type": "vless", "tag": "v", "server": "1.2.3.4",
+                                   "server_port": 443, "uuid": "11111111-2222-3333-4444-555555555555" } ] }
+            """.trimIndent()
+            assertTrue(LocationsRepositoryImpl(source).importText(text, null), "import failed")
+            assertNotNull(source.stored).locations.single().location.fakeDns
+        }
+
+        val legacy = assertNotNull(
+            importedFakeDns("""{ "fakeip": { "enabled": true, "inet4_range": "198.19.0.0/16" } }"""),
+            "the legacy dns.fakeip block must be carried"
+        )
+        assertEquals("198.19.0.0/16", legacy.inet4Range)
+        assertEquals("fc00::/18", legacy.inet6Range, "an absent v6 range falls back to the default")
+
+        val modern = assertNotNull(
+            importedFakeDns("""{ "servers": [ { "type": "fakeip", "tag": "f", "inet4_range": "198.18.0.0/15" } ] }"""),
+            "a 1.12+ fakeip server must be carried"
+        )
+        assertEquals("198.18.0.0/15", modern.inet4Range)
+
+        assertNull(
+            importedFakeDns("""{ "fakeip": { "enabled": false, "inet4_range": "198.19.0.0/16" } }"""),
+            "fakeip switched off in the config must stay off"
+        )
+        assertNull(
+            importedFakeDns("""{ "servers": [ { "tag": "g", "address": "tls://8.8.8.8" } ] }"""),
+            "a config without fakeip must not gain one"
+        )
+    }
+
     private class FakeDataSource(var stored: LocationBundleV4? = null) : LocationsDataSource {
         override suspend fun loadLocationBundle(): LocationBundleV4? = stored
         override suspend fun saveLocationBundle(bundle: LocationBundleV4) { stored = bundle }

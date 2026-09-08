@@ -17,6 +17,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -1860,6 +1861,10 @@ class LocationsRepositoryImpl(
         // to be dropped on the floor (only the outbound survived), so the app's own routing profile ran
         // instead. Normalize it once for this config and hang it on every location it produces.
         val embeddedRoute = (element as? JsonObject)?.let { normalizeSingBoxRoute(it, outbounds) }
+        // Its FakeDNS (fakeip) was dropped too — the Xray branch has always extracted an equivalent
+        // spec (fakeDnsSpecFromXray), so a sing-box JSON subscription silently lost its synthetic-IP
+        // pool while the same subscription in Xray form kept it.
+        val fakeDnsSpec = (element as? JsonObject)?.let { fakeDnsSpecFromSingBox(it) }
 
         val usedStorageIds = mutableSetOf<String>()
         val entries = servers.mapIndexedNotNull { index, outbound ->
@@ -1879,7 +1884,8 @@ class LocationsRepositoryImpl(
             val location = LocationConfig(
                 name = tag,
                 engine = EngineType.Standard,
-                proxy = profile
+                proxy = profile,
+                fakeDns = fakeDnsSpec
             ).normalized()
             val base = "${server}_$port"
                 .lowercase()
@@ -2272,6 +2278,31 @@ class LocationsRepositoryImpl(
         }.orEmpty().filterNotNull()
 
         return FakeDnsSpec(inet4Range = inet4, inet6Range = inet6, blockRegex = blockRegex)
+    }
+
+    /**
+     * Extracts a [FakeDnsSpec] from a full sing-box config. Two shapes are accepted: the legacy
+     * `dns.fakeip` block and the 1.12+ `dns.servers[]` entry of `type: "fakeip"`. Returns null when
+     * the config has no fakeip (or has it disabled).
+     *
+     * Only the pools travel: the blackhole list is [FakeDnsSpec.blockRegex]'s job on the Xray side,
+     * and a sing-box config expresses the same thing as `route` rules — which already come along
+     * verbatim via [normalizeSingBoxRoute], so translating its `dns.rules` too would double them.
+     */
+    private fun fakeDnsSpecFromSingBox(root: JsonObject): FakeDnsSpec? {
+        val dns = root["dns"]?.jsonObjectOrNull() ?: return null
+        val legacy = dns["fakeip"]?.jsonObjectOrNull()
+        val server = (dns["servers"] as? JsonArray)
+            ?.mapNotNull { it.jsonObjectOrNull() }
+            ?.firstOrNull { it.string("type")?.lowercase() == "fakeip" }
+        val block = legacy ?: server ?: return null
+        // `enabled` only exists on the legacy block; a 1.12+ fakeip server is on by its presence.
+        if (block["enabled"]?.jsonPrimitive?.booleanOrNull == false) return null
+        val defaults = FakeDnsSpec()
+        return FakeDnsSpec(
+            inet4Range = block.string("inet4_range")?.takeIf { it.isNotBlank() } ?: defaults.inet4Range,
+            inet6Range = block.string("inet6_range")?.takeIf { it.isNotBlank() } ?: defaults.inet6Range,
+        )
     }
 
     private fun parseOlcRtcUri(line: String): ParsedOlcRtcUri? {
