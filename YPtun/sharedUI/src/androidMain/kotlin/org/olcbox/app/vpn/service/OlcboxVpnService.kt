@@ -2529,8 +2529,9 @@ class OlcboxVpnService : VpnService() {
      * The minimal set of IPv4 routes that cover all of 0.0.0.0/0 EXCEPT the private/LAN ranges, so
      * those addresses are left on the real network (the "Обход LAN" behaviour) for every engine. Built
      * by subtracting the excluded CIDRs from the full space and re-packing each remaining gap into
-     * aligned CIDR blocks. Loopback (127/8) and link-local (169.254/16) are excluded alongside the
-     * RFC-1918 ranges, matching the per-core direct rules. Works on all API levels (no excludeRoute).
+     * aligned CIDR blocks. Loopback (127/8), link-local (169.254/16), multicast (224/4) and the
+     * limited broadcast address are excluded alongside the RFC-1918 ranges. Works on all API
+     * levels (no excludeRoute).
      */
     private fun ipv4RoutesExcludingLan(): List<Pair<String, Int>> {
         val excluded = listOf(
@@ -2538,7 +2539,15 @@ class OlcboxVpnService : VpnService() {
             cidrRange("127.0.0.0", 8),
             cidrRange("169.254.0.0", 16),
             cidrRange("172.16.0.0", 12),
-            cidrRange("192.168.0.0", 16)
+            cidrRange("192.168.0.0", 16),
+            // Multicast and the limited broadcast address. Leaving these IN the tunnel is what made
+            // "Обход LAN" look broken even though unicast LAN addresses already worked: every local
+            // DISCOVERY protocol is multicast (mDNS/Bonjour 224.0.0.251, SSDP/DLNA 239.255.255.250,
+            // Chromecast, printers) or broadcast (DHCP, Wake-on-LAN, older NAS/IoT apps), so nothing
+            // on the network could be FOUND — only reached by an IP typed in by hand. Neither range
+            // is routable off the local link, so keeping them on the real interface leaks nothing.
+            cidrRange("224.0.0.0", 4),
+            cidrRange("255.255.255.255", 32)
         ).sortedBy { it.first }
 
         val routes = mutableListOf<Pair<String, Int>>()

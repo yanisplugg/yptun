@@ -475,6 +475,21 @@ class DesktopVpnManager private constructor(
                 addAll(org.olcbox.app.vpn.telegram.DesktopTelegramProxy.candidateEndpointHosts())
             }
         }
+        // "Обход LAN" on Windows. Android carves the private ranges out of the VpnService routes;
+        // here the TUN grabs 0.0.0.0/1 + 128.0.0.0/1 at metric 1, so ONLY the adapter's own subnet
+        // stayed reachable (by its more specific on-link route) and every OTHER private range — a
+        // 10.x NAS while the laptop sits on 192.168.x, a second VLAN, a docker bridge — was
+        // swallowed by the tunnel no matter what the toggle said. Sending them via the physical
+        // gateway alongside the engines' own bypass routes is the same mechanism, applied to LAN.
+        //
+        // Deliberately NOT here: 127/8 and 169.254/16. Windows serves both from its own more
+        // specific on-link routes, and pinning them to a gateway at metric 1 would break loopback
+        // and APIPA instead of fixing anything.
+        val lanPrefixes = if (org.olcbox.app.vpn.desktop.JvmVpnSettings.loadRouting().bypassLan) {
+            listOf("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+        } else {
+            emptyList()
+        }
         val resolved = hosts.distinct().flatMap { host ->
             runCatching {
                 java.net.InetAddress.getAllByName(host)
@@ -485,7 +500,7 @@ class DesktopVpnManager private constructor(
                 emptyList()
             }
         }
-        return (resolved + vkTurnMediaPrefixes(config)).distinct().filter { it != "127.0.0.1" }
+        return (resolved + vkTurnMediaPrefixes(config) + lanPrefixes).distinct().filter { it != "127.0.0.1" }
     }
 
     /**
