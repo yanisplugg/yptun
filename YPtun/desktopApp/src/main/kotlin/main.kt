@@ -893,12 +893,30 @@ private fun runApp(args: Array<String>) = application {
                     },
                     updateAvailable = updateAvailable != null,
                     onUpdateClick = { updateAvailable?.let { updateOffer = it } },
-                    onScanQrRequested = {},
+                    // No camera on a PC: the desktop equivalent of «сканировать QR» is picking a
+                    // screenshot / photo of one and decoding it.
+                    onScanQrRequested = {
+                        val s = strings()
+                        chooseImageFile(window)?.let { file ->
+                            val text = org.olcbox.app.desktop.decodeQrImage(file)
+                            if (text.isNullOrBlank()) {
+                                desktopNotice = s.qrNotRecognized
+                            } else {
+                                dependencies.homeViewModel.onImportFullConfig(
+                                    rawText = text,
+                                    onComplete = {
+                                        reloadLocationsAfterImport { desktopNotice = s.qrImported }
+                                    },
+                                    onError = { msg -> desktopNotice = msg }
+                                )
+                            }
+                        }
+                    },
                     onCopyConfigRequested = {
                         dependencies.homeViewModel.onCopyFullConfigClicked()
                     },
                     onShareLocationRequested = { config ->
-                        sharePayload = "Location QR" to ConfigShareService.olcRtcUri(config)
+                        sharePayload = strings().locationQr to ConfigShareService.olcRtcUri(config)
                     },
                     onSaveLogsRequested = { onSaved, onError ->
                         chooseSaveFile(
@@ -1141,7 +1159,8 @@ private fun runApp(args: Array<String>) = application {
                         },
                         onCheckUpdatesClick = { checkUpdate(manual = true) },
                         onSubscriptionShareClick = { url ->
-                            sharePayload = "Subscription QR" to ConfigShareService.subscriptionQrText(url)
+                            sharePayload = strings().subscriptionQr to
+                                ConfigShareService.subscriptionQrText(url)
                         },
                         onSubscriptionRefreshClick = { url ->
                             dependencies.homeViewModel.refreshSubscription(url) { updatedCount ->
@@ -1404,7 +1423,13 @@ private fun DesktopConfigShareOverlay(
                         )
                     }
 
-                    if (qrMatrix != null) {
+                    if (qrMatrix == null) {
+                        Text(
+                            text = s.qrTooLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 13.sp
+                        )
+                    } else {
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
@@ -1554,6 +1579,19 @@ private fun desktopSubscriptionItems(items: List<LocationItem>): List<Subscripti
                 locationCount = subscriptionItems.size
             )
         }
+}
+
+private fun strings() =
+    org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+
+private fun chooseImageFile(owner: Frame): File? {
+    val dialog = FileDialog(owner, strings().locationQr, FileDialog.LOAD)
+    dialog.setFilenameFilter { _, name ->
+        name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "bmp", "gif")
+    }
+    dialog.isVisible = true
+
+    return dialog.files.firstOrNull()
 }
 
 private fun chooseConfigFile(owner: Frame): File? {

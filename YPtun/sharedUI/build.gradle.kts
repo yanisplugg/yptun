@@ -272,6 +272,8 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.kstore.file)
             implementation(libs.jna)
+            // QR decoding for «сканировать QR» on desktop (a picked image, there being no camera).
+            implementation(libs.zxing.core)
             // IPHlpAPI.GetIfEntry2 — the tunnel adapter's byte counters for the Home speed line.
             implementation(libs.jna.platform)
             // Vendored Google archive-patcher (File-by-File v1 applier): desktop delta updates
