@@ -11,7 +11,9 @@
 import io, json, os, sys, zipfile
 
 SRC = os.path.dirname(os.path.abspath(__file__))
-SKIP = {"pack.py", "link.test.mjs", "dist", ".gitignore"}
+# "release" — сюда кладутся готовые архивы; без него каждый новый архив утаскивал внутрь себя все
+# предыдущие (3.4.3 уехал в релиз с чужим zip внутри и весил втрое больше нужного).
+SKIP = {"pack.py", "link.test.mjs", "dist", "release", ".gitignore"}
 
 
 def files():
@@ -30,6 +32,9 @@ def main(out_dir):
     zip_path = os.path.join(out_dir, "yptun-chrome-%s.zip" % version)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         for path, rel in files():
+            # ...и сам архив, если его пишут прямо в каталог расширения.
+            if os.path.abspath(path) == os.path.abspath(zip_path):
+                continue
             z.write(path, rel)
     print("%s  %d bytes" % (zip_path, os.path.getsize(zip_path)))
 
