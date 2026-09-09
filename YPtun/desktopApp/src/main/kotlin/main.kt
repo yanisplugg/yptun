@@ -433,6 +433,15 @@ private fun runApp(args: Array<String>) = application {
         }
     }
 
+    // Copy confirmations posted from the sharedUI settings screens (Android shows them as Toasts).
+    val sharedToast by org.olcbox.app.desktop.DesktopToast.message.collectAsState()
+    LaunchedEffect(sharedToast) {
+        sharedToast?.let {
+            desktopNotice = it
+            org.olcbox.app.desktop.DesktopToast.consume()
+        }
+    }
+
     LaunchedEffect(desktopNotice) {
         if (desktopNotice != null) {
             delay(1_800)
@@ -748,7 +757,7 @@ private fun runApp(args: Array<String>) = application {
                 dependencies.locationViewModel.loadLocations {
                     dependencies.homeViewModel.loadCurrentConfig()
                 }
-                desktopNotice = if (trayRussian) "Ссылка импортирована" else "Link imported"
+                desktopNotice = strings().importedFromClipboard
             },
             onError = { message -> desktopNotice = message }
         )
@@ -1132,7 +1141,7 @@ private fun runApp(args: Array<String>) = application {
                         onDismiss = { showDesktopSettings = false },
                         onCopyConfigClick = {
                             dependencies.homeViewModel.onCopyFullConfigClicked()
-                            desktopNotice = "Copied"
+                            desktopNotice = strings().configCopied
                         },
                         onSaveLogsClick = {
                             chooseSaveFile(
@@ -1167,9 +1176,9 @@ private fun runApp(args: Array<String>) = application {
                                 reloadLocationsAfterImport {
                                     dependencies.homeViewModel.restartVpnIfRunning()
                                     updateMessage = if (updatedCount > 0) {
-                                        "Subscription updated"
+                                        strings().subscriptionUpdated
                                     } else {
-                                        "Subscription not updated"
+                                        strings().subscriptionNotUpdated
                                     }
                                 }
                             }
@@ -1282,7 +1291,7 @@ private fun runApp(args: Array<String>) = application {
                         payload = payload,
                         onCopy = {
                             dependencies.configImporter.copyToClipboard(payload)
-                            desktopNotice = "Copied"
+                            desktopNotice = strings().copied
                         },
                         onDismiss = {
                             sharePayload = null

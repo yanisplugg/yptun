@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.desktop.DesktopToast
 import org.olcbox.app.desktop.DesktopUriLauncher
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.RoutingRules
@@ -917,14 +918,20 @@ private fun AppSettingsHubContent(
                 subtitle = s.donateSubtitle,
                 icon = Icons.Rounded.Favorite,
                 enabled = true,
-                onClick = { hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS)) }
+                onClick = {
+                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
+                    DesktopToast.show(s.donateAddressCopied)
+                }
             )
             SettingsGroupRow(
                 title = DonationInfo.TON_ADDRESS,
                 icon = Icons.Outlined.ContentCopy,
                 enabled = true,
                 showChevron = false,
-                onClick = { hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS)) }
+                onClick = {
+                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
+                    DesktopToast.show(s.donateAddressCopied)
+                }
             )
         }
 
@@ -1082,7 +1089,10 @@ private fun ConnectionSettingsContent(
                             Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
-                            onClick = { clipboard.setText(AnnotatedString(tgLink)) },
+                            onClick = {
+                                clipboard.setText(AnnotatedString(tgLink))
+                                DesktopToast.show(s.telegramProxyLinkCopied)
+                            },
                             contentPadding = PaddingValues(horizontal = 12.dp),
                             modifier = Modifier.weight(1f)
                         ) {
