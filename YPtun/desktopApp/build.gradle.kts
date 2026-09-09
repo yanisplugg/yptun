@@ -977,3 +977,30 @@ if (currentBuildOs.isLinux) {
     }
 }
 
+
+
+/**
+ * Desktop only: hold the whole Compose train at the version the catalog declares.
+ *
+ * ComposeNativeTray requires Compose 1.12.0 stable, so conflict resolution lifted every
+ * org.jetbrains.compose module from 1.12.0-alpha01 up to 1.12.0 — every module except material3,
+ * which JetBrains never released as stable (M3 expressive ships as alphas only). The result was
+ * foundation 1.12.0, where `CustomStyle.applyStyle` takes a `CustomStyleScope`, running material3
+ * 1.12.0-alpha01, compiled when that parameter was still a `StyleScope`: every screen holding a
+ * text field died with an AbstractMethodError out of OutlinedTextFieldDefaults. Moving material3
+ * forward instead is not an option — alpha02/alpha03 pin runtime to versions androidx never
+ * published. Android never pulls the tray in, so it was already on this train and is untouched.
+ */
+private fun org.gradle.api.artifacts.Configuration.pinComposeToCatalogVersion(version: String) {
+    resolutionStrategy.eachDependency {
+        // Only the drifting train, not material-icons-extended, which is frozen at 1.7.3.
+        if (requested.group.startsWith("org.jetbrains.compose") &&
+            requested.version.orEmpty().startsWith(version.substringBefore('-'))
+        ) {
+            useVersion(version)
+            because("material3 has no 1.12.0 release; a mixed train breaks OutlinedTextField")
+        }
+    }
+}
+
+configurations.configureEach { pinComposeToCatalogVersion(libs.versions.compose.multiplatform.get()) }

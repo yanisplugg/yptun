@@ -312,3 +312,17 @@ tasks.withType<Test>().configureEach {
         outputs.upToDateWhen { false } // a dump run must re-run even when nothing changed
     }
 }
+
+/** Same Compose-train pin as desktopApp, for the jvm target's own classpaths. */
+configurations.matching { it.name.startsWith("jvm") }.configureEach {
+    val pinned = libs.versions.compose.multiplatform.get()
+    resolutionStrategy.eachDependency {
+        // Only the drifting train, not material-icons-extended, which is frozen at 1.7.3.
+        if (requested.group.startsWith("org.jetbrains.compose") &&
+            requested.version.orEmpty().startsWith(pinned.substringBefore('-'))
+        ) {
+            useVersion(pinned)
+            because("material3 has no 1.12.0 release; a mixed train breaks OutlinedTextField")
+        }
+    }
+}
