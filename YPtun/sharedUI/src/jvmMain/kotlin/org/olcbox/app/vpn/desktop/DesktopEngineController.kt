@@ -9,6 +9,8 @@ import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.desktop.DesktopToast
+import org.olcbox.app.desktop.DesktopUriLauncher
 import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.xray.XrayConfig
@@ -1148,10 +1150,29 @@ internal class DesktopEngineController(
         )
     }
 
+    /**
+     * Waits for the first VK-TURN stream. A manual VK captcha stops the clock the way Android does:
+     * the user needs far more than [timeoutMs] to solve one, and giving up mid-solve starts the
+     * WireGuard outbound against a relay that is not there yet. The captcha page is served by
+     * freeturn on localhost — we open it in the browser (a PC has no in-app WebView) and say so.
+     */
     private suspend fun awaitVkTurnRelayReady(timeoutMs: Int): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
+        var deadline = System.currentTimeMillis() + timeoutMs
+        var openedCaptcha = ""
         while (System.currentTimeMillis() < deadline) {
             if (YpTunCore.ftConnectedStreams() > 0) return true
+            val captcha = YpTunCore.ftCaptchaUrl()
+            if (captcha.isNotBlank() && captcha != openedCaptcha) {
+                openedCaptcha = captcha
+                log("VK просит капчу — открываю $captcha")
+                DesktopUriLauncher.open(captcha)
+                DesktopToast.show(
+                    org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+                        .vkCaptchaTitle
+                )
+            }
+            // freeturn gives up on a manual captcha by itself (3 min), so this cannot wait forever.
+            if (YpTunCore.ftCaptchaActive()) deadline = System.currentTimeMillis() + timeoutMs
             delay(200)
         }
         return false

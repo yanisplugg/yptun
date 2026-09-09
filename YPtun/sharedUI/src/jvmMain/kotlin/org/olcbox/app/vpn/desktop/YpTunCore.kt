@@ -52,6 +52,10 @@ internal interface YpTunCoreLib : Library {
     fun YpFtRunning(): Int
     fun YpFtConnectedStreams(): Int
 
+    fun YpFtCaptchaURL(): Pointer?
+
+    fun YpFtCaptchaActive(): Int
+
     fun YpWdttStart(
         peer: String,
         vkHashes: String,
@@ -287,6 +291,12 @@ internal object YpTunCore {
     fun ftStop() = libOrNull?.YpFtStop() ?: Unit
     fun ftRunning(): Boolean = libOrNull?.YpFtRunning() == 1
     fun ftConnectedStreams(): Int = libOrNull?.YpFtConnectedStreams() ?: 0
+
+    /** URL of a pending manual VK captcha (freeturn serves it on localhost); empty when there is none. */
+    fun ftCaptchaUrl(): String = takeString(libOrNull?.YpFtCaptchaURL()).orEmpty()
+
+    /** True while the user is solving a VK captcha — the relay cannot come up until they are done. */
+    fun ftCaptchaActive(): Boolean = (libOrNull?.YpFtCaptchaActive() ?: 0) == 1
 
     // VK-TURN / WDTT core (wg-turn-client) --------------------------------------------------
     fun wdttStart(

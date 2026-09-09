@@ -516,7 +516,39 @@ func YpFtVersion() *C.char { return cs(freeturn.Version()) }
 //export YpFtStart
 func YpFtStart(uri, listenAddr, vkLink *C.char, nStreams C.int) *C.char {
 	freeturn.SetLogWriter(tagWriter{"vkturn"})
+	// Without a presenter freeturn falls back to DefaultManualSolver, which opens the captcha in a
+	// browser ITSELF and, more importantly, never raises CaptchaActive — so the app's 20-second
+	// relay-ready wait expires while the user is still solving and WireGuard starts against a dead
+	// listener. With one registered the JVM learns both the URL and that a solve is in progress.
+	freeturn.SetCaptchaPresenter(ftCaptchaPresenter{})
 	return errOut(freeturn.Start(C.GoString(uri), C.GoString(listenAddr), C.GoString(vkLink), int(nStreams)))
+}
+
+// Pending manual VK captcha, published to the JVM: it opens the URL in the user's browser (the page
+// is served by freeturn on localhost) and keeps waiting for the relay while the solve is active.
+var ftCaptchaURL atomic.Value
+
+type ftCaptchaPresenter struct{}
+
+func (ftCaptchaPresenter) Show(url string) {
+	ftCaptchaURL.Store(url)
+	pushLog("vkturn", "VK просит капчу — открываю "+url)
+}
+
+func (ftCaptchaPresenter) Hide() { ftCaptchaURL.Store("") }
+
+//export YpFtCaptchaURL
+func YpFtCaptchaURL() *C.char {
+	url, _ := ftCaptchaURL.Load().(string)
+	return cs(url)
+}
+
+//export YpFtCaptchaActive
+func YpFtCaptchaActive() C.int {
+	if freeturn.CaptchaActive() {
+		return 1
+	}
+	return 0
 }
 
 //export YpFtStop
