@@ -773,6 +773,11 @@ sourceSets {
     main {
         resources.srcDir(generatedNativeResources)
         resources.srcDir(layout.projectDirectory.dir("appIcons"))
+        // The VPS auto-installers upload these to the server over SSH — the very same gzip'd server
+        // binaries the APK ships in assets/, taken from there instead of a second copy in git.
+        resources.srcDir(rootProject.layout.projectDirectory.dir("androidApp/src/main/assets"))
+        // Zygisk module: Android-only, nothing on a PC can use it.
+        resources.exclude("olcvpnhide.zip")
     }
 }
 

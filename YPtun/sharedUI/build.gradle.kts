@@ -210,6 +210,21 @@ kotlin {
             kotlin.srcDir(generateAppInfo)
         }
 
+        // Android and the desktop JVM share more than commonMain can hold: the VPS auto-installers
+        // are plain JVM code (JSch over SSH + a shell script), and duplicating ~700 lines of them per
+        // platform is how the two copies drift. Only the source of the bundled server binaries
+        // differs (Android assets vs. classpath resources), and that is passed in.
+        val jvmSharedMain by creating {
+            dependsOn(commonMain.get())
+            dependencies {
+                implementation(libs.kotlinx.coroutines.core)
+                // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
+                implementation("com.github.mwiede:jsch:0.2.21")
+            }
+        }
+        androidMain.get().dependsOn(jvmSharedMain)
+        jvmMain.get().dependsOn(jvmSharedMain)
+
         commonMain.dependencies {
             api(libs.compose.runtime)
             api(libs.compose.ui)
@@ -256,9 +271,6 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.kstore.file)
             implementation(libs.zxing.core)
-            // SSH client for the one-tap WDTT-server VPS installer (WdttServerInstaller).
-            // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
-            implementation("com.github.mwiede:jsch:0.2.21")
             implementation(coresAndroidAarDependency)
             // Trust Tunnel (AdGuard) client — vendored prebuilt AAR (com.adguard.trusttunnel:
             // trusttunnel-client-android:1.1.5-rc.1) carrying libtrusttunnel_android.so (all ABIs) +

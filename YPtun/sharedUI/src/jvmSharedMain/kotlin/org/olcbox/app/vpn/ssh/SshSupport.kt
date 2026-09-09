@@ -1,6 +1,5 @@
 package org.olcbox.app.vpn.ssh
 
-import android.content.Context
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Logger
@@ -215,7 +214,9 @@ internal fun sshUploadInChunks(
 ) {
     val q = remotePath.shellSingleQuote()
     sshOneShot(target, ": > $q", onLog) // truncate/create
-    val b64 = android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP)
+    // java.util.Base64 (JDK8+) instead of android.util.Base64: same NO_WRAP output, and this file is
+    // shared with the desktop.
+    val b64 = java.util.Base64.getEncoder().encodeToString(data)
     // The whole command is one argv element to the server's `sh -c`, and Linux caps a single argument
     // at MAX_ARG_STRLEN = 128 KB (131072). Keep the chunk comfortably under that (the command also
     // carries the `printf '%s' '…' | base64 -d >> …` wrapper). Multiple of 4 so each chunk decodes
@@ -235,30 +236,36 @@ internal fun sshUploadInChunks(
 }
 
 /**
+ * Where the bundled server binaries come from: Android reads them out of assets, the desktop out of
+ * the classpath. Returns null when the platform has no such file.
+ */
+fun interface ServerBinarySource {
+    fun bytesOrNull(path: String): ByteArray?
+}
+
+/**
  * Loads a bundled gzip'd server binary as GZIP bytes ready to upload. The build ships it as
  * "<basePath>.gz", but Android's asset packaging DECOMPRESSES .gz assets and stores the raw file
  * under "<basePath>" (no extension) — so opening "<basePath>.gz" at runtime throws FileNotFound. We
  * therefore try the plain name first, then ".gz". If what we read is the raw (decompressed) binary we
  * re-gzip it in-app so the upload stays small and the server-side `gunzip` still works; if it's
- * already gzip we pass it through. Throws if neither asset exists.
+ * already gzip we pass it through. Throws if neither file exists.
  */
-internal fun loadServerBinaryGz(context: Context, basePath: String): ByteArray {
-    val raw = context.openAssetBytesOrNull(basePath)
-        ?: context.openAssetBytesOrNull("$basePath.gz")
-        ?: error("В APK нет бинарника сервера ($basePath[.gz])")
+internal fun loadServerBinaryGz(binaries: ServerBinarySource, basePath: String): ByteArray {
+    val raw = binaries.bytesOrNull(basePath)
+        ?: binaries.bytesOrNull("$basePath.gz")
+        ?: error("В сборке нет бинарника сервера ($basePath[.gz])")
+    return gzipIfNeeded(raw)
+}
+
+/** Passes gzip bytes through, gzips anything else. */
+internal fun gzipIfNeeded(raw: ByteArray): ByteArray {
     val isGzip = raw.size >= 2 && raw[0] == 0x1f.toByte() && raw[1] == 0x8b.toByte()
     if (isGzip) return raw
     val out = ByteArrayOutputStream()
     GZIPOutputStream(out).use { it.write(raw) }
     return out.toByteArray()
 }
-
-private fun Context.openAssetBytesOrNull(path: String): ByteArray? =
-    try {
-        assets.open(path).use { it.readBytes() }
-    } catch (_: Exception) {
-        null
-    }
 
 /** Wraps [this] in single quotes for safe shell interpolation, escaping any embedded single quote. */
 internal fun String.shellSingleQuote(): String = "'" + replace("'", "'\\''") + "'"
