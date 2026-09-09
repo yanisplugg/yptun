@@ -42,6 +42,7 @@ import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
 import org.olcbox.app.ui.OlcboxAppContent
 import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
+import org.olcbox.app.ui.components.VkTurnLinkPromptDialog
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationViewModel
 import org.olcbox.app.ui.navigation.AppScreen
@@ -785,47 +786,3 @@ private sealed class PendingVpnPermissionAction {
     data class RestartWithMode(val mode: AndroidConnectionMode) : PendingVpnPermissionAction()
 }
 
-/**
- * Asks for the per-client VK Calls link right after a VK-TURN location is imported. "Later" defers
- * (the link can be added from location settings); "Next" saves it so the location can connect.
- */
-@Composable
-private fun VkTurnLinkPromptDialog(
-    locationName: String,
-    onLater: () -> Unit,
-    onNext: (String) -> Unit
-) {
-    var link by remember { mutableStateOf("") }
-    val s = org.olcbox.app.ui.i18n.LocalStrings.current
-    AlertDialog(
-        onDismissRequest = onLater,
-        title = { Text(s.vkCallLink) },
-        text = {
-            Column {
-                Text(s.vkCallLinkBody(locationName))
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = link,
-                    onValueChange = { link = it },
-                    placeholder = { Text("https://vk.com/call/join/…") },
-                    isError = link.isNotBlank() && !link.contains("/call/join/"),
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onNext(link) },
-                enabled = link.contains("/call/join/")
-            ) {
-                Text(s.next)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onLater) {
-                Text(s.later)
-            }
-        }
-    )
-}

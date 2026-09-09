@@ -1232,6 +1232,18 @@ private fun runApp(args: Array<String>) = application {
                     )
                 }
 
+                // A VK-TURN location without a VK call link cannot connect; Android asks for one
+                // here, desktop used to just fail silently.
+                homeState.vkTurnLinkPrompt?.let { prompt ->
+                    org.olcbox.app.ui.components.VkTurnLinkPromptDialog(
+                        locationName = prompt.locationName,
+                        onLater = { dependencies.homeViewModel.dismissVkTurnLinkPrompt() },
+                        onNext = { link ->
+                            dependencies.homeViewModel.submitVkTurnLink(prompt.storageId, link)
+                        }
+                    )
+                }
+
                 updateOffer?.let { info ->
                     ApplicationUpdateOfferSheet(
                         info = info,
