@@ -324,6 +324,8 @@ private fun runApp(args: Array<String>) = application {
     var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
     var updateProgress by remember { mutableStateOf<Float?>(null) }
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    // Newer release that is not downloaded yet — drives the Home banner, exactly like Android.
+    var updateAvailable by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var sharePayload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var desktopNotice by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -341,23 +343,26 @@ private fun runApp(args: Array<String>) = application {
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
-            updateMessage = "Checking ${previousSettings.channel.name.lowercase()}..."
+            val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+            updateMessage = s.checkingChannel(s.releaseChannelLabel.lowercase())
             val result = dependencies.updateService.check(previousSettings.channel)
             val checkedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             val checkedSettings = previousSettings.copy(lastCheckAtEpochMs = checkedAt).normalized()
             saveUpdateSettings(checkedSettings)
             result.fold(
                 onSuccess = { info ->
+                    updateAvailable = info.takeIf { it.isUpdateAvailable && !it.isDownloaded(checkedSettings) }
                     if (manual || info.shouldShowOffer(previousSettings, checkedAt)) {
                         if (info.isDownloaded(checkedSettings)) {
                             updateOffer = null
-                            updateMessage = "Latest ${info.channel.name.lowercase()} is already downloaded"
+                            updateMessage = s.latestAlreadyDownloaded(s.releaseChannelLabel)
                         } else if (info.isUpdateAvailable) {
-                            updateOffer = info
-                            updateMessage = "${info.channel.name} update found: ${info.version}"
+                            // Auto checks only raise the banner; the sheet pops on a manual check.
+                            if (manual) updateOffer = info
+                            updateMessage = s.channelUpdateAvailable(s.releaseChannelLabel, info.version)
                         } else {
                             updateOffer = null
-                            updateMessage = "YPtun is up to date"
+                            updateMessage = s.upToDate
                         }
                     } else {
                         updateOffer = null
@@ -365,7 +370,7 @@ private fun runApp(args: Array<String>) = application {
                     }
                 },
                 onFailure = { error ->
-                    updateMessage = error.message ?: "Update check failed"
+                    updateMessage = error.message ?: s.updateCheckFailed
                 }
             )
         }
@@ -373,10 +378,11 @@ private fun runApp(args: Array<String>) = application {
 
     fun downloadUpdate(info: AppUpdateInfo) {
         scope.launch {
+            val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
             updateProgress = 0f
             // With a delta published for this hop only a few MB are fetched and the installed jar is
             // patched in place; without one this is the full installer, as before.
-            updateMessage = "Downloading ${(info.deltaAsset ?: info.asset).name}..."
+            updateMessage = s.downloadingAsset((info.deltaAsset ?: info.asset).name)
             val result = dependencies.updateInstaller.install(info) { progress ->
                 updateProgress = progress
             }
@@ -387,7 +393,7 @@ private fun runApp(args: Array<String>) = application {
                         is DesktopUpdateOutcome.RestartRequired -> outcome.message
                     }
                 },
-                onFailure = { error -> "Download failed: ${error.message ?: "unknown error"}" }
+                onFailure = { error -> s.downloadFailed(error.message ?: s.updateCheckFailed) }
             )
             if (result.isSuccess) {
                 saveUpdateSettings(
@@ -397,6 +403,7 @@ private fun runApp(args: Array<String>) = application {
                     )
                 )
                 updateOffer = null
+                updateAvailable = null
             }
             updateProgress = null
             // A staged delta only lands once this process is gone (it holds its own jar open), and
@@ -884,6 +891,8 @@ private fun runApp(args: Array<String>) = application {
                             onError = onError
                         )
                     },
+                    updateAvailable = updateAvailable != null,
+                    onUpdateClick = { updateAvailable?.let { updateOffer = it } },
                     onScanQrRequested = {},
                     onCopyConfigRequested = {
                         dependencies.homeViewModel.onCopyFullConfigClicked()
@@ -1228,7 +1237,11 @@ private fun runApp(args: Array<String>) = application {
                         info = info,
                         downloadProgress = updateProgress,
                         onLater = { postponeUpdate(info) },
-                        onDownload = { downloadUpdate(info) }
+                        onDownload = { downloadUpdate(info) },
+                        onManual = {
+                            org.olcbox.app.desktop.DesktopUriLauncher.open(info.htmlUrl)
+                            updateOffer = null
+                        }
                     )
                 }
 
