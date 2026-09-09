@@ -1,16 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Variant 1: a single power button. Tap = connect active location / disconnect. -->
+<!-- 1x1 widget: a single power button. Tap = connect the active location / disconnect. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_toggle_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/widget_background"
-    android:padding="6dp">
+    android:padding="2dp">
+
+    <ImageView
+        android:id="@+id/widget_toggle_bg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_circle"
+        android:importantForAccessibility="no" />
 
     <ImageView
         android:id="@+id/widget_toggle_power"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
+        android:layout_width="30dp"
+        android:layout_height="30dp"
         android:layout_gravity="center"
         android:scaleType="fitCenter"
         android:src="@drawable/ic_widget_power"

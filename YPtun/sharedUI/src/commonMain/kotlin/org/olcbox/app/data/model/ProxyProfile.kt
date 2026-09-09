@@ -13,10 +13,10 @@ import kotlinx.serialization.Serializable
  * - [VkTurn] runs the free-turn-proxy client (a local WireGuard entry listener
  *   tunnelling through VK TURN) and sing-box with a WireGuard outbound pointed
  *   at that local listener — the panel's VK-TURN inbound consumed on the client.
- * - [Dnstt] runs the dnstt client (David Fifield's DNS tunnel: KCP + Noise over DNS
- *   TXT queries). It raises a local listener that transparently forwards each TCP
- *   connection through the DNS tunnel to the dnstt-server's upstream (a SOCKS5),
- *   so the local port behaves as the SOCKS5 the TUN bridge consumes directly.
+ * - [MasterDns] runs the MasterDnsVPN client (github.com/masterking32/MasterDnsVPN): a DNS
+ *   tunnel with a custom ARQ transport, several resolvers at once and packet duplication.
+ *   It serves a local SOCKS5 whose traffic rides inside ordinary DNS queries to the
+ *   MasterDnsVPN server, and the TUN bridge consumes that port directly.
  */
 @Serializable
 enum class EngineType {
@@ -32,15 +32,15 @@ enum class EngineType {
     @SerialName("vkturn")
     VkTurn,
 
-    @SerialName("dnstt")
-    Dnstt;
+    @SerialName("masterdns")
+    MasterDns;
 
     companion object {
         fun fromValue(value: String?): EngineType = when (value?.trim()?.lowercase()) {
             "standard", "singbox", "sing-box", "vless" -> Standard
             "chain", "stealth_chain", "stealth+vless" -> Chain
             "vkturn", "vk-turn", "freeturn" -> VkTurn
-            "dnstt", "dns-tt", "dnstunnel" -> Dnstt
+            "masterdns", "master-dns", "masterdnsvpn", "dnstt", "dns-tt", "dnstunnel" -> MasterDns
             else -> Stealth
         }
     }
@@ -128,6 +128,15 @@ data class ProxyProfile(
      */
     @SerialName("raw_xray_config")
     val rawXrayConfig: String? = null,
+    /**
+     * The `route` block of a full sing-box JSON subscription, normalized at import time: every rule's
+     * outbound is already rewritten to this app's own tags ("proxy"/"direct", or an `action: reject`),
+     * and `rule_set` definitions come along. When set, [SingBoxConfig] uses THESE rules instead of the
+     * app's routing profile/toggles — a JSON subscription's own routing takes precedence, the same way
+     * [rawXrayConfig] wins on the Xray core. Null = the config shipped no routing of its own.
+     */
+    @SerialName("raw_singbox_route")
+    val rawSingBoxRoute: String? = null,
     /**
      * AmneziaWG wg-quick INI (with the Jc/Jmin/Jmax/S1/S2/H1..H4 obfuscation knobs) for
      * [TYPE_AMNEZIAWG]. The awgproxy module raises a local SOCKS5 from it that the proxy is

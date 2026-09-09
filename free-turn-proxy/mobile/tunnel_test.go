@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/config"
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
@@ -226,5 +227,168 @@ func TestStartTunnelRejectsTCPMode(t *testing.T) {
 	const cfg = `{"peer":"1.2.3.4:5000","clientId":"deadbeef","proxy":{"mode":"tcp"},"vk":{"links":["https://vk.ru/call/join/CODE"]}}`
 	if err := StartTunnel(cfg, 7); !errors.Is(err, ErrTCPModeRequiresStart) {
 		t.Fatalf("StartTunnel() error = %v, want ErrTCPModeRequiresStart", err)
+	}
+}
+
+func TestDirectConfigRequiresEndpoint(t *testing.T) {
+	noEndpoint := awgConf()
+	hostname := strings.Replace(wgConf(), "1.2.3.4:51820", "vpn.example.com:51820", 1)
+	for _, conf := range []string{noEndpoint, hostname} {
+		if _, err := directConfig(conf, 0); err == nil {
+			t.Fatal("directConfig() error = nil, want ip:port endpoint")
+		}
+	}
+	cfg, err := directConfig(wgConf(), 1376)
+	if err != nil {
+		t.Fatalf("directConfig() error = %v", err)
+	}
+	if cfg.MTU != 1376 {
+		t.Errorf("MTU = %d, want 1376", cfg.MTU)
+	}
+	if cfg.Peers[0].Endpoint != "1.2.3.4:51820" {
+		t.Errorf("Endpoint = %q, want kept", cfg.Peers[0].Endpoint)
+	}
+}
+
+func TestStartDirectTunnelRejectsBadFD(t *testing.T) {
+	if err := StartDirectTunnel(wgConf(), 0, 0); err == nil {
+		t.Fatal("StartDirectTunnel() error = nil for fd 0")
+	}
+}
+
+// stubBackend подменяет устройство: реальный tun в тестах не поднять.
+type stubBackend struct {
+	stats tunnel.Stats
+	err   error
+}
+
+func (stubBackend) Up(*tunnel.Config, int) error   { return nil }
+func (stubBackend) Down() error                    { return nil }
+func (s stubBackend) Stats() (tunnel.Stats, error) { return s.stats, s.err }
+
+func TestDirectSnapshotPhase(t *testing.T) {
+	stale := time.Now().Add(-2 * directHandshakeStale)
+	cases := []struct {
+		name    string
+		backend stubBackend
+		prep    func(*live)
+		want    string
+	}{
+		{"no handshake", stubBackend{}, nil, StateConnecting},
+		{"fresh handshake", stubBackend{stats: tunnel.Stats{LastHandshake: time.Now()}}, nil, StateConnected},
+		{"stale handshake idle", stubBackend{stats: tunnel.Stats{LastHandshake: stale}}, nil, StateConnected},
+		{
+			"stale handshake with tx",
+			stubBackend{stats: tunnel.Stats{LastHandshake: stale, TxBytes: 2000}},
+			func(l *live) { l.prevAt = time.Now().Add(-time.Second) },
+			StateConnecting,
+		},
+		{"stats error", stubBackend{err: errors.New("boom")}, nil, StateError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &live{tunnel: &tunnelParts{backend: tc.backend}}
+			if tc.prep != nil {
+				tc.prep(l)
+			}
+			if got := directSnapshot(l).State; got != tc.want {
+				t.Errorf("State = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDirectSnapshotErrorKeepsStreams(t *testing.T) {
+	l := &live{tunnel: &tunnelParts{backend: stubBackend{err: errors.New("boom")}}}
+
+	s := directSnapshot(l)
+
+	if s.Streams != 1 || s.Total != 1 {
+		t.Errorf("streams = %d/%d, want 1/1", s.Streams, s.Total)
+	}
+}
+
+// Скорость берётся из дельты между опросами хоста.
+func TestFillRatesUsesDelta(t *testing.T) {
+	now := time.Now()
+	l := &live{prevTx: 1000, prevRx: 500, prevAt: now.Add(-2 * time.Second)}
+	s := &Snapshot{TxTotal: 3000, RxTotal: 1500}
+
+	l.fillRatesAt(s, now)
+
+	if s.TxRate != 1000 || s.RxRate != 500 {
+		t.Errorf("rates = %d/%d, want 1000/500", s.TxRate, s.RxRate)
+	}
+	if l.prevTx != 3000 || l.prevRx != 1500 {
+		t.Errorf("prev = %d/%d, want 3000/1500", l.prevTx, l.prevRx)
+	}
+}
+
+// Первый опрос не с чем сравнивать - скорость нулевая, а не мусорная.
+func TestFillRatesFirstCall(t *testing.T) {
+	l := &live{}
+	s := &Snapshot{TxTotal: 3000, RxTotal: 1500}
+
+	l.fillRates(s)
+
+	if s.TxRate != 0 || s.RxRate != 0 {
+		t.Errorf("rates = %d/%d, want 0/0", s.TxRate, s.RxRate)
+	}
+}
+
+type testProtector struct {
+	protected []int
+	ok        bool
+}
+
+func (p *testProtector) Protect(fd int) bool {
+	p.protected = append(p.protected, fd)
+	return p.ok
+}
+
+func TestProtectFDReturnsStatus(t *testing.T) {
+	SetProtect(nil)
+	if protectFD(42) {
+		t.Error("protectFD() = true when no protector set")
+	}
+
+	p := &testProtector{ok: true}
+	SetProtect(p)
+	t.Cleanup(func() { SetProtect(nil) })
+
+	if !protectFD(42) {
+		t.Error("protectFD(42) = false, want true")
+	}
+	if len(p.protected) != 1 || p.protected[0] != 42 {
+		t.Errorf("protected = %v, want [42]", p.protected)
+	}
+
+	p.ok = false
+	if protectFD(43) {
+		t.Error("protectFD(43) = true, want false when protect fails")
+	}
+}
+
+type stubRebinder struct {
+	stubBackend
+	rebound int
+}
+
+func (s *stubRebinder) Rebind() error {
+	s.rebound++
+	return nil
+}
+
+func TestDirectReconnectInvokesRebind(t *testing.T) {
+	reb := &stubRebinder{}
+	current.Store(&live{
+		tunnel: &tunnelParts{backend: reb},
+	})
+	t.Cleanup(func() { current.Store(nil) })
+
+	Reconnect()
+
+	if reb.rebound != 1 {
+		t.Errorf("rebound = %d, want 1", reb.rebound)
 	}
 }

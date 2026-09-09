@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.TrafficSettings
 
@@ -113,10 +114,24 @@ object XrayConfig {
 
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
 
-    /** Routing rules that hijack DNS (UDP/53, TCP/853 DoT) to the `dns-out` outbound. */
+    /**
+     * Routing rules that hijack DNS (port 53 both networks, TCP/853 DoT) to the `dns-out` outbound.
+     *
+     * Scoped to the app's own SOCKS inbound: xray's DNS client dials its upstreams from NO inbound, and
+     * [proxiedDns] hands it `tcp://<ip>` servers — an unscoped tcp/53 rule would hijack those back into
+     * `dns-out` and loop. TCP/53 has to be covered because desktop fronts xray with a sing-box TUN that
+     * forwards the hijacked system DNS as a SOCKS5 CONNECT to port 53 (`preferTcpRemoteDns`), never as
+     * UDP — so with UDP-only hijacking the config's FakeDNS was simply never consulted on PC.
+     */
     private fun dnsHijackRules(): List<JsonObject> = listOf(
-        buildJsonObject { put("type", "field"); put("network", "udp"); put("port", 53); put("outboundTag", "dns-out") },
-        buildJsonObject { put("type", "field"); put("network", "tcp"); put("port", 853); put("outboundTag", "dns-out") },
+        buildJsonObject {
+            put("type", "field"); putJsonArray("inboundTag") { add("socks-in") }
+            put("port", 53); put("outboundTag", "dns-out")
+        },
+        buildJsonObject {
+            put("type", "field"); putJsonArray("inboundTag") { add("socks-in") }
+            put("network", "tcp"); put("port", 853); put("outboundTag", "dns-out")
+        },
     )
 
     /** The `dns` protocol outbound that answers hijacked queries (tag `dns-out`). */
@@ -127,8 +142,8 @@ object XrayConfig {
     }
 
     /** A single synthetic-IP pool entry for the top-level `fakedns` array. */
-    private fun fakeDnsPool(): JsonObject = buildJsonObject {
-        put("ipPool", FAKEDNS_POOL)
+    private fun fakeDnsPool(ipPool: String? = null): JsonObject = buildJsonObject {
+        put("ipPool", ipPool?.takeIf { it.isNotBlank() } ?: FAKEDNS_POOL)
         put("poolSize", FAKEDNS_POOL_SIZE)
     }
 
@@ -168,26 +183,26 @@ object XrayConfig {
         blockQuic: Boolean = true,
         // Family enforcement (the opposite-family blackhole + IPIfNonMatch routing-resolve that ipv4_only/
         // prefer_ipv4/ipv6_only turn on). IPIfNonMatch makes Xray resolve EVERY domain for routing, and
-        // those DNS lookups egress via the proxy — i.e. through the tunnel. On a very slow tunnel (dnstt:
-        // DNS TXT) that adds a tunnel round-trip to every connection and stalls all traffic. Pass false
+        // those DNS lookups egress via the proxy — i.e. through the tunnel. On a very slow tunnel (MasterDNS:
+        // payload inside DNS queries) that adds a tunnel round-trip to every connection and stalls all traffic. Pass false
         // there: the bridge already drops client IPv6 for ipv4 modes, so the family stays pinned without
         // forcing per-connection resolution over the tunnel.
         forceFamilyResolve: Boolean = true,
         // Chain the main proxy through its detour with sockopt.dialerProxy (socket-level) instead of
         // proxySettings (proxy-level). proxySettings re-wraps the outbound and DROPS its own transport —
         // a vless+reality / xtls-vision exit then sends a malformed handshake and the server resets the
-        // connection ("vless → connection reset" over dnstt). dialerProxy keeps the full vless/TLS/flow
-        // intact and only routes the underlying socket through the detour. Set for the dnstt chain.
+        // connection ("vless → connection reset" over MasterDNS). dialerProxy keeps the full vless/TLS/flow
+        // intact and only routes the underlying socket through the detour. Set for the MasterDNS chain.
         chainViaDialerProxy: Boolean = false,
-        // For VK-TURN / dnstt: the base tunnel (WireGuard / dnstt SOCKS) is the MANDATORY transport, so a
+        // For VK-TURN / MasterDNS: the base tunnel (WireGuard / MasterDNS SOCKS) is the MANDATORY transport, so a
         // routing rule's `direct` bucket must NOT leak to the real network — it should still exit through
-        // the base tunnel (at the VK / dnstt-server). When true, the `direct` outbound dials through the
+        // the base tunnel (at the VK / MasterDNS-сервер). When true, the `direct` outbound dials through the
         // base detour instead of dialing the destination on the real interface. So routing only chooses
         // base-tunnel-exit (direct) vs second-proxy-exit (proxy); nothing ever bypasses the tunnel.
         directViaBase: Boolean = false,
         // Send LAN/private ranges straight out (not through the proxy) so local-network devices stay
         // reachable — the global "Обход LAN" toggle. Only applied when the `direct` outbound is the
-        // REAL network ([directViaBase] == false); for VK-TURN/dnstt base-detour exits LAN must keep
+        // REAL network ([directViaBase] == false); for VK-TURN/MasterDNS base-detour exits LAN must keep
         // tunnelling, so this is ignored there (the toggle still governs the sing-box path the same way).
         bypassLan: Boolean = true,
         // Optional SECOND proxy chained ON TOP of [profile] (the main). When present, traffic exits via
@@ -195,9 +210,15 @@ object XrayConfig {
         // the main (tag [PROXY_BASE_TAG]); the main dials through olcRTC/WG. So: client → [olcRTC/WG] →
         // main → second → internet. Null = the main proxy is the single exit (PROXY_TAG), as before.
         secondProfile: ProxyProfile? = null,
+        // FakeDNS translated from an imported JSON config (fakeip pool + dns.hosts blackholes) — the
+        // PER-LOCATION spec the sing-box path already honors via SingBoxConfig.fakeDnsSpec. Without it
+        // this path saw only the (removed, always-false) global [TrafficSettings.fakeDnsEnabled], so a
+        // subscription's FakeDNS silently vanished whenever the location ran on Xray instead of
+        // sing-box (explicit core choice, the app-wide default, blockRuDomains or a dnsHosts profile).
+        fakeDnsSpec: FakeDnsSpec? = null,
         // Outbound handshake budget (seconds). Xray's default is only 4s — far too short when the proxy
-        // is chained over an ultra-slow tunnel (dnstt: SOCKS5 greeting+CONNECT to the VPS, then the VPS's
-        // dial to the proxy server, then the vless/TLS handshake, all round-tripping over DNS TXT). Xray
+        // is chained over an ultra-slow tunnel (MasterDNS: SOCKS5 greeting+CONNECT to the VPS, then the VPS's
+        // dial to the proxy server, then the vless/TLS handshake, all round-tripping over DNS). Xray
         // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
         handshakeTimeoutSec: Int? = null,
     ): String {
@@ -207,6 +228,10 @@ object XrayConfig {
         // "xhttp + 2nd tcp proxy = нет соединения"). Route the exit through a local SOCKS loopback
         // instead; the main ([PROXY_BASE_TAG]) then runs as an ORDINARY outbound that just proxies the
         // TCP to the 2nd server. Same fix as prepareRaw(). Non-xhttp mains keep the direct dialerProxy.
+        // Either the (legacy) global toggle or a per-location spec turns the FakeDNS plumbing on.
+        val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null
+        // The spec's dns.hosts blackholes (domain -> 0.0.0.0), reproduced as Xray `regexp:` hosts.
+        val fakeBlockRegex = fakeDnsSpec?.blockRegex.orEmpty().filter { it.isNotBlank() }
         val cascadeMainIsXhttp = profile.network == ProxyProfile.NETWORK_XHTTP
         val cascadeLoopActive = secondProfile?.isComplete() == true && cascadeMainIsXhttp
         // Internal loopback SOCKS port: one above the app's listen port (127.0.0.1 only, not exposed).
@@ -215,7 +240,7 @@ object XrayConfig {
             putJsonObject("log") { put("loglevel", logLevel) }
 
             // Stretch the handshake (and idle) budget for slow chained tunnels so Xray doesn't kill a
-            // still-completing handshake. Only emitted when a caller asks for it (e.g. dnstt).
+            // still-completing handshake. Only emitted when a caller asks for it (e.g. MasterDNS).
             if (handshakeTimeoutSec != null) {
                 putJsonObject("policy") {
                     putJsonObject("levels") {
@@ -233,15 +258,17 @@ object XrayConfig {
 
             putJsonObject("dns") {
                 val profileHosts = routingProfile?.dnsHosts ?: emptyMap()
-                if (traffic.blockRuDomains || profileHosts.isNotEmpty()) {
+                if (traffic.blockRuDomains || profileHosts.isNotEmpty() || fakeBlockRegex.isNotEmpty()) {
                     putJsonObject("hosts") {
                         if (traffic.blockRuDomains) RuBlocklist.hostRegexps.forEach { put(it, "0.0.0.0") }
+                        // The imported config's own blackholes, back in Xray's own schema.
+                        fakeBlockRegex.forEach { put("regexp:$it", "0.0.0.0") }
                         profileHosts.forEach { (k, v) -> put(k, v) }
                     }
                 }
                 putJsonArray("servers") {
                     // FakeDNS first so sniffed domains get a synthetic IP before the real resolvers.
-                    if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
+                    if (fakeEnabled) add(FAKEDNS_SERVER)
                     // Remote resolvers ride the proxy/cascade → DoH-over-443 (major IPs) or DNS-over-TCP
                     // so they aren't dropped by an exit that blocks port 53 (the 4s-serial-timeout →
                     // ERR_CONNECTION_ABORTED bug).
@@ -254,8 +281,8 @@ object XrayConfig {
 
             // Synthetic-IP pool for FakeDNS (apps see 198.18.x.x; the domain is recovered via the
             // socks inbound's `fakedns` sniffing and resolved behind the proxy).
-            if (traffic.fakeDnsEnabled) {
-                putJsonArray("fakedns") { add(fakeDnsPool()) }
+            if (fakeEnabled) {
+                putJsonArray("fakedns") { add(fakeDnsPool(fakeDnsSpec?.inet4Range)) }
             }
 
             putJsonArray("inbounds") {
@@ -287,7 +314,7 @@ object XrayConfig {
                         putJsonArray("destOverride") {
                             add("http"); add("tls"); add("quic")
                             // Recover the real domain from a FakeDNS synthetic-IP connection.
-                            if (traffic.fakeDnsEnabled) add("fakedns")
+                            if (fakeEnabled) add("fakedns")
                         }
                         if (expert && routingProfile!!.xrayRouteOnly) put("routeOnly", true)
                     }
@@ -306,7 +333,7 @@ object XrayConfig {
             val wgBaseOutbound = wireguardBase?.let { buildWireguardBaseOutbound(it) }
             // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
             val baseDetour = if (wgBaseOutbound != null) WG_BASE_TAG else null
-            // The base tunnel's exit tag (WG for VK-TURN, dnstt SOCKS for dnstt). Used to keep `direct`
+            // The base tunnel's exit tag (WG for VK-TURN, MasterDNS SOCKS for MasterDNS). Used to keep `direct`
             // traffic on the tunnel when [directViaBase].
             val baseExitTag = when {
                 wgBaseOutbound != null -> WG_BASE_TAG
@@ -392,7 +419,7 @@ object XrayConfig {
                         // Resolve direct destinations via xray's own DNS, not Go's (broken on Android).
                         put("domainStrategy", directDomainStrategy(traffic))
                     }
-                    // VK-TURN / dnstt: send `direct` traffic THROUGH the base tunnel (the dnstt-server /
+                    // VK-TURN / MasterDNS: send `direct` traffic THROUGH the base tunnel (the MasterDNS-сервер /
                     // VK exit) instead of the real interface, so routing never bypasses the tunnel.
                     if (directDialsBase) {
                         putJsonObject("streamSettings") {
@@ -408,7 +435,7 @@ object XrayConfig {
                 }
                 // FakeDNS: DNS queries (port 53/853) are hijacked to this dns outbound so the core
                 // answers them from the fake pool / upstream instead of leaking them out.
-                if (traffic.fakeDnsEnabled) add(dnsOutOutbound())
+                if (fakeEnabled) add(dnsOutOutbound())
                 // TLS fragmentation outbound (DPI evasion); proxy dials through it via dialerProxy.
                 if (traffic.fragmentEnabled && olcrtcChainPort == null) {
                     addJsonObject {
@@ -438,8 +465,9 @@ object XrayConfig {
                 put("outboundTag", "block")
             }
             // FakeDNS: route DNS queries to the dns outbound so they're answered from the fake pool.
-            val dnsOutRules = if (traffic.fakeDnsEnabled) dnsHijackRules() else emptyList()
-            // Blocked RU hosts resolve to 0.0.0.0 (dns.hosts above); blackhole anything aimed there.
+            val dnsOutRules = if (fakeEnabled) dnsHijackRules() else emptyList()
+            // Blocked hosts resolve to 0.0.0.0 (dns.hosts above); blackhole anything aimed there.
+            val blockZero = traffic.blockRuDomains || fakeBlockRegex.isNotEmpty()
             val blockZeroRule = buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") { add("0.0.0.0") }
@@ -485,11 +513,11 @@ object XrayConfig {
             // interception of the real destination as "недоверенный SSL-сертификат". Normally the
             // sniffed SNI replaces the fake address first; when sniffing cannot see it (ECH, or
             // anything that is not TLS/HTTP) the fake address is all the router has to go on.
-            val fakeDnsProxyRule = if (traffic.fakeDnsEnabled) buildJsonObject {
+            val fakeDnsProxyRule = if (fakeEnabled) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
-                    add(FAKEDNS_POOL)
-                    add(FAKEDNS_POOL6)
+                    add(fakeDnsSpec?.inet4Range?.takeIf { it.isNotBlank() } ?: FAKEDNS_POOL)
+                    add(fakeDnsSpec?.inet6Range?.takeIf { it.isNotBlank() } ?: FAKEDNS_POOL6)
                 }
                 put("outboundTag", if (directViaBase) PROXY_BASE_TAG else PROXY_TAG)
             } else null
@@ -517,7 +545,7 @@ object XrayConfig {
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
-                        if (traffic.blockRuDomains) add(blockZeroRule)
+                        if (blockZero) add(blockZeroRule)
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
@@ -529,7 +557,7 @@ object XrayConfig {
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
-                        if (traffic.blockRuDomains) add(blockZeroRule)
+                        if (blockZero) add(blockZeroRule)
                     }
                 }
             }
@@ -1290,12 +1318,12 @@ object XrayConfig {
         // when a second/cascade proxy exits in front of it.
         tag: String = PROXY_TAG,
         // Force socket-level (dialerProxy) chaining over the detour even for non-xhttp transports — keeps
-        // a vless reality/vision exit intact over the dnstt chain (see [build]'s chainViaDialerProxy).
+        // a vless reality/vision exit intact over the MasterDNS chain (see [build]'s chainViaDialerProxy).
         chainViaDialerProxy: Boolean = false,
         // Keep XTLS Vision `flow` even though this is a chained hop. Set for the cascade SOCKS loopback,
         // which hands the exit a CLEAN transparent TCP stream Vision can traverse — and the 2nd server's
         // vless inbound REQUIRES the flow it was configured with (drop it → "EOF"/reset). The generic
-        // olcRTC/WG/dnstt detours still drop flow (they can't carry Vision's raw-TLS splice reliably).
+        // olcRTC/WG/MasterDNS detours still drop flow (they can't carry Vision's raw-TLS splice reliably).
         preserveFlow: Boolean = false,
         // Cascade base (xhttp main): give its xhttp transport a high-concurrency xmux so the loopback's
         // per-app-flow connections collapse onto a couple of H2 tunnels (see buildStreamSettings).
@@ -1326,7 +1354,7 @@ object XrayConfig {
                                         // XTLS Vision (xtls-rprx-vision) splices the RAW TLS connection to
                                         // ITS OWN server — it can't ride a chain. When this vless dials
                                         // through a detour (cascade exit over the main, an olcRTC/VK-TURN/
-                                        // dnstt base hop), keeping the flow makes the exit hang = "no
+                                        // MasterDNS base hop), keeping the flow makes the exit hang = "no
                                         // connection" (e.g. a tcp vless-reality 2nd proxy over an xhttp
                                         // main). Drop it on chained hops; plain vless tunnels fine. The
                                         // direct (un-chained) hop keeps its flow so Vision still works there.

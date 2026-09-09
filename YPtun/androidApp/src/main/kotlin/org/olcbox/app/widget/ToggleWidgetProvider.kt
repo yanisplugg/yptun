@@ -31,9 +31,13 @@ class ToggleWidgetProvider : AppWidgetProvider() {
         }
     }
 
+    override fun onDeleted(context: Context, ids: IntArray) {
+        WidgetStyle.forget(context, ids)
+    }
+
     private fun render(context: Context, manager: AppWidgetManager, id: Int) {
         val views = RemoteViews(context.packageName, R.layout.widget_toggle)
-        WidgetSupport.renderToggle(context, views)
+        WidgetSupport.renderToggle(context, views, WidgetStyle.load(context, id))
         manager.updateAppWidget(id, views)
     }
 }

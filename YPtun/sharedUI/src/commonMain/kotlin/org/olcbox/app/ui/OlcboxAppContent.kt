@@ -168,6 +168,7 @@ fun OlcboxAppContent(
                     viewModel = locationViewModel,
                     homeViewModel = homeViewModel,
                     allowVpsAutoInstall = allowVpsAutoInstall,
+                    confirmBeforeDelete = confirmBeforeDelete,
                     onShareLocationRequested = onShareLocationRequested,
                     onBack = {
                         homeViewModel.loadCurrentConfig()

@@ -36,8 +36,8 @@ func UAPI(c *Config) (string, error) {
 		} else {
 			line("endpoint", EndpointSinglePeer)
 		}
-		if p.Keepalive > 0 {
-			line("persistent_keepalive_interval", strconv.Itoa(p.Keepalive))
+		if p.Keepalive != "" && p.Keepalive != "0" {
+			line("persistent_keepalive_interval", p.Keepalive)
 		}
 		line("replace_allowed_ips", "true")
 		for _, ip := range p.AllowedIPs {

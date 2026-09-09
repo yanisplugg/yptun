@@ -1,6 +1,7 @@
 package org.olcbox.app.vpn.singbox
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.data.model.FakeDnsSpec
@@ -52,7 +53,10 @@ class SingBoxFakeIpCacheTest {
         assertEquals(true, cache["store_fakeip"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("/data/singbox/cache.db", cache["path"]!!.jsonPrimitive.content)
         // fakeip really is on in this config (otherwise the assertions above prove nothing).
-        assertTrue(root["dns"]!!.jsonObject["fakeip"] != null)
+        // sing-box 1.14 dropped the top-level `dns.fakeip` block: the pool is a typed server now.
+        val servers = root["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+        val fake = servers.first { it["type"]?.jsonPrimitive?.content == "fakeip" }
+        assertEquals("198.18.0.0/15", fake["inet4_range"]!!.jsonPrimitive.content)
     }
 
     /**

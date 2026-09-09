@@ -395,7 +395,20 @@ class DesktopVpnManager private constructor(
             }
             if (profile.server.isBlank()) return@withContext null
             val listenPort = (20_000..60_000).random()
-            val configJson = runCatching {
+            // A verbatim raw config (xhttp/splithttp/reality) can't be rebuilt from type/server/port —
+            // its transport lives only in rawXrayConfig. Probe THROUGH that verbatim proxy outbound, or
+            // the test dials a plain vless and falsely reports the server unreachable. Mirrors Android.
+            val rawXray = profile.rawXrayConfig
+            val configJson = if (!rawXray.isNullOrBlank()) {
+                org.olcbox.app.vpn.xray.XrayConfig.buildRawProxyPingConfig(
+                    rawConfigJson = rawXray,
+                    listenPort = listenPort,
+                    listenHost = "127.0.0.1",
+                ) ?: run {
+                    addLog("Proxy $method ping: no proxy outbound in verbatim config for ${profile.server}")
+                    return@withContext null
+                }
+            } else runCatching {
                 org.olcbox.app.vpn.xray.XrayConfig.build(
                     profile = profile,
                     listenPort = listenPort,
@@ -448,9 +461,11 @@ class DesktopVpnManager private constructor(
                 // token it re-authenticates with; carve those out too or the relay dies mid-session.
                 addAll(VK_TURN_CONTROL_HOSTS)
             }
-            // dnstt speaks plain UDP DNS to this resolver; looping that into the TUN deadlocks the
-            // tunnel it is carrying (Android protects the socket instead).
-            config.dnstt?.resolver?.substringBefore(':')?.takeIf { it.isNotBlank() }?.let { add(it) }
+            // MasterDNS speaks plain UDP DNS to its resolvers; looping those into the TUN deadlocks the
+            // tunnel they are carrying (Android protects the sockets instead). It balances across ALL of
+            // them and reactivates ones it had dropped, so every resolver has to be carved out, not just
+            // the one in use.
+            config.masterDns?.resolverHosts()?.forEach { add(it) }
             // The Telegram-over-WARP proxy is a SECOND tunnel living in this same process. Android
             // keeps its UDP off the VPN with VpnService.protect(); desktop has no protect, so route
             // WARP around the TUN instead — otherwise enabling the main VPN kills the Telegram proxy.
@@ -459,6 +474,21 @@ class DesktopVpnManager private constructor(
             if (org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior().telegramProxyEnabled) {
                 addAll(org.olcbox.app.vpn.telegram.DesktopTelegramProxy.candidateEndpointHosts())
             }
+        }
+        // "Обход LAN" on Windows. Android carves the private ranges out of the VpnService routes;
+        // here the TUN grabs 0.0.0.0/1 + 128.0.0.0/1 at metric 1, so ONLY the adapter's own subnet
+        // stayed reachable (by its more specific on-link route) and every OTHER private range — a
+        // 10.x NAS while the laptop sits on 192.168.x, a second VLAN, a docker bridge — was
+        // swallowed by the tunnel no matter what the toggle said. Sending them via the physical
+        // gateway alongside the engines' own bypass routes is the same mechanism, applied to LAN.
+        //
+        // Deliberately NOT here: 127/8 and 169.254/16. Windows serves both from its own more
+        // specific on-link routes, and pinning them to a gateway at metric 1 would break loopback
+        // and APIPA instead of fixing anything.
+        val lanPrefixes = if (org.olcbox.app.vpn.desktop.JvmVpnSettings.loadRouting().bypassLan) {
+            listOf("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+        } else {
+            emptyList()
         }
         val resolved = hosts.distinct().flatMap { host ->
             runCatching {
@@ -470,7 +500,7 @@ class DesktopVpnManager private constructor(
                 emptyList()
             }
         }
-        return (resolved + vkTurnMediaPrefixes(config)).distinct().filter { it != "127.0.0.1" }
+        return (resolved + vkTurnMediaPrefixes(config) + lanPrefixes).distinct().filter { it != "127.0.0.1" }
     }
 
     /**
@@ -533,21 +563,6 @@ class DesktopVpnManager private constructor(
             port = socks.port,
             username = socks.username,
             password = socks.password
-        )
-    }
-
-    fun updateSocksProxySettings(username: String, password: String, port: Int) {
-        val settings = DesktopSocksProxySettings(
-            port = port,
-            username = username,
-            password = password
-        ).normalized()
-        _socksProxySettings.value = settings
-        pacServer.updateSocksTarget(
-            socksHost = settings.host,
-            socksPort = settings.port,
-            socksUsername = settings.username,
-            socksPassword = settings.password
         )
     }
 
@@ -707,13 +722,7 @@ class DesktopVpnManager private constructor(
                 throw CancellationException("Desktop start superseded")
             }
 
-            // A bare dnstt tunnel leaves a transparent forwarder — not a real SOCKS server — on the
-            // local port, so nothing downstream may send an auth handshake to it.
-            val bridgeSettings = if (useEngineController && engineController.localSocksNoAuth) {
-                socksSettings.copy(username = "", password = "")
-            } else {
-                socksSettings
-            }
+            val bridgeSettings = socksSettings
 
             when (desktopMode) {
                 DesktopMode.LinuxTun -> startLinuxTun(requestGeneration = requestGeneration)
@@ -870,7 +879,7 @@ class DesktopVpnManager private constructor(
     ) {
         // The system HTTP proxy must NOT be pointed at the core's local port: only sing-box answers
         // HTTP there (its "mixed" inbound). xray-core — which every routing profile, raw
-        // subscription config and xhttp cascade forces — plus olcRTC and dnstt all publish a
+        // subscription config and xhttp cascade forces — plus olcRTC and MasterDNS all publish a
         // SOCKS-only listener, so WinINET's absolute-form GET was never understood and the browser
         // silently went direct. Our own HTTP bridge in front of the SOCKS gives one stable HTTP port
         // that behaves identically on every engine.

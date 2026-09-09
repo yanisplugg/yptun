@@ -104,6 +104,8 @@ interface Strings {
     val deleteAllSubscriptionsTitle: String
     val deleteAllSubscriptionsMessage: String
     val deleteAllConfigsTitle: String
+    val deleteLocationTitle: String
+    val deleteLocationMessage: String
     val deleteAllConfigsMessage: String
     val menuDeleteAllSubscriptions: String
     val menuDeleteAllConfigs: String
@@ -144,6 +146,9 @@ interface Strings {
     val dynamicTheme: String
     val dynamicThemeOn: String
     val dynamicThemeOff: String
+    val lightTheme: String
+    val lightThemeOn: String
+    val lightThemeOff: String
     val routing: String
     val routingSubtitle: String
     val trafficSettings: String
@@ -164,6 +169,7 @@ interface Strings {
     fun singboxVersion(v: String): String
     fun vkturnVersion(v: String): String
     fun wdttVersion(v: String): String
+    fun awgVersion(v: String): String
     fun olcrtcVersion(v: String): String
     /** Localized label for a TrafficSettings domain strategy (prefer_ipv4/prefer_ipv6/ipv4_only/ipv6_only). */
     fun domainStrategyName(v: String): String
@@ -357,6 +363,9 @@ interface Strings {
     // Connection / split tunneling
     val connectionMode: String
     val socks5Proxy: String
+    val securedSocksProxy: String
+    val securedSocksProxySubtitle: String
+    val securedSocksProxyOff: String
     val splitTunneling: String
     val routingBehavior: String
     val appsUsingYptun: String
@@ -531,9 +540,28 @@ interface Strings {
     val notifSplitTunnelError: String
     val notifStop: String
     val notifVkCaptcha: String
+
+    // Home-screen widget (rendered from a BroadcastReceiver, so it reads these instead of R.string).
+    val widgetDisconnected: String
+    val widgetNoLocation: String
+    val widgetSettingsTitle: String
+    val widgetTheme: String
+    val widgetThemeDark: String
+    val widgetThemeLight: String
+    val widgetThemeTransparent: String
+    val widgetOpacity: String
+    val widgetCorners: String
+    val widgetCornersSmall: String
+    val widgetCornersMedium: String
+    val widgetCornersRound: String
+    val widgetAccent: String
+    val widgetShowSpeed: String
+    val widgetShowControls: String
+    val widgetDone: String
     val vkCaptchaTitle: String
     val noFileSelected: String
     val qrImported: String
+    val qrNotRecognized: String
     fun cannotOpenFilePicker(msg: String): String
     val configCopied: String
     val copied: String
@@ -746,6 +774,8 @@ object RuStrings : Strings {
     override val deleteAllSubscriptionsMessage =
         "Будут удалены все конфигурации из подписок. Собственные локации сохранятся."
     override val deleteAllConfigsTitle = "Удалить все конфигурации?"
+    override val deleteLocationTitle = "Удалить конфигурацию?"
+    override val deleteLocationMessage = "Эта локация будет удалена. Действие необратимо."
     override val deleteAllConfigsMessage =
         "Будут удалены все конфигурации и подписки. Это действие необратимо."
     override val menuDeleteAllSubscriptions = "Удалить все подписки"
@@ -786,6 +816,9 @@ object RuStrings : Strings {
     override val dynamicTheme = "Динамическая тема"
     override val dynamicThemeOn = "Системные цвета Android"
     override val dynamicThemeOff = "Цвета YPtun"
+    override val lightTheme = "Светлая тема"
+    override val lightThemeOn = "Белый фон, тёмная тема системы игнорируется"
+    override val lightThemeOff = "Тёмный фон"
     override val routing = "Маршрутизация"
     override val routingSubtitle = "Обход LAN/России, блокировка рекламы, домены"
     override val trafficSettings = "Настройки трафика"
@@ -806,6 +839,7 @@ object RuStrings : Strings {
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
     override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
+    override fun awgVersion(v: String) = "AmneziaWG: $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "Предпочитать IPv4"
@@ -990,6 +1024,9 @@ object RuStrings : Strings {
     override val createCustomLocationSubtitle = "Комната, ключ, провайдер и транспорт"
     override val connectionMode = "Режим подключения"
     override val socks5Proxy = "SOCKS5-прокси"
+    override val securedSocksProxy = "Защищённый SOCKS-прокси"
+    override val securedSocksProxySubtitle = "Логин и пароль на своём порту"
+    override val securedSocksProxyOff = "Выключен · 127.0.0.1:8080 без авторизации"
     override val splitTunneling = "Раздельное туннелирование"
     override val routingBehavior = "Поведение маршрутизации"
     override val appsUsingYptun = "Приложения через YPtun"
@@ -1144,9 +1181,27 @@ object RuStrings : Strings {
     override val notifSplitTunnelError = "Ошибка раздельного туннелирования"
     override val notifStop = "Стоп"
     override val notifVkCaptcha = "VK просит капчу — нажмите, чтобы решить"
+
+    override val widgetDisconnected = "Отключено"
+    override val widgetNoLocation = "Локация не выбрана"
+    override val widgetSettingsTitle = "Оформление виджета"
+    override val widgetTheme = "Тема"
+    override val widgetThemeDark = "Тёмная"
+    override val widgetThemeLight = "Светлая"
+    override val widgetThemeTransparent = "Прозрачная"
+    override val widgetOpacity = "Непрозрачность фона"
+    override val widgetCorners = "Скругление углов"
+    override val widgetCornersSmall = "Малое"
+    override val widgetCornersMedium = "Среднее"
+    override val widgetCornersRound = "Круглое"
+    override val widgetAccent = "Акцент"
+    override val widgetShowSpeed = "Показывать скорость"
+    override val widgetShowControls = "Кнопки «Авто» и ‹ ›"
+    override val widgetDone = "Готово"
     override val vkCaptchaTitle = "Капча VK"
     override val noFileSelected = "Файл не выбран"
     override val qrImported = "QR-код импортирован"
+    override val qrNotRecognized = "QR-код в файле не распознан"
     override fun cannotOpenFilePicker(msg: String) = "Не удалось открыть выбор файла: $msg"
     override val configCopied = "Конфигурация скопирована"
     override val copied = "Скопировано"
@@ -1342,6 +1397,8 @@ object EnStrings : Strings {
     override val deleteAllSubscriptionsMessage =
         "All subscription configurations will be removed. Custom locations are kept."
     override val deleteAllConfigsTitle = "Delete all configs?"
+    override val deleteLocationTitle = "Delete config?"
+    override val deleteLocationMessage = "This location will be removed. This cannot be undone."
     override val deleteAllConfigsMessage =
         "All configurations and subscriptions will be removed. This cannot be undone."
     override val menuDeleteAllSubscriptions = "Delete all subscriptions"
@@ -1382,6 +1439,9 @@ object EnStrings : Strings {
     override val dynamicTheme = "Dynamic theme"
     override val dynamicThemeOn = "Using Android system colors"
     override val dynamicThemeOff = "Using YPtun colors"
+    override val lightTheme = "Light theme"
+    override val lightThemeOn = "White canvas, system dark theme ignored"
+    override val lightThemeOff = "Dark canvas"
     override val routing = "Routing"
     override val routingSubtitle = "Bypass LAN/Russia, block ads, custom domains"
     override val trafficSettings = "Traffic settings"
@@ -1402,6 +1462,7 @@ object EnStrings : Strings {
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
     override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
+    override fun awgVersion(v: String) = "AmneziaWG: $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "Prefer IPv4"
@@ -1586,6 +1647,9 @@ object EnStrings : Strings {
     override val createCustomLocationSubtitle = "Enter room, key, provider, and transport"
     override val connectionMode = "Connection Mode"
     override val socks5Proxy = "SOCKS5 Proxy"
+    override val securedSocksProxy = "Secured SOCKS proxy"
+    override val securedSocksProxySubtitle = "Username and password on a port of your choosing"
+    override val securedSocksProxyOff = "Off · 127.0.0.1:8080, no authentication"
     override val splitTunneling = "Split Tunneling"
     override val routingBehavior = "Routing Behavior"
     override val appsUsingYptun = "Apps Using YPtun"
@@ -1740,9 +1804,27 @@ object EnStrings : Strings {
     override val notifSplitTunnelError = "Split tunneling error"
     override val notifStop = "Stop"
     override val notifVkCaptcha = "VK asks for a captcha — tap to solve"
+
+    override val widgetDisconnected = "Disconnected"
+    override val widgetNoLocation = "No server selected"
+    override val widgetSettingsTitle = "Widget appearance"
+    override val widgetTheme = "Theme"
+    override val widgetThemeDark = "Dark"
+    override val widgetThemeLight = "Light"
+    override val widgetThemeTransparent = "Transparent"
+    override val widgetOpacity = "Background opacity"
+    override val widgetCorners = "Corner radius"
+    override val widgetCornersSmall = "Small"
+    override val widgetCornersMedium = "Medium"
+    override val widgetCornersRound = "Round"
+    override val widgetAccent = "Accent"
+    override val widgetShowSpeed = "Show speed"
+    override val widgetShowControls = "Auto and ‹ › buttons"
+    override val widgetDone = "Done"
     override val vkCaptchaTitle = "VK captcha"
     override val noFileSelected = "No file selected"
     override val qrImported = "QR imported"
+    override val qrNotRecognized = "No QR code found in that image"
     override fun cannotOpenFilePicker(msg: String) = "Cannot open file picker: $msg"
     override val configCopied = "Config copied"
     override val copied = "Copied"
@@ -1938,6 +2020,8 @@ object FaStrings : Strings {
     override val deleteAllSubscriptionsMessage =
         "همهٔ پیکربندی‌های اشتراک‌ها حذف می‌شوند. موقعیت‌های سفارشی حفظ خواهند شد."
     override val deleteAllConfigsTitle = "همهٔ پیکربندی‌ها حذف شوند؟"
+    override val deleteLocationTitle = "پیکربندی حذف شود؟"
+    override val deleteLocationMessage = "این موقعیت حذف می‌شود. این کار بازگشت‌پذیر نیست."
     override val deleteAllConfigsMessage =
         "همهٔ پیکربندی‌ها و اشتراک‌ها حذف می‌شوند. این کار بازگشت‌ناپذیر است."
     override val menuDeleteAllSubscriptions = "حذف همهٔ اشتراک‌ها"
@@ -1978,6 +2062,9 @@ object FaStrings : Strings {
     override val dynamicTheme = "پوستهٔ پویا"
     override val dynamicThemeOn = "استفاده از رنگ‌های سیستم اندروید"
     override val dynamicThemeOff = "استفاده از رنگ‌های YPtun"
+    override val lightTheme = "پوستهٔ روشن"
+    override val lightThemeOn = "زمینهٔ سفید، پوستهٔ تیرهٔ سیستم نادیده گرفته می‌شود"
+    override val lightThemeOff = "زمینهٔ تیره"
     override val routing = "مسیریابی"
     override val routingSubtitle = "دور زدن LAN/روسیه، مسدودسازی تبلیغات، دامنه‌ها"
     override val trafficSettings = "تنظیمات ترافیک"
@@ -2005,6 +2092,7 @@ object FaStrings : Strings {
     override fun singboxVersion(v: String) = "sing-box: $v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn): $v"
     override fun wdttVersion(v: String) = "VK-TURN (WDTT): $v"
+    override fun awgVersion(v: String) = "AmneziaWG: $v"
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun hwid(v: String) = "HWID: $v"
     override val community = "انجمن"
@@ -2182,6 +2270,9 @@ object FaStrings : Strings {
     override val createCustomLocationSubtitle = "اتاق، کلید، ارائه‌دهنده و حامل"
     override val connectionMode = "حالت اتصال"
     override val socks5Proxy = "پراکسی SOCKS5"
+    override val securedSocksProxy = "پراکسی SOCKS محافظت‌شده"
+    override val securedSocksProxySubtitle = "نام کاربری و رمز عبور روی پورت دلخواه"
+    override val securedSocksProxyOff = "خاموش · 127.0.0.1:8080 بدون احراز هویت"
     override val splitTunneling = "تونل‌سازی تفکیکی"
     override val routingBehavior = "رفتار مسیریابی"
     override val appsUsingYptun = "برنامه‌های استفاده‌کننده از YPtun"
@@ -2336,9 +2427,27 @@ object FaStrings : Strings {
     override val notifSplitTunnelError = "خطای تونل‌سازی تفکیکی"
     override val notifStop = "توقف"
     override val notifVkCaptcha = "VK کپچا می‌خواهد — برای حل ضربه بزنید"
+
+    override val widgetDisconnected = "قطع شده"
+    override val widgetNoLocation = "سروری انتخاب نشده"
+    override val widgetSettingsTitle = "ظاهر ابزارک"
+    override val widgetTheme = "پوسته"
+    override val widgetThemeDark = "تیره"
+    override val widgetThemeLight = "روشن"
+    override val widgetThemeTransparent = "شفاف"
+    override val widgetOpacity = "کدری پس‌زمینه"
+    override val widgetCorners = "گردی گوشه‌ها"
+    override val widgetCornersSmall = "کم"
+    override val widgetCornersMedium = "متوسط"
+    override val widgetCornersRound = "گرد"
+    override val widgetAccent = "رنگ تأکید"
+    override val widgetShowSpeed = "نمایش سرعت"
+    override val widgetShowControls = "دکمه‌های خودکار و ‹ ›"
+    override val widgetDone = "تمام"
     override val vkCaptchaTitle = "کپچای VK"
     override val noFileSelected = "پرونده‌ای انتخاب نشد"
     override val qrImported = "QR وارد شد"
+    override val qrNotRecognized = "در آن تصویر کد QR پیدا نشد"
     override fun cannotOpenFilePicker(msg: String) = "بازکردن انتخابگر پرونده ممکن نشد: $msg"
     override val configCopied = "پیکربندی رونوشت شد"
     override val copied = "رونوشت شد"
@@ -2534,6 +2643,8 @@ object ZhStrings : Strings {
     override val deleteAllSubscriptionsMessage =
         "所有订阅配置都将被删除，自定义节点会保留。"
     override val deleteAllConfigsTitle = "删除所有配置？"
+    override val deleteLocationTitle = "删除配置？"
+    override val deleteLocationMessage = "该节点将被删除，此操作无法撤销。"
     override val deleteAllConfigsMessage =
         "所有配置和订阅都将被删除，此操作无法撤销。"
     override val menuDeleteAllSubscriptions = "删除所有订阅"
@@ -2574,6 +2685,9 @@ object ZhStrings : Strings {
     override val dynamicTheme = "动态主题"
     override val dynamicThemeOn = "使用 Android 系统配色"
     override val dynamicThemeOff = "使用 YPtun 配色"
+    override val lightTheme = "浅色主题"
+    override val lightThemeOn = "白色背景，忽略系统深色主题"
+    override val lightThemeOff = "深色背景"
     override val routing = "分流"
     override val routingSubtitle = "绕过局域网/俄罗斯、拦截广告、自定义域名"
     override val trafficSettings = "流量设置"
@@ -2594,6 +2708,7 @@ object ZhStrings : Strings {
     override fun singboxVersion(v: String) = "sing-box：$v"
     override fun vkturnVersion(v: String) = "VK-TURN (freeturn)：$v"
     override fun wdttVersion(v: String) = "VK-TURN (WDTT)：$v"
+    override fun awgVersion(v: String) = "AmneziaWG：$v"
     override fun olcrtcVersion(v: String) = "OLCRTC：$v"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "优先 IPv4"
@@ -2778,6 +2893,9 @@ object ZhStrings : Strings {
     override val createCustomLocationSubtitle = "输入房间、密钥、提供商和传输方式"
     override val connectionMode = "连接模式"
     override val socks5Proxy = "SOCKS5 代理"
+    override val securedSocksProxy = "受保护的 SOCKS 代理"
+    override val securedSocksProxySubtitle = "在自选端口上使用用户名和密码"
+    override val securedSocksProxyOff = "已关闭 · 127.0.0.1:8080，无需认证"
     override val splitTunneling = "分应用代理"
     override val routingBehavior = "分流行为"
     override val appsUsingYptun = "使用 YPtun 的应用"
@@ -2932,9 +3050,27 @@ object ZhStrings : Strings {
     override val notifSplitTunnelError = "分应用代理错误"
     override val notifStop = "停止"
     override val notifVkCaptcha = "VK 要求验证码 — 点按解决"
+
+    override val widgetDisconnected = "已断开"
+    override val widgetNoLocation = "未选择服务器"
+    override val widgetSettingsTitle = "小组件外观"
+    override val widgetTheme = "主题"
+    override val widgetThemeDark = "深色"
+    override val widgetThemeLight = "浅色"
+    override val widgetThemeTransparent = "透明"
+    override val widgetOpacity = "背景不透明度"
+    override val widgetCorners = "圆角"
+    override val widgetCornersSmall = "小"
+    override val widgetCornersMedium = "中"
+    override val widgetCornersRound = "圆形"
+    override val widgetAccent = "强调色"
+    override val widgetShowSpeed = "显示速度"
+    override val widgetShowControls = "自动与 ‹ › 按钮"
+    override val widgetDone = "完成"
     override val vkCaptchaTitle = "VK 验证码"
     override val noFileSelected = "未选择文件"
     override val qrImported = "二维码已导入"
+    override val qrNotRecognized = "该图片中未找到二维码"
     override fun cannotOpenFilePicker(msg: String) = "无法打开文件选择器：$msg"
     override val configCopied = "配置已复制"
     override val copied = "已复制"

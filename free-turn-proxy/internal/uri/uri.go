@@ -30,6 +30,7 @@ type Config struct {
 	ManualCaptcha  bool
 	KCP            *KCP
 	Comment        string
+	WGConf         string
 }
 
 // wire - JSON-схема freeturn:// ссылок.
@@ -50,6 +51,7 @@ type wire struct {
 	ManualCaptcha  bool   `json:"mcap,omitempty"`
 	KCP            *KCP   `json:"kcp,omitempty"`
 	Name           string `json:"name,omitempty"`
+	WGConf         string `json:"wg,omitempty"`
 }
 
 // Parse разбирает строку freeturn://<base64url(json)>.
@@ -103,6 +105,7 @@ func parseWire(payload string) (*Config, bool) {
 		ManualCaptcha:  w.ManualCaptcha,
 		KCP:            w.KCP,
 		Comment:        w.Name,
+		WGConf:         w.WGConf,
 	}, true
 }
 
@@ -115,6 +118,10 @@ func parseWire(payload string) (*Config, bool) {
 //   freeturn://<Provider>?<Transport><mode=..&obf-profile=..&bond=1>@<Peer>#<ObfKey>$<Comment>
 // payload — строка БЕЗ префикса схемы. Кастомный параметр wg= внутри <...> здесь не нужен
 // (его читает Kotlin-клиент из исходной ссылки); url.ParseQuery его молча игнорирует.
+//
+// НЕ заполнять здесь Config.WGConf, даже когда wg= разобран: с 3.4.0 непустой WGConf переключает
+// raw.applyURI на TunnelMode="awg", т.е. Go-клиент поднимал бы AmneziaWG САМ. У нас туннель строит
+// Kotlin (WireGuard-outbound в Xray/sing-box), и внутренний awg дублировал бы его.
 func parseLegacy(payload string) (*Config, error) {
 	s := payload
 	cfg := &Config{Version: currentVersion}
@@ -185,6 +192,7 @@ func (c *Config) String() string {
 		ManualCaptcha:  c.ManualCaptcha,
 		KCP:            c.KCP,
 		Name:           c.Comment,
+		WGConf:         c.WGConf,
 	}
 	if c.ObfProfile != "" && c.ObfProfile != "none" {
 		w.Obf = c.ObfProfile

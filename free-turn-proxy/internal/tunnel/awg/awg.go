@@ -3,6 +3,7 @@ package awg
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,9 +19,10 @@ import (
 type Deps struct {
 	Bind conn.Bind
 	Log  logx.Logger
+	// Protect исключает сокеты bind из туннеля (VpnService.protect); nil - бэкенд поверх пайпа релея.
+	Protect func(fd int) bool
 }
 
-// Backend управляет userspace WireGuard/AmneziaWG устройством.
 type Backend struct {
 	deps Deps
 
@@ -69,6 +71,8 @@ func (b *Backend) Up(cfg *tunnel.Config, tunFD int) error {
 		return err
 	}
 
+	b.protectBind(dev)
+
 	b.dev = dev
 	mode := "wg"
 	if cfg.Amnezia.Enabled() {
@@ -78,7 +82,51 @@ func (b *Backend) Up(cfg *tunnel.Config, tunFD int) error {
 	return nil
 }
 
-// Down останавливает устройство и закрывает tun-дескриптор.
+func (b *Backend) Rebind() error {
+	b.mu.Lock()
+	dev := b.dev
+	b.mu.Unlock()
+
+	if dev == nil {
+		return nil
+	}
+	if err := dev.BindUpdate(); err != nil {
+		return fmt.Errorf("awg: bind update: %w", err)
+	}
+	b.protectBind(dev)
+	b.deps.Log.Infof("tunnel: rebound")
+	return nil
+}
+
+func (b *Backend) protectBind(dev *device.Device) {
+	if b.deps.Protect == nil {
+		return
+	}
+	peek, ok := dev.Bind().(conn.PeekLookAtSocketFd)
+	if !ok {
+		b.deps.Log.Warnf("tunnel: bind does not expose socket fd, protect skipped")
+		return
+	}
+	protected := 0
+	if fd, err := peek.PeekLookAtSocketFd4(); err == nil {
+		if b.deps.Protect(fd) {
+			protected++
+		} else {
+			b.deps.Log.Warnf("tunnel: failed to protect ipv4 socket fd=%d", fd)
+		}
+	}
+	if fd, err := peek.PeekLookAtSocketFd6(); err == nil {
+		if b.deps.Protect(fd) {
+			protected++
+		} else {
+			b.deps.Log.Warnf("tunnel: failed to protect ipv6 socket fd=%d", fd)
+		}
+	}
+	if protected == 0 {
+		b.deps.Log.Warnf("tunnel: no bind socket protected")
+	}
+}
+
 func (b *Backend) Down() error {
 	b.mu.Lock()
 	dev := b.dev

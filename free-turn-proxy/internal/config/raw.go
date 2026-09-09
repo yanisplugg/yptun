@@ -103,6 +103,10 @@ func (r *raw) applyURI(u *uri.Config) {
 	if u.ManualCaptcha {
 		r.ManualCaptcha = true
 	}
+	if u.WGConf != "" {
+		r.TunnelMode = "awg"
+		r.TunnelConfig = u.WGConf
+	}
 }
 
 func assemble(r raw) (*Client, error) {

@@ -57,7 +57,7 @@ data class AppBehaviorSettings(
     /** Hidden "Experimental" section unlocked by tapping the connection timer 5×. */
     val experimentalUnlocked: Boolean = false,
     /**
-     * Show the one-tap "Автоустановка на VPS" buttons (WDTT / DNSTT server deploy over SSH) in the
+     * Show the one-tap "Автоустановка на VPS" buttons (WDTT / MasterDNS server deploy over SSH) in the
      * location editor. OFF by default — pushing a binary to a remote server over SSH is an advanced,
      * potentially destructive action, so it stays hidden until the user opts in here.
      */

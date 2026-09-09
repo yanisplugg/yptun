@@ -116,6 +116,7 @@ import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.datasource.JvmLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.JvmLogExporter
+import org.olcbox.app.vpn.desktop.DesktopExtensionBridge
 import org.olcbox.app.vpn.desktop.isTilingCompositor
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.importer.JvmConfigImporter
@@ -176,6 +177,22 @@ private class DesktopAppDependencies {
         vpnManager.appendLog(line)
     }
 
+    // jpackage builds the launcher as a GUI binary, so stderr goes nowhere: a crash inside the
+    // composition closed the window and left not one line behind — which is why «ошибки на кнопках
+    // на винде» stayed unexplained for weeks. Route it into the journal, which is mirrored to
+    // %APPDATA%\YPtun\yptun.log, so the next one arrives with a stack trace attached.
+    init {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching {
+                val trace = java.io.StringWriter()
+                error.printStackTrace(java.io.PrintWriter(trace))
+                vpnManager.appendLog("CRASH in ${thread.name}: $trace")
+            }
+            previous?.uncaughtException(thread, error)
+        }
+    }
+
     val homeViewModel = HomeScreenViewModel(
         vpnManager = vpnManager,
         locationsRepository = locationsRepository,
@@ -185,7 +202,19 @@ private class DesktopAppDependencies {
 
     val locationViewModel = LocationViewModel(locationsRepository)
 
+    /**
+     * Loopback control API the Chrome extension drives. A browser extension has no sockets of its
+     * own, so this app IS the extension's engine: it pastes a link here and points chrome.proxy at
+     * the HTTP port the bridge raises. See [DesktopExtensionBridge].
+     */
+    val extensionBridge = DesktopExtensionBridge(
+        repository = locationsRepository,
+        vpnManager = vpnManager,
+        log = { line -> vpnManager.appendLog(line) },
+    ).also { it.start() }
+
     fun close() {
+        extensionBridge.stop()
         telegramProxy.close()
         vpnManager.close()
     }
@@ -295,6 +324,8 @@ private fun runApp(args: Array<String>) = application {
     var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
     var updateProgress by remember { mutableStateOf<Float?>(null) }
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    // Newer release that is not downloaded yet — drives the Home banner, exactly like Android.
+    var updateAvailable by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var sharePayload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var desktopNotice by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -312,23 +343,26 @@ private fun runApp(args: Array<String>) = application {
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
-            updateMessage = "Checking ${previousSettings.channel.name.lowercase()}..."
+            val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+            updateMessage = s.checkingChannel(s.releaseChannelLabel.lowercase())
             val result = dependencies.updateService.check(previousSettings.channel)
             val checkedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             val checkedSettings = previousSettings.copy(lastCheckAtEpochMs = checkedAt).normalized()
             saveUpdateSettings(checkedSettings)
             result.fold(
                 onSuccess = { info ->
+                    updateAvailable = info.takeIf { it.isUpdateAvailable && !it.isDownloaded(checkedSettings) }
                     if (manual || info.shouldShowOffer(previousSettings, checkedAt)) {
                         if (info.isDownloaded(checkedSettings)) {
                             updateOffer = null
-                            updateMessage = "Latest ${info.channel.name.lowercase()} is already downloaded"
+                            updateMessage = s.latestAlreadyDownloaded(s.releaseChannelLabel)
                         } else if (info.isUpdateAvailable) {
-                            updateOffer = info
-                            updateMessage = "${info.channel.name} update found: ${info.version}"
+                            // Auto checks only raise the banner; the sheet pops on a manual check.
+                            if (manual) updateOffer = info
+                            updateMessage = s.channelUpdateAvailable(s.releaseChannelLabel, info.version)
                         } else {
                             updateOffer = null
-                            updateMessage = "YPtun is up to date"
+                            updateMessage = s.upToDate
                         }
                     } else {
                         updateOffer = null
@@ -336,7 +370,7 @@ private fun runApp(args: Array<String>) = application {
                     }
                 },
                 onFailure = { error ->
-                    updateMessage = error.message ?: "Update check failed"
+                    updateMessage = error.message ?: s.updateCheckFailed
                 }
             )
         }
@@ -344,10 +378,11 @@ private fun runApp(args: Array<String>) = application {
 
     fun downloadUpdate(info: AppUpdateInfo) {
         scope.launch {
+            val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
             updateProgress = 0f
             // With a delta published for this hop only a few MB are fetched and the installed jar is
             // patched in place; without one this is the full installer, as before.
-            updateMessage = "Downloading ${(info.deltaAsset ?: info.asset).name}..."
+            updateMessage = s.downloadingAsset((info.deltaAsset ?: info.asset).name)
             val result = dependencies.updateInstaller.install(info) { progress ->
                 updateProgress = progress
             }
@@ -358,7 +393,7 @@ private fun runApp(args: Array<String>) = application {
                         is DesktopUpdateOutcome.RestartRequired -> outcome.message
                     }
                 },
-                onFailure = { error -> "Download failed: ${error.message ?: "unknown error"}" }
+                onFailure = { error -> s.downloadFailed(error.message ?: s.updateCheckFailed) }
             )
             if (result.isSuccess) {
                 saveUpdateSettings(
@@ -368,6 +403,7 @@ private fun runApp(args: Array<String>) = application {
                     )
                 )
                 updateOffer = null
+                updateAvailable = null
             }
             updateProgress = null
             // A staged delta only lands once this process is gone (it holds its own jar open), and
@@ -394,6 +430,15 @@ private fun runApp(args: Array<String>) = application {
             dependencies.homeViewModel.loadCurrentConfig {
                 dependencies.homeViewModel.ToggleVpn()
             }
+        }
+    }
+
+    // Copy confirmations posted from the sharedUI settings screens (Android shows them as Toasts).
+    val sharedToast by org.olcbox.app.desktop.DesktopToast.message.collectAsState()
+    LaunchedEffect(sharedToast) {
+        sharedToast?.let {
+            desktopNotice = it
+            org.olcbox.app.desktop.DesktopToast.consume()
         }
     }
 
@@ -712,7 +757,7 @@ private fun runApp(args: Array<String>) = application {
                 dependencies.locationViewModel.loadLocations {
                     dependencies.homeViewModel.loadCurrentConfig()
                 }
-                desktopNotice = if (trayRussian) "Ссылка импортирована" else "Link imported"
+                desktopNotice = strings().importedFromClipboard
             },
             onError = { message -> desktopNotice = message }
         )
@@ -770,6 +815,7 @@ private fun runApp(args: Array<String>) = application {
         }
 
         val dynamicTheme by dependencies.settings.dynamicTheme.collectAsState()
+        val lightTheme by dependencies.settings.lightTheme.collectAsState()
 
         AppTheme(useDynamicColor = dynamicTheme) {
             // The AWT frame under the Compose surface is white by default; it is what shows during a
@@ -854,12 +900,42 @@ private fun runApp(args: Array<String>) = application {
                             onError = onError
                         )
                     },
-                    onScanQrRequested = {},
+                    // Seven taps on the version line unlock the experimental engines — on Android
+                    // since forever, on the PC the tap did nothing.
+                    onUnlockExperimental = {
+                        if (!appBehavior.experimentalUnlocked) {
+                            dependencies.settings.setAppBehavior(
+                                appBehavior.copy(experimentalUnlocked = true)
+                            )
+                            desktopNotice = strings().experimentalUnlocked
+                        }
+                    },
+                    updateAvailable = updateAvailable != null,
+                    onUpdateClick = { updateAvailable?.let { updateOffer = it } },
+                    // No camera on a PC: the desktop equivalent of «сканировать QR» is picking a
+                    // screenshot / photo of one and decoding it.
+                    onScanQrRequested = {
+                        val s = strings()
+                        chooseImageFile(window)?.let { file ->
+                            val text = org.olcbox.app.desktop.decodeQrImage(file)
+                            if (text.isNullOrBlank()) {
+                                desktopNotice = s.qrNotRecognized
+                            } else {
+                                dependencies.homeViewModel.onImportFullConfig(
+                                    rawText = text,
+                                    onComplete = {
+                                        reloadLocationsAfterImport { desktopNotice = s.qrImported }
+                                    },
+                                    onError = { msg -> desktopNotice = msg }
+                                )
+                            }
+                        }
+                    },
                     onCopyConfigRequested = {
                         dependencies.homeViewModel.onCopyFullConfigClicked()
                     },
                     onShareLocationRequested = { config ->
-                        sharePayload = "Location QR" to ConfigShareService.olcRtcUri(config)
+                        sharePayload = strings().locationQr to ConfigShareService.olcRtcUri(config)
                     },
                     onSaveLogsRequested = { onSaved, onError ->
                         chooseSaveFile(
@@ -1040,12 +1116,14 @@ private fun runApp(args: Array<String>) = application {
                             host = socksProxySettings.host,
                             port = socksProxySettings.port,
                             username = socksProxySettings.username,
-                            password = socksProxySettings.password
+                            password = socksProxySettings.password,
+                            secured = socksProxySettings.secured
                         ),
                         splitTunnelSettings = splitTunnelSettings,
                         installedApps = installedApps,
                         logs = logs,
                         dynamicThemeEnabled = dynamicTheme,
+                        lightThemeEnabled = lightTheme,
                         hwid = hwid,
                         routing = routing,
                         onRoutingChanged = dependencies.settings::setRouting,
@@ -1073,7 +1151,7 @@ private fun runApp(args: Array<String>) = application {
                         onDismiss = { showDesktopSettings = false },
                         onCopyConfigClick = {
                             dependencies.homeViewModel.onCopyFullConfigClicked()
-                            desktopNotice = "Copied"
+                            desktopNotice = strings().configCopied
                         },
                         onSaveLogsClick = {
                             chooseSaveFile(
@@ -1100,21 +1178,23 @@ private fun runApp(args: Array<String>) = application {
                         },
                         onCheckUpdatesClick = { checkUpdate(manual = true) },
                         onSubscriptionShareClick = { url ->
-                            sharePayload = "Subscription QR" to ConfigShareService.subscriptionQrText(url)
+                            sharePayload = strings().subscriptionQr to
+                                ConfigShareService.subscriptionQrText(url)
                         },
                         onSubscriptionRefreshClick = { url ->
                             dependencies.homeViewModel.refreshSubscription(url) { updatedCount ->
                                 reloadLocationsAfterImport {
                                     dependencies.homeViewModel.restartVpnIfRunning()
                                     updateMessage = if (updatedCount > 0) {
-                                        "Subscription updated"
+                                        strings().subscriptionUpdated
                                     } else {
-                                        "Subscription not updated"
+                                        strings().subscriptionNotUpdated
                                     }
                                 }
                             }
                         },
                         onDynamicThemeChanged = dependencies.settings::setDynamicTheme,
+                        onLightThemeChanged = dependencies.settings::setLightTheme,
                         onAccentColorSelected = dependencies.settings::setAccentColor,
                         onTextColorSelected = dependencies.settings::setTextColor,
                         onBackgroundColorSelected = dependencies.settings::setBackgroundColor,
@@ -1140,6 +1220,24 @@ private fun runApp(args: Array<String>) = application {
                                 dependencies.socksProxySettingsStore.save(newSettings)
                             }
                             desktopNotice = "SOCKS proxy saved"
+                            if (homeState.isVpnConnected) {
+                                dependencies.homeViewModel.restartVpnIfRunning()
+                            }
+                        },
+                        onSecuredProxyChanged = { on ->
+                            // Turning it off drops the credentials and moves the listener to the
+                            // standard proxy port (normalized() does both); turning it on seeds a
+                            // password so the form isn't empty.
+                            val newSettings = socksProxySettings.copy(
+                                secured = on,
+                                password = socksProxySettings.password.ifBlank {
+                                    if (on) generateDesktopProxyPassword() else ""
+                                }
+                            ).normalized()
+                            dependencies.vpnManager.updateSocksProxySettings(newSettings)
+                            scope.launch {
+                                dependencies.socksProxySettingsStore.save(newSettings)
+                            }
                             if (homeState.isVpnConnected) {
                                 dependencies.homeViewModel.restartVpnIfRunning()
                             }
@@ -1172,12 +1270,28 @@ private fun runApp(args: Array<String>) = application {
                     )
                 }
 
+                // A VK-TURN location without a VK call link cannot connect; Android asks for one
+                // here, desktop used to just fail silently.
+                homeState.vkTurnLinkPrompt?.let { prompt ->
+                    org.olcbox.app.ui.components.VkTurnLinkPromptDialog(
+                        locationName = prompt.locationName,
+                        onLater = { dependencies.homeViewModel.dismissVkTurnLinkPrompt() },
+                        onNext = { link ->
+                            dependencies.homeViewModel.submitVkTurnLink(prompt.storageId, link)
+                        }
+                    )
+                }
+
                 updateOffer?.let { info ->
                     ApplicationUpdateOfferSheet(
                         info = info,
                         downloadProgress = updateProgress,
                         onLater = { postponeUpdate(info) },
-                        onDownload = { downloadUpdate(info) }
+                        onDownload = { downloadUpdate(info) },
+                        onManual = {
+                            org.olcbox.app.desktop.DesktopUriLauncher.open(info.htmlUrl)
+                            updateOffer = null
+                        }
                     )
                 }
 
@@ -1187,7 +1301,7 @@ private fun runApp(args: Array<String>) = application {
                         payload = payload,
                         onCopy = {
                             dependencies.configImporter.copyToClipboard(payload)
-                            desktopNotice = "Copied"
+                            desktopNotice = strings().copied
                         },
                         onDismiss = {
                             sharePayload = null
@@ -1328,7 +1442,13 @@ private fun DesktopConfigShareOverlay(
                         )
                     }
 
-                    if (qrMatrix != null) {
+                    if (qrMatrix == null) {
+                        Text(
+                            text = s.qrTooLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 13.sp
+                        )
+                    } else {
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
@@ -1478,6 +1598,19 @@ private fun desktopSubscriptionItems(items: List<LocationItem>): List<Subscripti
                 locationCount = subscriptionItems.size
             )
         }
+}
+
+private fun strings() =
+    org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+
+private fun chooseImageFile(owner: Frame): File? {
+    val dialog = FileDialog(owner, strings().locationQr, FileDialog.LOAD)
+    dialog.setFilenameFilter { _, name ->
+        name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "bmp", "gif")
+    }
+    dialog.isVisible = true
+
+    return dialog.files.firstOrNull()
 }
 
 private fun chooseConfigFile(owner: Frame): File? {

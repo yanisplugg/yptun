@@ -17,7 +17,7 @@ import java.net.Socket
  * Wi-Fi proxy, desktop-over-LAN) speak an HTTP proxy, NOT SOCKS — so a SOCKS-only listener is silently
  * bypassed and leaks the real IP. This bridge gives the app's local proxy a real HTTP port, exactly like
  * Happ's local-proxy mode (SOCKS5 Port + HTTP Port). Engine-agnostic: it just dials the core's local
- * SOCKS5 ([socksHost]:[socksPort]), so it works for xray / sing-box / olcRTC / VK-TURN / dnstt alike.
+ * SOCKS5 ([socksHost]:[socksPort]), so it works for xray / sing-box / olcRTC / VK-TURN / MasterDNS alike.
  *
  * Started ONLY in Proxy mode (TUN mode never raises any HTTP listener). The SOCKS is no-auth in Proxy
  * mode, so no credentials are forwarded. Bind to 0.0.0.0 to be reachable from loopback AND the LAN.

@@ -4,6 +4,8 @@
     android:minHeight="40dp"
     android:targetCellWidth="1"
     android:targetCellHeight="1"
+    android:configure="org.olcbox.app.widget.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable|configuration_optional"
     android:description="@string/widget_toggle_description"
     android:initialLayout="@layout/widget_toggle"
     android:previewImage="@mipmap/ic_launcher"

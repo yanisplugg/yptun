@@ -4,7 +4,9 @@ data class AndroidSocksProxySettings(
     val host: String = DEFAULT_HOST,
     val port: Int = DEFAULT_PORT,
     val username: String = "",
-    val password: String = ""
+    val password: String = "",
+    /** Mirrors [DesktopSocksProxySettings.secured] — SOCKS auth on/off (off = no creds, port 8080). */
+    val secured: Boolean = false
 ) {
     val isConfigured: Boolean
         get() = username.isNotBlank() && password.isNotBlank()

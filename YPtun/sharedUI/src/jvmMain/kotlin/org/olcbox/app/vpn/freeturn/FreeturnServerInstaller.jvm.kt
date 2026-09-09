@@ -2,11 +2,9 @@ package org.olcbox.app.vpn.freeturn
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import org.olcbox.app.vpn.ssh.classpathServerBinaries
 
+/** Desktop uses the very same SSH installer; the server binaries ride in the app's resources. */
 @Composable
-actual fun rememberFreeturnServerInstaller(): FreeturnServerInstaller = remember { UnsupportedFreeturnServerInstaller }
-
-private object UnsupportedFreeturnServerInstaller : FreeturnServerInstaller {
-    override suspend fun install(options: FreeturnInstallOptions, onLog: (String) -> Unit): Result<FreeturnInstallResult> =
-        Result.failure(UnsupportedOperationException("Установка freeturn-сервера доступна только в Android-приложении"))
-}
+actual fun rememberFreeturnServerInstaller(): FreeturnServerInstaller =
+    remember { SshFreeturnServerInstaller(classpathServerBinaries) }

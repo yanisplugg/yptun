@@ -51,7 +51,7 @@ abstract class GenerateAppInfoTask : DefaultTask() {
 }
 
 // --- sing-box checkout, consumed by the combined cores AAR below ---
-// Clone github.com/SagerNet/sing-box (pinned v1.13.18,
+// Clone github.com/SagerNet/sing-box (pinned v1.14.0,
 // see SingBoxEngine.kt which targets that PlatformInterface/CommandServer) next to this repo,
 // or set SINGBOX_REPO to its path.
 val singboxRepoPath = providers.environmentVariable("SINGBOX_REPO")
@@ -110,8 +110,9 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
     inputs.dir(coresRepoDir.resolve("../free-turn-proxy/internal"))
     // WDTT VK-TURN core (sibling replace module wg-turn-client); track its sources.
     inputs.dir(coresRepoDir.resolve("../wdtt"))
-    // dnstt DNS-tunnel core (sibling replace module www.bamsoftware.com/git/dnstt.git); track its sources.
-    inputs.dir(coresRepoDir.resolve("../dnstt"))
+    // MasterDNS DNS-tunnel core (sibling replace module masterdnsvpn-go); track its sources.
+    inputs.dir(coresRepoDir.resolve("../masterdns/internal"))
+    inputs.dir(coresRepoDir.resolve("../masterdns/mdnsmobile"))
     // AmneziaWG SOCKS bridge (sibling module) + its local amneziawg-go fork.
     inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
     // NOTE: the old hysteria2proxy SOCKS bridge is gone — hysteria2 is native in sing-box
@@ -142,7 +143,7 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
         "github.com/sagernet/sing-box/experimental/libbox",
         "github.com/samosvalishe/free-turn-proxy/freeturn",
         "wg-turn-client/wdttmobile",
-        "www.bamsoftware.com/git/dnstt.git/dnsttmobile",
+        "masterdnsvpn-go/mdnsmobile",
         "github.com/olc/awgproxy/awg",
         "kazcores/xraybridge"
     )
@@ -209,6 +210,21 @@ kotlin {
             kotlin.srcDir(generateAppInfo)
         }
 
+        // Android and the desktop JVM share more than commonMain can hold: the VPS auto-installers
+        // are plain JVM code (JSch over SSH + a shell script), and duplicating ~700 lines of them per
+        // platform is how the two copies drift. Only the source of the bundled server binaries
+        // differs (Android assets vs. classpath resources), and that is passed in.
+        val jvmSharedMain by creating {
+            dependsOn(commonMain.get())
+            dependencies {
+                implementation(libs.kotlinx.coroutines.core)
+                // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
+                implementation("com.github.mwiede:jsch:0.2.21")
+            }
+        }
+        androidMain.get().dependsOn(jvmSharedMain)
+        jvmMain.get().dependsOn(jvmSharedMain)
+
         commonMain.dependencies {
             api(libs.compose.runtime)
             api(libs.compose.ui)
@@ -255,9 +271,6 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.kstore.file)
             implementation(libs.zxing.core)
-            // SSH client for the one-tap WDTT-server VPS installer (WdttServerInstaller).
-            // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
-            implementation("com.github.mwiede:jsch:0.2.21")
             implementation(coresAndroidAarDependency)
             // Trust Tunnel (AdGuard) client — vendored prebuilt AAR (com.adguard.trusttunnel:
             // trusttunnel-client-android:1.1.5-rc.1) carrying libtrusttunnel_android.so (all ABIs) +
@@ -271,6 +284,8 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.kstore.file)
             implementation(libs.jna)
+            // QR decoding for «сканировать QR» on desktop (a picked image, there being no camera).
+            implementation(libs.zxing.core)
             // IPHlpAPI.GetIfEntry2 — the tunnel adapter's byte counters for the Home speed line.
             implementation(libs.jna.platform)
             // Vendored Google archive-patcher (File-by-File v1 applier): desktop delta updates
@@ -302,3 +317,26 @@ kotlin {
         }
 }
 
+
+// Forwards -Dyptun.dumpConfigs=<dir> into the test JVM, so DumpDesktopConfigsTest can write the
+// generated sing-box configs out for a real `sing-box check` sweep (see singbox-114 notes).
+tasks.withType<Test>().configureEach {
+    System.getProperty("yptun.dumpConfigs")?.let {
+        systemProperty("yptun.dumpConfigs", it)
+        outputs.upToDateWhen { false } // a dump run must re-run even when nothing changed
+    }
+}
+
+/** Same Compose-train pin as desktopApp, for the jvm target's own classpaths. */
+configurations.matching { it.name.startsWith("jvm") }.configureEach {
+    val pinned = libs.versions.compose.multiplatform.get()
+    resolutionStrategy.eachDependency {
+        // Only the drifting train, not material-icons-extended, which is frozen at 1.7.3.
+        if (requested.group.startsWith("org.jetbrains.compose") &&
+            requested.version.orEmpty().startsWith(pinned.substringBefore('-'))
+        ) {
+            useVersion(pinned)
+            because("material3 has no 1.12.0 release; a mixed train breaks OutlinedTextField")
+        }
+    }
+}

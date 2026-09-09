@@ -34,7 +34,7 @@ import (
 
 	"github.com/olc/awgproxy/awg"
 	"github.com/openlibrecommunity/olcrtc/mobile"
-	"www.bamsoftware.com/git/dnstt.git/dnsttmobile"
+	"masterdnsvpn-go/mdnsmobile"
 	"wg-turn-client/wdttmobile"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/constant"
@@ -206,7 +206,7 @@ var (
 // [pinUdp] must be 0 for a config whose UDP goes to a LOCAL hop: xray hands the controller the
 // socket's BIND address (0.0.0.0:0) for UDP, not the destination, so a pinned UDP socket can no
 // longer reach 127.0.0.1 — which is exactly how the VK-TURN WireGuard-over-Xray exit talks to the
-// relay. Everything else (Standard/Chain/dnstt) wants 1, so direct DNS escapes the tunnel too.
+// relay. Everything else (Standard/Chain/MasterDNS) wants 1, so direct DNS escapes the tunnel too.
 //
 // Pass the PHYSICAL interface index before starting the core, and 0 after stopping it.
 //
@@ -233,7 +233,7 @@ func YpBindOutboundInterface(index C.int, pinUdp C.int) {
 // shouldPinSocket decides whether one dial gets pinned to the physical interface.
 //
 // IPv4 only (the desktop TUN captures IPv4 only), never loopback (every internal hop — the olcRTC
-// chain port, awgproxy, dnstt, the VK-TURN listener — lives there).
+// chain port, awgproxy, MasterDNS, the VK-TURN listener — lives there).
 func shouldPinSocket(network, address string) bool {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
@@ -415,6 +415,9 @@ func YpAwgStart(iniConfig, listenAddr *C.char) *C.char {
 	return errOut(awg.Start(C.GoString(iniConfig), C.GoString(listenAddr)))
 }
 
+//export YpAwgVersion
+func YpAwgVersion() *C.char { return cs(awg.Version()) }
+
 //export YpAwgStop
 func YpAwgStop() { awg.Stop() }
 
@@ -513,7 +516,39 @@ func YpFtVersion() *C.char { return cs(freeturn.Version()) }
 //export YpFtStart
 func YpFtStart(uri, listenAddr, vkLink *C.char, nStreams C.int) *C.char {
 	freeturn.SetLogWriter(tagWriter{"vkturn"})
+	// Without a presenter freeturn falls back to DefaultManualSolver, which opens the captcha in a
+	// browser ITSELF and, more importantly, never raises CaptchaActive — so the app's 20-second
+	// relay-ready wait expires while the user is still solving and WireGuard starts against a dead
+	// listener. With one registered the JVM learns both the URL and that a solve is in progress.
+	freeturn.SetCaptchaPresenter(ftCaptchaPresenter{})
 	return errOut(freeturn.Start(C.GoString(uri), C.GoString(listenAddr), C.GoString(vkLink), int(nStreams)))
+}
+
+// Pending manual VK captcha, published to the JVM: it opens the URL in the user's browser (the page
+// is served by freeturn on localhost) and keeps waiting for the relay while the solve is active.
+var ftCaptchaURL atomic.Value
+
+type ftCaptchaPresenter struct{}
+
+func (ftCaptchaPresenter) Show(url string) {
+	ftCaptchaURL.Store(url)
+	pushLog("vkturn", "VK просит капчу — открываю "+url)
+}
+
+func (ftCaptchaPresenter) Hide() { ftCaptchaURL.Store("") }
+
+//export YpFtCaptchaURL
+func YpFtCaptchaURL() *C.char {
+	url, _ := ftCaptchaURL.Load().(string)
+	return cs(url)
+}
+
+//export YpFtCaptchaActive
+func YpFtCaptchaActive() C.int {
+	if freeturn.CaptchaActive() {
+		return 1
+	}
+	return 0
 }
 
 //export YpFtStop
@@ -609,57 +644,89 @@ func YpWdttPushCaptcha(token *C.char) { wdttmobile.PushCaptcha(C.GoString(token)
 func YpWdttVersion() *C.char { return cs(wdttmobile.Version()) }
 
 // ---------------------------------------------------------------------------
-// dnstt (DNS tunnel): a transparent TCP forwarder on the local port; the dnstt-server relays each
-// connection to its own upstream SOCKS5, so the local port behaves as that SOCKS5. No socket
-// protector here — desktop has no VpnService, the TUN layer routes the DNS resolver around the
-// tunnel instead.
+// MasterDNS (DNS tunnel): the client serves a local SOCKS5 whose traffic rides inside DNS queries to
+// the MasterDnsVPN server. No socket protector here — desktop has no VpnService, so the TUN layer
+// routes the DNS resolvers around the tunnel instead (see DesktopVpnManager's bypass list).
 
 var (
-	dnsttMu     sync.Mutex
-	dnsttClient *dnsttmobile.DnsttClient
+	mdnsMu     sync.Mutex
+	mdnsClient *mdnsmobile.MasterDnsClient
 )
 
-//export YpDnsttStart
-func YpDnsttStart(resolver, domain, pubKeyHex, listenAddr *C.char) *C.char {
-	dnsttMu.Lock()
-	defer dnsttMu.Unlock()
-	if dnsttClient != nil {
-		return cs("dnstt already running")
+//export YpMasterDnsStart
+func YpMasterDnsStart(
+	workDir, domains, key *C.char,
+	encryptionMethod C.int,
+	resolvers, listenAddr, socksUser, socksPass *C.char,
+	balancingStrategy, packetDuplication, uploadCompression, downloadCompression C.int,
+) *C.char {
+	mdnsMu.Lock()
+	defer mdnsMu.Unlock()
+	if mdnsClient != nil {
+		return cs("masterdns already running")
 	}
-	client, err := dnsttmobile.NewClient(
-		C.GoString(resolver), C.GoString(domain), C.GoString(pubKeyHex), C.GoString(listenAddr))
+	client, err := mdnsmobile.NewClient(
+		C.GoString(workDir),
+		C.GoString(domains),
+		C.GoString(key),
+		int(encryptionMethod),
+		C.GoString(resolvers),
+		C.GoString(listenAddr),
+		C.GoString(socksUser),
+		C.GoString(socksPass),
+	)
 	if err != nil {
 		return errOut(err)
 	}
-	client.SetShareProxy(false)
+	// Zero / out-of-range values keep the upstream defaults, so the caller can pass 0 for anything
+	// the user did not set.
+	client.SetResolverBalancingStrategy(int(balancingStrategy))
+	client.SetPacketDuplication(int(packetDuplication))
+	client.SetCompression(int(uploadCompression), int(downloadCompression))
 	if err := client.Start(); err != nil {
 		return errOut(err)
 	}
-	dnsttClient = client
-	pushLog("dnstt", "dnstt started on "+C.GoString(listenAddr))
+	mdnsClient = client
+	pushLog("masterdns", "MasterDNS started on "+C.GoString(listenAddr))
 	return nil
 }
 
-//export YpDnsttStop
-func YpDnsttStop() {
-	dnsttMu.Lock()
-	defer dnsttMu.Unlock()
-	if dnsttClient != nil {
-		dnsttClient.Stop()
-		dnsttClient = nil
-		pushLog("dnstt", "dnstt stopped")
+//export YpMasterDnsStop
+func YpMasterDnsStop() {
+	mdnsMu.Lock()
+	defer mdnsMu.Unlock()
+	if mdnsClient != nil {
+		mdnsClient.Stop()
+		mdnsClient = nil
+		pushLog("masterdns", "MasterDNS stopped")
 	}
 }
 
-//export YpDnsttRunning
-func YpDnsttRunning() C.int {
-	dnsttMu.Lock()
-	defer dnsttMu.Unlock()
-	if dnsttClient != nil && dnsttClient.IsRunning() {
+//export YpMasterDnsRunning
+func YpMasterDnsRunning() C.int {
+	mdnsMu.Lock()
+	defer mdnsMu.Unlock()
+	if mdnsClient != nil && mdnsClient.IsRunning() {
 		return 1
 	}
 	return 0
 }
+
+//export YpMasterDnsLastError
+func YpMasterDnsLastError() *C.char {
+	mdnsMu.Lock()
+	defer mdnsMu.Unlock()
+	if mdnsClient == nil {
+		return nil
+	}
+	if msg := mdnsClient.LastError(); msg != "" {
+		return cs(msg)
+	}
+	return nil
+}
+
+//export YpMasterDnsVersion
+func YpMasterDnsVersion() *C.char { return cs(mdnsmobile.Version()) }
 
 // ---------------------------------------------------------------------------
 // olcrtc (Stealth engine)

@@ -52,6 +52,7 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_ACCENT_COLOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_TEXT_COLOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_BG_COLOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_DYNAMIC_THEME
+import org.olcbox.app.vpn.data.KEY_ANDROID_LIGHT_THEME
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_PROXY_APPS
@@ -76,6 +77,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     private val _proxySettings = MutableStateFlow(AndroidSocksProxySettings())
     private val _splitTunnelSettings = MutableStateFlow(AndroidSplitTunnelSettings())
     private val _dynamicThemeEnabled = MutableStateFlow(false)
+    private val _lightThemeEnabled = MutableStateFlow(false)
     private val _installedApps = MutableStateFlow<List<AndroidInstalledApp>>(emptyList())
     private val deviceIdentityProvider = PersistentDeviceIdentityProvider(
         LocationsDataSourceImpl(appContext)
@@ -89,6 +91,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val proxySettings: StateFlow<AndroidSocksProxySettings> = _proxySettings.asStateFlow()
     val splitTunnelSettings: StateFlow<AndroidSplitTunnelSettings> = _splitTunnelSettings.asStateFlow()
     val dynamicThemeEnabled: StateFlow<Boolean> = _dynamicThemeEnabled.asStateFlow()
+    val lightThemeEnabled: StateFlow<Boolean> = _lightThemeEnabled.asStateFlow()
     val installedApps: StateFlow<List<AndroidInstalledApp>> = _installedApps.asStateFlow()
     private val _hwid = MutableStateFlow("")
     val hwid: StateFlow<String> = _hwid.asStateFlow()
@@ -149,7 +152,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                         mode = mode,
                         proxy = proxy,
                         splitTunnel = splitTunnel,
-                        dynamicThemeEnabled = preferences[KEY_ANDROID_DYNAMIC_THEME] == true
+                        dynamicThemeEnabled = preferences[KEY_ANDROID_DYNAMIC_THEME] == true,
+                        lightThemeEnabled = preferences[KEY_ANDROID_LIGHT_THEME] == true
                     )
                 }
                 .collect { settings ->
@@ -157,6 +161,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     _proxySettings.value = settings.proxy
                     _splitTunnelSettings.value = settings.splitTunnel
                     _dynamicThemeEnabled.value = settings.dynamicThemeEnabled
+                    _lightThemeEnabled.value = settings.lightThemeEnabled
                 }
         }
         refreshInstalledApps()
@@ -201,6 +206,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 LocalizationState.language = lang
                 ThemeState.background = preferences[KEY_ANDROID_BG_COLOR]?.let { Color(it.toInt()) }
                 ThemeState.dynamicEnabled = preferences[KEY_ANDROID_DYNAMIC_THEME] == true
+                ThemeState.lightMode = preferences[KEY_ANDROID_LIGHT_THEME] == true
             }
         }
     }
@@ -604,6 +610,17 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         }
     }
 
+    /** White theme: light canvas, ignoring the system dark theme. */
+    fun setLightThemeEnabled(enabled: Boolean) {
+        _lightThemeEnabled.value = enabled
+        ThemeState.lightMode = enabled
+        scope.launch {
+            appContext.vpnPrefDataStore.edit { preferences ->
+                preferences[KEY_ANDROID_LIGHT_THEME] = enabled
+            }
+        }
+    }
+
     fun updateProxySettings(
         host: String,
         username: String,
@@ -761,12 +778,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         // now the default) but this location has no proxy, fall through to the engine-default probe
         // instead of reporting a false "Offline".
         val hasProxy = locationConfig.proxy != null
-        // VK-TURN / dnstt are obfuscated tunnels with no directly-probeable endpoint: a TCP/ICMP hit or
+        // VK-TURN / MasterDNS are obfuscated tunnels with no directly-probeable endpoint: a TCP/ICMP hit or
         // an xray proxy-URL test can't reach them (xray can't build a throwaway outbound for a DNS
         // tunnel, so proxy GET/HEAD failed INSTANTLY). They ONLY measure end-to-end through the live
         // tunnel, so ignore the manual ping-mode override and fall through to the tunnelPing branch below.
         val tunnelOnlyEngine =
-            locationConfig.engine == EngineType.VkTurn || locationConfig.engine == EngineType.Dnstt
+            locationConfig.engine == EngineType.VkTurn || locationConfig.engine == EngineType.MasterDns
         if (!tunnelOnlyEngine) {
             when (behavior.pingMode) {
                 AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
@@ -781,9 +798,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Obfuscated transports whose real endpoint is blocked/hidden (VK-TURN, AmneziaWG):
             // the only meaningful probe is end-to-end through the live tunnel.
             locationConfig.engine == EngineType.VkTurn -> tunnelPing()
-            // dnstt has no TCP endpoint (its "server" is a DNS resolver), so it only measures
+            // MasterDNS has no TCP endpoint (its "server" is a DNS resolver), so it only measures
             // end-to-end through the live tunnel once connected.
-            locationConfig.engine == EngineType.Dnstt -> tunnelPing()
+            locationConfig.engine == EngineType.MasterDns -> tunnelPing()
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
                 // Connected → measure through the live tunnel; otherwise a standalone WG-handshake
                 // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).
@@ -1151,7 +1168,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         val mode: AndroidConnectionMode,
         val proxy: AndroidSocksProxySettings,
         val splitTunnel: AndroidSplitTunnelSettings,
-        val dynamicThemeEnabled: Boolean
+        val dynamicThemeEnabled: Boolean,
+        val lightThemeEnabled: Boolean
     )
 
     private companion object {

@@ -28,6 +28,10 @@ class StatusWidgetProvider : AppWidgetProvider() {
         refreshAll(context)
     }
 
+    override fun onDeleted(context: Context, ids: IntArray) {
+        WidgetStyle.forget(context, ids)
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         when (intent.action) {
@@ -65,9 +69,10 @@ class StatusWidgetProvider : AppWidgetProvider() {
         val index: LocationViewIndex? =
             runCatching { LocationsDataSourceImpl(context.applicationContext).loadLocationViewIndex() }
                 .getOrNull()
+        val strings = WidgetSupport.strings(context)
         ids.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.widget_status)
-            WidgetSupport.renderStatus(context, views, index)
+            WidgetSupport.renderStatus(context, views, index, WidgetStyle.load(context, id), strings)
             manager.updateAppWidget(id, views)
         }
     }

@@ -1,5 +1,44 @@
 # Changelog
 
+## [3.4.0](https://github.com/samosvalishe/free-turn-proxy/compare/v3.3.2...v3.4.0) (2026-09-07)
+
+
+### Features
+
+* профиль freeturn vpn со вшитым wg и фикс ui_spin ([9da2c8e](https://github.com/samosvalishe/free-turn-proxy/commit/9da2c8ebd27f26e52cd79bceb14dbc5eac732575))
+
+## [3.3.2](https://github.com/samosvalishe/free-turn-proxy/compare/v3.3.1...v3.3.2) (2026-09-07)
+
+
+### Bug Fixes
+
+* небольшие улучшения ([c435605](https://github.com/samosvalishe/free-turn-proxy/commit/c435605fe20ef6b5cbb9b6d6149f374d3aa9a3df))
+* собственный iface для awg ([82907f3](https://github.com/samosvalishe/free-turn-proxy/commit/82907f3cc60cdb5a59aafe2633ec99c519f916bb))
+
+## [3.3.1](https://github.com/samosvalishe/free-turn-proxy/compare/v3.3.0...v3.3.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* installer ([408b68e](https://github.com/samosvalishe/free-turn-proxy/commit/408b68e960a668898ad39056f9f0e3b87a187b37))
+* installer ([032d1fa](https://github.com/samosvalishe/free-turn-proxy/commit/032d1fac562498b1d4c54f06978d38807b7d435b))
+* release awg img ([c447fc4](https://github.com/samosvalishe/free-turn-proxy/commit/c447fc405b0fb918e5ba2576f60bd60f726dd442))
+
+## [3.3.0](https://github.com/samosvalishe/free-turn-proxy/compare/v3.2.0...v3.3.0) (2026-09-06)
+
+
+### Features
+
+* **scripts:** поддержка amneziawg 3.1, управление клиентами и qr-коды в установщике ([daf8cec](https://github.com/samosvalishe/free-turn-proxy/commit/daf8cece80ba388788b67596168c79f4b0741e69))
+* прямой туннель без релея ([2812ded](https://github.com/samosvalishe/free-turn-proxy/commit/2812ded2ed4a6c2d9c0f44bf0e79e218a5a801dc))
+
+
+### Bug Fixes
+
+* fmt ([67f9a4f](https://github.com/samosvalishe/free-turn-proxy/commit/67f9a4fe4e3f6578b5fb88c976878fcc42e87648))
+* **tunnel:** race ([02c696f](https://github.com/samosvalishe/free-turn-proxy/commit/02c696fa28ac687e979a4c11f9bf630746ef3098))
+* **tunnel:** обработка защиты сокетов и стабильность прямого режима ([1cc5e93](https://github.com/samosvalishe/free-turn-proxy/commit/1cc5e93d0333d107b7193c6d74c87d27b737ab21))
+
 ## [3.2.0](https://github.com/samosvalishe/free-turn-proxy/compare/v3.1.1...v3.2.0) (2026-08-25)
 
 

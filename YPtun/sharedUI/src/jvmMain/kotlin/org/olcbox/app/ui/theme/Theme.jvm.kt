@@ -20,7 +20,10 @@ actual fun AppTheme(
     content: @Composable () -> Unit
 ) {
     val systemIsDark = isSystemInDarkTheme()
-    val isDarkState = remember { mutableStateOf(systemIsDark) }
+    // The white theme is an explicit user choice and outranks the OS setting: it stays light with a
+    // dark Windows/macOS theme on.
+    val lightMode = ThemeState.lightMode
+    val isDarkState = remember(lightMode, systemIsDark) { mutableStateOf(!lightMode && systemIsDark) }
     val typography = getAppTypography()
 
     val strings = stringsFor(LocalizationState.effective)
@@ -35,10 +38,12 @@ actual fun AppTheme(
         val systemAccent = remember { windowsAccentColor() }
         val dynamic = useDynamicColor && systemAccent != null
         val accent = if (dynamic) systemAccent else ThemeState.accent
-        val textColor = if (dynamic) null else ThemeState.textColor
-        val background = if (dynamic) null else ThemeState.background
+        // The background/text swatches are all dark-canvas colors, so the white theme ignores them
+        // (the settings screen hides those two rows while it is on).
+        val textColor = if (dynamic || lightMode) null else ThemeState.textColor
+        val background = if (dynamic || lightMode) null else ThemeState.background
 
-        var colorScheme = OlcboxDarkColorScheme
+        var colorScheme = if (lightMode) OlcboxLightColorScheme else OlcboxDarkColorScheme
         if (accent != null) {
             val onAccent = if (accent.luminance() > 0.5f) Color(0xFF101010) else Color(0xFFFFFFFF)
             colorScheme = colorScheme.copy(

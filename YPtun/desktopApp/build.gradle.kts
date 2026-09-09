@@ -564,7 +564,7 @@ fun registerYpTunCoreBuildTask(
     // переиспользовал старую .so/.dll, и починка, уже уехавшая в Android, до ПК не доезжала вовсе.
     // Тот же класс граблей, что был с olcrtc (строкой выше). Только .go/go.mod — остальное в сборку
     // не попадает и хеширование не удорожает.
-    listOf("free-turn-proxy", "awgproxy", "wdtt", "dnstt", "sing-box", "xray-core", "amneziawg-go")
+    listOf("free-turn-proxy", "awgproxy", "wdtt", "masterdns", "sing-box", "xray-core", "amneziawg-go")
         .map { coresRepoDir.resolveSibling(it) }
         .filter { it.isDirectory }
         .forEach { module ->
@@ -773,6 +773,11 @@ sourceSets {
     main {
         resources.srcDir(generatedNativeResources)
         resources.srcDir(layout.projectDirectory.dir("appIcons"))
+        // The VPS auto-installers upload these to the server over SSH — the very same gzip'd server
+        // binaries the APK ships in assets/, taken from there instead of a second copy in git.
+        resources.srcDir(rootProject.layout.projectDirectory.dir("androidApp/src/main/assets"))
+        // Zygisk module: Android-only, nothing on a PC can use it.
+        resources.exclude("olcvpnhide.zip")
     }
 }
 
@@ -977,3 +982,30 @@ if (currentBuildOs.isLinux) {
     }
 }
 
+
+
+/**
+ * Desktop only: hold the whole Compose train at the version the catalog declares.
+ *
+ * ComposeNativeTray requires Compose 1.12.0 stable, so conflict resolution lifted every
+ * org.jetbrains.compose module from 1.12.0-alpha01 up to 1.12.0 — every module except material3,
+ * which JetBrains never released as stable (M3 expressive ships as alphas only). The result was
+ * foundation 1.12.0, where `CustomStyle.applyStyle` takes a `CustomStyleScope`, running material3
+ * 1.12.0-alpha01, compiled when that parameter was still a `StyleScope`: every screen holding a
+ * text field died with an AbstractMethodError out of OutlinedTextFieldDefaults. Moving material3
+ * forward instead is not an option — alpha02/alpha03 pin runtime to versions androidx never
+ * published. Android never pulls the tray in, so it was already on this train and is untouched.
+ */
+private fun org.gradle.api.artifacts.Configuration.pinComposeToCatalogVersion(version: String) {
+    resolutionStrategy.eachDependency {
+        // Only the drifting train, not material-icons-extended, which is frozen at 1.7.3.
+        if (requested.group.startsWith("org.jetbrains.compose") &&
+            requested.version.orEmpty().startsWith(version.substringBefore('-'))
+        ) {
+            useVersion(version)
+            because("material3 has no 1.12.0 release; a mixed train breaks OutlinedTextField")
+        }
+    }
+}
+
+configurations.configureEach { pinComposeToCatalogVersion(libs.versions.compose.multiplatform.get()) }

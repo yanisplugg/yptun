@@ -37,7 +37,7 @@ const (
 	MaxCacheErrors     = 3
 	ErrorWindow        = 10 * time.Second
 
-	DefaultStreamsPerCache = 10
+	DefaultStreamsPerCache = 12
 
 	maxPersonaBurns = 2
 )

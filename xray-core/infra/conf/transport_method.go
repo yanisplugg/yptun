@@ -268,14 +268,14 @@ type SplitHTTPConfig struct {
 	UplinkHTTPMethod     string            `json:"uplinkHTTPMethod"`
 	SessionIDPlacement   string            `json:"sessionIDPlacement"`
 	SessionIDKey         string            `json:"sessionIDKey"`
-	SessionIDTable       string            `json:"sessionIDTable"`
-	SessionIDLength      Int32Range        `json:"sessionIDLength"`
 	// LOCAL PATCH: pre-26.7.28 spellings, kept as read-only aliases. Upstream #6258 renamed
 	// session* -> sessionID* with no fallback, so a subscription still emitting the old names would
 	// silently lose its placement/key and fall back to "path" — breaking servers that expect the
 	// session ID in a query param or header. Applied in Build() only when the new field is empty.
 	LegacySessionPlacement string `json:"sessionPlacement"`
 	LegacySessionKey       string `json:"sessionKey"`
+	SessionIDTable       string            `json:"sessionIDTable"`
+	SessionIDLength      Int32Range        `json:"sessionIDLength"`
 	SeqPlacement         string            `json:"seqPlacement"`
 	SeqKey               string            `json:"seqKey"`
 	UplinkDataPlacement  string            `json:"uplinkDataPlacement"`
@@ -765,6 +765,7 @@ type Masquerade struct {
 
 	Url         string `json:"url"`
 	RewriteHost bool   `json:"rewriteHost"`
+	XForwarded  bool   `json:"xForwarded"`
 	Insecure    bool   `json:"insecure"`
 
 	Content    string            `json:"content"`
@@ -805,6 +806,7 @@ func (c *HysteriaConfig) Build() (proto.Message, error) {
 	config.MasqFile = c.Masquerade.Dir
 	config.MasqUrl = c.Masquerade.Url
 	config.MasqUrlRewriteHost = c.Masquerade.RewriteHost
+	config.MasqUrlXForwarded = c.Masquerade.XForwarded
 	config.MasqUrlInsecure = c.Masquerade.Insecure
 	config.MasqString = c.Masquerade.Content
 	config.MasqStringHeaders = c.Masquerade.Headers

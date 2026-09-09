@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.desktop.DesktopToast
 import org.olcbox.app.desktop.DesktopUriLauncher
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.RoutingRules
@@ -82,6 +83,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.LightMode
 import org.olcbox.app.DonationInfo
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
@@ -162,6 +164,7 @@ fun AppSettingsSheet(
     installedApps: List<AndroidInstalledApp>,
     logs: List<String>,
     dynamicThemeEnabled: Boolean,
+    lightThemeEnabled: Boolean,
     hwid: String,
     routing: RoutingRules,
     onRoutingChanged: (RoutingRules) -> Unit,
@@ -195,12 +198,14 @@ fun AppSettingsSheet(
     onSubscriptionShareClick: (String) -> Unit,
     onSubscriptionRefreshClick: (String) -> Unit,
     onDynamicThemeChanged: (Boolean) -> Unit,
+    onLightThemeChanged: (Boolean) -> Unit,
     onAccentColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onTextColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onBackgroundColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onModeSelected: (AndroidConnectionMode) -> Unit,
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
+    onSecuredProxyChanged: (Boolean) -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
     onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
@@ -274,11 +279,13 @@ fun AppSettingsSheet(
                 AppSettingsRoute.Hub -> AppSettingsHubContent(
                     selectedMode = selectedMode,
                     dynamicThemeEnabled = dynamicThemeEnabled,
+                    lightThemeEnabled = lightThemeEnabled,
                     updateSettings = updateSettings,
                     subscriptionsCount = subscriptions.size,
                     enabled = enabled,
                     hwid = hwid,
                     onDynamicThemeChanged = onDynamicThemeChanged,
+                    onLightThemeChanged = onLightThemeChanged,
                     onAccentColorSelected = onAccentColorSelected,
                     onTextColorSelected = onTextColorSelected,
                     onBackgroundColorSelected = onBackgroundColorSelected,
@@ -372,7 +379,8 @@ fun AppSettingsSheet(
                     isConnectionActive = isConnectionActive,
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onProxySettingsSaved = onProxySettingsSaved,
-                    onProxyPasswordRegenerated = onProxyPasswordRegenerated
+                    onProxyPasswordRegenerated = onProxyPasswordRegenerated,
+                    onSecuredProxyChanged = onSecuredProxyChanged
                 )
 
                 AppSettingsRoute.SplitTunneling -> SplitTunnelingSettingsContent(
@@ -435,6 +443,9 @@ enum class AppSettingsInitialRoute {
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ThemeColorSection(
+    // The background/text swatches are dark-canvas colors; with the white theme on they are ignored
+    // by AppTheme, so the rows are hidden instead of offering settings that do nothing.
+    lightMode: Boolean,
     onAccentColorSelected: (Color?) -> Unit,
     onTextColorSelected: (Color?) -> Unit,
     onBackgroundColorSelected: (Color?) -> Unit
@@ -447,26 +458,28 @@ private fun ThemeColorSection(
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            text = s.themeColor,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val currentBg = ThemeState.background
-            val isBgPreset = currentBg == null || ThemeState.backgroundPresets.contains(currentBg)
-            ThemeState.backgroundPresets.forEachIndexed { index, color ->
-                val selected = currentBg == color || (currentBg == null && index == 0)
-                ColorSwatch(color = color, selected = selected) { onBackgroundColorSelected(color) }
-            }
-            CustomColorSwatch(
-                current = if (!isBgPreset) currentBg else null,
-                onClick = { showBackgroundPicker = true }
+        if (!lightMode) {
+            Text(
+                text = s.themeColor,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
             )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val currentBg = ThemeState.background
+                val isBgPreset = currentBg == null || ThemeState.backgroundPresets.contains(currentBg)
+                ThemeState.backgroundPresets.forEachIndexed { index, color ->
+                    val selected = currentBg == color || (currentBg == null && index == 0)
+                    ColorSwatch(color = color, selected = selected) { onBackgroundColorSelected(color) }
+                }
+                CustomColorSwatch(
+                    current = if (!isBgPreset) currentBg else null,
+                    onClick = { showBackgroundPicker = true }
+                )
+            }
         }
 
         Text(
@@ -491,23 +504,25 @@ private fun ThemeColorSection(
             )
         }
 
-        Text(
-            text = s.textColor,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val currentText = ThemeState.textColor
-            ThemeState.textPresets.forEach { color ->
-                val selected = currentText == color
-                ColorSwatch(
-                    color = color ?: MaterialTheme.colorScheme.onSurface,
-                    selected = selected
-                ) { onTextColorSelected(color) }
+        if (!lightMode) {
+            Text(
+                text = s.textColor,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val currentText = ThemeState.textColor
+                ThemeState.textPresets.forEach { color ->
+                    val selected = currentText == color
+                    ColorSwatch(
+                        color = color ?: MaterialTheme.colorScheme.onSurface,
+                        selected = selected
+                    ) { onTextColorSelected(color) }
+                }
             }
         }
     }
@@ -649,11 +664,13 @@ private fun ColorSwatch(
 private fun AppSettingsHubContent(
     selectedMode: AndroidConnectionMode,
     dynamicThemeEnabled: Boolean,
+    lightThemeEnabled: Boolean,
     updateSettings: AppUpdateSettings,
     subscriptionsCount: Int,
     enabled: Boolean,
     hwid: String,
     onDynamicThemeChanged: (Boolean) -> Unit,
+    onLightThemeChanged: (Boolean) -> Unit,
     onAccentColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onTextColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
     onBackgroundColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
@@ -696,8 +713,18 @@ private fun AppSettingsHubContent(
             onCheckedChange = onDynamicThemeChanged
         )
 
+        SettingsSwitchRow(
+            title = s.lightTheme,
+            value = if (lightThemeEnabled) s.lightThemeOn else s.lightThemeOff,
+            icon = Icons.Outlined.LightMode,
+            checked = lightThemeEnabled,
+            enabled = true,
+            onCheckedChange = onLightThemeChanged
+        )
+
         if (!dynamicThemeEnabled) {
             ThemeColorSection(
+                lightMode = lightThemeEnabled,
                 onAccentColorSelected = onAccentColorSelected,
                 onTextColorSelected = onTextColorSelected,
                 onBackgroundColorSelected = onBackgroundColorSelected
@@ -813,6 +840,7 @@ private fun AppSettingsHubContent(
             val olcrtcVer = remember { runCatching { core.rtcVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
             val vkturnVer = remember { runCatching { core.ftVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
             val wdttVer = remember { runCatching { core.wdttVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
+            val awgVer = remember { runCatching { core.awgVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
             SettingsGroupRow(
                 title = s.xrayVersion(xrayVer),
                 icon = Icons.Outlined.Tune,
@@ -843,6 +871,13 @@ private fun AppSettingsHubContent(
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.wdttVersion(wdttVer),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.awgVersion(awgVer),
                 icon = Icons.Outlined.Tune,
                 enabled = true,
                 showChevron = false
@@ -883,14 +918,20 @@ private fun AppSettingsHubContent(
                 subtitle = s.donateSubtitle,
                 icon = Icons.Rounded.Favorite,
                 enabled = true,
-                onClick = { hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS)) }
+                onClick = {
+                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
+                    DesktopToast.show(s.donateAddressCopied)
+                }
             )
             SettingsGroupRow(
                 title = DonationInfo.TON_ADDRESS,
                 icon = Icons.Outlined.ContentCopy,
                 enabled = true,
                 showChevron = false,
-                onClick = { hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS)) }
+                onClick = {
+                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
+                    DesktopToast.show(s.donateAddressCopied)
+                }
             )
         }
 
@@ -1048,7 +1089,10 @@ private fun ConnectionSettingsContent(
                             Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
-                            onClick = { clipboard.setText(AnnotatedString(tgLink)) },
+                            onClick = {
+                                clipboard.setText(AnnotatedString(tgLink))
+                                DesktopToast.show(s.telegramProxyLinkCopied)
+                            },
                             contentPadding = PaddingValues(horizontal = 12.dp),
                             modifier = Modifier.weight(1f)
                         ) {
@@ -1139,7 +1183,8 @@ private fun SocksProxySettingsContent(
     isConnectionActive: Boolean,
     onBack: () -> Unit,
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
-    onProxyPasswordRegenerated: () -> Unit
+    onProxyPasswordRegenerated: () -> Unit,
+    onSecuredProxyChanged: (Boolean) -> Unit
 ) {
     var editedHost by remember(proxySettings.host) { mutableStateOf(proxySettings.host) }
     var editedPort by remember(proxySettings.port) { mutableStateOf(proxySettings.port.toString()) }
@@ -1171,6 +1216,26 @@ private fun SocksProxySettingsContent(
             subtitle = proxySettings.host,
             onBack = onBack
         )
+
+        Spacer(Modifier.height(20.dp))
+
+        // The local proxy is a SERVER the OS and browsers point at, and neither can answer a SOCKS
+        // auth challenge — so authentication is OFF by default and the listener sits on the standard
+        // proxy port. Turn it on only for clients that do speak SOCKS auth.
+        SettingsSwitchRow(
+            title = LocalStrings.current.securedSocksProxy,
+            value = if (proxySettings.secured) {
+                LocalStrings.current.securedSocksProxySubtitle
+            } else {
+                LocalStrings.current.securedSocksProxyOff
+            },
+            icon = Icons.Rounded.Key,
+            checked = proxySettings.secured,
+            enabled = enabled,
+            onCheckedChange = onSecuredProxyChanged
+        )
+
+        if (!proxySettings.secured) return@Column
 
         Spacer(Modifier.height(20.dp))
 
@@ -3902,12 +3967,18 @@ private fun ExperimentalContent(
         OutlinedButton(
             onClick = {
                 cookieScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val dialog = java.awt.FileDialog(null as java.awt.Frame?, "Cookies file", java.awt.FileDialog.LOAD)
+                    val dialog = java.awt.FileDialog(null as java.awt.Frame?, s.loadFromFile, java.awt.FileDialog.LOAD)
                     dialog.isVisible = true
                     val file = dialog.files.firstOrNull() ?: return@launch
-                    val text = runCatching { file.readText() }.getOrNull() ?: return@launch
+                    val text = runCatching { file.readText() }.getOrNull()
+                    val cookies = text?.let(::cookiesFromFile).orEmpty()
+                    if (cookies.isBlank()) {
+                        DesktopToast.show(s.cookiesReadFailed)
+                        return@launch
+                    }
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        onChanged(settings.copy(telemostCookies = cookiesFromFile(text)))
+                        onChanged(settings.copy(telemostCookies = cookies))
+                        DesktopToast.show(s.cookiesLoaded)
                     }
                 }
             },

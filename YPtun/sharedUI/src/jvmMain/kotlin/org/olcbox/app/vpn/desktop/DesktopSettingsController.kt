@@ -36,6 +36,7 @@ data class DesktopUiSettings(
     val language: String = "system",
     val connectionMode: String = "tun",
     val dynamicTheme: Boolean = false,
+    val lightTheme: Boolean = false,
     val accentArgb: Int? = null,
     val textArgb: Int? = null,
     val backgroundArgb: Int? = null,
@@ -76,6 +77,8 @@ class DesktopSettingsController {
 
     private val _dynamicTheme = MutableStateFlow(false)
     val dynamicTheme: StateFlow<Boolean> = _dynamicTheme.asStateFlow()
+    private val _lightTheme = MutableStateFlow(false)
+    val lightTheme: StateFlow<Boolean> = _lightTheme.asStateFlow()
 
     init {
         // What «Системный» resolves to on this machine. Without this the desktop kept the
@@ -106,6 +109,8 @@ class DesktopSettingsController {
         }
         _dynamicTheme.value = ui.dynamicTheme
         ThemeState.dynamicEnabled = ui.dynamicTheme
+        _lightTheme.value = ui.lightTheme
+        ThemeState.lightMode = ui.lightTheme
         ThemeState.accent = ui.accentArgb?.let { Color(it) }
         ThemeState.textColor = ui.textArgb?.let { Color(it) }
         ThemeState.background = ui.backgroundArgb?.let { Color(it) }
@@ -188,6 +193,13 @@ class DesktopSettingsController {
         _dynamicTheme.value = enabled
         ThemeState.dynamicEnabled = enabled
         saveUi { it.copy(dynamicTheme = enabled) }
+    }
+
+    /** White theme: light canvas, ignoring the OS dark theme. */
+    fun setLightTheme(enabled: Boolean) {
+        _lightTheme.value = enabled
+        ThemeState.lightMode = enabled
+        saveUi { it.copy(lightTheme = enabled) }
     }
 
     private fun loadUi(): DesktopUiSettings {

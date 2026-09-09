@@ -9,6 +9,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -43,6 +45,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -83,8 +86,8 @@ import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
 import org.olcbox.app.vpn.freeturn.FreeturnExit
 import org.olcbox.app.vpn.freeturn.FreeturnInstallOptions
 import org.olcbox.app.vpn.freeturn.rememberFreeturnServerInstaller
-import org.olcbox.app.vpn.dnstt.DnsttInstallOptions
-import org.olcbox.app.vpn.dnstt.rememberDnsttServerInstaller
+import org.olcbox.app.vpn.masterdns.MasterDnsInstallOptions
+import org.olcbox.app.vpn.masterdns.rememberMasterDnsServerInstaller
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,7 +108,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
-import org.olcbox.app.data.model.DnsttConfig
+import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
@@ -157,6 +160,10 @@ fun LocationSettingsScreen(
     viewModel: LocationViewModel,
     homeViewModel: HomeScreenViewModel,
     allowVpsAutoInstall: Boolean = false,
+    // "Подтверждение удаления" from app settings. The home screen already honours it for
+    // subscriptions and bulk deletes; the per-config delete button below is the one place that used
+    // to wipe a location on the first tap regardless of the setting.
+    confirmBeforeDelete: Boolean = true,
     onShareLocationRequested: (LocationConfig) -> Unit = {},
     onBack: () -> Unit
 ) {
@@ -198,12 +205,32 @@ fun LocationSettingsScreen(
         )
     }
 
-    var showDnsttInstall by remember { mutableStateOf(false) }
-    if (showDnsttInstall) {
-        DnsttInstallDialog(
-            config = viewModel.editingDnstt,
-            onApplyConfig = { update -> viewModel.updateDnstt(update) },
-            onDismiss = { showDnsttInstall = false }
+    var confirmDelete by remember { mutableStateOf(false) }
+    fun deleteNow() {
+        viewModel.editingId?.let { id -> viewModel.deleteLocation(id) { onBack() } } ?: onBack()
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(s.deleteLocationTitle) },
+            text = { Text(s.deleteLocationMessage) },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; deleteNow() }) {
+                    Text(s.delete, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text(s.cancel) }
+            }
+        )
+    }
+
+    var showMasterDnsInstall by remember { mutableStateOf(false) }
+    if (showMasterDnsInstall) {
+        MasterDnsInstallDialog(
+            config = viewModel.editingMasterDns,
+            onApplyConfig = { update -> viewModel.updateMasterDns(update) },
+            onDismiss = { showMasterDnsInstall = false }
         )
     }
 
@@ -227,11 +254,7 @@ fun LocationSettingsScreen(
                         showDelete = viewModel.editingId != null,
                         isSaving = isSaving,
                         isFormValid = viewModel.isFormValid,
-                        onDelete = {
-                            viewModel.editingId?.let { id ->
-                                viewModel.deleteLocation(id) { onBack() }
-                            } ?: onBack()
-                        },
+                        onDelete = { if (confirmBeforeDelete) confirmDelete = true else deleteNow() },
                         onSave = {
                             viewModel.saveEditing {
                                 homeViewModel.loadCurrentConfig()
@@ -357,13 +380,13 @@ fun LocationSettingsScreen(
                 )
             }
 
-            if (config.engine == EngineType.Dnstt) {
-                dnsttSection(
-                    config = viewModel.editingDnstt,
+            if (config.engine == EngineType.MasterDns) {
+                masterDnsSection(
+                    config = viewModel.editingMasterDns,
                     enabled = !isSaving,
                     showAutoInstall = allowVpsAutoInstall,
-                    onChange = viewModel::updateDnstt,
-                    onDnsttAutoInstall = { showDnsttInstall = true }
+                    onChange = viewModel::updateMasterDns,
+                    onMasterDnsAutoInstall = { showMasterDnsInstall = true }
                 )
             }
 
@@ -448,10 +471,15 @@ fun LocationSettingsScreen(
                 item {
                     // Своя кнопка рядом с комнатой и ключом: у olcRTC сервер задаётся ровно этими
                     // полями, и установка их же и заполняет.
-                    TextButton(
+                    OutlinedButton(
+                        onClick = { showOlcRtcInstall = true },
                         enabled = !isSaving,
-                        onClick = { showOlcRtcInstall = true }
-                    ) { Text("Установить olcRTC на VPS") }
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Установить olcRTC на VPS")
+                    }
                 }
             }
 
@@ -649,7 +677,7 @@ private fun EngineSelector(
         EngineType.Standard,
         EngineType.Chain,
         EngineType.VkTurn,
-        EngineType.Dnstt
+        EngineType.MasterDns
     )
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -773,17 +801,18 @@ private fun ProxyField(
 }
 
 /**
- * dnstt (DNS tunnel) editor: tunnel domain, the server's Noise public key and a UDP DNS resolver.
- * The dnstt client raises a local listener that transparently forwards each TCP connection through
- * DNS TXT queries to the dnstt-server, which relays to its upstream SOCKS5 — so the local port
- * behaves as that SOCKS5 and the TUN bridge consumes it directly.
+ * MasterDNS (DNS tunnel) editor: the tunnel domain(s), the shared encryption key + cipher, and the DNS
+ * resolvers that reach them. The client carries TCP inside ordinary DNS queries to the MasterDnsVPN
+ * server and serves a local SOCKS5 the TUN bridge consumes directly. Several resolvers are the point
+ * of the protocol — it spreads traffic across all of them, duplicates packets on lossy links and drops
+ * resolvers that stop answering — so the field takes a list.
  */
-private fun LazyListScope.dnsttSection(
-    config: DnsttConfig,
+private fun LazyListScope.masterDnsSection(
+    config: MasterDnsConfig,
     enabled: Boolean,
     showAutoInstall: Boolean,
-    onChange: ((DnsttConfig) -> DnsttConfig) -> Unit,
-    onDnsttAutoInstall: () -> Unit
+    onChange: ((MasterDnsConfig) -> MasterDnsConfig) -> Unit,
+    onMasterDnsAutoInstall: () -> Unit
 ) {
     item {
         Column(
@@ -791,37 +820,52 @@ private fun LazyListScope.dnsttSection(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
-                title = "DNSTT — туннель через DNS",
-                subtitle = "Домен и публичный ключ от твоего dnstt-сервера; резолвер — любой UDP-DNS, который его дотягивает"
+                title = "MasterDNS — туннель через DNS",
+                subtitle = "Домен и ключ шифрования от твоего MasterDNS-сервера; резолверы — любые UDP-DNS, которые его дотягивают"
             )
-            VkTurnField(
-                value = config.domain,
-                onValueChange = { v -> onChange { it.copy(domain = v.trim()) } },
-                label = "Домен туннеля",
-                placeholder = "t.example.com",
+            OutlinedTextField(
+                value = config.domains,
+                onValueChange = { v -> onChange { it.copy(domains = v) } },
+                label = { Text("Домен(ы) туннеля") },
+                placeholder = { Text("v.example.com, v2.example.com") },
                 enabled = enabled,
-                keyboardType = KeyboardType.Uri
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth()
             )
             VkTurnField(
-                value = config.pubKey,
-                onValueChange = { v -> onChange { it.copy(pubKey = v.trim()) } },
-                label = "Публичный ключ сервера (hex)",
-                placeholder = "Noise public key, 64 hex-символа",
+                value = config.encryptionKey,
+                onValueChange = { v -> onChange { it.copy(encryptionKey = v.trim()) } },
+                label = "Ключ шифрования",
+                placeholder = "содержимое encrypt_key.txt с сервера",
                 enabled = enabled
             )
-            VkTurnField(
-                value = config.resolver,
-                onValueChange = { v -> onChange { it.copy(resolver = v.trim()) } },
-                label = "DNS-резолвер (UDP)",
-                placeholder = "1.1.1.1:53",
+            MasterDnsEncryptionSelector(
+                selected = config.encryptionMethod,
                 enabled = enabled,
-                keyboardType = KeyboardType.Uri
+                onSelected = { v -> onChange { it.copy(encryptionMethod = v) } }
             )
-            // Auto-install the dnstt-server on a VPS (direct mode: resolver→VPS:port). Hidden unless
+            OutlinedTextField(
+                value = config.resolvers,
+                onValueChange = { v -> onChange { it.copy(resolvers = v) } },
+                label = { Text("DNS-резолверы (UDP)") },
+                placeholder = { Text("1.1.1.1, 8.8.8.8:53, 192.168.1.0/30") },
+                supportingText = {
+                    Text("Через запятую или с новой строки. Чем больше живых резолверов, тем стабильнее и быстрее туннель.")
+                },
+                enabled = enabled,
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+            MasterDnsTuningRow(
+                config = config,
+                enabled = enabled,
+                onChange = onChange
+            )
+            // Auto-install the MasterDNS-сервер on a VPS (direct mode: resolver→VPS:port). Hidden unless
             // the user enabled "Автоустановка на VPS" in app settings (off by default).
             if (showAutoInstall) {
                 OutlinedButton(
-                    onClick = onDnsttAutoInstall,
+                    onClick = onMasterDnsAutoInstall,
                     enabled = enabled,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -833,8 +877,8 @@ private fun LazyListScope.dnsttSection(
         }
     }
 
-    // Optional proxy chained ON TOP of the dnstt tunnel: traffic → dnstt → proxy → internet (the
-    // proxy server is dialled THROUGH the dnstt SOCKS), so the public exit is the proxy. Same idea as
+    // Optional proxy chained ON TOP of the MasterDNS tunnel: traffic → MasterDNS → proxy → internet (the
+    // proxy server is dialled THROUGH the MasterDNS SOCKS), so the public exit is the proxy. Same idea as
     // "proxy over VK-TURN".
     item {
         var proxyOn by remember(config.proxyLink.isNotBlank()) {
@@ -845,11 +889,11 @@ private fun LazyListScope.dnsttSection(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
-                title = "Прокси поверх DNSTT",
-                subtitle = "VLESS/Trojan/SS, который дозванивается ЧЕРЕЗ dnstt-туннель — выходной IP будет прокси, а не dnstt-сервер"
+                title = "Прокси поверх MasterDNS",
+                subtitle = "VLESS/Trojan/SS, который дозванивается ЧЕРЕЗ MasterDNS-туннель — выходной IP будет прокси, а не MasterDNS-сервер"
             )
             VkTurnSwitchRow(
-                label = "Прокси поверх DNSTT",
+                label = "Прокси поверх MasterDNS",
                 checked = proxyOn,
                 enabled = enabled,
                 onCheckedChange = { on ->
@@ -1221,6 +1265,9 @@ private fun LazyListScope.vkTurnSection(
             }
             if (isAwg) {
                 // AmneziaWG obfuscation knobs (Jc/Jmin/Jmax/S1/S2/H1..H4) — must match the server.
+                // H1..H4 are magic-header VALUES OR RANGES ("1000000-2000000"), which is what
+                // AmneziaWG 2.0 generates, so those four fields must keep the dash — a digits-only
+                // filter silently turned a pasted range into one giant number that matches nothing.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1240,10 +1287,10 @@ private fun LazyListScope.vkTurnSection(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    VkTurnField(draft.awgH1, { v -> onChange { it.copy(awgH1 = v.filter(Char::isDigit)) } }, "H1", "1", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
-                    VkTurnField(draft.awgH2, { v -> onChange { it.copy(awgH2 = v.filter(Char::isDigit)) } }, "H2", "2", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
-                    VkTurnField(draft.awgH3, { v -> onChange { it.copy(awgH3 = v.filter(Char::isDigit)) } }, "H3", "3", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
-                    VkTurnField(draft.awgH4, { v -> onChange { it.copy(awgH4 = v.filter(Char::isDigit)) } }, "H4", "4", enabled, keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH1, { v -> onChange { it.copy(awgH1 = v.filter { c -> c.isDigit() || c == '-' }) } }, "H1", "1", enabled, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH2, { v -> onChange { it.copy(awgH2 = v.filter { c -> c.isDigit() || c == '-' }) } }, "H2", "2", enabled, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH3, { v -> onChange { it.copy(awgH3 = v.filter { c -> c.isDigit() || c == '-' }) } }, "H3", "3", enabled, modifier = Modifier.weight(1f))
+                    VkTurnField(draft.awgH4, { v -> onChange { it.copy(awgH4 = v.filter { c -> c.isDigit() || c == '-' }) } }, "H4", "4", enabled, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -1277,9 +1324,10 @@ private fun LazyListScope.vkTurnSection(
         }
     }
 
-    // Optional proxy chained ON TOP of the WireGuard tunnel (WG outbound only). A toggle enables or
-    // disables it; turning it off clears the link so the composer falls back to plain WireGuard.
-    if (draft.outbound == VkTurnConfig.OUTBOUND_WIREGUARD) item {
+    // Optional proxy chained ON TOP of the tunnel — WireGuard AND AmneziaWG (a proxy exit needs no
+    // second hop). A toggle enables or disables it; turning it off clears the link so the composer
+    // falls back to the plain tunnel.
+    if (draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
         var proxyEnabled by remember(draft.chainProxyLink.isNotBlank()) {
             mutableStateOf(draft.chainProxyLink.isNotBlank())
         }
@@ -1321,7 +1369,7 @@ private fun LazyListScope.vkTurnSection(
 }
 
 /**
- * Live install-log area shared by the WDTT and DNSTT installer dialogs. The lines are both
+ * Live install-log area shared by the WDTT and MasterDNS installer dialogs. The lines are both
  * hand-selectable (wrapped in a [SelectionContainer]) and copyable in one tap via the "Копировать"
  * button — so the user can paste the full SSH log when reporting an install problem.
  */
@@ -1836,36 +1884,39 @@ private fun FreeturnInstallDialog(
 }
 
 /**
- * One-tap dnstt-server installer. Collects SSH access to the VPS plus the dnstt UDP port + tunnel
- * domain, and on confirm connects over SSH, uploads the bundled dnstt-server binary, generates a
- * persistent Noise keypair and runs it (with its built-in SOCKS5 exit) as a systemd service
- * ([rememberDnsttServerInstaller]). Progress streams live into a log area. On success the returned
- * public key + domain + resolver (`host:port`, direct mode) are written straight into the location.
+ * One-tap MasterDnsVPN server installer. Collects SSH access to the VPS plus the UDP port, tunnel
+ * domain and cipher, and on confirm connects over SSH, uploads the bundled server binary, generates a
+ * persistent encryption key and runs it as a systemd service ([rememberMasterDnsServerInstaller]).
+ * Progress streams live into a log area. On success the key + domain + cipher + resolver
+ * (`host:port`, direct mode) are written straight into the location.
  */
 @Composable
-private fun DnsttInstallDialog(
-    config: DnsttConfig,
-    onApplyConfig: (((DnsttConfig) -> DnsttConfig)) -> Unit,
+private fun MasterDnsInstallDialog(
+    config: MasterDnsConfig,
+    onApplyConfig: (((MasterDnsConfig) -> MasterDnsConfig)) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val installer = rememberDnsttServerInstaller()
+    val installer = rememberMasterDnsServerInstaller()
     val scope = rememberCoroutineScope()
-    var ip by remember { mutableStateOf(deriveHost(config.resolver)) }
+    var ip by remember { mutableStateOf(config.resolverHosts().firstOrNull().orEmpty()) }
     var sshPort by remember { mutableStateOf("22") }
     var login by remember { mutableStateOf("root") }
     var password by remember { mutableStateOf("") }
     var useKey by remember { mutableStateOf(false) }
     var sshKey by remember { mutableStateOf("") }
     var keyPassphrase by remember { mutableStateOf("") }
-    var udpPortText by remember { mutableStateOf(DnsttInstallOptions.DEFAULT_UDP_PORT.toString()) }
-    var domain by remember { mutableStateOf(config.domain.ifBlank { DnsttInstallOptions.DEFAULT_DOMAIN }) }
+    var udpPortText by remember { mutableStateOf(MasterDnsInstallOptions.DEFAULT_UDP_PORT.toString()) }
+    var domain by remember {
+        mutableStateOf(config.domainList().firstOrNull() ?: MasterDnsInstallOptions.DEFAULT_DOMAIN)
+    }
+    var encryptionMethod by remember { mutableStateOf(config.encryptionMethod) }
     var running by remember { mutableStateOf(false) }
-    var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.dnstt.DnsttInstallResult>?>(null) }
+    var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.masterdns.MasterDnsInstallResult>?>(null) }
     val log = remember { mutableStateListOf<String>() }
     val logScroll = rememberScrollState()
 
     val udpPort = udpPortText.ifBlank { "5300" }.toIntOrNull()?.takeIf { it in 1..65535 }
-        ?: DnsttInstallOptions.DEFAULT_UDP_PORT
+        ?: MasterDnsInstallOptions.DEFAULT_UDP_PORT
     val succeeded = result?.isSuccess == true
 
     androidx.compose.runtime.LaunchedEffect(log.size) {
@@ -1874,15 +1925,16 @@ private fun DnsttInstallDialog(
 
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
-        title = { Text("Автоустановка DNSTT на VPS") },
+        title = { Text("Автоустановка MasterDNS на VPS") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    "Подключусь к VPS по SSH, загружу dnstt-сервер, сгенерирую ключ и запущу его на UDP-порту $udpPort " +
-                        "со встроенным SOCKS5-выходом. Публичный ключ, домен и резолвер ($ip:$udpPort) подставятся в локацию.",
+                    "Подключусь к VPS по SSH, загружу MasterDNS-сервер, сгенерирую ключ шифрования и запущу его на " +
+                        "UDP-порту $udpPort — сервер сам работает выходом в интернет. Ключ, домен и резолвер " +
+                        "($ip:$udpPort) подставятся в локацию.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 OutlinedTextField(
@@ -1973,7 +2025,7 @@ private fun DnsttInstallDialog(
                         log.clear()
                         scope.launch {
                             val res = installer.install(
-                                DnsttInstallOptions(
+                                MasterDnsInstallOptions(
                                     host = ip.trim(),
                                     sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
                                     login = login.ifBlank { "root" },
@@ -1982,16 +2034,19 @@ private fun DnsttInstallDialog(
                                     sshKeyPassphrase = if (useKey) keyPassphrase else "",
                                     udpPort = udpPort,
                                     domain = domain.trim(),
+                                    encryptionMethod = encryptionMethod,
                                 )
                             ) { line -> log.add(line) }
-                            // On success, write the server's public key + domain + resolver into the
-                            // location so the dnstt client connects to the freshly installed server.
+                            // On success, write the key + domain + cipher + resolver into the location
+                            // so the client connects to the freshly installed server. Direct mode: the
+                            // resolver IS the VPS, so no NS delegation is needed.
                             res.getOrNull()?.let { ok ->
                                 onApplyConfig { c ->
                                     c.copy(
-                                        domain = domain.trim(),
-                                        pubKey = ok.publicKey,
-                                        resolver = "${ip.trim()}:$udpPort"
+                                        domains = domain.trim(),
+                                        encryptionKey = ok.encryptionKey,
+                                        encryptionMethod = encryptionMethod,
+                                        resolvers = "${ip.trim()}:$udpPort"
                                     )
                                 }
                             }
@@ -2016,14 +2071,6 @@ private fun DnsttInstallDialog(
             }
         }
     )
-}
-
-/** Extracts the host portion of a `host:port` resolver string (or returns it unchanged). */
-private fun deriveHost(resolver: String): String {
-    val trimmed = resolver.trim()
-    if (trimmed.isBlank()) return ""
-    val idx = trimmed.lastIndexOf(':')
-    return if (idx > 0) trimmed.substring(0, idx) else trimmed
 }
 
 /**
@@ -2225,6 +2272,115 @@ private fun CoreSelector(
     }
 }
 
+/**
+ * Payload cipher for the MasterDNS tunnel. It is not a preference — it has to match the server's
+ * DATA_ENCRYPTION_METHOD exactly, or every packet decodes to noise and the tunnel simply never comes up.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MasterDnsEncryptionSelector(
+    selected: Int,
+    enabled: Boolean,
+    onSelected: (Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Шифрование (как на сервере)",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MasterDnsConfig.ENCRYPTION_LABELS.forEachIndexed { value, label ->
+                FilterChip(
+                    selected = selected == value,
+                    onClick = { onSelected(value) },
+                    enabled = enabled,
+                    label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The two knobs worth surfacing from MasterDNS's large tuning surface: how resolvers are picked, and
+ * how many copies of each packet go out. Everything else keeps the upstream defaults.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MasterDnsTuningRow(
+    config: MasterDnsConfig,
+    enabled: Boolean,
+    onChange: ((MasterDnsConfig) -> MasterDnsConfig) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Выбор резолверов",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MASTER_DNS_BALANCING_LABELS.forEach { (value, label) ->
+                FilterChip(
+                    selected = config.balancingStrategy == value,
+                    onClick = { onChange { it.copy(balancingStrategy = value) } },
+                    enabled = enabled,
+                    label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                )
+            }
+        }
+        Text(
+            text = "Дублирование пакетов",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(0 to "По умолчанию", 1 to "1×", 2 to "2×", 3 to "3×", 4 to "4×").forEach { (value, label) ->
+                FilterChip(
+                    selected = config.packetDuplication == value,
+                    onClick = { onChange { it.copy(packetDuplication = value) } },
+                    enabled = enabled,
+                    label = { Text(label, maxLines = 1) }
+                )
+            }
+        }
+        Text(
+            text = "Больше копий — выше шанс доставки на рваном канале, но и трафика больше.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** RESOLVER_BALANCING_STRATEGY values worth offering; 0 keeps the upstream default. */
+private val MASTER_DNS_BALANCING_LABELS = listOf(
+    0 to "По умолчанию",
+    1 to "Случайно",
+    3 to "Мин. потери",
+    4 to "Мин. задержка",
+    5 to "Гибрид",
+    6 to "Потери → задержка",
+    8 to "По кругу среди лучших",
+)
+
 private fun coreLabel(core: ProxyCore): String = when (core) {
     ProxyCore.Auto -> stringsFor(LocalizationState.effective).coreAuto
     ProxyCore.SingBox -> "sing-box"
@@ -2269,7 +2425,7 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.Standard -> "Standard"
     EngineType.Chain -> "Chain"
     EngineType.VkTurn -> "VK-TURN"
-    EngineType.Dnstt -> "DNSTT"
+    EngineType.MasterDns -> "MasterDNS"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {
@@ -2277,7 +2433,7 @@ private fun engineSubtitle(engine: EngineType): String = when (engine) {
     EngineType.Standard -> "sing-box proxy (VLESS, VMess, Trojan, SS…)"
     EngineType.Chain -> "Proxy wrapped inside the olcRTC tunnel"
     EngineType.VkTurn -> "WireGuard over a VK TURN tunnel (free-turn-proxy)"
-    EngineType.Dnstt -> "Туннель через DNS (dnstt: KCP + Noise)"
+    EngineType.MasterDns -> "Туннель через DNS (MasterDnsVPN: несколько резолверов + ARQ)"
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {

@@ -1,9 +1,17 @@
-﻿# Режимы
+# Режимы
 
 ## UDP-Релей (WireGuard / AmneziaWG / Hysteria)
 
 Дефолтный режим (`-mode udp`). Клиент слушает локальный UDP-порт, сервер прозрачно форвардит UDP-пакеты в backend (например, WG `127.0.0.1:51820`).
 Отлично подходит для VPN-протоколов, работающих поверх UDP: **WireGuard, AmneziaWG, Hysteria**.
+
+## Прямой туннель (Direct AWG)
+
+Если на VPS поднят сервис `freeturn-awg` и порт `51820/udp` открыт наружу, клиенты AmneziaWG/AmneziaVPN подключаются **напрямую к серверу**, минуя релей:
+- **VK Calls не участвует**: звонки и TURN-серверы не используются, клиент подключается напрямую к VPS.
+- **Маскировка**: вместо `rtpopus3` работает встроенная обфускация **AmneziaWG 3.1** (`Jc`, `Jmin`, `Jmax`, `S1`..`S4`, `H1`..`H4`, `HeaderProtectionKey`).
+- **Скорость и пинг**: нативный прямой UDP без накладных расходов релея.
+- **Импорт**: сканирование терминального QR-кода (`sudo bash install.sh client qr <name> direct`).
 
 ## TCP-Форвардер (Xray / sing-box / VLESS)
 
@@ -31,9 +39,10 @@ Relayed-данные TURN - всегда датаграммы, даже при `
 `-obf-profile` выбирает wire-профиль маскировки TURN-payload. Профиль и ключ должны совпадать на клиенте и сервере.
 
 Доступные профили:
-- **`none`** (default) - обфускация выключена (скорость может быть сильно урезана).
-- **`rtpopus`** - RTP/opus-заголовок + ChaCha20-Poly1305 AEAD на теле. Идеально для обхода шейпов.
-- **`rtpopus2`** - rtpopus + RTP header extension (RFC 8285): X=1, ssrc-audio-level + transport-cc. Ближе к современному WebRTC. Wire несовместим с rtpopus - профиль должен совпадать на обеих сторонах.
+- **`rtpopus3`** (рекомендуется) - RTP/opus + RFC 8285 extension (`ssrc-audio-level` + `transport-cc`) + ChaCha20-Poly1305. Полная эмуляция современного WebRTC-аудиопотока звонков VK.
+- **`rtpopus2`** - RTP/opus + базовый RFC 8285 header extension.
+- **`rtpopus`** - базовый RTP/opus-заголовок + ChaCha20-Poly1305 AEAD.
+- **`none`** - обфускация выключена (скорость может быть сильно урезана шейпингом).
 
 Сгенерировать ключ:
 
@@ -44,8 +53,8 @@ Relayed-данные TURN - всегда датаграммы, даже при `
 Запуск:
 
 ```bash
-./server ... -obf-profile rtpopus -obf-key <64-hex>
-./client ... -obf-profile rtpopus -obf-key <64-hex>
+./server ... -obf-profile rtpopus3 -obf-key <64-hex>
+./client ... -obf-profile rtpopus3 -obf-key <64-hex>
 ```
 
 ## TURN Транспорт

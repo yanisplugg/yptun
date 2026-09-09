@@ -180,6 +180,18 @@
             Home-screen widgets. The running VPN service repaints them by sending an explicit
             ACTION_WIDGET_REFRESH broadcast (no intent-filter needed for explicit/same-app delivery).
         -->
+        <!-- Per-instance widget appearance (theme / opacity / corners / accent / visible parts). -->
+        <activity
+            android:name=".widget.WidgetConfigActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:label="@string/widget_config_label"
+            android:theme="@style/Theme.YPtun">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".widget.ToggleWidgetProvider"
             android:label="@string/widget_toggle_label"

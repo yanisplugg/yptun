@@ -17,6 +17,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -1853,6 +1857,15 @@ class LocationsRepositoryImpl(
         val servers = outbounds.filter { it["type"] != null && it["server"] != null }
         if (servers.isEmpty()) return null
 
+        // A full sing-box config brings its own `route` — the whole point of a JSON subscription. It used
+        // to be dropped on the floor (only the outbound survived), so the app's own routing profile ran
+        // instead. Normalize it once for this config and hang it on every location it produces.
+        val embeddedRoute = (element as? JsonObject)?.let { normalizeSingBoxRoute(it, outbounds) }
+        // Its FakeDNS (fakeip) was dropped too — the Xray branch has always extracted an equivalent
+        // spec (fakeDnsSpecFromXray), so a sing-box JSON subscription silently lost its synthetic-IP
+        // pool while the same subscription in Xray form kept it.
+        val fakeDnsSpec = (element as? JsonObject)?.let { fakeDnsSpecFromSingBox(it) }
+
         val usedStorageIds = mutableSetOf<String>()
         val entries = servers.mapIndexedNotNull { index, outbound ->
             val server = outbound.string("server") ?: return@mapIndexedNotNull null
@@ -1865,12 +1878,14 @@ class LocationsRepositoryImpl(
                 type = type,
                 server = server,
                 serverPort = port,
-                rawOutbound = outbound.toString()
+                rawOutbound = outbound.toString(),
+                rawSingBoxRoute = embeddedRoute
             )
             val location = LocationConfig(
                 name = tag,
                 engine = EngineType.Standard,
-                proxy = profile
+                proxy = profile,
+                fakeDns = fakeDnsSpec
             ).normalized()
             val base = "${server}_$port"
                 .lowercase()
@@ -1925,6 +1940,95 @@ class LocationsRepositoryImpl(
         )
     }
 
+    /**
+     * Rewrites a sing-box config's own `route` block into one this app can splice into the config it
+     * builds: every rule's outbound tag is resolved through the config's outbound list and re-pointed at
+     * our own tags ("proxy" / "direct"), a block/reject outbound becomes `action: "reject"`, and rules
+     * that only make sense inside the original config (its `dns` outbound, its inbound tags, the sniff /
+     * hijack-dns plumbing we emit ourselves) are dropped. `rule_set` definitions and `final` come along.
+     *
+     * Returns null when the config ships no usable routing — the app's own routing then applies as before.
+     */
+    private fun normalizeSingBoxRoute(root: JsonObject, outbounds: List<JsonObject>): String? {
+        val route = root["route"]?.jsonObjectOrNull() ?: return null
+        val rules = route["rules"]?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.mapNotNull { it.jsonObjectOrNull() }
+            ?: return null
+        if (rules.isEmpty()) return null
+
+        // What each outbound tag really is, so a rule pointing at it can be re-pointed at ours.
+        val kindByTag = outbounds.mapNotNull { ob ->
+            val tag = ob.string("tag")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val kind = when (ob.string("type")?.lowercase()) {
+                "direct" -> "direct"
+                "block", "reject" -> "reject"
+                "dns" -> "dns"
+                // A server outbound, or a selector/urltest over servers: all of it is "the tunnel".
+                else -> "proxy"
+            }
+            tag to kind
+        }.toMap()
+
+        val mapped = rules.mapNotNull { rule ->
+            // Rules keyed to the original config's inbounds can never match ours.
+            if (rule["inbound"] != null) return@mapNotNull null
+            val action = rule.string("action")?.lowercase()
+            when (action) {
+                // We emit our own sniff / DNS hijack (and must, for the TUN) — never duplicate them.
+                "sniff", "hijack-dns" -> return@mapNotNull null
+                // reject / resolve / hijack are self-contained: keep verbatim.
+                null, "route" -> Unit
+                else -> return@mapNotNull rule
+            }
+            val target = rule.string("outbound") ?: return@mapNotNull null
+            when (kindByTag[target] ?: "proxy") {
+                "dns" -> null // legacy `outbound: dns-out`; our hijack-dns rule already covers it
+                "reject" -> buildJsonObject {
+                    rule.forEach { (k, v) -> if (k != "outbound" && k != "action") put(k, v) }
+                    put("action", "reject")
+                }
+                "direct" -> buildJsonObject {
+                    rule.forEach { (k, v) -> if (k != "outbound") put(k, v) }
+                    put("outbound", "direct")
+                }
+                else -> buildJsonObject {
+                    rule.forEach { (k, v) -> if (k != "outbound") put(k, v) }
+                    put("outbound", "proxy")
+                }
+            }
+        }
+        if (mapped.isEmpty()) return null
+
+        // Remote rule-sets come along, but their `download_detour` names an outbound of the ORIGINAL
+        // config — pointing at a tag we don't have is a hard sing-box error, so re-point it at ours
+        // (the proxy, which is also what the app uses for its own rule-sets).
+        val ruleSets = route["rule_set"]?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.mapNotNull { it.jsonObjectOrNull() }
+            ?.map { set ->
+                val detour = set.string("download_detour")
+                if (detour == null && set.string("type") != "remote") {
+                    set
+                } else {
+                    buildJsonObject {
+                        set.forEach { (k, v) -> if (k != "download_detour") put(k, v) }
+                        put("download_detour", if (kindByTag[detour] == "direct") "direct" else "proxy")
+                    }
+                }
+            }
+            .orEmpty()
+        val finalTag = route.string("final")
+            ?.let { if ((kindByTag[it] ?: "proxy") == "direct") "direct" else "proxy" }
+            ?: "proxy"
+
+        return buildJsonObject {
+            put("final", finalTag)
+            put("rules", buildJsonArray { mapped.forEach { add(it) } })
+            if (ruleSets.isNotEmpty()) {
+                put("rule_set", buildJsonArray { ruleSets.forEach { add(it) } })
+            }
+        }.toString()
+    }
+
     /** Builds one verbatim-Xray location from a single full Xray config object, or null if it isn't one. */
     private fun parseSingleRawXrayEntry(
         root: JsonObject,
@@ -1963,7 +2067,26 @@ class LocationsRepositoryImpl(
         // EITHER core — sing-box reproduces FakeDNS natively (dns.fakeip), so FakeDNS no longer needs
         // xray-core. Only an xhttp/splithttp transport (sing-box can't serve it) keeps the verbatim
         // Xray template + forced Xray core.
-        val typed = typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
+        // …UNLESS the config carries routing/DNS of its own. That is the whole point of a JSON
+        // subscription: its `routing.rules` and per-domain `dns.servers` express where traffic must go,
+        // and NEITHER survives the typed translation (a typed location gets the APP's routing profile
+        // instead). So whenever the JSON brings its own, keep the template verbatim on Xray —
+        // XrayConfig.prepareRaw then honors it and skips overlaying the app profile.
+        val ownRouting = root["routing"]?.jsonObjectOrNull()
+            ?.get("rules")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.isNotEmpty() == true
+        // Scoped DNS = a `dns.servers` entry that is an OBJECT (address + domains/expectIPs), i.e. a
+        // per-domain resolver split. Plain string servers are reproduced by the typed path just fine.
+        val ownScopedDns = root["dns"]?.jsonObjectOrNull()
+            ?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.any { it.jsonObjectOrNull() != null } == true
+        val bringsOwnRouting = ownRouting || ownScopedDns
+
+        val typed = if (bringsOwnRouting) {
+            null
+        } else {
+            typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
+        }
         val location = if (typed != null) {
             LocationConfig(
                 name = name,
@@ -1974,7 +2097,8 @@ class LocationsRepositoryImpl(
                 fakeDns = fakeDnsSpecFromXray(root),
             ).normalized()
         } else {
-            // Untranslatable (xhttp / unknown transport) → run the whole template verbatim on Xray.
+            // Untranslatable (xhttp / unknown transport) OR carrying its own routing/DNS → run the whole
+            // template verbatim on Xray.
             LocationConfig(
                 name = name,
                 description = description,
@@ -2154,6 +2278,31 @@ class LocationsRepositoryImpl(
         }.orEmpty().filterNotNull()
 
         return FakeDnsSpec(inet4Range = inet4, inet6Range = inet6, blockRegex = blockRegex)
+    }
+
+    /**
+     * Extracts a [FakeDnsSpec] from a full sing-box config. Two shapes are accepted: the legacy
+     * `dns.fakeip` block and the 1.12+ `dns.servers[]` entry of `type: "fakeip"`. Returns null when
+     * the config has no fakeip (or has it disabled).
+     *
+     * Only the pools travel: the blackhole list is [FakeDnsSpec.blockRegex]'s job on the Xray side,
+     * and a sing-box config expresses the same thing as `route` rules — which already come along
+     * verbatim via [normalizeSingBoxRoute], so translating its `dns.rules` too would double them.
+     */
+    private fun fakeDnsSpecFromSingBox(root: JsonObject): FakeDnsSpec? {
+        val dns = root["dns"]?.jsonObjectOrNull() ?: return null
+        val legacy = dns["fakeip"]?.jsonObjectOrNull()
+        val server = (dns["servers"] as? JsonArray)
+            ?.mapNotNull { it.jsonObjectOrNull() }
+            ?.firstOrNull { it.string("type")?.lowercase() == "fakeip" }
+        val block = legacy ?: server ?: return null
+        // `enabled` only exists on the legacy block; a 1.12+ fakeip server is on by its presence.
+        if (block["enabled"]?.jsonPrimitive?.booleanOrNull == false) return null
+        val defaults = FakeDnsSpec()
+        return FakeDnsSpec(
+            inet4Range = block.string("inet4_range")?.takeIf { it.isNotBlank() } ?: defaults.inet4Range,
+            inet6Range = block.string("inet6_range")?.takeIf { it.isNotBlank() } ?: defaults.inet6Range,
+        )
     }
 
     private fun parseOlcRtcUri(line: String): ParsedOlcRtcUri? {

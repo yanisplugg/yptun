@@ -30,7 +30,7 @@ func TestParseClient_Defaults(t *testing.T) {
 	if c.Proxy.Listen != "127.0.0.1:9000" {
 		t.Errorf("Proxy.Listen default: %q", c.Proxy.Listen)
 	}
-	if c.TURN.N != 10 {
+	if c.TURN.N != DefaultStreams {
 		t.Errorf("TURN.N default: %d", c.TURN.N)
 	}
 	if c.DNS.Mode != "auto" {
@@ -201,14 +201,14 @@ func TestParseClient_StreamsPerCredNonPositive(t *testing.T) {
 	}
 }
 
-func TestParseClient_NClampedToTen(t *testing.T) {
+func TestParseClient_NClampedToDefault(t *testing.T) {
 	args := append(validClientArgs(), "-n", "-5")
 	c, err := ParseClient(args, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.TURN.N != 10 {
-		t.Errorf("TURN.N: %d (expected 10)", c.TURN.N)
+	if c.TURN.N != DefaultStreams {
+		t.Errorf("TURN.N: %d (expected %d)", c.TURN.N, DefaultStreams)
 	}
 }
 

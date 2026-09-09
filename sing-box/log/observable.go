@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing/common"
@@ -12,7 +14,7 @@ import (
 	"github.com/sagernet/sing/service/filemanager"
 )
 
-var _ Factory = (*defaultFactory)(nil)
+var _ ObservableFactory = (*defaultFactory)(nil)
 
 type defaultFactory struct {
 	ctx               context.Context
@@ -21,11 +23,22 @@ type defaultFactory struct {
 	writer            io.Writer
 	file              *os.File
 	filePath          string
-	platformWriter    PlatformWriter
+	platformWriters   atomic.Pointer[[]PlatformWriter]
 	needObservable    bool
 	level             Level
 	subscriber        *observable.Subscriber[Entry]
 	observer          *observable.Observer[Entry]
+	startAccess       sync.Mutex
+	started           atomic.Bool
+	pendingEntries    []pendingEntry
+}
+
+type pendingEntry struct {
+	ctx       context.Context
+	level     Level
+	tag       string
+	message   string
+	timestamp time.Time
 }
 
 func NewDefaultFactory(
@@ -45,37 +58,65 @@ func NewDefaultFactory(
 		},
 		writer:         writer,
 		filePath:       filePath,
-		platformWriter: platformWriter,
 		needObservable: needObservable,
 		level:          LevelTrace,
 		subscriber:     observable.NewSubscriber[Entry](128),
 	}
+	if platformWriter != nil {
+		factory.platformWriters.Store(&[]PlatformWriter{platformWriter})
+	}
 	/*if platformWriter != nil {
 		factory.platformFormatter.DisableColors = platformWriter.DisableColors()
 	}*/
-	if needObservable {
-		factory.observer = observable.NewObserver[Entry](factory.subscriber, 64)
-	}
 	return factory
 }
 
 func (f *defaultFactory) Start() error {
+	var err error
 	if f.filePath != "" {
-		logFile, err := filemanager.OpenFile(f.ctx, f.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
+		logFile, openErr := filemanager.OpenFile(f.ctx, f.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			err = openErr
+		} else {
+			f.writer = logFile
+			f.file = logFile
 		}
-		f.writer = logFile
-		f.file = logFile
 	}
-	return nil
+	if f.needObservable {
+		f.observer = observable.NewObserver[Entry](f.subscriber, 64)
+	}
+	f.startAccess.Lock()
+	pendingEntries := f.pendingEntries
+	f.pendingEntries = nil
+	f.started.Store(true)
+	f.startAccess.Unlock()
+	for _, entry := range pendingEntries {
+		f.output(entry.ctx, entry.level, entry.tag, entry.message, entry.timestamp)
+	}
+	return err
 }
 
 func (f *defaultFactory) Close() error {
+	f.startAccess.Lock()
+	f.pendingEntries = nil
+	f.startAccess.Unlock()
 	return common.Close(
 		common.PtrOrNil(f.file),
 		f.subscriber,
 	)
+}
+
+func (f *defaultFactory) AttachPlatformWriter(writer PlatformWriter) {
+	writers := append(f.loadPlatformWriters(), writer)
+	f.platformWriters.Store(&writers)
+}
+
+func (f *defaultFactory) loadPlatformWriters() []PlatformWriter {
+	writers := f.platformWriters.Load()
+	if writers == nil {
+		return nil
+	}
+	return *writers
 }
 
 func (f *defaultFactory) Level() Level {
@@ -102,6 +143,38 @@ func (f *defaultFactory) UnSubscribe(sub observable.Subscription[Entry]) {
 	f.observer.UnSubscribe(sub)
 }
 
+func (f *defaultFactory) output(ctx context.Context, level Level, tag string, message string, timestamp time.Time) {
+	if f.needObservable {
+		formatted, formattedSimple := f.formatter.FormatWithSimple(ctx, level, tag, message, timestamp)
+		if level <= f.level {
+			if level == LevelPanic {
+				panic(formatted)
+			}
+			f.writer.Write([]byte(formatted))
+			if level == LevelFatal {
+				os.Exit(1)
+			}
+		}
+		f.subscriber.Emit(Entry{level, formattedSimple})
+	} else if level <= f.level {
+		formatted := f.formatter.Format(ctx, level, tag, message, timestamp)
+		if level == LevelPanic {
+			panic(formatted)
+		}
+		f.writer.Write([]byte(formatted))
+		if level == LevelFatal {
+			os.Exit(1)
+		}
+	}
+	platformWriters := f.loadPlatformWriters()
+	if len(platformWriters) > 0 {
+		platformMessage := f.platformFormatter.Format(ctx, level, tag, message, timestamp)
+		for _, platformWriter := range platformWriters {
+			platformWriter.WriteMessage(level, platformMessage)
+		}
+	}
+}
+
 var _ ContextLogger = (*observableLogger)(nil)
 
 type observableLogger struct {
@@ -111,35 +184,22 @@ type observableLogger struct {
 
 func (l *observableLogger) Log(ctx context.Context, level Level, args []any) {
 	level = OverrideLevelFromContext(level, ctx)
-	if level > l.level && l.platformWriter == nil && !l.needObservable {
+	platformWriters := l.loadPlatformWriters()
+	if level > l.level && len(platformWriters) == 0 && !l.needObservable {
 		return
 	}
 	nowTime := time.Now()
-	if l.needObservable {
-		message, messageSimple := l.formatter.FormatWithSimple(ctx, level, l.tag, F.ToString(args...), nowTime)
-		if level <= l.level {
-			if level == LevelPanic {
-				panic(message)
-			}
-			l.writer.Write([]byte(message))
-			if level == LevelFatal {
-				os.Exit(1)
-			}
+	message := F.ToString(args...)
+	if !l.started.Load() && level != LevelFatal && level != LevelPanic {
+		l.startAccess.Lock()
+		if !l.started.Load() {
+			l.pendingEntries = append(l.pendingEntries, pendingEntry{ctx, level, l.tag, message, nowTime})
+			l.startAccess.Unlock()
+			return
 		}
-		l.subscriber.Emit(Entry{level, messageSimple})
-	} else if level <= l.level {
-		message := l.formatter.Format(ctx, level, l.tag, F.ToString(args...), nowTime)
-		if level == LevelPanic {
-			panic(message)
-		}
-		l.writer.Write([]byte(message))
-		if level == LevelFatal {
-			os.Exit(1)
-		}
+		l.startAccess.Unlock()
 	}
-	if l.platformWriter != nil {
-		l.platformWriter.WriteMessage(level, l.platformFormatter.Format(ctx, level, l.tag, F.ToString(args...), nowTime))
-	}
+	l.output(ctx, level, l.tag, message, nowTime)
 }
 
 func (l *observableLogger) Trace(args ...any) {

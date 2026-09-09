@@ -48,6 +48,16 @@ func TestRoundTrip(t *testing.T) {
 				Comment:  "Сервер РФ",
 			},
 		},
+		{
+			name: "with wg conf",
+			cfg: &Config{
+				Version:  currentVersion,
+				Provider: "vk",
+				Peer:     "1.2.3.4:56000",
+				Comment:  "VPN Server",
+				WGConf:   "[Interface]\nPrivateKey = test\n[Peer]\nPublicKey = test\n",
+			},
+		},
 	}
 
 	for _, tt := range tests {

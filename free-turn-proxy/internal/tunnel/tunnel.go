@@ -36,3 +36,8 @@ type Backend interface {
 	Down() error
 	Stats() (Stats, error)
 }
+
+// Rebinder реализует бэкенд с собственными сокетами
+type Rebinder interface {
+	Rebind() error
+}

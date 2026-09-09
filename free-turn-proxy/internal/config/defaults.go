@@ -21,8 +21,8 @@ const (
 
 const (
 	DefaultListen         = "127.0.0.1:9000"
-	DefaultStreams        = 10
-	DefaultStreamsPerCred = 10
+	DefaultStreams        = 12
+	DefaultStreamsPerCred = 12
 	DefaultTransport      = TransportTCP
 	DefaultMode           = ModeUDP
 	DefaultDNSMode        = DNSModeAuto

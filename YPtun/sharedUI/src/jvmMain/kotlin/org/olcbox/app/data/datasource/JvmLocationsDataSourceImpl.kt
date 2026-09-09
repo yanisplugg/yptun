@@ -19,6 +19,10 @@ class JvmLocationsDataSourceImpl(
 
     private val json = Json {
         ignoreUnknownKeys = true
+        // A value this build no longer knows (an engine that was removed, say) must degrade to the
+        // field default instead of throwing — otherwise ONE stale location takes the whole saved
+        // bundle down with it and the user loses every location.
+        coerceInputValues = true
         encodeDefaults = true
         explicitNulls = false
         prettyPrint = true

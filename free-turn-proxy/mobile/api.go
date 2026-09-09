@@ -54,7 +54,14 @@ type live struct {
 	done   chan struct{}
 	total  int
 	tunnel *tunnelParts
+
+	rateMu sync.Mutex
+	prevTx int64
+	prevRx int64
+	prevAt time.Time
 }
+
+func (l *live) direct() bool { return l.sess == nil }
 
 type final struct {
 	state  string
@@ -82,6 +89,9 @@ type Snapshot struct {
 
 func GetState() *Snapshot {
 	if l := current.Load(); l != nil {
+		if l.direct() {
+			return directSnapshot(l)
+		}
 		s := l.sess.Snapshot()
 		return &Snapshot{
 			State:   string(s.Phase),
@@ -156,15 +166,32 @@ func Stop() {
 
 // Wake форсирует пересоздание TURN-аллокаций при пробуждении устройства.
 func Wake() {
-	if l := current.Load(); l != nil {
+	if l := current.Load(); l != nil && !l.direct() {
 		l.sess.Wake()
 	}
 }
 
 // Reconnect пересоздаёт TURN-аллокации, не трогая туннель и tun-дескриптор.
+// В прямом режиме вместо них пересоздаются сокеты bind.
 func Reconnect() {
-	if l := current.Load(); l != nil {
+	l := current.Load()
+	if l == nil {
+		return
+	}
+	if !l.direct() {
 		l.sess.Reconnect()
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	l = current.Load()
+	if l == nil || !l.direct() {
+		return
+	}
+	if r, ok := l.tunnel.backend.(tunnel.Rebinder); ok {
+		if err := r.Rebind(); err != nil {
+			coreLog().Warnf("%v", err)
+		}
 	}
 }
 
