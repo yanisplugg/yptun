@@ -177,6 +177,22 @@ private class DesktopAppDependencies {
         vpnManager.appendLog(line)
     }
 
+    // jpackage builds the launcher as a GUI binary, so stderr goes nowhere: a crash inside the
+    // composition closed the window and left not one line behind — which is why «ошибки на кнопках
+    // на винде» stayed unexplained for weeks. Route it into the journal, which is mirrored to
+    // %APPDATA%\YPtun\yptun.log, so the next one arrives with a stack trace attached.
+    init {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching {
+                val trace = java.io.StringWriter()
+                error.printStackTrace(java.io.PrintWriter(trace))
+                vpnManager.appendLog("CRASH in ${thread.name}: $trace")
+            }
+            previous?.uncaughtException(thread, error)
+        }
+    }
+
     val homeViewModel = HomeScreenViewModel(
         vpnManager = vpnManager,
         locationsRepository = locationsRepository,
