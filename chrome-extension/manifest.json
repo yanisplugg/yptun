@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YPtun VPN",
-  "version": "3.4.3",
+  "version": "3.4.4",
   "description": "Paste a link, switch it on: Chrome goes through your YPtun location — tcp, xhttp, TLS and REALITY included.",
   "permissions": [
     "proxy",
