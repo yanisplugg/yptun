@@ -157,7 +157,7 @@ class AppUpdateService(
         fun selectAsset(assets: List<GithubReleaseAsset>, platform: UpdatePlatform): AppUpdateAsset? {
             val asset = when (platform.os) {
                 "android" -> selectAndroidAsset(assets, platform)
-                else -> selectAssetByTokens(assets, platform.assetToken, platform.preferredExtensions)
+                else -> selectDesktopAsset(assets, platform)
             }
 
             return asset?.let {
@@ -192,20 +192,26 @@ class AppUpdateService(
             val to = toVersion.removePrefix("v")
             if (from.isBlank() || to.isBlank() || from == to) return null
             val fullName = fullAssetName.lowercase()
-            val target = if (platform.os == "android") {
-                platform.androidArchTokens.firstOrNull { it in fullName }
-            } else {
-                platform.assetToken.joinToString("-").takeIf { token ->
-                    platform.assetToken.all { it in fullName }
+            // Which patch belongs to the build the user actually has: the ABI on Android (plus
+            // "universal" — an install off the universal APK matches no ABI token, and picking the
+            // first patch in the list then downloaded tens of megabytes that always failed
+            // verification), and "<os>-<arch>" (or the bare arch spelling) on desktop.
+            val targets = if (platform.os == "android") {
+                platform.androidArchTokens.filter { it in fullName }.ifEmpty {
+                    listOf("universal").filter { it in fullName }
                 }
+            } else {
+                platform.archTokens.filter { it in fullName }
+                    .flatMap { arch -> listOf("${platform.os}-$arch", arch) }
             }
             val candidates = assets.filter { asset ->
                 val name = asset.name.lowercase()
                 (name.endsWith(".patch.gz") || name.endsWith(".patch")) &&
                     "delta" in name && from in name && to in name
             }
-            val chosen = if (target != null) candidates.firstOrNull { target in it.name.lowercase() }
-            else candidates.firstOrNull()
+            val chosen = targets.firstNotNullOfOrNull { target ->
+                candidates.firstOrNull { target in it.name.lowercase() }
+            } ?: candidates.singleOrNull()
             return chosen?.let {
                 AppUpdateAsset(
                     name = it.name,
@@ -238,6 +244,33 @@ class AppUpdateService(
 
             return selectPreferredAsset(universalCandidates, preferredExtensions)
         }
+
+        /**
+         * Desktop release asset for this OS/arch.
+         *
+         * Requiring BOTH an os and an arch token (the old rule) matched NOTHING in a real release:
+         * the files are named "YPtun-3.3.2-x64-installer.exe" — no "windows" in the name and "x64"
+         * rather than "amd64" — so the desktop updater has never found an asset, on either arch.
+         * Match on any spelling of the arch instead, refuse assets that name a DIFFERENT os, and
+         * prefer one that does carry our os token when the release has both kinds.
+         */
+        private fun selectDesktopAsset(
+            assets: List<GithubReleaseAsset>,
+            platform: UpdatePlatform
+        ): GithubReleaseAsset? {
+            val foreignOsTokens = knownDesktopOsTokens - platform.os
+            val candidates = assets.filter { asset ->
+                val name = asset.name.lowercase()
+                platform.preferredExtensions.any { name.endsWith(it) } &&
+                    platform.archTokens.any { it in name } &&
+                    foreignOsTokens.none { it in name }
+            }
+            val named = candidates.filter { platform.os in it.name.lowercase() }
+
+            return selectPreferredAsset(named.ifEmpty { candidates }, platform.preferredExtensions)
+        }
+
+        private val knownDesktopOsTokens = listOf("windows", "linux", "macos")
 
         private fun selectAssetByTokens(
             assets: List<GithubReleaseAsset>,
@@ -311,11 +344,18 @@ data class UpdatePlatform(
 ) {
     val assetToken: List<String>
         get() = when (os) {
-            "windows" -> listOf("windows", "amd64")
-            "macos" -> listOf("macos", arch)
-            "linux" -> listOf("linux", arch)
+            // Windows used to be pinned to "amd64" whatever the machine was, so a Windows-on-ARM
+            // build looked for x64 assets.
             "android" -> listOf("android")
             else -> listOf(os, arch)
+        }
+
+    /** Spellings of [arch] a release asset may use — the same build ships as x64 and as amd64. */
+    val archTokens: List<String>
+        get() = when (arch) {
+            "amd64" -> listOf("amd64", "x64", "x86_64")
+            "arm64" -> listOf("arm64", "aarch64")
+            else -> listOf(arch)
         }
 
     val androidArchTokens: List<String>
