@@ -900,6 +900,16 @@ private fun runApp(args: Array<String>) = application {
                             onError = onError
                         )
                     },
+                    // Seven taps on the version line unlock the experimental engines — on Android
+                    // since forever, on the PC the tap did nothing.
+                    onUnlockExperimental = {
+                        if (!appBehavior.experimentalUnlocked) {
+                            dependencies.settings.setAppBehavior(
+                                appBehavior.copy(experimentalUnlocked = true)
+                            )
+                            desktopNotice = strings().experimentalUnlocked
+                        }
+                    },
                     updateAvailable = updateAvailable != null,
                     onUpdateClick = { updateAvailable?.let { updateOffer = it } },
                     // No camera on a PC: the desktop equivalent of «сканировать QR» is picking a

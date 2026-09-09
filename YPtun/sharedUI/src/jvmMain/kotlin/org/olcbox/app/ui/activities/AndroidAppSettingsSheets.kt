@@ -3967,12 +3967,18 @@ private fun ExperimentalContent(
         OutlinedButton(
             onClick = {
                 cookieScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val dialog = java.awt.FileDialog(null as java.awt.Frame?, "Cookies file", java.awt.FileDialog.LOAD)
+                    val dialog = java.awt.FileDialog(null as java.awt.Frame?, s.loadFromFile, java.awt.FileDialog.LOAD)
                     dialog.isVisible = true
                     val file = dialog.files.firstOrNull() ?: return@launch
-                    val text = runCatching { file.readText() }.getOrNull() ?: return@launch
+                    val text = runCatching { file.readText() }.getOrNull()
+                    val cookies = text?.let(::cookiesFromFile).orEmpty()
+                    if (cookies.isBlank()) {
+                        DesktopToast.show(s.cookiesReadFailed)
+                        return@launch
+                    }
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        onChanged(settings.copy(telemostCookies = cookiesFromFile(text)))
+                        onChanged(settings.copy(telemostCookies = cookies))
+                        DesktopToast.show(s.cookiesLoaded)
                     }
                 }
             },
