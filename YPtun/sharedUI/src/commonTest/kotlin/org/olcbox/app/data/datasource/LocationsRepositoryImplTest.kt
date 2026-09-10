@@ -900,6 +900,43 @@ class LocationsRepositoryImplTest {
         assertEquals("https://example.test/b", ConfigShareService.subscriptionQrText(items[1].url))
     }
 
+    /**
+     * A subscription that grows between refreshes must not lose servers. All proxy locations used to
+     * share one refresh signature, so old ids were handed out by POSITION, and a new server's generated
+     * id (`imported_location` for a Cyrillic name) could equal an id just reused by position — the
+     * bundle's distinctBy(storageId) then silently dropped the LAST server, on every later refresh too.
+     */
+    @Test
+    fun growingSubscriptionKeepsEveryServerAndItsId() = runTest {
+        fun link(host: String, name: String) =
+            "vless://11111111-2222-3333-4444-555555555555@$host:443?type=tcp&security=tls#$name"
+        var body = listOf(link("a.test", "Рига"), link("b.test", "Хельсинки")).joinToString("\n")
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(
+            dataSource = source,
+            httpClient = HttpClient(MockEngine { respond(body) }),
+            deviceIdentityProvider = StaticIdentityProvider("hwid-test")
+        )
+        val url = "https://example.test/grow"
+        repo.importText(url)
+        val rigaId = source.stored!!.locations.single { it.name == "Рига" }.storageId
+
+        body += "\n" + link("c.test", "Стокгольм")
+        repo.refreshSubscription(url)
+        // A server inserted at the FRONT shifts every position.
+        body = link("d.test", "Алматы") + "\n" + body + "\n" + link("e.test", "Нюрнберг")
+        repo.refreshSubscription(url)
+
+        val locations = source.stored!!.locations
+        assertEquals(
+            listOf("Алматы", "Рига", "Хельсинки", "Стокгольм", "Нюрнберг"),
+            locations.map { it.name }
+        )
+        assertEquals(locations.size, locations.map { it.storageId }.toSet().size)
+        // The id (selection, pings) follows the server, not its position in the list.
+        assertEquals(rigaId, locations.single { it.name == "Рига" }.storageId)
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),

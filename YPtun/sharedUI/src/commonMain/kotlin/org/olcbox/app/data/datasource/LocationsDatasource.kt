@@ -418,9 +418,22 @@ class LocationsRepositoryImpl(
                 return@forEach
             }
 
-            val reusedBySignature = previousEntries
-                .groupBy { subscriptionSignature(it.location) }
-                .mapValues { (_, entries) -> entries.toMutableList() }
+            // Each refreshed server takes over the id (selection, pings) of the SAME server from before:
+            // same endpoint + same name first, then same endpoint alone (renamed upstream). Exact matches
+            // are resolved for the whole list before any fallback, so a fallback can't steal the id of a
+            // server that still exists further down.
+            val taken = mutableSetOf<String>()
+            fun claim(pool: List<LocationEntry>?): LocationEntry? =
+                pool?.firstOrNull { it.storageId !in taken }?.also { taken += it.storageId }
+            val byNamedSignature = previousEntries.groupBy { namedSubscriptionSignature(it.location) }
+            val bySignature = previousEntries.groupBy { subscriptionSignature(it.location) }
+            val exactReuse = refreshed.map { claim(byNamedSignature[namedSubscriptionSignature(it.location)]) }
+            val reusedEntries = refreshed.mapIndexed { index, entry ->
+                exactReuse[index] ?: claim(bySignature[subscriptionSignature(entry.location)])
+            }
+            // Reserve every reused id BEFORE generating new ones: a new server's id could otherwise
+            // equal a reused one, and the bundle's distinctBy(storageId) silently drops that server.
+            usedStorageIds += taken
 
             // Was the previously-selected server one of THIS subscription's entries? If so we must
             // decide its fate after the refresh: keep it if it still exists (reused by signature),
@@ -429,9 +442,7 @@ class LocationsRepositoryImpl(
             var activeReusedHere = false
 
             val reassigned = refreshed.mapIndexed { index, entry ->
-                val signature = subscriptionSignature(entry.location)
-                val reusedPool = reusedBySignature[signature]
-                val reusedEntry = if (reusedPool.isNullOrEmpty()) null else reusedPool.removeAt(0)
+                val reusedEntry = reusedEntries[index]
                 val storageId = reusedEntry?.storageId ?: uniqueStorageId(
                     base = "imported_${entry.location.storageSlug().ifBlank { "location_${index + 1}" }}",
                     used = usedStorageIds
@@ -2480,15 +2491,25 @@ class LocationsRepositoryImpl(
         }.getOrNull()
     }
 
+    /**
+     * What identifies a subscription server across refreshes. The olcRTC fields alone left every proxy
+     * location with the SAME signature (they're all blank there), so refreshes matched servers purely
+     * by position — the endpoint tells proxy servers apart.
+     */
     private fun subscriptionSignature(location: LocationConfig): String {
         val normalized = location.normalized()
         return listOf(
             normalized.bypassProvider,
             normalized.transport,
             normalized.id,
-            normalized.key
+            normalized.key,
+            normalized.proxy?.let { "${it.type}@${it.server}:${it.serverPort}" }.orEmpty()
         ).joinToString("|")
     }
+
+    /** [subscriptionSignature] + name: several servers of one panel often share one endpoint. */
+    private fun namedSubscriptionSignature(location: LocationConfig): String =
+        subscriptionSignature(location) + "|" + location.name.trim()
 
     private fun LocationConfig.storageSlug(): String {
         return displayName().ifBlank { id }.storageSlug()
