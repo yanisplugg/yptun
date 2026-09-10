@@ -2,6 +2,7 @@ package org.olcbox.app.vpn.desktop
 
 import kotlinx.coroutines.delay
 import org.olcbox.app.data.importer.ShareLinkParser
+import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.MasterDnsConfig
@@ -828,7 +829,9 @@ internal class DesktopEngineController(
         deviceId: String,
     ) {
         val vk = config.vkturn
-        var profile = config.proxy
+        // Clamp the exit's WireGuard/AmneziaWG MTU to what the VK TURN + DTLS + RTP-obf path can carry
+        // — a panel link's 1280/1420 does not fail loudly, it just silently drops full-size segments.
+        var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true
         val outboundType = vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
             ?: VkTurnConfig.OUTBOUND_WIREGUARD
@@ -863,6 +866,25 @@ internal class DesktopEngineController(
                 deviceId = deviceId,
                 fingerprint = vk.wdttFingerprint.ifBlank { "chrome" },
             )
+        } else {
+            // bond=1 в старых ссылках ядро 3.2.0 игнорирует — вырезать его больше не нужно.
+            val freeturnUri = vk.uri
+            log("Starting VK-TURN freeturn listener on $listenAddr")
+            YpTunCore.ftStart(freeturnUri, listenAddr, vk.vkLink, vk.streams)
+        }
+
+        // ---- The relay handshake (VK auth → DTLS → TURN allocation) is now IN FLIGHT ----
+        // The settings/geo preparation below does not depend on it and is not free (ASN selectors are
+        // resolved to CIDRs, which fetches on a cold cache), so run it HERE, overlapping the handshake,
+        // instead of stacking its time on top of an already-slow connect.
+        val routing = loadRoutingExpandingAsn()
+        // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
+        val traffic = JvmVpnSettings.loadTraffic().copy(domainStrategy = "ipv4_only")
+        val profilesState = JvmVpnSettings.loadRoutingProfiles()
+        val routingProfile: RoutingProfile? = null
+
+        // ---- Relay-ready gate: bring the tunnel up only behind a live TURN stream ----
+        if (usesWdtt) {
             // The config only arrives once the first worker has a VK TURN session up, so waiting on it
             // doubles as the relay-ready gate (same as the Android OnConfig path).
             val wgConf = YpTunCore.wdttWaitConfig(VKTURN_RELAY_READY_TIMEOUT_MS)
@@ -877,40 +899,35 @@ internal class DesktopEngineController(
                     "WDTT: no WireGuard config from server (GETCONF) and none stored"
                 )
             }
+        } else if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
+            log("VK-TURN relay up (${YpTunCore.ftConnectedStreams()} stream(s)); starting WireGuard")
         } else {
-            // bond=1 в старых ссылках ядро 3.2.0 игнорирует — вырезать его больше не нужно.
-            val freeturnUri = vk.uri
-            log("Starting VK-TURN freeturn listener on $listenAddr")
-            YpTunCore.ftStart(freeturnUri, listenAddr, vk.vkLink, vk.streams)
-
-            if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
-                log("VK-TURN relay up (${YpTunCore.ftConnectedStreams()} stream(s)); starting WireGuard")
-            } else {
-                log("VK-TURN relay not ready yet; starting outbound anyway (will retry)")
-            }
+            log("VK-TURN relay not ready yet; starting outbound anyway (will retry)")
         }
 
         activeProxyCore = ProxyCore.SingBox
         val exitProfile = requireNotNull(profile)
-        val routing = loadRoutingExpandingAsn()
-        // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
-        val traffic = JvmVpnSettings.loadTraffic().copy(domainStrategy = "ipv4_only")
-        val profilesState = JvmVpnSettings.loadRoutingProfiles()
-        val routingProfile: RoutingProfile? = null
 
-        // Chained exit proxy on top of the tunnel — WireGuard/WDTT AND AmneziaWG (the AWG branch
-        // below cascades it over the local AWG SOCKS, same as [wireguardBase] does for WG).
+        // Chained exit proxy on top of the tunnel — WireGuard/WDTT AND AmneziaWG (the AWG exit is a
+        // local SOCKS, so the chain rides it as a base detour, like MasterDNS does).
         val chainProxy = if (outboundType != VkTurnConfig.OUTBOUND_PROXY) {
             vk.chainProxyLink.takeIf { it.isNotBlank() }
                 ?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+        } else null
+
+        // AmneziaWG exit: raise its local SOCKS up front — BOTH cores route through it now.
+        val awgSocks = if (outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG) {
+            prepareAmneziaWgProxy(exitProfile, listenPort)
         } else null
 
         val proxyForCore = when (outboundType) {
             VkTurnConfig.OUTBOUND_PROXY -> exitProfile
             else -> chainProxy
         }
+        // AmneziaWG no longer blocks Xray: it used to, which silently killed every second proxy only
+        // Xray can serve (xhttp/splithttp, a raw Xray config, an explicit "Xray" core choice) — the
+        // chain was force-built on sing-box, which cannot speak those transports.
         val useXray = proxyForCore != null &&
-            outboundType != VkTurnConfig.OUTBOUND_AMNEZIAWG &&
             vk.resolvedProxyCore(proxyForCore) == ProxyCore.Xray
 
         if (useXray) {
@@ -931,6 +948,27 @@ internal class DesktopEngineController(
                     traffic = traffic,
                     routingProfile = null,
                     blockQuic = false,
+                )
+            } else if (outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG) {
+                log("VK-TURN chaining proxy ${chainProxy!!.displayName()} over AmneziaWG (Xray)")
+                XrayConfig.build(
+                    profile = chainProxy,
+                    // The AmneziaWG tunnel is a LOCAL SOCKS (awgproxy), so the chain rides it as a base
+                    // detour — the same wiring MasterDNS uses for its own local SOCKS tunnel.
+                    olcrtcChainPort = awgLocalPort(listenPort),
+                    listenPort = xrayPort,
+                    listenHost = xrayHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    logLevel = "debug",
+                    traffic = traffic,
+                    routingProfile = null,
+                    blockQuic = false,
+                    // Socket-level chaining keeps a vless reality/xtls-vision exit's own transport intact;
+                    // proxySettings would re-wrap it and the server resets the malformed handshake.
+                    chainViaDialerProxy = true,
+                    // `direct` traffic exits through the AWG-over-VK tunnel, never the real network.
+                    directViaBase = true,
                 )
             } else {
                 log("VK-TURN chaining proxy ${chainProxy!!.displayName()} over WireGuard (Xray)")
@@ -966,15 +1004,17 @@ internal class DesktopEngineController(
         } else {
             val json = when (outboundType) {
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
-                    val awgSocks = prepareAmneziaWgProxy(exitProfile, listenPort)
                     if (chainProxy != null) {
                         log("VK-TURN chaining proxy ${chainProxy.displayName()} over AmneziaWG")
                     } else {
                         log("VK-TURN exit: AmneziaWG over VK")
                     }
                     SingBoxConfig.build(
-                        profile = awgSocks,
-                        secondProfile = chainProxy,
+                        // With a chain proxy the chain IS the exit and dials THROUGH the AWG SOCKS as a
+                        // base detour ([olcrtcChainPort]) — not as a `secondProfile` cascade, which gave
+                        // the tunnel no base tag, so `direct` traffic leaked straight past it.
+                        profile = chainProxy ?: requireNotNull(awgSocks),
+                        olcrtcChainPort = if (chainProxy != null) awgLocalPort(listenPort) else null,
                         listenPort = listenPort,
                         listenHost = listenHost,
                         socksUsername = socksUsername,
@@ -989,6 +1029,15 @@ internal class DesktopEngineController(
                         logLevel = "debug",
                         dnsStrategyOverride = "ipv4_only",
                         blockQuic = false,
+                        // Full UDP tunnel behind a local SOCKS: always sniff, so an app's own IPv6
+                        // literal is replaced by its domain and re-resolved to IPv4 instead of dying on
+                        // the strict `::/0` backstop.
+                        sniffOverrideDestination = true,
+                        // Without a chain proxy the tunnel's DNS would ride the flaky SOCKS UDP-ASSOCIATE
+                        // path; resolve over TCP (CONNECT) instead. A chain proxy carries DNS itself.
+                        preferTcpRemoteDns = chainProxy == null,
+                        // `direct` traffic exits through the AWG-over-VK tunnel, never the real network.
+                        directViaBase = chainProxy != null,
                         tunMode = requestedTun,
                         splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
                         splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
@@ -1154,7 +1203,9 @@ internal class DesktopEngineController(
      * Waits for the first VK-TURN stream. A manual VK captcha stops the clock the way Android does:
      * the user needs far more than [timeoutMs] to solve one, and giving up mid-solve starts the
      * WireGuard outbound against a relay that is not there yet. The captcha page is served by
-     * freeturn on localhost — we open it in the browser (a PC has no in-app WebView) and say so.
+     * freeturn on localhost and opens in its OWN browser window ([DesktopUriLauncher.openBrowserWindow]
+     * drives the user's browser in application mode — there is no embedded web engine in this build),
+     * so it reads as a step of connecting instead of a lost tab.
      */
     private suspend fun awaitVkTurnRelayReady(timeoutMs: Int): Boolean {
         var deadline = System.currentTimeMillis() + timeoutMs
@@ -1164,8 +1215,13 @@ internal class DesktopEngineController(
             val captcha = YpTunCore.ftCaptchaUrl()
             if (captcha.isNotBlank() && captcha != openedCaptcha) {
                 openedCaptcha = captcha
-                log("VK просит капчу — открываю $captcha")
-                DesktopUriLauncher.open(captcha)
+                log("VK просит капчу — открываю $captcha в отдельном окне браузера")
+                // A separate browser window, NOT explorer.exe: handed an `http://localhost:<port>/…`
+                // URL explorer can decide it is a network location and open a File Explorer window —
+                // which is what users saw instead of the captcha page.
+                if (!DesktopUriLauncher.openBrowserWindow(captcha)) {
+                    log("Не удалось открыть браузер — решите капчу вручную по адресу $captcha")
+                }
                 DesktopToast.show(
                     org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
                         .vkCaptchaTitle
@@ -1173,7 +1229,9 @@ internal class DesktopEngineController(
             }
             // freeturn gives up on a manual captcha by itself (3 min), so this cannot wait forever.
             if (YpTunCore.ftCaptchaActive()) deadline = System.currentTimeMillis() + timeoutMs
-            delay(200)
+            // Tight poll: this is time the user spends watching "Connecting", and the check is a single
+            // atomic read in the core.
+            delay(50)
         }
         return false
     }

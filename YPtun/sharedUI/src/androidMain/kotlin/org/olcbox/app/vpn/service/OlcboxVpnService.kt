@@ -1685,7 +1685,11 @@ class OlcboxVpnService : VpnService() {
         val vk = config.vkturn
         // [profile] is the exit outbound. For WDTT it is SYNTHESIZED at runtime from the wdtt-server's
         // WireGuard config (GETCONF/OnConfig) — the user enters only the server IP[:port], no WG keys.
-        var profile = config.proxy
+        // The MTU is clamped to what the VK TURN + DTLS + RTP-obf path can actually carry: a panel's
+        // link often bakes in 1280/1420, which does not fail loudly — small exchanges fit while
+        // anything filling a segment is silently dropped, i.e. "сайты открываются, а в приложениях
+        // нет соединения / плохая скорость". WDTT already clamps its server-provided config the same way.
+        var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true
         // WDTT always exits via WireGuard (server-provided); the freeturn outbound choice is irrelevant.
         val outboundType = if (usesWdtt) VkTurnConfig.OUTBOUND_WIREGUARD
@@ -1730,11 +1734,15 @@ class OlcboxVpnService : VpnService() {
                 add(profile!!)
                 freeturnServers.drop(1).forEachIndexed { idx, u ->
                     VkTurnComposer.freeturnUriToWgProfile(u, vk.listenPort + idx + 1, "VK-TURN ${idx + 2}")
+                        ?.let { VkTurnComposer.clampVkTurnMtu(it) }
                         ?.let { add(it) }
                 }
             } else emptyList()
             // Need at least 2 working WG outbounds (else there's nothing to balance) to engage multi.
             val multiFreeturn = freeturnWgProfiles.count { !it.rawOutbound.isNullOrBlank() } > 1
+
+            // Set by the WDTT branch: the server's WireGuard config, which also acts as its relay gate.
+            var wdttConfigSignal: CompletableDeferred<String>? = null
 
             if (vk.usesWdtt()) {
                 // WDTT core (wg-turn-client): connects purely by the wdtt-server IP[:port] and FETCHES its
@@ -1764,20 +1772,10 @@ class OlcboxVpnService : VpnService() {
                 )
                 coroutineContext.ensureActive()
                 if (requestedGeneration != generation) return false
-                // The WireGuard config arrives via OnConfig once the first worker has a VK TURN session up,
-                // so waiting on it doubles as the relay-ready gate. Build the WG outbound from it.
-                val wgConf = withTimeoutOrNull(VKTURN_RELAY_READY_TIMEOUT_MS) { configSignal.await() }
-                when {
-                    wgConf != null && wgConf.isNotBlank() -> {
-                        profile = buildWdttWgProfile(wgConf, vk.listenPort)
-                        addLog("VK-TURN WDTT relay up; WireGuard config from server applied")
-                    }
-                    profile?.rawOutbound?.isNotBlank() == true ->
-                        addLog("VK-TURN WDTT: no GETCONF — falling back to the stored WireGuard config")
-                    else -> throw IllegalStateException(
-                        "WDTT: no WireGuard config from server (GETCONF) and none stored"
-                    )
-                }
+                // The config arrives via OnConfig once the first worker has a VK TURN session up, so
+                // waiting on it doubles as the relay-ready gate — awaited below, AFTER the settings
+                // preparation, so that work overlaps the handshake instead of queueing behind it.
+                wdttConfigSignal = configSignal
             } else {
                 // freeturn client: local WireGuard entry listener tunnelling through VK.
                 Freeturn.setDebug(false)
@@ -1858,20 +1856,45 @@ class OlcboxVpnService : VpnService() {
                     addLog("Starting VK-TURN freeturn listener on $listenAddr (links=$linkCount, streams=$effectiveStreams)")
                     Freeturn.start(freeturnUri, listenAddr, vk.vkLink, effectiveStreams.toLong())
                 }
-                coroutineContext.ensureActive()
-                if (requestedGeneration != generation) return false
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) return false
 
-                // Order the WireGuard bring-up behind the VK TURN relay: wait for the freeturn
-                // client to establish at least one TURN stream (DTLS handshake + TURN allocation)
-                // so the tunnel uplink is live before WireGuard starts handshaking. Otherwise the
-                // WireGuard outbound can exhaust its handshake attempts and report offline while the
-                // relay is still coming up (only masked on a fast same-LAN path). Best-effort: if the
-                // relay does not report ready in time we proceed anyway and let WireGuard retry.
-                if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
-                    addLog("VK-TURN relay up (${Freeturn.connectedStreams()} stream(s)); starting WireGuard")
-                } else {
-                    addLog("VK-TURN relay not ready yet; starting WireGuard anyway (will retry)")
+            // ---- The relay handshake (VK auth → DTLS → TURN allocation) is now IN FLIGHT ----
+            // Everything below up to the gate is independent of it and can be slow on a real device:
+            // loadRouting() enumerates every installed package to expand per-app rules and resolves
+            // `asn:` selectors to CIDRs (a network fetch on a cold cache), and the routing profile /
+            // geo assets cost more still. Doing it HERE overlaps it with the handshake instead of
+            // adding its seconds after the relay is already up — the connect the user waits through.
+            val routing = loadRouting()
+            val traffic = loadTrafficSettings()
+            // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
+            val ipv4Traffic = traffic.copy(domainStrategy = "ipv4_only")
+            val profilesState = loadRoutingProfilesState()
+
+            // ---- Relay-ready gate: order the tunnel bring-up behind at least one live TURN stream ----
+            // (DTLS handshake + TURN allocation) so the uplink is live before WireGuard starts
+            // handshaking. Otherwise the WireGuard outbound can exhaust its handshake attempts and
+            // report offline while the relay is still coming up (only masked on a fast same-LAN path).
+            // Best-effort: if the relay does not report ready in time we proceed anyway and retry.
+            val wdttSignal = wdttConfigSignal
+            if (wdttSignal != null) {
+                val wgConf = withTimeoutOrNull(VKTURN_RELAY_READY_TIMEOUT_MS) { wdttSignal.await() }
+                when {
+                    wgConf != null && wgConf.isNotBlank() -> {
+                        profile = buildWdttWgProfile(wgConf, vk.listenPort)
+                        addLog("VK-TURN WDTT relay up; WireGuard config from server applied")
+                    }
+                    profile?.rawOutbound?.isNotBlank() == true ->
+                        addLog("VK-TURN WDTT: no GETCONF — falling back to the stored WireGuard config")
+                    else -> throw IllegalStateException(
+                        "WDTT: no WireGuard config from server (GETCONF) and none stored"
+                    )
                 }
+            } else if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
+                addLog("VK-TURN relay up (${Freeturn.connectedStreams()} stream(s)); starting WireGuard")
+            } else {
+                addLog("VK-TURN relay not ready yet; starting WireGuard anyway (will retry)")
             }
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) return false
@@ -1884,11 +1907,6 @@ class OlcboxVpnService : VpnService() {
             //      (mode=tcp); sing-box dials it directly through the tunnel.
             activeProxyCore = ProxyCore.SingBox
             val exitProfile = requireNotNull(profile)
-            val routing = loadRouting()
-            val traffic = loadTrafficSettings()
-            // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
-            val ipv4Traffic = traffic.copy(domainStrategy = "ipv4_only")
-            val profilesState = loadRoutingProfilesState()
 
             // Multi-server freeturn: build ONE Xray config that load-balances across the per-server
             // WireGuard outbounds (each dialing its own local relay listener). Per-connection `random`
@@ -1946,22 +1964,29 @@ class OlcboxVpnService : VpnService() {
                 parsed
             } else null
 
+            // AmneziaWG exit: raise its local SOCKS UP FRONT — BOTH cores route through it (the chain
+            // proxy dials its server through this SOCKS exactly like MasterDNS does), so it can no
+            // longer live inside the sing-box branch alone.
+            val awgSocks = if (outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG) {
+                prepareAmneziaWgProxy(exitProfile)
+            } else null
+
             // Routing profiles apply ONLY where there's a real proxy exit to split traffic on: the
-            // proxy EXIT (outbound=Proxy) OR a chain/second proxy over WireGuard. Then the core listens
-            // on a local SOCKS and the profile can split (proxy bucket over VK, direct bucket straight
-            // out). Plain WireGuard / AmneziaWG / WDTT (no proxy) stay EXCLUDED (like olcRTC): they
+            // proxy EXIT (outbound=Proxy) OR a chain/second proxy over the tunnel. Then the core listens
+            // on a local SOCKS and the profile can split (proxy bucket over VK, direct bucket via the
+            // tunnel). Plain WireGuard / AmneziaWG / WDTT (no proxy) stay EXCLUDED (like olcRTC): they
             // tunnel everything through the WG-over-VK path with nothing to route against.
-            // AmneziaWG is excluded even with a chain proxy: its base is a local SOCKS, not a WG
-            // endpoint, so [directViaBase] has nothing to detour to and the profile's `direct` bucket
-            // would leak straight out of the tunnel.
+            // AmneziaWG + chain proxy IS included now: the chain rides the AWG SOCKS as its base detour
+            // ([SingBoxConfig.olcrtcChainPort] / [XrayConfig.olcrtcChainPort]), which gives the profile's
+            // `direct` bucket a base tag to exit through ([directViaBase]) instead of leaking past the
+            // tunnel — the reason it used to be excluded.
             val routingProfile: RoutingProfile? =
-                if (outboundType == VkTurnConfig.OUTBOUND_PROXY ||
-                    (chainProxy != null && outboundType != VkTurnConfig.OUTBOUND_AMNEZIAWG)
-                ) resolveProfileExpandingAsn(profilesState, config.routingProfileId)
+                if (outboundType == VkTurnConfig.OUTBOUND_PROXY || chainProxy != null)
+                    resolveProfileExpandingAsn(profilesState, config.routingProfileId)
                 else null
 
-            // The proxy whose core choice matters: the PROXY exit, or the WG chain proxy. AmneziaWG /
-            // plain WireGuard have no typed proxy → always sing-box.
+            // The proxy whose core choice matters: the PROXY exit, or the chain proxy over the tunnel.
+            // Plain WireGuard / AmneziaWG without a chain have no typed proxy → always sing-box.
             val proxyForCore = when (outboundType) {
                 VkTurnConfig.OUTBOUND_PROXY -> exitProfile
                 else -> chainProxy
@@ -1973,8 +1998,11 @@ class OlcboxVpnService : VpnService() {
                 proxyForCore != null && proxyForCore.type in XRAY_SUPPORTED_TYPES
             // App-wide engine default applies to the VK-TURN exit/chain proxy too (per-location wins).
             val globalCore = loadAppBehavior().globalProxyCore
+            // AmneziaWG no longer blocks Xray. It used to, and that silently killed every second proxy
+            // Xray alone can serve — an xhttp/splithttp link, a raw Xray config, or simply the user's
+            // "Xray" core choice — because the chain was force-built on sing-box, which cannot speak
+            // those transports. With the AWG SOCKS as the chain's base detour both cores work.
             val useXray = proxyForCore != null &&
-                outboundType != VkTurnConfig.OUTBOUND_AMNEZIAWG &&
                 (vk.resolvedProxyCore(proxyForCore, globalCore) == ProxyCore.Xray || profileWantsXray)
 
             if (useXray) {
@@ -1993,6 +2021,28 @@ class OlcboxVpnService : VpnService() {
                         routingProfile = xrayProfile,
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
                         bypassLan = routing.bypassLan,
+                    )
+                } else if (outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG) {
+                    addLog("VK-TURN chaining proxy ${chainProxy!!.displayName()} over AmneziaWG (Xray)")
+                    XrayConfig.build(
+                        profile = chainProxy,
+                        // The AmneziaWG tunnel is a LOCAL SOCKS (awgproxy), so the chain rides it as a
+                        // base detour — the same wiring MasterDNS uses for its own local SOCKS tunnel.
+                        olcrtcChainPort = awgLocalPort,
+                        listenPort = socksListenPort,
+                        listenHost = socksListenHost,
+                        socksUsername = socksUsername,
+                        socksPassword = socksPassword,
+                        logLevel = "debug",
+                        traffic = ipv4Traffic,
+                        routingProfile = xrayProfile,
+                        blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                        // Chain at the SOCKET level (dialerProxy), not proxySettings: the latter re-wraps
+                        // the outbound and drops its transport, so a vless reality/xtls-vision exit sends
+                        // a malformed handshake and the server resets it. Same lesson as the MasterDNS chain.
+                        chainViaDialerProxy = true,
+                        // `direct` traffic exits through the AWG-over-VK tunnel, never the real network.
+                        directViaBase = true,
                     )
                 } else {
                     addLog("VK-TURN chaining proxy ${chainProxy!!.displayName()} over WireGuard (Xray)")
@@ -2030,17 +2080,18 @@ class OlcboxVpnService : VpnService() {
 
             val json = when (outboundType) {
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
-                    val awgSocks = prepareAmneziaWgProxy(exitProfile)
                     if (chainProxy != null) {
                         addLog("VK-TURN chaining proxy ${chainProxy.displayName()} over AmneziaWG")
                     } else {
                         addLog("VK-TURN exit: AmneziaWG over VK")
                     }
                     SingBoxConfig.build(
-                        profile = awgSocks,
-                        // The chain proxy becomes the real exit and dials THROUGH the AWG SOCKS, same
-                        // cascade the WireGuard branch below gets via [wireguardBase].
-                        secondProfile = chainProxy,
+                        // With a chain proxy the chain IS the exit and dials THROUGH the AWG SOCKS as a
+                        // base detour ([olcrtcChainPort]) — not as a `secondProfile` cascade, which left
+                        // the tunnel without a base tag: `direct` traffic then leaked past it and routing
+                        // profiles had to be disabled outright. Without a chain the AWG SOCKS is the exit.
+                        profile = chainProxy ?: requireNotNull(awgSocks),
+                        olcrtcChainPort = if (chainProxy != null) awgLocalPort else null,
                         listenPort = socksListenPort,
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
@@ -2054,6 +2105,18 @@ class OlcboxVpnService : VpnService() {
                         logLevel = "debug",
                         dnsStrategyOverride = "ipv4_only",
                         blockQuic = false, // VK-TURN tunnels UDP; never block QUIC here
+                        // A full UDP tunnel behind a local SOCKS: always sniff, so the `resolve` action can
+                        // replace an app's own IPv6 literal with its domain and re-resolve it to IPv4
+                        // instead of the strict `::/0` backstop killing the connection. Same as the
+                        // standalone AmneziaWG path — VK-TURN's AWG exit is the very same tunnel shape.
+                        sniffOverrideDestination = true,
+                        // No chain proxy → the tunnel's own DNS rides the SOCKS UDP-ASSOCIATE path, which
+                        // is far flakier than a plain CONNECT and silently kills name resolution ("works
+                        // only with a 2nd proxy"). Resolve over TCP instead. With a chain, that proxy's
+                        // own protocol carries DNS, so this is a no-op there.
+                        preferTcpRemoteDns = chainProxy == null,
+                        // `direct` traffic exits through the AWG-over-VK tunnel, never the real network.
+                        directViaBase = chainProxy != null,
                         cacheFilePath = singBoxCachePath(),
                     )
                 }
@@ -4360,7 +4423,10 @@ class OlcboxVpnService : VpnService() {
         private const val SOCKS_RELEASE_QUICK_TIMEOUT_MS = 500L
         private const val SOCKS_RELEASE_POLL_MS = 100L
         private const val VKTURN_RELAY_READY_TIMEOUT_MS = 20_000L
-        private const val VKTURN_RELAY_POLL_MS = 200L
+        // Poll the relay-ready gate tightly: this runs while the user is staring at "Connecting", so a
+        // coarse interval is pure added latency on top of an already slow VK handshake. The check is a
+        // single atomic read in the freeturn core, so 50ms costs nothing.
+        private const val VKTURN_RELAY_POLL_MS = 50L
         // Max EXTRA freeturn servers run alongside the primary for load-balancing (6 total).
         private const val VKTURN_MAX_EXTRA_FREETURN = 5
         // VK-TURN parallel TURN streams. freeturn fans these across the call links (multiProvider), so

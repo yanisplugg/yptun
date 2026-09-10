@@ -209,6 +209,78 @@ object VkTurnComposer {
         return compose(draft, name).second
     }
 
+    /**
+     * Largest WireGuard/AmneziaWG MTU that survives the VK TURN path.
+     *
+     * The tunnel's packets ride inside DTLS + the RTP/Opus obfuscation on top of the carrier's own
+     * UDP, so the real path MTU is far below the 1500 a WireGuard config normally assumes. A larger
+     * value does NOT fail loudly — small exchanges (a page's HTML, an API call) fit and look fine,
+     * while anything that fills a segment (uploads, media, big TLS records) is silently dropped. That
+     * is exactly the "сайты открываются, а в приложениях нет соединения / плохая скорость" shape.
+     * The WDTT branch already hard-caps at this value; freeturn links take whatever MTU the panel
+     * baked into their `wg=` (commonly 1280, sometimes 1420), so they need the same clamp.
+     */
+    const val VKTURN_MAX_WG_MTU = 1200
+
+    /**
+     * Returns [profile] with its WireGuard/AmneziaWG MTU clamped to at most [maxMtu]
+     * ([VKTURN_MAX_WG_MTU] by default) — a smaller value the server picked is honoured, a missing one
+     * is filled in. Covers both shapes a VK-TURN exit can take: the sing-box WireGuard outbound JSON
+     * in [ProxyProfile.rawOutbound] and the wg-quick INI in [ProxyProfile.awgConfig]. Anything else
+     * (a proxy exit, an empty profile) is returned untouched.
+     */
+    fun clampVkTurnMtu(profile: ProxyProfile?, maxMtu: Int = VKTURN_MAX_WG_MTU): ProxyProfile? {
+        if (profile == null || maxMtu <= 0) return profile
+        var result = profile
+        profile.rawOutbound?.takeIf { it.isNotBlank() }?.let { raw ->
+            val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
+            if (obj != null && obj["type"]?.jsonPrimitive?.contentOrNull == "wireguard") {
+                val current = obj["mtu"]?.jsonPrimitive?.intOrNull ?: 0
+                val clamped = (if (current > 0) current else maxMtu).coerceAtMost(maxMtu)
+                if (clamped != current) {
+                    val patched = buildJsonObject {
+                        obj.forEach { (k, v) -> if (k != "mtu") put(k, v) }
+                        put("mtu", clamped)
+                    }
+                    result = result.copy(rawOutbound = patched.toString())
+                }
+            }
+        }
+        if (profile.awgConfig.isNotBlank()) {
+            clampWgConfMtu(profile.awgConfig, maxMtu)?.let { result = result.copy(awgConfig = it) }
+        }
+        return result
+    }
+
+    /**
+     * Rewrites the `MTU = …` of a wg-quick INI to at most [maxMtu], adding the line to `[Interface]`
+     * when the config carries none (awgproxy would otherwise default to 1280 — over the cap). Returns
+     * null when nothing needed changing, so callers can keep the original string.
+     */
+    internal fun clampWgConfMtu(conf: String, maxMtu: Int): String? {
+        val lines = conf.split("\n")
+        var seen = false
+        var changed = false
+        val out = lines.map { rawLine ->
+            val line = rawLine.trim().removeSuffix("\r")
+            val eq = line.indexOf('=')
+            if (eq <= 0 || !line.substring(0, eq).trim().equals("MTU", ignoreCase = true)) return@map rawLine
+            seen = true
+            val current = line.substring(eq + 1).trim().toIntOrNull() ?: 0
+            val clamped = (if (current > 0) current else maxMtu).coerceAtMost(maxMtu)
+            if (clamped == current) rawLine else { changed = true; "MTU = $clamped" }
+        }.toMutableList()
+        if (!seen) {
+            // No MTU at all → awgproxy's own 1280 default would apply. Pin ours right after
+            // [Interface] so the section it belongs to is unambiguous.
+            val at = out.indexOfFirst { it.trim().equals("[Interface]", ignoreCase = true) }
+            if (at < 0) return null
+            out.add(at + 1, "MTU = $maxMtu")
+            changed = true
+        }
+        return if (changed) out.joinToString("\n") else null
+    }
+
     /** Reconstructs an editable [VkTurnDraft] from a stored [vkturn] config + WG [proxy]. */
     fun decompose(vkturn: VkTurnConfig?, proxy: ProxyProfile?): VkTurnDraft {
         var draft = VkTurnDraft()
