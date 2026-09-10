@@ -352,13 +352,8 @@ data class MasterDnsConfig(
      *  [VkTurnConfig.resolvedProxyCore], but defaults to Xray: chaining the exit over the tunnel's
      *  SOCKS needs socket-level dialerProxy chaining (Xray) to keep a vless reality/xtls-vision
      *  transport intact — other paths reset it. An explicit per-location or global core still wins. */
-    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
-        proxyCore != ProxyCore.Auto -> proxyCore
-        !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
-        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
-        globalCore != ProxyCore.Auto -> globalCore
-        else -> ProxyCore.Xray
-    }
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore =
+        overTunnelProxyCore(proxyCore, profile, globalCore)
 
     fun normalized(): MasterDnsConfig = MasterDnsConfig(
         domains = domainList().joinToString(","),
@@ -392,6 +387,20 @@ data class MasterDnsConfig(
 }
 
 /**
+ * Core for a proxy chained OVER a tunnel's local SOCKS (MasterDNS, OpenFlux). Like
+ * [VkTurnConfig.resolvedProxyCore], but Auto means Xray: chaining through the tunnel's SOCKS needs
+ * socket-level dialerProxy chaining to keep a vless reality/xtls-vision transport intact — other paths
+ * reset it. An explicit per-location or global core still wins.
+ */
+internal fun overTunnelProxyCore(chosen: ProxyCore, profile: ProxyProfile?, globalCore: ProxyCore): ProxyCore = when {
+    chosen != ProxyCore.Auto -> chosen
+    !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
+    profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+    globalCore != ProxyCore.Auto -> globalCore
+    else -> ProxyCore.Xray
+}
+
+/**
  * OpenFlux (github.com/p1neappleXpress/OpenFlux) transport for [EngineType.OpenFlux]: a TCP tunnel that
  * carries IP packets through a carrier service to the user's own exit node on a VPS. The client serves a
  * local SOCKS5 the TUN bridge consumes. Two carriers:
@@ -422,8 +431,22 @@ data class OpenFluxConfig(
     /** Verbose client log (upstream `--debug`): every SOCKS CONNECT and transport event. */
     @SerialName("debug")
     val debug: Boolean = false,
+    /**
+     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the tunnel: dialled THROUGH the
+     * OpenFlux SOCKS, so the public exit is the proxy — and the traffic is encrypted end to end, which
+     * OpenFlux alone doesn't do. Blank = exit straight through the exit node.
+     */
+    @SerialName("proxy_link")
+    val proxyLink: String = "",
+    @SerialName("proxy_core")
+    val proxyCore: ProxyCore = ProxyCore.Auto,
 ) {
     fun usesMax(): Boolean = transport == TRANSPORT_MAX
+
+    fun hasProxy(): Boolean = proxyLink.isNotBlank()
+
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore =
+        overTunnelProxyCore(proxyCore, profile, globalCore)
 
     fun isComplete(): Boolean = when (transport) {
         TRANSPORT_MAX -> maxToken.isNotBlank() && maxUid.trim().toLongOrNull() != null
@@ -436,6 +459,7 @@ data class OpenFluxConfig(
         maxToken = maxToken.trim(),
         maxUid = maxUid.trim(),
         dnsServer = dnsServer.trim(),
+        proxyLink = proxyLink.trim(),
     )
 
     /** One-line summary for the location list. */

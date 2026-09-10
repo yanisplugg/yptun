@@ -105,6 +105,7 @@ internal class DesktopEngineController(
         }
         tunHandledInCore = false
         masterDnsProxyActive = false
+        openFluxProxyActive = false
         singBoxFrontActive = false
         val config = location.normalized()
         when (config.engine) {
@@ -157,6 +158,7 @@ internal class DesktopEngineController(
         // log said "Windows TUN owned by sing-box" while nothing owned it and no TUN existed at all.
         tunHandledInCore = false
         masterDnsProxyActive = false
+        openFluxProxyActive = false
         singBoxFrontActive = false
     }
 
@@ -168,11 +170,15 @@ internal class DesktopEngineController(
         // MasterDNS raises its own local forwarder; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> YpTunCore.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
         // OpenFlux is a subprocess; in TUN mode a sing-box front owns the adapter in front of it.
-        EngineType.OpenFlux -> openFlux.isRunning() && (!singBoxFrontActive || YpTunCore.sbRunning())
+        EngineType.OpenFlux -> openFlux.isRunning() &&
+            if (openFluxProxyActive) proxyCoreRunning() else (!singBoxFrontActive || YpTunCore.sbRunning())
     }
 
     /** True when the active MasterDNS engine also fronts a proxy core (proxy-over-MasterDNS). */
     private var masterDnsProxyActive: Boolean = false
+
+    /** True when a proxy core fronts the OpenFlux tunnel (proxy-over-OpenFlux). */
+    private var openFluxProxyActive: Boolean = false
 
     /** True while a sing-box front owns the TUN in front of the Xray core (see [startSingBoxFront]). */
     private var singBoxFrontActive: Boolean = false
@@ -679,16 +685,38 @@ internal class DesktopEngineController(
     ) {
         val of = config.openFlux
         check(of != null && of.isComplete()) { "OpenFlux not configured" }
-        val front = requestedTun
-        val port = if (front) singBoxFrontPort(listenPort) else listenPort
-        val host = if (front) "127.0.0.1" else listenHost
+        // Optional proxy over the tunnel (as for MasterDNS): OpenFlux on the internal chain port with no
+        // auth (the core dials it without credentials); the proxy core then owns listenPort / the TUN.
+        val proxy = of.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link) ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?.takeIf { it.isComplete() }
+        }
+        if (of.hasProxy() && proxy == null) {
+            log("OpenFlux: proxy link present but could not be parsed — exiting via the exit node directly (no proxy)")
+        }
+        openFluxProxyActive = proxy != null
+        val front = requestedTun && proxy == null
+        val port = when {
+            proxy != null -> chainOlcrtcPort(listenPort)
+            front -> singBoxFrontPort(listenPort)
+            else -> listenPort
+        }
+        val host = if (proxy != null || front) "127.0.0.1" else listenHost
         require(!isLocalSocksPortOpen(port)) { "OpenFlux port $port is still in use" }
-        openFlux.start(of, host, port, socksUsername, socksPassword)
+        openFlux.start(
+            of, host, port,
+            socksUsername = if (proxy != null) "" else socksUsername,
+            socksPassword = if (proxy != null) "" else socksPassword,
+        )
         if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("OpenFlux SOCKS port $port did not open (${openFlux.exitDescription()})")
         }
         log("OpenFlux ready on $host:$port")
-        if (front) {
+        if (proxy != null) {
+            startProxyOverTunnel("OpenFlux", config, proxy, port, listenHost, listenPort, socksUsername, socksPassword) { p, g ->
+                of.resolvedProxyCore(p, g)
+            }
+        } else if (front) {
             startSingBoxFront(
                 xrayPort = port,
                 listenHost = listenHost,
@@ -768,6 +796,28 @@ internal class DesktopEngineController(
         log("MasterDNS ready on $masterDnsAddr")
         if (!useProxy) return
 
+        startProxyOverTunnel("MasterDNS", config, proxy, masterDnsPort, listenHost, listenPort, socksUsername, socksPassword) { p, g ->
+            masterDns.resolvedProxyCore(p, g)
+        }
+    }
+
+    /**
+     * Fronts a tunnel's local SOCKS ([tunnelPort], no auth) with a proxy core on [listenPort]: apps →
+     * core → [proxy] → tunnel SOCKS → tunnel exit → internet. Shared by proxy-over-MasterDNS and
+     * proxy-over-OpenFlux (mirrors OlcboxVpnService.startProxyOverTunnel). Both tunnels are slow and
+     * TCP-only, which is what the tuning below is about.
+     */
+    private suspend fun startProxyOverTunnel(
+        label: String,
+        config: LocationConfig,
+        proxy: ProxyProfile,
+        tunnelPort: Int,
+        listenHost: String,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+        resolveCore: (ProxyProfile, ProxyCore) -> ProxyCore,
+    ) {
         val traffic = JvmVpnSettings.loadTraffic()
         val routing = loadRoutingExpandingAsn()
         val profilesState = JvmVpnSettings.loadRoutingProfiles()
@@ -776,8 +826,8 @@ internal class DesktopEngineController(
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
             proxy.type in XRAY_SUPPORTED_TYPES
-        val useXray = masterDns.resolvedProxyCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
-        log("MasterDNS chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+        val useXray = resolveCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
+        log("$label chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
 
         if (useXray) {
             // xray owns no TUN — a sing-box front does, so the external tun2socks bridge (and its
@@ -792,7 +842,7 @@ internal class DesktopEngineController(
                 listenHost = xrayHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                olcrtcChainPort = masterDnsPort,
+                olcrtcChainPort = tunnelPort,
                 traffic = traffic,
                 routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                 blockQuic = true,
@@ -830,7 +880,7 @@ internal class DesktopEngineController(
                 listenHost = listenHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                olcrtcChainPort = masterDnsPort,
+                olcrtcChainPort = tunnelPort,
                 autoDetectInterface = true,
                 routing = routing,
                 matchAppsByProcess = true,
@@ -859,9 +909,9 @@ internal class DesktopEngineController(
         }
 
         if (!awaitSocksPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
-            throw IllegalStateException("MasterDNS proxy SOCKS port $listenPort did not open")
+            throw IllegalStateException("$label proxy SOCKS port $listenPort did not open")
         }
-        log("MasterDNS proxy ready on $listenHost:$listenPort")
+        log("$label proxy ready on $listenHost:$listenPort")
     }
 
     // ---------------------------------------------------------------------------------------

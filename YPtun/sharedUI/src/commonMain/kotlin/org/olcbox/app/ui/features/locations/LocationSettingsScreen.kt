@@ -898,31 +898,55 @@ private fun LazyListScope.masterDnsSection(
     // Optional proxy chained ON TOP of the MasterDNS tunnel: traffic → MasterDNS → proxy → internet (the
     // proxy server is dialled THROUGH the MasterDNS SOCKS), so the public exit is the proxy. Same idea as
     // "proxy over VK-TURN".
+    proxyOverTunnelSection(
+        tunnel = "MasterDNS",
+        exitName = "MasterDNS-сервер",
+        proxyLink = config.proxyLink,
+        proxyCore = config.proxyCore,
+        enabled = enabled,
+        onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
+        onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
+    )
+}
+
+/**
+ * "Proxy over <tunnel>": a VLESS/Trojan/SS server dialled THROUGH the tunnel's local SOCKS, so the public
+ * exit is that proxy instead of the tunnel's own server. Shared by the MasterDNS and OpenFlux editors.
+ */
+private fun LazyListScope.proxyOverTunnelSection(
+    tunnel: String,
+    exitName: String,
+    proxyLink: String,
+    proxyCore: ProxyCore,
+    enabled: Boolean,
+    onLinkChange: (String) -> Unit,
+    onCoreChange: (ProxyCore) -> Unit,
+) {
     item {
-        var proxyOn by remember(config.proxyLink.isNotBlank()) {
-            mutableStateOf(config.proxyLink.isNotBlank())
+        var proxyOn by remember(proxyLink.isNotBlank()) {
+            mutableStateOf(proxyLink.isNotBlank())
         }
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
-                title = "Прокси поверх MasterDNS",
-                subtitle = "VLESS/Trojan/SS, который дозванивается ЧЕРЕЗ MasterDNS-туннель — выходной IP будет прокси, а не MasterDNS-сервер"
+                title = "Прокси поверх $tunnel",
+                subtitle = "VLESS/Trojan/SS, который дозванивается ЧЕРЕЗ туннель $tunnel — выходной IP будет прокси, а не $exitName"
             )
             VkTurnSwitchRow(
-                label = "Прокси поверх MasterDNS",
+                label = "Прокси поверх $tunnel",
                 checked = proxyOn,
                 enabled = enabled,
                 onCheckedChange = { on ->
                     proxyOn = on
-                    if (!on) onChange { it.copy(proxyLink = "") }
+                    if (!on) onLinkChange("")
                 }
             )
             if (proxyOn) {
                 OutlinedTextField(
-                    value = config.proxyLink,
-                    onValueChange = { v -> onChange { it.copy(proxyLink = v) } },
+                    value = proxyLink,
+                    onValueChange = onLinkChange,
                     label = { Text(LocalStrings.current.proxyLink) },
                     placeholder = { Text("vless://… / trojan://… / ss://…") },
                     enabled = enabled,
@@ -930,9 +954,9 @@ private fun LazyListScope.masterDnsSection(
                     modifier = Modifier.fillMaxWidth()
                 )
                 CoreSelector(
-                    selected = config.proxyCore,
+                    selected = proxyCore,
                     enabled = enabled,
-                    onSelected = { v -> onChange { it.copy(proxyCore = v) } }
+                    onSelected = onCoreChange
                 )
             }
         }
@@ -1510,8 +1534,9 @@ private fun LazyListScope.openFluxSection(
                 onChange { it.copy(debug = v) }
             }
             Text(
-                "OpenFlux сам трафик не шифрует — остаётся только шифрование сайтов (HTTPS). Скорость " +
-                    "невысокая: это исследовательский туннель на случай, когда остальное заблокировано.",
+                "OpenFlux сам трафик не шифрует — остаётся только шифрование сайтов (HTTPS); для полного " +
+                    "шифрования включи прокси поверх OpenFlux ниже. Скорость невысокая: это исследовательский " +
+                    "туннель на случай, когда остальное заблокировано.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1528,6 +1553,17 @@ private fun LazyListScope.openFluxSection(
             }
         }
     }
+
+    // Proxy over OpenFlux — also the way to get encryption end to end: OpenFlux itself carries plain packets.
+    proxyOverTunnelSection(
+        tunnel = "OpenFlux",
+        exitName = "выходная нода OpenFlux",
+        proxyLink = config.proxyLink,
+        proxyCore = config.proxyCore,
+        enabled = enabled,
+        onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
+        onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
+    )
 }
 
 /**
