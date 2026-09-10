@@ -77,6 +77,62 @@ class AppUpdateServiceTest {
     }
 
     @Test
+    fun selectsWindowsAssetNamedWithX64() {
+        // Real release naming: "YPtun-3.3.2-x64-installer.exe" — no "windows" token, "x64" instead
+        // of "amd64". The old rule required both and matched nothing at all.
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-v3.3.2-arm64-v8a.apk", "https://example/apk"),
+            GithubReleaseAsset("YPtun-3.3.2-x64-portable.exe", "https://example/portable"),
+            GithubReleaseAsset("YPtun-3.3.2-x64-installer.exe", "https://example/installer"),
+            GithubReleaseAsset("YPtun-3.3.2-arm64-installer.exe", "https://example/arm64")
+        )
+
+        val selected = AppUpdateService.selectAsset(assets, UpdatePlatform("windows", "amd64"))
+
+        assertEquals("YPtun-3.3.2-x64-portable.exe", selected?.name)
+    }
+
+    @Test
+    fun windowsOnArmDoesNotTakeTheX64Build() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-3.3.2-x64-installer.exe", "https://example/x64"),
+            GithubReleaseAsset("YPtun-3.3.2-arm64-installer.exe", "https://example/arm64")
+        )
+
+        val selected = AppUpdateService.selectAsset(assets, UpdatePlatform("windows", "arm64"))
+
+        assertEquals("YPtun-3.3.2-arm64-installer.exe", selected?.name)
+    }
+
+    @Test
+    fun windowsIgnoresLinuxAndAndroidAssets() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-v3.3.2-x86_64.apk", "https://example/apk"),
+            GithubReleaseAsset("YPtun-3.3.2-linux-amd64.deb", "https://example/deb")
+        )
+
+        assertEquals(null, AppUpdateService.selectAsset(assets, UpdatePlatform("windows", "amd64")))
+    }
+
+    @Test
+    fun universalApkInstallTakesTheUniversalDelta() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-delta-3.3.2-3.4.4-arm64-v8a.patch.gz", "https://example/arm64"),
+            GithubReleaseAsset("YPtun-delta-3.3.2-3.4.4-universal.patch.gz", "https://example/universal")
+        )
+
+        val selected = AppUpdateService.selectDeltaAsset(
+            assets = assets,
+            platform = UpdatePlatform("android", "arm64"),
+            fromVersion = "3.3.2",
+            toVersion = "3.4.4",
+            fullAssetName = "YPtun-v3.4.4-universal.apk"
+        )
+
+        assertEquals("YPtun-delta-3.3.2-3.4.4-universal.patch.gz", selected?.name)
+    }
+
+    @Test
     fun selectsNightlyAndroidApk() {
         val selected = AppUpdateService.selectAsset(
             assets = listOf(

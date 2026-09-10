@@ -1148,41 +1148,46 @@ class LocationsRepositoryImpl(
         updateIntervalHours: Int? = null,
         subscriptionMetadata: SubscriptionMetadata? = null
     ): ParsedImport? {
+        // ONE subscription may mix link families — olcrtc:// next to vless:// is the common case —
+        // so every line-based parser gets a go at the SAME text and their results are concatenated.
+        // Stopping at the first parser that matched is what dropped every vless:// server from a
+        // subscription that also had olcrtc:// links (and, for a base64 body, the olcrtc:// ones,
+        // which the parser never even saw). Each parser picks up only its own scheme, so no line is
+        // imported twice.
+        val linkText = SubscriptionDecoder.toLinkText(text)
+        val linkBundles = mutableListOf<LocationBundleV4>()
+
         // Our own universal inbound link (yptun://inbound?…&d=<base64 LocationConfig JSON>): carries
-        // the WHOLE location (engine, transport, proxy/AWG/VK outbound, every toggle). Checked first
-        // since it has its own scheme and restores the location verbatim.
-        parseYptunInboundText(text, subscriptionUrl)?.let {
-            return ParsedImport(it, ImportMode.Additive)
-        }
+        // the WHOLE location (engine, transport, proxy/AWG/VK outbound, every toggle).
+        parseYptunInboundText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
-        parseOlcRtcText(text, subscriptionUrl, updateIntervalHours)?.let {
-            return ParsedImport(it, ImportMode.Additive)
-        }
+        parseOlcRtcText(linkText, subscriptionUrl, updateIntervalHours)?.let { linkBundles += it }
 
-        // VK-TURN share link (freeturn://): a WireGuard-over-VK location. Checked before the
-        // generic proxy parser since it has its own scheme and engine.
-        parseFreeturnText(text, subscriptionUrl)?.let {
-            return ParsedImport(it, ImportMode.Additive)
-        }
+        // VK-TURN share links (freeturn://): WireGuard-over-VK locations.
+        parseFreeturnText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
-        // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
-        // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
-        // and would not see the multi-line config).
-        parseAmneziaWgText(text, subscriptionUrl)?.let {
-            return ParsedImport(it, ImportMode.Additive)
-        }
+        if (linkBundles.isEmpty()) {
+            // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
+            // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
+            // and would not see the multi-line config).
+            parseAmneziaWgText(text, subscriptionUrl)?.let {
+                return ParsedImport(it, ImportMode.Additive)
+            }
 
-        // Full raw Xray config — a single object OR an array of them (Happ/Remnawave subscriptions
-        // ship one complete Xray config per server, each with its own dns.hosts / routing / fakedns).
-        // MUST run before the proxy/sing-box parsers, otherwise the config is downgraded to a bare
-        // sing-box vless and its fakedns / RU-direct DNS hosts are lost.
-        parseRawXray(text, subscriptionUrl)?.let {
-            return ParsedImport(it, ImportMode.Additive)
+            // Full raw Xray config — a single object OR an array of them (Happ/Remnawave subscriptions
+            // ship one complete Xray config per server, each with its own dns.hosts / routing / fakedns).
+            // MUST run before the proxy/sing-box parsers, otherwise the config is downgraded to a bare
+            // sing-box vless and its fakedns / RU-direct DNS hosts are lost.
+            parseRawXray(text, subscriptionUrl)?.let {
+                return ParsedImport(it, ImportMode.Additive)
+            }
         }
 
         // Proxy share links / subscriptions (vless, vmess, trojan, ss, base64 blobs and
         // JSON panels with a "links" array) become sing-box (Standard) locations.
-        parseProxyText(text, subscriptionUrl, subscriptionMetadata)?.let {
+        parseProxyText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+
+        mergeParsedBundles(linkBundles)?.let {
             return ParsedImport(it, ImportMode.Additive)
         }
 
@@ -1215,6 +1220,25 @@ class LocationsRepositoryImpl(
                 ImportMode.Additive
             )
         }
+    }
+
+    /**
+     * Concatenates the bundles produced by the per-scheme link parsers of ONE import, keeping storage
+     * ids unique across them (two families can slug the same name). The first entry stays active, so
+     * a mixed subscription behaves like a single-family one.
+     */
+    private fun mergeParsedBundles(bundles: List<LocationBundleV4>): LocationBundleV4? {
+        if (bundles.isEmpty()) return null
+        bundles.singleOrNull()?.let { return it }
+
+        val usedStorageIds = mutableSetOf<String>()
+        val locations = bundles.flatMap { it.locations }.map { entry ->
+            entry.copy(storageId = uniqueStorageId(entry.storageId, usedStorageIds))
+        }
+        return LocationBundleV4(
+            activeLocationId = locations.firstOrNull()?.storageId,
+            locations = locations
+        )
     }
 
     private fun mergeImportedBundle(
@@ -1707,12 +1731,26 @@ class LocationsRepositoryImpl(
         text: String,
         subscriptionUrl: String? = null
     ): LocationBundleV4? {
-        val line = text.trim().lineSequence()
+        val usedStorageIds = mutableSetOf<String>()
+        // EVERY freeturn:// line, not just the first: a subscription may list several VK-TURN servers.
+        val entries = text.trim().lineSequence()
             .map { it.trim() }
-            .firstOrNull { it.startsWith(FreeturnUriParser.SCHEME, ignoreCase = true) }
-            ?: return null
-        val link = FreeturnUriParser.parse(line) ?: return null
+            .filter { it.startsWith(FreeturnUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { FreeturnUriParser.parse(it) }
+            .map { link -> freeturnEntry(link, subscriptionUrl, usedStorageIds) }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(
+            activeLocationId = entries.first().storageId,
+            locations = entries
+        )
+    }
 
+    private fun freeturnEntry(
+        link: FreeturnUriParser.FreeturnLink,
+        subscriptionUrl: String?,
+        usedStorageIds: MutableSet<String>
+    ): LocationEntry {
         val name = link.comment.ifBlank { "VK-TURN ${link.serverIp}" }
         val location = if (link.mode == "tcp") {
             // tcp / Proxy-bonded: the exit is a normal proxy dialled THROUGH the local freeturn tcp
@@ -1760,15 +1798,11 @@ class LocationsRepositoryImpl(
             .lowercase()
             .map { if (it.isLetterOrDigit()) it else '_' }
             .joinToString("")
-        val storageId = uniqueStorageId("imported_vkturn_$base", mutableSetOf())
-        val entry = LocationEntry.from(
+        val storageId = uniqueStorageId("imported_vkturn_$base", usedStorageIds)
+        return LocationEntry.from(
             storageId = storageId,
             location = location,
             subscriptionUrl = subscriptionUrl,
-        )
-        return LocationBundleV4(
-            activeLocationId = entry.storageId,
-            locations = listOf(entry)
         )
     }
 

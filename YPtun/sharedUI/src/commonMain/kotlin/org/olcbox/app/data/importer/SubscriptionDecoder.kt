@@ -15,6 +15,19 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 internal object SubscriptionDecoder {
 
+    /**
+     * The body as PLAIN link text: a base64 blob is decoded and a JSON "links" array is flattened to
+     * one link per line; a plain body is returned untouched (its `#`/`##` metadata lines matter to the
+     * olcrtc parser). Every link family must look at the same text, otherwise a base64 subscription
+     * hides olcrtc:// links from the parser that checks for them and a plain one hides nothing —
+     * which is exactly how mixed subscriptions lost half their servers.
+     */
+    fun toLinkText(body: String): String {
+        val trimmed = body.trim()
+        extractJsonLinks(trimmed)?.let { return it.joinToString(separator = "\n") }
+        return maybeBase64Decode(trimmed) ?: body
+    }
+
     fun toLinks(body: String): List<String> {
         val trimmed = body.trim()
         val raw = extractJsonLinks(trimmed)
