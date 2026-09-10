@@ -47,6 +47,7 @@ internal class DesktopEngineController(
     private fun trustTunnelLocalPort(socksPort: Int) = socksPort + 5
 
     private val trustTunnel = DesktopTrustTunnel(log)
+    private val openFlux = DesktopOpenFlux(log)
 
     val isSupported: Boolean get() = YpTunCore.isAvailable
 
@@ -113,6 +114,7 @@ internal class DesktopEngineController(
             EngineType.VkTurn ->
                 startVkTurn(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.MasterDns -> startMasterDns(config, listenHost, listenPort, socksUsername, socksPassword)
+            EngineType.OpenFlux -> startOpenFlux(config, listenHost, listenPort, socksUsername, socksPassword)
         }
         if (requestedTun && !tunHandledInCore) {
             log("Per-process split tunneling unavailable (core is ${activeProxyCore}); falling back to tun2socks for all apps")
@@ -147,6 +149,7 @@ internal class DesktopEngineController(
 
     fun stopAll() {
         trustTunnel.stop()
+        openFlux.stop()
         YpTunCore.stopAll()
         // [start] is the only other place these are reset, and the olcRTC (Stealth) path never calls
         // it — it runs the olcrtc subprocess instead. So a stale tunHandledInCore=true, left by the
@@ -164,6 +167,8 @@ internal class DesktopEngineController(
         EngineType.VkTurn -> (YpTunCore.ftRunning() || YpTunCore.wdttRunning()) && proxyCoreRunning()
         // MasterDNS raises its own local forwarder; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> YpTunCore.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
+        // OpenFlux is a subprocess; in TUN mode a sing-box front owns the adapter in front of it.
+        EngineType.OpenFlux -> openFlux.isRunning() && (!singBoxFrontActive || YpTunCore.sbRunning())
     }
 
     /** True when the active MasterDNS engine also fronts a proxy core (proxy-over-MasterDNS). */
@@ -654,6 +659,48 @@ internal class DesktopEngineController(
         YpTunCore.sbStart(json)
         tunHandledInCore = true
         singBoxFrontActive = true
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // OpenFlux (mirrors OlcboxVpnService.startOpenFluxCore)
+
+    /**
+     * OpenFlux runs as a subprocess serving a SOCKS5 with the session credentials. In TUN mode it moves to
+     * an internal port and a sing-box front owns the adapter — the same front the Xray path uses, and for
+     * the same reason: the external tun2socks bridge sends DNS as SOCKS UDP, which OpenFlux (TCP only)
+     * cannot carry, while the front sends DNS as a TCP CONNECT the client resolves through the tunnel.
+     */
+    private suspend fun startOpenFlux(
+        config: LocationConfig,
+        listenHost: String,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+    ) {
+        val of = config.openFlux
+        check(of != null && of.isComplete()) { "OpenFlux not configured" }
+        val front = requestedTun
+        val port = if (front) singBoxFrontPort(listenPort) else listenPort
+        val host = if (front) "127.0.0.1" else listenHost
+        require(!isLocalSocksPortOpen(port)) { "OpenFlux port $port is still in use" }
+        openFlux.start(of, host, port, socksUsername, socksPassword)
+        if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("OpenFlux SOCKS port $port did not open (${openFlux.exitDescription()})")
+        }
+        log("OpenFlux ready on $host:$port")
+        if (front) {
+            startSingBoxFront(
+                xrayPort = port,
+                listenHost = listenHost,
+                listenPort = listenPort,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                routing = loadRoutingExpandingAsn(),
+                traffic = JvmVpnSettings.loadTraffic(),
+                // TCP-only tunnel: QUIC would only time out before apps fall back to TCP.
+                blockQuic = true,
+            )
+        }
     }
 
     // ---------------------------------------------------------------------------------------

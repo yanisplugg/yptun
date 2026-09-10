@@ -130,6 +130,59 @@ android {
     }
 }
 
+// --- OpenFlux client executable (../openflux), packaged as lib/<abi>/libopenflux.so ---
+// It runs as a SUBPROCESS started from nativeLibraryDir (useLegacyPackaging extracts it there), not as
+// a gomobile library: its young transports panic on unexpected input, and a panic in a bound library
+// kills the whole app. CGo + the NDK clang is required: without cgo the Go resolver looks for
+// /etc/resolv.conf, which Android doesn't have, so every name lookup would fail.
+val openfluxRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("openflux")
+val openfluxJniLibsDir = layout.buildDirectory.dir("generated/openflux/jniLibs")
+val openfluxNdkDir: File = System.getenv("ANDROID_NDK_HOME")?.let(::File)
+    ?: run {
+        val local = Properties().apply {
+            rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+        }
+        val sdk = local.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME") ?: ""
+        File(sdk, "ndk/28.2.13676358")
+    }
+val openfluxHostTag = when {
+    System.getProperty("os.name").lowercase().contains("windows") -> "windows-x86_64"
+    System.getProperty("os.name").lowercase().contains("mac") -> "darwin-x86_64"
+    else -> "linux-x86_64"
+}
+val openfluxClangSuffix = if (openfluxHostTag.startsWith("windows")) ".cmd" else ""
+val buildOpenFluxAndroid = tasks.register("buildOpenFluxAndroid") {
+    group = "build"
+    description = "Builds the OpenFlux client executable for every packaged ABI."
+}
+androidAbiFilters.forEach { abi ->
+    val (goarch, clang, goarm) = when (abi) {
+        "arm64-v8a" -> Triple("arm64", "aarch64-linux-android23-clang", "")
+        "armeabi-v7a" -> Triple("arm", "armv7a-linux-androideabi23-clang", "7")
+        "x86_64" -> Triple("amd64", "x86_64-linux-android23-clang", "")
+        "x86" -> Triple("386", "i686-linux-android23-clang", "")
+        else -> error("Unsupported ABI for OpenFlux: $abi")
+    }
+    val task = tasks.register<Exec>("buildOpenFluxAndroid_$abi") {
+        val output = openfluxJniLibsDir.map { it.file("$abi/libopenflux.so") }
+        inputs.files(fileTree(openfluxRepoDir) { include("**/*.go", "go.mod", "go.sum"); exclude("**/*_test.go") })
+        outputs.file(output)
+        workingDir = openfluxRepoDir
+        environment("GOOS", "android")
+        environment("GOARCH", goarch)
+        if (goarm.isNotEmpty()) environment("GOARM", goarm)
+        environment("CGO_ENABLED", "1")
+        environment("CC", openfluxNdkDir.resolve("toolchains/llvm/prebuilt/$openfluxHostTag/bin/$clang$openfluxClangSuffix").absolutePath)
+        commandLine("go", "build", "-trimpath", "-ldflags", "-s -w -checklinkname=0",
+            "-o", output.get().asFile.absolutePath, ".")
+        doFirst { output.get().asFile.parentFile.mkdirs() }
+    }
+    buildOpenFluxAndroid.configure { dependsOn(task) }
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(openfluxJniLibsDir.get().asFile)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(buildOpenFluxAndroid) }
+
 // In AGP 9.0+ Kotlin settings for Android are configured like this:
 kotlin {
     compilerOptions {

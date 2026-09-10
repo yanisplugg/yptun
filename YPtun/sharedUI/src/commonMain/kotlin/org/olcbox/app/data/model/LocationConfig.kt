@@ -391,6 +391,64 @@ data class MasterDnsConfig(
     }
 }
 
+/**
+ * OpenFlux (github.com/p1neappleXpress/OpenFlux) transport for [EngineType.OpenFlux]: a TCP tunnel that
+ * carries IP packets through a carrier service to the user's own exit node on a VPS. The client serves a
+ * local SOCKS5 the TUN bridge consumes. Two carriers:
+ * - [TRANSPORT_YANDEX]: cursor messages of a Yandex Docs document ([docUrl], the legacy editor), shared
+ *   by the client and the exit node;
+ * - [TRANSPORT_MAX]: a WebRTC DataChannel of a MAX call — the client logs in with [maxToken] and calls
+ *   the exit node's account [maxUid] (the exit node runs with ITS OWN MAX token).
+ */
+@Serializable
+data class OpenFluxConfig(
+    @SerialName("transport")
+    val transport: String = TRANSPORT_YANDEX,
+    /** Yandex Docs document URL (legacy editor), the same one the exit node uses. */
+    @SerialName("doc_url")
+    val docUrl: String = "",
+    /** The CLIENT's MAX web token ([TRANSPORT_MAX]). */
+    @SerialName("max_token")
+    val maxToken: String = "",
+    /** MAX user id of the EXIT NODE's account — the client calls it ([TRANSPORT_MAX]). */
+    @SerialName("max_uid")
+    val maxUid: String = "",
+    /**
+     * DNS server reached THROUGH the tunnel for domain lookups (`ip:port`). The device DNS would leak
+     * every name to the ISP and, for blocked sites, answer with spoofed addresses. Blank = device DNS.
+     */
+    @SerialName("dns")
+    val dnsServer: String = DEFAULT_DNS,
+    /** Verbose client log (upstream `--debug`): every SOCKS CONNECT and transport event. */
+    @SerialName("debug")
+    val debug: Boolean = false,
+) {
+    fun usesMax(): Boolean = transport == TRANSPORT_MAX
+
+    fun isComplete(): Boolean = when (transport) {
+        TRANSPORT_MAX -> maxToken.isNotBlank() && maxUid.trim().toLongOrNull() != null
+        else -> docUrl.trim().startsWith("http", ignoreCase = true)
+    }
+
+    fun normalized(): OpenFluxConfig = copy(
+        transport = if (transport == TRANSPORT_MAX) TRANSPORT_MAX else TRANSPORT_YANDEX,
+        docUrl = docUrl.trim(),
+        maxToken = maxToken.trim(),
+        maxUid = maxUid.trim(),
+        dnsServer = dnsServer.trim(),
+    )
+
+    /** One-line summary for the location list. */
+    fun summary(): String = if (usesMax()) "MAX · звонок $maxUid" else "Яндекс Документы"
+
+    companion object {
+        const val TRANSPORT_YANDEX = "yandex"
+        /** Upstream calls the MAX transport "oneme". */
+        const val TRANSPORT_MAX = "oneme"
+        const val DEFAULT_DNS = "1.1.1.1:53"
+    }
+}
+
 /** One additional olcRTC room for the multi-room (aggregation) feature. */
 @Serializable
 data class ExtraRoom(
@@ -448,6 +506,9 @@ data class LocationConfig(
     /** MasterDNS (DNS tunnel) transport for the [EngineType.MasterDns] engine. Null for other engines. */
     @SerialName("masterdns")
     val masterDns: MasterDnsConfig? = null,
+    /** OpenFlux transport for the [EngineType.OpenFlux] engine. Null for other engines. */
+    @SerialName("openflux")
+    val openFlux: OpenFluxConfig? = null,
     /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
     val advanced: AdvancedCoreConfig? = null,
     /**
@@ -520,6 +581,7 @@ data class LocationConfig(
             core = core,
             vkturn = vkturn,
             masterDns = masterDns?.normalized(),
+            openFlux = openFlux?.normalized(),
             routingProfileId = routingProfileId.trim(),
             fakeDns = fakeDns,
         )
@@ -589,6 +651,8 @@ data class LocationConfig(
         EngineType.VkTurn -> vkturn?.isComplete() == true && vkTurnExitPresent()
         // MasterDNS needs the tunnel domain(s), the shared encryption key and at least one resolver.
         EngineType.MasterDns -> masterDns?.isComplete() == true
+        // OpenFlux needs the carrier's coordinates: the Yandex Docs URL, or the MAX token + callee id.
+        EngineType.OpenFlux -> openFlux?.isComplete() == true
     }
 
     /**
@@ -1002,6 +1066,8 @@ data class LocationEntry(
     val vkturn: VkTurnConfig? = null,
     @SerialName("masterdns")
     val masterDns: MasterDnsConfig? = null,
+    @SerialName("openflux")
+    val openFlux: OpenFluxConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
@@ -1085,6 +1151,7 @@ data class LocationEntry(
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
                 masterDns = masterDns,
+                openFlux = openFlux,
                 advanced = advanced,
                 fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
@@ -1116,6 +1183,7 @@ data class LocationEntry(
             core = config.core,
             vkturn = config.vkturn,
             masterDns = config.masterDns,
+            openFlux = config.openFlux,
             advanced = config.advanced,
             fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
@@ -1155,6 +1223,7 @@ data class LocationEntry(
                 core = config.core,
                 vkturn = config.vkturn,
                 masterDns = config.masterDns,
+                openFlux = config.openFlux,
                 advanced = config.advanced,
                 fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },

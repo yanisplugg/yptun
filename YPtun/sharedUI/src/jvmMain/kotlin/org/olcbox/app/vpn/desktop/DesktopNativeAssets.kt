@@ -130,6 +130,16 @@ internal object DesktopNativeAssets {
         )
     }
 
+    /** OpenFlux client (built from ../openflux by desktopApp's buildOpenFluxHost). */
+    fun resolveOpenFluxBinary(): Path {
+        val fileName = when (DesktopPaths.os) {
+            DesktopOs.Linux -> "openflux-linux-${desktopArch()}"
+            DesktopOs.Windows -> "openflux-windows-${desktopArch()}.exe"
+            else -> error("OpenFlux is not bundled for ${DesktopPaths.os}")
+        }
+        return resolveBinary(fileName = fileName, resourceName = "native/$fileName", candidates = emptyList())
+    }
+
     private fun trustTunnelFileName(kind: String): String {
         return when (DesktopPaths.os) {
             DesktopOs.Linux -> "trusttunnel-$kind-linux-${desktopArch()}"

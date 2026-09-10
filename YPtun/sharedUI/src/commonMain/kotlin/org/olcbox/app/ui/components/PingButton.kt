@@ -55,7 +55,8 @@ fun PingButton(
     // VK-TURN / MasterDNS have no meaningful off-tunnel latency probe — show a neutral dash.
     val engine = configGetter()?.engine
     val isVkTurn = engine == org.olcbox.app.data.model.EngineType.VkTurn ||
-        engine == org.olcbox.app.data.model.EngineType.MasterDns
+        engine == org.olcbox.app.data.model.EngineType.MasterDns ||
+        engine == org.olcbox.app.data.model.EngineType.OpenFlux
 
     val descriptionText = when {
         isVkTurn -> "—"

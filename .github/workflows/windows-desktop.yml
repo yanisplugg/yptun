@@ -38,6 +38,7 @@ on:
       - "YPtun/gradle.properties"
       - "cores/**"
       - "olcrtc/**"
+      - "openflux/**"
 
 permissions:
   contents: read
@@ -163,6 +164,7 @@ jobs:
           Assert-Arch "$native\yptuncore-windows-$ga.dll" "yptuncore"
           Assert-Arch "$native\olcrtc-windows-$ga.exe" "olcrtc binary"
           Assert-Arch "$native\tun2socks-windows-$ga.exe" "tun2socks"
+          Assert-Arch "$native\openflux-windows-$ga.exe" "openflux"
           Assert-Arch "$native\wintun.dll" "wintun"
           # And the jpackage launcher, which proves the runtime image is native too.
           Assert-Arch "YPtun\desktopApp\build\compose\binaries\main\app\YPtun\YPtun.exe" "launcher"

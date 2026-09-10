@@ -196,6 +196,9 @@ class OlcboxVpnService : VpnService() {
     private var masterDnsClient: MasterDnsClient? = null
     /** True when the active MasterDNS engine also fronts a proxy core (proxy-over-MasterDNS). */
     private var masterDnsProxyActive: Boolean = false
+
+    /** OpenFlux client subprocess for [EngineType.OpenFlux]; null when another engine is running. */
+    private var openFluxProcess: Process? = null
     /** Active Trust Tunnel client (SOCKS-only) for a [ProxyProfile.TYPE_TRUSTTUNNEL] proxy; null otherwise. */
     private var trustTunnelClient: TrustTunnelVpnClient? = null
     private var tun2socksThread: Thread? = null
@@ -965,6 +968,85 @@ class OlcboxVpnService : VpnService() {
             EngineType.Chain -> startSingBoxCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.VkTurn -> startVkTurnCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.MasterDns -> startMasterDnsCore(location, upstream, requestedGeneration, setErrorOnFailure)
+            EngineType.OpenFlux -> startOpenFluxCore(location, requestedGeneration, setErrorOnFailure)
+        }
+    }
+
+    /**
+     * OpenFlux: the client serves a real SOCKS5 (with the session credentials) on [socksListenPort] and
+     * carries its TCP through Yandex Docs / a MAX call to the user's exit node — the TUN bridge consumes
+     * the port directly. It runs as a SUBPROCESS (lib/<abi>/libopenflux.so): its young transports panic
+     * on unexpected answers, and in-process that would kill the app. Same UID as the app, so the app's
+     * own exclusion from the VPN keeps its sockets off the TUN — no protect() needed. It dies with us:
+     * `--exit-on-stdin-eof` watches the stdin pipe we hold.
+     */
+    private suspend fun startOpenFluxCore(
+        location: LocationConfig,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean
+    ): Boolean {
+        val openFlux = location.normalized().openFlux
+        if (openFlux == null || !openFlux.isComplete()) {
+            if (setErrorOnFailure) {
+                setStatus(VpnStatus.Error("OpenFlux not configured"))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            return false
+        }
+        return try {
+            waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+            if (isLocalSocksPortOpen(socksListenPort)) {
+                throw IllegalStateException("SOCKS port $socksListenPort is still in use")
+            }
+            val exe = java.io.File(applicationInfo.nativeLibraryDir, "libopenflux.so")
+            if (!exe.canExecute()) throw IllegalStateException("OpenFlux core is missing from this build")
+            val listen = "$socksListenHost:$socksListenPort"
+            val cmd = buildList {
+                addAll(listOf(exe.absolutePath, "--client", "--transport", openFlux.transport, "--socks5", listen))
+                if (openFlux.usesMax()) addAll(listOf("--maxUid", openFlux.maxUid)) else addAll(listOf("--url", openFlux.docUrl))
+                if (openFlux.dnsServer.isNotBlank()) addAll(listOf("--dns", openFlux.dnsServer))
+                if (openFlux.debug) add("--debug")
+                add("--exit-on-stdin-eof")
+            }
+            addLog("Starting OpenFlux (${openFlux.summary()}) on $listen, dns=${openFlux.dnsServer.ifBlank { "device" }}")
+            val process = ProcessBuilder(cmd).redirectErrorStream(true).apply {
+                // Secrets via the environment, never argv.
+                environment()["OPENFLUX_MAX_TOKEN"] = openFlux.maxToken
+                environment()["OPENFLUX_SOCKS_USER"] = socksUsername
+                environment()["OPENFLUX_SOCKS_PASS"] = socksPassword
+            }.start()
+            openFluxProcess = process
+            kotlin.concurrent.thread(name = "openflux-log", isDaemon = true) {
+                runCatching { process.inputStream.bufferedReader().forEachLine { addLog("openflux: $it") } }
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("OpenFlux start superseded")
+                return false
+            }
+            if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                val exit = if (process.isAlive) "still starting" else "exited with ${process.exitValue()}"
+                throw IllegalStateException("OpenFlux SOCKS port $socksListenPort did not open ($exit)")
+            }
+            addLog("OpenFlux ready on $listen")
+            publishActiveSocks()
+            true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                addLog("OpenFlux start canceled")
+                stopMobileAndWait()
+            }
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Transport failed"
+            addLog(if (staleRequest) "OpenFlux start canceled: $message" else "OpenFlux start failed: $message")
+            stopMobileAndWait()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            false
         }
     }
 
@@ -2324,6 +2406,7 @@ class OlcboxVpnService : VpnService() {
         EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
         // MasterDNS raises its own local SOCKS listener; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> masterDnsClient?.isRunning == true && (!masterDnsProxyActive || proxyCoreRunning())
+        EngineType.OpenFlux -> openFluxProcess?.isAlive == true
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -2754,7 +2837,7 @@ class OlcboxVpnService : VpnService() {
             socks5:
               address: ${socksConnectHost()}
               port: $socksListenPort
-              udp: '${if (engineType == EngineType.Stealth || engineType == EngineType.MasterDns) "tcp" else "udp"}'
+              udp: '${if (engineType == EngineType.Stealth || engineType == EngineType.MasterDns || engineType == EngineType.OpenFlux) "tcp" else "udp"}'
               pipeline: false
               username: '$socksUsername'
               password: '$socksPassword'
@@ -2770,7 +2853,7 @@ class OlcboxVpnService : VpnService() {
               task-stack-size: 24576
               tcp-buffer-size: 4096
               max-session-count: 1200
-              connect-timeout: ${if (engineType == EngineType.MasterDns) 30000 else 10000}
+              connect-timeout: ${if (engineType == EngineType.MasterDns || engineType == EngineType.OpenFlux) 30000 else 10000}
               tcp-read-write-timeout: 300000
               udp-read-write-timeout: 60000
               log-file: stderr
@@ -3043,6 +3126,13 @@ class OlcboxVpnService : VpnService() {
         runCatching { masterDnsClient?.stop() }
         masterDnsClient = null
         masterDnsProxyActive = false
+        openFluxProcess?.let { p ->
+            runCatching { p.destroy() }
+            if (runCatching { !p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(true)) {
+                runCatching { p.destroyForcibly() }
+            }
+        }
+        openFluxProcess = null
         runCatching { Awg.stop() }
         runCatching { trustTunnelClient?.stop() }
         runCatching { trustTunnelClient?.close() }

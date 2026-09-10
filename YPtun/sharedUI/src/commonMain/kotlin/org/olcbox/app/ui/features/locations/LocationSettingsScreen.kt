@@ -88,6 +88,8 @@ import org.olcbox.app.vpn.freeturn.FreeturnInstallOptions
 import org.olcbox.app.vpn.freeturn.rememberFreeturnServerInstaller
 import org.olcbox.app.vpn.masterdns.MasterDnsInstallOptions
 import org.olcbox.app.vpn.masterdns.rememberMasterDnsServerInstaller
+import org.olcbox.app.vpn.openflux.OpenFluxInstallOptions
+import org.olcbox.app.vpn.openflux.rememberOpenFluxServerInstaller
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -109,6 +111,7 @@ import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.MasterDnsConfig
+import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
@@ -226,6 +229,14 @@ fun LocationSettingsScreen(
         )
     }
 
+    var showOpenFluxInstall by remember { mutableStateOf(false) }
+    if (showOpenFluxInstall) {
+        OpenFluxInstallDialog(
+            config = viewModel.editingOpenFlux,
+            onApplyConfig = { update -> viewModel.updateOpenFlux(update) },
+            onDismiss = { showOpenFluxInstall = false }
+        )
+    }
     var showMasterDnsInstall by remember { mutableStateOf(false) }
     if (showMasterDnsInstall) {
         MasterDnsInstallDialog(
@@ -388,6 +399,16 @@ fun LocationSettingsScreen(
                     showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateMasterDns,
                     onMasterDnsAutoInstall = { showMasterDnsInstall = true }
+                )
+            }
+
+            if (config.engine == EngineType.OpenFlux) {
+                openFluxSection(
+                    config = viewModel.editingOpenFlux,
+                    enabled = !isSaving,
+                    showAutoInstall = allowVpsAutoInstall,
+                    onChange = viewModel::updateOpenFlux,
+                    onAutoInstall = { showOpenFluxInstall = true }
                 )
             }
 
@@ -678,7 +699,8 @@ private fun EngineSelector(
         EngineType.Standard,
         EngineType.Chain,
         EngineType.VkTurn,
-        EngineType.MasterDns
+        EngineType.MasterDns,
+        EngineType.OpenFlux
     )
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -1417,6 +1439,273 @@ internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
             }
         }
     }
+}
+
+/**
+ * OpenFlux editor: the carrier (Yandex Docs or a MAX call) with its coordinates, the DNS server reached
+ * through the tunnel, and the exit-node auto-install. The client serves a local SOCKS5 the TUN bridge
+ * consumes directly; the exit node on the VPS is the internet exit.
+ */
+private fun LazyListScope.openFluxSection(
+    config: OpenFluxConfig,
+    enabled: Boolean,
+    showAutoInstall: Boolean,
+    onChange: ((OpenFluxConfig) -> OpenFluxConfig) -> Unit,
+    onAutoInstall: () -> Unit
+) {
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "OpenFlux — туннель через сервисы",
+                subtitle = "TCP-туннель до твоей выходной ноды на VPS: пакеты идут через Яндекс Документы или звонок в MAX"
+            )
+            SettingsDropdown(
+                label = "Транспорт",
+                selectedValue = config.transport,
+                options = listOf(OpenFluxConfig.TRANSPORT_YANDEX, OpenFluxConfig.TRANSPORT_MAX),
+                enabled = enabled,
+                onValueSelected = { v -> onChange { it.copy(transport = v) } },
+                valueLabel = {
+                    if (it == OpenFluxConfig.TRANSPORT_MAX) "MAX (WebRTC-звонок)" else "Яндекс Документы (курсоры)"
+                }
+            )
+            if (config.usesMax()) {
+                VkTurnField(
+                    value = config.maxToken,
+                    onValueChange = { v -> onChange { it.copy(maxToken = v.trim()) } },
+                    label = "Твой токен MAX (веб)",
+                    placeholder = "токен аккаунта, с которого звонит клиент",
+                    enabled = enabled
+                )
+                VkTurnField(
+                    value = config.maxUid,
+                    onValueChange = { v -> onChange { it.copy(maxUid = v.filter(Char::isDigit)) } },
+                    label = "ID аккаунта выходной ноды в MAX",
+                    placeholder = "кому звонить; у ноды свой токен",
+                    enabled = enabled,
+                    isError = config.maxUid.isNotBlank() && config.maxUid.toLongOrNull() == null,
+                    keyboardType = KeyboardType.Number
+                )
+            } else {
+                OutlinedTextField(
+                    value = config.docUrl,
+                    onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
+                    label = { Text("Ссылка на Яндекс Документ") },
+                    placeholder = { Text("https://docs.yandex.ru/…") },
+                    supportingText = {
+                        Text("Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода.")
+                    },
+                    enabled = enabled,
+                    minLines = 1,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            VkTurnField(
+                value = config.dnsServer,
+                onValueChange = { v -> onChange { it.copy(dnsServer = v.trim()) } },
+                label = "DNS через туннель",
+                placeholder = "1.1.1.1:53; пусто — DNS устройства (утекает провайдеру)",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+            VkTurnSwitchRow("Подробный журнал ядра", config.debug, enabled) { v ->
+                onChange { it.copy(debug = v) }
+            }
+            Text(
+                "OpenFlux сам трафик не шифрует — остаётся только шифрование сайтов (HTTPS). Скорость " +
+                    "невысокая: это исследовательский туннель на случай, когда остальное заблокировано.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (showAutoInstall) {
+                OutlinedButton(
+                    onClick = onAutoInstall,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Автоустановка выходной ноды на VPS")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One-tap OpenFlux exit-node installer ([rememberOpenFluxServerInstaller]). The Yandex Docs link comes
+ * from the location (both ends share one document); for MAX the node needs ITS OWN account token, which
+ * only the server keeps — the location stores the client's token and the node's account id.
+ */
+@Composable
+private fun OpenFluxInstallDialog(
+    config: OpenFluxConfig,
+    onApplyConfig: (((OpenFluxConfig) -> OpenFluxConfig)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberOpenFluxServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf("") }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    var docUrl by remember { mutableStateOf(config.docUrl) }
+    var exitToken by remember { mutableStateOf("") }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<String>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+    val usesMax = config.usesMax()
+    val succeeded = result?.isSuccess == true
+    val carrierReady = if (usesMax) exitToken.isNotBlank() else docUrl.startsWith("http", ignoreCase = true)
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Автоустановка выходной ноды OpenFlux") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH, загружу OpenFlux и запущу выходную ноду службой systemd. " +
+                        "Пока служба работает, VPS не отправляет исходящие TCP RST (так требует нода) — " +
+                        "другим сервисам на этом VPS это может мешать.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                if (usesMax) {
+                    OutlinedTextField(
+                        value = exitToken,
+                        onValueChange = { exitToken = it.trim() },
+                        label = { Text("Токен MAX выходной ноды") },
+                        supportingText = { Text("Отдельный аккаунт, которому звонит клиент. Хранится только на VPS.") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = docUrl,
+                        onValueChange = { docUrl = it.trim() },
+                        label = { Text("Ссылка на Яндекс Документ") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull().orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() && carrierReady &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        // Both ends must share the document: write it back into the location.
+                        if (!usesMax) onApplyConfig { it.copy(docUrl = docUrl.trim()) }
+                        scope.launch {
+                            val res = installer.install(
+                                OpenFluxInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    transport = config.transport,
+                                    docUrl = docUrl.trim(),
+                                    exitMaxToken = exitToken.trim(),
+                                )
+                            ) { line -> log.add(line) }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
+    )
 }
 
 /**
@@ -2536,6 +2825,7 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.Chain -> "Chain"
     EngineType.VkTurn -> "VK-TURN"
     EngineType.MasterDns -> "MasterDNS"
+    EngineType.OpenFlux -> "OpenFlux"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {
@@ -2544,6 +2834,7 @@ private fun engineSubtitle(engine: EngineType): String = when (engine) {
     EngineType.Chain -> "Proxy wrapped inside the olcRTC tunnel"
     EngineType.VkTurn -> "WireGuard over a VK TURN tunnel (free-turn-proxy)"
     EngineType.MasterDns -> "Туннель через DNS (MasterDnsVPN: несколько резолверов + ARQ)"
+    EngineType.OpenFlux -> "TCP-туннель через Яндекс Документы или звонок MAX до своей выходной ноды"
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {

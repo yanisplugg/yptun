@@ -24,6 +24,7 @@ on:
       - "YPtun/gradle.properties"
       - "cores/**"
       - "olcrtc/**"
+      - "openflux/**"
 
 permissions:
   contents: read
