@@ -231,7 +231,8 @@ object VkTurnComposer {
      */
     fun clampVkTurnMtu(profile: ProxyProfile?, maxMtu: Int = VKTURN_MAX_WG_MTU): ProxyProfile? {
         if (profile == null || maxMtu <= 0) return profile
-        var result = profile
+        // Explicit type: a captured `var` gets no smart cast inside the lambdas below.
+        var result: ProxyProfile = profile
         profile.rawOutbound?.takeIf { it.isNotBlank() }?.let { raw ->
             val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
             if (obj != null && obj["type"]?.jsonPrimitive?.contentOrNull == "wireguard") {
