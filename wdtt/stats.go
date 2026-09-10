@@ -6,10 +6,12 @@ import (
 	"time"
 )
 
+var globalActiveConnections atomic.Int32
+
 type Stats struct {
-	ActiveConnections int32
-	TotalBytesUp      int64
-	TotalBytesDown    int64
+	ActiveConnections atomic.Int32
+	TotalBytesUp      atomic.Int64
+	TotalBytesDown    atomic.Int64
 }
 
 func NewStats() *Stats {
@@ -25,13 +27,13 @@ func (s *Stats) RunLoop(shutdown <-chan struct{}) {
 		case <-shutdown:
 			return
 		case <-ticker.C:
-			active := atomic.LoadInt32(&s.ActiveConnections)
-			up := atomic.LoadInt64(&s.TotalBytesUp)
-			down := atomic.LoadInt64(&s.TotalBytesDown)
-			totalMB := float64(up+down) / (1024.0 * 1024.0)
+			active := s.ActiveConnections.Load()
+			up := s.TotalBytesUp.Load()
+			down := s.TotalBytesDown.Load()
+			upMB := float64(up) / (1024.0 * 1024.0)
+			downMB := float64(down) / (1024.0 * 1024.0)
 
-			log.Printf("[СТАТИСТИКА] Активных: %d | Трафик: %.2f МБ", active, totalMB)
-			emitStats(s)
+			log.Printf("[СТАТИСТИКА] Активных: %d | ↓%.2f МБ / ↑%.2f МБ", active, downMB, upMB)
 		}
 	}
 }

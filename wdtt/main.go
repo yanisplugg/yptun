@@ -1,16 +1,19 @@
-// Package wdtt is the vendored WDTT (amurcanov/proxy-turn-vk-android) WireGuard-
-// over-VK-TURN client, refactored from a CLI (package main) into a library so it
-// can be gomobile-bound alongside freeturn as an ALTERNATIVE VK-TURN core. The
-// transport model: WireGuard GoBackend → local UDP → chunked Dispatcher → N
-// DTLS-over-VK-TURN worker sessions (9 per VK call hash, up to ~108) → wdtt-server
-// → internet. Upstream license: GPLv3.
+// Package wdtt is the vendored WDTT Plus (github.com/Ivan4537/WDTT-Plus, go_client) WireGuard-
+// over-VK-TURN client, turned from a CLI (package main) into a library so it can be gomobile-bound
+// (Android) and linked into the desktop core alongside freeturn as an ALTERNATIVE VK-TURN core.
+// Transport: WireGuard → local UDP → chunked Dispatcher → N DTLS-over-VK-TURN worker sessions
+// (9 per VK call hash, up to 108) → wdtt-server → internet. Upstream license: GPLv3.
 //
-// Only the CLI shell (flags, signals, stdin control, file output) was replaced;
-// the dispatcher/session/group/creds/captcha/obfs/wrap logic is upstream verbatim.
+// Only the CLI shell was replaced (flags → Config, stdin control → exported functions, stdout
+// captcha marker → SetCaptchaRequestHook, file output → Config.OnConfig); everything else is
+// upstream verbatim. To re-vendor: copy go_client/*.go over, `package main` → `package wdtt`, and
+// port upstream's main() changes into Run below.
 package wdtt
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -20,48 +23,27 @@ import (
 	"time"
 )
 
-// CaptchaResultChan delivers a captcha token from an external solver (the Android
-// WebView). Feed it via PushCaptchaResult.
-var CaptchaResultChan = make(chan string, 1)
+type CaptchaResult struct {
+	RequestID string
+	Value     string
+}
+
+// CaptchaResultChan — канал для получения токена капчи из внешнего решателя (WebView)
+var CaptchaResultChan = make(chan CaptchaResult, 8)
+var captchaRequestSequence atomic.Uint64
+var captchaResultWaiters = struct {
+	sync.Mutex
+	byRequestID map[string]chan CaptchaResult
+}{
+	byRequestID: make(map[string]chan CaptchaResult),
+}
 
 var captchaModeValue atomic.Value
-
-// vkAuthModeValue selects how VK TURN creds are fetched: "vkcalls" (new upstream
-// path via the VK Calls API, with automatic legacy fallback) or "legacy".
-var vkAuthModeValue atomic.Value
-
-// pauseFlag pauses the worker groups (e.g. on Android Doze). 0 = run, 1 = pause.
-var pauseFlag int32
-
-// running reports whether a Run is currently active (for the mobile IsRunning).
-var running atomic.Bool
+var vkCallsPreflightEnabled atomic.Bool
 
 func init() {
 	captchaModeValue.Store("auto")
-	vkAuthModeValue.Store("vkcalls")
-}
-
-func normalizeVKAuthMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "legacy":
-		return "legacy"
-	default:
-		return "vkcalls"
-	}
-}
-
-func setVKAuthMode(mode string) string {
-	normalized := normalizeVKAuthMode(mode)
-	vkAuthModeValue.Store(normalized)
-	return normalized
-}
-
-func getVKAuthMode() string {
-	mode, _ := vkAuthModeValue.Load().(string)
-	if mode == "" {
-		return "vkcalls"
-	}
-	return mode
+	vkCallsPreflightEnabled.Store(true)
 }
 
 func normalizeCaptchaMode(mode string) string {
@@ -87,22 +69,179 @@ func getCaptchaMode() string {
 	return mode
 }
 
-// drainCaptchaResult drops a stale captcha result from the channel.
-func drainCaptchaResult() {
+func setVKCallsPreflight(enabled bool) {
+	vkCallsPreflightEnabled.Store(enabled)
+}
+
+// CheckHashes probes each VK call hash for TURN credentials (the upstream "-check-hashes" mode) and
+// returns one "index|hash|status|message" line per hash. status is ok/captcha/dead/blocked/full/
+// limited/network/error (see classifyHashCheckError).
+func CheckHashes(ctx context.Context, rawHashes string) []string {
+	hashes := ParseHashes(rawHashes)
+	SetHashCheckMode(true)
+	defer SetHashCheckMode(false)
+	out := make([]string, 0, len(hashes))
+	for i, hash := range hashes {
+		checkCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		_, _, turnURLs, err := GetCreds(checkCtx, hash, 9000+i)
+		cancel()
+		status, message := classifyHashCheckError(err)
+		if err == nil {
+			message = fmt.Sprintf("TURN urls=%d", len(turnURLs))
+		}
+		out = append(out, fmt.Sprintf("%d|%s|%s|%s", i+1, hash, status, sanitizeHashCheckMessage(message)))
+	}
+	return out
+}
+
+func classifyHashCheckError(err error) (string, string) {
+	if err == nil {
+		return "ok", ""
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "captcha_required") || strings.Contains(text, "captcha_wait_required"):
+		return "captcha", "VK просит капчу"
+	case strings.Contains(text, "invalid_join_link") ||
+		strings.Contains(text, "call not found") ||
+		strings.Contains(text, "join link is not valid") ||
+		strings.Contains(text, "error 9000") ||
+		strings.Contains(text, "error 9008") ||
+		strings.Contains(text, "error_code:9000") ||
+		strings.Contains(text, "error_code:9008"):
+		return "dead", "Звонок не найден или закрыт"
+	case strings.Contains(text, "anon_blocked") || strings.Contains(text, "anonymous join is disabled"):
+		return "blocked", "В звонке запрещён анонимный вход"
+	case strings.Contains(text, "call_full") || strings.Contains(text, "call is full"):
+		return "full", "В звонке сейчас нет свободных мест"
+	case strings.Contains(text, "flood") || strings.Contains(text, "rate limit") || strings.Contains(text, "error_code:29"):
+		return "limited", "VK временно ограничил запросы"
+	case strings.Contains(text, "timeout") || strings.Contains(text, "deadline") || strings.Contains(text, "lookup") ||
+		strings.Contains(text, "network") || strings.Contains(text, "vk https"):
+		return "network", "Сетевая ошибка"
+	default:
+		return "error", err.Error()
+	}
+}
+
+func sanitizeHashCheckMessage(message string) string {
+	message = strings.ReplaceAll(message, "\n", " ")
+	message = strings.ReplaceAll(message, "\r", " ")
+	message = strings.ReplaceAll(message, "|", "/")
+	if len(message) > 180 {
+		return message[:180]
+	}
+	return message
+}
+
+func nextCaptchaRequestID(streamID int) string {
+	return fmt.Sprintf("%d-%d", streamID, captchaRequestSequence.Add(1))
+}
+
+func parseCaptchaResultPayload(payload string) CaptchaResult {
+	parts := strings.SplitN(payload, "|", 2)
+	if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" {
+		return CaptchaResult{RequestID: strings.TrimSpace(parts[0]), Value: strings.TrimSpace(parts[1])}
+	}
+	return CaptchaResult{Value: strings.TrimSpace(payload)}
+}
+
+func captchaResultMatchesRequest(result CaptchaResult, requestID string) bool {
+	return result.RequestID == "" || result.RequestID == requestID
+}
+
+func registerCaptchaResultWaiter(requestID string) (<-chan CaptchaResult, func()) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return CaptchaResultChan, func() {}
+	}
+
+	ch := make(chan CaptchaResult, 1)
+	captchaResultWaiters.Lock()
+	captchaResultWaiters.byRequestID[requestID] = ch
+	captchaResultWaiters.Unlock()
+
+	cleanup := func() {
+		captchaResultWaiters.Lock()
+		if captchaResultWaiters.byRequestID[requestID] == ch {
+			delete(captchaResultWaiters.byRequestID, requestID)
+		}
+		captchaResultWaiters.Unlock()
+	}
+	return ch, cleanup
+}
+
+func deliverCaptchaResult(ch chan CaptchaResult, result CaptchaResult) bool {
+	select {
+	case ch <- result:
+		return true
+	default:
+		return false
+	}
+}
+
+func enqueueCaptchaResult(result CaptchaResult) {
+	if result.RequestID != "" {
+		captchaResultWaiters.Lock()
+		ch := captchaResultWaiters.byRequestID[result.RequestID]
+		captchaResultWaiters.Unlock()
+		if ch == nil {
+			log.Printf("[КАПЧА] Запоздалый результат без активного ожидателя request=%q", result.RequestID)
+			return
+		}
+		if !deliverCaptchaResult(ch, result) {
+			log.Printf("[КАПЧА] Очередь результата заполнена request=%q", result.RequestID)
+		}
+		return
+	}
+
+	select {
+	case CaptchaResultChan <- result:
+		return
+	default:
+	}
 	select {
 	case <-CaptchaResultChan:
 	default:
 	}
-}
-
-// PushCaptchaResult feeds a captcha token (from the Android WebView solver) to the
-// waiting VK auth flow. Exported for the mobile wrapper.
-func PushCaptchaResult(token string) {
-	drainCaptchaResult()
 	select {
-	case CaptchaResultChan <- token:
+	case CaptchaResultChan <- result:
 	default:
 	}
+}
+// pauseFlag pauses the worker groups (e.g. on Android Doze). 0 = run, 1 = pause.
+var pauseFlag int32
+
+// activeDispatcher is the running Run's dispatcher, for the device sleep/wake hints.
+var activeDispatcher atomic.Pointer[Dispatcher]
+
+// running reports whether a Run is currently active (for the mobile IsRunning).
+var running atomic.Bool
+
+// captchaRequestHook receives a WebView captcha request (upstream printed it to stdout as
+// "CAPTCHA_SOLVE|id|mode|redirectURI|sessionToken" for its Android host). nil = no WebView bridge:
+// the request fails at once, so the chain moves straight on to the built-in Go solver instead of
+// waiting out the WebView timeout.
+var captchaRequestHook atomic.Pointer[func(requestID, mode, redirectURI, sessionToken string)]
+
+// SetCaptchaRequestHook installs (or, with nil, removes) the WebView captcha bridge. Answer through
+// PushCaptchaResultFor.
+func SetCaptchaRequestHook(hook func(requestID, mode, redirectURI, sessionToken string)) {
+	if hook == nil {
+		captchaRequestHook.Store(nil)
+		return
+	}
+	captchaRequestHook.Store(&hook)
+}
+
+// PushCaptchaResult feeds a captcha token to whichever request is waiting.
+func PushCaptchaResult(token string) {
+	enqueueCaptchaResult(CaptchaResult{Value: strings.TrimSpace(token)})
+}
+
+// PushCaptchaResultFor answers one specific captcha request ("error:..." values report a failure).
+func PushCaptchaResultFor(requestID, value string) {
+	enqueueCaptchaResult(CaptchaResult{RequestID: strings.TrimSpace(requestID), Value: strings.TrimSpace(value)})
 }
 
 // SetPaused toggles the Doze pause for the worker groups.
@@ -114,48 +253,112 @@ func SetPaused(paused bool) {
 	}
 }
 
+// NoteDeviceSleep tells the dispatcher the screen went off (true) or on (false): network timeouts
+// are not enforced while asleep, and waking sends an immediate channel check.
+func NoteDeviceSleep(asleep bool) {
+	d := activeDispatcher.Load()
+	if d == nil {
+		return
+	}
+	if asleep {
+		d.noteDeviceSleep()
+	} else {
+		d.noteDeviceWake(time.Now())
+	}
+}
+
 // IsRunning reports whether a Run is active.
 func IsRunning() bool { return running.Load() }
 
-// Config configures a WDTT run. The zero value is invalid (Peer, VKHashes and
-// Password are required).
+// Config configures a WDTT Plus run. Peer, VKHashes and Password are required.
 type Config struct {
 	Peer        string // VPS wdtt-server "host:port" (required)
 	VKHashes    string // comma/space/newline-separated VK call hashes (required)
-	Password    string // connection password — WRAP key is HKDF-derived from it (required)
+	Password    string // connection password — the WRAP key is HKDF-derived from it (required)
 	Listen      string // local UDP addr WireGuard dials; default "127.0.0.1:9000"
-	NumWorkers  int    // clamped to [workersPerGroup, 108] and rounded to a multiple of workersPerGroup
+	NumWorkers  int    // clamped to [workersPerGroup, 108] and rounded down to a multiple of workersPerGroup
 	DeviceID    string // unique device id (default "unknown")
-	Fingerprint string // TLS fingerprint: chrome/safari/ios/android/firefox (default "chrome")
+	DeviceInfo  string // JSON with safe device info shown to the server admin (optional)
+	Fingerprint string // TLS fingerprint: firefox/chrome/safari/ios/android (default "firefox")
 	ClientIDs   string // VK client IDs, comma-separated (optional override)
 	CaptchaMode string // auto/wv/rjs (default auto)
-	VKAuthMode  string // vkcalls/legacy (default vkcalls, auto-falls back to legacy)
 	TurnHost    string // optional TURN IP override
 	TurnPort    string // optional TURN port override
 
-	// OnConfig receives the WireGuard config fetched from the server (GETCONF),
-	// MTU-normalised. The host parses it and brings up the WG tunnel.
+	// VKCallsPreflight tries the VK Calls API before the captcha chain (upstream default: on).
+	VKCallsPreflight bool
+	// ConfigFirstStart waits for the server's WireGuard config before starting the other workers.
+	ConfigFirstStart bool
+	// HashFallback lets a group fall back to the remaining VK hashes when its own one dies.
+	HashFallback bool
+	// TurnStreamFirst is the «Сеть РТ» mode: TURN/TLS, then TURN/TCP to every VK address first,
+	// keeping UDP as the reserve (for networks that throttle or block UDP to VK).
+	TurnStreamFirst bool
+	// TurnSNI is the whitelisted SNI for the outer TURN/TLS connection (TurnStreamFirst only).
+	TurnSNI string
+	// Masque adds a Cloudflare WARP CONNECT-IP (HTTP/2, then HTTP/3) reserve after the direct
+	// «Сеть РТ» paths (TurnStreamFirst only). MasqueConfigPath is where the WARP enrollment is kept;
+	// MasqueAcceptTOS records the user's consent to Cloudflare's terms for the first enrollment.
+	Masque           bool
+	MasqueConfigPath string
+	MasqueAcceptTOS  bool
+	// CustomVKClientID/Secret add an independent VK app as a credential provider (both or neither).
+	CustomVKClientID     string
+	CustomVKClientSecret string
+
+	// OnConfig receives the WireGuard config fetched from the server (GETCONF), MTU-normalised.
+	// The host parses it and brings up the WG tunnel.
 	OnConfig func(wgConf string)
 }
 
-// Run sets up the local UDP listener, the chunked dispatcher and the worker
-// groups, and blocks until ctx is cancelled or every worker exits. It is the
-// library entry point (replaces the old CLI main).
-func Run(ctx context.Context, cfg Config) error {
+// Run sets up the local UDP listener, the chunked dispatcher and the worker groups, and blocks until
+// ctx is cancelled or every worker exits. It is the library entry point replacing upstream's CLI
+// main(): flags became Config fields, the stdin control channel became the exported functions above.
+func Run(parent context.Context, cfg Config) error {
 	setupGlobalResolver()
-	setCaptchaMode(cfg.CaptchaMode)
-	setVKAuthMode(cfg.VKAuthMode)
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	activeCaptchaMode := setCaptchaMode(cfg.CaptchaMode)
+	setVKCallsPreflight(cfg.VKCallsPreflight)
 
 	if strings.TrimSpace(cfg.Peer) == "" || strings.TrimSpace(cfg.VKHashes) == "" {
 		return fmt.Errorf("wdtt: Peer and VKHashes are required")
 	}
 	if cfg.Password == "" {
-		return fmt.Errorf("wdtt: Password is required (WRAP key derives from it)")
+		return fmt.Errorf("wdtt: Password is required (the WRAP key derives from it)")
 	}
 
-	listen := cfg.Listen
-	if strings.TrimSpace(listen) == "" {
-		listen = "127.0.0.1:9000"
+	var normalizedTurnSNI string
+	if cfg.TurnStreamFirst {
+		var err error
+		normalizedTurnSNI, err = normalizeTURNFrontSNI(cfg.TurnSNI)
+		if err != nil {
+			return fmt.Errorf("wdtt: invalid TURN SNI: %w", err)
+		}
+		log.Printf("[TURN] Режим «Сеть РТ»: TURN/TLS, затем TCP ко всем адресам VK; UDP остаётся резервом (SNI=%q)", normalizedTurnSNI)
+	}
+	if cfg.Masque && !cfg.TurnStreamFirst {
+		log.Printf("[MASQUE] Проигнорирован: механизм доступен только вместе с режимом «Сеть РТ»")
+	}
+
+	fingerprint := strings.TrimSpace(cfg.Fingerprint)
+	if fingerprint == "" {
+		fingerprint = "firefox"
+	}
+	SetActiveFingerprint(fingerprint)
+	if strings.TrimSpace(cfg.ClientIDs) != "" {
+		SetActiveClientIds(cfg.ClientIDs)
+	}
+	if cfg.CustomVKClientID != "" || cfg.CustomVKClientSecret != "" {
+		if err := SetCustomVKCredentials(cfg.CustomVKClientID, cfg.CustomVKClientSecret); err != nil {
+			return fmt.Errorf("wdtt: invalid custom VK credentials: %w", err)
+		}
+	}
+
+	hashes := ParseHashes(cfg.VKHashes)
+	if len(hashes) == 0 {
+		return fmt.Errorf("wdtt: no usable VK hashes")
 	}
 
 	// Resolve the VPS peer, retrying briefly (DNS may not be ready right at start).
@@ -177,18 +380,6 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("wdtt: resolve peer %q: %w", cleanPeerAddr, err)
 	}
 
-	if strings.TrimSpace(cfg.Fingerprint) != "" {
-		SetActiveFingerprint(cfg.Fingerprint)
-	}
-	if strings.TrimSpace(cfg.ClientIDs) != "" {
-		SetActiveClientIds(cfg.ClientIDs)
-	}
-
-	hashes := ParseHashes(cfg.VKHashes)
-	if len(hashes) == 0 {
-		return fmt.Errorf("wdtt: no usable VK hashes")
-	}
-
 	wrapKey, err := deriveWrapKey(cfg.Password)
 	if err != nil {
 		return fmt.Errorf("wdtt: derive WRAP key: %w", err)
@@ -204,19 +395,36 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	numW = (numW / workersPerGroup) * workersPerGroup
 
-	tp := &TurnParams{
-		Host:    cfg.TurnHost,
-		Port:    cfg.TurnPort,
-		Hashes:  hashes,
-		WrapKey: wrapKey,
+	var masqueManager *warpMasqueManager
+	if cfg.TurnStreamFirst && cfg.Masque {
+		masqueManager, err = newWarpMasqueManager(ctx, cfg.MasqueConfigPath, normalizedTurnSNI, cfg.MasqueAcceptTOS)
+		if err != nil {
+			log.Printf("[MASQUE] Не удалось включить: %v; прямые пути «Сети РТ» остаются доступны", err)
+			masqueManager = nil
+		} else {
+			defer masqueManager.Close()
+			go masqueManager.prewarmConfig()
+		}
 	}
 
-	// Bind the local UDP listener WireGuard dials, waiting for a stale process to
-	// release the port, then falling back to a dynamic port.
+	tp := &TurnParams{
+		Host:        cfg.TurnHost,
+		Port:        cfg.TurnPort,
+		Hashes:      hashes,
+		TLSFrontSNI: normalizedTurnSNI,
+		Masque:      masqueManager,
+		WrapKey:     wrapKey,
+	}
+
+	listen := strings.TrimSpace(cfg.Listen)
+	if listen == "" {
+		listen = "127.0.0.1:9000"
+	}
+	// Bind the local UDP listener WireGuard dials, waiting for a previous run to release the port,
+	// then falling back to a dynamic port.
 	var localConn net.PacketConn
-	actualListenAddr := listen
 	for i := 0; i < 5; i++ {
-		localConn, err = net.ListenPacket("udp", actualListenAddr)
+		localConn, err = net.ListenPacket("udp", listen)
 		if err == nil {
 			break
 		}
@@ -227,8 +435,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	if err != nil {
-		actualListenAddr = "127.0.0.1:0"
-		localConn, err = net.ListenPacket("udp", actualListenAddr)
+		localConn, err = net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
 			return fmt.Errorf("wdtt: bind local UDP: %w", err)
 		}
@@ -249,9 +456,10 @@ func Run(ctx context.Context, cfg Config) error {
 	if deviceID == "" {
 		deviceID = "unknown"
 	}
-
+	transportSession := newTransportSession()
 	numGroups := numW / workersPerGroup
-	log.Printf("[WDTT] workers=%d groups=%d hashes=%d listen=%s peer=%s", numW, numGroups, len(hashes), listen, cleanPeerAddr)
+	log.Printf("[WDTT] workers=%d groups=%d hashes=%d listen=%s peer=%s captcha=%s fingerprint=%s",
+		numW, numGroups, len(hashes), localConn.LocalAddr(), cleanPeerAddr, activeCaptchaMode, GetActiveFingerprint())
 
 	running.Store(true)
 	defer running.Store(false)
@@ -265,10 +473,11 @@ func Run(ctx context.Context, cfg Config) error {
 	go stats.RunLoop(shutdownCh)
 
 	disp := NewDispatcher(ctx, localConn, stats)
+	activeDispatcher.Store(disp)
+	defer activeDispatcher.CompareAndSwap(disp, nil)
 	defer disp.Shutdown()
 
-	// The first worker fetches the WireGuard config (GETCONF); normalise MTU and
-	// hand it to the host via OnConfig.
+	// The first group fetches the WireGuard config (GETCONF); normalise MTU and hand it to the host.
 	configCh := make(chan string, 1)
 	configDone := make(chan struct{})
 	go func() {
@@ -299,20 +508,20 @@ func Run(ctx context.Context, cfg Config) error {
 
 	var wg sync.WaitGroup
 	workerIDCounter := 1
-	var prevWaitReady <-chan struct{}
+	workerStarts := newStartPacer(workerStartInterval(len(hashes), cfg.TurnStreamFirst))
+	credentialRequests := newCredentialRequestGate(credentialRequestCooldown)
+	configStartGate := newConfigFirstStartGate(cfg.ConfigFirstStart)
+	primaryCredentialsReady := make(chan struct{})
+	log.Printf("[WDTT] распределение потоков по VK-хешам: %v", workerDistributionByHash(numW, len(hashes)))
 
 	for g := 0; g < numGroups; g++ {
 		isFirst := g == 0
-
-		var myWaitReady <-chan struct{}
-		var mySignalReady chan<- struct{}
-		if g > 0 {
-			myWaitReady = prevWaitReady
-		}
-		if g < numGroups-1 {
-			ch := make(chan struct{})
-			mySignalReady = ch
-			prevWaitReady = ch
+		var waitPrimary <-chan struct{}
+		var signalPrimary chan<- struct{}
+		if isFirst {
+			signalPrimary = primaryCredentialsReady
+		} else {
+			waitPrimary = primaryCredentialsReady
 		}
 
 		ids := make([]int, workersPerGroup)
@@ -327,11 +536,14 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 
 		wg.Add(1)
-		go func(groupID int, isFirstGroup bool, configChan chan<- string, workerIds []int, startHashIndex int, waitR <-chan struct{}, sigR chan<- struct{}) {
+		go func(groupID int, isFirstGroup bool, configChan chan<- string, workerIDs []int, startHashIndex int,
+			waitR <-chan struct{}, signalR chan<- struct{}) {
 			defer wg.Done()
-			WorkerGroup(ctx, groupID, startHashIndex, tp, peer, disp, localPort,
-				isFirstGroup, configChan, workerIds, &pauseFlag, deviceID, cfg.Password, stats, waitR, sigR, nil, nil)
-		}(g+1, isFirst, cc, ids, g, myWaitReady, mySignalReady)
+			WorkerGroup(ctx, cancel, groupID, startHashIndex, tp, peer, disp, localPort,
+				isFirstGroup, configChan, workerIDs, numW, cfg.HashFallback, &pauseFlag,
+				deviceID, cfg.Password, cfg.DeviceInfo, transportSession, stats, cfg.TurnStreamFirst,
+				configStartGate, workerStarts, credentialRequests, waitR, signalR)
+		}(g+1, isFirst, cc, ids, g, waitPrimary, signalPrimary)
 	}
 
 	wg.Wait()
@@ -339,4 +551,29 @@ func Run(ctx context.Context, cfg Config) error {
 	<-configDone
 	log.Println("[WDTT] all workers finished")
 	return nil
+}
+
+func newTransportSession() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err == nil {
+		return hex.EncodeToString(value[:])
+	}
+	return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+}
+
+func normalizeTransportSession(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) < 16 || len(value) > 64 {
+		return ""
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '-' || char == '_' {
+			continue
+		}
+		return ""
+	}
+	return value
 }

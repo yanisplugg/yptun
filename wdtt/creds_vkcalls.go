@@ -9,8 +9,11 @@ import (
 	"io"
 	"log"
 	neturl "net/url"
-	"os"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	tlsclient "github.com/bogdanfinn/tls-client"
@@ -19,306 +22,333 @@ import (
 )
 
 const (
-	vkConnectClientID     = "8093730"
-	vkCallsAPIHost        = "api.vk.me"
-	vkCallsAnonAPIVersion = "5.276"
+	vkCallsClientID              = "8093730"
+	vkCallsAPIVersion            = "5.276"
+	vkCallsUserAgent             = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+	vkCallsFloodPause            = 60 * time.Second
+	vkCallsTransientFailurePause = 45 * time.Second
+	vkCallsCaptchaPause          = 2 * time.Minute
 )
 
-var vkCallsProfile = Profile{
-	UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-	SecChUa:         `"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`,
-	SecChUaMobile:   "?0",
-	SecChUaPlatform: `"Windows"`,
-}
-
-type vkCallsFailureKind string
-
-const (
-	vkCallsFailureSkipped vkCallsFailureKind = "skipped"
-	vkCallsFailureSetup   vkCallsFailureKind = "setup"
-	vkCallsFailureNetwork vkCallsFailureKind = "network"
-	vkCallsFailureDecode  vkCallsFailureKind = "decode"
-	vkCallsFailureVKAPI   vkCallsFailureKind = "vk_api"
-	vkCallsFailureCaptcha vkCallsFailureKind = "captcha"
-	vkCallsFailureOKCDN   vkCallsFailureKind = "okcdn_api"
-	vkCallsFailureParse   vkCallsFailureKind = "parse"
+var (
+	errVKCallsFlood   = errors.New("VKCalls participant check flood")
+	vkCallsFloodUntil atomic.Int64
+	vkCallsLinkPauses = struct {
+		sync.Mutex
+		until map[string]int64
+	}{until: make(map[string]int64)}
+	vkCallsAPIBaseURLs = [...]string{
+		"https://api.vk.me",
+		"https://api.vk.ru",
+	}
 )
 
-type vkCallsFailure struct {
-	Step string
-	Kind vkCallsFailureKind
-	Err  error
+func vkCallsJoinURL(link string) string {
+	return neturl.QueryEscape("https://vk.ru/call/join/" + link)
 }
 
-func (e *vkCallsFailure) Error() string {
-	if e == nil {
-		return "vkcalls failure"
+func vkCallsAPIRequestURLs(path string) []string {
+	cleanPath := "/" + strings.TrimLeft(path, "/")
+	result := make([]string, 0, len(vkCallsAPIBaseURLs))
+	for _, baseURL := range vkCallsAPIBaseURLs {
+		result = append(result, strings.TrimRight(baseURL, "/")+cleanPath)
 	}
-	if e.Err == nil {
-		return fmt.Sprintf("step=%s kind=%s", e.Step, e.Kind)
-	}
-	return fmt.Sprintf("step=%s kind=%s: %v", e.Step, e.Kind, e.Err)
+	return result
 }
 
-func (e *vkCallsFailure) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Err
+func isVKCallsFloodError(err error) bool {
+	return errors.Is(err, errVKCallsFlood)
 }
 
-func newVKCallsFailure(step string, kind vkCallsFailureKind, err error) error {
+func startVKCallsFloodPause(now time.Time) {
+	startVKCallsGlobalPause(now, vkCallsFloodPause)
+}
+
+// startVKCallsGlobalPause protects the shared public IP from a confirmed VK
+// flood response. CAPTCHA and transient failures are scoped to one join link:
+// a bad call must not force every independent worker group into legacy CAPTCHA.
+func startVKCallsGlobalPause(now time.Time, duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	target := now.Add(duration).UnixNano()
+	for {
+		current := vkCallsFloodUntil.Load()
+		if current >= target || vkCallsFloodUntil.CompareAndSwap(current, target) {
+			return
+		}
+	}
+}
+
+func vkCallsGlobalPauseRemaining(now time.Time) time.Duration {
+	remaining := time.Unix(0, vkCallsFloodUntil.Load()).Sub(now)
+	if remaining <= 0 {
+		return 0
+	}
+	return remaining
+}
+
+func startVKCallsLinkPause(link string, now time.Time, duration time.Duration) {
+	link = strings.TrimSpace(link)
+	if link == "" || duration <= 0 {
+		return
+	}
+	target := now.Add(duration).UnixNano()
+	vkCallsLinkPauses.Lock()
+	if vkCallsLinkPauses.until[link] < target {
+		vkCallsLinkPauses.until[link] = target
+	}
+	vkCallsLinkPauses.Unlock()
+}
+
+func vkCallsPreflightPauseRemaining(link string, now time.Time) time.Duration {
+	remaining := vkCallsGlobalPauseRemaining(now)
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return remaining
+	}
+	vkCallsLinkPauses.Lock()
+	linkUntil := vkCallsLinkPauses.until[link]
+	if linkUntil != 0 && !now.Before(time.Unix(0, linkUntil)) {
+		delete(vkCallsLinkPauses.until, link)
+		linkUntil = 0
+	}
+	vkCallsLinkPauses.Unlock()
+	linkRemaining := time.Unix(0, linkUntil).Sub(now)
+	if linkRemaining > remaining {
+		return linkRemaining
+	}
+	return remaining
+}
+
+func vkCallsPreflightPauseForError(err error) time.Duration {
 	if err == nil {
-		err = fmt.Errorf("unknown error")
+		return 0
 	}
-	return &vkCallsFailure{Step: step, Kind: kind, Err: err}
-}
-
-func describeVKCallsFailure(err error) string {
-	if err == nil {
-		return ""
+	if isVKCallsFloodError(err) {
+		return vkCallsFloodPause
 	}
-	var failure *vkCallsFailure
-	if errors.As(err, &failure) {
-		return failure.Error()
-	}
-	return err.Error()
-}
-
-func vkCallsAPIErrorKind(err error) vkCallsFailureKind {
 	var captchaErr *VkCaptchaError
 	if errors.As(err, &captchaErr) {
-		return vkCallsFailureCaptcha
+		return vkCallsCaptchaPause
 	}
-	return vkCallsFailureVKAPI
+	if strings.Contains(err.Error(), "INVALID_JOIN_LINK") ||
+		strings.Contains(err.Error(), "ANON_BLOCKED") ||
+		strings.Contains(err.Error(), "CALL_FULL") {
+		return 0
+	}
+	return vkCallsTransientFailurePause
 }
 
-type vkCallsVKAPIError struct {
-	Code    int
-	Message string
+func shouldRetryVKCallsPreflight(err error) bool {
+	if err == nil || isVKCallsFloodError(err) {
+		return false
+	}
+	message := strings.ToUpper(err.Error())
+	return !strings.Contains(message, "INVALID_JOIN_LINK") &&
+		!strings.Contains(message, "ANON_BLOCKED") &&
+		!strings.Contains(message, "CALL_FULL")
 }
 
-func (e *vkCallsVKAPIError) Error() string {
-	if e == nil {
-		return "VK API error"
-	}
-	if e.Message == "" {
-		return fmt.Sprintf("error_code=%d", e.Code)
-	}
-	return fmt.Sprintf("error_code=%d %s", e.Code, e.Message)
-}
-
-type vkCallsOKAPIError struct {
-	Code    int
-	Message string
-}
-
-func (e *vkCallsOKAPIError) Error() string {
-	if e == nil {
-		return "OK CDN API error"
-	}
-	if e.Message == "" {
-		return fmt.Sprintf("error_code=%d", e.Code)
-	}
-	return fmt.Sprintf("error_code=%d %s", e.Code, e.Message)
-}
-
-func getVKCredsViaVKCallsPath(ctx context.Context, link string, streamID int) (string, string, []string, error) {
-	if os.Getenv("VK_SKIP_VKCALLS") == "1" {
-		return "", "", nil, newVKCallsFailure("preflight", vkCallsFailureSkipped, fmt.Errorf("disabled by VK_SKIP_VKCALLS=1"))
-	}
-
-	deviceID := uuid.New().String()
+func getVKCredsViaVKCalls(ctx context.Context, link string, streamID int) (string, string, []string, time.Duration, error) {
+	// VKCalls device_id identifies an anonymous call participant. Reusing the
+	// Android installation ID for several calls makes independent worker groups
+	// look like repeated joins of one participant and can trigger participant
+	// flood control. One bounded preflight attempt therefore gets one fresh pair
+	// of anonymous participant IDs; retries are capped by fetchVkCreds.
+	deviceID := uuid.NewString()
+	okDeviceID := uuid.NewString()
 	name := generateName()
-	profile := vkCallsProfile
-	linkURL := neturl.QueryEscape("https://vk.com/call/join/" + link)
-	nameEnc := neturl.QueryEscape(name)
+	joinURL := vkCallsJoinURL(link)
 
-	client, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(),
+	client, err := tlsclient.NewHttpClient(
+		tlsclient.NewNoopLogger(),
 		tlsclient.WithTimeoutSeconds(20),
 		tlsclient.WithClientProfile(profiles.Chrome_146),
 		tlsclient.WithCookieJar(tlsclient.NewCookieJar()),
 	)
 	if err != nil {
-		return "", "", nil, newVKCallsFailure("setup", vkCallsFailureSetup, fmt.Errorf("create tls client: %w", err))
+		return "", "", nil, 0, fmt.Errorf("setup: %w", err)
 	}
 
-	log.Printf("[STREAM %d] [VKCalls] Identity - Name: %s | device_id=%s | TLS=Chrome_146 | UA: %s", streamID, name, deviceID, profile.UserAgent)
-
-	doRequest := func(step string, url string) (map[string]interface{}, error) {
-		req, err := fhttp.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(nil))
-		if err != nil {
-			return nil, newVKCallsFailure(step, vkCallsFailureSetup, fmt.Errorf("create request: %w", err))
+	doRequest := func(step, requestURL string) (map[string]interface{}, error) {
+		parsedURL, parseErr := neturl.Parse(requestURL)
+		host := ""
+		if parseErr == nil {
+			host = parsedURL.Hostname()
 		}
-		req.Header.Set("User-Agent", profile.UserAgent)
+		req, err := fhttp.NewRequestWithContext(ctx, "POST", requestURL, bytes.NewReader(nil))
+		if err != nil {
+			return nil, fmt.Errorf("%s create request: %w", step, err)
+		}
+		req.Header.Set("User-Agent", vkCallsUserAgent)
 		req.Header.Set("Accept", "*/*")
 		req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
-		req.Header.Set("Accept-Language", "en-GB,en;q=0.9")
+		req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8")
 
-		httpResp, err := client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
-			return nil, newVKCallsFailure(step, vkCallsFailureNetwork, fmt.Errorf("request failed: %w", err))
-		}
-		defer func() {
-			if closeErr := httpResp.Body.Close(); closeErr != nil {
-				log.Printf("close response body: %s", closeErr)
+			if host != "" {
+				return nil, fmt.Errorf("%s VK HTTPS %s: %w", step, host, err)
 			}
-		}()
-
-		body, err := io.ReadAll(httpResp.Body)
+			return nil, fmt.Errorf("%s request: %w", step, err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		if err != nil {
-			return nil, newVKCallsFailure(step, vkCallsFailureNetwork, fmt.Errorf("read response: %w", err))
+			return nil, fmt.Errorf("%s read response: %w", step, err)
 		}
-
-		var resp map[string]interface{}
-		if err := json.Unmarshal(body, &resp); err != nil {
-			return nil, newVKCallsFailure(step, vkCallsFailureDecode, fmt.Errorf("unmarshal JSON: %w, body: %s", err, truncateVKCallsLog(string(body), 200)))
+		var result map[string]interface{}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("%s decode status=%d: %w", step, resp.StatusCode, err)
 		}
-		return resp, nil
+		return result, nil
+	}
+	doVKAPIRequest := func(step, path string) (map[string]interface{}, error) {
+		var lastErr error
+		requestURLs := vkCallsAPIRequestURLs(path)
+		for index, requestURL := range requestURLs {
+			result, requestErr := doRequest(step, requestURL)
+			if requestErr == nil {
+				return result, nil
+			}
+			lastErr = requestErr
+			if index+1 < len(requestURLs) {
+				log.Printf("[VKCalls] %s через основной API-домен не выполнен, пробуем совместимый резерв: %v", step, requestErr)
+			}
+		}
+		return nil, lastErr
 	}
 
-	step1 := "step1 auth.getAnonymToken"
-	step1URL := fmt.Sprintf(
-		"https://%s/method/auth.getAnonymToken?v=%s&client_id=%s&link=%s&device_id=%s&anonymName=%s&lang=en",
-		vkCallsAPIHost, vkCallsAnonAPIVersion, vkConnectClientID,
-		linkURL, deviceID, nameEnc,
+	step1Path := fmt.Sprintf(
+		"/method/auth.getAnonymToken?v=%s&client_id=%s&link=%s&device_id=%s&anonymName=%s&lang=ru",
+		vkCallsAPIVersion, vkCallsClientID, joinURL, deviceID, neturl.QueryEscape(name),
 	)
-	resp1, err := doRequest(step1, step1URL)
+	step1, err := doVKAPIRequest("auth.getAnonymToken", step1Path)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, 0, err
 	}
-	anonymToken, err := extractVKCallsStr(resp1, "response", "token")
+	if err := parseVKCallsAPIError(step1); err != nil {
+		return "", "", nil, 0, fmt.Errorf("auth.getAnonymToken: %w", err)
+	}
+	anonymToken, err := extractVKCallsString(step1, "response", "token")
 	if err != nil {
-		return "", "", nil, newVKCallsFailure(step1, vkCallsFailureParse, fmt.Errorf("parse token: %w (resp: %s)", err, truncateVKCallsResp(resp1)))
+		return "", "", nil, 0, fmt.Errorf("auth.getAnonymToken: %w", err)
 	}
-	anonymTokenEnc := neturl.QueryEscape(anonymToken)
-	log.Printf("[STREAM %d] [VKCalls] step1 OK, anonymous_token (%d chars)", streamID, len(anonymToken))
 
-	step2 := "step2 messages.getCallPreview"
-	step2URL := fmt.Sprintf(
-		"https://%s/method/messages.getCallPreview?v=%s&anonymous_token=%s&device_id=%s&extended=1&fields=first_name,last_name,photo_200&lang=en&link=%s",
-		vkCallsAPIHost, vkCallsAnonAPIVersion, anonymTokenEnc, deviceID, linkURL,
+	step2Path := fmt.Sprintf(
+		"/method/messages.getCallPreview?v=%s&anonymous_token=%s&device_id=%s&extended=1&fields=first_name,last_name,photo_200&lang=ru&link=%s",
+		vkCallsAPIVersion, neturl.QueryEscape(anonymToken), deviceID, joinURL,
 	)
-	resp2, err := doRequest(step2, step2URL)
+	step2, err := doVKAPIRequest("messages.getCallPreview", step2Path)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, 0, err
 	}
-	if apiErr := vkCallsAPIError(resp2); apiErr != nil {
-		if captchaErr, ok := apiErr.(*VkCaptchaError); ok {
-			log.Printf("[STREAM %d] [VKCalls] step2 captcha gate appeared (sid=%q, redirect_uri=%t)", streamID, captchaErr.CaptchaSid, captchaErr.RedirectURI != "")
-		}
-		return "", "", nil, newVKCallsFailure(step2, vkCallsAPIErrorKind(apiErr), apiErr)
+	if err := parseVKCallsAPIError(step2); err != nil {
+		return "", "", nil, 0, fmt.Errorf("messages.getCallPreview: %w", err)
 	}
-	userIDFloat, err := extractVKCallsFloat(resp2, "response", "user_id")
+	userID, err := extractVKCallsNumber(step2, "response", "user_id")
 	if err != nil {
-		return "", "", nil, newVKCallsFailure(step2, vkCallsFailureParse, fmt.Errorf("parse user_id: %w (resp: %s)", err, truncateVKCallsResp(resp2)))
+		return "", "", nil, 0, fmt.Errorf("messages.getCallPreview user_id: %w", err)
 	}
-	userIDStr := fmt.Sprintf("%.0f", userIDFloat)
-	secret, err := extractVKCallsStr(resp2, "response", "secret")
+	secret, err := extractVKCallsString(step2, "response", "secret")
 	if err != nil {
-		return "", "", nil, newVKCallsFailure(step2, vkCallsFailureParse, fmt.Errorf("parse secret: %w", err))
+		return "", "", nil, 0, fmt.Errorf("messages.getCallPreview secret: %w", err)
 	}
-	log.Printf("[STREAM %d] [VKCalls] step2 OK, user_id=%s, secret (%d chars)", streamID, userIDStr, len(secret))
 
-	step3 := "step3 messages.getAnonymCallToken"
-	step3URL := fmt.Sprintf(
-		"https://%s/method/messages.getAnonymCallToken?v=%s&anonymous_token=%s&device_id=%s&link=%s&name=%s&user_id=%s&secret=%s&lang=en",
-		vkCallsAPIHost, vkCallsAnonAPIVersion, anonymTokenEnc, deviceID, linkURL,
-		nameEnc, userIDStr, neturl.QueryEscape(secret),
+	step3Path := fmt.Sprintf(
+		"/method/messages.getAnonymCallToken?v=%s&anonymous_token=%s&device_id=%s&link=%s&name=%s&user_id=%.0f&secret=%s&lang=ru",
+		vkCallsAPIVersion, neturl.QueryEscape(anonymToken), deviceID, joinURL,
+		neturl.QueryEscape(name), userID, neturl.QueryEscape(secret),
 	)
-	resp3, err := doRequest(step3, step3URL)
+	step3, err := doVKAPIRequest("messages.getAnonymCallToken", step3Path)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, 0, err
 	}
-	if apiErr := vkCallsAPIError(resp3); apiErr != nil {
-		if captchaErr, ok := apiErr.(*VkCaptchaError); ok {
-			log.Printf("[STREAM %d] [VKCalls] step3 captcha gate appeared (sid=%q, redirect_uri=%t)", streamID, captchaErr.CaptchaSid, captchaErr.RedirectURI != "")
-		}
-		return "", "", nil, newVKCallsFailure(step3, vkCallsAPIErrorKind(apiErr), apiErr)
+	if err := parseVKCallsAPIError(step3); err != nil {
+		return "", "", nil, 0, fmt.Errorf("messages.getAnonymCallToken: %w", err)
 	}
-	okAnonymToken, err := extractVKCallsStr(resp3, "response", "token")
+	okAnonymToken, err := extractVKCallsString(step3, "response", "token")
 	if err != nil {
-		return "", "", nil, newVKCallsFailure(step3, vkCallsFailureParse, fmt.Errorf("parse token: %w (resp: %s)", err, truncateVKCallsResp(resp3)))
+		return "", "", nil, 0, fmt.Errorf("messages.getAnonymCallToken token: %w", err)
 	}
-	log.Printf("[STREAM %d] [VKCalls] step3 OK, OK anonymToken (%d chars)", streamID, len(okAnonymToken))
 
-	okDeviceID := uuid.New().String()
-	step4 := "step4 auth.anonymLogin"
-	step4URL := "https://calls.okcdn.ru/fb.do?session_data=" +
-		neturl.QueryEscape(fmt.Sprintf(
-			`{"version":2,"device_id":"%s","client_version":"1.0.1"}`, okDeviceID,
-		)) +
+	sessionData := neturl.QueryEscape(fmt.Sprintf(`{"version":2,"device_id":"%s","client_version":"1.0.1"}`, okDeviceID))
+	step4URL := "https://calls.okcdn.ru/fb.do?session_data=" + sessionData +
 		"&method=auth.anonymLogin&format=JSON&application_key=CGMMEJLGDIHBABABA"
-	resp4, err := doRequest(step4, step4URL)
+	step4, err := doRequest("auth.anonymLogin", step4URL)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, 0, err
 	}
-	sessionKey, err := extractVKCallsStr(resp4, "session_key")
+	if err := parseVKCallsOKError(step4); err != nil {
+		return "", "", nil, 0, fmt.Errorf("auth.anonymLogin: %w", err)
+	}
+	sessionKey, err := extractVKCallsString(step4, "session_key")
 	if err != nil {
-		return "", "", nil, newVKCallsFailure(step4, vkCallsFailureParse, fmt.Errorf("parse session_key: %w (resp: %s)", err, truncateVKCallsResp(resp4)))
+		return "", "", nil, 0, fmt.Errorf("auth.anonymLogin session_key: %w", err)
 	}
-	log.Printf("[STREAM %d] [VKCalls] step4 OK, OK session_key (%d chars)", streamID, len(sessionKey))
 
-	step5 := "step5 vchat.joinConversationByLink"
 	step5URL := fmt.Sprintf(
 		"https://calls.okcdn.ru/fb.do?joinLink=%s&isVideo=false&protocolVersion=5&anonymToken=%s&method=vchat.joinConversationByLink&format=JSON&application_key=CGMMEJLGDIHBABABA&session_key=%s",
-		link, okAnonymToken, sessionKey,
+		neturl.QueryEscape(link), neturl.QueryEscape(okAnonymToken), neturl.QueryEscape(sessionKey),
 	)
-	resp5, err := doRequest(step5, step5URL)
+	step5, err := doRequest("vchat.joinConversationByLink", step5URL)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, 0, err
 	}
-	if okErr := vkCallsOKError(resp5); okErr != nil {
-		return "", "", nil, newVKCallsFailure(step5, vkCallsFailureOKCDN, fmt.Errorf("%w (resp: %s)", okErr, truncateVKCallsResp(resp5)))
+	if terminal := classifyTerminalVKJoinError(step5); terminal != nil {
+		return "", "", nil, 0, terminal
 	}
-
-	user, err := extractVKCallsStr(resp5, "turn_server", "username")
+	if err := parseVKCallsOKError(step5); err != nil {
+		return "", "", nil, 0, fmt.Errorf("vchat.joinConversationByLink: %w", err)
+	}
+	user, err := extractVKCallsString(step5, "turn_server", "username")
 	if err != nil {
-		return "", "", nil, newVKCallsFailure(step5, vkCallsFailureParse, fmt.Errorf("parse username: %w (resp: %s)", err, truncateVKCallsResp(resp5)))
+		return "", "", nil, 0, err
 	}
-	pass, err := extractVKCallsStr(resp5, "turn_server", "credential")
+	pass, err := extractVKCallsString(step5, "turn_server", "credential")
 	if err != nil {
-		return "", "", nil, newVKCallsFailure(step5, vkCallsFailureParse, fmt.Errorf("parse credential: %w", err))
+		return "", "", nil, 0, err
 	}
-	addrs := parseVKCallsTURNAddresses(resp5)
+	addrs := parseVKCallsTURNAddresses(step5)
 	if len(addrs) == 0 {
-		return "", "", nil, newVKCallsFailure(step5, vkCallsFailureParse, fmt.Errorf("turn_server.urls empty"))
+		return "", "", nil, 0, fmt.Errorf("turn_server.urls empty")
 	}
-
-	log.Printf("[STREAM %d] [VKCalls] SUCCESS, TURN urls=%d", streamID, len(addrs))
-	return user, pass, addrs, nil
+	lifetime := parseVKCallsTURNLifetime(step5, user, time.Now())
+	log.Printf("[STREAM %d] [VKCalls] TURN credentials получены, адресов=%d, lifetime=%v", streamID, len(addrs), lifetime.Truncate(time.Second))
+	return user, pass, addrs, lifetime, nil
 }
 
-func extractVKCallsStr(resp map[string]interface{}, keys ...string) (string, error) {
-	var cur interface{} = resp
-	for _, k := range keys {
-		m, ok := cur.(map[string]interface{})
+func extractVKCallsString(resp map[string]interface{}, keys ...string) (string, error) {
+	var value interface{} = resp
+	for _, key := range keys {
+		object, ok := value.(map[string]interface{})
 		if !ok {
-			return "", fmt.Errorf("expected map at key %q, got %T", k, cur)
+			return "", fmt.Errorf("%s: expected object, got %T", key, value)
 		}
-		cur = m[k]
+		value = object[key]
 	}
-	s, ok := cur.(string)
-	if !ok {
-		return "", fmt.Errorf("expected string at end of path, got %T", cur)
+	result, ok := value.(string)
+	if !ok || result == "" {
+		return "", fmt.Errorf("%s: expected non-empty string, got %T", strings.Join(keys, "."), value)
 	}
-	return s, nil
+	return result, nil
 }
 
-func extractVKCallsFloat(resp map[string]interface{}, keys ...string) (float64, error) {
-	var cur interface{} = resp
-	for _, k := range keys {
-		m, ok := cur.(map[string]interface{})
+func extractVKCallsNumber(resp map[string]interface{}, keys ...string) (float64, error) {
+	var value interface{} = resp
+	for _, key := range keys {
+		object, ok := value.(map[string]interface{})
 		if !ok {
-			return 0, fmt.Errorf("expected map at key %q, got %T", k, cur)
+			return 0, fmt.Errorf("%s: expected object, got %T", key, value)
 		}
-		cur = m[k]
+		value = object[key]
 	}
-	f, ok := cur.(float64)
+	result, ok := value.(float64)
 	if !ok {
-		return 0, fmt.Errorf("expected float64 at end of path, got %T", cur)
+		return 0, fmt.Errorf("%s: expected number, got %T", strings.Join(keys, "."), value)
 	}
-	return f, nil
+	return result, nil
 }
 
 func parseVKCallsTURNAddresses(resp map[string]interface{}) []string {
@@ -330,60 +360,89 @@ func parseVKCallsTURNAddresses(resp map[string]interface{}) []string {
 	if !ok {
 		return nil
 	}
-	var addrs []string
-	for i, u := range urls {
-		s, ok := u.(string)
+	result := make([]string, 0, len(urls))
+	for _, raw := range urls {
+		value, ok := raw.(string)
 		if !ok {
-			log.Printf("[VKCalls] turn_server.urls[%d]=<non-string %T>, skipping", i, u)
 			continue
 		}
-		clean := strings.Split(s, "?")[0]
-		addr := strings.TrimPrefix(strings.TrimPrefix(clean, "turn:"), "turns:")
-		log.Printf("[VKCalls] turn_server.urls[%d]=%s", i, addr)
-		addrs = append(addrs, addr)
+		if normalized := normalizeTURNURL(value); normalized != "" {
+			result = append(result, normalized)
+		}
 	}
-	return addrs
+	return result
 }
 
-func vkCallsAPIError(resp map[string]interface{}) error {
-	errObj, ok := resp["error"].(map[string]interface{})
+func parseVKCallsTURNLifetime(resp map[string]interface{}, username string, now time.Time) time.Duration {
+	if turnServer, ok := resp["turn_server"].(map[string]interface{}); ok {
+		for _, key := range []string{"lifetime", "ttl"} {
+			if seconds := vkCallsPositiveSeconds(turnServer[key]); seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+	}
+
+	// TURN REST обычно кодирует срок действия в начале username.
+	if separator := strings.IndexByte(username, ':'); separator > 0 {
+		if expiresAt, err := strconv.ParseInt(username[:separator], 10, 64); err == nil {
+			lifetime := time.Unix(expiresAt, 0).Sub(now)
+			if lifetime > 0 {
+				return lifetime
+			}
+		}
+	}
+	return 0
+}
+
+func vkCallsPositiveSeconds(value interface{}) int64 {
+	switch number := value.(type) {
+	case float64:
+		if number > 0 {
+			return int64(number)
+		}
+	case json.Number:
+		if parsed, err := number.Int64(); err == nil && parsed > 0 {
+			return parsed
+		}
+	case string:
+		if parsed, err := time.ParseDuration(strings.TrimSpace(number) + "s"); err == nil && parsed > 0 {
+			return int64(parsed / time.Second)
+		}
+	}
+	return 0
+}
+
+func parseVKCallsAPIError(resp map[string]interface{}) error {
+	errObject, ok := resp["error"].(map[string]interface{})
 	if !ok {
 		return nil
 	}
-	code, _ := errObj["error_code"].(float64)
-	msg, _ := errObj["error_msg"].(string)
-	if code == 0 && msg == "" {
-		return nil
-	}
+	code, _ := errObject["error_code"].(float64)
+	message, _ := errObject["error_msg"].(string)
 	if int(code) == 14 {
-		if errJSON, err := json.Marshal(errObj); err == nil {
-			log.Printf("[VKCalls] captcha error response: %s", truncateVKCallsLog(string(errJSON), 300))
-		}
-		return parseVkCaptchaError(errObj)
+		return parseVkCaptchaError(errObject)
 	}
-	return &vkCallsVKAPIError{Code: int(code), Message: msg}
+	lowerMessage := strings.ToLower(message)
+	if int(code) == 29 || strings.Contains(lowerMessage, "flood") || strings.Contains(lowerMessage, "rate limit") {
+		return fmt.Errorf("%w: VK API %.0f: %s", errVKCallsFlood, code, message)
+	}
+	if terminal := classifyTerminalVKJoinError(errObject); terminal != nil {
+		return terminal
+	}
+	if code != 0 || message != "" {
+		return fmt.Errorf("VK API error %.0f: %s", code, message)
+	}
+	return nil
 }
 
-func vkCallsOKError(resp map[string]interface{}) error {
-	code, ok := resp["error_code"].(float64)
-	if !ok || code == 0 {
+func parseVKCallsOKError(resp map[string]interface{}) error {
+	code, _ := resp["error_code"].(float64)
+	if code == 0 {
 		return nil
 	}
-	msg, _ := resp["error_msg"].(string)
-	return &vkCallsOKAPIError{Code: int(code), Message: msg}
-}
-
-func truncateVKCallsLog(s string, n int) string {
-	if len(s) <= n {
-		return s
+	message, _ := resp["error_msg"].(string)
+	if strings.Contains(strings.ToLower(message), "participant.check.flood") {
+		return fmt.Errorf("%w: %s", errVKCallsFlood, message)
 	}
-	return s[:n] + "..."
-}
-
-func truncateVKCallsResp(resp map[string]interface{}) string {
-	b, err := json.Marshal(resp)
-	if err != nil {
-		return fmt.Sprintf("(unmarshallable: %v)", err)
-	}
-	return truncateVKCallsLog(string(b), 300)
+	return fmt.Errorf("OK API error %.0f: %s", code, message)
 }

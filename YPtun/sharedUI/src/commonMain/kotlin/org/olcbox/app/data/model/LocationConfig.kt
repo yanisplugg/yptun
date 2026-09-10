@@ -10,7 +10,9 @@ import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -79,6 +81,9 @@ data class VkTurnConfig(
     /** WDTT worker count; 0 → core default. Clamped to [9,108] and rounded to a multiple of 9 in-core. */
     @SerialName("wdtt_workers")
     val wdttWorkers: Int = 0,
+    /** The WDTT Plus core's advanced knobs (network modes, VK auth, reserves). */
+    @SerialName("wdtt_plus")
+    val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
     /**
      * Master switch for multi-server freeturn. When off, only the primary [uri] is used (today's exact
      * single-server behaviour) even if [extraFreeturnUris] is non-empty. When on, the extra servers
@@ -161,7 +166,83 @@ data class VkTurnConfig(
         usesWdtt() -> wdttPeer.isNotBlank()
         else -> uri.startsWith("freeturn://")
     }
+
+    /**
+     * The WDTT Plus core options (wdttmobile.Options JSON) for this location — ONE builder for both the
+     * Android gomobile binding and the desktop core. [listen] is the local UDP address WireGuard dials,
+     * [masqueConfigPath] a private writable file for the WARP enrollment.
+     */
+    fun wdttCoreOptionsJson(listen: String, deviceId: String, masqueConfigPath: String): String {
+        val p = wdttPlus
+        return buildJsonObject {
+            put("peer", wdttPeerAddr())
+            put("vk_hashes", vkLink)
+            put("password", wdttPassword)
+            put("listen", listen)
+            put("workers", wdttWorkers)
+            put("device_id", deviceId)
+            put("fingerprint", wdttFingerprint.ifBlank { "chrome" })
+            put("client_ids", p.clientIds.trim())
+            put("captcha_mode", "auto")
+            put("turn_host", p.turnHost.trim())
+            put("turn_port", p.turnPort.trim())
+            put("vkcalls_preflight", p.vkCallsPreflight)
+            put("config_first_start", p.configFirstStart)
+            put("hash_fallback", p.hashFallback)
+            put("turn_stream_first", p.rtNetworkMode)
+            put("turn_sni", p.turnSni.trim())
+            put("masque", p.masque)
+            put("masque_config_path", masqueConfigPath)
+            put("masque_accept_tos", p.masqueAcceptTos)
+            put("custom_vk_client_id", p.customVkClientId.trim())
+            put("custom_vk_client_secret", p.customVkClientSecret.trim())
+        }.toString()
+    }
 }
+
+/**
+ * Advanced options of the WDTT Plus VK-TURN core (github.com/Ivan4537/WDTT-Plus). Defaults reproduce
+ * the core's own defaults, so an untouched location behaves exactly like upstream.
+ */
+@Serializable
+data class WdttPlusOptions(
+    /**
+     * «Сеть РТ»: try TURN/TLS, then TURN/TCP to every VK address first and keep UDP as the reserve —
+     * for networks (Rostelecom and the like) that throttle or cut UDP to VK.
+     */
+    @SerialName("rt_network_mode")
+    val rtNetworkMode: Boolean = false,
+    /** Whitelisted SNI for the outer TURN/TLS connection («Сеть РТ» only). Blank = none. */
+    @SerialName("turn_sni")
+    val turnSni: String = "",
+    /** Cloudflare WARP CONNECT-IP (HTTP/2, then HTTP/3) reserve after the direct «Сеть РТ» paths. */
+    val masque: Boolean = false,
+    /** The user accepted Cloudflare's terms for the first WARP enrollment (required by [masque]). */
+    @SerialName("masque_accept_tos")
+    val masqueAcceptTos: Boolean = false,
+    /** Try the VK Calls API before the captcha chain (upstream default: on). */
+    @SerialName("vkcalls_preflight")
+    val vkCallsPreflight: Boolean = true,
+    /** Wait for the server's WireGuard config before starting the rest of the workers. */
+    @SerialName("config_first_start")
+    val configFirstStart: Boolean = false,
+    /** A group whose own VK hash died falls back to the remaining hashes. */
+    @SerialName("hash_fallback")
+    val hashFallback: Boolean = false,
+    /** VK client IDs override, comma-separated. Blank = the core's built-in set. */
+    @SerialName("client_ids")
+    val clientIds: String = "",
+    /** An independent VK app as an extra credential provider: both fields or neither. */
+    @SerialName("custom_vk_client_id")
+    val customVkClientId: String = "",
+    @SerialName("custom_vk_client_secret")
+    val customVkClientSecret: String = "",
+    /** TURN server IP / port override (blank = the ones VK hands out). */
+    @SerialName("turn_host")
+    val turnHost: String = "",
+    @SerialName("turn_port")
+    val turnPort: String = "",
+)
 
 /**
  * Advanced per-location options for the sing-box / Xray proxy core (shown in the editor only when a

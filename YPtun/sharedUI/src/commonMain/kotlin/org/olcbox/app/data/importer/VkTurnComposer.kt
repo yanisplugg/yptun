@@ -16,6 +16,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.data.model.WdttPlusOptions
 
 /**
  * Editable representation of a VK-TURN (freeturn) location. The connection path consumes two
@@ -82,6 +83,8 @@ data class VkTurnDraft(
     val wdttFingerprint: String = "chrome",
     /** WDTT worker count; blank/0 → core default. */
     val wdttWorkers: String = "",
+    /** WDTT Plus advanced knobs, edited in place. */
+    val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
     /** Master switch for multi-server freeturn (the [extraFreeturnUris] are only used when on). */
     val freeturnMultiServer: Boolean = false,
     /**
@@ -185,6 +188,7 @@ object VkTurnComposer {
             wdttPassword = draft.wdttPassword.trim(),
             wdttFingerprint = draft.wdttFingerprint.trim(),
             wdttWorkers = draft.wdttWorkers.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
+            wdttPlus = draft.wdttPlus,
             freeturnMultiServer = draft.freeturnMultiServer,
             extraFreeturnUris = draft.extraFreeturnUris
                 .split('\n')
@@ -306,6 +310,7 @@ object VkTurnComposer {
                 wdttPassword = vkturn.wdttPassword,
                 wdttFingerprint = vkturn.wdttFingerprint.ifBlank { "chrome" },
                 wdttWorkers = vkturn.wdttWorkers.takeIf { it > 0 }?.toString() ?: "",
+                wdttPlus = vkturn.wdttPlus,
                 freeturnMultiServer = vkturn.freeturnMultiServer,
                 extraFreeturnUris = vkturn.extraFreeturnUris.joinToString("\n"),
             )

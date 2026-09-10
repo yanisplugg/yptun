@@ -1751,18 +1751,16 @@ class OlcboxVpnService : VpnService() {
                 val peerAddr = vk.wdttPeerAddr()
                 val configSignal = CompletableDeferred<String>()
                 addLog(
-                    "Starting VK-TURN WDTT core on $listenAddr (peer=$peerAddr, " +
-                        "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"})"
+                    "Starting VK-TURN WDTT Plus core on $listenAddr (peer=$peerAddr, " +
+                        "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
+                        "rt=${vk.wdttPlus.rtNetworkMode}, masque=${vk.wdttPlus.masque})"
                 )
                 Wdttmobile.start(
-                    peerAddr,
-                    vk.vkLink,
-                    vk.wdttPassword,
-                    listenAddr,
-                    vk.wdttWorkers.toLong(),
-                    deviceIdentityProvider.hwid(),
-                    vk.wdttFingerprint.ifBlank { "chrome" },
-                    "",
+                    vk.wdttCoreOptionsJson(
+                        listen = listenAddr,
+                        deviceId = deviceIdentityProvider.hwid(),
+                        masqueConfigPath = java.io.File(filesDir, "wdtt-masque.json").absolutePath,
+                    ),
                     object : WdttConfigSink {
                         override fun onConfig(wgConf: String) {
                             addLog("vkturn(wdtt): server WG config received (${wgConf.length} chars)")
@@ -1888,7 +1886,8 @@ class OlcboxVpnService : VpnService() {
                     profile?.rawOutbound?.isNotBlank() == true ->
                         addLog("VK-TURN WDTT: no GETCONF — falling back to the stored WireGuard config")
                     else -> throw IllegalStateException(
-                        "WDTT: no WireGuard config from server (GETCONF) and none stored"
+                        "WDTT: no WireGuard config from server (GETCONF) and none stored" +
+                            Wdttmobile.lastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
                     )
                 }
             } else if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {

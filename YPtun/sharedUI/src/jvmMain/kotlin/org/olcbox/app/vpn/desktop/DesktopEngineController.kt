@@ -854,17 +854,17 @@ internal class DesktopEngineController(
             // and hands back the WireGuard config we build the outbound from.
             val peerAddr = vk.wdttPeerAddr()
             log(
-                "Starting VK-TURN WDTT core on $listenAddr (peer=$peerAddr, " +
-                    "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"})"
+                "Starting VK-TURN WDTT Plus core on $listenAddr (peer=$peerAddr, " +
+                    "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
+                    "rt=${vk.wdttPlus.rtNetworkMode}, masque=${vk.wdttPlus.masque})"
             )
             YpTunCore.wdttStart(
-                peer = peerAddr,
-                vkHashes = vk.vkLink,
-                password = vk.wdttPassword,
-                listen = listenAddr,
-                numWorkers = vk.wdttWorkers,
-                deviceId = deviceId,
-                fingerprint = vk.wdttFingerprint.ifBlank { "chrome" },
+                vk.wdttCoreOptionsJson(
+                    listen = listenAddr,
+                    deviceId = deviceId,
+                    masqueConfigPath = org.olcbox.app.desktop.DesktopPaths.appDataDir()
+                        .resolve("wdtt-masque.json").toString(),
+                )
             )
         } else {
             // bond=1 в старых ссылках ядро 3.2.0 игнорирует — вырезать его больше не нужно.
@@ -896,7 +896,8 @@ internal class DesktopEngineController(
                 !profile?.rawOutbound.isNullOrBlank() ->
                     log("VK-TURN WDTT: no GETCONF — falling back to the stored WireGuard config")
                 else -> throw IllegalStateException(
-                    "WDTT: no WireGuard config from server (GETCONF) and none stored"
+                    "WDTT: no WireGuard config from server (GETCONF) and none stored" +
+                        YpTunCore.wdttLastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
                 )
             }
         } else if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {

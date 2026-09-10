@@ -64,10 +64,16 @@ internal class SshWdttServerInstaller(private val binaries: ServerBinarySource) 
 }
 
 /**
- * The remote install script. Decompresses + installs the binary, writes a systemd unit that runs
- * it as root (it needs CAP_NET_ADMIN for the TUN/NAT it sets up itself), opens the UDP port on any
- * common firewall (best-effort), starts the service and prints its active state. Single-quoted
- * values are escaped so an awkward password can't break out of the shell quoting.
+ * The remote install script, following the WDTT Plus deploy contract (binary /usr/local/bin/wdtt-server,
+ * unit wdtt.service, data in /etc/wdtt). Decompresses + installs the binary, writes a systemd unit that
+ * runs it as root (it needs CAP_NET_ADMIN for the WireGuard/NAT it sets up itself), opens the UDP port
+ * on any common firewall (best-effort), starts the service and prints its active state.
+ *
+ * Upgrading from the pre-Plus WDTT (unit wdtt-server.service): that service is stopped and removed and
+ * its /etc/wdtt moved aside — the Plus server refuses to start on a database it doesn't recognise, and
+ * a fresh one costs nothing (the client fetches its WireGuard config from the server every start).
+ * Re-running over a Plus install keeps /etc/wdtt (clients, keys) as is. Single-quoted values are
+ * escaped so an awkward password can't break out of the shell quoting.
  */
 internal fun buildInstallScript(options: WdttInstallOptions): String {
     val port = options.wdttPort
@@ -76,15 +82,22 @@ internal fun buildInstallScript(options: WdttInstallOptions): String {
     return """
         set -e
         gunzip -f /tmp/wdtt-server.gz
+        if [ -f /etc/systemd/system/wdtt-server.service ]; then
+          echo "Найден старый WDTT — переношу на WDTT Plus"
+          systemctl disable --now wdtt-server >/dev/null 2>&1 || true
+          rm -f /etc/systemd/system/wdtt-server.service
+          if [ -d /etc/wdtt ]; then mv /etc/wdtt "/etc/wdtt.pre-plus-${'$'}(date +%Y%m%d%H%M%S)"; fi
+        fi
+        systemctl stop wdtt >/dev/null 2>&1 || true
         install -m 0755 /tmp/wdtt-server /usr/local/bin/wdtt-server
         rm -f /tmp/wdtt-server
-        cat > /etc/systemd/system/wdtt-server.service <<UNIT
+        cat > /etc/systemd/system/wdtt.service <<UNIT
         [Unit]
-        Description=WDTT Server
+        Description=WDTT Plus server
         After=network-online.target
         Wants=network-online.target
         [Service]
-        ExecStart=/usr/local/bin/wdtt-server -listen 0.0.0.0:$port -password $pass -dns $dns
+        ExecStart=/usr/local/bin/wdtt-server -listen 0.0.0.0:$port -password $pass -dns $dns -config-dir /etc/wdtt
         Restart=always
         RestartSec=3
         LimitNOFILE=1048576
@@ -94,8 +107,9 @@ internal fun buildInstallScript(options: WdttInstallOptions): String {
         if command -v ufw >/dev/null 2>&1; then ufw allow $port/udp || true; fi
         if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --add-port=$port/udp --permanent && firewall-cmd --reload || true; fi
         systemctl daemon-reload
-        systemctl enable --now wdtt-server
-        sleep 1
-        systemctl is-active wdtt-server && echo "Служба wdtt-server активна на порту $port"
+        systemctl enable --now wdtt
+        sleep 2
+        echo "Версия сервера: ${'$'}(/usr/local/bin/wdtt-server --version 2>/dev/null || echo ?)"
+        systemctl is-active wdtt && echo "Служба wdtt (WDTT Plus) активна на порту $port"
     """.trimIndent()
 }

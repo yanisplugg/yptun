@@ -6,6 +6,7 @@ import (
 	"os"
 )
 
+// Profile holds consistent browser fingerprint headers for TLS+HTTP requests.
 type Profile struct {
 	UserAgent       string `json:"user_agent"`
 	SecChUa         string `json:"sec_ch_ua"`
@@ -13,6 +14,7 @@ type Profile struct {
 	SecChUaPlatform string `json:"sec_ch_ua_platform"`
 }
 
+// SavedProfile is a saved real browser profile loaded from disk.
 type SavedProfile struct {
 	Profile
 	DeviceJSON string `json:"device_json"`
@@ -33,8 +35,9 @@ func LoadProfileFromDisk() (*SavedProfile, error) {
 	return &sp, nil
 }
 
+// profileList contains paired User-Agent and Client Hints strings.
 var profileList = []Profile{
-
+	// Windows Chrome
 	{
 		UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
 		SecChUa:         `"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`,
@@ -54,6 +57,7 @@ var profileList = []Profile{
 		SecChUaPlatform: `"Windows"`,
 	},
 
+	// Windows Edge
 	{
 		UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0",
 		SecChUa:         `"Chromium";v="146", "Not-A.Brand";v="24", "Microsoft Edge";v="146"`,
@@ -67,6 +71,7 @@ var profileList = []Profile{
 		SecChUaPlatform: `"Windows"`,
 	},
 
+	// macOS Chrome
 	{
 		UserAgent:       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
 		SecChUa:         `"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`,
@@ -80,6 +85,7 @@ var profileList = []Profile{
 		SecChUaPlatform: `"macOS"`,
 	},
 
+	// Linux Chrome
 	{
 		UserAgent:       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
 		SecChUa:         `"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`,
@@ -93,10 +99,7 @@ var profileList = []Profile{
 		SecChUaPlatform: `"Linux"`,
 	},
 	{
-		UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
-		SecChUa:         `"Firefox";v="132", "Not-A.Brand";v="8", "Mozilla Firefox";v="132"`,
-		SecChUaMobile:   "?0",
-		SecChUaPlatform: `"Windows"`,
+		UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
 	},
 }
 
@@ -118,7 +121,7 @@ var iosProfiles = []Profile{
 	},
 }
 
-var activeFingerprint = "chrome"
+var activeFingerprint = "firefox"
 
 func SetActiveFingerprint(fp string) {
 	activeFingerprint = fp
@@ -128,6 +131,7 @@ func GetActiveFingerprint() string {
 	return activeFingerprint
 }
 
+// getRandomProfile returns a paired User-Agent and Client Hints profile.
 func getRandomProfile() Profile {
 	switch activeFingerprint {
 	case "android":
@@ -135,11 +139,11 @@ func getRandomProfile() Profile {
 	case "ios":
 		return iosProfiles[rand.Intn(len(iosProfiles))]
 	case "safari":
-		return profileList[4]
+		return profileList[4] // Using macOS Chrome as approximation for Safari if no specific Safari profile exists, or implement one. Actually, let's just use iOS for safari or macos.
 	case "firefox":
 		return profileList[len(profileList)-1]
 	default:
-
+		// chrome, or unknown, pick from first few chrome profiles
 		return profileList[rand.Intn(3)]
 	}
 }

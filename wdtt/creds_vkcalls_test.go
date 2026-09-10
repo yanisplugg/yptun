@@ -1,0 +1,278 @@
+package wdtt
+
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"reflect"
+	"testing"
+	"time"
+)
+
+func TestVKCallsUsesVkRuJoinLink(t *testing.T) {
+	encoded := vkCallsJoinURL("join-code")
+	decoded, err := url.QueryUnescape(encoded)
+	if err != nil {
+		t.Fatalf("decode join URL: %v", err)
+	}
+	if decoded != "https://vk.ru/call/join/join-code" {
+		t.Fatalf("join URL = %q", decoded)
+	}
+}
+
+func TestVKCallsUsesVkMeAPIWithCompatibilityFallback(t *testing.T) {
+	got := vkCallsAPIRequestURLs("/method/test?v=5.276")
+	want := []string{
+		"https://api.vk.me/method/test?v=5.276",
+		"https://api.vk.ru/method/test?v=5.276",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("API URLs = %#v, want %#v", got, want)
+	}
+}
+
+func TestVKCallsPreflightRetryClassification(t *testing.T) {
+	for _, err := range []error{
+		&VkCaptchaError{ErrorCode: 14},
+		errors.New("temporary network failure"),
+	} {
+		if !shouldRetryVKCallsPreflight(err) {
+			t.Fatalf("transient preflight error was not retried: %v", err)
+		}
+	}
+	for _, err := range []error{
+		fmt.Errorf("%w: rate limited", errVKCallsFlood),
+		errors.New("INVALID_JOIN_LINK"),
+		errors.New("ANON_BLOCKED"),
+		errors.New("CALL_FULL"),
+	} {
+		if shouldRetryVKCallsPreflight(err) {
+			t.Fatalf("non-retryable preflight error was retried: %v", err)
+		}
+	}
+}
+
+func TestParseVKCallsTURNAddresses(t *testing.T) {
+	resp := map[string]interface{}{
+		"turn_server": map[string]interface{}{
+			"urls": []interface{}{
+				"turn:1.2.3.4:3478?transport=udp",
+				"turns:turn.example:443?transport=tcp",
+				42,
+			},
+		},
+	}
+	want := []string{"turn:1.2.3.4:3478?transport=udp", "turns:turn.example:443?transport=tcp"}
+	if got := parseVKCallsTURNAddresses(resp); !reflect.DeepEqual(got, want) {
+		t.Fatalf("addresses = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseVKCallsCaptchaError(t *testing.T) {
+	resp := map[string]interface{}{
+		"error": map[string]interface{}{
+			"error_code":   float64(14),
+			"error_msg":    "Captcha needed",
+			"redirect_uri": "https://id.vk.com/captcha?session_token=test",
+		},
+	}
+	err := parseVKCallsAPIError(resp)
+	var captchaErr *VkCaptchaError
+	if !errors.As(err, &captchaErr) {
+		t.Fatalf("expected VkCaptchaError, got %T: %v", err, err)
+	}
+	if captchaErr.RedirectURI == "" {
+		t.Fatal("redirect_uri was not preserved")
+	}
+}
+
+func TestParseVKCallsFloodError(t *testing.T) {
+	err := parseVKCallsOKError(map[string]interface{}{
+		"error_code": float64(4),
+		"error_msg":  "REQUEST : error.webrtc.participant.check.flood",
+	})
+	if !isVKCallsFloodError(err) {
+		t.Fatalf("expected VKCalls flood error, got %v", err)
+	}
+}
+
+func TestParseVKCallsAPIFloodError(t *testing.T) {
+	err := parseVKCallsAPIError(map[string]interface{}{
+		"error": map[string]interface{}{
+			"error_code": float64(29),
+			"error_msg":  "Rate limit reached",
+		},
+	})
+	if !isVKCallsFloodError(err) {
+		t.Fatalf("expected VKCalls flood error, got %v", err)
+	}
+}
+
+func TestParseVKCallsTURNLifetime(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	tests := []struct {
+		name     string
+		response map[string]interface{}
+		username string
+		want     time.Duration
+	}{
+		{
+			name: "lifetime",
+			response: map[string]interface{}{
+				"turn_server": map[string]interface{}{"lifetime": float64(600)},
+			},
+			want: 10 * time.Minute,
+		},
+		{
+			name: "ttl",
+			response: map[string]interface{}{
+				"turn_server": map[string]interface{}{"ttl": "300"},
+			},
+			want: 5 * time.Minute,
+		},
+		{
+			name:     "username expiry",
+			response: map[string]interface{}{"turn_server": map[string]interface{}{}},
+			username: "1700000600:participant",
+			want:     10 * time.Minute,
+		},
+		{
+			name:     "unknown",
+			response: map[string]interface{}{},
+			username: "participant",
+			want:     0,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := parseVKCallsTURNLifetime(test.response, test.username, now); got != test.want {
+				t.Fatalf("lifetime = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestVKCallsFloodPause(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	startVKCallsFloodPause(now)
+	if got := vkCallsPreflightPauseRemaining("first-link", now.Add(10*time.Second)); got != 50*time.Second {
+		t.Fatalf("pause remaining = %v, want 50s", got)
+	}
+	if got := vkCallsPreflightPauseRemaining("first-link", now.Add(vkCallsFloodPause)); got != 0 {
+		t.Fatalf("expired pause remaining = %v, want 0", got)
+	}
+	vkCallsFloodUntil.Store(0)
+}
+
+func TestVKCallsCaptchaPauseIsScopedToOneLink(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	vkCallsFloodUntil.Store(0)
+	vkCallsLinkPauses.Lock()
+	vkCallsLinkPauses.until = make(map[string]int64)
+	vkCallsLinkPauses.Unlock()
+
+	startVKCallsLinkPause("first-link", now, vkCallsCaptchaPause)
+	if got := vkCallsPreflightPauseRemaining("first-link", now.Add(time.Second)); got <= 0 {
+		t.Fatal("the failed link did not retain its CAPTCHA pause")
+	}
+	if got := vkCallsPreflightPauseRemaining("second-link", now.Add(time.Second)); got != 0 {
+		t.Fatalf("independent link inherited another link pause: %v", got)
+	}
+}
+
+func TestVKCallsPreflightPauseForError(t *testing.T) {
+	if got := vkCallsPreflightPauseForError(fmt.Errorf("%w: rate limited", errVKCallsFlood)); got != vkCallsFloodPause {
+		t.Fatalf("flood pause = %v, want %v", got, vkCallsFloodPause)
+	}
+	if got := vkCallsPreflightPauseForError(&VkCaptchaError{ErrorCode: 14}); got != vkCallsCaptchaPause {
+		t.Fatalf("captcha pause = %v, want %v", got, vkCallsCaptchaPause)
+	}
+	if got := vkCallsPreflightPauseForError(errors.New("temporary network failure")); got != vkCallsTransientFailurePause {
+		t.Fatalf("transient pause = %v, want %v", got, vkCallsTransientFailurePause)
+	}
+	if got := vkCallsPreflightPauseForError(errors.New("INVALID_JOIN_LINK")); got != 0 {
+		t.Fatalf("terminal pause = %v, want 0", got)
+	}
+}
+
+func TestExtractVKCallsValues(t *testing.T) {
+	resp := map[string]interface{}{
+		"response": map[string]interface{}{
+			"token":   "token-value",
+			"user_id": float64(123),
+		},
+	}
+	if got, err := extractVKCallsString(resp, "response", "token"); err != nil || got != "token-value" {
+		t.Fatalf("token = %q, err=%v", got, err)
+	}
+	if got, err := extractVKCallsNumber(resp, "response", "user_id"); err != nil || got != 123 {
+		t.Fatalf("user_id = %v, err=%v", got, err)
+	}
+}
+
+func TestCaptchaResultRequestCorrelation(t *testing.T) {
+	result := parseCaptchaResultPayload("200-7|success-token")
+	if result.RequestID != "200-7" || result.Value != "success-token" {
+		t.Fatalf("unexpected parsed result: %#v", result)
+	}
+	if !captchaResultMatchesRequest(result, "200-7") {
+		t.Fatal("matching request ID was rejected")
+	}
+	if captchaResultMatchesRequest(result, "200-8") {
+		t.Fatal("stale result matched a new request")
+	}
+	if !captchaResultMatchesRequest(parseCaptchaResultPayload("legacy-token"), "200-8") {
+		t.Fatal("legacy result compatibility was lost")
+	}
+}
+
+func TestCaptchaResultRoutesToMatchingWaiter(t *testing.T) {
+	resetCaptchaResultRoutingForTest()
+
+	firstCh, firstCleanup := registerCaptchaResultWaiter("100-1")
+	defer firstCleanup()
+	secondCh, secondCleanup := registerCaptchaResultWaiter("200-1")
+	defer secondCleanup()
+
+	enqueueCaptchaResult(CaptchaResult{RequestID: "200-1", Value: "second-token"})
+
+	select {
+	case got := <-secondCh:
+		if got.Value != "second-token" {
+			t.Fatalf("second waiter got %#v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second waiter did not receive its result")
+	}
+
+	select {
+	case got := <-firstCh:
+		t.Fatalf("first waiter received another request result: %#v", got)
+	default:
+	}
+}
+
+func TestLateIdentifiedCaptchaResultDoesNotPoisonLegacyQueue(t *testing.T) {
+	resetCaptchaResultRoutingForTest()
+
+	enqueueCaptchaResult(CaptchaResult{RequestID: "missing", Value: "late-token"})
+
+	select {
+	case got := <-CaptchaResultChan:
+		t.Fatalf("late identified result leaked into legacy queue: %#v", got)
+	default:
+	}
+}
+
+func resetCaptchaResultRoutingForTest() {
+	for {
+		select {
+		case <-CaptchaResultChan:
+		default:
+			captchaResultWaiters.Lock()
+			captchaResultWaiters.byRequestID = make(map[string]chan CaptchaResult)
+			captchaResultWaiters.Unlock()
+			return
+		}
+	}
+}

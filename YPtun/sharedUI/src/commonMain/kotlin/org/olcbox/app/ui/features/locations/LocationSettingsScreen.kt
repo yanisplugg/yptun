@@ -116,6 +116,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.ui.components.PingButton
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 
@@ -950,7 +951,7 @@ private fun LazyListScope.vkTurnSection(
         ) {
             SectionTitle(
                 title = "Транспортное ядро VK-TURN",
-                subtitle = "freeturn — стандартный клиент; WDTT — агрегация одного WG-потока по звонкам (chunk-dispatch)"
+                subtitle = "freeturn — стандартный клиент; WDTT Plus — агрегация одного WG-потока по звонкам, режим «Сеть РТ», резерв через WARP"
             )
             SettingsDropdown(
                 label = "Ядро",
@@ -958,7 +959,7 @@ private fun LazyListScope.vkTurnSection(
                 options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT),
                 enabled = enabled,
                 onValueSelected = { v -> onChange { it.copy(core = v) } },
-                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "WDTT (агрегация по звонкам)" else "freeturn (стандарт)" }
+                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "WDTT Plus (агрегация по звонкам)" else "freeturn (стандарт)" }
             )
             if (draft.core == VkTurnConfig.CORE_WDTT) {
                 Row(
@@ -1019,6 +1020,11 @@ private fun LazyListScope.vkTurnSection(
                     placeholder = "0 — авто; кратно 9, максимум 108",
                     enabled = enabled,
                     keyboardType = KeyboardType.Number
+                )
+                WdttPlusAdvanced(
+                    options = draft.wdttPlus,
+                    enabled = enabled,
+                    onChange = { transform -> onChange { it.copy(wdttPlus = transform(it.wdttPlus)) } }
                 )
             }
         }
@@ -1456,14 +1462,14 @@ private fun WdttInstallDialog(
 
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
-        title = { Text("Автоустановка WDTT на VPS") },
+        title = { Text("Автоустановка WDTT Plus на VPS") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    "Подключусь к VPS по SSH, загружу и запущу wdtt-сервер на порту $port. " +
+                    "Подключусь к VPS по SSH, загружу и запущу сервер WDTT Plus на порту $port. " +
                         "Порт, пароль и DNS можно изменить ниже — они сохранятся в настройки локации.",
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -2172,6 +2178,110 @@ private fun VkTurnSwitchRow(
             modifier = Modifier.weight(1f).padding(end = 12.dp)
         )
         Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+    }
+}
+
+/**
+ * WDTT Plus core knobs ([WdttPlusOptions]). Collapsed by default and opened automatically when any of
+ * them differs from the core's defaults, so a customised location shows what it changed.
+ */
+@Composable
+private fun WdttPlusAdvanced(
+    options: WdttPlusOptions,
+    enabled: Boolean,
+    onChange: ((WdttPlusOptions) -> WdttPlusOptions) -> Unit
+) {
+    var expanded by remember { mutableStateOf(options != WdttPlusOptions()) }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        VkTurnSwitchRow("Расширенные настройки WDTT Plus", expanded, enabled) { expanded = it }
+        if (!expanded) return@Column
+
+        VkTurnSwitchRow("Режим «Сеть РТ»: TURN/TLS и TCP, UDP — резерв", options.rtNetworkMode, enabled) { v ->
+            onChange { it.copy(rtNetworkMode = v) }
+        }
+        if (options.rtNetworkMode) {
+            VkTurnField(
+                value = options.turnSni,
+                onValueChange = { v -> onChange { it.copy(turnSni = v.trim()) } },
+                label = "SNI для TURN/TLS (белый список)",
+                placeholder = "пусто — без SNI",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+            VkTurnSwitchRow("Резерв через Cloudflare WARP (MASQUE)", options.masque, enabled) { v ->
+                onChange { it.copy(masque = v) }
+            }
+            if (options.masque) {
+                VkTurnSwitchRow("Принимаю условия Cloudflare WARP", options.masqueAcceptTos, enabled) { v ->
+                    onChange { it.copy(masqueAcceptTos = v) }
+                }
+            }
+        }
+        VkTurnSwitchRow("Сначала VK Calls API, потом капча", options.vkCallsPreflight, enabled) { v ->
+            onChange { it.copy(vkCallsPreflight = v) }
+        }
+        VkTurnSwitchRow("Резервные VK-хеши для групп", options.hashFallback, enabled) { v ->
+            onChange { it.copy(hashFallback = v) }
+        }
+        VkTurnSwitchRow("Дождаться конфига сервера до запуска потоков", options.configFirstStart, enabled) { v ->
+            onChange { it.copy(configFirstStart = v) }
+        }
+        VkTurnField(
+            value = options.clientIds,
+            onValueChange = { v -> onChange { it.copy(clientIds = v.trim()) } },
+            label = "ID клиентов VK",
+            placeholder = "через запятую; пусто — встроенные",
+            enabled = enabled
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            VkTurnField(
+                value = options.customVkClientId,
+                onValueChange = { v -> onChange { it.copy(customVkClientId = v.trim()) } },
+                label = "Свой VK client_id",
+                placeholder = "необязательно",
+                enabled = enabled,
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f)
+            )
+            VkTurnField(
+                value = options.customVkClientSecret,
+                onValueChange = { v -> onChange { it.copy(customVkClientSecret = v.trim()) } },
+                label = "client_secret",
+                placeholder = "вместе с client_id",
+                enabled = enabled,
+                isError = (options.customVkClientId.isBlank()) != (options.customVkClientSecret.isBlank()),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            VkTurnField(
+                value = options.turnHost,
+                onValueChange = { v -> onChange { it.copy(turnHost = v.trim()) } },
+                label = "IP TURN (вручную)",
+                placeholder = "пусто — от VK",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri,
+                modifier = Modifier.weight(2f)
+            )
+            VkTurnField(
+                value = options.turnPort,
+                onValueChange = { v -> onChange { it.copy(turnPort = v.filter(Char::isDigit)) } },
+                label = "Порт",
+                placeholder = "авто",
+                enabled = enabled,
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f)
+            )
+        }
     }
 }
 
