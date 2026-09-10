@@ -937,6 +937,30 @@ class LocationsRepositoryImplTest {
         assertEquals(rigaId, locations.single { it.name == "Рига" }.storageId)
     }
 
+    @Test
+    fun freeturnSubscriptionKeepsEveryServerAndItsId() = runTest {
+        fun link(host: String, port: Int, comment: String) =
+            "freeturn://10.0.0.2:51820?server=$host&port=$port&pub=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=&comment=$comment"
+        var body = listOf(link("198.51.100.1", 443, "Нода 1"), link("198.51.100.2", 443, "Нода 2")).joinToString("\n")
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(
+            dataSource = source,
+            httpClient = HttpClient(MockEngine { respond(body) }),
+            deviceIdentityProvider = StaticIdentityProvider("hwid-test")
+        )
+        val url = "https://example.test/freeturn-grow"
+        repo.importText(url)
+        val node1Id = source.stored!!.locations.single { it.name == "Нода 1" }.storageId
+
+        body = link("198.51.100.3", 443, "Нода 0") + "\n" + body
+        repo.refreshSubscription(url)
+
+        val locations = source.stored!!.locations
+        assertEquals(listOf("Нода 0", "Нода 1", "Нода 2"), locations.map { it.name })
+        assertEquals(locations.size, locations.map { it.storageId }.toSet().size)
+        assertEquals(node1Id, locations.single { it.name == "Нода 1" }.storageId)
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),

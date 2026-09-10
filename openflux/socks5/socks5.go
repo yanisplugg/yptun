@@ -94,37 +94,59 @@ func (s *SOCKS5Server) Start() error {
 func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	buf := make([]byte, 256)
-	n, err := clientConn.Read(buf)
-	if err != nil || n < 2 || buf[0] != 0x05 {
+	head := make([]byte, 2)
+	if _, err := io.ReadFull(clientConn, head); err != nil || head[0] != 0x05 {
 		return
 	}
 
-	nMethods := int(buf[1])
-	if 2+nMethods > n {
-		nMethods = n - 2
+	methods := make([]byte, head[1])
+	if _, err := io.ReadFull(clientConn, methods); err != nil {
+		return
 	}
-	if !s.authenticate(clientConn, buf[2:2+nMethods]) {
+	if !s.authenticate(clientConn, methods) {
 		return
 	}
 
-	n, err = clientConn.Read(buf)
-	if err != nil || n < 10 || buf[1] != 0x01 {
+	reqHead := make([]byte, 4)
+	if _, err := io.ReadFull(clientConn, reqHead); err != nil || reqHead[0] != 0x05 {
+		return
+	}
+	if reqHead[1] != 0x01 {
+		// Command not supported
+		clientConn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return
 	}
 
 	var targetAddr string
-	switch buf[3] {
-	case 0x01:
+	switch reqHead[3] {
+	case 0x01: // IPv4
+		addrBuf := make([]byte, 6)
+		if _, err := io.ReadFull(clientConn, addrBuf); err != nil {
+			return
+		}
 		targetAddr = fmt.Sprintf("%d.%d.%d.%d:%d",
-			buf[4], buf[5], buf[6], buf[7],
-			uint16(buf[8])<<8|uint16(buf[9]))
-	case 0x03:
-		domainLen := int(buf[4])
+			addrBuf[0], addrBuf[1], addrBuf[2], addrBuf[3],
+			uint16(addrBuf[4])<<8|uint16(addrBuf[5]))
+	case 0x03: // Domain
+		var lenBuf [1]byte
+		if _, err := io.ReadFull(clientConn, lenBuf[:]); err != nil {
+			return
+		}
+		domainLen := int(lenBuf[0])
+		domainBuf := make([]byte, domainLen+2)
+		if _, err := io.ReadFull(clientConn, domainBuf); err != nil {
+			return
+		}
 		targetAddr = fmt.Sprintf("%s:%d",
-			string(buf[5:5+domainLen]),
-			uint16(buf[5+domainLen])<<8|uint16(buf[6+domainLen]))
+			string(domainBuf[:domainLen]),
+			uint16(domainBuf[domainLen])<<8|uint16(domainBuf[domainLen+1]))
+	case 0x04: // IPv6 (OpenFlux tunnel carries IPv4 only)
+		addrBuf := make([]byte, 18)
+		_, _ = io.ReadFull(clientConn, addrBuf)
+		clientConn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+		return
 	default:
+		clientConn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return
 	}
 
