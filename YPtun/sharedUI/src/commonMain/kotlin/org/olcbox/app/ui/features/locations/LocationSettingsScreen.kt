@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.padding
@@ -97,7 +96,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -106,8 +104,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.MasterDnsConfig
@@ -179,9 +175,11 @@ fun LocationSettingsScreen(
         config.transport,
         config.bypassProvider
     )
-    val density = LocalDensity.current
-    val isKeyboardVisible = WindowInsets.ime.getBottom(density) > 0
-
+    // No WindowInsets.ime here (issue #40): the activity runs adjustPan like the rest of the app, and in
+    // that mode Compose's IME insets are not reliable — after a long-press "Вставить" toolbar the value
+    // stuck at the keyboard height once the keyboard was gone, so imePadding() left the bottom half of
+    // the screen black and the Save bar hidden. adjustPan already moves the focused field above the
+    // keyboard, so the screen needs no IME handling of its own.
     var showWdttInstall by remember { mutableStateOf(false) }
     if (showWdttInstall) {
         WdttInstallDialog(
@@ -255,35 +253,32 @@ fun LocationSettingsScreen(
             )
         },
         bottomBar = {
-            if (!isKeyboardVisible) {
-                Column {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    ActionsBar(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 24.dp, vertical = 16.dp),
-                        showDelete = viewModel.editingId != null,
-                        isSaving = isSaving,
-                        isFormValid = viewModel.isFormValid,
-                        onDelete = { if (confirmBeforeDelete) confirmDelete = true else deleteNow() },
-                        onSave = {
-                            viewModel.saveEditing {
-                                homeViewModel.loadCurrentConfig()
-                                homeViewModel.restartVpnIfRunning()
-                                onBack()
-                            }
+            Column {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                ActionsBar(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
+                    showDelete = viewModel.editingId != null,
+                    isSaving = isSaving,
+                    isFormValid = viewModel.isFormValid,
+                    onDelete = { if (confirmBeforeDelete) confirmDelete = true else deleteNow() },
+                    onSave = {
+                        viewModel.saveEditing {
+                            homeViewModel.loadCurrentConfig()
+                            homeViewModel.restartVpnIfRunning()
+                            onBack()
                         }
-                    )
-                }
+                    }
+                )
             }
         }
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding(),
+                .padding(innerPadding),
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
