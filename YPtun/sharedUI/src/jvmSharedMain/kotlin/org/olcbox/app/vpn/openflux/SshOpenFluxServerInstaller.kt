@@ -77,6 +77,11 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
     val transport = if (options.transport == OpenFluxConfig.TRANSPORT_MAX) OpenFluxConfig.TRANSPORT_MAX
     else OpenFluxConfig.TRANSPORT_YANDEX
     val rst = "OUTPUT -p tcp --tcp-flags RST RST -j DROP"
+    val execArgs = if (transport == OpenFluxConfig.TRANSPORT_MAX) {
+        "--exit-node --transport ${'$'}{OPENFLUX_TRANSPORT}"
+    } else {
+        "--exit-node --transport ${'$'}{OPENFLUX_TRANSPORT} --url ${'$'}{OPENFLUX_DOC_URL}"
+    }
     return """
         set -e
         gunzip -f /tmp/openflux.gz
@@ -103,7 +108,7 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
         [Service]
         EnvironmentFile=/etc/openflux/openflux.env
         ExecStartPre=/bin/sh -c 'iptables -C $rst 2>/dev/null || iptables -A $rst'
-        ExecStart=/usr/local/bin/openflux --exit-node --transport ${'$'}{OPENFLUX_TRANSPORT} --url ${'$'}{OPENFLUX_DOC_URL}
+        ExecStart=/usr/local/bin/openflux $execArgs
         ExecStopPost=/bin/sh -c 'iptables -D $rst 2>/dev/null || true'
         Restart=always
         RestartSec=3

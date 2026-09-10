@@ -34,5 +34,8 @@ class OpenFluxInstallScriptTest {
         assertTrue(script.lines().any { it.startsWith("ExecStopPost=") && "iptables -D OUTPUT -p tcp --tcp-flags RST RST -j DROP" in it })
         assertTrue(script.lines().any { it == "OPENFLUX_TRANSPORT=\"oneme\"" })
         assertTrue(script.lines().any { it == "OPENFLUX_MAX_TOKEN=\"tok\"" })
+        val execStart = script.lines().single { it.startsWith("ExecStart=") }
+        assertTrue(execStart.endsWith("--transport \${OPENFLUX_TRANSPORT}"), execStart)
+        assertFalse("--url" in execStart, "MAX transport should not have --url on ExecStart: $execStart")
     }
 }

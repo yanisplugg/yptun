@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,8 +70,12 @@ type cachedIP struct {
 const dnsCacheTTL = 5 * time.Minute
 
 func newTunnelResolvingDialer(tun *tunnel.TCPTunnel, dnsServer string) socks5.Dialer {
+	dnsServer = strings.TrimSpace(dnsServer)
 	if dnsServer == "" {
 		return tun // upstream behaviour: system resolver
+	}
+	if !strings.Contains(dnsServer, ":") {
+		dnsServer = net.JoinHostPort(dnsServer, "53")
 	}
 	return &tunnelResolvingDialer{
 		tun: tun,
