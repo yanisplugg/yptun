@@ -937,11 +937,24 @@ class LocationsRepositoryImplTest {
         assertEquals(rigaId, locations.single { it.name == "Рига" }.storageId)
     }
 
+    /** VK-TURN servers keep their ids across a refresh that inserts a server AND renames one upstream. */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
     @Test
     fun freeturnSubscriptionKeepsEveryServerAndItsId() = runTest {
-        fun link(host: String, port: Int, comment: String) =
-            "freeturn://10.0.0.2:51820?server=$host&port=$port&pub=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=&comment=$comment"
-        var body = listOf(link("198.51.100.1", 443, "Нода 1"), link("198.51.100.2", 443, "Нода 2")).joinToString("\n")
+        val wgConf = listOf(
+            "[Interface]",
+            "PrivateKey = QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoxMjM0NTY3OD0=",
+            "Address = 10.7.3.2/32",
+            "",
+            "[Peer]",
+            "PublicKey = cGVlcl9wdWJsaWNfa2V5X2Jhc2U2NF8zMl9ieXRlc19vaz0=",
+            "Endpoint = 127.0.0.1:9000",
+            "AllowedIPs = 0.0.0.0/0",
+        ).joinToString("\n")
+        val wg = kotlin.io.encoding.Base64.UrlSafe.encode(wgConf.encodeToByteArray()).trimEnd('=')
+        fun link(ip: String, name: String) =
+            "freeturn://vk?tcp<mode=udp&obf-profile=rtpopus&wg=$wg>@$ip:56000#deadbeef${'$'}$name"
+        var body = listOf(link("198.51.100.1", "Нода 1"), link("198.51.100.2", "Нода 2")).joinToString("\n")
         val source = FakeLocationsDataSource()
         val repo = LocationsRepositoryImpl(
             dataSource = source,
@@ -950,15 +963,21 @@ class LocationsRepositoryImplTest {
         )
         val url = "https://example.test/freeturn-grow"
         repo.importText(url)
-        val node1Id = source.stored!!.locations.single { it.name == "Нода 1" }.storageId
+        val imported = source.stored!!.locations
+        assertEquals(listOf("Нода 1", "Нода 2"), imported.map { it.name })
+        val node1Id = imported.single { it.name == "Нода 1" }.storageId
 
-        body = link("198.51.100.3", 443, "Нода 0") + "\n" + body
+        body = listOf(
+            link("198.51.100.3", "Нода 0"),
+            link("198.51.100.1", "Нода 1 (NL)"),
+            link("198.51.100.2", "Нода 2"),
+        ).joinToString("\n")
         repo.refreshSubscription(url)
 
         val locations = source.stored!!.locations
-        assertEquals(listOf("Нода 0", "Нода 1", "Нода 2"), locations.map { it.name })
+        assertEquals(listOf("Нода 0", "Нода 1 (NL)", "Нода 2"), locations.map { it.name })
         assertEquals(locations.size, locations.map { it.storageId }.toSet().size)
-        assertEquals(node1Id, locations.single { it.name == "Нода 1" }.storageId)
+        assertEquals(node1Id, locations.single { it.name == "Нода 1 (NL)" }.storageId)
     }
 
     private class FakeLocationsDataSource(

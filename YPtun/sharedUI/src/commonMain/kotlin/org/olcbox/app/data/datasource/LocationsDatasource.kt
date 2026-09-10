@@ -2504,7 +2504,9 @@ class LocationsRepositoryImpl(
             normalized.id,
             normalized.key,
             normalized.proxy?.let { "${it.type}@${it.server}:${it.serverPort}" }.orEmpty(),
-            normalized.vkturn?.let { "${it.outbound}@${it.uri.ifBlank { it.outboundProxyLink }}" }.orEmpty(),
+            // The freeturn:// link minus its `$comment` (the display name): a rename upstream must still
+            // match by endpoint in the fallback pass below.
+            normalized.vkturn?.let { "${it.outbound}@${it.uri.substringBefore('$').ifBlank { it.outboundProxyLink }}" }.orEmpty(),
             normalized.masterDns?.let { "${it.domains}@${it.resolvers}" }.orEmpty(),
             normalized.openFlux?.let { "${it.transport}@${if (it.usesMax()) it.maxUid else it.docUrl}" }.orEmpty(),
         ).joinToString("|")

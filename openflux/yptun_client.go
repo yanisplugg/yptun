@@ -70,12 +70,9 @@ type cachedIP struct {
 const dnsCacheTTL = 5 * time.Minute
 
 func newTunnelResolvingDialer(tun *tunnel.TCPTunnel, dnsServer string) socks5.Dialer {
-	dnsServer = strings.TrimSpace(dnsServer)
+	dnsServer = dnsServerAddr(dnsServer)
 	if dnsServer == "" {
 		return tun // upstream behaviour: system resolver
-	}
-	if !strings.Contains(dnsServer, ":") {
-		dnsServer = net.JoinHostPort(dnsServer, "53")
 	}
 	return &tunnelResolvingDialer{
 		tun: tun,
@@ -88,6 +85,19 @@ func newTunnelResolvingDialer(tun *tunnel.TCPTunnel, dnsServer string) socks5.Di
 		},
 		cache: make(map[string]cachedIP),
 	}
+}
+
+// dnsServerAddr turns a user-entered DNS server into host:port ("1.1.1.1" → "1.1.1.1:53"). It checks with
+// SplitHostPort rather than for a colon, because a bare IPv6 address has colons too.
+func dnsServerAddr(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if _, _, err := net.SplitHostPort(value); err == nil {
+		return value
+	}
+	return net.JoinHostPort(strings.Trim(value, "[]"), "53")
 }
 
 func (d *tunnelResolvingDialer) DialTCP(address string) (net.Conn, error) {

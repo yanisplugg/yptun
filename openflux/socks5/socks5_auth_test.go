@@ -114,7 +114,9 @@ func TestHandleConnectionDomainAndIPv4(t *testing.T) {
 	client2.Write([]byte{0x05, 0x01, 0x00})
 	io.ReadFull(client2, authResp)
 
-	client2.Write([]byte{0x05, 0x03, 0x00, 0x01, 127, 0, 0, 1, 0x04, 0x38})
+	// net.Pipe is synchronous: the server answers after the 4-byte header and never reads the address,
+	// so a blocking 10-byte Write here would deadlock against the server's reply.
+	go client2.Write([]byte{0x05, 0x03, 0x00, 0x01, 127, 0, 0, 1, 0x04, 0x38})
 	resp2 := make([]byte, 10)
 	io.ReadFull(client2, resp2)
 	if resp2[1] != 0x07 { // 0x07 = Command not supported
