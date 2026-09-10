@@ -1,0 +1,225 @@
+# Windows desktop builds (x64 + ARM64), Authenticode-signed through SignPath when configured.
+#
+# ARM64 CANNOT be built from an x64 machine: jpackage/jlink emit a launcher for the host architecture
+# only, the Go cores are CGo (a c-shared .dll) so they need a real aarch64 C toolchain, and Windows
+# emulation only runs x64 ON arm64, never the reverse. So it runs on a native `windows-11-arm`
+# runner, which is free for public repositories. x64 builds here too so that BOTH architectures come
+# out of CI: SignPath only signs artifacts whose origin it can verify, i.e. built by GitHub Actions.
+#
+# Signing (SignPath Foundation, free for open source): active once the repo has the secret
+# SIGNPATH_API_TOKEN and the variables SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG /
+# SIGNPATH_SIGNING_POLICY_SLUG. Without them the job ships unsigned files under the same artifact
+# names. The artifact configuration to paste into the SignPath project is .signpath/artifact-configuration.xml.
+#
+# Note this workflow lives at the REPO ROOT. There is a similar matrix under YPtun/.github/, but
+# GitHub only reads workflows from the repository root, so that one never ran.
+
+name: Windows desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp (defaults to olcbox.version in gradle.properties)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+    # workflow_dispatch only works once the file is on the default branch, so the desktop branch also
+    # builds on push - narrowed to the paths that can actually change the Windows output.
+    branches:
+      - pc-client-beta
+    paths:
+      - ".github/workflows/windows-desktop.yml"
+      - "YPtun/desktopApp/**"
+      - "YPtun/sharedUI/src/jvmMain/**"
+      - "YPtun/sharedUI/src/commonMain/**"
+      - "YPtun/gradle.properties"
+      - "cores/**"
+      - "olcrtc/**"
+
+permissions:
+  contents: read
+  actions: read # SignPath fetches the unsigned artifact through the Actions API
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} installer + portable
+    runs-on: ${{ matrix.runner }}
+    # Build ~25 min + up to an hour waiting for the SignPath approval.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            goarch: amd64
+            runner: windows-latest
+            jdk: x64
+            mingw: x86_64
+            machine: "0x8664"
+          - arch: arm64
+            goarch: arm64
+            runner: windows-11-arm
+            jdk: aarch64
+            mingw: aarch64
+            machine: "0xAA64"
+    env:
+      SIGNPATH_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: "21"
+          architecture: ${{ matrix.jdk }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cores/go.mod
+          cache: false
+
+      # CGo needs a mingw-style C compiler; MSVC is not cgo-compatible. llvm-mingw ships native
+      # toolchains for both hosts, so nothing is emulated here.
+      - name: Install llvm-mingw (C toolchain)
+        shell: pwsh
+        run: |
+          $ver = "20260616"
+          $pkg = "llvm-mingw-$ver-ucrt-${{ matrix.mingw }}"
+          Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$ver/$pkg.zip" -OutFile "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Expand-Archive "$env:RUNNER_TEMP\llvm-mingw.zip" -DestinationPath "C:\" -Force
+          $bin = "C:\$pkg\bin"
+          $cc = "$bin\${{ matrix.mingw }}-w64-mingw32-clang.exe"
+          if (-not (Test-Path $cc)) { throw "llvm-mingw layout unexpected: $cc" }
+          echo $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CC=$cc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "CXX=$bin\${{ matrix.mingw }}-w64-mingw32-clang++.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Gradle configures every project in the build, including the Android modules, so AGP demands a
+      # valid SDK *location* even though only :desktopApp is built here. Nothing else is installed:
+      # no Android task ever runs, and compileSdk 37 is not in the stable SDK channel yet anyway.
+      - name: Set up Android SDK (only to satisfy AGP's SDK-location check)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+
+      # Inno Setup builds the multilingual installer (an x86 binary, fine under ARM64 emulation).
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe" -OutFile "$env:RUNNER_TEMP\is.exe"
+            Start-Process "$env:RUNNER_TEMP\is.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          }
+
+      - name: Report toolchain
+        shell: pwsh
+        run: |
+          java -version
+          go version
+          & $env:CC --version
+          Write-Host "os.arch = $(java -XshowSettings:properties -version 2>&1 | Select-String 'os.arch')"
+
+      - name: Override version
+        if: inputs.version != ''
+        shell: pwsh
+        working-directory: YPtun
+        run: |
+          (Get-Content gradle.properties) -replace '^olcbox\.version=.*', "olcbox.version=${{ inputs.version }}" |
+            Set-Content gradle.properties
+
+      # --max-workers=1 and no daemon: the Exec tasks that shell out to `go build` must inherit the
+      # CC/PATH set above, which a reused daemon does not pick up (learned the hard way on amd64).
+      - name: Build app image
+        shell: pwsh
+        working-directory: YPtun
+        env:
+          CGO_ENABLED: "1"
+        run: .\gradlew.bat --no-daemon --max-workers=1 :desktopApp:createDistributable --stacktrace
+
+      - name: Verify the app image architecture
+        shell: pwsh
+        run: |
+          # PE machine type: 0x8664 = x64, 0xAA64 = ARM64. Catches a binary silently built for the wrong
+          # arch, which would otherwise only surface at runtime (a JNA load failure, or a dead launcher).
+          $expected = [Convert]::ToUInt16("${{ matrix.machine }}".Substring(2), 16)
+          function Assert-Arch($path, $label) {
+            if (-not (Test-Path $path)) { throw "$label missing: $path" }
+            $bytes = [IO.File]::ReadAllBytes($path)
+            $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOff + 4)
+            if ($machine -ne $expected) { throw ("{0} machine type is 0x{1:X4}, expected 0x{2:X4}" -f $label, $machine, $expected) }
+            Write-Host "OK: $label is ${{ matrix.arch }}"
+          }
+          # The cores ship inside the desktopApp jar, so check them where the build emits them.
+          $native = "YPtun\desktopApp\build\generated\desktopNativeResources\native"
+          $ga = "${{ matrix.goarch }}"
+          Assert-Arch "$native\yptuncore-windows-$ga.dll" "yptuncore"
+          Assert-Arch "$native\olcrtc-windows-$ga.exe" "olcrtc binary"
+          Assert-Arch "$native\tun2socks-windows-$ga.exe" "tun2socks"
+          Assert-Arch "$native\wintun.dll" "wintun"
+          # And the jpackage launcher, which proves the runtime image is native too.
+          Assert-Arch "YPtun\desktopApp\build\compose\binaries\main\app\YPtun\YPtun.exe" "launcher"
+
+      - name: Build installer (en/ru/zh/fa)
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File YPtun\desktopApp\packaging\windows\build-installer.ps1 -Arch ${{ matrix.goarch }}
+
+      - name: Build portable
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File YPtun\desktopApp\packaging\windows\build-portable.ps1 -Arch ${{ matrix.goarch }}
+
+      - name: Upload unsigned
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: yptun-windows-${{ matrix.arch }}-unsigned
+          path: |
+            YPtun/desktopApp/build/compose/binaries/main/exe/YPtun-*-${{ matrix.arch }}-installer.exe
+            YPtun/desktopApp/build/compose/binaries/main/exe/YPtun-*-${{ matrix.arch }}-portable.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      # Release signing waits for a maintainer to approve the request on signpath.io.
+      - name: Sign (SignPath)
+        if: env.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: release
+
+      - name: Verify signatures
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          Get-ChildItem release\*.exe | ForEach-Object {
+            $sig = Get-AuthenticodeSignature $_.FullName
+            Write-Host "$($_.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { throw "$($_.Name) is not validly signed" }
+          }
+
+      - name: Use unsigned files (signing not configured)
+        if: env.SIGNPATH_ENABLED != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory release -Force | Out-Null
+          Copy-Item YPtun\desktopApp\build\compose\binaries\main\exe\YPtun-*-${{ matrix.arch }}-*.exe release\
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yptun-windows-${{ matrix.arch }}
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 30

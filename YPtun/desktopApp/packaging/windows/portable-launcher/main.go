@@ -13,11 +13,14 @@
 //
 // Layout of the shipped file:
 //
-//	[ launcher .exe ][ app-image zip ][ uint64 zip size ][ "YPTUNPKG" ]
+//	[ launcher .exe ][ app-image zip ][ uint64 zip size ][ "YPTUNPKG" ]( [ 0-7 zero pad ][ signature ] )
+//
+// The part in parentheses exists once the file is Authenticode-signed (see dataEnd).
 package main
 
 import (
 	"archive/zip"
+	"debug/pe"
 	"encoding/binary"
 	"io"
 	"os"
@@ -159,19 +162,58 @@ func payloadRange(f *os.File) (size int64, offset int64, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	return findPayload(f, dataEnd(f, info.Size()))
+}
+
+// dataEnd is where this file's own bytes stop. Unsigned, that is the end of the file. Signing the
+// .exe (Authenticode) appends a certificate table AFTER the trailer, so the trailer then sits right
+// before the table — whose file offset the PE security directory records.
+func dataEnd(f io.ReaderAt, fileSize int64) int64 {
+	img, err := pe.NewFile(f)
+	if err != nil {
+		return fileSize
+	}
+	var dirs []pe.DataDirectory
+	switch h := img.OptionalHeader.(type) {
+	case *pe.OptionalHeader64:
+		dirs = h.DataDirectory[:min(int(h.NumberOfRvaAndSizes), len(h.DataDirectory))]
+	case *pe.OptionalHeader32:
+		dirs = h.DataDirectory[:min(int(h.NumberOfRvaAndSizes), len(h.DataDirectory))]
+	}
+	if len(dirs) <= pe.IMAGE_DIRECTORY_ENTRY_SECURITY {
+		return fileSize
+	}
+	// For the security directory VirtualAddress is a FILE offset, not an RVA.
+	cert := dirs[pe.IMAGE_DIRECTORY_ENTRY_SECURITY]
+	if cert.VirtualAddress == 0 || cert.Size == 0 || int64(cert.VirtualAddress) > fileSize {
+		return fileSize
+	}
+	return int64(cert.VirtualAddress)
+}
+
+// findPayload locates the trailer ending at [end]. signtool pads the file to an 8-byte boundary with
+// zeros before the certificate table, so up to 7 zero bytes may sit between trailer and [end].
+func findPayload(r io.ReaderAt, end int64) (size int64, offset int64, err error) {
 	trailer := make([]byte, trailerSize)
-	if _, err := f.ReadAt(trailer, info.Size()-trailerSize); err != nil {
-		return 0, 0, err
+	for pad := int64(0); pad < 8; pad++ {
+		at := end - pad - trailerSize
+		if at < 0 {
+			break
+		}
+		if _, err := r.ReadAt(trailer, at); err != nil {
+			return 0, 0, err
+		}
+		if string(trailer[8:]) != trailerMagic {
+			continue
+		}
+		size = int64(binary.LittleEndian.Uint64(trailer[:8]))
+		offset = at - size
+		if offset < 0 {
+			return 0, 0, errString("the appended app image is truncated")
+		}
+		return size, offset, nil
 	}
-	if string(trailer[8:]) != trailerMagic {
-		return 0, 0, errString("this launcher carries no app image (rebuild it with build-portable.ps1)")
-	}
-	size = int64(binary.LittleEndian.Uint64(trailer[:8]))
-	offset = info.Size() - trailerSize - size
-	if offset < 0 {
-		return 0, 0, errString("the appended app image is truncated")
-	}
-	return size, offset, nil
+	return 0, 0, errString("this launcher carries no app image (rebuild it with build-portable.ps1)")
 }
 
 func extract(entry *zip.File, root string) error {

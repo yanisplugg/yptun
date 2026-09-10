@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Artifact configuration for the SignPath project (paste it in the project's "Artifact configurations").
+  The GitHub artifact uploaded by .github/workflows/windows-desktop.yml is a zip holding exactly two
+  files per architecture: YPtun-<ver>-<arch>-installer.exe and YPtun-<ver>-<arch>-portable.exe.
+  The portable launcher finds its appended app image in front of the signature (portable-launcher/main.go).
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="YPtun-*-installer.exe">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="YPtun-*-portable.exe">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

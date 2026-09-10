@@ -216,6 +216,16 @@ Standing on the shoulders of giants:
 [olcRTC](https://github.com/openlibrecommunity/olcrtc) ·
 [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go).
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Signed are the Windows installer and portable built by [GitHub Actions](.github/workflows/windows-desktop.yml) from this repository.
+
+- Committers and reviewers: [repository contributors](https://github.com/yanisplugg/olcvpn-client/graphs/contributors)
+- Approvers: [repository owner](https://github.com/yanisplugg)
+
+Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user (their servers, subscriptions and the circumvention services they choose), apart from checking GitHub for updates.
+
 ## License
 
 [GPL-3.0](LICENSE) — the app ships under the GNU GPL v3.0 because it bundles **sing-box** (also GPL-3.0): copyleft applies to the whole product. Vendored components keep their own licenses (`sing-box` — GPL-3.0, Xray — MPL-2.0, `amneziawg-go` — MIT, `olcrtc` — WTFPL).

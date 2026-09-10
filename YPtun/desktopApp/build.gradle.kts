@@ -648,7 +648,7 @@ if (currentBuildOs.isLinux) {
 
 // Windows natives are built/downloaded for the HOST arch only: the cores are CGo (a c-shared .dll),
 // so cross-building them needs a full cross C toolchain. amd64 comes off a normal runner, arm64 off a
-// native windows-11-arm runner (see .github/workflows/windows-arm64.yml).
+// native windows-11-arm runner (see .github/workflows/windows-desktop.yml).
 if (currentBuildOs.isWindows) {
     val buildYpTunCoreWindows = registerYpTunCoreBuildTask(
         taskName = "buildYpTunCoreWindows${hostDesktopArch.replaceFirstChar { it.uppercase() }}",
