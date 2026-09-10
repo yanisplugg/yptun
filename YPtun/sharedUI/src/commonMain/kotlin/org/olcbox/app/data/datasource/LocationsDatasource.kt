@@ -2503,7 +2503,10 @@ class LocationsRepositoryImpl(
             normalized.transport,
             normalized.id,
             normalized.key,
-            normalized.proxy?.let { "${it.type}@${it.server}:${it.serverPort}" }.orEmpty()
+            normalized.proxy?.let { "${it.type}@${it.server}:${it.serverPort}" }.orEmpty(),
+            normalized.vkturn?.let { "${it.outbound}@${it.uri.ifBlank { it.outboundProxyLink }}" }.orEmpty(),
+            normalized.masterDns?.let { "${it.domains}@${it.resolvers}" }.orEmpty(),
+            normalized.openFlux?.let { "${it.transport}@${if (it.usesMax()) it.maxUid else it.docUrl}" }.orEmpty(),
         ).joinToString("|")
     }
 
