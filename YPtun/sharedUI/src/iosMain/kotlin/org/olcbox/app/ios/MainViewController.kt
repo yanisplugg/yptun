@@ -62,6 +62,11 @@ class IosAppSession internal constructor(
 ) {
     private val dependencies = IosAppDependencies(platformBridge, coreBridge)
 
+    init {
+        IosPlatformHooks.bridge = platformBridge
+        IosPlatformHooks.core = coreBridge
+    }
+
     fun createViewController(): UIViewController {
         return ComposeUIViewController {
             IosApp(platformBridge, dependencies)

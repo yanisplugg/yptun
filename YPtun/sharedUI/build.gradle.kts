@@ -248,6 +248,15 @@ kotlin {
         androidMain.get().dependsOn(jvmSharedMain)
         jvmMain.get().dependsOn(jvmSharedMain)
 
+        // Code the desktop and iOS share but Android does not: Android keeps its own copies of the
+        // settings screens (they grew Android-only features), the desktop port of them is what iOS
+        // reuses. Platform bits go through SettingsPlatform (expect/actual).
+        val nonAndroidMain by creating {
+            dependsOn(commonMain.get())
+        }
+        jvmMain.get().dependsOn(nonAndroidMain)
+        iosMain.get().dependsOn(nonAndroidMain)
+
         commonMain.dependencies {
             api(libs.compose.runtime)
             api(libs.compose.ui)

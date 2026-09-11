@@ -25,8 +25,6 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
-import org.olcbox.app.desktop.DesktopToast
-import org.olcbox.app.desktop.DesktopUriLauncher
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.SingBoxRule
@@ -44,7 +42,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.ContentCopy
-import org.olcbox.app.vpn.telegram.DesktopTelegramProxy
 import org.olcbox.app.vpn.telegram.TelegramProxyState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -126,7 +123,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.OutlinedButton
@@ -151,8 +147,6 @@ import org.olcbox.app.vpn.AndroidSocksProxySettings
 import org.olcbox.app.vpn.AndroidSplitTunnelList
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
 import org.olcbox.app.vpn.AndroidSplitTunnelSettings
-import java.text.DateFormat
-import java.util.Date
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -626,7 +620,7 @@ private fun ColorPickerDialog(
 }
 
 private fun rgbToHex(r: Float, g: Float, b: Float): String =
-    "#%02X%02X%02X".format(r.toInt(), g.toInt(), b.toInt())
+    "#" + listOf(r, g, b).joinToString("") { it.toInt().toString(16).padStart(2, '0') }.uppercase()
 
 private fun parseHex(input: String): Triple<Float, Float, Float>? {
     val h = input.trim().removePrefix("#")
@@ -834,13 +828,13 @@ private fun AppSettingsHubContent(
             // Every version comes from the running core (yptuncore), like libbox/xraybridge do on
             // Android — the sing-box one used to be a hardcoded "1.12.25" that no longer matched the
             // bundled core, which read as "the desktop ships an old sing-box".
-            val core = org.olcbox.app.vpn.desktop.YpTunCore
-            val xrayVer = remember { runCatching { core.xrayVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
-            val singboxVer = remember { runCatching { core.sbVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
-            val olcrtcVer = remember { runCatching { core.rtcVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
-            val vkturnVer = remember { runCatching { core.ftVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
-            val wdttVer = remember { runCatching { core.wdttVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
-            val awgVer = remember { runCatching { core.awgVersion() }.getOrNull()?.ifBlank { null } ?: "—" }
+            fun ver(core: CoreName) = runCatching { SettingsPlatform.coreVersion(core) }.getOrNull()?.ifBlank { null } ?: "—"
+            val xrayVer = remember { ver(CoreName.Xray) }
+            val singboxVer = remember { ver(CoreName.SingBox) }
+            val olcrtcVer = remember { ver(CoreName.OlcRtc) }
+            val vkturnVer = remember { ver(CoreName.Freeturn) }
+            val wdttVer = remember { ver(CoreName.Wdtt) }
+            val awgVer = remember { ver(CoreName.AmneziaWg) }
             SettingsGroupRow(
                 title = s.xrayVersion(xrayVer),
                 icon = Icons.Outlined.Tune,
@@ -901,14 +895,14 @@ private fun AppSettingsHubContent(
                 subtitle = "t.me/YPtun",
                 icon = Icons.Rounded.Person,
                 enabled = true,
-                onClick = { DesktopUriLauncher.open("https://t.me/YPtun") }
+                onClick = { SettingsPlatform.openUri("https://t.me/YPtun") }
             )
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.howToConnect,
                 icon = Icons.Outlined.Shield,
                 enabled = true,
-                onClick = { DesktopUriLauncher.open("https://t.me/YPtun") }
+                onClick = { SettingsPlatform.openUri("https://t.me/YPtun") }
             )
             SettingsGroupDivider()
             // One TON wallet takes USDT, TON and GRAM alike. Clicking copies it — the address is far
@@ -920,7 +914,7 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = {
                     hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    DesktopToast.show(s.donateAddressCopied)
+                    SettingsPlatform.toast(s.donateAddressCopied)
                 }
             )
             SettingsGroupRow(
@@ -930,7 +924,7 @@ private fun AppSettingsHubContent(
                 showChevron = false,
                 onClick = {
                     hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    DesktopToast.show(s.donateAddressCopied)
+                    SettingsPlatform.toast(s.donateAddressCopied)
                 }
             )
         }
@@ -1004,7 +998,7 @@ private fun ConnectionSettingsContent(
                 is TelegramProxyState.Error -> "${s.telegramProxyError}: ${st.message}"
                 is TelegramProxyState.Stopped -> if (appBehavior.telegramProxyEnabled) {
                     "${s.telegramProxyRunning}: SOCKS5 " +
-                        "${DesktopTelegramProxy.LISTEN_HOST}:${DesktopTelegramProxy.LISTEN_PORT}"
+                        SettingsPlatform.telegramProxyEndpoint
                 } else {
                     null
                 }
@@ -1074,8 +1068,8 @@ private fun ConnectionSettingsContent(
                             onClick = {
                                 val tgDeep = "tg://socks?server=${running.host}&port=${running.port}" +
                                     "&user=${running.user}&pass=${running.pass}"
-                                val target = if (DesktopUriLauncher.schemeRegistered("tg")) tgDeep else tgLink
-                                DesktopUriLauncher.open(target)
+                                val target = if (SettingsPlatform.schemeRegistered("tg")) tgDeep else tgLink
+                                SettingsPlatform.openUri(target)
                             },
                             contentPadding = PaddingValues(horizontal = 12.dp),
                             modifier = Modifier.weight(1f)
@@ -1091,7 +1085,7 @@ private fun ConnectionSettingsContent(
                         OutlinedButton(
                             onClick = {
                                 clipboard.setText(AnnotatedString(tgLink))
-                                DesktopToast.show(s.telegramProxyLinkCopied)
+                                SettingsPlatform.toast(s.telegramProxyLinkCopied)
                             },
                             contentPadding = PaddingValues(horizontal = 12.dp),
                             modifier = Modifier.weight(1f)
@@ -1897,12 +1891,12 @@ private fun SubscriptionShareRow(
                 }
                 // Panel-advertised links (Remnawave/Happ `profile-web-page-url` / `support-url`).
                 item.webPageUrl?.takeIf { it.isNotBlank() }?.let { web ->
-                    TextButton(onClick = { DesktopUriLauncher.open(web) }) {
+                    TextButton(onClick = { SettingsPlatform.openUri(web) }) {
                         Text(LocalStrings.current.subscriptionWebPage)
                     }
                 }
                 item.supportUrl?.takeIf { it.isNotBlank() }?.let { support ->
-                    TextButton(onClick = { DesktopUriLauncher.open(support) }) {
+                    TextButton(onClick = { SettingsPlatform.openUri(support) }) {
                         Text(LocalStrings.current.subscriptionSupport)
                     }
                 }
@@ -3966,19 +3960,15 @@ private fun ExperimentalContent(
         val cookieScope = rememberCoroutineScope()
         OutlinedButton(
             onClick = {
-                cookieScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val dialog = java.awt.FileDialog(null as java.awt.Frame?, s.loadFromFile, java.awt.FileDialog.LOAD)
-                    dialog.isVisible = true
-                    val file = dialog.files.firstOrNull() ?: return@launch
-                    val text = runCatching { file.readText() }.getOrNull()
+                SettingsPlatform.pickTextFile(s.loadFromFile) { text ->
                     val cookies = text?.let(::cookiesFromFile).orEmpty()
-                    if (cookies.isBlank()) {
-                        DesktopToast.show(s.cookiesReadFailed)
-                        return@launch
-                    }
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        onChanged(settings.copy(telemostCookies = cookies))
-                        DesktopToast.show(s.cookiesLoaded)
+                    cookieScope.launch {
+                        if (cookies.isBlank()) {
+                            SettingsPlatform.toast(s.cookiesReadFailed)
+                        } else {
+                            onChanged(settings.copy(telemostCookies = cookies))
+                            SettingsPlatform.toast(s.cookiesLoaded)
+                        }
                     }
                 }
             },
@@ -4119,7 +4109,7 @@ private fun SubscriptionShareItem.subscriptionSummary(): String {
 }
 
 private fun Long.formatDateTime(): String {
-    return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(this))
+    return formatEpochMs(this)
 }
 
 private fun AndroidConnectionMode.shortLabel(): String {

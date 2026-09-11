@@ -592,11 +592,5 @@ private fun listToText(list: List<String>): String = list.joinToString("\n")
 private fun linesToList(text: String): List<String> =
     text.split('\n', '\r', ',', ';').map { it.trim() }.filter { it.isNotEmpty() }
 
-/** Compact local timestamp (yyyy-MM-dd HH:mm) without pulling in a formatter dependency. */
-private fun formatTimestamp(ms: Long): String {
-    val cal = java.util.Calendar.getInstance().apply { timeInMillis = ms }
-    fun p(n: Int) = n.toString().padStart(2, '0')
-    return "${cal.get(java.util.Calendar.YEAR)}-${p(cal.get(java.util.Calendar.MONTH) + 1)}-" +
-        "${p(cal.get(java.util.Calendar.DAY_OF_MONTH))} " +
-        "${p(cal.get(java.util.Calendar.HOUR_OF_DAY))}:${p(cal.get(java.util.Calendar.MINUTE))}"
-}
+/** Compact local timestamp (yyyy-MM-dd HH:mm). */
+private fun formatTimestamp(ms: Long): String = formatEpochMs(ms)
