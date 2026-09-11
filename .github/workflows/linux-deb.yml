@@ -16,6 +16,7 @@ on:
       - "v*"
     branches:
       - pc-client-beta
+      - Beta
     paths:
       - ".github/workflows/linux-deb.yml"
       - "YPtun/desktopApp/**"
@@ -31,7 +32,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.arch }} .deb
+    name: ${{ matrix.arch }} packages
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -58,12 +59,15 @@ jobs:
           go-version-file: cores/go.mod
           cache: false
 
-      # fakeroot + dpkg-dev are what jpackage shells out to for --type deb. The X/GTK dev headers are
-      # not needed to build (skiko ships prebuilt natives), only at runtime on the user's machine.
+      # fakeroot + dpkg-dev are what jpackage shells out to for --type deb.
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fakeroot dpkg-dev binutils
+          sudo apt-get install -y --no-install-recommends fakeroot dpkg-dev binutils file wget
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            sudo wget -O /usr/local/bin/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage || true
+            sudo chmod +x /usr/local/bin/appimagetool || true
+          fi
 
       # Gradle configures every project including the Android modules, and AGP refuses to configure
       # without a valid SDK location. Nothing is installed - no Android task runs here.
@@ -82,16 +86,16 @@ jobs:
 
       # --no-daemon --max-workers=1: the Exec tasks shell out to `go build` and must inherit this
       # environment, which a reused daemon does not pick up.
-      - name: Build .deb
+      - name: Build packages
         working-directory: YPtun
         env:
           CGO_ENABLED: "1"
-        # The repo is maintained from Windows, so gradlew is committed as mode 100644 and is not
-        # executable on checkout. Set the bit here rather than changing the recorded mode, which would
-        # also land on the Android branches when this one is merged.
         run: |
           chmod +x ./gradlew
           ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseDeb --stacktrace
+          if [ "${{ matrix.arch }}" = "amd64" ] && [ -x /usr/local/bin/appimagetool ]; then
+            APPIMAGETOOL="/usr/local/bin/appimagetool --appimage-extract-and-run" ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseLinuxAppImage || true
+          fi
 
       - name: Verify the package
         run: |
@@ -107,18 +111,22 @@ jobs:
           [ "$got" = "$expected" ] || { echo "deb Architecture=$got, expected $expected"; exit 1; }
           echo "OK: $expected"
 
-      - name: Rename for release
+      - name: Prepare artifacts for release
         run: |
           set -eu
           deb=$(find YPtun/desktopApp/build/compose/binaries -name '*.deb' | head -1)
           ver=$(grep '^olcbox.version=' YPtun/gradle.properties | cut -d= -f2)
           mkdir -p dist
           cp "$deb" "dist/YPtun-${ver}-${{ matrix.arch }}.deb"
+          appimage=$(find YPtun/desktopApp/build/compose/binaries -name '*.AppImage' | head -1 || true)
+          if [ -n "$appimage" ]; then
+            cp "$appimage" "dist/YPtun-${ver}-${{ matrix.arch }}.AppImage"
+          fi
           ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: yptun-linux-${{ matrix.arch }}-deb
-          path: dist/*.deb
+          name: yptun-linux-${{ matrix.arch }}-packages
+          path: dist/*
           if-no-files-found: error
           retention-days: 30
