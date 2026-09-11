@@ -689,24 +689,36 @@ private fun EngineSelector(
     enabled: Boolean,
     onSelected: (EngineType) -> Unit
 ) {
-    val options = listOf(
-        EngineType.Stealth,
-        EngineType.Standard,
-        EngineType.Chain,
-        EngineType.VkTurn,
-        EngineType.MasterDns,
-        EngineType.OpenFlux
-    )
+    val isIos = remember { org.olcbox.app.data.identity.DeviceInfo.os.equals("iOS", ignoreCase = true) }
+    val options = remember(isIos) {
+        if (isIos) {
+            listOf(
+                EngineType.Stealth,
+                EngineType.Standard,
+                EngineType.Chain,
+                EngineType.VkTurn,
+                EngineType.MasterDns
+            )
+        } else {
+            listOf(
+                EngineType.Stealth,
+                EngineType.Standard,
+                EngineType.Chain,
+                EngineType.VkTurn,
+                EngineType.MasterDns,
+                EngineType.OpenFlux
+            )
+        }
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         SectionTitle(title = LocalStrings.current.engineSection, subtitle = engineSubtitle(selected))
 
-        // ONE cohesive 2×2 block: a single rounded outline drawn ONCE around all four engines, with thin
-        // inner dividers between the cells — no per-row pills, no offset hack, no seam/gap. Two rows of
-        // two equal-width cells; the row height tracks the tallest cell (IntrinsicSize.Min) so the
-        // vertical divider spans it. clip() rounds the selected-cell highlight to the block's corners.
+        // ONE cohesive block: a single rounded outline drawn ONCE around all engines, with thin
+        // inner dividers between the cells. Two equal-width cells per row; the row height tracks the
+        // tallest cell (IntrinsicSize.Min) so the vertical divider spans it.
         val shape = RoundedCornerShape(20.dp)
         val outline = MaterialTheme.colorScheme.outline
         Column(
@@ -731,6 +743,10 @@ private fun EngineSelector(
                             onClick = { onSelected(engine) },
                             modifier = Modifier.weight(1f)
                         )
+                    }
+                    if (rowOptions.size == 1) {
+                        VerticalDivider(color = outline)
+                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
             }

@@ -68,7 +68,11 @@ class HomeScreenViewModel(
                         VpnStatus.Reconnecting -> it.copy(isVpnConnected = true, isVpnLoading = true)
                         VpnStatus.Stopping -> it.copy(isVpnConnected = false, isVpnLoading = false)
                         VpnStatus.Disconnected -> it.copy(isVpnConnected = false, isVpnLoading = false)
-                        is VpnStatus.Error -> it.copy(isVpnConnected = false, isVpnLoading = false)
+                        is VpnStatus.Error -> it.copy(
+                            isVpnConnected = false,
+                            isVpnLoading = false,
+                            startBlockedReason = status.message
+                        )
                     }
                 }
             }
@@ -151,7 +155,7 @@ class HomeScreenViewModel(
         }
 
         viewModelScope.launch {
-            _state.update { it.copy(isVpnLoading = true) }
+            _state.update { it.copy(isVpnLoading = true, startBlockedReason = null) }
             try {
                 if (_state.value.isVpnConnected || vpnManager.status.value is VpnStatus.Connected) {
                     vpnManager.stopVpn()
