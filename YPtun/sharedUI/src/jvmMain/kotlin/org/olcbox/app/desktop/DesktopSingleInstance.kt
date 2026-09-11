@@ -39,7 +39,14 @@ object DesktopSingleInstance {
      *
      * [onShowRequested] is called — off the UI thread — whenever a later launch asks for the window.
      */
-    fun claim(onShowRequested: () -> Unit): Boolean {
+    /**
+     * Claims ownership. Returns true when this process is the one instance and may continue; false
+     * when another copy is already running (it has been told to show itself and this process must
+     * exit immediately, without a window).
+     *
+     * [onCommandReceived] is called — off the UI thread — with the command or arguments passed by a later launch.
+     */
+    fun claim(onCommandReceived: (String) -> Unit): Boolean {
         val loopback = InetAddress.getLoopbackAddress()
         val server = try {
             ServerSocket().apply {
@@ -47,11 +54,35 @@ object DesktopSingleInstance {
                 bind(InetSocketAddress(loopback, PORT))
             }
         } catch (e: IOException) {
-            notifyOwner()
+            notifyOwner(SHOW_COMMAND)
             return false
         }
         listener = server
-        Thread({ acceptLoop(server, onShowRequested) }, "YPtunSingleInstance").apply {
+        Thread({ acceptLoop(server, onCommandReceived) }, "YPtunSingleInstance").apply {
+            isDaemon = true
+            start()
+        }
+        return true
+    }
+
+    /**
+     * Overload for claim with CLI arguments: if another instance is running, passes the arguments
+     * (e.g. imported deep links) to it before exiting.
+     */
+    fun claimWithArgs(args: Array<String>, onCommandReceived: (String) -> Unit): Boolean {
+        val loopback = InetAddress.getLoopbackAddress()
+        val server = try {
+            ServerSocket().apply {
+                reuseAddress = false
+                bind(InetSocketAddress(loopback, PORT))
+            }
+        } catch (e: IOException) {
+            val command = if (args.isEmpty()) SHOW_COMMAND else "$SHOW_COMMAND ${args.joinToString(" ")}"
+            notifyOwner(command)
+            return false
+        }
+        listener = server
+        Thread({ acceptLoop(server, onCommandReceived) }, "YPtunSingleInstance").apply {
             isDaemon = true
             start()
         }
@@ -63,7 +94,7 @@ object DesktopSingleInstance {
      * elevated: the old process is still alive for a moment, and it must NOT be mistaken for a
      * duplicate — it is the very process being replaced.
      */
-    fun claimAfterPredecessorExits(onShowRequested: () -> Unit, timeoutMs: Long = 10_000): Boolean {
+    fun claimAfterPredecessorExits(onCommandReceived: (String) -> Unit, timeoutMs: Long = 10_000): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             val loopback = InetAddress.getLoopbackAddress()
@@ -77,7 +108,7 @@ object DesktopSingleInstance {
                 continue
             }
             listener = server
-            Thread({ acceptLoop(server, onShowRequested) }, "YPtunSingleInstance").apply {
+            Thread({ acceptLoop(server, onCommandReceived) }, "YPtunSingleInstance").apply {
                 isDaemon = true
                 start()
             }
@@ -93,7 +124,7 @@ object DesktopSingleInstance {
         listener = null
     }
 
-    private fun acceptLoop(server: ServerSocket, onShowRequested: () -> Unit) {
+    private fun acceptLoop(server: ServerSocket, onCommandReceived: (String) -> Unit) {
         while (true) {
             val client = try {
                 server.accept()
@@ -104,18 +135,18 @@ object DesktopSingleInstance {
                 client.use {
                     it.soTimeout = 2_000
                     val line = it.getInputStream().bufferedReader().readLine()
-                    if (line?.trim() == SHOW_COMMAND) onShowRequested()
+                    if (!line.isNullOrBlank()) onCommandReceived(line.trim())
                 }
             }
         }
     }
 
     /** Best-effort "you are already running, come to the front". */
-    private fun notifyOwner() {
+    private fun notifyOwner(command: String = SHOW_COMMAND) {
         runCatching {
             Socket().use { socket ->
                 socket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), PORT), 2_000)
-                socket.getOutputStream().write("$SHOW_COMMAND\n".toByteArray(Charsets.US_ASCII))
+                socket.getOutputStream().write("$command\n".toByteArray(Charsets.UTF_8))
                 socket.getOutputStream().flush()
             }
         }
