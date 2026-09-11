@@ -18,4 +18,9 @@
     <string name="widget_state_connected">Connected</string>
     <string name="widget_state_no_location">No server selected</string>
     <string name="widget_config_label">Widget appearance</string>
+
+    <!-- Launcher shortcuts (also Samsung Modes & Routines app actions) -->
+    <string name="shortcut_vpn_on">Turn VPN on</string>
+    <string name="shortcut_vpn_off">Turn VPN off</string>
+    <string name="shortcut_vpn_toggle">Toggle VPN</string>
 </resources>

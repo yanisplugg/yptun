@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_vpn_on">开启 VPN</string>
+    <string name="shortcut_vpn_off">关闭 VPN</string>
+    <string name="shortcut_vpn_toggle">开关 VPN</string>
+</resources>

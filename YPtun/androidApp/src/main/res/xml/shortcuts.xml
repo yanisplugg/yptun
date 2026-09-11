@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher shortcuts = app actions for Samsung «Режимы и сценарии» and any launcher (long-press the icon).
+     targetPackage is the applicationId (org.yptun.app, fixed since 3.3.2); targetClass is the Kotlin class. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="vpn_on"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_vpn_on">
+        <intent
+            android:action="org.yptun.app.action.VPN_ON"
+            android:targetPackage="org.yptun.app"
+            android:targetClass="org.olcbox.app.VpnShortcutActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="vpn_off"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_vpn_off">
+        <intent
+            android:action="org.yptun.app.action.VPN_OFF"
+            android:targetPackage="org.yptun.app"
+            android:targetClass="org.olcbox.app.VpnShortcutActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="vpn_toggle"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_vpn_toggle">
+        <intent
+            android:action="org.yptun.app.action.VPN_TOGGLE"
+            android:targetPackage="org.yptun.app"
+            android:targetClass="org.olcbox.app.VpnShortcutActivity" />
+    </shortcut>
+</shortcuts>

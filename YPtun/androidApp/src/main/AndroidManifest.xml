@@ -96,7 +96,20 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
             </intent-filter>
+            <!-- «Включить / Выключить / Вкл/выкл VPN»: long-press on the icon and Samsung Routines app actions. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+
+        <!-- Invisible target of those shortcuts: switches the VPN and finishes (see VpnShortcutActivity). -->
+        <activity
+            android:name=".VpnShortcutActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <activity
             android:name="org.olcbox.app.ui.activities.QrScannerActivity"
