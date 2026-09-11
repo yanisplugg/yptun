@@ -260,6 +260,72 @@ class DesktopProxyModeTest {
     }
 
     @Test
+    fun linuxGnomeProxyCommandsEnableAndRestoreState() {
+        val enable = LinuxProxyController.enableGnomeProxyCommands("127.0.0.1", 10810)
+        assertEquals(
+            listOf(
+                listOf("gsettings", "set", "org.gnome.system.proxy.http", "host", "127.0.0.1"),
+                listOf("gsettings", "set", "org.gnome.system.proxy.http", "port", "10810"),
+                listOf("gsettings", "set", "org.gnome.system.proxy.https", "host", "127.0.0.1"),
+                listOf("gsettings", "set", "org.gnome.system.proxy.https", "port", "10810"),
+                listOf("gsettings", "set", "org.gnome.system.proxy", "ignore-hosts", "['localhost', '127.0.0.0/8', '::1']"),
+                listOf("gsettings", "set", "org.gnome.system.proxy", "mode", "manual")
+            ),
+            enable
+        )
+
+        val disable = LinuxProxyController.disableGnomeProxyCommands()
+        assertEquals(
+            listOf(listOf("gsettings", "set", "org.gnome.system.proxy", "mode", "none")),
+            disable
+        )
+
+        val state = LinuxGnomeProxyState(
+            mode = "manual",
+            httpHost = "'10.0.0.1'",
+            httpPort = 8080,
+            httpsHost = "'10.0.0.1'",
+            httpsPort = 8080,
+            ignoreHosts = "['localhost']"
+        )
+        val restore = LinuxProxyController.restoreGnomeProxyCommands(state)
+        assertEquals(
+            listOf(
+                listOf("gsettings", "set", "org.gnome.system.proxy.http", "host", "10.0.0.1"),
+                listOf("gsettings", "set", "org.gnome.system.proxy.http", "port", "8080"),
+                listOf("gsettings", "set", "org.gnome.system.proxy.https", "host", "10.0.0.1"),
+                listOf("gsettings", "set", "org.gnome.system.proxy.https", "port", "8080"),
+                listOf("gsettings", "set", "org.gnome.system.proxy", "ignore-hosts", "['localhost']"),
+                listOf("gsettings", "set", "org.gnome.system.proxy", "mode", "manual")
+            ),
+            restore
+        )
+    }
+
+    @Test
+    fun linuxKdeProxyCommandsEnableAndRestoreState() {
+        val enable = LinuxProxyController.enableKdeProxyCommands("http://127.0.0.1:10810", "kwriteconfig5")
+        assertEquals(
+            listOf(
+                listOf("kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"),
+                listOf("kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", "http://127.0.0.1:10810"),
+                listOf("kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", "http://127.0.0.1:10810")
+            ),
+            enable
+        )
+
+        val disable = LinuxProxyController.disableKdeProxyCommands("kwriteconfig5")
+        assertEquals(
+            listOf(
+                listOf("kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"),
+                listOf("kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", ""),
+                listOf("kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", "")
+            ),
+            disable
+        )
+    }
+
+    @Test
     fun windowsProxyHttpEnableSetsFixedProxyAndClearsPac() {
         val edits = WindowsProxyController.enableHttpEdits("127.0.0.1:10812")
 
@@ -371,8 +437,30 @@ class DesktopProxyModeTest {
         assertContains(up, "ip route add default dev olcbox0 table 51820")
         assertContains(up, "ip rule add lookup 51820 pref 20")
         assertContains(up, "resolvectl dns olcbox0 1.1.1.1")
+        assertContains(up, "resolvconf -a \"olcbox0\"")
         assertContains(down, "ip rule del uidrange 0-0 lookup main pref 10")
         assertContains(down, "ip route flush table 51820")
         assertContains(down, "resolvectl revert olcbox0")
+        assertContains(down, "resolvconf -d \"olcbox0\"")
+    }
+
+    /**
+     * In-process cores run as the user, so the root-only rule doesn't cover their upstream dials:
+     * those must go via the main table AHEAD of the TUN rule, or the tunnel carries itself.
+     */
+    @Test
+    fun linuxTunUpScriptRoutesCoreUpstreamsAroundTheTun() {
+        val up = LinuxTunController.upScriptContent(
+            listOf("203.0.113.7", "87.240.128.0/18", "203.0.113.7", "::1", "1.2.3.4; reboot", "evil\nrm -rf /")
+        )
+        val bypass = up.indexOf("ip rule add to 203.0.113.7 lookup main pref 15")
+        assertTrue(bypass >= 0, up)
+        assertTrue(bypass < up.indexOf("ip rule add lookup 51820 pref 20"))
+        assertContains(up, "ip rule add to 87.240.128.0/18 lookup main pref 15")
+        assertEquals(1, Regex("to 203\\.0\\.113\\.7 ").findAll(up).count())
+        assertFalse("pref 15\n" in up, "a bad bypass entry must not abort the set -e script")
+        // Root shell script: nothing but a strict dotted IPv4 (/len) may get in.
+        assertFalse("reboot" in up || "rm -rf" in up || "::1" in up, up)
+        assertContains(LinuxTunController.downScriptContent(), "while ip rule del pref 15")
     }
 }

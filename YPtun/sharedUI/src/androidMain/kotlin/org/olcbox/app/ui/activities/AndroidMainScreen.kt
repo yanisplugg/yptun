@@ -148,6 +148,9 @@ fun AndroidMainScreen(
     // Drives the persistent "update app" banner above the nav bar (independent of the offer sheet,
     // which the user can dismiss while a newer release still exists).
     var updateAvailable by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    // The banner lives only in memory, so the first check of every launch must really run — gating it
+    // by the interval hid the banner after a restart until the interval ran out.
+    var updateCheckedThisLaunch by remember { mutableStateOf(false) }
     var relaunchAfterInstall by remember { mutableStateOf(false) }
     val subscriptionShareItems = locationViewModel.locations.toList()
         .mapNotNull { item ->
@@ -231,7 +234,7 @@ fun AndroidMainScreen(
         scope.launch {
             val previousSettings = updateSettings
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
-            if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
+            if (!manual && updateCheckedThisLaunch && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
             updateStatusText = s.checkingChannel(s.releaseChannelLabel.lowercase())
             val result = service.check(
@@ -243,6 +246,7 @@ fun AndroidMainScreen(
             saveUpdateSettings(checkedSettings)
             result.fold(
                 onSuccess = { info ->
+                    updateCheckedThisLaunch = true
                     // The banner reflects whether a newer, not-yet-downloaded release exists — shown
                     // regardless of the postpone/"should offer" logic that only gates the sheet.
                     updateAvailable = info.takeIf { it.isUpdateAvailable && !it.isDownloaded(checkedSettings) }
@@ -307,8 +311,11 @@ fun AndroidMainScreen(
     LaunchedEffect(appUpdateService) {
         val loaded = updateSettingsStore.load()
         updateSettings = loaded
-        if (appUpdateService != null) {
+        // Launch check, then re-check while the app stays open; checkUpdate itself skips ticks
+        // until the chosen interval (1–24 h) has passed, so a tick costs nothing.
+        while (appUpdateService != null) {
             checkUpdate(manual = false)
+            kotlinx.coroutines.delay(AppUpdateSettings.CHECK_TICK_MS)
         }
     }
 

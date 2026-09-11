@@ -580,6 +580,8 @@ fun registerYpTunCoreBuildTask(
     val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
 
     inputs.dir(coresRepoDir.resolve("cmd"))
+    // cmd/yptuncore is only the C-ABI wrapper; the cores live in coreapi (shared with iOS).
+    inputs.dir(coresRepoDir.resolve("coreapi"))
     inputs.file(coresRepoDir.resolve("go.mod"))
     // olcrtc/mobile is compiled into this core through the path-replace in
     // cores/go.mod, so a core re-sync has to invalidate it as well.
@@ -974,10 +976,12 @@ if (currentBuildOs.isLinux) {
             [Desktop Entry]
             Type=Application
             Name=$desktopPackageName
-            Exec=$desktopPackageName
+            Comment=Fast, versatile VPN client to bypass censorship
+            Exec=$desktopPackageName %u
             Icon=olcbox
             Categories=Network;Utility;
             Terminal=false
+            MimeType=x-scheme-handler/yptun;x-scheme-handler/vless;x-scheme-handler/vmess;x-scheme-handler/ss;x-scheme-handler/trojan;x-scheme-handler/hysteria2;x-scheme-handler/tuic;
             DESKTOP
 
             cp "${'$'}icon_file" "${'$'}target_dir/olcbox.png"

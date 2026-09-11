@@ -1,6 +1,8 @@
 package org.olcbox.app.vpn
 
 import kotlinx.serialization.Serializable
+import org.olcbox.app.desktop.DesktopOs
+import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.desktop.PacServer
 
 @Serializable
@@ -20,10 +22,10 @@ data class DesktopSocksProxySettings(
         get() = username.isNotBlank() && password.isNotBlank()
 
     fun normalized(): DesktopSocksProxySettings {
-        // Unsecured is the default shape: no credentials, standard proxy port.
+        // Unsecured is the default shape: no credentials, standard proxy port (see unsecuredPort).
         if (!secured) return copy(
             host = host.ifBlank { PacServer.LOCAL_SOCKS_HOST },
-            port = UNSECURED_PORT,
+            port = unsecuredPort(),
             username = "",
             password = ""
         )
@@ -42,6 +44,10 @@ data class DesktopSocksProxySettings(
 
         /** Port used when [secured] is off — the default proxy port Windows/browsers expect. */
         const val UNSECURED_PORT = 8080
+
+        /** [UNSECURED_PORT], except Linux: Steam's steamwebhelper holds 8080 there (Steam Deck). */
+        fun unsecuredPort(): Int =
+            if (DesktopPaths.os == DesktopOs.Linux) PacServer.LOCAL_SOCKS_PORT else UNSECURED_PORT
 
         fun isValidPort(port: Int): Boolean = port in MIN_PORT..MAX_PORT
 

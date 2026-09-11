@@ -18,37 +18,72 @@ internal class LinuxTunController(
 
     /**
      * Writes hev's config/up/down scripts and returns the command to launch it — does NOT start the
-     * process. Linux TUN needs both hev and olcRTC running as root under the SAME pkexec
-     * authorization (see DesktopVpnManager.startOlcRtcProcess's combined launch), so the caller
-     * backgrounds this command inside its own privileged process instead of us spawning it directly
-     * under a second, separate pkexec.
+     * process. Used when bundling hev launch with another privileged process (e.g. olcRTC).
      */
     fun prepareHevLaunch(
         hevBinary: Path,
         socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
         socksUsername: String = "",
-        socksPassword: String = ""
+        socksPassword: String = "",
+        bypassPrefixes: List<String> = emptyList()
     ): List<String> {
         this.hevBinary = hevBinary
-        val upScript = writeUpScript()
+        val upScript = writeScript("linux-tun-up.sh", upScriptContent(bypassPrefixes))
         val downScript = writeDownScript()
         val config = writeConfig(socksPort, upScript, downScript, socksUsername, socksPassword)
         return listOf(hevBinary.toString(), config.toString())
     }
 
     /**
-     * Polls for the TUN interface + route rule hev's up-script installs. olcRTC's own SOCKS5
-     * readiness check runs first and takes several seconds (WebRTC handshake) — hev, started earlier
-     * in the same combined launch well before olcRTC's exec, has had a comfortable head start by the
-     * time we get here, so this rarely waits long in practice.
+     * Launches hev on its own under pkexec/sudo, for the in-process engines (sing-box, Xray,
+     * AmneziaWG, …): unlike olcRTC there is no privileged process of ours to ride along with.
+     *
+     * Those cores run inside this JVM as the USER, so the root-only bypass rule does not cover their
+     * own dials — [bypassPrefixes] (their upstreams, see DesktopVpnManager.resolveBypassServerIps)
+     * are routed around the TUN instead, or the tunnel would carry itself.
+     *
+     * Cleanup stays with the caller's single privileged stop (see [privilegedCleanupCommands]).
      */
-    suspend fun awaitReady() {
-        val deadline = System.currentTimeMillis() + TUN_READY_TIMEOUT_MS
+    suspend fun start(
+        hevBinary: Path,
+        socksPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+        bypassPrefixes: List<String>
+    ): Process = withContext(Dispatchers.IO) {
+        val hevCommand = prepareHevLaunch(hevBinary, socksPort, socksUsername, socksPassword, bypassPrefixes)
+        addLog("Starting Linux TUN bridge: ${hevBinary.fileName} -> 127.0.0.1:$socksPort")
+        val process = ProcessBuilder(LinuxPrivilege.command(hevCommand))
+            .redirectErrorStream(true)
+            .start()
+        try {
+            // The wait includes the pkexec password dialog, so it gets far longer than the olcRTC path.
+            awaitReady(launcher = process, timeoutMs = AUTH_READY_TIMEOUT_MS)
+        } catch (e: Exception) {
+            process.destroy()
+            throw e
+        }
+        process
+    }
+
+    /**
+     * Polls for the TUN interface + route rule hev's up-script installs. With a [launcher], gives up
+     * as soon as it exits non-zero — pkexec does that when the authorization is dismissed.
+     */
+    suspend fun awaitReady(launcher: Process? = null, timeoutMs: Long = TUN_READY_TIMEOUT_MS) {
+        val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (interfaceExists() && routeRuleExists()) {
                 routesInstalled = true
                 addLog("Linux TUN connected on $TUN_NAME")
                 return
+            }
+            if (launcher != null && !launcher.isAlive && launcher.exitValue() != 0) {
+                val code = launcher.exitValue()
+                // pkexec's "dismissed"/"not authorized": nothing ran as root, so nothing to clean up
+                // and no reason to show a second password prompt for the cleanup.
+                if (code == 126 || code == 127) hevBinary = null
+                error("Linux TUN bridge exited with code $code${if (code == 126 || code == 127) " (authorization cancelled)" else ""}")
             }
             delay(TUN_READY_POLL_MS)
         }
@@ -62,8 +97,7 @@ internal class LinuxTunController(
      * Returns commands only, doesn't invoke pkexec itself — the caller bundles these with olcRTC's
      * own privileged kill into ONE combined pkexec call instead of each of us prompting separately.
      * Best-effort by design (`|| true` throughout): always included, never gates on whether hev is
-     * actually still around, because the caller's pkexec call is happening either way (olcRTC runs
-     * as root in this mode, so an unprivileged kill can never reach it) — bundling this in is free.
+     * actually still around.
      */
     fun privilegedCleanupCommands(): List<String> {
         val commands = mutableListOf<String>()
@@ -103,13 +137,6 @@ internal class LinuxTunController(
             )
         )
         return config
-    }
-
-    private fun writeUpScript(): Path {
-        return writeScript(
-            name = "linux-tun-up.sh",
-            body = upScriptContent()
-        )
     }
 
     private fun writeDownScript(): Path {
@@ -174,8 +201,11 @@ internal class LinuxTunController(
         const val MAPDNS_NETMASK = "255.192.0.0"
         const val ROUTE_TABLE = "51820"
         const val ROOT_BYPASS_RULE_PREF = "10"
+        const val UPSTREAM_BYPASS_RULE_PREF = "15"
         const val TUN_RULE_PREF = "20"
         const val TUN_READY_TIMEOUT_MS = 10_000L
+        const val AUTH_READY_TIMEOUT_MS = 120_000L
+        private val IPV4_PREFIX = Regex("""\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?""")
         const val TUN_READY_POLL_MS = 100L
         const val ROUTE_CLEANUP_TIMEOUT_MS = 2_000L
 
@@ -237,23 +267,36 @@ internal class LinuxTunController(
         /** YAML single-quoted scalar: the only escape inside is a doubled quote. */
         private fun yamlQuoted(value: String): String = "'" + value.replace("'", "''") + "'"
 
-        fun upScriptContent(): String {
+        /**
+         * [bypassPrefixes]: IPv4 addresses/CIDRs sent via the main table ahead of the TUN rule. They
+         * land in a script run as root and partly come off the network (ASN lists), so anything that
+         * is not strictly a dotted IPv4 (optionally /len) is dropped.
+         */
+        fun upScriptContent(bypassPrefixes: List<String> = emptyList()): String {
+            val bypassRules = bypassPrefixes.distinct().filter { IPV4_PREFIX.matches(it) }.joinToString("") {
+                // One bad entry must not abort the whole `set -e` script and with it the TUN.
+                "\nip rule add to $it lookup main pref $UPSTREAM_BYPASS_RULE_PREF 2>/dev/null || true"
+            }
             return """
                 #!/bin/sh
                 set -eu
                 ip rule del uidrange 0-0 lookup main pref $ROOT_BYPASS_RULE_PREF 2>/dev/null || true
+                while ip rule del pref $UPSTREAM_BYPASS_RULE_PREF 2>/dev/null; do :; done
                 ip rule del lookup $ROUTE_TABLE pref $TUN_RULE_PREF 2>/dev/null || true
                 ip route flush table $ROUTE_TABLE 2>/dev/null || true
                 sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
                 sysctl -w net.ipv4.conf.$TUN_NAME.rp_filter=0 >/dev/null 2>&1 || true
                 ip link set $TUN_NAME up
                 ip rule add uidrange 0-0 lookup main pref $ROOT_BYPASS_RULE_PREF
+            """.trimIndent() + bypassRules + "\n" + """
                 ip route add default dev $TUN_NAME table $ROUTE_TABLE
                 ip rule add lookup $ROUTE_TABLE pref $TUN_RULE_PREF
                 if command -v resolvectl >/dev/null 2>&1; then
                   resolvectl dns $TUN_NAME $MAPDNS_ADDRESS >/dev/null 2>&1 || true
                   resolvectl domain $TUN_NAME '~.' >/dev/null 2>&1 || true
                   resolvectl default-route $TUN_NAME yes >/dev/null 2>&1 || true
+                elif command -v resolvconf >/dev/null 2>&1; then
+                  printf "nameserver %s\n" "$MAPDNS_ADDRESS" | resolvconf -a "$TUN_NAME" 2>/dev/null || true
                 fi
             """.trimIndent()
         }
@@ -262,10 +305,13 @@ internal class LinuxTunController(
             return """
                 #!/bin/sh
                 ip rule del uidrange 0-0 lookup main pref $ROOT_BYPASS_RULE_PREF 2>/dev/null || true
+                while ip rule del pref $UPSTREAM_BYPASS_RULE_PREF 2>/dev/null; do :; done
                 ip rule del lookup $ROUTE_TABLE pref $TUN_RULE_PREF 2>/dev/null || true
                 ip route flush table $ROUTE_TABLE 2>/dev/null || true
                 if command -v resolvectl >/dev/null 2>&1; then
                   resolvectl revert $TUN_NAME >/dev/null 2>&1 || true
+                elif command -v resolvconf >/dev/null 2>&1; then
+                  resolvconf -d "$TUN_NAME" 2>/dev/null || true
                 fi
             """.trimIndent()
         }
@@ -294,7 +340,7 @@ internal object LinuxPrivilege {
         }.getOrDefault(false)
     }
 
-    private fun executableExists(name: String): Boolean {
+    fun executableExists(name: String): Boolean {
         val path = System.getenv("PATH").orEmpty()
         return path.split(':')
             .filter { it.isNotBlank() }

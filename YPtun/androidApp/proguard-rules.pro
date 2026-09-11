@@ -33,6 +33,12 @@
 # com.jcraft.jsch.jce.Random). Keep the whole package (and its optional agentproxy/jgss helpers).
 -keep class com.jcraft.jsch.** { *; }
 -dontwarn com.jcraft.jsch.**
+# Bouncy Castle: JSch's ssh-ed25519 / curve25519 / chacha20 on Android (below Java 15 it uses the
+# com.jcraft.jsch.bc.* classes, which call BC's lightweight API). Only that API is kept, not the JCA
+# provider, so the APK carries a fraction of bcprov.
+-keep class org.bouncycastle.crypto.** { *; }
+-keep class org.bouncycastle.math.** { *; }
+-dontwarn org.bouncycastle.**
 
 # --- kotlinx.serialization ---
 # Standard R8/ProGuard rules so @Serializable models keep their generated serializers.

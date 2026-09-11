@@ -24,3 +24,6 @@ Thumbs.db
 
 # --- Logs ---
 *.log
+
+# iOS: generated from YPtun/iosApp/project.yml by XcodeGen
+YPtun/iosApp/*.xcodeproj/

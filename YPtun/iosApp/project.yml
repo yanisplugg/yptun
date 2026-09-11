@@ -1,0 +1,138 @@
+# XcodeGen spec for the iOS app — the single source of the Xcode project (`xcodegen generate` in this
+# directory writes YPtun.xcodeproj; the generated project is not committed).
+#
+# Three targets:
+#   YPtun         – the Compose app (Kotlin SharedUI.framework); pings servers with the cores in-process.
+#   PacketTunnel  – the system VPN (NEPacketTunnelProvider): Kotlin picks/starts the cores
+#                   (IosTunnelSession), hev-socks5-tunnel (Tun2SocksKit) feeds the utun into their SOCKS5.
+#   YPtunWidget   – WidgetKit: home-screen status widget (+ connect button on iOS 17) and the Control
+#                   Center toggle (iOS 18). Pure Swift, links neither Kotlin nor the cores.
+# The app and PacketTunnel link Coreapi.xcframework (every Go core, `gomobile bind ./coreapi`) and SharedUI.framework (static).
+#
+# Build the Go framework first (macOS + Xcode + gomobile):  ../gradlew -p .. :sharedUI:buildCoresIosXcframework
+name: YPtun
+
+options:
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    # CI stamps both from YPtun/gradle.properties (olcbox.version / olcbox.versionCode).
+    MARKETING_VERSION: "3.5.0"
+    CURRENT_PROJECT_VERSION: "353"
+    SWIFT_VERSION: "5.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_BITCODE: NO
+    KOTLIN_FRAMEWORK_BUILD_TYPE: release
+    SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+    SUPPORTS_MACCATALYST: NO
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+    "FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]":
+      - "$(inherited)"
+      - "$(SRCROOT)/../sharedUI/build/bin/iosArm64/$(KOTLIN_FRAMEWORK_BUILD_TYPE)Framework"
+    "FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]":
+      - "$(inherited)"
+      - "$(SRCROOT)/../sharedUI/build/bin/iosSimulatorArm64/$(KOTLIN_FRAMEWORK_BUILD_TYPE)Framework"
+    OTHER_LDFLAGS:
+      - "$(inherited)"
+      - "-ObjC"
+      - "-framework"
+      - "SharedUI"
+      - "-lresolv"
+  configs:
+    Debug:
+      KOTLIN_FRAMEWORK_BUILD_TYPE: debug
+
+packages:
+  Tun2SocksKit:
+    url: https://github.com/EbrahimTahernejad/Tun2SocksKit
+    exactVersion: "5.16.0"
+
+targets:
+  YPtun:
+    type: application
+    platform: iOS
+    sources:
+      - path: iosApp
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_NAME: YPtun
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app
+        INFOPLIST_FILE: iosApp/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: iosApp/YPtun.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks"]
+    dependencies:
+      - target: PacketTunnel
+      - target: YPtunWidget
+      - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
+        embed: false
+    preBuildScripts:
+      # Kotlin framework for this SDK/configuration + the Compose resources copied into the app bundle.
+      - name: Kotlin SharedUI framework
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/.."
+          ./gradlew :sharedUI:embedAndSignAppleFrameworkForXcode --no-configuration-cache
+
+  PacketTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: PacketTunnel
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_NAME: PacketTunnel
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.tunnel
+        INFOPLIST_FILE: PacketTunnel/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: PacketTunnel/PacketTunnel.entitlements
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"]
+        # Xcode refuses an extension built otherwise. The Kotlin framework is static, so the linker's
+        # extension-safety check (dylibs only) doesn't apply to it; the app-only code in it never runs here.
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: Tun2SocksKit
+        product: Tun2SocksKit
+      - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
+        embed: false
+    preBuildScripts:
+      # The extension builds BEFORE the app (the app embeds it), so it links the Kotlin framework itself.
+      - name: Kotlin SharedUI framework (link)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          cd "$SRCROOT/.."
+          TYPE=$(echo "$KOTLIN_FRAMEWORK_BUILD_TYPE" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
+          case "$SDK_NAME" in
+            iphonesimulator*) TARGET=IosSimulatorArm64 ;;
+            *) TARGET=IosArm64 ;;
+          esac
+          ./gradlew ":sharedUI:link${TYPE}Framework${TARGET}" --no-configuration-cache
+
+  YPtunWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: YPtunWidget
+    settings:
+      base:
+        PRODUCT_NAME: YPtunWidget
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.widget
+        INFOPLIST_FILE: YPtunWidget/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: YPtunWidget/YPtunWidget.entitlements
+        # Plain Swift: NOT the project-wide flags (they link the Kotlin framework).
+        OTHER_LDFLAGS: ["-ObjC"]
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"]
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework

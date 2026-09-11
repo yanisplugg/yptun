@@ -89,6 +89,11 @@ internal interface YpTunCoreLib : Library {
     fun YpRtcSetDNS(dnsServer: String)
     fun YpRtcSetSocksListenHost(host: String)
     fun YpRtcSetVP8Options(fps: Int, batchSize: Int)
+    fun YpRtcSetSEIOptions(fps: Int, batchSize: Int, fragmentSize: Int, ackTimeoutMs: Int): Pointer?
+    fun YpRtcSetVideoOptions(
+        width: Int, height: Int, fps: Int, qrSize: Int,
+        qrRecovery: String, codec: String, tileModule: Int, tileRS: Int,
+    ): Pointer?
     fun YpRtcSetLivenessOptions(intervalMs: Int, timeoutMs: Int, failures: Int)
     fun YpRtcStart(
         carrier: String,
@@ -289,8 +294,8 @@ internal object YpTunCore {
     /** True while the user is solving a VK captcha — the relay cannot come up until they are done. */
     fun ftCaptchaActive(): Boolean = (libOrNull?.YpFtCaptchaActive() ?: 0) == 1
 
-    // VK-TURN / WDTT Plus core (wg-turn-client) ---------------------------------------------
-    /** Starts WDTT Plus from [org.olcbox.app.data.model.VkTurnConfig.wdttCoreOptionsJson]. */
+    // VK-TURN / qWDTT core (wg-turn-client) ---------------------------------------------
+    /** Starts qWDTT from [org.olcbox.app.data.model.VkTurnConfig.wdttCoreOptionsJson]. */
     fun wdttStart(optionsJson: String) = check(lib().YpWdttStart(optionsJson), "WDTT start failed")
 
     /** Why the core stopped on its own ("" while fine). */
@@ -344,6 +349,25 @@ internal object YpTunCore {
     fun rtcSetTelemostCookies(cookies: String) = lib().YpRtcSetTelemostCookies(cookies)
     fun rtcSetDns(dnsServer: String) = lib().YpRtcSetDNS(dnsServer)
     fun rtcSetSocksListenHost(host: String) = lib().YpRtcSetSocksListenHost(host)
+
+    /** Per-transport options of a location (vp8 / sei / video), before [rtcStart]. */
+    fun rtcApplyTransportOptions(config: org.olcbox.app.data.model.LocationConfig) {
+        when (config.transport) {
+            org.olcbox.app.data.model.LocationConfig.TRANSPORT_VP8CHANNEL ->
+                lib().YpRtcSetVP8Options(config.vp8Fps, config.vp8Batch)
+            org.olcbox.app.data.model.LocationConfig.TRANSPORT_SEICHANNEL -> config.seiOptions().let {
+                check(lib().YpRtcSetSEIOptions(it.fps, it.batch, it.fragmentSize, it.ackTimeoutMs), "olcRTC SEI options")
+            }
+            org.olcbox.app.data.model.LocationConfig.TRANSPORT_VIDEOCHANNEL -> config.videoOptions().let {
+                check(
+                    lib().YpRtcSetVideoOptions(
+                        it.width, it.height, it.fps, it.qrSize, it.qrRecovery, it.codec, it.tileModule, it.tileRs,
+                    ),
+                    "olcRTC video options",
+                )
+            }
+        }
+    }
 
     fun rtcStart(
         carrier: String,

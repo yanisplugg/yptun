@@ -2,6 +2,7 @@ package org.olcbox.app.vpn.wdtt
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.vpn.ssh.SshTarget
 import org.olcbox.app.vpn.ssh.ServerBinarySource
 import org.olcbox.app.vpn.ssh.loadServerBinaryGz
@@ -10,19 +11,28 @@ import org.olcbox.app.vpn.ssh.sshOneShot
 import org.olcbox.app.vpn.ssh.sshUploadInChunks
 
 /**
- * SSH-based wdtt-server installer. Connects with password auth, detects the VPS architecture
- * (`uname -m`), streams the matching bundled server binary (gzip asset) into /tmp via a plain exec
- * channel (no SFTP — minimal VPS images often lack the subsystem), then runs the install script as a
- * single shell command that places it in /usr/local/bin and starts it as a systemd service. The
- * server binary sets up IP forwarding, NAT and the userspace WireGuard tunnel by itself, so the
- * script is deliberately minimal. The binaries live in assets/wdtt/ (see build-wdtt-server.ps1).
+ * One-tap qWDTT server install on a VPS, the way the qWDTT app itself deploys: its own `deploy.sh`
+ * (assets/wdtt/deploy.sh — distro detection, prerequisites, sysctl, NAT/firewall, systemd unit, admin
+ * TLS) is uploaded with the server binary and run with the ports and secrets in its environment.
+ *
+ * Around it, what that script does not cover and a real VPS needs:
+ *  - an older WDTT under ANY unit name (the pre-Plus `wdtt-server.service`, a hand-started one…) still
+ *    holding the port is stopped, its unit and binary removed — deploy.sh only knows `wdtt.service`;
+ *  - a WDTT Plus database is moved aside: the qWDTT server stops dead on a passwords.json it can't
+ *    read, and clients fetch their WireGuard config from the server every start anyway;
+ *  - ports another program holds (the freeturn server also defaults to 56000) are skipped: DTLS, the
+ *    internal WireGuard and the admin port each move to the next free one, and the location follows;
+ *  - "installed" means the service stays up: deploy.sh checks `is-active` after 2 s, which a crash
+ *    loop passes. We re-check after a few seconds with NRestarts and show the journal on failure.
+ *
+ * Every step is its own fresh SSH connection (some VPSes reset the link on a 2nd channel).
  */
 internal class SshWdttServerInstaller(private val binaries: ServerBinarySource) : WdttServerInstaller {
 
     override suspend fun install(
         options: WdttInstallOptions,
         onLog: (String) -> Unit
-    ): Result<String> = withContext(Dispatchers.IO) {
+    ): Result<WdttInstallResult> = withContext(Dispatchers.IO) {
         runCatching {
             require(options.host.isNotBlank()) { "Не указан IP/хост VPS" }
             require(options.sshKey.isNotBlank() || options.sshPassword.isNotBlank()) {
@@ -30,8 +40,6 @@ internal class SshWdttServerInstaller(private val binaries: ServerBinarySource) 
             }
             require(options.wdttPassword.isNotBlank()) { "Не указан пароль WDTT" }
 
-            // This VPS resets the link the moment a 2nd channel is opened on a connection, so EVERY
-            // step is its own fresh connection running one small command (the only thing that worked).
             val target = SshTarget(
                 options.host, options.sshPort, options.login, options.sshPassword,
                 privateKey = options.sshKey, passphrase = options.sshKeyPassphrase,
@@ -46,70 +54,196 @@ internal class SshWdttServerInstaller(private val binaries: ServerBinarySource) 
             }
             onLog("Архитектура VPS: $machine → $goArch")
 
+            onLog("Готовлю VPS: старый WDTT, база WDTT Plus, свободные порты…")
+            val prepared = sshOneShot(target, buildPrepareScript(options.wdttPort), onLog)
+            prepared.lines().map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith(PORTS_MARKER) }
+                .forEach(onLog)
+            val ports = parsePorts(prepared) ?: error("VPS не сообщил свободные порты:\n${prepared.trim()}")
+            onLog("Порты: DTLS ${ports.dtls}/udp, WireGuard ${ports.wg}/udp (только локально), админка ${ports.admin}/tcp, Raw ${ports.raw}/udp")
+
             val gz = loadServerBinaryGz(binaries, "wdtt/wdtt-server-linux-$goArch")
-            onLog("Загрузка сервера (${gz.size / 1024} КБ, по частям)…")
+            onLog("Загрузка сервера qWDTT (${gz.size / 1024} КБ, по частям)…")
             sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
-            onLog("Бинарник загружен, ставлю службу…")
+            // CR stripped: a Windows checkout can hand the asset over with CRLF, and bash on the VPS
+            // then dies on the first line ("syntax error near {\r").
+            val script = binaries.bytesOrNull(DEPLOY_SCRIPT_ASSET)
+                ?.let { bytes -> String(bytes, Charsets.UTF_8).replace("\r", "").toByteArray(Charsets.UTF_8) }
+                ?: error("В сборке нет установщика $DEPLOY_SCRIPT_ASSET")
+            onLog("Загрузка установщика qWDTT…")
+            sshUploadInChunks(target, script, REMOTE_SCRIPT, onLog)
 
-            val output = sshOneShot(target, buildInstallScript(options), onLog)
-            output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach(onLog)
+            onLog("Установка qWDTT (пакеты, сеть, служба) — может занять пару минут…")
+            val output = sshOneShot(
+                target,
+                buildDeployCommand(options, ports, adminToken = randomToken()),
+                onLog,
+            )
+            val report = readDeployOutput(output)
+            report.lines.forEach(onLog)
+            check(report.ok) {
+                "Установщик qWDTT не завершился успехом (код ${report.exitCode ?: "?"}). " +
+                    "Подробности — в строках журнала выше."
+            }
 
-            "wdtt-server установлен и запущен на ${options.host}:${options.wdttPort}"
+            onLog("Проверяю, что служба держится…")
+            val verify = sshOneShot(target, buildVerifyScript(), onLog)
+            check(verify.contains(VERIFY_OK)) {
+                "Служба wdtt не держится после запуска. Журнал сервера:\n${verify.trim()}"
+            }
+
+            WdttInstallResult("qWDTT установлен и запущен на ${options.host}:${ports.dtls} (Raw — ${ports.raw})", ports.dtls, ports.raw)
         }
     }
 
     private companion object {
         const val REMOTE_GZ = "/tmp/wdtt-server.gz"
+        const val REMOTE_SCRIPT = "/tmp/deploy.sh"
+        const val DEPLOY_SCRIPT_ASSET = "wdtt/deploy.sh"
+
+        fun randomToken(): String {
+            val bytes = ByteArray(24)
+            java.security.SecureRandom().nextBytes(bytes)
+            return bytes.joinToString("") { "%02x".format(it) }
+        }
     }
 }
 
+internal data class WdttPorts(val dtls: Int, val wg: Int, val admin: Int, val raw: Int)
+
+internal const val PORTS_MARKER = "WDTT_PORTS="
+internal const val VERIFY_OK = "WDTT_SERVICE_STABLE"
+
+internal fun parsePorts(output: String): WdttPorts? {
+    val line = output.lineSequence().map { it.trim() }.lastOrNull { it.startsWith(PORTS_MARKER) } ?: return null
+    val parts = line.removePrefix(PORTS_MARKER).split('|').map { it.trim().toIntOrNull() }
+    if (parts.size != 4 || parts.any { it == null || it !in 1..65535 }) return null
+    return WdttPorts(parts[0]!!, parts[1]!!, parts[2]!!, parts[3]!!)
+}
+
 /**
- * The remote install script, following the WDTT Plus deploy contract (binary /usr/local/bin/wdtt-server,
- * unit wdtt.service, data in /etc/wdtt). Decompresses + installs the binary, writes a systemd unit that
- * runs it as root (it needs CAP_NET_ADMIN for the WireGuard/NAT it sets up itself), opens the UDP port
- * on any common firewall (best-effort), starts the service and prints its active state.
- *
- * Upgrading from the pre-Plus WDTT (unit wdtt-server.service): that service is stopped and removed and
- * its /etc/wdtt moved aside — the Plus server refuses to start on a database it doesn't recognise, and
- * a fresh one costs nothing (the client fetches its WireGuard config from the server every start).
- * Re-running over a Plus install keeps /etc/wdtt (clients, keys) as is. Single-quoted values are
- * escaped so an awkward password can't break out of the shell quoting.
+ * Runs before deploy.sh: takes down every older WDTT (any unit name) still holding the DTLS or the WG
+ * port, sets a WDTT Plus database aside, then picks free ports and prints `WDTT_PORTS=dtls|wg|admin|raw`.
+ * The raw port (qWDTT 1.4 «Raw», `-listen-raw`) is always enabled, so either client mode works.
  */
-internal fun buildInstallScript(options: WdttInstallOptions): String {
-    val port = options.wdttPort
-    val pass = options.wdttPassword.shellSingleQuote()
-    val dns = options.dns.ifBlank { "1.1.1.1" }.shellSingleQuote()
+internal fun buildPrepareScript(requestedPort: Int): String {
+    val d = "$"
+    return """
+        set -e
+        systemctl stop wdtt >/dev/null 2>&1 || true
+        udp_pids() { ss -Hulnp "sport = :${d}1" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u; }
+        udp_busy() { ss -Hulnp "sport = :${d}1" 2>/dev/null | grep -q .; }
+        tcp_busy() { ss -Htlnp "sport = :${d}1" 2>/dev/null | grep -q .; }
+        if [ -f /etc/systemd/system/wdtt-server.service ]; then
+          echo "Найден старый WDTT (wdtt-server.service) — удаляю"
+          systemctl disable --now wdtt-server >/dev/null 2>&1 || true
+          rm -f /etc/systemd/system/wdtt-server.service
+        fi
+        for P in $requestedPort 56001; do
+          for pid in ${d}(udp_pids ${d}P); do
+            exe=${d}(readlink -f /proc/${d}pid/exe 2>/dev/null || true)
+            unit=${d}(grep -o '[^/]*[.]service' /proc/${d}pid/cgroup 2>/dev/null | tail -1 || true)
+            case "${d}(basename "${d}exe") ${d}unit" in *wdtt*|*wg-turn*|*WDTT*) ;; *) continue ;; esac
+            echo "Найден старый WDTT на порту ${d}P (${d}exe ${d}unit) — удаляю"
+            if [ -n "${d}unit" ] && [ "${d}unit" != "wdtt.service" ]; then
+              frag=${d}(systemctl show -p FragmentPath --value "${d}unit" 2>/dev/null || true)
+              systemctl disable --now "${d}unit" >/dev/null 2>&1 || true
+              if [ -n "${d}frag" ]; then rm -f "${d}frag"; fi
+            fi
+            kill ${d}pid 2>/dev/null || true
+            if [ "${d}exe" != /usr/local/bin/wdtt-server ]; then rm -f "${d}exe"; fi
+          done
+        done
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        sleep 1
+        if [ -f /etc/wdtt/passwords.json ] && grep -q '"main_password"' /etc/wdtt/passwords.json 2>/dev/null; then
+          aside="/etc/wdtt.pre-qwdtt-${d}(date +%Y%m%d%H%M%S)"
+          mv /etc/wdtt "${d}aside"
+          echo "База WDTT Plus отложена в ${d}aside (qWDTT её не читает)"
+        fi
+        DTLS=$requestedPort
+        if udp_busy ${d}DTLS; then
+          owner=${d}(ss -Hulnp "sport = :${d}DTLS" 2>/dev/null | grep -o 'users:(("[^"]*' | head -1 | cut -d'"' -f2)
+          while udp_busy ${d}DTLS; do DTLS=${d}((DTLS+1)); done
+          echo "Порт $requestedPort/udp занят (${d}{owner:-другой программой}) — qWDTT встанет на ${d}DTLS"
+        fi
+        WG=56001
+        while [ "${d}WG" = "${d}DTLS" ] || udp_busy ${d}WG; do WG=${d}((WG+1)); done
+        ADMIN=56002
+        while [ "${d}ADMIN" = "${d}DTLS" ] || [ "${d}ADMIN" = "${d}WG" ] || tcp_busy ${d}ADMIN; do ADMIN=${d}((ADMIN+1)); done
+        RAW=${WdttPlusOptions.DEFAULT_RAW_PORT}
+        while [ "${d}RAW" = "${d}DTLS" ] || [ "${d}RAW" = "${d}WG" ] || [ "${d}RAW" = "${d}ADMIN" ] || udp_busy ${d}RAW; do RAW=${d}((RAW+1)); done
+        echo "$PORTS_MARKER${d}DTLS|${d}WG|${d}ADMIN|${d}RAW"
+    """.trimIndent()
+}
+
+/**
+ * Unpacks the binary, writes the secrets the way the qWDTT app does (files in /tmp that deploy.sh moves
+ * into /etc/wdtt and deletes) and runs deploy.sh. Always exits 0 and reports deploy.sh's own exit code
+ * as `WDTT_DEPLOY_EXIT=<n>`, so its output reaches the log even when it fails.
+ */
+internal fun buildDeployCommand(options: WdttInstallOptions, ports: WdttPorts, adminToken: String): String {
+    val b64 = java.util.Base64.getEncoder()
+    val password = b64.encodeToString(options.wdttPassword.toByteArray(Charsets.UTF_8))
+    val token = b64.encodeToString(adminToken.toByteArray(Charsets.UTF_8))
+    val dns = options.dns.split(',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
+        .ifEmpty { listOf("1.1.1.1") }.joinToString(",").shellSingleQuote()
     return """
         set -e
         gunzip -f /tmp/wdtt-server.gz
-        if [ -f /etc/systemd/system/wdtt-server.service ]; then
-          echo "Найден старый WDTT — переношу на WDTT Plus"
-          systemctl disable --now wdtt-server >/dev/null 2>&1 || true
-          rm -f /etc/systemd/system/wdtt-server.service
-          if [ -d /etc/wdtt ]; then mv /etc/wdtt "/etc/wdtt.pre-plus-${'$'}(date +%Y%m%d%H%M%S)"; fi
-        fi
-        systemctl stop wdtt >/dev/null 2>&1 || true
-        install -m 0755 /tmp/wdtt-server /usr/local/bin/wdtt-server
-        rm -f /tmp/wdtt-server
-        cat > /etc/systemd/system/wdtt.service <<UNIT
-        [Unit]
-        Description=WDTT Plus server
-        After=network-online.target
-        Wants=network-online.target
-        [Service]
-        ExecStart=/usr/local/bin/wdtt-server -listen 0.0.0.0:$port -password $pass -dns $dns -config-dir /etc/wdtt
-        Restart=always
-        RestartSec=3
-        LimitNOFILE=1048576
-        [Install]
-        WantedBy=multi-user.target
-        UNIT
-        if command -v ufw >/dev/null 2>&1; then ufw allow $port/udp || true; fi
-        if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --add-port=$port/udp --permanent && firewall-cmd --reload || true; fi
-        systemctl daemon-reload
-        systemctl enable --now wdtt
-        sleep 2
-        echo "Версия сервера: ${'$'}(/usr/local/bin/wdtt-server --version 2>/dev/null || echo ?)"
-        systemctl is-active wdtt && echo "Служба wdtt (WDTT Plus) активна на порту $port"
+        printf '%s' '$password' | base64 -d > /tmp/wdtt-main.password
+        printf '%s' '$token' | base64 -d > /tmp/wdtt-admin.token
+        : > /tmp/wdtt-bot.token
+        chmod 600 /tmp/wdtt-main.password /tmp/wdtt-admin.token /tmp/wdtt-bot.token
+        set +e
+        env WDTT_ADMIN_ID= WDTT_DNS_SERVERS=$dns WDTT_DTLS_PORT=${ports.dtls} WDTT_WG_PORT=${ports.wg} WDTT_ADMIN_PORT=${ports.admin} WDTT_RAW_PORT=${ports.raw} WDTT_SSH_PORT=${options.sshPort} bash /tmp/deploy.sh 2>&1
+        echo "WDTT_DEPLOY_EXIT=${'$'}?"
+        rm -f /tmp/deploy.sh
+        exit 0
     """.trimIndent()
+}
+
+/** Checks a few seconds later that the service did not fall into a restart loop. */
+internal fun buildVerifyScript(): String {
+    val d = "$"
+    return """
+        sleep 6
+        if systemctl is-active --quiet wdtt && [ "${d}(systemctl show -p NRestarts --value wdtt)" = "0" ]; then
+          echo "$VERIFY_OK"
+        else
+          echo "Состояние: ${d}(systemctl is-active wdtt 2>/dev/null), перезапусков: ${d}(systemctl show -p NRestarts --value wdtt 2>/dev/null)"
+          journalctl -u wdtt -n 30 --no-pager -o cat 2>/dev/null || true
+        fi
+    """.trimIndent()
+}
+
+internal data class DeployReport(val ok: Boolean, val exitCode: Int?, val lines: List<String>)
+
+private val ansi = Regex("\u001B\\[[0-9;]*[A-Za-z]")
+
+/**
+ * deploy.sh's output for the log: colours stripped, its `WDTT_PROGRESS|x|step` lines turned into the
+ * step names, apt noise and the secrets markers left out. Success = its own `WDTT_DEPLOY_OK` marker and
+ * exit code 0.
+ */
+internal fun readDeployOutput(output: String): DeployReport {
+    var exitCode: Int? = null
+    var ok = false
+    val lines = mutableListOf<String>()
+    for (raw in output.lines()) {
+        val line = raw.replace(ansi, "").trim()
+        when {
+            line.isEmpty() -> Unit
+            line.startsWith("WDTT_DEPLOY_EXIT=") -> exitCode = line.substringAfter('=').toIntOrNull()
+            line == "WDTT_DEPLOY_OK" -> ok = true
+            line.startsWith("WDTT_PROGRESS|") -> line.split('|').getOrNull(2)?.takeIf { it.isNotBlank() }?.let { lines += "• $it" }
+            line.startsWith("WDTT_ADMIN_PIN|") -> Unit
+            line.startsWith("Get:") || line.startsWith("Hit:") || line.startsWith("Ign:") ||
+                line.startsWith("Reading ") || line.startsWith("Selecting ") || line.startsWith("Preparing ") ||
+                line.startsWith("Unpacking ") || line.startsWith("Setting up ") || line.startsWith("Processing ") ||
+                line.startsWith("(Reading database") -> Unit
+            else -> lines += line
+        }
+    }
+    return DeployReport(ok = ok && exitCode == 0, exitCode = exitCode, lines = lines)
 }

@@ -75,13 +75,13 @@ data class VkTurnConfig(
     /** WDTT connection password — the WRAP key is HKDF-derived from it server-side and client-side. */
     @SerialName("wdtt_password")
     val wdttPassword: String = "",
-    /** WDTT TLS fingerprint for the VK auth flow: chrome/safari/ios/android/firefox (blank → chrome). */
+    /** Unused since qWDTT (it always uses its Chrome fingerprint); kept so stored locations load. */
     @SerialName("wdtt_fingerprint")
     val wdttFingerprint: String = "",
     /** WDTT worker count; 0 → core default. Clamped to [9,108] and rounded to a multiple of 9 in-core. */
     @SerialName("wdtt_workers")
     val wdttWorkers: Int = 0,
-    /** The WDTT Plus core's advanced knobs (network modes, VK auth, reserves). */
+    /** The qWDTT core's advanced knobs (TURN over TCP, camouflage, DNS for VK). */
     @SerialName("wdtt_plus")
     val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
     /**
@@ -122,6 +122,13 @@ data class VkTurnConfig(
         if (host.substringAfterLast(':', "").toIntOrNull() != null && host.contains(':')) return host
         val port = wdttPort.takeIf { it in 1..65535 } ?: DEFAULT_WDTT_PORT
         return "$host:$port"
+    }
+
+    /** Where the core dials: the raw port in Raw mode (same host, `-listen-raw`), else [wdttPeerAddr]. */
+    fun wdttDialAddr(): String {
+        if (!wdttPlus.rawMode) return wdttPeerAddr()
+        val host = wdttPeerAddr().substringBeforeLast(':')
+        return if (host.isEmpty()) "" else "$host:${wdttPlus.rawPortOrDefault()}"
     }
 
     fun isComplete(): Boolean =
@@ -168,81 +175,74 @@ data class VkTurnConfig(
     }
 
     /**
-     * The WDTT Plus core options (wdttmobile.Options JSON) for this location — ONE builder for both the
-     * Android gomobile binding and the desktop core. [listen] is the local UDP address WireGuard dials,
-     * [masqueConfigPath] a private writable file for the WARP enrollment.
+     * The qWDTT core options (wdttmobile.Options JSON) for this location — ONE builder for both the
+     * Android gomobile binding and the desktop/iOS core. [listen] is the local UDP address WireGuard dials
+     * — or, in Raw mode, the local SOCKS5 (TCP) the core serves the tunnel on.
      */
-    fun wdttCoreOptionsJson(listen: String, deviceId: String, masqueConfigPath: String): String {
+    fun wdttCoreOptionsJson(listen: String, deviceId: String): String {
         val p = wdttPlus
         return buildJsonObject {
-            put("peer", wdttPeerAddr())
+            put("peer", wdttDialAddr())
+            put("raw", p.rawMode)
             put("vk_hashes", vkLink)
             put("password", wdttPassword)
             put("listen", listen)
             put("workers", wdttWorkers)
             put("device_id", deviceId)
-            put("fingerprint", wdttFingerprint.ifBlank { "chrome" })
-            put("client_ids", p.clientIds.trim())
             put("captcha_mode", "auto")
             put("turn_host", p.turnHost.trim())
             put("turn_port", p.turnPort.trim())
-            put("vkcalls_preflight", p.vkCallsPreflight)
-            put("config_first_start", p.configFirstStart)
-            put("hash_fallback", p.hashFallback)
-            put("turn_stream_first", p.rtNetworkMode)
-            put("turn_sni", p.turnSni.trim())
-            put("masque", p.masque)
-            put("masque_config_path", masqueConfigPath)
-            put("masque_accept_tos", p.masqueAcceptTos)
-            put("custom_vk_client_id", p.customVkClientId.trim())
-            put("custom_vk_client_secret", p.customVkClientSecret.trim())
+            put("turn_tcp", p.rtNetworkMode)
+            put("obfs", if (p.obfsVideo) "video" else "audio")
+            put("go_dns", p.goDns.trim())
+            put("vk_anon_path", if (p.vkAnonLegacy) "legacy" else "vkcalls")
         }.toString()
     }
 }
 
 /**
- * Advanced options of the WDTT Plus VK-TURN core (github.com/Ivan4537/WDTT-Plus). Defaults reproduce
- * the core's own defaults, so an untouched location behaves exactly like upstream.
+ * Advanced options of the qWDTT VK-TURN core (github.com/SpaceNeuroX/proxy-turn-vk-android). The name is
+ * left over from the WDTT Plus core it replaced, so stored locations keep loading (its old fields are
+ * simply ignored). Defaults reproduce qWDTT's own defaults.
  */
 @Serializable
 data class WdttPlusOptions(
     /**
-     * «Сеть РТ»: try TURN/TLS, then TURN/TCP to every VK address first and keep UDP as the reserve —
-     * for networks (Rostelecom and the like) that throttle or cut UDP to VK.
+     * TURN relay over TCP instead of UDP — for networks that throttle or cut UDP to VK (Rostelecom and
+     * the like). Same stored key as WDTT Plus's «Сеть РТ», which served the same purpose.
      */
     @SerialName("rt_network_mode")
     val rtNetworkMode: Boolean = false,
-    /** Whitelisted SNI for the outer TURN/TLS connection («Сеть РТ» only). Blank = none. */
-    @SerialName("turn_sni")
-    val turnSni: String = "",
-    /** Cloudflare WARP CONNECT-IP (HTTP/2, then HTTP/3) reserve after the direct «Сеть РТ» paths. */
-    val masque: Boolean = false,
-    /** The user accepted Cloudflare's terms for the first WARP enrollment (required by [masque]). */
-    @SerialName("masque_accept_tos")
-    val masqueAcceptTos: Boolean = false,
-    /** Try the VK Calls API before the captcha chain (upstream default: on). */
-    @SerialName("vkcalls_preflight")
-    val vkCallsPreflight: Boolean = true,
-    /** Wait for the server's WireGuard config before starting the rest of the workers. */
-    @SerialName("config_first_start")
-    val configFirstStart: Boolean = false,
-    /** A group whose own VK hash died falls back to the remaining hashes. */
-    @SerialName("hash_fallback")
-    val hashFallback: Boolean = false,
-    /** VK client IDs override, comma-separated. Blank = the core's built-in set. */
-    @SerialName("client_ids")
-    val clientIds: String = "",
-    /** An independent VK app as an extra credential provider: both fields or neither. */
-    @SerialName("custom_vk_client_id")
-    val customVkClientId: String = "",
-    @SerialName("custom_vk_client_secret")
-    val customVkClientSecret: String = "",
+    /** RTP camouflage as a video stream instead of audio. */
+    @SerialName("obfs_video")
+    val obfsVideo: Boolean = false,
+    /** DNS the core resolves VK with: yandex/cloudflare/google, doh-*, custom:IP, doh:URL. Blank = yandex. */
+    @SerialName("go_dns")
+    val goDns: String = "",
+    /** The older anonymous TURN credential path (`legacy`) instead of VK Calls. */
+    @SerialName("vk_anon_legacy")
+    val vkAnonLegacy: Boolean = false,
     /** TURN server IP / port override (blank = the ones VK hands out). */
     @SerialName("turn_host")
     val turnHost: String = "",
     @SerialName("turn_port")
     val turnPort: String = "",
-)
+    /**
+     * qWDTT 1.4 «Raw»: raw IP packets without WireGuard — faster, but the server must run `-listen-raw`
+     * (the auto-install enables it on [rawPort]). Off = the WireGuard mode, compatible with every server.
+     */
+    @SerialName("raw_mode")
+    val rawMode: Boolean = false,
+    /** The server's raw port; 0 → [DEFAULT_RAW_PORT] (qWDTT's own default). */
+    @SerialName("raw_port")
+    val rawPort: Int = 0,
+) {
+    fun rawPortOrDefault(): Int = rawPort.takeIf { it in 1..65535 } ?: DEFAULT_RAW_PORT
+
+    companion object {
+        const val DEFAULT_RAW_PORT = 56003
+    }
+}
 
 /**
  * Advanced per-location options for the sing-box / Xray proxy core (shown in the editor only when a
@@ -500,6 +500,14 @@ data class LocationConfig(
     val vp8Fps: Int = DEFAULT_VP8_FPS,
     @SerialName("vp8_batch")
     val vp8Batch: Int = DEFAULT_VP8_BATCH,
+    /**
+     * Transport parameters exactly as the olcRTC URI carries them in `<key=value&…>` (docs/uri.md):
+     * seichannel `fps`/`batch`/`frag`/`ack-ms`, videochannel `video-w`/`video-h`/`video-fps`/
+     * `video-codec`/`video-qr-size`/`video-qr-recovery`/`video-tile-module`/`video-tile-rs`. Kept raw so a
+     * share link round-trips; the cores read them through [seiOptions] / [videoOptions].
+     */
+    @SerialName("transport_options")
+    val transportOptions: Map<String, String> = emptyMap(),
     /** Which core serves the local SOCKS5: olcRTC (Stealth), sing-box (Standard) or both (Chain). */
     val engine: EngineType = EngineType.Stealth,
     /** Main proxy server for the sing-box engine (Standard/Chain) — the primary outbound, ALWAYS
@@ -599,6 +607,7 @@ data class LocationConfig(
             transport = normalizedTransport,
             vp8Fps = sanitizeVp8Fps(vp8Fps),
             vp8Batch = sanitizeVp8Batch(vp8Batch),
+            transportOptions = normalizeTransportOptions(transportOptions),
             engine = engine,
             proxy = proxy,
             proxy2 = proxy2,
@@ -711,6 +720,36 @@ data class LocationConfig(
 
     fun transportName(): String = transportDisplayName(transport)
 
+    private fun optionInt(key: String): Int? = transportOptions[key]?.trim()?.toIntOrNull()
+
+    /** seichannel settings: the URI's payload over the olcRTC defaults (docs/settings.md). */
+    fun seiOptions(): SeiOptions = SeiOptions(
+        fps = (optionInt("fps") ?: SeiOptions.DEFAULT_FPS).coerceIn(1, 120),
+        batch = (optionInt("batch") ?: SeiOptions.DEFAULT_BATCH).coerceAtLeast(1),
+        fragmentSize = (optionInt("frag") ?: SeiOptions.DEFAULT_FRAGMENT).coerceAtLeast(1),
+        ackTimeoutMs = (optionInt("ack-ms") ?: SeiOptions.DEFAULT_ACK_MS).coerceAtLeast(1),
+    )
+
+    /** videochannel settings: the URI's payload over the olcRTC defaults (docs/settings.md). */
+    fun videoOptions(): VideoOptions {
+        val codec = transportOptions["video-codec"]?.trim()?.lowercase()
+            ?.takeIf { it == VideoOptions.CODEC_QRCODE || it == VideoOptions.CODEC_TILE }
+            ?: VideoOptions.CODEC_QRCODE
+        // The tile codec only runs at exactly 1080x1080 — the core rejects anything else.
+        val tile = codec == VideoOptions.CODEC_TILE
+        return VideoOptions(
+            width = if (tile) 1080 else (optionInt("video-w") ?: VideoOptions.DEFAULT_WIDTH).coerceAtLeast(1),
+            height = if (tile) 1080 else (optionInt("video-h") ?: VideoOptions.DEFAULT_HEIGHT).coerceAtLeast(1),
+            fps = (optionInt("video-fps") ?: VideoOptions.DEFAULT_FPS).coerceIn(1, 120),
+            qrSize = (optionInt("video-qr-size") ?: 0).coerceAtLeast(0),
+            qrRecovery = transportOptions["video-qr-recovery"]?.trim()?.lowercase()
+                ?.takeIf { it in VideoOptions.QR_RECOVERY_LEVELS } ?: "low",
+            codec = codec,
+            tileModule = (optionInt("video-tile-module") ?: 4).coerceIn(1, 270),
+            tileRs = (optionInt("video-tile-rs") ?: 0).coerceIn(0, 200),
+        )
+    }
+
     companion object {
         const val PROVIDER_JAZZ = "jazz"
         const val PROVIDER_TELEMOST = "telemost"
@@ -721,6 +760,7 @@ data class LocationConfig(
         const val TRANSPORT_DATACHANNEL = "datachannel"
         const val TRANSPORT_VP8CHANNEL = "vp8channel"
         const val TRANSPORT_SEICHANNEL = "seichannel"
+        const val TRANSPORT_VIDEOCHANNEL = "videochannel"
         const val DEFAULT_TRANSPORT = TRANSPORT_VP8CHANNEL
 
         const val DEFAULT_VP8_FPS = 60
@@ -744,7 +784,8 @@ data class LocationConfig(
         val supportedTransports = listOf(
             TRANSPORT_DATACHANNEL,
             TRANSPORT_VP8CHANNEL,
-            TRANSPORT_SEICHANNEL
+            TRANSPORT_SEICHANNEL,
+            TRANSPORT_VIDEOCHANNEL
         )
 
         /**
@@ -756,10 +797,12 @@ data class LocationConfig(
          */
         fun supportedTransportsForProvider(provider: String): List<String> {
             return when (normalizeProvider(provider)) {
-                PROVIDER_TELEMOST -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
-                PROVIDER_WB_STREAM -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
+                PROVIDER_TELEMOST ->
+                    listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
+                PROVIDER_WB_STREAM ->
+                    listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_DATACHANNEL)
                 PROVIDER_JITSI, PROVIDER_JAZZ ->
-                    listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
+                    listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL)
                 else -> supportedTransports
             }
         }
@@ -779,6 +822,7 @@ data class LocationConfig(
                 TRANSPORT_DATACHANNEL, "data", "dc" -> TRANSPORT_DATACHANNEL
                 TRANSPORT_VP8CHANNEL, "vp8", "video_vp8", "video-vp8" -> TRANSPORT_VP8CHANNEL
                 TRANSPORT_SEICHANNEL, "sei", "sei_channel", "sei-channel", "h264_sei" -> TRANSPORT_SEICHANNEL
+                TRANSPORT_VIDEOCHANNEL, "video", "video_channel", "video-channel" -> TRANSPORT_VIDEOCHANNEL
                 else -> DEFAULT_TRANSPORT
             }
             val supported = supportedTransportsForProvider(provider)
@@ -802,6 +846,7 @@ data class LocationConfig(
                 TRANSPORT_DATACHANNEL -> "DataChannel"
                 TRANSPORT_VP8CHANNEL -> "VP8"
                 TRANSPORT_SEICHANNEL -> "SEI"
+                TRANSPORT_VIDEOCHANNEL -> "Video"
                 else -> "VP8"
             }
         }
@@ -809,6 +854,45 @@ data class LocationConfig(
         fun sanitizeVp8Fps(value: Int): Int = value.coerceIn(1, 120)
 
         fun sanitizeVp8Batch(value: Int): Int = value.coerceIn(1, 64)
+
+        /** Lower-cased keys, trimmed values, no blanks — the payload of a `<key=value&…>` block. */
+        fun normalizeTransportOptions(options: Map<String, String>): Map<String, String> =
+            options.entries
+                .map { (k, v) -> k.trim().lowercase() to v.trim() }
+                .filter { (k, v) -> k.isNotEmpty() && v.isNotEmpty() }
+                .toMap()
+    }
+}
+
+/** seichannel parameters handed to the olcRTC core (`sei.*` in its YAML). */
+data class SeiOptions(val fps: Int, val batch: Int, val fragmentSize: Int, val ackTimeoutMs: Int) {
+    companion object {
+        // 60 like this app's VP8 default (and what the desktop always sent); olcRTC's own default is 30.
+        const val DEFAULT_FPS = 60
+        const val DEFAULT_BATCH = 64
+        const val DEFAULT_FRAGMENT = 900
+        const val DEFAULT_ACK_MS = 2000
+    }
+}
+
+/** videochannel parameters handed to the olcRTC core (`video.*` in its YAML). */
+data class VideoOptions(
+    val width: Int,
+    val height: Int,
+    val fps: Int,
+    val qrSize: Int,
+    val qrRecovery: String,
+    val codec: String,
+    val tileModule: Int,
+    val tileRs: Int,
+) {
+    companion object {
+        const val CODEC_QRCODE = "qrcode"
+        const val CODEC_TILE = "tile"
+        const val DEFAULT_WIDTH = 1920
+        const val DEFAULT_HEIGHT = 1080
+        const val DEFAULT_FPS = 30
+        val QR_RECOVERY_LEVELS = setOf("low", "medium", "high", "highest")
     }
 }
 
@@ -834,7 +918,9 @@ data class Vp8TransportConfig(
 @Serializable(with = LocationTransportConfigSerializer::class)
 data class LocationTransportConfig(
     val type: String = LocationConfig.DEFAULT_TRANSPORT,
-    val vp8: Vp8TransportConfig? = null
+    val vp8: Vp8TransportConfig? = null,
+    /** See [LocationConfig.transportOptions]. */
+    val options: Map<String, String> = emptyMap()
 ) {
     fun normalized(provider: String): LocationTransportConfig {
         val normalizedType = LocationConfig.normalizeTransport(type, provider)
@@ -857,7 +943,8 @@ data class LocationTransportConfig(
                     Vp8TransportConfig.from(normalized)
                 } else {
                     null
-                }
+                },
+                options = normalized.transportOptions
             )
         }
     }
@@ -866,7 +953,8 @@ data class LocationTransportConfig(
 @Serializable
 private data class LocationTransportConfigSurrogate(
     val type: String = LocationConfig.DEFAULT_TRANSPORT,
-    val vp8: Vp8TransportConfig? = null
+    val vp8: Vp8TransportConfig? = null,
+    val options: Map<String, String> = emptyMap()
 )
 
 object LocationTransportConfigSerializer : KSerializer<LocationTransportConfig> {
@@ -883,7 +971,8 @@ object LocationTransportConfigSerializer : KSerializer<LocationTransportConfig> 
                 )
                 LocationTransportConfig(
                     type = surrogate.type,
-                    vp8 = surrogate.vp8
+                    vp8 = surrogate.vp8,
+                    options = surrogate.options
                 )
             }
             else -> LocationTransportConfig()
@@ -894,7 +983,8 @@ object LocationTransportConfigSerializer : KSerializer<LocationTransportConfig> 
         val jsonEncoder = encoder as? JsonEncoder
         val surrogate = LocationTransportConfigSurrogate(
             type = value.type,
-            vp8 = value.vp8
+            vp8 = value.vp8,
+            options = value.options
         )
         if (jsonEncoder != null) {
             jsonEncoder.encodeJsonElement(
@@ -1168,6 +1258,7 @@ data class LocationEntry(
                     ?: legacyVp8Batch
                     ?: legacyVp8BatchCamel
                     ?: LocationConfig.DEFAULT_VP8_BATCH,
+                transportOptions = transportConfig.options,
                 engine = engine ?: EngineType.Stealth,
                 proxy = proxy,
                 proxy2 = proxy2,

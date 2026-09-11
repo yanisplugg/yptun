@@ -1,20 +1,29 @@
-import SwiftUI
+import NetworkExtension
 import SharedUI
+import SwiftUI
+import WidgetKit
 
 @main
 struct OlcboxIosApp: App {
     private let platformBridge: SwiftPlatformBridge
-    private let olcRtcBridge: SwiftOlcRtcManager
+    private let coreBridge: SwiftCoreBridge
     private let appSession: IosAppSession
 
     init() {
+        // The widget and the Control Center toggle show the VPN state: refresh them on every change.
+        NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { _ in
+            WidgetCenter.shared.reloadAllTimelines()
+            if #available(iOS 18.0, *) {
+                ControlCenter.shared.reloadAllControls()
+            }
+        }
         let platformBridge = SwiftPlatformBridge()
-        let olcRtcBridge = SwiftOlcRtcManager()
+        let coreBridge = SwiftCoreBridge()
         self.platformBridge = platformBridge
-        self.olcRtcBridge = olcRtcBridge
+        self.coreBridge = coreBridge
         self.appSession = IosAppFactory().createSession(
             platformBridge: platformBridge,
-            olcRtcBridge: olcRtcBridge
+            coreBridge: coreBridge
         )
     }
 

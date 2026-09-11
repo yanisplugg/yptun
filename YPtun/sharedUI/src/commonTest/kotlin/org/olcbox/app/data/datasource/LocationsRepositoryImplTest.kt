@@ -383,7 +383,7 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
-    fun importsUnsupportedVideochannelAsDefaultTransport() = runTest {
+    fun importsVideochannelTransport() = runTest {
         val source = FakeLocationsDataSource()
         val input = """
             {
@@ -413,7 +413,58 @@ class LocationsRepositoryImplTest {
         val location = imported.locations.first().location
         assertEquals(5, imported.version)
         assertEquals(LocationConfig.PROVIDER_TELEMOST, location.bypassProvider)
-        assertEquals(LocationConfig.TRANSPORT_VP8CHANNEL, location.transport)
+        // videochannel is a real olcRTC transport (docs/settings.md) — it used to be swapped for vp8.
+        assertEquals(LocationConfig.TRANSPORT_VIDEOCHANNEL, location.transport)
+    }
+
+    /** The full example of olcRTC's own subscription format (olcrtc/docs/sub.md, format v1). */
+    @Test
+    fun importsTheOlcRtcSubscriptionFormatWithTransportParameters() = runTest {
+        val source = FakeLocationsDataSource()
+        val key = "d823fa01cb3e0609b67322f7cf984c4ee2e4ce2e294936fc24ef38c9e59f4799"
+        val input = """
+            #name: Zarazaex Free RU
+            #update: 1778011200
+            #refresh: 10m
+            #color: #4A90E2
+            #icon: 🇷🇺
+            #used: 10mb/10gb
+            #available: 9.99gb
+
+            olcrtc://wbstream?seichannel<fps=60&batch=64&frag=900&ack-ms=2000>@room-01#$key${'$'}RU / olcng free sub / IPv6
+            ##name: RU-1
+            ##icon: 🇷🇺
+            ##comment: basic free node
+
+            olcrtc://jitsi?videochannel<video-w=1080&video-h=1080&video-codec=tile&video-tile-rs=20>@https://meet.jit.si/room-02#${"a".repeat(64)}${'$'}DE / backup
+            ##name: DE-Backup
+        """.trimIndent()
+
+        LocationsRepositoryImpl(source).importText(input)
+
+        val imported = assertNotNull(source.stored)
+        val (sei, video) = imported.locations.map { it.location }
+        assertEquals(listOf("RU-1", "DE-Backup"), listOf(sei.name, video.name))
+
+        assertEquals(LocationConfig.TRANSPORT_SEICHANNEL, sei.transport)
+        val seiOptions = sei.seiOptions()
+        assertEquals(listOf(60, 64, 900, 2000), listOf(seiOptions.fps, seiOptions.batch, seiOptions.fragmentSize, seiOptions.ackTimeoutMs))
+
+        assertEquals(LocationConfig.TRANSPORT_VIDEOCHANNEL, video.transport)
+        val videoOptions = video.videoOptions()
+        assertEquals("tile", videoOptions.codec)
+        assertEquals(1080 to 1080, videoOptions.width to videoOptions.height)
+        assertEquals(20, videoOptions.tileRs)
+
+        // "#refresh: 10m" → the hourly auto-updater checks it every hour.
+        assertEquals(1, imported.locations[0].metadata?.subscription?.updateIntervalHours)
+
+        // A share link opens the same way elsewhere: parameters survive export → import.
+        val shared = ConfigShareService.olcRtcUri(sei)
+        assertTrue("seichannel<fps=60&batch=64&frag=900&ack-ms=2000>" in shared, shared)
+        val again = FakeLocationsDataSource()
+        LocationsRepositoryImpl(again).importText(ConfigShareService.olcRtcUri(video))
+        assertEquals(video.videoOptions(), assertNotNull(again.stored).locations.single().location.videoOptions())
     }
 
     @Test
@@ -424,6 +475,7 @@ class LocationsRepositoryImplTest {
         assertEquals(
             listOf(
                 LocationConfig.TRANSPORT_VP8CHANNEL,
+                LocationConfig.TRANSPORT_VIDEOCHANNEL,
                 LocationConfig.TRANSPORT_SEICHANNEL,
                 LocationConfig.TRANSPORT_DATACHANNEL
             ),
@@ -433,7 +485,8 @@ class LocationsRepositoryImplTest {
             listOf(
                 LocationConfig.TRANSPORT_DATACHANNEL,
                 LocationConfig.TRANSPORT_VP8CHANNEL,
-                LocationConfig.TRANSPORT_SEICHANNEL
+                LocationConfig.TRANSPORT_SEICHANNEL,
+                LocationConfig.TRANSPORT_VIDEOCHANNEL
             ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ)
         )
@@ -441,18 +494,20 @@ class LocationsRepositoryImplTest {
             listOf(
                 LocationConfig.TRANSPORT_VP8CHANNEL,
                 LocationConfig.TRANSPORT_SEICHANNEL,
+                LocationConfig.TRANSPORT_VIDEOCHANNEL,
                 LocationConfig.TRANSPORT_DATACHANNEL
             ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_WB_STREAM)
         )
-        // Jitsi carries all three: the olcRTC core registers transports globally and the auth
+        // Jitsi carries all four: the olcRTC core registers transports globally and the auth
         // provider is independent of them. datachannel stays FIRST because it is the default and
         // the known-good pairing.
         assertEquals(
             listOf(
                 LocationConfig.TRANSPORT_DATACHANNEL,
                 LocationConfig.TRANSPORT_VP8CHANNEL,
-                LocationConfig.TRANSPORT_SEICHANNEL
+                LocationConfig.TRANSPORT_SEICHANNEL,
+                LocationConfig.TRANSPORT_VIDEOCHANNEL
             ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JITSI)
         )

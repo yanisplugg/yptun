@@ -11,428 +11,14 @@ import (
 	"time"
 )
 
-const (
-	workersPerGroup              = 9
-	defaultCycleSecs             = 36000
-	defaultWorkerRetryMin        = 5 * time.Second
-	defaultWorkerRetryMax        = 15 * time.Second
-	wrapHandshakeRetryMin        = 1 * time.Second
-	wrapHandshakeRetryMax        = 3 * time.Second
-	refreshedCredsRetryMin       = 500 * time.Millisecond
-	refreshedCredsRetrySlot      = 250 * time.Millisecond
-	refreshedCredsRetryJitterMax = 250 * time.Millisecond
-	turnCapacityRetrySlot        = 250 * time.Millisecond
-	// VK-реквизиты запрашиваются последовательно. Меньший интервал старта
-	// воркеров не должен превращать их в burst запросов к VK.
-	credentialRequestCooldown = 100 * time.Millisecond
-)
+const workersPerGroup = 9
 
-// workerStartInterval выбирает темп только для начального набора сессии.
-// Несколько независимых VK-хешей распределяют нагрузку между группами, поэтому
-// их можно запускать быстрее. Для единственного хеша и TCP/TLS режима «Сеть
-// РТ» оставляем более щадящий темп: это снижает вероятность flood/CAPTCHA и
-// всплеска тяжёлых TLS-подключений.
-func workerStartInterval(hashCount int, turnStreamFirst bool) time.Duration {
-	if turnStreamFirst {
-		return 125 * time.Millisecond
-	}
-	switch {
-	case hashCount >= 3:
-		return 100 * time.Millisecond
-	case hashCount == 2:
-		return 125 * time.Millisecond
-	default:
-		return 150 * time.Millisecond
-	}
-}
-
-// workerDistributionByHash возвращает, сколько воркеров получит каждый
-// уникальный хеш. Одна группа всегда содержит workersPerGroup воркеров.
-func workerDistributionByHash(workerCount, hashCount int) []int {
-	if hashCount < 1 {
-		return nil
-	}
-	distribution := make([]int, hashCount)
-	groupCount := workerCount / workersPerGroup
-	for group := 0; group < groupCount; group++ {
-		distribution[group%hashCount] += workersPerGroup
-	}
-	return distribution
-}
-
-func workerHashCandidates(hashes []string, hashIndex, requestedWorkers int, fallback bool) []string {
-	if len(hashes) == 0 {
-		return nil
-	}
-	primary := ((hashIndex % len(hashes)) + len(hashes)) % len(hashes)
-	if !fallback || len(hashes) == 1 {
-		return []string{hashes[primary]}
-	}
-
-	groupCount := requestedWorkers / workersPerGroup
-	if groupCount < 1 {
-		groupCount = 1
-	}
-	primaryCount := min(groupCount, len(hashes))
-	result := make([]string, 0, len(hashes))
-	result = append(result, hashes[primary])
-
-	// Prefer hashes that have no primary group. With 18 workers and four
-	// hashes this gives group 1 hash 3 as its first reserve and group 2 hash 4,
-	// so one degraded group does not move onto the other group's live hash.
-	unusedCount := len(hashes) - primaryCount
-	for offset := 0; offset < unusedCount; offset++ {
-		index := primaryCount + (primary+offset)%unusedCount
-		result = append(result, hashes[index])
-	}
-	for offset := 1; offset < primaryCount; offset++ {
-		index := (primary + offset) % primaryCount
-		result = append(result, hashes[index])
-	}
-	return result
-}
-
-// startPacer распределяет первичные подключения всех групп по общей шкале
-// времени. Это позволяет готовить группы параллельно, не создавая всплеск из
-// десятков одновременных DTLS/TURN-handshake.
-type startPacer struct {
-	mu       sync.Mutex
-	next     time.Time
-	interval time.Duration
-}
-
-func newStartPacer(interval time.Duration) *startPacer {
-	if interval < 0 {
-		interval = 0
-	}
-	return &startPacer{interval: interval}
-}
-
-func (p *startPacer) reserve(now time.Time) time.Time {
-	if p == nil {
-		return now
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	scheduled := now
-	if p.next.After(scheduled) {
-		scheduled = p.next
-	}
-	p.next = scheduled.Add(p.interval)
-	return scheduled
-}
-
-func (p *startPacer) wait(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	scheduled := p.reserve(time.Now())
-	delay := time.Until(scheduled)
-	if delay <= 0 {
-		return ctx.Err()
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return ctx.Err()
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-type credentialFetchResult struct {
-	user     string
-	pass     string
-	turnURLs []string
-	err      error
-}
-
-// credentialRequestGate оставляет только один активный запрос реквизитов.
-// Короткая пауза между запросами защищает VK-путь от стартового flood control,
-// при этом группы больше не ждут полного запуска предыдущих девяти воркеров.
-type credentialRequestGate struct {
-	token    chan struct{}
-	cooldown time.Duration
-}
-
-func newCredentialRequestGate(cooldown time.Duration) *credentialRequestGate {
-	if cooldown < 0 {
-		cooldown = 0
-	}
-	gate := &credentialRequestGate{
-		token:    make(chan struct{}, 1),
-		cooldown: cooldown,
-	}
-	gate.token <- struct{}{}
-	return gate
-}
-
-func (g *credentialRequestGate) fetch(
-	ctx context.Context,
-	request func() (string, string, []string, error),
-) credentialFetchResult {
-	if g == nil {
-		user, pass, turnURLs, err := request()
-		return credentialFetchResult{user: user, pass: pass, turnURLs: turnURLs, err: err}
-	}
-	select {
-	case <-g.token:
-	case <-ctx.Done():
-		return credentialFetchResult{err: ctx.Err()}
-	}
-	defer func() { g.token <- struct{}{} }()
-
-	user, pass, turnURLs, err := request()
-	if g.cooldown > 0 && ctx.Err() == nil {
-		timer := time.NewTimer(g.cooldown)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-		}
-	}
-	return credentialFetchResult{user: user, pass: pass, turnURLs: turnURLs, err: err}
-}
-
-type credentialRefreshResult uint8
-
-const (
-	credentialRefreshNone credentialRefreshResult = iota
-	credentialRefreshApplied
-	credentialRefreshSuperseded
-)
-
-type groupCredentialsState struct {
-	mu       sync.RWMutex
-	value    Credentials
-	revision uint64
-}
-
-func newGroupCredentialsState(value Credentials) *groupCredentialsState {
-	value.TurnURLs = cloneStringSlice(value.TurnURLs)
-	return &groupCredentialsState{value: value, revision: 1}
-}
-
-func (state *groupCredentialsState) snapshot() (Credentials, uint64) {
-	state.mu.RLock()
-	defer state.mu.RUnlock()
-	value := state.value
-	value.TurnURLs = cloneStringSlice(value.TurnURLs)
-	return value, state.revision
-}
-
-func (state *groupCredentialsState) isCurrent(revision uint64) bool {
-	state.mu.RLock()
-	defer state.mu.RUnlock()
-	return state.revision == revision
-}
-
-func (state *groupCredentialsState) replaceIfCurrent(revision uint64, value Credentials) bool {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.revision != revision {
-		return false
-	}
-	value.TurnURLs = cloneStringSlice(value.TurnURLs)
-	state.value = value
-	state.revision++
-	return true
-}
-
-func workerRetryDelayBounds(err error) (time.Duration, time.Duration) {
-	if err != nil && strings.Contains(strings.ToUpper(err.Error()), "WRAP_AUTH_TIMEOUT") {
-		return wrapHandshakeRetryMin, wrapHandshakeRetryMax
-	}
-	return defaultWorkerRetryMin, defaultWorkerRetryMax
-}
-
-func workerRetryDelay(err error) time.Duration {
-	minDelay, maxDelay := workerRetryDelayBounds(err)
-	steps := int((maxDelay-minDelay)/time.Second) + 1
-	return minDelay + time.Duration(rand.Intn(steps))*time.Second
-}
-
-func workerRetryDelayAfterCredentialRefresh(err error, result credentialRefreshResult, workerIndex int) time.Duration {
-	if result != credentialRefreshApplied && result != credentialRefreshSuperseded {
-		return workerRetryDelay(err)
-	}
-	if workerIndex < 0 {
-		workerIndex = 0
-	}
-	slot := workerIndex % workersPerGroup
-	jitter := time.Duration(rand.Int63n(int64(refreshedCredsRetryJitterMax) + 1))
-	return refreshedCredsRetryMin + time.Duration(slot)*refreshedCredsRetrySlot + jitter
-}
-
-func shouldRotateTurnCandidateAfterSessionError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToUpper(err.Error())
-	return strings.Contains(message, "WRAP_AUTH_TIMEOUT") ||
-		strings.Contains(message, "DTLS ХЕНДШЕЙК")
-}
-
-type workerPolicyRetryGate struct {
-	mu           sync.Mutex
-	blockedUntil time.Time
-	round        int
-}
-
-func workerPolicyRetryDelay(round int) time.Duration {
-	if round < 1 {
-		round = 1
-	}
-	delay := time.Duration(3+round*2) * time.Second
-	if delay > 15*time.Second {
-		return 15 * time.Second
-	}
-	return delay
-}
-
-// turnCapacityRetryDelay backs off retries after a TURN 486/508 response.
-// Unlike an authentication failure, this is an admission-control response
-// from a remote relay: immediately making all nine workers retry only keeps
-// that relay saturated and makes the next successful allocation less likely.
-// Keep the ceiling short so that a relay which frees capacity is discovered
-// promptly, while normal (non-capacity-limited) startup remains untouched.
-func turnCapacityRetryDelay(round int) time.Duration {
-	switch {
-	case round <= 1:
-		return 3 * time.Second
-	case round == 2:
-		return 6 * time.Second
-	case round == 3:
-		return 12 * time.Second
-	default:
-		return 20 * time.Second
-	}
-}
-
-// wait объединяет одновременные отказы всех воркеров в одно окно повтора.
-// Небольшой разброс не даёт девяти DTLS-handshake стартовать в одну миллисекунду.
-func (g *workerPolicyRetryGate) wait(ctx context.Context, workerID int) (bool, int, error) {
-	g.mu.Lock()
-	now := time.Now()
-	startedRound := !now.Before(g.blockedUntil)
-	if startedRound {
-		g.round++
-		g.blockedUntil = now.Add(workerPolicyRetryDelay(g.round))
-	}
-	round := g.round
-	retryAt := g.blockedUntil.Add(time.Duration(workerID%workersPerGroup) * 250 * time.Millisecond)
-	g.mu.Unlock()
-
-	wait := time.Until(retryAt)
-	if wait <= 0 {
-		return startedRound, round, nil
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return startedRound, round, nil
-	case <-ctx.Done():
-		return startedRound, round, ctx.Err()
-	}
-}
-
-func (g *workerPolicyRetryGate) reset() {
-	g.mu.Lock()
-	g.blockedUntil = time.Time{}
-	g.round = 0
-	g.mu.Unlock()
-}
-
-// turnCapacityRetryGate is deliberately per credential group. Different
-// groups may use different VK/TURN credentials, so one saturated relay must
-// not slow a healthy group with another hash. The slot offset keeps a retry
-// round from turning into nine simultaneous Allocate requests.
-type turnCapacityRetryGate struct {
-	mu           sync.Mutex
-	blockedUntil time.Time
-	round        int
-}
-
-func (g *turnCapacityRetryGate) wait(ctx context.Context, workerID int) (bool, int, error) {
-	g.mu.Lock()
-	now := time.Now()
-	startedRound := !now.Before(g.blockedUntil)
-	if startedRound {
-		g.round++
-		g.blockedUntil = now.Add(turnCapacityRetryDelay(g.round))
-	}
-	round := g.round
-	retryAt := g.blockedUntil.Add(time.Duration(workerID%workersPerGroup) * turnCapacityRetrySlot)
-	g.mu.Unlock()
-
-	wait := time.Until(retryAt)
-	if wait <= 0 {
-		return startedRound, round, nil
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return startedRound, round, nil
-	case <-ctx.Done():
-		return startedRound, round, ctx.Err()
-	}
-}
-
-func (g *turnCapacityRetryGate) reset() {
-	g.mu.Lock()
-	g.blockedUntil = time.Time{}
-	g.round = 0
-	g.mu.Unlock()
-}
-
-type configFirstStartGate struct {
-	enabled bool
-	ready   chan struct{}
-	once    sync.Once
-}
-
-func newConfigFirstStartGate(enabled bool) *configFirstStartGate {
-	gate := &configFirstStartGate{enabled: enabled}
-	if enabled {
-		gate.ready = make(chan struct{})
-	}
-	return gate
-}
-
-func (g *configFirstStartGate) wait(ctx context.Context, configWorker bool) error {
-	if g == nil || !g.enabled || configWorker {
-		return nil
-	}
-	select {
-	case <-g.ready:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (g *configFirstStartGate) release() {
-	if g == nil || !g.enabled {
-		return
-	}
-	g.once.Do(func() {
-		close(g.ready)
-	})
-}
+const allocateGateInterval = 100 * time.Millisecond
 
 // WorkerGroup:
 // Запускает 9 потоков с одними кредами. Ротации нет — работает до смерти воркеров.
 func WorkerGroup(
 	ctx context.Context,
-	cancel context.CancelFunc,
 	groupID int,
 	hashIndex int,
 	tp *TurnParams,
@@ -442,22 +28,27 @@ func WorkerGroup(
 	getConfig bool,
 	configCh chan<- string,
 	workerIDs []int,
-	requestedWorkers int,
-	hashFallback bool,
 	pauseFlag *int32,
-	deviceID, password, deviceInfo, transportSession string,
+	deviceID, password string,
 	stats *Stats,
-	turnStreamFirst bool,
-	configStartGate *configFirstStartGate,
-	workerStarts *startPacer,
-	credentialRequests *credentialRequestGate,
-	waitForPrimaryCredentials <-chan struct{},
-	signalPrimaryCredentials chan<- struct{},
+	waitReady <-chan struct{},
+	signalReady chan<- struct{},
 ) {
+	// Каскадный запуск: ждем свою очередь
+	if waitReady != nil {
+		log.Printf("[ГРУППА #%d] Ожидание сигнала от предыдущей группы...", groupID)
+		select {
+		case <-waitReady:
+		case <-ctx.Done():
+			return
+		}
+	}
+
 	var configSent int32
 	if !getConfig {
 		configSent = 1
 	}
+
 	// Doze-mode пауза
 	for atomic.LoadInt32(pauseFlag) != 0 {
 		if ctx.Err() != nil {
@@ -465,169 +56,100 @@ func WorkerGroup(
 		}
 		time.Sleep(1 * time.Second)
 	}
-	if waitForPrimaryCredentials != nil {
-		select {
-		case <-waitForPrimaryCredentials:
-		case <-ctx.Done():
-			return
-		}
-	}
 
-	hashCandidates := workerHashCandidates(tp.Hashes, hashIndex, requestedWorkers, hashFallback)
-	selectedHash := 0
-	hash := hashCandidates[selectedHash]
-	log.Printf("[ГРУППА #%d] Запрос реквизитов подключения", groupID)
+	hash := tp.Hashes[hashIndex%len(tp.Hashes)]
+	shortHash := hash
+	if len(shortHash) > 8 {
+		shortHash = shortHash[:8]
+	}
+	log.Printf("[ГРУППА #%d] Запрос кредов (хеш: %s...)", groupID, shortHash)
 
 	credStreamID := groupID * 100
-	fetchCredentials := func(candidateHash string) credentialFetchResult {
-		return credentialRequests.fetch(ctx, func() (string, string, []string, error) {
-			return GetCreds(ctx, candidateHash, credStreamID)
-		})
-	}
-	credentials := fetchCredentials(hash)
-	user, pass, turnURLs, err := credentials.user, credentials.pass, credentials.turnURLs, credentials.err
-	for err != nil &&
-		selectedHash+1 < len(hashCandidates) &&
-		isHashFallbackCredentialError(err) {
-		selectedHash++
-		hash = hashCandidates[selectedHash]
-		log.Printf(
-			"[ГРУППА #%d] Текущий VK-хеш недоступен; пробуем резерв %d из %d",
-			groupID,
-			selectedHash+1,
-			len(hashCandidates),
-		)
-		credentials = fetchCredentials(hash)
-		user, pass, turnURLs, err = credentials.user, credentials.pass, credentials.turnURLs, credentials.err
-	}
-	if signalPrimaryCredentials != nil {
-		close(signalPrimaryCredentials)
-	}
-	if err != nil && getConfig {
-		log.Printf("[ГРУППА #%d] Стартовые креды не получены: %v; завершаем запуск для чистого повтора", groupID, err)
-		cancel()
+	user, pass, turnURLs, err := GetCreds(ctx, hash, credStreamID)
+	var creds *Credentials
+	if err == nil {
+		creds = &Credentials{User: user, Pass: pass, TurnURLs: turnURLs, CacheStreamID: credStreamID}
+	} else {
+		log.Printf("[ГРУППА #%d] Ошибка кредов: %v", groupID, err)
 		return
 	}
-	if err != nil {
-		for attempt := 2; err != nil; attempt++ {
-			if isTerminalGroupCredentialError(err) {
-				log.Printf("[ГРУППА #%d] Креды недоступны без восстановления: %v", groupID, err)
-				return
-			}
-			delay := groupCredentialRetryDelay(err)
-			log.Printf("[ГРУППА #%d] Креды пока не получены: повтор %d через %v", groupID, attempt, delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return
-			}
-			credentials = fetchCredentials(hash)
-			user, pass, turnURLs, err = credentials.user, credentials.pass, credentials.turnURLs, credentials.err
-		}
-	}
-	credsState := newGroupCredentialsState(Credentials{
-		User:          user,
-		Pass:          pass,
-		TurnURLs:      turnURLs,
-		CacheStreamID: credStreamID,
-	})
 
-	initialCreds, _ := credsState.snapshot()
-	log.Printf("[ГРУППА #%d] Креды OK, TURN: %v, %d воркеров", groupID, initialCreds.TurnURLs, len(workerIDs))
+	log.Printf("[ГРУППА #%d] Креды OK, TURN: %v, %d воркеров", groupID, creds.TurnURLs, len(workerIDs))
 
 	var configRequestInFlight int32
 	var wg sync.WaitGroup
+	var credsMu sync.RWMutex
 	var refreshMu sync.Mutex
 	var lastCredRefresh atomic.Int64
-	var policyRetryGate workerPolicyRetryGate
-	var turnCapacityGate turnCapacityRetryGate
 
-	refreshCreds := func(reason string, failedRevision uint64) credentialRefreshResult {
+	refreshCreds := func(reason string) bool {
 		refreshMu.Lock()
 		defer refreshMu.Unlock()
-		if !credsState.isCurrent(failedRevision) {
-			log.Printf("[TURN] Креды уже заменены после этой попытки, используем актуальные (%s)", reason)
-			return credentialRefreshSuperseded
-		}
 
 		now := time.Now().Unix()
 		last := lastCredRefresh.Load()
 		if last > 0 && now-last < 15 {
 			log.Printf("[TURN] Креды уже обновлялись %d сек назад, ждём следующий retry (%s)", now-last, reason)
-			return credentialRefreshNone
+			return true
 		}
 
-		rotateForTurnFailure := hashFallback &&
-			len(hashCandidates) > 1 &&
-			strings.HasPrefix(strings.ToUpper(strings.TrimSpace(reason)), "TURN")
-		order := hashRefreshOrder(selectedHash, len(hashCandidates), rotateForTurnFailure)
-		var (
-			u             string
-			p             string
-			urls          []string
-			refreshErr    error
-			nextHashIndex = selectedHash
-		)
-		for attempt, candidateIndex := range order {
-			candidateHash := hashCandidates[candidateIndex]
-			if attempt > 0 || candidateIndex != selectedHash {
-				log.Printf(
-					"[ГРУППА #%d] Пробуем резервный VK-хеш %d из %d после ошибки TURN",
-					groupID,
-					candidateIndex+1,
-					len(hashCandidates),
-				)
-			}
-			getStreamCache(credStreamID).invalidate(credStreamID)
-			credentials := fetchCredentials(candidateHash)
-			u, p, urls, refreshErr = credentials.user, credentials.pass, credentials.turnURLs, credentials.err
-			if refreshErr == nil {
-				nextHashIndex = candidateIndex
-				break
-			}
-			if !isHashFallbackCredentialError(refreshErr) {
-				break
-			}
+		getStreamCache(credStreamID).invalidate(credStreamID)
+		if getVkAuthMode() == "account" {
+			invalidateInjectedTurnCreds(hash)
 		}
+		u, p, urls, refreshErr := GetCreds(ctx, hash, credStreamID)
 		if refreshErr != nil {
 			log.Printf("[TURN] Не удалось обновить креды после %s: %v", reason, refreshErr)
-			return credentialRefreshNone
+			return false
 		}
-		selectedHash = nextHashIndex
-		hash = hashCandidates[selectedHash]
 
-		replaced := credsState.replaceIfCurrent(failedRevision, Credentials{
-			User:          u,
-			Pass:          p,
-			TurnURLs:      urls,
-			CacheStreamID: credStreamID,
-		})
-		if !replaced {
-			log.Printf("[TURN] Креды уже заменены во время обновления, используем актуальные (%s)", reason)
-			return credentialRefreshSuperseded
-		}
+		credsMu.Lock()
+		creds = &Credentials{User: u, Pass: p, TurnURLs: urls, CacheStreamID: credStreamID}
+		credsMu.Unlock()
 		lastCredRefresh.Store(time.Now().Unix())
 		log.Printf("[TURN] Креды обновлены после %s, TURN urls=%d", reason, len(urls))
-		return credentialRefreshApplied
+		return true
 	}
+
+	// Сигнализируем следующей группе, что мы успешно запустились (креды получены + фора)
+	if signalReady != nil {
+		go func() {
+			delayMs := 500 + rand.Intn(250)
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+			close(signalReady)
+			log.Printf("[ГРУППА #%d] Успешный старт! Передача эстафеты следующей группе...", groupID)
+		}()
+	}
+
+	// Общий rate-limit на TURN Allocate по всей группе: не более одной новой
+	// аллокации за тик, независимо от того, сколько воркеров сейчас готовы
+	// её выполнить (стартовый stagger — отдельная вещь, см. workerDelay ниже —
+	// он размазывает старт горутин, но не сами ретраи Allocate внутри уже
+	// запущенных). Без этого на нестабильной сети несколько воркеров всё
+	// равно накладываются друг на друга и вместе выжигают VK-квоту (error
+	// 486) быстрее, чем должны. См. RunSession(allocateGate) в session.go и
+	// комментарий там про free-turn-proxy — тот же приём.
+	allocateTicker := time.NewTicker(allocateGateInterval)
+	defer allocateTicker.Stop()
 
 	for i, wid := range workerIDs {
 		wg.Add(1)
 
-		go func(workerIndex, wid int) {
+		workerDelay := time.Duration(i) * 75 * time.Millisecond
+
+		go func(wid int, delay time.Duration) {
 			defer wg.Done()
 
-			if err := configStartGate.wait(ctx, getConfig && workerIndex == 0); err != nil {
-				return
-			}
-
-			if err := workerStarts.wait(ctx); err != nil {
-				return
+			if delay > 0 {
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return
+				}
 			}
 
 			shouldGetConfig := getConfig
 			attempt := 0
-			turnCandidateRetry := 0
 
 			for {
 				if ctx.Err() != nil {
@@ -642,25 +164,17 @@ func WorkerGroup(
 				if getConf {
 					cc = configCh
 				}
-				requireConfig := configStartGate.enabled && getConf
-				var onConfigDelivered func()
-				if requireConfig {
-					onConfigDelivered = func() {
-						atomic.StoreInt32(&configSent, 1)
-						configStartGate.release()
-						log.Printf("[ГРУППА #%d] Новое подключение зарегистрировано; запускаем остальные воркеры", groupID)
-					}
-				}
 
-				credsSnapshot, credsRevision := credsState.snapshot()
+				credsMu.RLock()
+				credsSnapshot := *creds
+				credsSnapshot.TurnURLs = cloneStringSlice(creds.TurnURLs)
+				credsMu.RUnlock()
 
 				configDelivered, sessErr := RunSession(ctx, tp, peer, d, localPort,
-					getConf, cc, requireConfig, onConfigDelivered, wid, &credsSnapshot,
-					deviceID, password, deviceInfo,
-					transportSession, stats, turnStreamFirst, turnCandidateRetry,
-					turnCapacityGate.reset)
-				refreshResult := credentialRefreshNone
+					getConf, cc, wid, &credsSnapshot, deviceID, password, stats, allocateTicker.C)
 
+				quotaRetry := false
+				fastRetry := false
 				if getConf {
 					if configDelivered {
 						atomic.StoreInt32(&configSent, 1)
@@ -673,40 +187,26 @@ func WorkerGroup(
 					if ctx.Err() != nil {
 						return
 					}
-					relayHandshakeFailed := shouldRotateTurnCandidateAfterSessionError(sessErr)
-					if relayHandshakeFailed {
-						turnCandidateRetry++
-					}
-					if maxWorkers, limited := workerPolicyLimit(sessErr); limited {
-						if shouldRetryWorkerPolicy(maxWorkers, requestedWorkers) {
-							startedRound, round, waitErr := policyRetryGate.wait(ctx, wid)
-							if startedRound && (round == 1 || round%6 == 0) {
-								log.Printf(
-									"[МОЩНОСТЬ] Лимит временно занят другими потоками этого доступа (максимум: %d); повторяем подключение",
-									maxWorkers,
-								)
-							}
-							if waitErr != nil {
-								return
-							}
-							continue
-						}
-						log.Printf(
-							"[МОЩНОСТЬ] Сервер остановил лишний поток согласно ограничению доступа (максимум: %d)",
-							maxWorkers,
-						)
-						return
-					}
-					policyRetryGate.reset()
 					errStr := sessErr.Error()
 					errStrLower := strings.ToLower(errStr)
+					fastRetry = strings.Contains(errStrLower, "broken pipe") ||
+						strings.Contains(errStrLower, "connection reset by peer") ||
+						strings.Contains(errStrLower, "unexpected eof")
 
 					turnAllocAttrMissing := strings.Contains(errStrLower, "turn allocate") &&
 						strings.Contains(errStrLower, "attribute not found")
-					turnCredRefreshNeeded := turnAllocAttrMissing || isCredentialTURNError(sessErr)
-					turnCapacityLimited := isTURNCapacityError(sessErr)
+					isTurnQuota := strings.Contains(errStrLower, "quota") || strings.Contains(errStr, "486")
+					quotaRetry = isTurnQuota
+					turnCredRefreshNeeded := !isTurnQuota && (turnAllocAttrMissing ||
+						strings.Contains(errStrLower, "turn allocate auth") ||
+						strings.Contains(errStrLower, "invalid credential") ||
+						strings.Contains(errStrLower, "stale nonce") ||
+						strings.Contains(errStrLower, "allocation mismatch") ||
+						strings.Contains(errStrLower, "error 508"))
 
-					if strings.Contains(errStrLower, "rate limit") ||
+					if hint := workerErrorHint(sessErr); hint != "" {
+						errStr += " | " + hint
+					} else if strings.Contains(errStrLower, "rate limit") ||
 						strings.Contains(errStrLower, "flood control") ||
 						strings.Contains(errStrLower, "ip mismatch") ||
 						strings.Contains(errStrLower, "error 29") {
@@ -720,37 +220,16 @@ func WorkerGroup(
 					}
 
 					attempt++
-					if turnAllocAttrMissing {
+					if isTurnQuota {
+						log.Printf("[ВОРКЕР #%d] [TURN] Квота relay исчерпана (один аккаунт VK = мало слотов), ждём: %s", wid, errStr)
+					} else if turnAllocAttrMissing {
 						log.Printf("[ВОРКЕР #%d] [TURN] Allocate вернул неполный ответ, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
-						refreshResult = refreshCreds("TURN Allocate attribute-not-found", credsRevision)
+						refreshCreds("TURN Allocate attribute-not-found")
 					} else if turnCredRefreshNeeded {
 						log.Printf("[ВОРКЕР #%d] [TURN] Ошибка allocation/кредов, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
-						refreshResult = refreshCreds("TURN allocation error", credsRevision)
-					} else if turnCapacityLimited {
-						startedRound, round, waitErr := turnCapacityGate.wait(ctx, wid)
-						if startedRound {
-							log.Printf("[ВОРКЕР #%d] [TURN] Узел временно ограничил новые allocation; снижаем темп повторов (раунд %d), креды сохранены: %s", wid, round, errStr)
-						}
-						if waitErr != nil {
-							return
-						}
-						continue
-					} else if relayHandshakeFailed &&
-						hashFallback &&
-						len(credsSnapshot.TurnURLs) > 0 &&
-						turnCandidateRetry%len(credsSnapshot.TurnURLs) == 0 {
-						log.Printf("[ВОРКЕР #%d] Ошибка (попытка %d): %s", wid, attempt, errStr)
-						log.Printf(
-							"[ВОРКЕР #%d] [TURN] Все relay-пути текущего VK-хеша не провели DTLS; пробуем резервный хеш",
-							wid,
-						)
-						refreshResult = refreshCreds("TURN relay handshake timeout", credsRevision)
+						refreshCreds("TURN allocation error")
 					} else {
 						log.Printf("[ВОРКЕР #%d] Ошибка (попытка %d): %s", wid, attempt, errStr)
-					}
-					if refreshResult == credentialRefreshApplied ||
-						refreshResult == credentialRefreshSuperseded {
-						turnCandidateRetry = 0
 					}
 
 					// Если ошибка STUN (credentials invalid), воркер не сможет переподключиться. Завершаем.
@@ -767,65 +246,23 @@ func WorkerGroup(
 					return
 				}
 
-				retryDelay := workerRetryDelayAfterCredentialRefresh(sessErr, refreshResult, workerIndex)
+				retryDelay := time.Duration(5+rand.Intn(11)) * time.Second
+				if quotaRetry {
+					retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
+				} else if fastRetry {
+					retryDelay = time.Duration(1+rand.Intn(3)) * time.Second
+				}
 				select {
 				case <-time.After(retryDelay):
 				case <-ctx.Done():
 					return
 				}
 			}
-		}(i, wid)
+		}(wid, workerDelay)
 	}
 
 	wg.Wait()
 	log.Printf("[ГРУППА #%d] Все воркеры группы завершились.", groupID)
-}
-
-func isTerminalGroupCredentialError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToUpper(err.Error())
-	return strings.Contains(message, "INVALID_JOIN_LINK") ||
-		strings.Contains(message, "ANON_BLOCKED") ||
-		strings.Contains(message, "CALL_FULL") ||
-		strings.Contains(message, "FATAL_AUTH")
-}
-
-func isHashFallbackCredentialError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToUpper(err.Error())
-	return strings.Contains(message, "INVALID_JOIN_LINK") ||
-		strings.Contains(message, "ANON_BLOCKED") ||
-		strings.Contains(message, "CALL_FULL")
-}
-
-func hashRefreshOrder(current, total int, rotate bool) []int {
-	if total <= 0 {
-		return nil
-	}
-	current = ((current % total) + total) % total
-	start := current
-	if rotate && total > 1 {
-		start = (current + 1) % total
-	}
-	order := make([]int, 0, total)
-	for offset := 0; offset < total; offset++ {
-		order = append(order, (start+offset)%total)
-	}
-	return order
-}
-
-func groupCredentialRetryDelay(err error) time.Duration {
-	if err != nil {
-		message := strings.ToUpper(err.Error())
-		if strings.Contains(message, "CAPTCHA_WAIT_REQUIRED") || strings.Contains(message, "FATAL_CAPTCHA") {
-			return 90 * time.Second
-		}
-	}
-	return time.Duration(20+rand.Intn(21)) * time.Second
 }
 
 // ParseHashes — парсит строку хешей
@@ -868,12 +305,23 @@ func normalizeVKJoinHash(input string) string {
 
 // TurnParams — конфигурация TURN
 type TurnParams struct {
-	Host        string
-	Port        string
-	Hashes      []string
-	TLSFrontSNI string
-	Masque      *warpMasqueManager
-	WrapKey     []byte // Password-derived WRAP key (32 bytes), nil = disabled
+	Host     string
+	Port     string
+	Hashes   []string
+	WrapKey  []byte // Password-derived WRAP key (32 bytes), nil = disabled
+	ObfsMode string // "audio" or "video" — RTP masking mode
+	// NoDTLS: пропустить DTLS и идти RTP-obfs AEAD напрямую поверх TURN relay.
+	// Требует сервер, который умеет принимать прямые (без DTLS) сессии на
+	// отдельном порту/слушателе — см. server/main.go -listen-direct.
+	NoDTLS bool
+	// RawMode: raw-IP без WireGuard (см. server/main.go -listen-raw, handleConnRaw).
+	// Подразумевает NoDTLS — сервер на -listen-raw DTLS не понимает.
+	RawMode bool
+	// TCPTransport: соединяться с TURN-relay по TCP вместо UDP (см.
+	// dialTURNConn в session.go). На некоторых сетях (замечено на
+	// Ростелекоме) UDP до TURN душится/дропается провайдером агрессивнее,
+	// чем TCP на тот же relay — этот флаг обходит именно это.
+	TCPTransport bool
 }
 
 // Credentials — учетные данные TURN

@@ -24,8 +24,14 @@ object ConfigShareService {
             LocationConfig.TRANSPORT_VP8CHANNEL -> {
                 "vp8channel<vp8-fps=${normalized.vp8Fps}&vp8-batch=${normalized.vp8Batch}>"
             }
-            LocationConfig.TRANSPORT_SEICHANNEL -> {
-                "seichannel<fps=60&batch=64&frag=900&ack-ms=2000>"
+            // The location's own parameters (docs/uri.md payload), so the link opens the same way elsewhere.
+            LocationConfig.TRANSPORT_SEICHANNEL -> normalized.seiOptions().let {
+                "seichannel<fps=${it.fps}&batch=${it.batch}&frag=${it.fragmentSize}&ack-ms=${it.ackTimeoutMs}>"
+            }
+            LocationConfig.TRANSPORT_VIDEOCHANNEL -> normalized.videoOptions().let {
+                "videochannel<video-w=${it.width}&video-h=${it.height}&video-fps=${it.fps}&video-codec=${it.codec}" +
+                    "&video-qr-size=${it.qrSize}&video-qr-recovery=${it.qrRecovery}" +
+                    "&video-tile-module=${it.tileModule}&video-tile-rs=${it.tileRs}>"
             }
             else -> normalized.transport
         }

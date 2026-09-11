@@ -19,8 +19,6 @@ plugins {
 val olcrtcRepoPath = providers.environmentVariable("OLCRTC_REPO")
     .orElse(rootProject.layout.projectDirectory.asFile.parentFile.resolve("olcrtc").absolutePath)
 val olcrtcRepoDir = rootProject.file(olcrtcRepoPath.get())
-val olcrtcIosXcframework = layout.buildDirectory.dir("generated/olcrtc/ios/OlcRtcMobile.xcframework")
-val olcrtcIosXcframeworkDir = olcrtcIosXcframework.get().asFile
 val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("1.0.0")
 val olcboxVersionValue = olcboxVersion.get()
 val generatedAppInfoDir = layout.buildDirectory.dir("generated/source/olcboxAppInfo/commonMain")
@@ -151,31 +149,52 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
 
 val coresAndroidAarDependency = files(coresAndroidAarFile).builtBy(buildCoresAndroidAar)
 
-val buildOlcrtcIosXcframework by tasks.registering(Exec::class) {
-    group = "build"
-    description = "Builds olcrtc iOS XCFramework from OLCRTC_REPO using gomobile."
+// iOS: every core through the flat kazcores/coreapi package (the same one the desktop DLL wraps), in
+// ONE gomobile framework linked by both the app (pings) and the packet-tunnel extension. macOS + Xcode
+// only. No with_gvisor (sing-box owns no TUN on iOS — hev does) and no with_naive_outbound (cronet
+// has no iOS build here yet).
+val coresIosBuildTags = "with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic"
+val coresIosXcframework = layout.buildDirectory.dir("generated/cores/ios/Coreapi.xcframework")
 
+val buildCoresIosXcframework by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds Coreapi.xcframework (every core, kazcores/coreapi) for iOS via gomobile."
+
+    inputs.files(coresRepoDir.resolve("go.mod"), coresRepoDir.resolve("go.sum"))
+    inputs.dir(coresRepoDir.resolve("coreapi"))
+    inputs.dir(coresRepoDir.resolve("../free-turn-proxy/freeturn"))
+    inputs.dir(coresRepoDir.resolve("../free-turn-proxy/internal"))
+    inputs.dir(coresRepoDir.resolve("../wdtt"))
+    inputs.dir(coresRepoDir.resolve("../masterdns/internal"))
+    inputs.dir(coresRepoDir.resolve("../masterdns/mdnsmobile"))
+    inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
     inputs.dir(olcrtcRepoDir.resolve("internal"))
-    inputs.files(olcrtcRepoDir.resolve("go.mod"), olcrtcRepoDir.resolve("go.sum"))
-    outputs.dir(olcrtcIosXcframework)
+    inputs.property("tags", coresIosBuildTags)
+    inputs.property("singboxVersion", singboxVersion)
+    outputs.dir(coresIosXcframework)
 
-    workingDir = olcrtcRepoDir
-
+    workingDir = coresRepoDir
+    val outDir = coresIosXcframework.get().asFile
     doFirst {
-        delete(olcrtcIosXcframeworkDir)
-        olcrtcIosXcframeworkDir.parentFile.mkdirs()
+        delete(outDir)
+        outDir.parentFile.mkdirs()
     }
 
     commandLine(
         "gomobile",
         "bind",
         "-target=ios",
+        "-iosversion",
+        "15.0",
+        "-tags",
+        coresIosBuildTags,
+        "-trimpath",
         "-ldflags",
-        "-s -w -checklinkname=0",
+        "-X github.com/sagernet/sing-box/constant.Version=$singboxVersion -s -w -checklinkname=0",
         "-o",
-        olcrtcIosXcframeworkDir.absolutePath,
-        "./mobile"
+        outDir.absolutePath,
+        "./coreapi"
     )
 }
 
@@ -205,6 +224,10 @@ kotlin {
     iosArm64()
     iosSimulatorArm64()
 
+    // The explicit jvmSharedMain edges below switch the default hierarchy off, and without it
+    // iosArm64Main/iosSimulatorArm64Main never depend on iosMain — every iOS actual went missing.
+    applyDefaultHierarchyTemplate()
+
     sourceSets {
         commonMain {
             kotlin.srcDir(generateAppInfo)
@@ -220,10 +243,23 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.core)
                 // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
                 implementation("com.github.mwiede:jsch:0.2.21")
+                // ssh-ed25519 / curve25519 / chacha20 for JSch on every platform (SshSupport pins JSch to
+                // these). Android had none of them — its runtime reports Java < 15, where JSch needs BC —
+                // so an Ed25519 key was never offered and the VPS auto-install failed with "Auth fail".
+                implementation("org.bouncycastle:bcprov-jdk18on:1.86")
             }
         }
         androidMain.get().dependsOn(jvmSharedMain)
         jvmMain.get().dependsOn(jvmSharedMain)
+
+        // Code the desktop and iOS share but Android does not: Android keeps its own copies of the
+        // settings screens (they grew Android-only features), the desktop port of them is what iOS
+        // reuses. Platform bits go through SettingsPlatform (expect/actual).
+        val nonAndroidMain by creating {
+            dependsOn(commonMain.get())
+        }
+        jvmMain.get().dependsOn(nonAndroidMain)
+        iosMain.get().dependsOn(nonAndroidMain)
 
         commonMain.dependencies {
             api(libs.compose.runtime)
