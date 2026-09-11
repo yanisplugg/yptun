@@ -24,6 +24,10 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Камера нужна, чтобы сканировать QR-коды с конфигурациями.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Фотографии нужны для сканирования QR-кодов с конфигурациями из медиатеки.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
