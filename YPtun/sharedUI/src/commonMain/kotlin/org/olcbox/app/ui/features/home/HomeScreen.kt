@@ -29,6 +29,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -791,29 +793,36 @@ private sealed interface PendingDelete {
 @Composable
 private fun UpdateAvailableBanner(onClick: () -> Unit) {
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val colors = MaterialTheme.colorScheme
     Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
+        onClick = onClick,
+        color = colors.primaryContainer,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 8.dp),
+                .padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
                 text = s.updateBannerTitle,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = colors.onPrimaryContainer,
+                modifier = Modifier.weight(1f)
             )
-            TextButton(onClick = onClick) {
-                Text(
-                    text = s.updateBannerAction,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary
+            // Inverted container colours: a text button tinted `primary` vanished on a
+            // dynamic-colour primaryContainer (same hue), leaving the banner without an action.
+            Button(
+                onClick = onClick,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.onPrimaryContainer,
+                    contentColor = colors.primaryContainer
                 )
+            ) {
+                Text(text = s.updateBannerAction, fontWeight = FontWeight.SemiBold)
             }
         }
     }
