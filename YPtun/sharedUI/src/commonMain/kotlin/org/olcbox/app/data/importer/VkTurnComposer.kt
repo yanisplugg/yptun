@@ -83,7 +83,7 @@ data class VkTurnDraft(
     val wdttFingerprint: String = "chrome",
     /** WDTT worker count; blank/0 → core default. */
     val wdttWorkers: String = "",
-    /** WDTT Plus advanced knobs, edited in place. */
+    /** qWDTT advanced knobs, edited in place. */
     val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
     /** Master switch for multi-server freeturn (the [extraFreeturnUris] are only used when on). */
     val freeturnMultiServer: Boolean = false,

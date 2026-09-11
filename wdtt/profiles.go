@@ -2,6 +2,7 @@ package wdtt
 
 import (
 	"encoding/json"
+	"log"
 	"math/rand"
 	"os"
 )
@@ -21,7 +22,10 @@ type SavedProfile struct {
 	BrowserFp  string `json:"browser_fp"`
 }
 
-const profileFile = "vk_profile.json"
+const (
+	profileFile         = "vk_profile.json"
+	captchaBrowserFpFile = "captcha_browser_fp"
+)
 
 func LoadProfileFromDisk() (*SavedProfile, error) {
 	data, err := os.ReadFile(profileFile)
@@ -33,6 +37,37 @@ func LoadProfileFromDisk() (*SavedProfile, error) {
 		return nil, err
 	}
 	return &sp, nil
+}
+
+// rotateCaptchaBrowserFP — полная ротация профиля капчи (fp + UA + device_json).
+func rotateCaptchaBrowserFP() (*SavedProfile, error) {
+	return rotateCaptchaProfile()
+}
+
+func rotateCaptchaProfile() (*SavedProfile, error) {
+	fp, err := captchaV2BrowserFP()
+	if err != nil {
+		return nil, err
+	}
+	p := getRandomProfile()
+	deviceJSON := captchaV2VariedDeviceJSON(captchaV2DeviceInfo)
+	sp := &SavedProfile{
+		Profile:    p,
+		DeviceJSON: deviceJSON,
+		BrowserFp:  fp,
+	}
+	data, err := json.Marshal(sp)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(profileFile, data, 0644); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(captchaBrowserFpFile, []byte(fp), 0644); err != nil {
+		return nil, err
+	}
+	log.Printf("[КАПЧА] captcha profile rotated (fp=%s...)", fp[:8])
+	return sp, nil
 }
 
 // profileList contains paired User-Agent and Client Hints strings.
@@ -98,52 +133,9 @@ var profileList = []Profile{
 		SecChUaMobile:   "?0",
 		SecChUaPlatform: `"Linux"`,
 	},
-	{
-		UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
-	},
-}
-
-var androidProfiles = []Profile{
-	{
-		UserAgent:       "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36",
-		SecChUa:         `"Chromium";v="129", "Not-A.Brand";v="24", "Google Chrome";v="129"`,
-		SecChUaMobile:   "?1",
-		SecChUaPlatform: `"Android"`,
-	},
-}
-
-var iosProfiles = []Profile{
-	{
-		UserAgent:       "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
-		SecChUa:         `"Safari";v="17", "Not-A.Brand";v="24", "Apple Safari";v="17"`,
-		SecChUaMobile:   "?1",
-		SecChUaPlatform: `"iOS"`,
-	},
-}
-
-var activeFingerprint = "firefox"
-
-func SetActiveFingerprint(fp string) {
-	activeFingerprint = fp
-}
-
-func GetActiveFingerprint() string {
-	return activeFingerprint
 }
 
 // getRandomProfile returns a paired User-Agent and Client Hints profile.
 func getRandomProfile() Profile {
-	switch activeFingerprint {
-	case "android":
-		return androidProfiles[rand.Intn(len(androidProfiles))]
-	case "ios":
-		return iosProfiles[rand.Intn(len(iosProfiles))]
-	case "safari":
-		return profileList[4] // Using macOS Chrome as approximation for Safari if no specific Safari profile exists, or implement one. Actually, let's just use iOS for safari or macos.
-	case "firefox":
-		return profileList[len(profileList)-1]
-	default:
-		// chrome, or unknown, pick from first few chrome profiles
-		return profileList[rand.Intn(3)]
-	}
+	return profileList[rand.Intn(len(profileList))]
 }

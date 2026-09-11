@@ -953,16 +953,14 @@ internal class DesktopEngineController(
             // and hands back the WireGuard config we build the outbound from.
             val peerAddr = vk.wdttPeerAddr()
             log(
-                "Starting VK-TURN WDTT Plus core on $listenAddr (peer=$peerAddr, " +
+                "Starting VK-TURN qWDTT core on $listenAddr (peer=$peerAddr, " +
                     "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
-                    "rt=${vk.wdttPlus.rtNetworkMode}, masque=${vk.wdttPlus.masque})"
+                    "turn-tcp=${vk.wdttPlus.rtNetworkMode}, obfs=${if (vk.wdttPlus.obfsVideo) "video" else "audio"})"
             )
             YpTunCore.wdttStart(
                 vk.wdttCoreOptionsJson(
                     listen = listenAddr,
                     deviceId = deviceId,
-                    masqueConfigPath = org.olcbox.app.desktop.DesktopPaths.appDataDir()
-                        .resolve("wdtt-masque.json").toString(),
                 )
             )
         } else {

@@ -1881,15 +1881,14 @@ class OlcboxVpnService : VpnService() {
                 val peerAddr = vk.wdttPeerAddr()
                 val configSignal = CompletableDeferred<String>()
                 addLog(
-                    "Starting VK-TURN WDTT Plus core on $listenAddr (peer=$peerAddr, " +
+                    "Starting VK-TURN qWDTT core on $listenAddr (peer=$peerAddr, " +
                         "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
-                        "rt=${vk.wdttPlus.rtNetworkMode}, masque=${vk.wdttPlus.masque})"
+                        "turn-tcp=${vk.wdttPlus.rtNetworkMode}, obfs=${if (vk.wdttPlus.obfsVideo) "video" else "audio"})"
                 )
                 Wdttmobile.start(
                     vk.wdttCoreOptionsJson(
                         listen = listenAddr,
                         deviceId = deviceIdentityProvider.hwid(),
-                        masqueConfigPath = java.io.File(filesDir, "wdtt-masque.json").absolutePath,
                     ),
                     object : WdttConfigSink {
                         override fun onConfig(wgConf: String) {

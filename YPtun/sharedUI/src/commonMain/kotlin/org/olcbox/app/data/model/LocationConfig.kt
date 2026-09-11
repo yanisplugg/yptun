@@ -75,13 +75,13 @@ data class VkTurnConfig(
     /** WDTT connection password — the WRAP key is HKDF-derived from it server-side and client-side. */
     @SerialName("wdtt_password")
     val wdttPassword: String = "",
-    /** WDTT TLS fingerprint for the VK auth flow: chrome/safari/ios/android/firefox (blank → chrome). */
+    /** Unused since qWDTT (it always uses its Chrome fingerprint); kept so stored locations load. */
     @SerialName("wdtt_fingerprint")
     val wdttFingerprint: String = "",
     /** WDTT worker count; 0 → core default. Clamped to [9,108] and rounded to a multiple of 9 in-core. */
     @SerialName("wdtt_workers")
     val wdttWorkers: Int = 0,
-    /** The WDTT Plus core's advanced knobs (network modes, VK auth, reserves). */
+    /** The qWDTT core's advanced knobs (TURN over TCP, camouflage, DNS for VK). */
     @SerialName("wdtt_plus")
     val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
     /**
@@ -168,11 +168,10 @@ data class VkTurnConfig(
     }
 
     /**
-     * The WDTT Plus core options (wdttmobile.Options JSON) for this location — ONE builder for both the
-     * Android gomobile binding and the desktop core. [listen] is the local UDP address WireGuard dials,
-     * [masqueConfigPath] a private writable file for the WARP enrollment.
+     * The qWDTT core options (wdttmobile.Options JSON) for this location — ONE builder for both the
+     * Android gomobile binding and the desktop/iOS core. [listen] is the local UDP address WireGuard dials.
      */
-    fun wdttCoreOptionsJson(listen: String, deviceId: String, masqueConfigPath: String): String {
+    fun wdttCoreOptionsJson(listen: String, deviceId: String): String {
         val p = wdttPlus
         return buildJsonObject {
             put("peer", wdttPeerAddr())
@@ -181,62 +180,39 @@ data class VkTurnConfig(
             put("listen", listen)
             put("workers", wdttWorkers)
             put("device_id", deviceId)
-            put("fingerprint", wdttFingerprint.ifBlank { "chrome" })
-            put("client_ids", p.clientIds.trim())
             put("captcha_mode", "auto")
             put("turn_host", p.turnHost.trim())
             put("turn_port", p.turnPort.trim())
-            put("vkcalls_preflight", p.vkCallsPreflight)
-            put("config_first_start", p.configFirstStart)
-            put("hash_fallback", p.hashFallback)
-            put("turn_stream_first", p.rtNetworkMode)
-            put("turn_sni", p.turnSni.trim())
-            put("masque", p.masque)
-            put("masque_config_path", masqueConfigPath)
-            put("masque_accept_tos", p.masqueAcceptTos)
-            put("custom_vk_client_id", p.customVkClientId.trim())
-            put("custom_vk_client_secret", p.customVkClientSecret.trim())
+            put("turn_tcp", p.rtNetworkMode)
+            put("obfs", if (p.obfsVideo) "video" else "audio")
+            put("go_dns", p.goDns.trim())
+            put("vk_anon_path", if (p.vkAnonLegacy) "legacy" else "vkcalls")
         }.toString()
     }
 }
 
 /**
- * Advanced options of the WDTT Plus VK-TURN core (github.com/Ivan4537/WDTT-Plus). Defaults reproduce
- * the core's own defaults, so an untouched location behaves exactly like upstream.
+ * Advanced options of the qWDTT VK-TURN core (github.com/SpaceNeuroX/proxy-turn-vk-android). The name is
+ * left over from the WDTT Plus core it replaced, so stored locations keep loading (its old fields are
+ * simply ignored). Defaults reproduce qWDTT's own defaults.
  */
 @Serializable
 data class WdttPlusOptions(
     /**
-     * «Сеть РТ»: try TURN/TLS, then TURN/TCP to every VK address first and keep UDP as the reserve —
-     * for networks (Rostelecom and the like) that throttle or cut UDP to VK.
+     * TURN relay over TCP instead of UDP — for networks that throttle or cut UDP to VK (Rostelecom and
+     * the like). Same stored key as WDTT Plus's «Сеть РТ», which served the same purpose.
      */
     @SerialName("rt_network_mode")
     val rtNetworkMode: Boolean = false,
-    /** Whitelisted SNI for the outer TURN/TLS connection («Сеть РТ» only). Blank = none. */
-    @SerialName("turn_sni")
-    val turnSni: String = "",
-    /** Cloudflare WARP CONNECT-IP (HTTP/2, then HTTP/3) reserve after the direct «Сеть РТ» paths. */
-    val masque: Boolean = false,
-    /** The user accepted Cloudflare's terms for the first WARP enrollment (required by [masque]). */
-    @SerialName("masque_accept_tos")
-    val masqueAcceptTos: Boolean = false,
-    /** Try the VK Calls API before the captcha chain (upstream default: on). */
-    @SerialName("vkcalls_preflight")
-    val vkCallsPreflight: Boolean = true,
-    /** Wait for the server's WireGuard config before starting the rest of the workers. */
-    @SerialName("config_first_start")
-    val configFirstStart: Boolean = false,
-    /** A group whose own VK hash died falls back to the remaining hashes. */
-    @SerialName("hash_fallback")
-    val hashFallback: Boolean = false,
-    /** VK client IDs override, comma-separated. Blank = the core's built-in set. */
-    @SerialName("client_ids")
-    val clientIds: String = "",
-    /** An independent VK app as an extra credential provider: both fields or neither. */
-    @SerialName("custom_vk_client_id")
-    val customVkClientId: String = "",
-    @SerialName("custom_vk_client_secret")
-    val customVkClientSecret: String = "",
+    /** RTP camouflage as a video stream instead of audio. */
+    @SerialName("obfs_video")
+    val obfsVideo: Boolean = false,
+    /** DNS the core resolves VK with: yandex/cloudflare/google, doh-*, custom:IP, doh:URL. Blank = yandex. */
+    @SerialName("go_dns")
+    val goDns: String = "",
+    /** The older anonymous TURN credential path (`legacy`) instead of VK Calls. */
+    @SerialName("vk_anon_legacy")
+    val vkAnonLegacy: Boolean = false,
     /** TURN server IP / port override (blank = the ones VK hands out). */
     @SerialName("turn_host")
     val turnHost: String = "",

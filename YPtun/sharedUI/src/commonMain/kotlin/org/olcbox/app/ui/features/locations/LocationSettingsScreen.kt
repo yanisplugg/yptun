@@ -992,7 +992,7 @@ private fun LazyListScope.vkTurnSection(
         ) {
             SectionTitle(
                 title = "Транспортное ядро VK-TURN",
-                subtitle = "freeturn — стандартный клиент; WDTT Plus — агрегация одного WG-потока по звонкам, режим «Сеть РТ», резерв через WARP"
+                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация одного WG-потока по звонкам, TURN по TCP, маскировка под аудио/видео"
             )
             SettingsDropdown(
                 label = "Ядро",
@@ -1000,7 +1000,7 @@ private fun LazyListScope.vkTurnSection(
                 options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT),
                 enabled = enabled,
                 onValueSelected = { v -> onChange { it.copy(core = v) } },
-                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "WDTT Plus (агрегация по звонкам)" else "freeturn (стандарт)" }
+                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "qWDTT (агрегация по звонкам)" else "freeturn (стандарт)" }
             )
             if (draft.core == VkTurnConfig.CORE_WDTT) {
                 Row(
@@ -1046,14 +1046,6 @@ private fun LazyListScope.vkTurnSection(
                         Text("Автоустановка на VPS")
                     }
                 }
-                SettingsDropdown(
-                    label = "TLS-отпечаток (VK auth)",
-                    selectedValue = draft.wdttFingerprint.ifBlank { "chrome" },
-                    options = listOf("chrome", "firefox", "safari", "ios", "android"),
-                    enabled = enabled,
-                    onValueSelected = { v -> onChange { it.copy(wdttFingerprint = v) } },
-                    valueLabel = { it }
-                )
                 VkTurnField(
                     value = draft.wdttWorkers,
                     onValueChange = { v -> onChange { it.copy(wdttWorkers = v.filter(Char::isDigit)) } },
@@ -1782,14 +1774,15 @@ private fun WdttInstallDialog(
 
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
-        title = { Text("Автоустановка WDTT Plus на VPS") },
+        title = { Text("Автоустановка qWDTT на VPS") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    "Подключусь к VPS по SSH, загружу и запущу сервер WDTT Plus на порту $port. " +
+                    "Подключусь к VPS по SSH и поставлю сервер qWDTT его штатным установщиком на порту $port " +
+                        "(старый WDTT/WDTT Plus удалю, занятый порт заменю свободным). " +
                         "Порт, пароль и DNS можно изменить ниже — они сохранятся в настройки локации.",
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -2508,8 +2501,8 @@ private fun VkTurnSwitchRow(
 }
 
 /**
- * WDTT Plus core knobs ([WdttPlusOptions]). Collapsed by default and opened automatically when any of
- * them differs from the core's defaults, so a customised location shows what it changed.
+ * qWDTT core knobs ([WdttPlusOptions]). Collapsed by default and opened automatically when any of them
+ * differs from the core's defaults, so a customised location shows what it changed.
  */
 @Composable
 private fun WdttPlusAdvanced(
@@ -2522,68 +2515,25 @@ private fun WdttPlusAdvanced(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        VkTurnSwitchRow("Расширенные настройки WDTT Plus", expanded, enabled) { expanded = it }
+        VkTurnSwitchRow("Расширенные настройки qWDTT", expanded, enabled) { expanded = it }
         if (!expanded) return@Column
 
-        VkTurnSwitchRow("Режим «Сеть РТ»: TURN/TLS и TCP, UDP — резерв", options.rtNetworkMode, enabled) { v ->
+        VkTurnSwitchRow("TURN по TCP (если сеть режет UDP к VK, напр. Ростелеком)", options.rtNetworkMode, enabled) { v ->
             onChange { it.copy(rtNetworkMode = v) }
         }
-        if (options.rtNetworkMode) {
-            VkTurnField(
-                value = options.turnSni,
-                onValueChange = { v -> onChange { it.copy(turnSni = v.trim()) } },
-                label = "SNI для TURN/TLS (белый список)",
-                placeholder = "пусто — без SNI",
-                enabled = enabled,
-                keyboardType = KeyboardType.Uri
-            )
-            VkTurnSwitchRow("Резерв через Cloudflare WARP (MASQUE)", options.masque, enabled) { v ->
-                onChange { it.copy(masque = v) }
-            }
-            if (options.masque) {
-                VkTurnSwitchRow("Принимаю условия Cloudflare WARP", options.masqueAcceptTos, enabled) { v ->
-                    onChange { it.copy(masqueAcceptTos = v) }
-                }
-            }
+        VkTurnSwitchRow("Маскировка под видео (иначе — под аудио)", options.obfsVideo, enabled) { v ->
+            onChange { it.copy(obfsVideo = v) }
         }
-        VkTurnSwitchRow("Сначала VK Calls API, потом капча", options.vkCallsPreflight, enabled) { v ->
-            onChange { it.copy(vkCallsPreflight = v) }
-        }
-        VkTurnSwitchRow("Резервные VK-хеши для групп", options.hashFallback, enabled) { v ->
-            onChange { it.copy(hashFallback = v) }
-        }
-        VkTurnSwitchRow("Дождаться конфига сервера до запуска потоков", options.configFirstStart, enabled) { v ->
-            onChange { it.copy(configFirstStart = v) }
-        }
-        VkTurnField(
-            value = options.clientIds,
-            onValueChange = { v -> onChange { it.copy(clientIds = v.trim()) } },
-            label = "ID клиентов VK",
-            placeholder = "через запятую; пусто — встроенные",
-            enabled = enabled
+        SettingsDropdown(
+            label = "DNS для VK",
+            selectedValue = options.goDns.ifBlank { "yandex" },
+            options = listOf("yandex", "cloudflare", "google", "doh-yandex", "doh-cloudflare", "doh-google"),
+            enabled = enabled,
+            onValueSelected = { v -> onChange { it.copy(goDns = if (v == "yandex") "" else v) } },
+            valueLabel = { it }
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            VkTurnField(
-                value = options.customVkClientId,
-                onValueChange = { v -> onChange { it.copy(customVkClientId = v.trim()) } },
-                label = "Свой VK client_id",
-                placeholder = "необязательно",
-                enabled = enabled,
-                keyboardType = KeyboardType.Number,
-                modifier = Modifier.weight(1f)
-            )
-            VkTurnField(
-                value = options.customVkClientSecret,
-                onValueChange = { v -> onChange { it.copy(customVkClientSecret = v.trim()) } },
-                label = "client_secret",
-                placeholder = "вместе с client_id",
-                enabled = enabled,
-                isError = (options.customVkClientId.isBlank()) != (options.customVkClientSecret.isBlank()),
-                modifier = Modifier.weight(1f)
-            )
+        VkTurnSwitchRow("Старый анонимный путь VK (legacy)", options.vkAnonLegacy, enabled) { v ->
+            onChange { it.copy(vkAnonLegacy = v) }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),

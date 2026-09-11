@@ -1,27 +1,7 @@
 # Third-party notices
 
-The Cloudflare WARP MASQUE interoperability in `masque_warp.go` is adapted
-from [Diniboy1123/usque](https://github.com/Diniboy1123/usque), commit
-`6aa03fc97d12848dce34eedbd187fb1077b5d1ea`.
-
-The MIT License (MIT)
-
-Copyright © 2025, github.com/Diniboy1123
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the “Software”), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+The client in `wdtt/` and the server in `../wdtt-server/` (plus the bundled `deploy.sh`) are
+adapted from qWDTT, [SpaceNeuroX/proxy-turn-vk-android](https://github.com/SpaceNeuroX/proxy-turn-vk-android),
+commit `fae121e`, licensed under the GNU General Public License v3.0 — the same license as this
+project (see `../LICENSE`). Local changes: the CLI client became a library (`Run`, host hooks for
+CAPTCHA and VK auth instead of the stdin/stdout protocol) and gained a Windows listener.

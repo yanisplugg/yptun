@@ -515,15 +515,14 @@ internal class IosEngineController(
         val listenAddr = "127.0.0.1:${vk.listenPort}"
         if (usesWdtt) {
             log(
-                "Starting VK-TURN WDTT Plus core on $listenAddr (peer=${vk.wdttPeerAddr()}, " +
+                "Starting VK-TURN qWDTT core on $listenAddr (peer=${vk.wdttPeerAddr()}, " +
                     "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
-                    "rt=${vk.wdttPlus.rtNetworkMode}, masque=${vk.wdttPlus.masque})"
+                    "turn-tcp=${vk.wdttPlus.rtNetworkMode}, obfs=${if (vk.wdttPlus.obfsVideo) "video" else "audio"})"
             )
             core.wdttStart(
                 vk.wdttCoreOptionsJson(
                     listen = listenAddr,
                     deviceId = deviceId,
-                    masqueConfigPath = IosSharedStore.path("wdtt-masque.json"),
                 )
             ).orThrow("WDTT start failed")
         } else {

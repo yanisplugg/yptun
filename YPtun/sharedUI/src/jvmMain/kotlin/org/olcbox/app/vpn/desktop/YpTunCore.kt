@@ -294,8 +294,8 @@ internal object YpTunCore {
     /** True while the user is solving a VK captcha — the relay cannot come up until they are done. */
     fun ftCaptchaActive(): Boolean = (libOrNull?.YpFtCaptchaActive() ?: 0) == 1
 
-    // VK-TURN / WDTT Plus core (wg-turn-client) ---------------------------------------------
-    /** Starts WDTT Plus from [org.olcbox.app.data.model.VkTurnConfig.wdttCoreOptionsJson]. */
+    // VK-TURN / qWDTT core (wg-turn-client) ---------------------------------------------
+    /** Starts qWDTT from [org.olcbox.app.data.model.VkTurnConfig.wdttCoreOptionsJson]. */
     fun wdttStart(optionsJson: String) = check(lib().YpWdttStart(optionsJson), "WDTT start failed")
 
     /** Why the core stopped on its own ("" while fine). */
