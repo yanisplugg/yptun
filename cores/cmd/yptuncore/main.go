@@ -397,6 +397,17 @@ func YpRtcSetVP8Options(fps, batchSize C.int) {
 	rtcSet("set vp8 options", coreapi.RtcSetVP8Options(int(fps), int(batchSize)))
 }
 
+//export YpRtcSetSEIOptions
+func YpRtcSetSEIOptions(fps, batchSize, fragmentSize, ackTimeoutMs C.int) *C.char {
+	return errOut(coreapi.RtcSetSEIOptions(int(fps), int(batchSize), int(fragmentSize), int(ackTimeoutMs)))
+}
+
+//export YpRtcSetVideoOptions
+func YpRtcSetVideoOptions(width, height, fps, qrSize C.int, qrRecovery, codec *C.char, tileModule, tileRS C.int) *C.char {
+	return errOut(coreapi.RtcSetVideoOptions(int(width), int(height), int(fps), int(qrSize),
+		gs(qrRecovery), gs(codec), int(tileModule), int(tileRS)))
+}
+
 //export YpRtcSetLivenessOptions
 func YpRtcSetLivenessOptions(intervalMs, timeoutMs, failures C.int) {
 	rtcSet("set liveness options", coreapi.RtcSetLivenessOptions(int(intervalMs), int(timeoutMs), int(failures)))

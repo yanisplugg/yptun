@@ -481,6 +481,16 @@ func RtcSetSocksListenHost(host string) error { return rtcRuntime.SetSocksListen
 
 func RtcSetVP8Options(fps, batchSize int) error { return rtcRuntime.SetVP8Options(fps, batchSize) }
 
+// RtcSetSEIOptions configures seichannel (fps, frames per tick, fragment bytes, ACK timeout ms).
+func RtcSetSEIOptions(fps, batchSize, fragmentSize, ackTimeoutMs int) error {
+	return rtcRuntime.SetSEIOptions(fps, batchSize, fragmentSize, ackTimeoutMs)
+}
+
+// RtcSetVideoOptions configures videochannel; codec "qrcode" or "tile" (tile needs 1080x1080).
+func RtcSetVideoOptions(width, height, fps, qrSize int, qrRecovery, codec string, tileModule, tileRS int) error {
+	return rtcRuntime.SetVideoOptions(width, height, fps, qrSize, qrRecovery, codec, tileModule, tileRS)
+}
+
 func RtcSetLivenessOptions(intervalMs, timeoutMs, failures int) error {
 	return rtcRuntime.SetLivenessOptions(intervalMs, timeoutMs, failures)
 }

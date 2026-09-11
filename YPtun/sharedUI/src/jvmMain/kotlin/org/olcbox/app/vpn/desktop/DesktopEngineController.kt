@@ -205,6 +205,7 @@ internal class DesktopEngineController(
         require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
         YpTunCore.rtcSetSocksListenHost(listenHost)
         applyTelemostCookies(config)
+        YpTunCore.rtcApplyTransportOptions(config)
         log("Starting olcRTC provider=${config.bypassProvider}, transport=${config.transport}, room=${config.id}")
         YpTunCore.rtcStart(
             carrier = config.bypassProvider,
@@ -325,6 +326,7 @@ internal class DesktopEngineController(
 
         if (chained) {
             applyTelemostCookies(config)
+            YpTunCore.rtcApplyTransportOptions(config)
             log("Starting olcRTC (chain) provider=${config.bypassProvider}, room=${config.id}")
             YpTunCore.rtcStart(
                 carrier = config.bypassProvider,

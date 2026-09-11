@@ -2499,6 +2499,19 @@ class OlcboxVpnService : VpnService() {
         mobileRuntime.setDNS(resolveOlcRtcDnsServer())
         mobileRuntime.setSocksListenHost(socksListenHost)
         mobileRuntime.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
+        // seichannel / videochannel parameters from the olcRTC link or subscription (docs/uri.md). Set on
+        // every start: the runtime keeps them, so a previous location's values must not leak into this one.
+        config.seiOptions().let {
+            mobileRuntime.setSEIOptions(it.fps.toLong(), it.batch.toLong(), it.fragmentSize.toLong(), it.ackTimeoutMs.toLong())
+        }
+        if (config.transport == LocationConfig.TRANSPORT_VIDEOCHANNEL) {
+            config.videoOptions().let {
+                mobileRuntime.setVideoOptions(
+                    it.width.toLong(), it.height.toLong(), it.fps.toLong(), it.qrSize.toLong(),
+                    it.qrRecovery, it.codec, it.tileModule.toLong(), it.tileRs.toLong(),
+                )
+            }
+        }
     }
 
     /**

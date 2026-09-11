@@ -70,6 +70,17 @@ interface IosCoreBridge {
     fun rtcSetDns(dnsServer: String): String
     fun rtcSetSocksListenHost(host: String): String
     fun rtcSetVp8Options(fps: Int, batchSize: Int): String
+    fun rtcSetSeiOptions(fps: Int, batchSize: Int, fragmentSize: Int, ackTimeoutMs: Int): String
+    fun rtcSetVideoOptions(
+        width: Int,
+        height: Int,
+        fps: Int,
+        qrSize: Int,
+        qrRecovery: String,
+        codec: String,
+        tileModule: Int,
+        tileRs: Int,
+    ): String
     fun rtcStart(
         carrier: String,
         transport: String,

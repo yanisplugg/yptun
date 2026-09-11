@@ -111,6 +111,18 @@ internal class IosEngineController(
         core.rtcSetDns(RTC_DNS).takeIf { it.isNotEmpty() }?.let { log("olcRTC: set dns failed: $it") }
         core.rtcSetVp8Options(config.vp8Fps, config.vp8Batch)
             .takeIf { it.isNotEmpty() }?.let { log("olcRTC: set vp8 options failed: $it") }
+        // seichannel / videochannel parameters from the link or subscription (docs/uri.md); set every time,
+        // the runtime keeps the previous location's values otherwise.
+        config.seiOptions().let {
+            core.rtcSetSeiOptions(it.fps, it.batch, it.fragmentSize, it.ackTimeoutMs)
+                .takeIf { e -> e.isNotEmpty() }?.let { e -> log("olcRTC: set SEI options failed: $e") }
+        }
+        if (config.transport == LocationConfig.TRANSPORT_VIDEOCHANNEL) {
+            config.videoOptions().let {
+                core.rtcSetVideoOptions(it.width, it.height, it.fps, it.qrSize, it.qrRecovery, it.codec, it.tileModule, it.tileRs)
+                    .orThrow("olcRTC video options")
+            }
+        }
         log("Starting olcRTC provider=${config.bypassProvider}, transport=${config.transport}, room=${config.id}")
         core.rtcStart(
             carrier = config.bypassProvider,

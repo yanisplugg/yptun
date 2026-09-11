@@ -62,7 +62,7 @@ expect fun rememberOlcRtcServerInstaller(): OlcRtcServerInstaller
 val OLCRTC_PROVIDERS = listOf("jitsi", "telemost", "wbstream")
 
 /** Транспорты, общие для сервера и нашего клиента. */
-val OLCRTC_TRANSPORTS = listOf("datachannel", "vp8channel", "seichannel")
+val OLCRTC_TRANSPORTS = listOf("datachannel", "vp8channel", "seichannel", "videochannel")
 
 /** Сколько комнат максимум — столько же тянет мультирум на клиенте. */
 const val OLCRTC_MAX_ROOMS = 5

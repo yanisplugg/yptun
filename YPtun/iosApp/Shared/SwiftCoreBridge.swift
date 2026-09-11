@@ -79,6 +79,19 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
     func rtcSetVp8Options(fps: Int32, batchSize: Int32) -> String {
         err { CoreapiRtcSetVP8Options(Int(fps), Int(batchSize), $0) }
     }
+    func rtcSetSeiOptions(fps: Int32, batchSize: Int32, fragmentSize: Int32, ackTimeoutMs: Int32) -> String {
+        err { CoreapiRtcSetSEIOptions(Int(fps), Int(batchSize), Int(fragmentSize), Int(ackTimeoutMs), $0) }
+    }
+    func rtcSetVideoOptions(
+        width: Int32, height: Int32, fps: Int32, qrSize: Int32,
+        qrRecovery: String, codec: String, tileModule: Int32, tileRs: Int32
+    ) -> String {
+        err {
+            CoreapiRtcSetVideoOptions(
+                Int(width), Int(height), Int(fps), Int(qrSize), qrRecovery, codec, Int(tileModule), Int(tileRs), $0
+            )
+        }
+    }
     func rtcStart(
         carrier: String, transport: String, roomId: String, clientId: String, keyHex: String,
         socksPort: Int32, socksUser: String, socksPass: String

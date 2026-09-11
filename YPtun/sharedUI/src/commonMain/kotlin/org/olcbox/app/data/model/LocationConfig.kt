@@ -500,6 +500,14 @@ data class LocationConfig(
     val vp8Fps: Int = DEFAULT_VP8_FPS,
     @SerialName("vp8_batch")
     val vp8Batch: Int = DEFAULT_VP8_BATCH,
+    /**
+     * Transport parameters exactly as the olcRTC URI carries them in `<key=value&…>` (docs/uri.md):
+     * seichannel `fps`/`batch`/`frag`/`ack-ms`, videochannel `video-w`/`video-h`/`video-fps`/
+     * `video-codec`/`video-qr-size`/`video-qr-recovery`/`video-tile-module`/`video-tile-rs`. Kept raw so a
+     * share link round-trips; the cores read them through [seiOptions] / [videoOptions].
+     */
+    @SerialName("transport_options")
+    val transportOptions: Map<String, String> = emptyMap(),
     /** Which core serves the local SOCKS5: olcRTC (Stealth), sing-box (Standard) or both (Chain). */
     val engine: EngineType = EngineType.Stealth,
     /** Main proxy server for the sing-box engine (Standard/Chain) — the primary outbound, ALWAYS
@@ -599,6 +607,7 @@ data class LocationConfig(
             transport = normalizedTransport,
             vp8Fps = sanitizeVp8Fps(vp8Fps),
             vp8Batch = sanitizeVp8Batch(vp8Batch),
+            transportOptions = normalizeTransportOptions(transportOptions),
             engine = engine,
             proxy = proxy,
             proxy2 = proxy2,
@@ -711,6 +720,36 @@ data class LocationConfig(
 
     fun transportName(): String = transportDisplayName(transport)
 
+    private fun optionInt(key: String): Int? = transportOptions[key]?.trim()?.toIntOrNull()
+
+    /** seichannel settings: the URI's payload over the olcRTC defaults (docs/settings.md). */
+    fun seiOptions(): SeiOptions = SeiOptions(
+        fps = (optionInt("fps") ?: SeiOptions.DEFAULT_FPS).coerceIn(1, 120),
+        batch = (optionInt("batch") ?: SeiOptions.DEFAULT_BATCH).coerceAtLeast(1),
+        fragmentSize = (optionInt("frag") ?: SeiOptions.DEFAULT_FRAGMENT).coerceAtLeast(1),
+        ackTimeoutMs = (optionInt("ack-ms") ?: SeiOptions.DEFAULT_ACK_MS).coerceAtLeast(1),
+    )
+
+    /** videochannel settings: the URI's payload over the olcRTC defaults (docs/settings.md). */
+    fun videoOptions(): VideoOptions {
+        val codec = transportOptions["video-codec"]?.trim()?.lowercase()
+            ?.takeIf { it == VideoOptions.CODEC_QRCODE || it == VideoOptions.CODEC_TILE }
+            ?: VideoOptions.CODEC_QRCODE
+        // The tile codec only runs at exactly 1080x1080 — the core rejects anything else.
+        val tile = codec == VideoOptions.CODEC_TILE
+        return VideoOptions(
+            width = if (tile) 1080 else (optionInt("video-w") ?: VideoOptions.DEFAULT_WIDTH).coerceAtLeast(1),
+            height = if (tile) 1080 else (optionInt("video-h") ?: VideoOptions.DEFAULT_HEIGHT).coerceAtLeast(1),
+            fps = (optionInt("video-fps") ?: VideoOptions.DEFAULT_FPS).coerceIn(1, 120),
+            qrSize = (optionInt("video-qr-size") ?: 0).coerceAtLeast(0),
+            qrRecovery = transportOptions["video-qr-recovery"]?.trim()?.lowercase()
+                ?.takeIf { it in VideoOptions.QR_RECOVERY_LEVELS } ?: "low",
+            codec = codec,
+            tileModule = (optionInt("video-tile-module") ?: 4).coerceIn(1, 270),
+            tileRs = (optionInt("video-tile-rs") ?: 0).coerceIn(0, 200),
+        )
+    }
+
     companion object {
         const val PROVIDER_JAZZ = "jazz"
         const val PROVIDER_TELEMOST = "telemost"
@@ -721,6 +760,7 @@ data class LocationConfig(
         const val TRANSPORT_DATACHANNEL = "datachannel"
         const val TRANSPORT_VP8CHANNEL = "vp8channel"
         const val TRANSPORT_SEICHANNEL = "seichannel"
+        const val TRANSPORT_VIDEOCHANNEL = "videochannel"
         const val DEFAULT_TRANSPORT = TRANSPORT_VP8CHANNEL
 
         const val DEFAULT_VP8_FPS = 60
@@ -744,7 +784,8 @@ data class LocationConfig(
         val supportedTransports = listOf(
             TRANSPORT_DATACHANNEL,
             TRANSPORT_VP8CHANNEL,
-            TRANSPORT_SEICHANNEL
+            TRANSPORT_SEICHANNEL,
+            TRANSPORT_VIDEOCHANNEL
         )
 
         /**
@@ -756,10 +797,12 @@ data class LocationConfig(
          */
         fun supportedTransportsForProvider(provider: String): List<String> {
             return when (normalizeProvider(provider)) {
-                PROVIDER_TELEMOST -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
-                PROVIDER_WB_STREAM -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
+                PROVIDER_TELEMOST ->
+                    listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
+                PROVIDER_WB_STREAM ->
+                    listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_DATACHANNEL)
                 PROVIDER_JITSI, PROVIDER_JAZZ ->
-                    listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
+                    listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL)
                 else -> supportedTransports
             }
         }
@@ -779,6 +822,7 @@ data class LocationConfig(
                 TRANSPORT_DATACHANNEL, "data", "dc" -> TRANSPORT_DATACHANNEL
                 TRANSPORT_VP8CHANNEL, "vp8", "video_vp8", "video-vp8" -> TRANSPORT_VP8CHANNEL
                 TRANSPORT_SEICHANNEL, "sei", "sei_channel", "sei-channel", "h264_sei" -> TRANSPORT_SEICHANNEL
+                TRANSPORT_VIDEOCHANNEL, "video", "video_channel", "video-channel" -> TRANSPORT_VIDEOCHANNEL
                 else -> DEFAULT_TRANSPORT
             }
             val supported = supportedTransportsForProvider(provider)
@@ -802,6 +846,7 @@ data class LocationConfig(
                 TRANSPORT_DATACHANNEL -> "DataChannel"
                 TRANSPORT_VP8CHANNEL -> "VP8"
                 TRANSPORT_SEICHANNEL -> "SEI"
+                TRANSPORT_VIDEOCHANNEL -> "Video"
                 else -> "VP8"
             }
         }
@@ -809,6 +854,45 @@ data class LocationConfig(
         fun sanitizeVp8Fps(value: Int): Int = value.coerceIn(1, 120)
 
         fun sanitizeVp8Batch(value: Int): Int = value.coerceIn(1, 64)
+
+        /** Lower-cased keys, trimmed values, no blanks — the payload of a `<key=value&…>` block. */
+        fun normalizeTransportOptions(options: Map<String, String>): Map<String, String> =
+            options.entries
+                .map { (k, v) -> k.trim().lowercase() to v.trim() }
+                .filter { (k, v) -> k.isNotEmpty() && v.isNotEmpty() }
+                .toMap()
+    }
+}
+
+/** seichannel parameters handed to the olcRTC core (`sei.*` in its YAML). */
+data class SeiOptions(val fps: Int, val batch: Int, val fragmentSize: Int, val ackTimeoutMs: Int) {
+    companion object {
+        // 60 like this app's VP8 default (and what the desktop always sent); olcRTC's own default is 30.
+        const val DEFAULT_FPS = 60
+        const val DEFAULT_BATCH = 64
+        const val DEFAULT_FRAGMENT = 900
+        const val DEFAULT_ACK_MS = 2000
+    }
+}
+
+/** videochannel parameters handed to the olcRTC core (`video.*` in its YAML). */
+data class VideoOptions(
+    val width: Int,
+    val height: Int,
+    val fps: Int,
+    val qrSize: Int,
+    val qrRecovery: String,
+    val codec: String,
+    val tileModule: Int,
+    val tileRs: Int,
+) {
+    companion object {
+        const val CODEC_QRCODE = "qrcode"
+        const val CODEC_TILE = "tile"
+        const val DEFAULT_WIDTH = 1920
+        const val DEFAULT_HEIGHT = 1080
+        const val DEFAULT_FPS = 30
+        val QR_RECOVERY_LEVELS = setOf("low", "medium", "high", "highest")
     }
 }
 
@@ -834,7 +918,9 @@ data class Vp8TransportConfig(
 @Serializable(with = LocationTransportConfigSerializer::class)
 data class LocationTransportConfig(
     val type: String = LocationConfig.DEFAULT_TRANSPORT,
-    val vp8: Vp8TransportConfig? = null
+    val vp8: Vp8TransportConfig? = null,
+    /** See [LocationConfig.transportOptions]. */
+    val options: Map<String, String> = emptyMap()
 ) {
     fun normalized(provider: String): LocationTransportConfig {
         val normalizedType = LocationConfig.normalizeTransport(type, provider)
@@ -857,7 +943,8 @@ data class LocationTransportConfig(
                     Vp8TransportConfig.from(normalized)
                 } else {
                     null
-                }
+                },
+                options = normalized.transportOptions
             )
         }
     }
@@ -866,7 +953,8 @@ data class LocationTransportConfig(
 @Serializable
 private data class LocationTransportConfigSurrogate(
     val type: String = LocationConfig.DEFAULT_TRANSPORT,
-    val vp8: Vp8TransportConfig? = null
+    val vp8: Vp8TransportConfig? = null,
+    val options: Map<String, String> = emptyMap()
 )
 
 object LocationTransportConfigSerializer : KSerializer<LocationTransportConfig> {
@@ -883,7 +971,8 @@ object LocationTransportConfigSerializer : KSerializer<LocationTransportConfig> 
                 )
                 LocationTransportConfig(
                     type = surrogate.type,
-                    vp8 = surrogate.vp8
+                    vp8 = surrogate.vp8,
+                    options = surrogate.options
                 )
             }
             else -> LocationTransportConfig()
@@ -894,7 +983,8 @@ object LocationTransportConfigSerializer : KSerializer<LocationTransportConfig> 
         val jsonEncoder = encoder as? JsonEncoder
         val surrogate = LocationTransportConfigSurrogate(
             type = value.type,
-            vp8 = value.vp8
+            vp8 = value.vp8,
+            options = value.options
         )
         if (jsonEncoder != null) {
             jsonEncoder.encodeJsonElement(
@@ -1168,6 +1258,7 @@ data class LocationEntry(
                     ?: legacyVp8Batch
                     ?: legacyVp8BatchCamel
                     ?: LocationConfig.DEFAULT_VP8_BATCH,
+                transportOptions = transportConfig.options,
                 engine = engine ?: EngineType.Stealth,
                 proxy = proxy,
                 proxy2 = proxy2,

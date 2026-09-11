@@ -1543,8 +1543,10 @@ class LocationsRepositoryImpl(
 
         if (locations.isEmpty()) return null
 
+        // An olcRTC subscription (docs/sub.md) states its own refresh period ("#refresh: 10m"); a panel
+        // header, when there is one, still wins.
         val subscriptionMetadata = buildSubscriptionMetadata(subscriptionFields)
-            .withSubscriptionInterval(updateIntervalHours)
+            .withSubscriptionInterval(updateIntervalHours ?: refreshIntervalHours(subscriptionFields["refresh"]))
         val usedStorageIds = mutableSetOf<String>()
 
         val entries = locations.mapIndexed { index, (parsed, fields) ->
@@ -2394,12 +2396,12 @@ class LocationsRepositoryImpl(
             key = key,
             bypassProvider = provider,
             transport = transport,
-            vp8Fps = transportOptions["vp8-fps"]
-                ?: transportOptions["fps"]
+            vp8Fps = (transportOptions["vp8-fps"] ?: transportOptions["fps"])?.toIntOrNull()
                 ?: LocationConfig.DEFAULT_VP8_FPS,
-            vp8Batch = transportOptions["vp8-batch"]
-                ?: transportOptions["batch"]
-                ?: LocationConfig.DEFAULT_VP8_BATCH
+            vp8Batch = (transportOptions["vp8-batch"] ?: transportOptions["batch"])?.toIntOrNull()
+                ?: LocationConfig.DEFAULT_VP8_BATCH,
+            // seichannel/videochannel parameters (frag, ack-ms, video-codec, …) reach the core from here.
+            transportOptions = transportOptions
         ).normalized()
 
         return location
@@ -2437,7 +2439,11 @@ class LocationsRepositoryImpl(
         ).normalized().takeUnless { it.isEmpty() }
     }
 
-    private fun parseTransportToken(token: String): Pair<String, Map<String, Int>> {
+    /**
+     * `<Transport><key=value&…>` → the transport and its parameters. Values stay strings: videochannel
+     * takes words too (`video-codec=tile`, `video-qr-recovery=high`).
+     */
+    private fun parseTransportToken(token: String): Pair<String, Map<String, String>> {
         val optionsStart = token.indexOf('<')
         val optionsEnd = token.lastIndexOf('>')
         if (optionsStart < 0 || optionsEnd <= optionsStart) {
@@ -2451,12 +2457,33 @@ class LocationsRepositoryImpl(
                 val separator = part.indexOf('=')
                 if (separator <= 0) return@mapNotNull null
                 val key = part.substring(0, separator).trim().lowercase()
-                val value = part.substring(separator + 1).trim().toIntOrNull() ?: return@mapNotNull null
+                val value = part.substring(separator + 1).trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
                 key to value
             }
             .toMap()
 
         return transport to options
+    }
+
+    /**
+     * `#refresh:` of an olcRTC subscription ("5s", "10m", "6h", "1d"; a bare number = seconds) → whole
+     * hours for the auto-updater, which runs no more often than hourly. Null when absent or unreadable.
+     */
+    private fun refreshIntervalHours(value: String?): Int? {
+        val match = Regex("""^\s*(\d+)\s*([smhd]?)\s*$""", RegexOption.IGNORE_CASE).find(value ?: return null)
+            ?: return null
+        val amount = match.groupValues[1].toLongOrNull() ?: return null
+        val seconds = when (match.groupValues[2].lowercase()) {
+            "m" -> amount * 60
+            "h" -> amount * 3600
+            "d" -> amount * 86_400
+            else -> amount
+        }
+        if (seconds <= 0) return null
+        return ((seconds + 3599) / 3600).coerceIn(
+            SubscriptionMetadata.MIN_UPDATE_INTERVAL_HOURS.toLong(),
+            SubscriptionMetadata.MAX_UPDATE_INTERVAL_HOURS.toLong()
+        ).toInt()
     }
 
     private fun parseSubscriptionField(value: String): Pair<String, String>? {

@@ -45,12 +45,24 @@ internal data class OlcRtcCommand(
                     appendLine("  fps: ${config.vp8Fps}")
                     appendLine("  batch_size: ${config.vp8Batch}")
                 }
-                LocationConfig.TRANSPORT_SEICHANNEL -> {
+                // The location's own parameters (from its olcrtc:// link / subscription, docs/uri.md).
+                LocationConfig.TRANSPORT_SEICHANNEL -> config.seiOptions().let {
                     appendLine("sei:")
-                    appendLine("  fps: 60")
-                    appendLine("  batch_size: 64")
-                    appendLine("  fragment_size: 900")
-                    appendLine("  ack_timeout_ms: 2000")
+                    appendLine("  fps: ${it.fps}")
+                    appendLine("  batch_size: ${it.batch}")
+                    appendLine("  fragment_size: ${it.fragmentSize}")
+                    appendLine("  ack_timeout_ms: ${it.ackTimeoutMs}")
+                }
+                LocationConfig.TRANSPORT_VIDEOCHANNEL -> config.videoOptions().let {
+                    appendLine("video:")
+                    appendLine("  codec: ${it.codec}")
+                    appendLine("  width: ${it.width}")
+                    appendLine("  height: ${it.height}")
+                    appendLine("  fps: ${it.fps}")
+                    appendLine("  qr_size: ${it.qrSize}")
+                    appendLine("  qr_recovery: ${it.qrRecovery}")
+                    appendLine("  tile_module: ${it.tileModule}")
+                    appendLine("  tile_rs: ${it.tileRs}")
                 }
             }
             appendLine("data: ${(dataDir?.toString() ?: "data").yamlValue()}")
