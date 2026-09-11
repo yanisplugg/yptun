@@ -124,6 +124,13 @@ data class VkTurnConfig(
         return "$host:$port"
     }
 
+    /** Where the core dials: the raw port in Raw mode (same host, `-listen-raw`), else [wdttPeerAddr]. */
+    fun wdttDialAddr(): String {
+        if (!wdttPlus.rawMode) return wdttPeerAddr()
+        val host = wdttPeerAddr().substringBeforeLast(':')
+        return if (host.isEmpty()) "" else "$host:${wdttPlus.rawPortOrDefault()}"
+    }
+
     fun isComplete(): Boolean =
         isStorable() && vkLink.isNotBlank()
 
@@ -169,12 +176,14 @@ data class VkTurnConfig(
 
     /**
      * The qWDTT core options (wdttmobile.Options JSON) for this location — ONE builder for both the
-     * Android gomobile binding and the desktop/iOS core. [listen] is the local UDP address WireGuard dials.
+     * Android gomobile binding and the desktop/iOS core. [listen] is the local UDP address WireGuard dials
+     * — or, in Raw mode, the local SOCKS5 (TCP) the core serves the tunnel on.
      */
     fun wdttCoreOptionsJson(listen: String, deviceId: String): String {
         val p = wdttPlus
         return buildJsonObject {
-            put("peer", wdttPeerAddr())
+            put("peer", wdttDialAddr())
+            put("raw", p.rawMode)
             put("vk_hashes", vkLink)
             put("password", wdttPassword)
             put("listen", listen)
@@ -218,7 +227,22 @@ data class WdttPlusOptions(
     val turnHost: String = "",
     @SerialName("turn_port")
     val turnPort: String = "",
-)
+    /**
+     * qWDTT 1.4 «Raw»: raw IP packets without WireGuard — faster, but the server must run `-listen-raw`
+     * (the auto-install enables it on [rawPort]). Off = the WireGuard mode, compatible with every server.
+     */
+    @SerialName("raw_mode")
+    val rawMode: Boolean = false,
+    /** The server's raw port; 0 → [DEFAULT_RAW_PORT] (qWDTT's own default). */
+    @SerialName("raw_port")
+    val rawPort: Int = 0,
+) {
+    fun rawPortOrDefault(): Int = rawPort.takeIf { it in 1..65535 } ?: DEFAULT_RAW_PORT
+
+    companion object {
+        const val DEFAULT_RAW_PORT = 56003
+    }
+}
 
 /**
  * Advanced per-location options for the sing-box / Xray proxy core (shown in the editor only when a

@@ -39,6 +39,9 @@ type Options struct {
 	GoDNS string `json:"go_dns"`
 	// VKAnonPath is the anonymous TURN credential path: "vkcalls" (default) or "legacy".
 	VKAnonPath string `json:"vk_anon_path"`
+	// Raw is qWDTT's Raw mode (no WireGuard): Peer is the server's raw port and Listen becomes a local
+	// SOCKS5; the sink then gets "RAWCONF:…" instead of a WireGuard config.
+	Raw bool `json:"raw"`
 }
 
 func (o Options) config() core.Config {
@@ -56,6 +59,7 @@ func (o Options) config() core.Config {
 		Obfs:        o.Obfs,
 		GoDNS:       o.GoDNS,
 		VKAnonPath:  o.VKAnonPath,
+		RawMode:     o.Raw,
 		// Anonymous VK only: an account login needs upstream's WebView flow, which no host of ours has.
 		VKAuthMode: "anonymous",
 	}

@@ -43,9 +43,10 @@ interface WdttServerInstaller {
 /**
  * [port] is the DTLS port the server really runs on: the requested one, or the next free one when
  * something else (typically the freeturn server, which also defaults to 56000) already holds it. The
- * location must be switched to it or the client dials the wrong service.
+ * location must be switched to it or the client dials the wrong service. [rawPort] is the same for the
+ * Raw mode's `-listen-raw` port (0 = not reported).
  */
-data class WdttInstallResult(val message: String, val port: Int)
+data class WdttInstallResult(val message: String, val port: Int, val rawPort: Int = 0)
 
 /**
  * Platform factory for the [WdttServerInstaller]. Android returns a real SSH-based installer;

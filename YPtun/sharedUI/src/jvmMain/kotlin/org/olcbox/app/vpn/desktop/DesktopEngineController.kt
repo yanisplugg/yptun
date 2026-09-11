@@ -932,8 +932,11 @@ internal class DesktopEngineController(
         // — a panel link's 1280/1420 does not fail loudly, it just silently drops full-size segments.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true
-        val outboundType = vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
-            ?: VkTurnConfig.OUTBOUND_WIREGUARD
+        // qWDTT Raw serves its tunnel as a local SOCKS5 on the AmneziaWG exit's port, so it rides that
+        // branch (chain proxy, routing, DNS) — same as OlcboxVpnService.
+        val wdttRaw = usesWdtt && vk?.wdttPlus?.rawMode == true
+        val outboundType = if (wdttRaw) VkTurnConfig.OUTBOUND_AMNEZIAWG
+            else vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD } ?: VkTurnConfig.OUTBOUND_WIREGUARD
         val outboundConfigured = when {
             // WDTT fetches its WireGuard config FROM the server (GETCONF), so the user stores no WG
             // keys and there is nothing to validate up front — see LocationViewModel's matching gate.
@@ -951,15 +954,16 @@ internal class DesktopEngineController(
         if (usesWdtt) {
             // WDTT core (wg-turn-client): dials the wdtt-server purely by IP[:port] over VK call links
             // and hands back the WireGuard config we build the outbound from.
-            val peerAddr = vk.wdttPeerAddr()
+            val peerAddr = vk.wdttDialAddr()
+            val coreListen = if (wdttRaw) "127.0.0.1:${awgLocalPort(listenPort)}" else listenAddr
             log(
-                "Starting VK-TURN qWDTT core on $listenAddr (peer=$peerAddr, " +
+                "Starting VK-TURN qWDTT core on $coreListen (mode=${if (wdttRaw) "raw" else "wg"}, peer=$peerAddr, " +
                     "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
                     "turn-tcp=${vk.wdttPlus.rtNetworkMode}, obfs=${if (vk.wdttPlus.obfsVideo) "video" else "audio"})"
             )
             YpTunCore.wdttStart(
                 vk.wdttCoreOptionsJson(
-                    listen = listenAddr,
+                    listen = coreListen,
                     deviceId = deviceId,
                 )
             )
@@ -986,6 +990,15 @@ internal class DesktopEngineController(
             // doubles as the relay-ready gate (same as the Android OnConfig path).
             val wgConf = YpTunCore.wdttWaitConfig(VKTURN_RELAY_READY_TIMEOUT_MS)
             when {
+                wdttRaw && wgConf?.startsWith("RAWCONF:") == true -> {
+                    profile = localSocksProfile("qWDTT Raw", awgLocalPort(listenPort))
+                    log("VK-TURN WDTT Raw up (${wgConf.removePrefix("RAWCONF:")}); SOCKS on ${awgLocalPort(listenPort)}")
+                }
+                wdttRaw -> throw IllegalStateException(
+                    "WDTT Raw: no address from the server — is -listen-raw on port " +
+                        "${vk.wdttPlus.rawPortOrDefault()} enabled? (redeploy with auto-install)" +
+                        YpTunCore.wdttLastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+                )
                 wgConf != null -> {
                     profile = buildWdttWgProfile(wgConf, vk.listenPort)
                     log("VK-TURN WDTT relay up; WireGuard config from server applied")
@@ -1347,16 +1360,17 @@ internal class DesktopEngineController(
         if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("AmneziaWG SOCKS port $port did not open")
         }
-        val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
-            "\"server_port\":$port,\"version\":\"5\"}"
-        return ProxyProfile(
-            tag = profile.tag.ifBlank { "AmneziaWG" },
-            type = "socks",
-            server = "127.0.0.1",
-            serverPort = port,
-            rawOutbound = raw,
-        )
+        return localSocksProfile(profile.tag.ifBlank { "AmneziaWG" }, port)
     }
+
+    /** A SOCKS5 outbound to a loopback listener one of our cores serves (AmneziaWG, qWDTT Raw). */
+    private fun localSocksProfile(tag: String, port: Int): ProxyProfile = ProxyProfile(
+        tag = tag,
+        type = "socks",
+        server = "127.0.0.1",
+        serverPort = port,
+        rawOutbound = "{\"type\":\"socks\",\"server\":\"127.0.0.1\",\"server_port\":$port,\"version\":\"5\"}",
+    )
 
     /**
      * Starts the AdGuard Trust Tunnel client from the profile's `tt://` deep link and returns a SOCKS

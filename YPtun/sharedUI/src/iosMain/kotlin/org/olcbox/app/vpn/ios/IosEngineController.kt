@@ -499,8 +499,10 @@ internal class IosEngineController(
         // Clamp the exit's WireGuard/AmneziaWG MTU to what VK TURN + DTLS + RTP-obf can carry.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true
-        val outboundType = vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
-            ?: VkTurnConfig.OUTBOUND_WIREGUARD
+        // qWDTT Raw serves its tunnel as a local SOCKS5 on the AmneziaWG exit's port → that branch.
+        val wdttRaw = usesWdtt && vk?.wdttPlus?.rawMode == true
+        val outboundType = if (wdttRaw) VkTurnConfig.OUTBOUND_AMNEZIAWG
+            else vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD } ?: VkTurnConfig.OUTBOUND_WIREGUARD
         val outboundConfigured = when {
             usesWdtt -> true // WDTT fetches its WireGuard config FROM the server (GETCONF)
             outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
@@ -514,14 +516,15 @@ internal class IosEngineController(
 
         val listenAddr = "127.0.0.1:${vk.listenPort}"
         if (usesWdtt) {
+            val coreListen = if (wdttRaw) "127.0.0.1:${awgLocalPort(listenPort)}" else listenAddr
             log(
-                "Starting VK-TURN qWDTT core on $listenAddr (peer=${vk.wdttPeerAddr()}, " +
+                "Starting VK-TURN qWDTT core on $coreListen (mode=${if (wdttRaw) "raw" else "wg"}, peer=${vk.wdttDialAddr()}, " +
                     "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
                     "turn-tcp=${vk.wdttPlus.rtNetworkMode}, obfs=${if (vk.wdttPlus.obfsVideo) "video" else "audio"})"
             )
             core.wdttStart(
                 vk.wdttCoreOptionsJson(
-                    listen = listenAddr,
+                    listen = coreListen,
                     deviceId = deviceId,
                 )
             ).orThrow("WDTT start failed")
@@ -541,6 +544,15 @@ internal class IosEngineController(
             // as the relay-ready gate.
             val wgConf = core.wdttWaitConfig(VKTURN_RELAY_READY_TIMEOUT_MS)
             when {
+                wdttRaw && wgConf.startsWith("RAWCONF:") -> {
+                    profile = localSocksProfile("qWDTT Raw", awgLocalPort(listenPort))
+                    log("VK-TURN WDTT Raw up (${wgConf.removePrefix("RAWCONF:")}); SOCKS on ${awgLocalPort(listenPort)}")
+                }
+                wdttRaw -> throw IllegalStateException(
+                    "WDTT Raw: no address from the server — is -listen-raw on port " +
+                        "${vk.wdttPlus.rawPortOrDefault()} enabled? (redeploy with auto-install)" +
+                        core.wdttLastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+                )
                 wgConf.isNotEmpty() -> {
                     profile = buildWdttWgProfile(wgConf, vk.listenPort)
                     log("VK-TURN WDTT relay up; WireGuard config from server applied")
@@ -777,14 +789,17 @@ internal class IosEngineController(
         if (!IosNet.awaitLocalPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("AmneziaWG SOCKS port $port did not open")
         }
-        return ProxyProfile(
-            tag = profile.tag.ifBlank { "AmneziaWG" },
-            type = "socks",
-            server = "127.0.0.1",
-            serverPort = port,
-            rawOutbound = "{\"type\":\"socks\",\"server\":\"127.0.0.1\",\"server_port\":$port,\"version\":\"5\"}",
-        )
+        return localSocksProfile(profile.tag.ifBlank { "AmneziaWG" }, port)
     }
+
+    /** A SOCKS5 outbound to a loopback listener one of our cores serves (AmneziaWG, qWDTT Raw). */
+    private fun localSocksProfile(tag: String, port: Int): ProxyProfile = ProxyProfile(
+        tag = tag,
+        type = "socks",
+        server = "127.0.0.1",
+        serverPort = port,
+        rawOutbound = "{\"type\":\"socks\",\"server\":\"127.0.0.1\",\"server_port\":$port,\"version\":\"5\"}",
+    )
 
     // ---------------------------------------------------------------------------------------
     // Geo assets

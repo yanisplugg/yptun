@@ -1919,6 +1919,14 @@ private fun WdttInstallDialog(
                                 wdttPortText = actual.toString()
                                 onApplyDraft { d -> d.copy(wdttPort = actual.toString()) }
                             }
+                            // Same for the Raw port, when it could not take the default.
+                            res.getOrNull()?.rawPort?.takeIf { it > 0 }?.let { raw ->
+                                onApplyDraft { d ->
+                                    d.copy(wdttPlus = d.wdttPlus.copy(
+                                        rawPort = raw.takeIf { it != WdttPlusOptions.DEFAULT_RAW_PORT } ?: 0
+                                    ))
+                                }
+                            }
                             result = res
                             running = false
                         }
@@ -2510,11 +2518,36 @@ private fun WdttPlusAdvanced(
     enabled: Boolean,
     onChange: ((WdttPlusOptions) -> WdttPlusOptions) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(options != WdttPlusOptions()) }
+    var expanded by remember { mutableStateOf(options.copy(rawMode = false, rawPort = 0) != WdttPlusOptions()) }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // The primary choice, so it sits outside the collapsible block.
+        SettingsDropdown(
+            label = "Режим подключения",
+            selectedValue = if (options.rawMode) "raw" else "wg",
+            options = listOf("wg", "raw"),
+            enabled = enabled,
+            onValueSelected = { v -> onChange { it.copy(rawMode = v == "raw") } },
+            valueLabel = { if (it == "raw") "Raw — без WireGuard, быстрее" else "WG — WireGuard, любой сервер" }
+        )
+        if (options.rawMode) {
+            VkTurnField(
+                value = options.rawPort.takeIf { it > 0 }?.toString().orEmpty(),
+                onValueChange = { v -> onChange { it.copy(rawPort = v.filter(Char::isDigit).take(5).toIntOrNull() ?: 0) } },
+                label = "Raw-порт сервера",
+                placeholder = WdttPlusOptions.DEFAULT_RAW_PORT.toString(),
+                enabled = enabled,
+                keyboardType = KeyboardType.Number
+            )
+            Text(
+                text = "Серверу нужен raw-порт (-listen-raw). Автоустановка его включает — сервер, " +
+                    "поставленный раньше, переустановите.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         VkTurnSwitchRow("Расширенные настройки qWDTT", expanded, enabled) { expanded = it }
         if (!expanded) return@Column
 

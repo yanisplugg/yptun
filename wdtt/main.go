@@ -222,15 +222,20 @@ type Config struct {
 	NoDTLS bool
 	// TurnTCP dials the TURN relay over TCP instead of UDP [-turn-tcp] — for networks that throttle UDP.
 	TurnTCP bool
+	// RawMode is qWDTT 1.4's Raw [-mode rawtun]: raw IP packets without WireGuard, to the server's
+	// -listen-raw port (Peer must point there). YPtun has no TUN fd to hand over, so the packets land in a
+	// userspace netstack served as a SOCKS5 (TCP + UDP) on Listen — see raw_socks.go.
+	RawMode bool
 
 	// OnConfig receives the WireGuard config fetched from the server (GETCONF), with an MTU line
-	// guaranteed. The host parses it and brings up the WG tunnel.
+	// guaranteed. The host parses it and brings up the WG tunnel. In RawMode it gets the server's
+	// "RAWCONF:ip|dns|mtu" instead, once the SOCKS5 on Listen is accepting.
 	OnConfig func(wgConf string)
 }
 
 // Run sets up the local UDP listener, the dispatcher and the worker groups, and blocks until ctx is
-// cancelled or every worker exits. Always the upstream "vpn" mode: the host runs WireGuard itself
-// against Listen.
+// cancelled or every worker exits. Upstream's "vpn" mode (the host runs WireGuard itself against
+// Listen), or with RawMode its "rawtun" behind a local SOCKS5.
 func Run(parent context.Context, cfg Config) error {
 	if !running.CompareAndSwap(false, true) {
 		return fmt.Errorf("wdtt: already running")
@@ -323,7 +328,7 @@ func Run(parent context.Context, cfg Config) error {
 		WrapKey:      wrapKey,
 		ObfsMode:     normalizeObfsMode(cfg.Obfs),
 		NoDTLS:       cfg.NoDTLS,
-		RawMode:      false,
+		RawMode:      cfg.RawMode,
 		TCPTransport: cfg.TurnTCP,
 	}
 
@@ -331,17 +336,21 @@ func Run(parent context.Context, cfg Config) error {
 	if listen == "" {
 		listen = "127.0.0.1:9000"
 	}
-	// SO_REUSEADDR — a quick restart can reclaim the port.
-	localConn, err := listenUDP(listen)
-	if err != nil {
-		return fmt.Errorf("wdtt: listen %s: %w", listen, err)
+	// SO_REUSEADDR — a quick restart can reclaim the port. Raw has no WireGuard to receive from:
+	// Listen is its SOCKS5 (TCP) instead, raised once the server assigns the address.
+	var localConn net.PacketConn
+	if !cfg.RawMode {
+		localConn, err = listenUDP(listen)
+		if err != nil {
+			return fmt.Errorf("wdtt: listen %s: %w", listen, err)
+		}
+		if uc, ok := localConn.(*net.UDPConn); ok {
+			_ = uc.SetReadBuffer(socketBufSize)
+			_ = uc.SetWriteBuffer(socketBufSize)
+		}
+		stopLocalConn := context.AfterFunc(ctx, func() { _ = localConn.Close() })
+		defer stopLocalConn()
 	}
-	if uc, ok := localConn.(*net.UDPConn); ok {
-		_ = uc.SetReadBuffer(socketBufSize)
-		_ = uc.SetWriteBuffer(socketBufSize)
-	}
-	stopLocalConn := context.AfterFunc(ctx, func() { _ = localConn.Close() })
-	defer stopLocalConn()
 
 	_, localPort, _ := net.SplitHostPort(listen)
 	if localPort == "" {
@@ -355,8 +364,9 @@ func Run(parent context.Context, cfg Config) error {
 	numGroups := (numW + workersPerGroup - 1) / workersPerGroup
 	log.Println("[КЛИЕНТ] ═══════════════════════════════════════")
 	log.Printf("[КЛИЕНТ] qWDTT: воркеров %d (групп %d), хешей %d", numW, numGroups, len(hashes))
-	log.Printf("[КЛИЕНТ] Слушаю: %s | Пир: %s | TURN: %s | obfs: %s", listen, peerAddr,
-		map[bool]string{true: "TCP", false: "UDP"}[cfg.TurnTCP], tp.ObfsMode)
+	log.Printf("[КЛИЕНТ] Слушаю: %s | Пир: %s | TURN: %s | obfs: %s | режим: %s", listen, peerAddr,
+		map[bool]string{true: "TCP", false: "UDP"}[cfg.TurnTCP], tp.ObfsMode,
+		map[bool]string{true: "Raw", false: "WG"}[cfg.RawMode])
 	log.Printf("[КЛИЕНТ] VK auth: %s (anon path %s) | Captcha: %s", activeVkAuthMode, activeVkAnonPath, activeCaptchaMode)
 	log.Println("[КЛИЕНТ] ═══════════════════════════════════════")
 
@@ -368,7 +378,12 @@ func Run(parent context.Context, cfg Config) error {
 	}()
 	go stats.RunLoop(shutdownCh)
 
-	disp := NewDispatcher(ctx, localConn, stats)
+	var disp *Dispatcher
+	if cfg.RawMode {
+		disp = NewDispatcherPendingTUN(ctx, stats)
+	} else {
+		disp = NewDispatcher(ctx, localConn, stats)
+	}
 	defer disp.Shutdown()
 
 	configCh := make(chan string, 1)
@@ -377,7 +392,20 @@ func Run(parent context.Context, cfg Config) error {
 		defer close(configDone)
 		select {
 		case rawConf, ok := <-configCh:
-			if !ok || rawConf == "" || strings.HasPrefix(rawConf, "RAWCONF:") {
+			if !ok || rawConf == "" {
+				return
+			}
+			if strings.HasPrefix(rawConf, "RAWCONF:") {
+				if !cfg.RawMode {
+					return
+				}
+				if err := startRawSocks(ctx, rawConf, disp, listen); err != nil {
+					log.Printf("[RAW] %v", err)
+					return
+				}
+				if cfg.OnConfig != nil {
+					cfg.OnConfig(rawConf)
+				}
 				return
 			}
 			finalConf := rawConf

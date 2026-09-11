@@ -1821,8 +1821,12 @@ class OlcboxVpnService : VpnService() {
         // нет соединения / плохая скорость". WDTT already clamps its server-provided config the same way.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true
-        // WDTT always exits via WireGuard (server-provided); the freeturn outbound choice is irrelevant.
-        val outboundType = if (usesWdtt) VkTurnConfig.OUTBOUND_WIREGUARD
+        val wdttRaw = usesWdtt && vk?.wdttPlus?.rawMode == true
+        // WDTT exits via WireGuard (server-provided); the freeturn outbound choice is irrelevant. Its Raw
+        // mode is a local SOCKS5 served by the core — the very shape of the AmneziaWG exit (awgproxy's
+        // SOCKS on [awgLocalPort]), so it rides that branch: chain proxy, routing and DNS included.
+        val outboundType = if (wdttRaw) VkTurnConfig.OUTBOUND_AMNEZIAWG
+            else if (usesWdtt) VkTurnConfig.OUTBOUND_WIREGUARD
             else vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD } ?: VkTurnConfig.OUTBOUND_WIREGUARD
         val outboundConfigured = when {
             usesWdtt -> vk?.wdttPeer?.isNotBlank() == true // WG config comes from the server
@@ -1878,16 +1882,18 @@ class OlcboxVpnService : VpnService() {
                 // WDTT core (wg-turn-client): connects purely by the wdtt-server IP[:port] and FETCHES its
                 // WireGuard config from the server (GETCONF/OnConfig) — the user enters no WG keys. We bring
                 // WireGuard up from that returned config (Endpoint overridden to the local WDTT listener).
-                val peerAddr = vk.wdttPeerAddr()
+                val peerAddr = vk.wdttDialAddr()
                 val configSignal = CompletableDeferred<String>()
+                // Raw serves its tunnel as a SOCKS5 where the AmneziaWG exit would.
+                val coreListen = if (wdttRaw) "127.0.0.1:$awgLocalPort" else listenAddr
                 addLog(
-                    "Starting VK-TURN qWDTT core on $listenAddr (peer=$peerAddr, " +
+                    "Starting VK-TURN qWDTT core on $coreListen (mode=${if (wdttRaw) "raw" else "wg"}, peer=$peerAddr, " +
                         "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
                         "turn-tcp=${vk.wdttPlus.rtNetworkMode}, obfs=${if (vk.wdttPlus.obfsVideo) "video" else "audio"})"
                 )
                 Wdttmobile.start(
                     vk.wdttCoreOptionsJson(
-                        listen = listenAddr,
+                        listen = coreListen,
                         deviceId = deviceIdentityProvider.hwid(),
                     ),
                     object : WdttConfigSink {
@@ -2008,6 +2014,15 @@ class OlcboxVpnService : VpnService() {
             if (wdttSignal != null) {
                 val wgConf = withTimeoutOrNull(VKTURN_RELAY_READY_TIMEOUT_MS) { wdttSignal.await() }
                 when {
+                    wdttRaw && wgConf?.startsWith("RAWCONF:") == true -> {
+                        profile = localSocksProfile("qWDTT Raw", awgLocalPort)
+                        addLog("VK-TURN WDTT Raw up (${wgConf.removePrefix("RAWCONF:")}); SOCKS on $awgLocalPort")
+                    }
+                    wdttRaw -> throw IllegalStateException(
+                        "WDTT Raw: no address from the server — is -listen-raw on port " +
+                            "${vk.wdttPlus.rawPortOrDefault()} enabled? (redeploy with auto-install)" +
+                            Wdttmobile.lastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+                    )
                     wgConf != null && wgConf.isNotBlank() -> {
                         profile = buildWdttWgProfile(wgConf, vk.listenPort)
                         addLog("VK-TURN WDTT relay up; WireGuard config from server applied")
@@ -3251,16 +3266,17 @@ class OlcboxVpnService : VpnService() {
         if (!awaitSocksPortOpen(awgLocalPort, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("AmneziaWG SOCKS port $awgLocalPort did not open")
         }
-        val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
-            "\"server_port\":$awgLocalPort,\"version\":\"5\"}"
-        return ProxyProfile(
-            tag = profile.tag.ifBlank { "AmneziaWG" },
-            type = "socks",
-            server = "127.0.0.1",
-            serverPort = awgLocalPort,
-            rawOutbound = raw,
-        )
+        return localSocksProfile(profile.tag.ifBlank { "AmneziaWG" }, awgLocalPort)
     }
+
+    /** A SOCKS5 outbound to a loopback listener one of our cores serves (AmneziaWG, qWDTT Raw). */
+    private fun localSocksProfile(tag: String, port: Int): ProxyProfile = ProxyProfile(
+        tag = tag,
+        type = "socks",
+        server = "127.0.0.1",
+        serverPort = port,
+        rawOutbound = "{\"type\":\"socks\",\"server\":\"127.0.0.1\",\"server_port\":$port,\"version\":\"5\"}",
+    )
 
     /**
      * If [profile] is Trust Tunnel, decode its `tt://` deep-link into a `[endpoint]` TOML (native

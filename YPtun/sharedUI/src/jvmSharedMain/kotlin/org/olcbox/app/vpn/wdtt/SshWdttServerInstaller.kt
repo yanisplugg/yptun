@@ -2,6 +2,7 @@ package org.olcbox.app.vpn.wdtt
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.vpn.ssh.SshTarget
 import org.olcbox.app.vpn.ssh.ServerBinarySource
 import org.olcbox.app.vpn.ssh.loadServerBinaryGz
@@ -59,7 +60,7 @@ internal class SshWdttServerInstaller(private val binaries: ServerBinarySource) 
                 .filter { it.isNotEmpty() && !it.startsWith(PORTS_MARKER) }
                 .forEach(onLog)
             val ports = parsePorts(prepared) ?: error("VPS не сообщил свободные порты:\n${prepared.trim()}")
-            onLog("Порты: DTLS ${ports.dtls}/udp, WireGuard ${ports.wg}/udp (только локально), админка ${ports.admin}/tcp")
+            onLog("Порты: DTLS ${ports.dtls}/udp, WireGuard ${ports.wg}/udp (только локально), админка ${ports.admin}/tcp, Raw ${ports.raw}/udp")
 
             val gz = loadServerBinaryGz(binaries, "wdtt/wdtt-server-linux-$goArch")
             onLog("Загрузка сервера qWDTT (${gz.size / 1024} КБ, по частям)…")
@@ -91,7 +92,7 @@ internal class SshWdttServerInstaller(private val binaries: ServerBinarySource) 
                 "Служба wdtt не держится после запуска. Журнал сервера:\n${verify.trim()}"
             }
 
-            WdttInstallResult("qWDTT установлен и запущен на ${options.host}:${ports.dtls}", ports.dtls)
+            WdttInstallResult("qWDTT установлен и запущен на ${options.host}:${ports.dtls} (Raw — ${ports.raw})", ports.dtls, ports.raw)
         }
     }
 
@@ -108,7 +109,7 @@ internal class SshWdttServerInstaller(private val binaries: ServerBinarySource) 
     }
 }
 
-internal data class WdttPorts(val dtls: Int, val wg: Int, val admin: Int)
+internal data class WdttPorts(val dtls: Int, val wg: Int, val admin: Int, val raw: Int)
 
 internal const val PORTS_MARKER = "WDTT_PORTS="
 internal const val VERIFY_OK = "WDTT_SERVICE_STABLE"
@@ -116,13 +117,14 @@ internal const val VERIFY_OK = "WDTT_SERVICE_STABLE"
 internal fun parsePorts(output: String): WdttPorts? {
     val line = output.lineSequence().map { it.trim() }.lastOrNull { it.startsWith(PORTS_MARKER) } ?: return null
     val parts = line.removePrefix(PORTS_MARKER).split('|').map { it.trim().toIntOrNull() }
-    if (parts.size != 3 || parts.any { it == null || it !in 1..65535 }) return null
-    return WdttPorts(parts[0]!!, parts[1]!!, parts[2]!!)
+    if (parts.size != 4 || parts.any { it == null || it !in 1..65535 }) return null
+    return WdttPorts(parts[0]!!, parts[1]!!, parts[2]!!, parts[3]!!)
 }
 
 /**
  * Runs before deploy.sh: takes down every older WDTT (any unit name) still holding the DTLS or the WG
- * port, sets a WDTT Plus database aside, then picks free ports and prints `WDTT_PORTS=dtls|wg|admin`.
+ * port, sets a WDTT Plus database aside, then picks free ports and prints `WDTT_PORTS=dtls|wg|admin|raw`.
+ * The raw port (qWDTT 1.4 «Raw», `-listen-raw`) is always enabled, so either client mode works.
  */
 internal fun buildPrepareScript(requestedPort: Int): String {
     val d = "$"
@@ -169,7 +171,9 @@ internal fun buildPrepareScript(requestedPort: Int): String {
         while [ "${d}WG" = "${d}DTLS" ] || udp_busy ${d}WG; do WG=${d}((WG+1)); done
         ADMIN=56002
         while [ "${d}ADMIN" = "${d}DTLS" ] || [ "${d}ADMIN" = "${d}WG" ] || tcp_busy ${d}ADMIN; do ADMIN=${d}((ADMIN+1)); done
-        echo "$PORTS_MARKER${d}DTLS|${d}WG|${d}ADMIN"
+        RAW=${WdttPlusOptions.DEFAULT_RAW_PORT}
+        while [ "${d}RAW" = "${d}DTLS" ] || [ "${d}RAW" = "${d}WG" ] || [ "${d}RAW" = "${d}ADMIN" ] || udp_busy ${d}RAW; do RAW=${d}((RAW+1)); done
+        echo "$PORTS_MARKER${d}DTLS|${d}WG|${d}ADMIN|${d}RAW"
     """.trimIndent()
 }
 
@@ -192,7 +196,7 @@ internal fun buildDeployCommand(options: WdttInstallOptions, ports: WdttPorts, a
         : > /tmp/wdtt-bot.token
         chmod 600 /tmp/wdtt-main.password /tmp/wdtt-admin.token /tmp/wdtt-bot.token
         set +e
-        env WDTT_ADMIN_ID= WDTT_DNS_SERVERS=$dns WDTT_DTLS_PORT=${ports.dtls} WDTT_WG_PORT=${ports.wg} WDTT_ADMIN_PORT=${ports.admin} WDTT_SSH_PORT=${options.sshPort} bash /tmp/deploy.sh 2>&1
+        env WDTT_ADMIN_ID= WDTT_DNS_SERVERS=$dns WDTT_DTLS_PORT=${ports.dtls} WDTT_WG_PORT=${ports.wg} WDTT_ADMIN_PORT=${ports.admin} WDTT_RAW_PORT=${ports.raw} WDTT_SSH_PORT=${options.sshPort} bash /tmp/deploy.sh 2>&1
         echo "WDTT_DEPLOY_EXIT=${'$'}?"
         rm -f /tmp/deploy.sh
         exit 0

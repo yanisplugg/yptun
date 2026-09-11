@@ -3,8 +3,8 @@ package wdtt
 import (
 	"context"
 	"log"
+	"io"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,7 +88,7 @@ type WorkerSlot struct {
 
 type Dispatcher struct {
 	localConn    net.PacketConn
-	tunFile      *os.File // не nil в -mode rawtun: сырые IP-пакеты вместо локального WG-loopback
+	tunFile      io.ReadWriter // не nil в -mode rawtun: сырые IP-пакеты вместо локального WG-loopback (YPtun: и netstack)
 	ready        chan struct{}
 	clientAddr   atomic.Pointer[net.Addr]
 	mu           sync.Mutex
@@ -160,7 +160,7 @@ func NewDispatcherPendingTUN(ctx context.Context, stats *Stats) *Dispatcher {
 
 // AttachTUN подключает полученный от Android TUN-fd к уже запущенному
 // диспетчеру и снимает блокировку с readLoop/writeLoop.
-func (d *Dispatcher) AttachTUN(f *os.File) {
+func (d *Dispatcher) AttachTUN(f io.ReadWriter) {
 	d.tunFile = f
 	close(d.ready)
 }
@@ -219,7 +219,7 @@ func (d *Dispatcher) readLoop() {
 	case <-d.ready:
 	}
 	if d.tunFile != nil {
-		rawDiagf("readLoop: разблокирован, начинаю читать из tunFile (fd=%v)", d.tunFile.Fd())
+		rawDiagf("readLoop: разблокирован, начинаю читать из tunFile (%T)", d.tunFile)
 	}
 
 	buf := make([]byte, readBufSize)
