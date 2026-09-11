@@ -443,4 +443,24 @@ class DesktopProxyModeTest {
         assertContains(down, "resolvectl revert olcbox0")
         assertContains(down, "resolvconf -d \"olcbox0\"")
     }
+
+    /**
+     * In-process cores run as the user, so the root-only rule doesn't cover their upstream dials:
+     * those must go via the main table AHEAD of the TUN rule, or the tunnel carries itself.
+     */
+    @Test
+    fun linuxTunUpScriptRoutesCoreUpstreamsAroundTheTun() {
+        val up = LinuxTunController.upScriptContent(
+            listOf("203.0.113.7", "87.240.128.0/18", "203.0.113.7", "::1", "1.2.3.4; reboot", "evil\nrm -rf /")
+        )
+        val bypass = up.indexOf("ip rule add to 203.0.113.7 lookup main pref 15")
+        assertTrue(bypass >= 0, up)
+        assertTrue(bypass < up.indexOf("ip rule add lookup 51820 pref 20"))
+        assertContains(up, "ip rule add to 87.240.128.0/18 lookup main pref 15")
+        assertEquals(1, Regex("to 203\\.0\\.113\\.7 ").findAll(up).count())
+        assertFalse("pref 15\n" in up, "a bad bypass entry must not abort the set -e script")
+        // Root shell script: nothing but a strict dotted IPv4 (/len) may get in.
+        assertFalse("reboot" in up || "rm -rf" in up || "::1" in up, up)
+        assertContains(LinuxTunController.downScriptContent(), "while ip rule del pref 15")
+    }
 }

@@ -16,9 +16,6 @@ on:
       - "v*"
     branches:
       - pc-client-beta
-      - Beta
-      - main
-      - "feature/**"
     paths:
       - ".github/workflows/linux-deb.yml"
       - "YPtun/desktopApp/**"
@@ -61,13 +58,14 @@ jobs:
           go-version-file: cores/go.mod
           cache: false
 
-      # fakeroot + dpkg-dev are what jpackage shells out to for --type deb.
+      # fakeroot + dpkg-dev are what jpackage shells out to for --type deb. The X/GTK dev headers are
+      # not needed to build (skiko ships prebuilt natives), only at runtime on the user's machine.
       - name: Install packaging tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fakeroot dpkg-dev binutils file wget libfuse2
           if [ "${{ matrix.arch }}" = "amd64" ]; then
-            sudo wget -O /usr/local/bin/appimagetool.bin https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage || true
+            sudo wget -O /usr/local/bin/appimagetool.bin https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage || true
             if [ -f /usr/local/bin/appimagetool.bin ]; then
               sudo chmod +x /usr/local/bin/appimagetool.bin
               sudo sh -c 'printf "#!/bin/sh\nexec /usr/local/bin/appimagetool.bin --appimage-extract-and-run \"\$@\"\n" > /usr/local/bin/appimagetool'
@@ -96,6 +94,9 @@ jobs:
         working-directory: YPtun
         env:
           CGO_ENABLED: "1"
+        # The repo is maintained from Windows, so gradlew is committed as mode 100644 and is not
+        # executable on checkout. Set the bit here rather than changing the recorded mode, which would
+        # also land on the Android branches when this one is merged.
         run: |
           chmod +x ./gradlew
           ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseDeb --stacktrace

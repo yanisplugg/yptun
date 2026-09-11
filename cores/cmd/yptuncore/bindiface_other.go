@@ -1,12 +1,11 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package main
 
 import "syscall"
 
-// Non-Windows desktops don't need per-socket interface pinning: LinuxTunController installs
-// `ip rule add uidrange 0-0 lookup main`, so everything this process dials already bypasses the
-// tunnel. Kept as a no-op so the exported setter has one signature everywhere.
+// No per-socket pinning on the remaining desktops (macOS): kept as a no-op so the exported setter
+// has one signature everywhere. Windows and Linux have their own bindiface_*.go.
 func bindSocketToInterface(conn syscall.RawConn, index uint32) error {
 	return nil
 }

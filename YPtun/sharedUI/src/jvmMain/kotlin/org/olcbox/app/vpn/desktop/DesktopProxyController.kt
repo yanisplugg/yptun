@@ -76,99 +76,59 @@ internal class LinuxProxyController : DesktopProxyController {
     private var gnomeBackup: LinuxGnomeProxyState? = null
     private var kdeBackup: LinuxKdeProxyState? = null
 
+    /** Set by [enable]: [restore] must not touch settings we never changed (e.g. a start that failed early). */
+    private var active = false
+
+    // PATH lookup rather than `which`: it is missing on minimal installs (Arch base), and Plasma 6
+    // ships only the *6 tools — checking kwriteconfig5 first used to hide KDE entirely there.
+    private val hasGsettings get() = LinuxPrivilege.executableExists("gsettings")
+    private val kdeWrite get() = listOf("kwriteconfig6", "kwriteconfig5").firstOrNull(LinuxPrivilege::executableExists)
+    private val kdeRead get() = listOf("kreadconfig6", "kreadconfig5").firstOrNull(LinuxPrivilege::executableExists)
+
     override suspend fun enable(httpProxyHostPort: String, pacUrl: String) {
         val host = httpProxyHostPort.substringBefore(':')
-        val port = httpProxyHostPort.substringAfter(':', "8080").toIntOrNull() ?: 8080
-
-        if (hasGsettings()) {
-            val current = readGnomeState()
-            if (current != null && !current.looksLikeOurs()) {
-                gnomeBackup = current
-            }
-            enableGnomeProxyCommands(host, port).forEach { cmd ->
-                runCatching { runCommand(cmd) }
-            }
+        val port = httpProxyHostPort.substringAfter(':').toInt()
+        val kde = kdeWrite
+        // Neither desktop's settings tool: "connected" would carry nothing, so say so instead.
+        if (!hasGsettings && kde == null) {
+            error("System proxy on Linux needs GNOME (gsettings) or KDE (kwriteconfig5/6)")
         }
+        active = true
 
-        if (hasKdeConfig()) {
-            val current = readKdeState()
-            if (current != null && !current.looksLikeOurs()) {
-                kdeBackup = current
-            }
-            enableKdeProxyCommands("http://$httpProxyHostPort").forEach { cmd ->
-                runCatching { runCommand(cmd) }
-            }
+        if (hasGsettings) {
+            readGnomeState()?.takeUnless { it.looksLikeOurs() }?.let { gnomeBackup = it }
+            runAll(enableGnomeProxyCommands(host, port))
+        }
+        if (kde != null) {
+            readKdeState()?.takeUnless { it.looksLikeOurs() }?.let { kdeBackup = it }
+            runAll(enableKdeProxyCommands("http://$httpProxyHostPort", kde))
         }
     }
 
     override suspend fun restore() {
-        gnomeBackup?.let { state ->
-            restoreGnomeProxyCommands(state).forEach { cmd ->
-                runCatching { runCommand(cmd) }
-            }
+        if (!active) return
+        active = false
+        if (hasGsettings) {
+            runAll(gnomeBackup?.let(::restoreGnomeProxyCommands) ?: disableGnomeProxyCommands())
             gnomeBackup = null
-        } ?: run {
-            if (hasGsettings()) {
-                disableGnomeProxyCommands().forEach { cmd ->
-                    runCatching { runCommand(cmd) }
-                }
-            }
         }
-
-        kdeBackup?.let { state ->
-            restoreKdeProxyCommands(state).forEach { cmd ->
-                runCatching { runCommand(cmd) }
-            }
+        kdeWrite?.let { kde ->
+            runAll(kdeBackup?.let { restoreKdeProxyCommands(it, kde) } ?: disableKdeProxyCommands(kde))
             kdeBackup = null
-        } ?: run {
-            if (hasKdeConfig()) {
-                disableKdeProxyCommands().forEach { cmd ->
-                    runCatching { runCommand(cmd) }
-                }
-            }
         }
     }
 
     override suspend fun clearStaleProxy() {
-        if (hasGsettings()) {
-            val current = readGnomeState()
-            if (current != null && current.looksLikeOurs()) {
-                disableGnomeProxyCommands().forEach { cmd ->
-                    runCatching { runCommand(cmd) }
-                }
-            }
+        if (hasGsettings && readGnomeState()?.looksLikeOurs() == true) {
+            runAll(disableGnomeProxyCommands())
         }
-        if (hasKdeConfig()) {
-            val current = readKdeState()
-            if (current != null && current.looksLikeOurs()) {
-                disableKdeProxyCommands().forEach { cmd ->
-                    runCatching { runCommand(cmd) }
-                }
-            }
+        val kde = kdeWrite
+        if (kde != null && readKdeState()?.looksLikeOurs() == true) {
+            runAll(disableKdeProxyCommands(kde))
         }
     }
 
-    private suspend fun hasGsettings(): Boolean = runCatching {
-        val out = runCommand(listOf("which", "gsettings"))
-        out.isNotBlank()
-    }.getOrDefault(false)
-
-    private suspend fun hasKdeConfig(): Boolean = runCatching {
-        val out = runCommand(listOf("which", "kwriteconfig5")).ifBlank {
-            runCatching { runCommand(listOf("which", "kwriteconfig6")) }.getOrDefault("")
-        }
-        out.isNotBlank()
-    }.getOrDefault(false)
-
-    private suspend fun kdeConfigBinary(): String = runCatching {
-        val which6 = runCatching { runCommand(listOf("which", "kwriteconfig6")) }.getOrDefault("")
-        if (which6.isNotBlank()) "kwriteconfig6" else "kwriteconfig5"
-    }.getOrDefault("kwriteconfig5")
-
-    private suspend fun kdeReadBinary(): String = runCatching {
-        val which6 = runCatching { runCommand(listOf("which", "kreadconfig6")) }.getOrDefault("")
-        if (which6.isNotBlank()) "kreadconfig6" else "kreadconfig5"
-    }.getOrDefault("kreadconfig5")
+    private suspend fun runAll(commands: List<List<String>>) = commands.forEach { runCatching { runCommand(it) } }
 
     private suspend fun readGnomeState(): LinuxGnomeProxyState? = runCatching {
         val mode = runCommand(listOf("gsettings", "get", "org.gnome.system.proxy", "mode")).trim()
@@ -181,7 +141,7 @@ internal class LinuxProxyController : DesktopProxyController {
     }.getOrNull()
 
     private suspend fun readKdeState(): LinuxKdeProxyState? = runCatching {
-        val readBin = kdeReadBinary()
+        val readBin = kdeRead ?: error("kreadconfig5/6 not found")
         val proxyType = runCommand(listOf(readBin, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType")).trim()
         val httpProxy = runCommand(listOf(readBin, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy")).trim()
         val httpsProxy = runCommand(listOf(readBin, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy")).trim()

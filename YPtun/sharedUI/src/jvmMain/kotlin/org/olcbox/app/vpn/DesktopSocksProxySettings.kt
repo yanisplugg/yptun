@@ -22,9 +22,7 @@ data class DesktopSocksProxySettings(
         get() = username.isNotBlank() && password.isNotBlank()
 
     fun normalized(): DesktopSocksProxySettings {
-        // Unsecured is the default shape: no credentials, standard proxy port.
-        // On Linux, port 8080 is commonly used by other software (e.g. Steam's steamwebhelper),
-        // so we fall back to LOCAL_SOCKS_PORT (10808) which avoids that conflict.
+        // Unsecured is the default shape: no credentials, standard proxy port (see unsecuredPort).
         if (!secured) return copy(
             host = host.ifBlank { PacServer.LOCAL_SOCKS_HOST },
             port = unsecuredPort(),
@@ -47,16 +45,9 @@ data class DesktopSocksProxySettings(
         /** Port used when [secured] is off — the default proxy port Windows/browsers expect. */
         const val UNSECURED_PORT = 8080
 
-        /**
-         * Returns the unsecured SOCKS port for the current platform.
-         * Windows uses 8080 (conventional browser proxy port).
-         * Linux uses LOCAL_SOCKS_PORT (10808) to avoid conflicts with common services
-         * (e.g. Steam's steamwebhelper occupies 8080 on Steam Deck).
-         */
-        fun unsecuredPort(): Int = when (DesktopPaths.os) {
-            DesktopOs.Windows -> UNSECURED_PORT
-            else -> PacServer.LOCAL_SOCKS_PORT
-        }
+        /** [UNSECURED_PORT], except Linux: Steam's steamwebhelper holds 8080 there (Steam Deck). */
+        fun unsecuredPort(): Int =
+            if (DesktopPaths.os == DesktopOs.Linux) PacServer.LOCAL_SOCKS_PORT else UNSECURED_PORT
 
         fun isValidPort(port: Int): Boolean = port in MIN_PORT..MAX_PORT
 

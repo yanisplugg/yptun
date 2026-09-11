@@ -1221,7 +1221,8 @@ private fun SocksProxySettingsContent(
             value = if (proxySettings.secured) {
                 LocalStrings.current.securedSocksProxySubtitle
             } else {
-                LocalStrings.current.securedSocksProxyOff
+                // The strings name 8080; Linux listens elsewhere (see DesktopSocksProxySettings).
+                LocalStrings.current.securedSocksProxyOff.replace("8080", proxySettings.port.toString())
             },
             icon = Icons.Rounded.Key,
             checked = proxySettings.secured,

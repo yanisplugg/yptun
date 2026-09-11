@@ -561,6 +561,7 @@ interface Strings {
     val vkCaptchaTitle: String
     val noFileSelected: String
     val qrImported: String
+    val importedFromLink: String
     val qrNotRecognized: String
     fun cannotOpenFilePicker(msg: String): String
     val configCopied: String
@@ -1201,6 +1202,7 @@ object RuStrings : Strings {
     override val vkCaptchaTitle = "Капча VK"
     override val noFileSelected = "Файл не выбран"
     override val qrImported = "QR-код импортирован"
+    override val importedFromLink = "Импортировано по ссылке"
     override val qrNotRecognized = "QR-код в файле не распознан"
     override fun cannotOpenFilePicker(msg: String) = "Не удалось открыть выбор файла: $msg"
     override val configCopied = "Конфигурация скопирована"
@@ -1824,6 +1826,7 @@ object EnStrings : Strings {
     override val vkCaptchaTitle = "VK captcha"
     override val noFileSelected = "No file selected"
     override val qrImported = "QR imported"
+    override val importedFromLink = "Imported from link"
     override val qrNotRecognized = "No QR code found in that image"
     override fun cannotOpenFilePicker(msg: String) = "Cannot open file picker: $msg"
     override val configCopied = "Config copied"
@@ -2447,6 +2450,7 @@ object FaStrings : Strings {
     override val vkCaptchaTitle = "کپچای VK"
     override val noFileSelected = "پرونده‌ای انتخاب نشد"
     override val qrImported = "QR وارد شد"
+    override val importedFromLink = "از پیوند وارد شد"
     override val qrNotRecognized = "در آن تصویر کد QR پیدا نشد"
     override fun cannotOpenFilePicker(msg: String) = "بازکردن انتخابگر پرونده ممکن نشد: $msg"
     override val configCopied = "پیکربندی رونوشت شد"
@@ -3070,6 +3074,7 @@ object ZhStrings : Strings {
     override val vkCaptchaTitle = "VK 验证码"
     override val noFileSelected = "未选择文件"
     override val qrImported = "二维码已导入"
+    override val importedFromLink = "已从链接导入"
     override val qrNotRecognized = "该图片中未找到二维码"
     override fun cannotOpenFilePicker(msg: String) = "无法打开文件选择器：$msg"
     override val configCopied = "配置已复制"

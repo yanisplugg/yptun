@@ -253,9 +253,9 @@ fun main(args: Array<String>) {
     val relaunchedAfterElevation = DesktopElevation.STARTUP_ELEVATION_ARGUMENT in args ||
         WINDOWS_ELEVATED_START_ARGUMENT in args
     val claimed = if (relaunchedAfterElevation) {
-        DesktopSingleInstance.claimAfterPredecessorExits(::handleInstanceCommand)
+        DesktopSingleInstance.claimAfterPredecessorExits(::requestWindowToFront)
     } else {
-        DesktopSingleInstance.claimWithArgs(args, ::handleInstanceCommand)
+        DesktopSingleInstance.claim(args, ::requestWindowToFront)
     }
     if (!claimed) return
 
@@ -263,18 +263,16 @@ fun main(args: Array<String>) {
 }
 
 /**
- * Set by the running app so a second launch can raise its window or pass an import link.
- * Held here rather than inside the composition because it is called from a plain socket thread.
+ * Set by the running app so a second launch can raise its window and hand over the link it was
+ * opened with (see [DesktopSingleInstance]). Held here rather than inside the composition because it
+ * is called from a plain socket thread.
  */
 @Volatile
-private var instanceCommandHandler: ((String) -> Unit)? = null
+private var showWindowRequest: ((link: String?) -> Unit)? = null
 
-private fun handleInstanceCommand(command: String) {
-    javax.swing.SwingUtilities.invokeLater {
-        runCatching {
-            instanceCommandHandler?.invoke(command)
-        }
-    }
+private fun requestWindowToFront(link: String?) {
+    val request = showWindowRequest ?: return
+    javax.swing.SwingUtilities.invokeLater { runCatching { request(link) } }
 }
 
 /**
@@ -334,6 +332,21 @@ private fun runApp(args: Array<String>) = application {
     var sharePayload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var desktopNotice by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+
+    // A share link the app was opened with through a registered URL scheme — at startup, or handed
+    // over by a second launch (see DesktopSingleInstance).
+    fun importLink(link: String) {
+        dependencies.homeViewModel.onImportFullConfig(
+            link,
+            onComplete = {
+                dependencies.locationViewModel.loadLocations {
+                    dependencies.homeViewModel.loadCurrentConfig()
+                }
+                desktopNotice = strings().importedFromLink
+            },
+            onError = { message -> desktopNotice = message }
+        )
+    }
     val trayHomeState by dependencies.homeViewModel.state.collectAsState()
 
     suspend fun saveUpdateSettings(settings: AppUpdateSettings) {
@@ -436,15 +449,7 @@ private fun runApp(args: Array<String>) = application {
                 dependencies.homeViewModel.ToggleVpn()
             }
         }
-        val startupLink = args.firstOrNull { it.contains("://") || it.startsWith("vless:") || it.startsWith("vmess:") }
-        if (!startupLink.isNullOrBlank()) {
-            dependencies.homeViewModel.onImportFullConfig(startupLink, onComplete = {
-                dependencies.locationViewModel.loadLocations {
-                    dependencies.homeViewModel.loadCurrentConfig()
-                }
-                desktopNotice = strings().importedFromClipboard
-            })
-        }
+        DesktopSingleInstance.linkArgument(args)?.let(::importLink)
         // Launch check, then re-check while the app sits in the tray; checkUpdate skips ticks until
         // the chosen interval (1–24 h) has passed.
         while (true) {
@@ -820,9 +825,9 @@ private fun runApp(args: Array<String>) = application {
             }
         }
 
-        // A second launch hands its "show" or imported link here instead of starting a duplicate.
+        // A second launch hands its "show yourself" (and deep link, if any) here instead of starting a duplicate.
         DisposableEffect(Unit) {
-            instanceCommandHandler = { cmd ->
+            showWindowRequest = { link ->
                 isWindowVisible = true
                 runCatching {
                     window.isVisible = true
@@ -830,19 +835,9 @@ private fun runApp(args: Array<String>) = application {
                     window.toFront()
                     window.requestFocus()
                 }
-                val link = cmd.removePrefix("show").trim()
-                if (link.isNotBlank() && (link.contains("://") || link.startsWith("vless:") || link.startsWith("vmess:"))) {
-                    scope.launch {
-                        dependencies.homeViewModel.onImportFullConfig(link, onComplete = {
-                            dependencies.locationViewModel.loadLocations {
-                                dependencies.homeViewModel.loadCurrentConfig()
-                            }
-                            desktopNotice = strings().importedFromClipboard
-                        })
-                    }
-                }
+                link?.let(::importLink)
             }
-            onDispose { instanceCommandHandler = null }
+            onDispose { showWindowRequest = null }
         }
 
         val dynamicTheme by dependencies.settings.dynamicTheme.collectAsState()

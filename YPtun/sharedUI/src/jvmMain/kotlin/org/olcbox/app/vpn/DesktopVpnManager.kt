@@ -659,10 +659,13 @@ class DesktopVpnManager private constructor(
 
             if (desktopMode == DesktopMode.WindowsTun) {
                 windowsTunController.ensureAdministratorOrRequestRestart()
-                // Pin Xray's sockets to the physical adapter BEFORE anything is started — Windows
+            }
+            if (desktopMode != DesktopMode.SystemProxy) {
+                // Pin Xray's sockets to the physical adapter BEFORE anything is started — desktop
                 // has no VpnService.protect(), and a `direct`-routed dial that follows the routing
-                // table lands back in our own TUN and loops (see PhysicalInterface). sing-box needs
-                // none of this: it has auto_detect_interface.
+                // table lands back in our own TUN and loops (see PhysicalInterface). On Linux the
+                // cores run as the user, so the TUN's root-only bypass rule doesn't cover them either.
+                // sing-box needs none of this: it has auto_detect_interface.
                 val physIndex = org.olcbox.app.vpn.desktop.PhysicalInterface.index()
                 // VK-TURN's Xray exit reaches its WireGuard hop over UDP on 127.0.0.1, and Xray
                 // hands the controller the bind address for UDP, so a pinned UDP socket would cut it.
@@ -687,7 +690,7 @@ class DesktopVpnManager private constructor(
             // It used to be computed twice on the Windows-TUN + external-bridge path (in-core TUN
             // exclusions, then again for the bypass routes), paying the whole cost twice.
             val bypassServerIps =
-                if (useEngineController && desktopMode == DesktopMode.WindowsTun) {
+                if (useEngineController && desktopMode != DesktopMode.SystemProxy) {
                     resolveBypassServerIps(location)
                 } else {
                     emptyList()
@@ -756,6 +759,7 @@ class DesktopVpnManager private constructor(
                 DesktopMode.LinuxTun -> startLinuxTun(
                     socksPort = bridgeSettings.port,
                     requestGeneration = requestGeneration,
+                    bypassServerIps = bypassServerIps,
                     socksUsername = bridgeSettings.username,
                     socksPassword = bridgeSettings.password
                 )
@@ -876,23 +880,27 @@ class DesktopVpnManager private constructor(
      * For olcRTC (subprocess), hev was already launched inside the SAME combined pkexec call that
      * started olcRTC (see startOlcRtcProcess/writeLinuxTunLaunchScript), so we only await readiness.
      * For non-olcRTC engines (sing-box, xray, amneziawg, etc.), the core runs in-process via yptuncore,
-     * so hev-socks5-tunnel must be started here as a standalone privileged process.
+     * so hev-socks5-tunnel must be started here as a standalone privileged process. Either way the
+     * stop is ONE privileged call in stopProcess — a second one here would mean a second password.
      */
     private suspend fun startLinuxTun(
-        socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
+        socksPort: Int,
         requestGeneration: Long,
-        socksUsername: String = "",
-        socksPassword: String = ""
+        bypassServerIps: List<String>,
+        socksUsername: String,
+        socksPassword: String
     ) {
         if (process == null) {
-            // In-process engine (sing-box / xray / awg / openflux / etc.): launch standalone hev
-            val hevBinary = DesktopNativeAssets.resolveHevSocks5TunnelBinary()
-            tunProcess = linuxTunController.start(
-                hevBinary = hevBinary,
+            val started = linuxTunController.start(
+                hevBinary = DesktopNativeAssets.resolveHevSocks5TunnelBinary(),
                 socksPort = socksPort,
                 socksUsername = socksUsername,
-                socksPassword = socksPassword
+                socksPassword = socksPassword,
+                bypassPrefixes = bypassServerIps
             )
+            tunProcess = started
+            // hev logs to stderr; left unread, the pipe fills and hev blocks mid-session.
+            startTunLogReader(started)
         } else {
             // olcRTC subprocess: hev was already started by the combined wrapper script
             linuxTunController.awaitReady()
@@ -1062,16 +1070,8 @@ class DesktopVpnManager private constructor(
         when (stoppingDesktopMode) {
             // Cleanup (hev + routes, bundled with olcRTC's own kill into one pkexec call) happens
             // below via stopProcess(process, privileged = ...) — see LinuxTunController.onStopped.
-            // For in-process engines, tunProcess was started separately and is cleaned up here.
             DesktopMode.LinuxTun -> {
-                if (tunProcess != null) {
-                    runCatching {
-                        linuxTunController.stop(tunProcess)
-                    }.onFailure {
-                        addLog("Linux TUN stop failed: ${it.message}")
-                    }
-                    tunProcess = null
-                }
+                tunProcess = null
             }
             DesktopMode.WindowsTun -> {
                 runCatching {
@@ -1394,6 +1394,8 @@ class DesktopVpnManager private constructor(
                     if (pid != null) appendLine(killWithEscalationScript(pid))
                     linuxTunController.privilegedCleanupCommands().forEach { appendLine(it) }
                 }
+                // Nothing ever ran as root (e.g. the password prompt was dismissed): don't ask again.
+                if (script.isBlank()) return@withContext
                 val runtimeDir = DesktopPaths.appDataDir().resolve("runtime")
                 Files.createDirectories(runtimeDir)
                 val scriptFile = Files.createTempFile(runtimeDir, "linux-tun-stop-", ".sh")
