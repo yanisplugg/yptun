@@ -36,17 +36,17 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 
 ---
 
-## What's new in 3.2.1
+## What's new in 3.5.0
 
 | | |
 |---|---|
-| **Windows client** | Installer (en/ru/zh/fa) and a portable build as a **single `.exe`**, x64 and native ARM64. Two modes: "Tunnel" — its own network adapter, like on the phone — and "Proxy" — a local SOCKS5 + HTTP endpoint that needs no administrator rights. |
-| **Per-process split** | The desktop counterpart of split tunneling: chosen programs go around the tunnel — or, the other way round, only they go through it. |
-| **Tray menu + global hotkey** | Status, connect, server switching, "My IP" and settings straight from the tray. A global shortcut toggles the VPN from any application. |
-| **Cores updated** | xray-core 26.7.28, sing-box 1.13.18, freeturn 2.1.1, olcRTC. QUIC (Hysteria2 / TUIC / DoQ / HTTP3) is now built on every platform. |
-| **FakeDNS no longer leaks past the tunnel** | A synthetic FakeDNS address could match a "private addresses → direct" rule, so the connection left the tunnel and apps reported an untrusted certificate. The FakeDNS table also survives a reconnect now. |
-| **Routing** | Rule-sets are fetched through the tunnel instead of directly, and `asn:` works on the desktop too. |
-| **Desktop delta updates** | An update downloads a few megabytes instead of the whole installer. |
+| **WDTT Plus replaces WDTT** | Client and server on Android and desktop: an "RT network" mode (TURN/TLS and TCP, UDP as fallback), a Cloudflare WARP fallback, backup VK hashes, your own VK IDs and keys, a manual TURN address. ⚠️ An old WDTT server does not work with the new client — reinstall it with the "Auto-install" button in the location settings. freeturn locations are not affected. |
+| **New OpenFlux engine** | A TCP tunnel to your own exit node through Yandex Docs or a MAX call — for when everything else is blocked. The node installs on a VPS in one tap, DNS goes through the tunnel itself, and "Proxy over OpenFlux" adds end-to-end encryption. Experimental and not fast. |
+| **QR scanner rewritten** | zxing-cpp recognition reads blurry, tilted, dense and inverted codes; tap to focus, pinch to zoom, torch, automatic zoom on flagships with large sensors. It also accepts the QR codes the app itself draws (`yptun://`, `hysteria2://`, `naive+https://`, `tt://`, `happ://`). |
+| **VK-TURN** | The second proxy on top of AmneziaWG can go through Xray (xhttp and raw config), the exit MTU is capped at 1200, freeturn connects faster. An AmneziaWG exit without a second proxy no longer loses DNS. |
+| **Routing from JSON subscriptions** | Every server of a subscription now gets the full config with its rules, not only xhttp ones. Russian sites that a subscription routes through `dns.hosts` open directly again in "IPv4 only" mode. |
+| **Subscriptions keep their servers** | When a subscription grows, the last server no longer disappears and the selected one no longer jumps to its neighbour. Thanks @Zamotashka (#41). |
+| **Smaller fixes** | Half of the screen went black after pasting in the location editor (#40); on Windows the VK captcha opens in the browser instead of an Explorer window. |
 
 ---
 
@@ -83,6 +83,41 @@ Grab the latest signed APK from the **[releases page](https://github.com/yanispl
 | `universal` | One file for everything (largest) |
 
 Minimum is **Android 6.0** (API 23).
+
+---
+
+## Permissions and why they are needed
+
+YPtun asks only for what a specific feature cannot work without. Camera, notifications, unrestricted battery use and installing updates are requested when you use that feature, not at install time.
+
+### Android
+
+| Permission | Why |
+|---|---|
+| **VPN** (`BIND_VPN_SERVICE`) | The system "Allow VPN connection" prompt on the first connect. Without it the app cannot raise the tunnel and route traffic through it. |
+| **Internet and network state** (`INTERNET`, `ACCESS_NETWORK_STATE`) | Connecting to servers, pings, fetching subscriptions; reconnecting when you switch between Wi-Fi and mobile data. |
+| **Running in the background** (`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `WAKE_LOCK`) | The VPN and the Telegram proxy run as services with a notification so the system does not stop them while the screen is off. |
+| **Notifications** (`POST_NOTIFICATIONS`, Android 13+) | The connection notification with speed and a disconnect button — Android requires it for a background service. |
+| **Unrestricted battery** (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) | Only from a button in the settings: a Doze exemption so the tunnel does not drop overnight. Never requested without your tap. |
+| **Camera** (`CAMERA`) | The QR scanner for importing servers. Requested the first time you open the scanner; frames are processed on the phone and never sent anywhere. Without a camera you can import a QR from an image file. |
+| **Installed apps** (`QUERY_ALL_PACKAGES`) | Split tunneling: listing every installed app, including system ones without an icon, so you can pick which go through the VPN. The list never leaves the phone. |
+| **Install apps** (`REQUEST_INSTALL_PACKAGES`) | In-app updates: the downloaded APK is handed to the system installer, which still asks you to confirm. |
+| **Tasks after reboot** (`RECEIVE_BOOT_COMPLETED`, `FOREGROUND_SERVICE_DATA_SYNC`) | Added by the WorkManager library so a periodic task survives a reboot. There is one such task — the daily check-in for subscriptions with a Happ `providerid` (see below). YPtun has no autostart of its own. |
+| **Data migration** (`org.olcbox.app.permission.MIGRATION`) | The app's own signature-level permission: it moves settings from the old `org.olcbox.app` install to the new `org.yptun.app`. Only an APK with the same signature can read that data. |
+
+### Windows
+
+| Right | Why |
+|---|---|
+| **Administrator** (UAC) | Only for "Tunnel" mode: creating the network adapter (wintun) and adding routes. The prompt appears once at launch when that mode is selected. "Proxy" mode needs no administrator rights. |
+| **System proxy** | In "Proxy" mode the app sets the Windows proxy for the current user and restores the previous settings on disconnect. If the app crashed, the leftover proxy is removed on the next launch. |
+| **Process list** | Per-process split tunneling — and detecting another running VPN client that breaks the connection. The app offers to close it but never terminates anything without your consent. |
+
+### What the app contacts besides your servers
+
+- **GitHub** — update checks and, by default, the routing lists (geoip/geosite, ASN).
+- **`check.happ-proxy.com`** — only if a subscription carries a Happ `providerid`: once a day, like Happ itself, the app sends a check-in with the same device data the subscription already receives (HWID, OS, model, app version). Without a `providerid` there is no such request.
+- **Services of the connection method you chose** — VK (VK-TURN), Cloudflare (Telegram over WARP), call services (olcRTC), Yandex Docs or MAX (OpenFlux).
 
 ---
 
@@ -130,7 +165,7 @@ Everything needed is already vendored (`cores`, `olcrtc`, `sing-box`, `awgproxy`
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.2.1 -Polcbox.versionCode=322
+  -Polcbox.version=3.5.0 -Polcbox.versionCode=352
 ```
 
 APKs land in `YPtun/androidApp/build/outputs/apk/release/`.
@@ -224,7 +259,7 @@ Signed are the Windows installer and portable built by [GitHub Actions](.github/
 - Committers and reviewers: [repository contributors](https://github.com/yanisplugg/olcvpn-client/graphs/contributors)
 - Approvers: [repository owner](https://github.com/yanisplugg)
 
-Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user (their servers, subscriptions and the circumvention services they choose), apart from checking GitHub for updates.
+Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user (their servers, subscriptions and the circumvention services they choose), apart from checking GitHub for updates. Details are in [Permissions and why they are needed](#permissions-and-why-they-are-needed).
 
 ## License
 

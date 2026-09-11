@@ -36,17 +36,17 @@
 
 ---
 
-## 3.2.1 新功能
+## 3.5.0 新功能
 
 | | |
 |---|---|
-| **Windows 客户端** | 安装程序（中/英/俄/波斯语）以及**单文件 `.exe`** 便携版，支持 x64 与原生 ARM64。两种模式：「隧道」——像手机一样创建自己的网络适配器；「代理」——本地 SOCKS5 + HTTP，无需管理员权限。 |
-| **按进程分流** | 桌面端的分应用代理：所选程序绕过隧道，或者反过来只让它们走隧道。 |
-| **托盘菜单 + 全局快捷键** | 状态、连接、切换服务器、「我的 IP」和设置都可从托盘直接操作。全局快捷键可在任意应用中开关 VPN。 |
-| **内核更新** | xray-core 26.7.28、sing-box 1.13.18、freeturn 2.1.1、olcRTC。QUIC（Hysteria2 / TUIC / DoQ / HTTP3）已在所有平台编译。 |
-| **FakeDNS 不再漏到隧道之外** | FakeDNS 的合成地址可能命中「私有地址 → 直连」规则，导致连接绕过隧道，应用报告证书不受信任。FakeDNS 映射表现在也能在重连后保留。 |
-| **路由** | 规则集（rule-set）改为通过隧道下载，`asn:` 在桌面端同样可用。 |
-| **桌面增量更新** | 更新只下载几 MB，而不是整个安装包。 |
+| **WDTT Plus 取代 WDTT** | Android 与桌面端的客户端和服务端：「RT 网络」模式（TURN/TLS 与 TCP，UDP 作为备用）、Cloudflare WARP 备用、备用 VK 哈希、自定义 VK ID 与密钥、手动 TURN 地址。⚠️ 旧版 WDTT 服务端与新客户端不兼容 —— 请在节点设置中点「自动安装」重新安装服务端。freeturn 节点不受影响。 |
+| **新引擎 OpenFlux** | 通过 Yandex 文档或 MAX 通话连到你自己的出口节点的 TCP 隧道 —— 用于其他方式全被封锁的情况。节点可一键装到 VPS，DNS 走隧道本身，「OpenFlux 上的代理」可再加一层端到端加密。实验性功能，速度不快。 |
+| **二维码扫描器重写** | 采用 zxing-cpp，可识别模糊、倾斜、密集和反色的二维码；点按对焦、双指缩放、手电筒，大底旗舰机会自动放大。也能识别应用自己生成的二维码（`yptun://`、`hysteria2://`、`naive+https://`、`tt://`、`happ://`）。 |
+| **VK-TURN** | AmneziaWG 之上的第二代理可经由 Xray（xhttp 与原始配置），出口 MTU 限制为 1200，freeturn 连接更快。不带第二代理的 AmneziaWG 出口不再丢失 DNS。 |
+| **JSON 订阅中的分流** | 订阅中的每个服务器现在都会拿到带规则的完整配置，而不只是 xhttp 服务器。订阅通过 `dns.hosts` 指定的俄罗斯网站在「仅 IPv4」模式下重新可以直连。 |
+| **订阅不再丢服务器** | 订阅中服务器变多时，最后一个不再消失，已选服务器也不再跳到相邻的那个。感谢 @Zamotashka（#41）。 |
+| **小修复** | 在节点编辑器中粘贴后半个屏幕变黑（#40）；Windows 上 VK 验证码改在浏览器中打开，而不是资源管理器窗口。 |
 
 ---
 
@@ -83,6 +83,41 @@
 | `universal` | 一个文件通吃（体积最大） |
 
 最低 **Android 6.0**（API 23）。
+
+---
+
+## 权限及其用途
+
+YPtun 只申请某项功能缺之不可的权限。相机、通知、不受电池限制和安装更新都在你使用对应功能时才会申请，而不是在安装时。
+
+### Android
+
+| 权限 | 用途 |
+|---|---|
+| **VPN**（`BIND_VPN_SERVICE`） | 首次连接时系统弹出的「允许 VPN 连接」。没有它，应用无法建立隧道并让流量经过隧道。 |
+| **网络与网络状态**（`INTERNET`、`ACCESS_NETWORK_STATE`） | 连接服务器、测延迟、拉取订阅；在 Wi-Fi 与移动数据之间切换时重新连接。 |
+| **后台运行**（`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_SPECIAL_USE`、`WAKE_LOCK`） | VPN 和 Telegram 代理以带通知的服务形式运行，避免息屏时被系统停止。 |
+| **通知**（`POST_NOTIFICATIONS`，Android 13+） | 显示网速和断开按钮的连接通知 —— Android 要求后台服务必须有它。 |
+| **不受电池限制**（`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`） | 仅在设置中点按钮时申请：让系统的 Doze 省电模式不影响隧道，避免夜间断线。不点就不会申请。 |
+| **相机**（`CAMERA`） | 用于导入服务器的二维码扫描器。首次打开扫描器时申请；画面只在手机上处理，不会发送到任何地方。没有相机也可以从图片文件导入二维码。 |
+| **应用列表**（`QUERY_ALL_PACKAGES`） | 分应用代理：列出所有已安装应用（包括没有图标的系统应用），以便选择哪些走 VPN。列表不会离开手机。 |
+| **安装应用**（`REQUEST_INSTALL_PACKAGES`） | 应用内更新：下载的 APK 交给系统安装器，安装器仍会请你确认。 |
+| **重启后的任务**（`RECEIVE_BOOT_COMPLETED`、`FOREGROUND_SERVICE_DATA_SYNC`） | 由 WorkManager 库添加，使定期任务在重启后继续。这样的任务只有一个 —— 为带有 Happ `providerid` 的订阅做每日签到（见下文）。YPtun 自身没有开机自启。 |
+| **数据迁移**（`org.olcbox.app.permission.MIGRATION`） | 应用自己的 signature 级权限：把设置从旧安装 `org.olcbox.app` 迁到新安装 `org.yptun.app`。只有签名相同的 APK 才能读取这些数据。 |
+
+### Windows
+
+| 权限 | 用途 |
+|---|---|
+| **管理员**（UAC） | 仅「隧道」模式需要：创建网络适配器（wintun）并添加路由。选中该模式时，启动时询问一次。「代理」模式无需管理员权限。 |
+| **系统代理** | 「代理」模式下应用为当前用户设置 Windows 代理，断开时恢复原先的设置。若应用崩溃，残留的代理会在下次启动时清除。 |
+| **进程列表** | 按进程分流 —— 以及检测正在运行、妨碍连接的其他 VPN 客户端。应用会提议关闭它，但未经你同意不会结束任何进程。 |
+
+### 除你的服务器外，应用还会访问
+
+- **GitHub** —— 检查更新，以及（默认情况下）分流用的列表（geoip/geosite、ASN）。
+- **`check.happ-proxy.com`** —— 仅当订阅带有 Happ `providerid` 时：应用会像 Happ 一样每天发送一次签到，附带的设备信息与订阅本身收到的相同（HWID、系统、型号、应用版本）。没有 `providerid` 就不会有此请求。
+- **你所选连接方式用到的服务** —— VK（VK-TURN）、Cloudflare（经 WARP 的 Telegram）、通话服务（olcRTC）、Yandex 文档或 MAX（OpenFlux）。
 
 ---
 
@@ -130,7 +165,7 @@
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.2.1 -Polcbox.versionCode=322
+  -Polcbox.version=3.5.0 -Polcbox.versionCode=352
 ```
 
 APK 会生成在 `YPtun/androidApp/build/outputs/apk/release/`。
