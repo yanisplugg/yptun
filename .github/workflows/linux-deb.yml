@@ -65,10 +65,14 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fakeroot dpkg-dev binutils file wget
+          sudo apt-get install -y --no-install-recommends fakeroot dpkg-dev binutils file wget libfuse2
           if [ "${{ matrix.arch }}" = "amd64" ]; then
-            sudo wget -O /usr/local/bin/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage || true
-            sudo chmod +x /usr/local/bin/appimagetool || true
+            sudo wget -O /usr/local/bin/appimagetool.bin https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage || true
+            if [ -f /usr/local/bin/appimagetool.bin ]; then
+              sudo chmod +x /usr/local/bin/appimagetool.bin
+              sudo sh -c 'printf "#!/bin/sh\nexec /usr/local/bin/appimagetool.bin --appimage-extract-and-run \"\$@\"\n" > /usr/local/bin/appimagetool'
+              sudo chmod +x /usr/local/bin/appimagetool
+            fi
           fi
 
       # Gradle configures every project including the Android modules, and AGP refuses to configure
@@ -96,7 +100,7 @@ jobs:
           chmod +x ./gradlew
           ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseDeb --stacktrace
           if [ "${{ matrix.arch }}" = "amd64" ] && [ -x /usr/local/bin/appimagetool ]; then
-            APPIMAGETOOL="/usr/local/bin/appimagetool --appimage-extract-and-run" ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseLinuxAppImage || true
+            ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseLinuxAppImage || true
           fi
 
       - name: Verify the package

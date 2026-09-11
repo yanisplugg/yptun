@@ -438,12 +438,12 @@ private fun runApp(args: Array<String>) = application {
         }
         val startupLink = args.firstOrNull { it.contains("://") || it.startsWith("vless:") || it.startsWith("vmess:") }
         if (!startupLink.isNullOrBlank()) {
-            dependencies.homeViewModel.importConfig(startupLink) {
+            dependencies.homeViewModel.onImportFullConfig(startupLink, onComplete = {
                 dependencies.locationViewModel.loadLocations {
                     dependencies.homeViewModel.loadCurrentConfig()
                 }
                 desktopNotice = strings().importedFromClipboard
-            }
+            })
         }
         // Launch check, then re-check while the app sits in the tray; checkUpdate skips ticks until
         // the chosen interval (1–24 h) has passed.
@@ -833,12 +833,12 @@ private fun runApp(args: Array<String>) = application {
                 val link = cmd.removePrefix("show").trim()
                 if (link.isNotBlank() && (link.contains("://") || link.startsWith("vless:") || link.startsWith("vmess:"))) {
                     scope.launch {
-                        dependencies.homeViewModel.importConfig(link) {
+                        dependencies.homeViewModel.onImportFullConfig(link, onComplete = {
                             dependencies.locationViewModel.loadLocations {
                                 dependencies.homeViewModel.loadCurrentConfig()
                             }
                             desktopNotice = strings().importedFromClipboard
-                        }
+                        })
                     }
                 }
             }
