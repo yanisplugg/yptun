@@ -253,8 +253,12 @@ class IosVpnManager(
         }
         val m = existing ?: if (createIfMissing) NETunnelProviderManager() else return null
         if (existing == null || !m.enabled) {
+            val tunnelId = platform.Foundation.NSBundle.mainBundle.bundleIdentifier
+                ?.takeIf { it.isNotBlank() }
+                ?.let { "$it.tunnel" }
+                ?: TUNNEL_BUNDLE_ID
             m.setProtocolConfiguration(NETunnelProviderProtocol().apply {
-                setProviderBundleIdentifier(TUNNEL_BUNDLE_ID)
+                setProviderBundleIdentifier(tunnelId)
                 setServerAddress("YPtun")
             })
             m.setLocalizedDescription("YPtun")
