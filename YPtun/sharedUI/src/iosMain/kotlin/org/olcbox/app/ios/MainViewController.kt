@@ -67,6 +67,14 @@ class IosAppSession internal constructor(
         IosPlatformHooks.core = coreBridge
     }
 
+    fun startVpn() {
+        dependencies.vpnManager.startVpn()
+    }
+
+    fun stopVpn() {
+        dependencies.vpnManager.stopVpn()
+    }
+
     fun createViewController(): UIViewController {
         return ComposeUIViewController {
             IosApp(platformBridge, dependencies)

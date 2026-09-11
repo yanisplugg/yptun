@@ -50,6 +50,14 @@ import platform.NetworkExtension.NEVPNStatusDidChangeNotification
 import platform.NetworkExtension.NEVPNStatusDisconnecting
 import platform.NetworkExtension.NEVPNStatusReasserting
 import platform.UIKit.UIApplication
+import platform.UIKit.UIImpactFeedbackGenerator
+import platform.UIKit.UIImpactFeedbackStyle
+import platform.UIKit.UIImpactFeedbackStyleLight
+import platform.UIKit.UIImpactFeedbackStyleMedium
+import platform.UIKit.UINotificationFeedbackGenerator
+import platform.UIKit.UINotificationFeedbackType
+import platform.UIKit.UINotificationFeedbackTypeError
+import platform.UIKit.UINotificationFeedbackTypeSuccess
 import kotlin.coroutines.resume
 
 /**
@@ -103,9 +111,26 @@ class IosVpnManager(
         }
     }
 
+    private fun triggerImpactHaptic(style: UIImpactFeedbackStyle) {
+        runCatching {
+            val generator = UIImpactFeedbackGenerator(style)
+            generator.prepare()
+            generator.impactOccurred()
+        }
+    }
+
+    private fun triggerNotificationHaptic(type: UINotificationFeedbackType) {
+        runCatching {
+            val generator = UINotificationFeedbackGenerator()
+            generator.prepare()
+            generator.notificationOccurred(type)
+        }
+    }
+
     override fun needsPermission(): Boolean = false
 
     override fun startVpn() {
+        triggerImpactHaptic(UIImpactFeedbackStyleMedium)
         scope.launch {
             val active = locationsRepository.getActiveLocation()?.location?.normalized()
             if (active == null || !active.isComplete()) {
@@ -146,6 +171,7 @@ class IosVpnManager(
     }
 
     override fun stopVpn() {
+        triggerImpactHaptic(UIImpactFeedbackStyleLight)
         scope.launch {
             setStatus(VpnStatus.Stopping)
             manager?.connection?.stopVPNTunnel() ?: setStatus(VpnStatus.Disconnected)
@@ -301,13 +327,19 @@ class IosVpnManager(
                 _connectedSince.value = m.connection.connectedDate
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
                 setStatus(VpnStatus.Connected)
+                triggerNotificationHaptic(UINotificationFeedbackTypeSuccess)
             }
             NEVPNStatusReasserting -> setStatus(VpnStatus.Reconnecting)
             NEVPNStatusDisconnecting -> setStatus(VpnStatus.Stopping)
             else -> {
                 _connectedSince.value = 0L
                 val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
-                setStatus(if (wasConnecting && failure.isNotEmpty()) VpnStatus.Error(failure) else VpnStatus.Disconnected)
+                if (wasConnecting && failure.isNotEmpty()) {
+                    setStatus(VpnStatus.Error(failure))
+                    triggerNotificationHaptic(UINotificationFeedbackTypeError)
+                } else {
+                    setStatus(VpnStatus.Disconnected)
+                }
                 wasConnecting = false
             }
         }

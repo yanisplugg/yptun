@@ -28,6 +28,36 @@
 	<string>Фотографии нужны для сканирования QR-кодов с конфигурациями из медиатеки.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>org.yptun.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>yptun</string>
+			</array>
+		</dict>
+	</array>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>org.yptun.control.start</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Подключить VPN</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>bolt.fill</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>org.yptun.control.stop</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Отключить VPN</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>bolt.slash.fill</string>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
