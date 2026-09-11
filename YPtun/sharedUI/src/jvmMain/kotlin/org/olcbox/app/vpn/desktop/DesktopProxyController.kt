@@ -33,7 +33,7 @@ internal interface DesktopProxyController {
             return when (DesktopPaths.os) {
                 DesktopOs.MacOS -> MacOsProxyController()
                 DesktopOs.Windows -> WindowsProxyController()
-                DesktopOs.Linux -> UnsupportedProxyController()
+                DesktopOs.Linux -> LinuxProxyController()
                 DesktopOs.Other -> UnsupportedProxyController()
             }
         }
@@ -42,11 +42,197 @@ internal interface DesktopProxyController {
 
 internal class UnsupportedProxyController : DesktopProxyController {
     override suspend fun enable(httpProxyHostPort: String, pacUrl: String) {
-        error("System proxy mode supports macOS and Windows")
+        error("System proxy mode is not supported on this platform")
     }
 
     override suspend fun restore() = Unit
     override suspend fun clearStaleProxy() = Unit
+}
+
+internal data class LinuxGnomeProxyState(
+    val mode: String,
+    val httpHost: String,
+    val httpPort: Int,
+    val httpsHost: String,
+    val httpsPort: Int,
+    val ignoreHosts: String
+) {
+    fun looksLikeOurs(): Boolean =
+        (httpHost.contains("127.0.0.1") || httpHost.contains("localhost")) &&
+        (mode == "'manual'" || mode == "manual")
+}
+
+internal data class LinuxKdeProxyState(
+    val proxyType: String,
+    val httpProxy: String,
+    val httpsProxy: String
+) {
+    fun looksLikeOurs(): Boolean =
+        (httpProxy.contains("127.0.0.1") || httpProxy.contains("localhost")) &&
+        (proxyType == "1" || proxyType == "2")
+}
+
+internal class LinuxProxyController : DesktopProxyController {
+    private var gnomeBackup: LinuxGnomeProxyState? = null
+    private var kdeBackup: LinuxKdeProxyState? = null
+
+    override suspend fun enable(httpProxyHostPort: String, pacUrl: String) {
+        val host = httpProxyHostPort.substringBefore(':')
+        val port = httpProxyHostPort.substringAfter(':', "8080").toIntOrNull() ?: 8080
+
+        if (hasGsettings()) {
+            val current = readGnomeState()
+            if (current != null && !current.looksLikeOurs()) {
+                gnomeBackup = current
+            }
+            enableGnomeProxyCommands(host, port).forEach { cmd ->
+                runCatching { runCommand(cmd) }
+            }
+        }
+
+        if (hasKdeConfig()) {
+            val current = readKdeState()
+            if (current != null && !current.looksLikeOurs()) {
+                kdeBackup = current
+            }
+            enableKdeProxyCommands("http://$httpProxyHostPort").forEach { cmd ->
+                runCatching { runCommand(cmd) }
+            }
+        }
+    }
+
+    override suspend fun restore() {
+        gnomeBackup?.let { state ->
+            restoreGnomeProxyCommands(state).forEach { cmd ->
+                runCatching { runCommand(cmd) }
+            }
+            gnomeBackup = null
+        } ?: run {
+            if (hasGsettings()) {
+                disableGnomeProxyCommands().forEach { cmd ->
+                    runCatching { runCommand(cmd) }
+                }
+            }
+        }
+
+        kdeBackup?.let { state ->
+            restoreKdeProxyCommands(state).forEach { cmd ->
+                runCatching { runCommand(cmd) }
+            }
+            kdeBackup = null
+        } ?: run {
+            if (hasKdeConfig()) {
+                disableKdeProxyCommands().forEach { cmd ->
+                    runCatching { runCommand(cmd) }
+                }
+            }
+        }
+    }
+
+    override suspend fun clearStaleProxy() {
+        if (hasGsettings()) {
+            val current = readGnomeState()
+            if (current != null && current.looksLikeOurs()) {
+                disableGnomeProxyCommands().forEach { cmd ->
+                    runCatching { runCommand(cmd) }
+                }
+            }
+        }
+        if (hasKdeConfig()) {
+            val current = readKdeState()
+            if (current != null && current.looksLikeOurs()) {
+                disableKdeProxyCommands().forEach { cmd ->
+                    runCatching { runCommand(cmd) }
+                }
+            }
+        }
+    }
+
+    private suspend fun hasGsettings(): Boolean = runCatching {
+        val out = runCommand(listOf("which", "gsettings"))
+        out.isNotBlank()
+    }.getOrDefault(false)
+
+    private suspend fun hasKdeConfig(): Boolean = runCatching {
+        val out = runCommand(listOf("which", "kwriteconfig5")).ifBlank {
+            runCatching { runCommand(listOf("which", "kwriteconfig6")) }.getOrDefault("")
+        }
+        out.isNotBlank()
+    }.getOrDefault(false)
+
+    private suspend fun kdeConfigBinary(): String = runCatching {
+        val which6 = runCatching { runCommand(listOf("which", "kwriteconfig6")) }.getOrDefault("")
+        if (which6.isNotBlank()) "kwriteconfig6" else "kwriteconfig5"
+    }.getOrDefault("kwriteconfig5")
+
+    private suspend fun kdeReadBinary(): String = runCatching {
+        val which6 = runCatching { runCommand(listOf("which", "kreadconfig6")) }.getOrDefault("")
+        if (which6.isNotBlank()) "kreadconfig6" else "kreadconfig5"
+    }.getOrDefault("kreadconfig5")
+
+    private suspend fun readGnomeState(): LinuxGnomeProxyState? = runCatching {
+        val mode = runCommand(listOf("gsettings", "get", "org.gnome.system.proxy", "mode")).trim()
+        val httpHost = runCommand(listOf("gsettings", "get", "org.gnome.system.proxy.http", "host")).trim()
+        val httpPort = runCommand(listOf("gsettings", "get", "org.gnome.system.proxy.http", "port")).trim().toIntOrNull() ?: 0
+        val httpsHost = runCommand(listOf("gsettings", "get", "org.gnome.system.proxy.https", "host")).trim()
+        val httpsPort = runCommand(listOf("gsettings", "get", "org.gnome.system.proxy.https", "port")).trim().toIntOrNull() ?: 0
+        val ignoreHosts = runCommand(listOf("gsettings", "get", "org.gnome.system.proxy", "ignore-hosts")).trim()
+        LinuxGnomeProxyState(mode, httpHost, httpPort, httpsHost, httpsPort, ignoreHosts)
+    }.getOrNull()
+
+    private suspend fun readKdeState(): LinuxKdeProxyState? = runCatching {
+        val readBin = kdeReadBinary()
+        val proxyType = runCommand(listOf(readBin, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType")).trim()
+        val httpProxy = runCommand(listOf(readBin, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy")).trim()
+        val httpsProxy = runCommand(listOf(readBin, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy")).trim()
+        LinuxKdeProxyState(proxyType, httpProxy, httpsProxy)
+    }.getOrNull()
+
+    companion object {
+        fun enableGnomeProxyCommands(host: String, port: Int): List<List<String>> = listOf(
+            listOf("gsettings", "set", "org.gnome.system.proxy.http", "host", host),
+            listOf("gsettings", "set", "org.gnome.system.proxy.http", "port", port.toString()),
+            listOf("gsettings", "set", "org.gnome.system.proxy.https", "host", host),
+            listOf("gsettings", "set", "org.gnome.system.proxy.https", "port", port.toString()),
+            listOf("gsettings", "set", "org.gnome.system.proxy", "ignore-hosts", "['localhost', '127.0.0.0/8', '::1']"),
+            listOf("gsettings", "set", "org.gnome.system.proxy", "mode", "manual")
+        )
+
+        fun disableGnomeProxyCommands(): List<List<String>> = listOf(
+            listOf("gsettings", "set", "org.gnome.system.proxy", "mode", "none")
+        )
+
+        fun restoreGnomeProxyCommands(state: LinuxGnomeProxyState): List<List<String>> = buildList {
+            if (state.mode == "'none'" || state.mode == "none") {
+                add(listOf("gsettings", "set", "org.gnome.system.proxy", "mode", "none"))
+            } else {
+                add(listOf("gsettings", "set", "org.gnome.system.proxy.http", "host", state.httpHost.trim('\'')))
+                add(listOf("gsettings", "set", "org.gnome.system.proxy.http", "port", state.httpPort.toString()))
+                add(listOf("gsettings", "set", "org.gnome.system.proxy.https", "host", state.httpsHost.trim('\'')))
+                add(listOf("gsettings", "set", "org.gnome.system.proxy.https", "port", state.httpsPort.toString()))
+                add(listOf("gsettings", "set", "org.gnome.system.proxy", "ignore-hosts", state.ignoreHosts))
+                add(listOf("gsettings", "set", "org.gnome.system.proxy", "mode", state.mode.trim('\'')))
+            }
+        }
+
+        fun enableKdeProxyCommands(proxyUrl: String, binary: String = "kwriteconfig5"): List<List<String>> = listOf(
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"),
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", proxyUrl),
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", proxyUrl)
+        )
+
+        fun disableKdeProxyCommands(binary: String = "kwriteconfig5"): List<List<String>> = listOf(
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"),
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", ""),
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", "")
+        )
+
+        fun restoreKdeProxyCommands(state: LinuxKdeProxyState, binary: String = "kwriteconfig5"): List<List<String>> = listOf(
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", state.proxyType.ifBlank { "0" }),
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", state.httpProxy),
+            listOf(binary, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", state.httpsProxy)
+        )
+    }
 }
 
 internal data class MacOsAutoProxyState(
