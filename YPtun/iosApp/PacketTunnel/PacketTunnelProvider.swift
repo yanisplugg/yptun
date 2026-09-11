@@ -2,6 +2,7 @@ import Foundation
 import NetworkExtension
 import SharedUI
 import Tun2SocksKit
+import WidgetKit
 
 /// The system VPN. Everything that decides HOW to connect lives in Kotlin (`IosTunnelSession`); this
 /// class only hands it the cores and runs hev-socks5-tunnel, which moves the utun's packets into the
@@ -26,6 +27,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 NSLog("YPtun: hev-socks5-tunnel exited with \(code)")
             }
             completionHandler(nil)
+            PacketTunnelProvider.refreshWidgets()
+        }
+    }
+
+    /// A start/stop from Settings or the widget happens without the app — refresh the widget here too.
+    private static func refreshWidgets() {
+        WidgetCenter.shared.reloadAllTimelines()
+        if #available(iOS 18.0, *) {
+            ControlCenter.shared.reloadAllControls()
         }
     }
 
@@ -34,6 +44,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         session?.stop()
         session = nil
         completionHandler()
+        PacketTunnelProvider.refreshWidgets()
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {

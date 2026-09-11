@@ -1,11 +1,13 @@
 # XcodeGen spec for the iOS app — the single source of the Xcode project (`xcodegen generate` in this
 # directory writes YPtun.xcodeproj; the generated project is not committed).
 #
-# Two targets:
+# Three targets:
 #   YPtun         – the Compose app (Kotlin SharedUI.framework); pings servers with the cores in-process.
 #   PacketTunnel  – the system VPN (NEPacketTunnelProvider): Kotlin picks/starts the cores
 #                   (IosTunnelSession), hev-socks5-tunnel (Tun2SocksKit) feeds the utun into their SOCKS5.
-# Both link Coreapi.xcframework (every Go core, `gomobile bind ./coreapi`) and SharedUI.framework (static).
+#   YPtunWidget   – WidgetKit: home-screen status widget (+ connect button on iOS 17) and the Control
+#                   Center toggle (iOS 18). Pure Swift, links neither Kotlin nor the cores.
+# The app and PacketTunnel link Coreapi.xcframework (every Go core, `gomobile bind ./coreapi`) and SharedUI.framework (static).
 #
 # Build the Go framework first (macOS + Xcode + gomobile):  ../gradlew -p .. :sharedUI:buildCoresIosXcframework
 name: YPtun
@@ -17,8 +19,9 @@ options:
 
 settings:
   base:
+    # CI stamps both from YPtun/gradle.properties (olcbox.version / olcbox.versionCode).
     MARKETING_VERSION: "3.5.0"
-    CURRENT_PROJECT_VERSION: "352"
+    CURRENT_PROJECT_VERSION: "353"
     SWIFT_VERSION: "5.0"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     CODE_SIGN_STYLE: Automatic
@@ -66,6 +69,7 @@ targets:
         LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks"]
     dependencies:
       - target: PacketTunnel
+      - target: YPtunWidget
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
         embed: false
     preBuildScripts:
@@ -111,3 +115,22 @@ targets:
             *) TARGET=IosArm64 ;;
           esac
           ./gradlew ":sharedUI:link${TYPE}Framework${TARGET}" --no-configuration-cache
+
+  YPtunWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: YPtunWidget
+    settings:
+      base:
+        PRODUCT_NAME: YPtunWidget
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.widget
+        INFOPLIST_FILE: YPtunWidget/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: YPtunWidget/YPtunWidget.entitlements
+        # Plain Swift: NOT the project-wide flags (they link the Kotlin framework).
+        OTHER_LDFLAGS: ["-ObjC"]
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"]
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework

@@ -87,6 +87,8 @@ jobs:
         working-directory: YPtun/iosApp
         run: |
           mkdir -p build
+          VERSION=$(grep '^olcbox.version=' ../gradle.properties | cut -d= -f2 | tr -d '\r')
+          CODE=$(grep '^olcbox.versionCode=' ../gradle.properties | cut -d= -f2 | tr -d '\r')
           xcodebuild \
             -project YPtun.xcodeproj \
             -scheme YPtun \
@@ -94,6 +96,7 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/dd \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$CODE" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build | tee build/xcodebuild.log | grep -E "error:|warning: .*(Swift|swift)|\*\* BUILD" || true
           test -d build/dd/Build/Products/Release-iphoneos/YPtun.app
@@ -101,10 +104,11 @@ jobs:
       - name: Pack .ipa
         working-directory: YPtun/iosApp
         run: |
-          VERSION=$(grep '^olcbox.version=' ../gradle.properties | cut -d= -f2)
+          VERSION=$(grep '^olcbox.version=' ../gradle.properties | cut -d= -f2 | tr -d '\r')
           mkdir -p Payload
           cp -R build/dd/Build/Products/Release-iphoneos/YPtun.app Payload/
           test -d Payload/YPtun.app/PlugIns/PacketTunnel.appex
+          test -d Payload/YPtun.app/PlugIns/YPtunWidget.appex
           zip -qry "YPtun-$VERSION-unsigned.ipa" Payload
           ls -la *.ipa
           du -sh Payload/YPtun.app Payload/YPtun.app/PlugIns/PacketTunnel.appex

@@ -94,6 +94,11 @@ class IosVpnManager(
         scope.launch {
             runCatching { loadManager(createIfMissing = false) }
                 .onFailure { addLog("VPN profile load failed: ${it.message}") }
+            // The widget / Control Center toggle starts the tunnel without the app, so the extension
+            // must already find a request for the current location.
+            locationsRepository.getActiveLocation()?.location?.normalized()
+                ?.takeIf { it.isComplete() }
+                ?.let { runCatching { publishRequest(it) } }
             startLogTail()
         }
     }
@@ -114,11 +119,7 @@ class IosVpnManager(
             }
             setStatus(VpnStatus.Connecting)
             val result = runCatching {
-                val request = IosTunnelRequest(active, locationsRepository.getDeviceIdentity())
-                IosSharedStore.writeText(
-                    IosTunnelSession.REQUEST_FILE,
-                    IosTunnelSession.json.encodeToString(IosTunnelRequest.serializer(), request)
-                )
+                publishRequest(active)
                 IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
                 val m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
                 val connection = m.connection
@@ -206,6 +207,24 @@ class IosVpnManager(
             }.getOrNull()
         } ?: return null
         return core.xrayMeasureDelay(configJson, url, method, PING_TIMEOUT_MS).takeIf { it >= 0 }
+    }
+
+    /**
+     * The connect request the extension reads (location + device id) and the name the widget shows —
+     * both in the App Group container.
+     */
+    private suspend fun publishRequest(location: LocationConfig) {
+        val request = IosTunnelRequest(location, locationsRepository.getDeviceIdentity())
+        IosSharedStore.writeText(
+            IosTunnelSession.REQUEST_FILE,
+            IosTunnelSession.json.encodeToString(IosTunnelRequest.serializer(), request)
+        )
+        IosSharedStore.writeText(
+            WIDGET_FILE,
+            kotlinx.serialization.json.buildJsonObject {
+                put("name", kotlinx.serialization.json.JsonPrimitive(location.displayName()))
+            }.toString()
+        )
     }
 
     private suspend fun rtcPing(config: LocationConfig): Long? =
@@ -363,6 +382,8 @@ class IosVpnManager(
 
     private companion object {
         const val TUNNEL_BUNDLE_ID = "org.yptun.app.tunnel"
+        /** Read by the WidgetKit extension (YPtunWidget/VpnWidget.swift). */
+        const val WIDGET_FILE = "widget.json"
         const val MAX_LOG_LINES = 500
         const val PING_TIMEOUT_MS = 8_000
         const val HTTP_PING_URL = "https://www.google.com/generate_204"
