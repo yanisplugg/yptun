@@ -146,3 +146,31 @@ func TestRawUDPRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+type packetQueue struct{ pkts [][]byte }
+
+func (q *packetQueue) Read(p []byte) (int, error) {
+	if len(q.pkts) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, q.pkts[0])
+	q.pkts = q.pkts[1:]
+	return n, nil
+}
+func (q *packetQueue) Write(p []byte) (int, error) { return len(p), nil }
+func (q *packetQueue) Close() error                { return nil }
+
+// The host TUN still captures ::/0; those packets must not reach the (IPv4-only) Raw relay.
+func TestIPv4OnlySkipsIPv6(t *testing.T) {
+	q := &packetQueue{pkts: [][]byte{{0x60, 1}, {0x45, 2}, {0x60, 3}, {0x45, 4}}}
+	r := ipv4Only{q}
+	buf := make([]byte, 16)
+	for _, want := range []byte{2, 4} {
+		if n, err := r.Read(buf); err != nil || n != 2 || buf[1] != want {
+			t.Fatalf("got %v n=%d err=%v, want v4 packet %d", buf[:2], n, err, want)
+		}
+	}
+	if _, err := r.Read(buf); err != io.EOF {
+		t.Fatalf("want EOF, got %v", err)
+	}
+}

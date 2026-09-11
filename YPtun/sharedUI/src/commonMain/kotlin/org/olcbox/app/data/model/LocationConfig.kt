@@ -179,11 +179,13 @@ data class VkTurnConfig(
      * Android gomobile binding and the desktop/iOS core. [listen] is the local UDP address WireGuard dials
      * — or, in Raw mode, the local SOCKS5 (TCP) the core serves the tunnel on.
      */
-    fun wdttCoreOptionsJson(listen: String, deviceId: String): String {
+    fun wdttCoreOptionsJson(listen: String, deviceId: String, rawTun: Boolean = false): String {
         val p = wdttPlus
         return buildJsonObject {
             put("peer", wdttDialAddr())
             put("raw", p.rawMode)
+            // The host hands its TUN fd to the core (Android «Raw напрямую») instead of taking a SOCKS.
+            put("raw_tun", p.rawMode && rawTun)
             put("vk_hashes", vkLink)
             put("password", wdttPassword)
             put("listen", listen)
@@ -236,6 +238,13 @@ data class WdttPlusOptions(
     /** The server's raw port; 0 → [DEFAULT_RAW_PORT] (qWDTT's own default). */
     @SerialName("raw_port")
     val rawPort: Int = 0,
+    /**
+     * «Raw напрямую» (with [rawMode]), Android TUN mode only: the VpnService TUN goes straight to the core as
+     * in qWDTT itself — no tun2socks, proxy core or netstack on the way, so the fastest path, but routing
+     * profiles and the chained proxy do not apply. Anywhere else it runs as plain Raw.
+     */
+    @SerialName("raw_direct")
+    val rawDirect: Boolean = false,
 ) {
     fun rawPortOrDefault(): Int = rawPort.takeIf { it in 1..65535 } ?: DEFAULT_RAW_PORT
 

@@ -301,3 +301,16 @@ func rawPipe(a, b net.Conn) {
 	go cp(b, a)
 	<-done
 }
+
+// ipv4Only drops IPv6 on the way in: the Raw server carries IPv4 only, and the host still routes ::/0
+// into the TUN so IPv6 cannot leak past the VPN. Sending those packets over VK would only waste the relay.
+type ipv4Only struct{ io.ReadWriteCloser }
+
+func (t ipv4Only) Read(p []byte) (int, error) {
+	for {
+		n, err := t.ReadWriteCloser.Read(p)
+		if err != nil || n == 0 || p[0]>>4 != 6 {
+			return n, err
+		}
+	}
+}
