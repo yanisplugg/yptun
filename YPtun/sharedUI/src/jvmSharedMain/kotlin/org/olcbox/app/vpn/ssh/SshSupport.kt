@@ -13,6 +13,22 @@ import java.util.zip.GZIPOutputStream
 internal const val SSH_CONNECT_TIMEOUT_MS = 25_000
 
 /**
+ * Pins JSch's Ed25519/Ed448 signatures, curve25519 key exchange and chacha20-poly1305 to its Bouncy
+ * Castle implementations. JSch otherwise picks them by Java version: Android reports < 15, where the
+ * defaults need BC — which the app did not ship — so they all came up "not available", an Ed25519 key
+ * was never offered and every key login failed with "Auth fail". The desktop used the JDK's own,
+ * which a trimmed runtime may lack too. One implementation, identical everywhere.
+ */
+internal val useBouncyCastleAlgorithms: Unit by lazy {
+    JSch.setConfig("ssh-ed25519", "com.jcraft.jsch.bc.SignatureEd25519")
+    JSch.setConfig("ssh-ed448", "com.jcraft.jsch.bc.SignatureEd448")
+    JSch.setConfig("keypairgen.eddsa", "com.jcraft.jsch.bc.KeyPairGenEdDSA")
+    JSch.setConfig("keypairgen_fromprivate.eddsa", "com.jcraft.jsch.bc.KeyPairGenEdDSA")
+    JSch.setConfig("xdh", "com.jcraft.jsch.bc.XDH")
+    JSch.setConfig("chacha20-poly1305@openssh.com", "com.jcraft.jsch.bc.ChaCha20Poly1305")
+}
+
+/**
  * Opens an authenticated SSH [Session] with password auth, mirroring what OpenSSH/paramiko do so a
  * password that logs in fine from a terminal also logs in here. This is shared by the WDTT and MasterDNS
  * VPS auto-installers (which were each carrying their own slightly-different copy).
@@ -63,6 +79,7 @@ internal fun openSshSession(
         }
     })
 
+    useBouncyCastleAlgorithms
     val jsch = JSch()
     if (useKey) {
         // Load the key into JSch. mwiede's fork parses PEM (RSA/EC/…) and the newer OpenSSH format.

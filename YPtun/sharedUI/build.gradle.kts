@@ -243,6 +243,10 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.core)
                 // mwiede's maintained JSch fork: pure-Java, modern algorithms, no native deps.
                 implementation("com.github.mwiede:jsch:0.2.21")
+                // ssh-ed25519 / curve25519 / chacha20 for JSch on every platform (SshSupport pins JSch to
+                // these). Android had none of them — its runtime reports Java < 15, where JSch needs BC —
+                // so an Ed25519 key was never offered and the VPS auto-install failed with "Auth fail".
+                implementation("org.bouncycastle:bcprov-jdk18on:1.86")
             }
         }
         androidMain.get().dependsOn(jvmSharedMain)
