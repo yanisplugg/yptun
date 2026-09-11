@@ -20,6 +20,7 @@ on:
       - "YPtun/sharedUI/src/commonMain/**"
       - "YPtun/sharedUI/build.gradle.kts"
       - "YPtun/gradle.properties"
+      - "YPtun/gradlew"
       - "cores/**"
 
 permissions:
