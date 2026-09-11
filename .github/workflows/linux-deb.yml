@@ -17,6 +17,8 @@ on:
     branches:
       - pc-client-beta
       - Beta
+      - main
+      - "feature/**"
     paths:
       - ".github/workflows/linux-deb.yml"
       - "YPtun/desktopApp/**"
