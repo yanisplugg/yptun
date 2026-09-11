@@ -753,7 +753,12 @@ class DesktopVpnManager private constructor(
             val bridgeSettings = socksSettings
 
             when (desktopMode) {
-                DesktopMode.LinuxTun -> startLinuxTun(requestGeneration = requestGeneration)
+                DesktopMode.LinuxTun -> startLinuxTun(
+                    socksPort = bridgeSettings.port,
+                    requestGeneration = requestGeneration,
+                    socksUsername = bridgeSettings.username,
+                    socksPassword = bridgeSettings.password
+                )
                 DesktopMode.WindowsTun -> if (engineController.tunHandledInCore) {
                     // sing-box raised the wintun adapter itself (per-process split tunneling);
                     // no external tun2socks needed.
@@ -868,14 +873,30 @@ class DesktopVpnManager private constructor(
     }
 
     /**
-     * hev itself was already launched — backgrounded inside the SAME combined pkexec call that
-     * started olcRTC (see startOlcRtcProcess/writeLinuxTunLaunchScript) — so all that's left here is
-     * waiting for its up-script to actually install the TUN interface + route. [tunProcess] stays
-     * null in this mode: there is no separate Process handle for hev, its output already rides
-     * olcRTC's own (tagged "tun: ", split out in the reader loop there).
+     * For olcRTC (subprocess), hev was already launched inside the SAME combined pkexec call that
+     * started olcRTC (see startOlcRtcProcess/writeLinuxTunLaunchScript), so we only await readiness.
+     * For non-olcRTC engines (sing-box, xray, amneziawg, etc.), the core runs in-process via yptuncore,
+     * so hev-socks5-tunnel must be started here as a standalone privileged process.
      */
-    private suspend fun startLinuxTun(requestGeneration: Long) {
-        linuxTunController.awaitReady()
+    private suspend fun startLinuxTun(
+        socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
+        requestGeneration: Long,
+        socksUsername: String = "",
+        socksPassword: String = ""
+    ) {
+        if (process == null) {
+            // In-process engine (sing-box / xray / awg / openflux / etc.): launch standalone hev
+            val hevBinary = DesktopNativeAssets.resolveHevSocks5TunnelBinary()
+            tunProcess = linuxTunController.start(
+                hevBinary = hevBinary,
+                socksPort = socksPort,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword
+            )
+        } else {
+            // olcRTC subprocess: hev was already started by the combined wrapper script
+            linuxTunController.awaitReady()
+        }
 
         if (requestGeneration != generation) {
             throw CancellationException("Desktop start superseded")
@@ -1041,8 +1062,16 @@ class DesktopVpnManager private constructor(
         when (stoppingDesktopMode) {
             // Cleanup (hev + routes, bundled with olcRTC's own kill into one pkexec call) happens
             // below via stopProcess(process, privileged = ...) — see LinuxTunController.onStopped.
+            // For in-process engines, tunProcess was started separately and is cleaned up here.
             DesktopMode.LinuxTun -> {
-                tunProcess = null
+                if (tunProcess != null) {
+                    runCatching {
+                        linuxTunController.stop(tunProcess)
+                    }.onFailure {
+                        addLog("Linux TUN stop failed: ${it.message}")
+                    }
+                    tunProcess = null
+                }
             }
             DesktopMode.WindowsTun -> {
                 runCatching {

@@ -371,8 +371,10 @@ class DesktopProxyModeTest {
         assertContains(up, "ip route add default dev olcbox0 table 51820")
         assertContains(up, "ip rule add lookup 51820 pref 20")
         assertContains(up, "resolvectl dns olcbox0 1.1.1.1")
+        assertContains(up, "resolvconf -a \"olcbox0\"")
         assertContains(down, "ip rule del uidrange 0-0 lookup main pref 10")
         assertContains(down, "ip route flush table 51820")
         assertContains(down, "resolvectl revert olcbox0")
+        assertContains(down, "resolvconf -d \"olcbox0\"")
     }
 }
