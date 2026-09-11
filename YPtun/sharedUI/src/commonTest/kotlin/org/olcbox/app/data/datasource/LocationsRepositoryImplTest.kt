@@ -980,6 +980,47 @@ class LocationsRepositoryImplTest {
         assertEquals(node1Id, locations.single { it.name == "Нода 1 (NL)" }.storageId)
     }
 
+    /**
+     * A panel serving links to our UA and full Xray JSON to Happ's: a plain tcp/tls server whose JSON
+     * brings its OWN routing must run that JSON verbatim — before only xhttp got the swap, so every other
+     * server lost the panel's routing (RU direct, torrents blocked) on the link-parsed typed path.
+     */
+    @Test
+    fun jsonSubscriptionRoutingIsKeptForEveryServer() = runTest {
+        val link = "vless://732c8764-e31d-49ab-852b-54cb0f7cc3de@spb.example.test:443" +
+            "?type=tcp&security=tls&sni=spb.example.test#SPB"
+        val json = """
+            [{
+              "remarks": "SPB",
+              "dns": { "hosts": { "regexp:(^|\\.)ru${'$'}": "198.18.0.2" }, "servers": ["1.1.1.1"] },
+              "routing": { "domainStrategy": "IPOnDemand", "rules": [
+                { "type": "field", "ip": ["198.18.0.0/15"], "outboundTag": "direct" },
+                { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" }
+              ] },
+              "outbounds": [
+                { "tag": "proxy", "protocol": "vless", "settings": { "vnext": [ { "address": "spb.example.test", "port": 443,
+                  "users": [ { "id": "732c8764-e31d-49ab-852b-54cb0f7cc3de", "encryption": "none" } ] } ] },
+                  "streamSettings": { "network": "tcp", "security": "tls" } },
+                { "tag": "direct", "protocol": "freedom" },
+                { "tag": "block", "protocol": "blackhole" }
+              ]
+            }]
+        """.trimIndent()
+        val engine = MockEngine { request ->
+            val happ = request.headers[HttpHeaders.UserAgent].orEmpty().startsWith("Happ")
+            respond(if (happ) json else link)
+        }
+        val source = FakeLocationsDataSource()
+        LocationsRepositoryImpl(source, HttpClient(engine), StaticIdentityProvider("hwid-test"))
+            .importText("https://example.test/panel")
+
+        val entry = source.stored!!.locations.single()
+        assertEquals("SPB", entry.name)
+        assertEquals(org.olcbox.app.data.model.ProxyCore.Xray, entry.core)
+        val raw = entry.proxy?.rawXrayConfig.orEmpty()
+        assertTrue("bittorrent" in raw && "198.18.0.0/15" in raw, raw)
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),

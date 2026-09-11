@@ -830,9 +830,10 @@ class LocationsRepositoryImpl(
         val richBody = source.fakednsJson
         val fakeDnsSpec = richBody?.let { fakeDnsSpecFromSubscriptionBody(it) }
         val descByServer = richBody?.let { serverDescriptionsFromSubscriptionBody(it) }.orEmpty()
-        // xhttp/splithttp verbatim configs from the Happ-UA body: a default-UA vless:// link can't carry
-        // the domain-fronting `extra` (seqKey/xPadding/extra.host…) these transports need, so we swap in
-        // the full config and run it as-is on Xray. See [verbatimXhttpConfigs].
+        // Verbatim configs from the Happ-UA body, swapped in for the link-parsed entries: xhttp/splithttp
+        // (a default-UA vless:// link can't carry the domain-fronting `extra` block) and ANY config that
+        // brings its own routing/DNS — a link carries none of it, and the panel's routing (RU direct,
+        // torrents blocked, …) must apply exactly as in Happ. See [verbatimXhttpConfigs].
         val verbatimXhttp = richBody?.let { verbatimXhttpConfigs(it) }.orEmpty()
         if (fakeDnsSpec == null && descByServer.isEmpty() && verbatimXhttp.isEmpty()) return parsed
         val enriched = parsed.bundle.copy(
@@ -844,14 +845,13 @@ class LocationsRepositoryImpl(
                     val key = e.proxy?.let { "${it.server}:${it.serverPort}" }
                     if (key != null) descByServer[key]?.let { d -> e = e.copy(description = d) }
                 }
-                // xhttp: replace the link-parsed typed profile (which lost its `extra` fronting block) with
-                // the verbatim Happ config so it runs identically to Happ. Match by NAME first — several
-                // xhttp servers share one host:port (same server, different routing), so server:port alone
-                // is ambiguous; fall back to it only when exactly one xhttp config has that endpoint.
+                // Replace the link-parsed typed profile (no `extra` fronting block, no routing) with the
+                // verbatim Happ config so it runs identically to Happ. Match by NAME first — several
+                // servers share one host:port (same server, different routing), so server:port alone is
+                // ambiguous; fall back to it only when exactly one verbatim config has that endpoint.
                 if (verbatimXhttp.isNotEmpty() &&
                     e.proxy != null &&
-                    e.proxy?.rawXrayConfig.isNullOrBlank() &&
-                    e.proxy?.network == ProxyProfile.NETWORK_XHTTP
+                    e.proxy?.rawXrayConfig.isNullOrBlank()
                 ) {
                     val sp = "${e.proxy?.server}:${e.proxy?.serverPort}"
                     val match = verbatimXhttp.firstOrNull { it.first.isNotBlank() && it.first == e.name.trim() }
@@ -912,8 +912,8 @@ class LocationsRepositoryImpl(
     }
 
     /**
-     * Full verbatim Xray configs (as JSON text) for the xhttp/splithttp proxies in a rich Happ-UA
-     * subscription body. xhttp carries a domain-fronting `extra` block (seqKey / sessionKey / xPadding*
+     * Full verbatim Xray configs (as JSON text) for the xhttp/splithttp proxies — and for every config that
+     * brings its own routing/DNS ([bringsOwnRouting]) — in a rich Happ-UA subscription body. xhttp carries a domain-fronting `extra` block (seqKey / sessionKey / xPadding*
      * / extra.host …) that a bare `vless://` link from the default-UA body can't fully reproduce — so
      * when the main fetch parsed such a location from a link, we swap in the verbatim config (keeping the
      * link's clean name) and run it as-is on Xray. Returns Triple(remarks/name, "server:port", json);
@@ -936,7 +936,7 @@ class LocationsRepositoryImpl(
                 it.string("protocol")?.lowercase() in proxyProtocols
             } ?: continue
             val net = proxyOutbound["streamSettings"]?.jsonObjectOrNull()?.string("network")?.lowercase()
-            if (net != "xhttp" && net != "splithttp") continue
+            if (net != "xhttp" && net != "splithttp" && !bringsOwnRouting(root)) continue
             val settings = proxyOutbound["settings"]?.jsonObjectOrNull()
             val endpoint = settings?.get("vnext")?.let { runCatching { it.jsonArray }.getOrNull() }
                 ?: settings?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
@@ -2117,17 +2117,7 @@ class LocationsRepositoryImpl(
         // and NEITHER survives the typed translation (a typed location gets the APP's routing profile
         // instead). So whenever the JSON brings its own, keep the template verbatim on Xray —
         // XrayConfig.prepareRaw then honors it and skips overlaying the app profile.
-        val ownRouting = root["routing"]?.jsonObjectOrNull()
-            ?.get("rules")?.let { runCatching { it.jsonArray }.getOrNull() }
-            ?.isNotEmpty() == true
-        // Scoped DNS = a `dns.servers` entry that is an OBJECT (address + domains/expectIPs), i.e. a
-        // per-domain resolver split. Plain string servers are reproduced by the typed path just fine.
-        val ownScopedDns = root["dns"]?.jsonObjectOrNull()
-            ?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
-            ?.any { it.jsonObjectOrNull() != null } == true
-        val bringsOwnRouting = ownRouting || ownScopedDns
-
-        val typed = if (bringsOwnRouting) {
+        val typed = if (bringsOwnRouting(root)) {
             null
         } else {
             typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
@@ -2172,6 +2162,22 @@ class LocationsRepositoryImpl(
             subscriptionUrl = subscriptionUrl,
             metadata = null
         )
+    }
+
+    /**
+     * True when a full Xray config carries routing/DNS of its own: `routing.rules`, or a scoped
+     * `dns.servers` entry (an OBJECT with address + domains, a per-domain resolver split — plain string
+     * servers the typed path reproduces fine). Neither survives the typed translation, so such a config
+     * must run VERBATIM on Xray for its rules to apply.
+     */
+    private fun bringsOwnRouting(root: JsonObject): Boolean {
+        val ownRouting = root["routing"]?.jsonObjectOrNull()
+            ?.get("rules")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.isNotEmpty() == true
+        val ownScopedDns = root["dns"]?.jsonObjectOrNull()
+            ?.get("servers")?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.any { it.jsonObjectOrNull() != null } == true
+        return ownRouting || ownScopedDns
     }
 
     /**
