@@ -326,6 +326,8 @@ private fun runApp(args: Array<String>) = application {
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
     // Newer release that is not downloaded yet — drives the Home banner, exactly like Android.
     var updateAvailable by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    // The banner lives only in memory, so the first check of every launch must really run.
+    var updateCheckedThisLaunch by remember { mutableStateOf(false) }
     var sharePayload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var desktopNotice by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -341,7 +343,7 @@ private fun runApp(args: Array<String>) = application {
         scope.launch {
             val previousSettings = updateSettings
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
-            if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
+            if (!manual && updateCheckedThisLaunch && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
             val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
             updateMessage = s.checkingChannel(s.releaseChannelLabel.lowercase())
@@ -351,6 +353,7 @@ private fun runApp(args: Array<String>) = application {
             saveUpdateSettings(checkedSettings)
             result.fold(
                 onSuccess = { info ->
+                    updateCheckedThisLaunch = true
                     updateAvailable = info.takeIf { it.isUpdateAvailable && !it.isDownloaded(checkedSettings) }
                     if (manual || info.shouldShowOffer(previousSettings, checkedAt)) {
                         if (info.isDownloaded(checkedSettings)) {
@@ -425,11 +428,16 @@ private fun runApp(args: Array<String>) = application {
         val loaded = dependencies.updateSettingsStore.load()
         updateSettings = loaded
         dependencies.vpnManager.updateSocksProxySettings(dependencies.socksProxySettingsStore.load())
-        checkUpdate(manual = false)
         if (WINDOWS_ELEVATED_START_ARGUMENT in args) {
             dependencies.homeViewModel.loadCurrentConfig {
                 dependencies.homeViewModel.ToggleVpn()
             }
+        }
+        // Launch check, then re-check while the app sits in the tray; checkUpdate skips ticks until
+        // the chosen interval (1–24 h) has passed.
+        while (true) {
+            checkUpdate(manual = false)
+            kotlinx.coroutines.delay(AppUpdateSettings.CHECK_TICK_MS)
         }
     }
 

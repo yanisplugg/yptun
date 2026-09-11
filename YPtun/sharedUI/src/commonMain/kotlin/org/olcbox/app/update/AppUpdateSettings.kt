@@ -31,6 +31,8 @@ data class AppUpdateSettings(
         const val MAX_INTERVAL_HOURS = 24
         const val DEFAULT_INTERVAL_HOURS = 24
         val INTERVAL_PRESETS = listOf(1, 6, 12, 24)
+        /** How often a running app asks "is a check due yet?" — well under the shortest interval. */
+        const val CHECK_TICK_MS = 15L * 60L * 1_000L
     }
 }
 
