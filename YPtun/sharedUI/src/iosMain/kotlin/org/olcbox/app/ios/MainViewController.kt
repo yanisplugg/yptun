@@ -43,24 +43,24 @@ import platform.UIKit.UIViewController
 class IosAppFactory {
     fun createSession(
         platformBridge: IosPlatformBridge,
-        olcRtcBridge: IosOlcRtcBridge
+        coreBridge: IosCoreBridge
     ): IosAppSession {
-        return IosAppSession(platformBridge, olcRtcBridge)
+        return IosAppSession(platformBridge, coreBridge)
     }
 
     fun createViewController(
         platformBridge: IosPlatformBridge,
-        olcRtcBridge: IosOlcRtcBridge
+        coreBridge: IosCoreBridge
     ): UIViewController {
-        return createSession(platformBridge, olcRtcBridge).createViewController()
+        return createSession(platformBridge, coreBridge).createViewController()
     }
 }
 
 class IosAppSession internal constructor(
     private val platformBridge: IosPlatformBridge,
-    olcRtcBridge: IosOlcRtcBridge
+    coreBridge: IosCoreBridge
 ) {
-    private val dependencies = IosAppDependencies(platformBridge, olcRtcBridge)
+    private val dependencies = IosAppDependencies(platformBridge, coreBridge)
 
     fun createViewController(): UIViewController {
         return ComposeUIViewController {
@@ -75,11 +75,11 @@ class IosAppSession internal constructor(
 
 private class IosAppDependencies(
     platformBridge: IosPlatformBridge,
-    olcRtcBridge: IosOlcRtcBridge
+    coreBridge: IosCoreBridge
 ) {
     private val locationsDataSource = IosLocationsDataSourceImpl()
     val locationsRepository = LocationsRepositoryImpl(locationsDataSource)
-    val vpnManager = IosVpnManager(locationsRepository, olcRtcBridge)
+    val vpnManager = IosVpnManager(locationsRepository, coreBridge)
     val updateService = AppUpdateService(
         deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
     )
@@ -182,7 +182,7 @@ private fun IosApp(
         val logs by dependencies.homeViewModel.logs.collectAsState()
         val homeState by dependencies.homeViewModel.state.collectAsState()
         val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
-        val connectionSummary = "SOCKS5 127.0.0.1:${socksProxySettings.port}"
+        val connectionSummary = "Системный VPN (Network Extension)"
 
         Box(modifier = Modifier.fillMaxSize()) {
             OlcboxAppContent(
@@ -248,9 +248,7 @@ private fun IosApp(
                     logs = logs,
                     connectionSummary = connectionSummary,
                     connectionDetails = listOf(
-                        "Mode" to "Local SOCKS5 proxy",
-                        "Host" to "127.0.0.1",
-                        "Port" to socksProxySettings.port.toString()
+                        "Mode" to "System VPN (packet tunnel)"
                     ),
                     socksProxySettings = socksProxySettings,
                     isConnectionActive = homeState.isVpnConnected,

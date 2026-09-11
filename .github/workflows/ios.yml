@@ -1,0 +1,122 @@
+# iOS build: Go cores (gomobile → Coreapi.xcframework), Kotlin SharedUI.framework, the Xcode project
+# generated from YPtun/iosApp/project.yml (XcodeGen), then an UNSIGNED device build packed as an .ipa.
+#
+# Unsigned on purpose: a packet-tunnel extension needs the Network Extension entitlement, which only a
+# paid Apple Developer team can sign. The .ipa is for re-signing (your own team, AltStore/SideStore
+# with a paid account, TrollStore) and, above all, proves the whole iOS tree compiles — nothing iOS
+# can be built on the Windows machine the rest of the project is developed on.
+
+name: iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - Beta
+    paths:
+      - ".github/workflows/ios.yml"
+      - "YPtun/iosApp/**"
+      - "YPtun/sharedUI/src/iosMain/**"
+      - "YPtun/sharedUI/src/commonMain/**"
+      - "YPtun/sharedUI/build.gradle.kts"
+      - "YPtun/gradle.properties"
+      - "cores/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cores/go.mod
+          cache: false
+
+      # Gradle configures every project, including the Android ones, so AGP wants an SDK location.
+      - name: Set up Android SDK (only for AGP's SDK-location check)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+
+      # gomobile/gobind at the x/mobile version pinned in cores/go.mod (bind needs the matching runtime).
+      - name: Install gomobile + XcodeGen
+        run: |
+          cd cores
+          go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          brew install xcodegen
+
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          go version
+          java -version
+
+      - name: Go cores → Coreapi.xcframework
+        working-directory: YPtun
+        run: |
+          gomobile init
+          ./gradlew :sharedUI:buildCoresIosXcframework --no-configuration-cache --stacktrace
+
+      - name: Kotlin → SharedUI.framework (device, release)
+        working-directory: YPtun
+        run: ./gradlew :sharedUI:linkReleaseFrameworkIosArm64 --no-configuration-cache
+
+      - name: Generate the Xcode project
+        working-directory: YPtun/iosApp
+        run: xcodegen generate
+
+      - name: Build (unsigned, device)
+        working-directory: YPtun/iosApp
+        run: |
+          mkdir -p build
+          xcodebuild \
+            -project YPtun.xcodeproj \
+            -scheme YPtun \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tee build/xcodebuild.log | grep -E "error:|warning: .*(Swift|swift)|\*\* BUILD" || true
+          test -d build/dd/Build/Products/Release-iphoneos/YPtun.app
+
+      - name: Pack .ipa
+        working-directory: YPtun/iosApp
+        run: |
+          VERSION=$(grep '^olcbox.version=' ../gradle.properties | cut -d= -f2)
+          mkdir -p Payload
+          cp -R build/dd/Build/Products/Release-iphoneos/YPtun.app Payload/
+          test -d Payload/YPtun.app/PlugIns/PacketTunnel.appex
+          zip -qry "YPtun-$VERSION-unsigned.ipa" Payload
+          ls -la *.ipa
+          du -sh Payload/YPtun.app Payload/YPtun.app/PlugIns/PacketTunnel.appex
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YPtun-ios-unsigned
+          path: YPtun/iosApp/*.ipa
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xcodebuild-log
+          path: YPtun/iosApp/build/xcodebuild.log
+          if-no-files-found: ignore
