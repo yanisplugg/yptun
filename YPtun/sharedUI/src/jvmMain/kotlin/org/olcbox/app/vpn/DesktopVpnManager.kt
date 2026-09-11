@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
@@ -474,6 +475,10 @@ class DesktopVpnManager private constructor(
                 } else {
                     runCatching { java.net.URI(of.docUrl).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
                     add("docs.yandex.ru")
+                    // The new editor's relay, push channel and the Disk redirect it authorizes through.
+                    if (of.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
+                        addAll(listOf("volga.yandex.ru", "push.yandex.ru", "disk.yandex.ru"))
+                    }
                 }
             }
             // The Telegram-over-WARP proxy is a SECOND tunnel living in this same process. Android

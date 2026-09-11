@@ -30,8 +30,8 @@ func main() {
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, google, custom)")
 	flag.StringVar(&globalDocUrl, "url", "http://#", "Document URL. If u use Yandex.Docs transport")
-	flag.StringVar(&maxToken, "maxToken", "", "MAX call user id. If u use MAX transport")
-	flag.StringVar(&maxUid, "maxUid", "", "MAX Web token. If u use MAX transport")
+	flag.StringVar(&maxToken, "maxToken", "", "MAX Web token. If u use MAX transport")
+	flag.StringVar(&maxUid, "maxUid", "", "MAX call user id. If u use MAX transport")
 	// YPtun: resolve through the tunnel, die with the parent app (see yptun_client.go).
 	dnsServer := flag.String("dns", "", "YPtun: DNS server reached THROUGH the tunnel for SOCKS domain CONNECTs (empty = system resolver)")
 	exitOnStdinEOF := flag.Bool("exit-on-stdin-eof", false, "YPtun: exit when stdin closes (the parent app is gone)")
@@ -58,6 +58,8 @@ func main() {
 	var trans transport.Transport
 
 	switch *transportType {
+	case "vyandex":
+		trans = transport.NewCompressedTransport(yandex.NewYandexVolgaTransport(globalDocUrl, config))
 	case "yandex":
 		trans = transport.NewCompressedTransport(yandex.NewYandexDocsTransport(globalDocUrl, config))
 	case "oneme":

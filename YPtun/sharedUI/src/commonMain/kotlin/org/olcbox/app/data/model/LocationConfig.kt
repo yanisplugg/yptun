@@ -406,6 +406,7 @@ internal fun overTunnelProxyCore(chosen: ProxyCore, profile: ProxyProfile?, glob
  * local SOCKS5 the TUN bridge consumes. Two carriers:
  * - [TRANSPORT_YANDEX]: cursor messages of a Yandex Docs document ([docUrl], the legacy editor), shared
  *   by the client and the exit node;
+ * - [TRANSPORT_VYANDEX]: the same over the NEW Yandex Docs editor (Volga, volga.yandex.ru relay);
  * - [TRANSPORT_MAX]: a WebRTC DataChannel of a MAX call — the client logs in with [maxToken] and calls
  *   the exit node's account [maxUid] (the exit node runs with ITS OWN MAX token).
  */
@@ -454,7 +455,7 @@ data class OpenFluxConfig(
     }
 
     fun normalized(): OpenFluxConfig = copy(
-        transport = if (transport == TRANSPORT_MAX) TRANSPORT_MAX else TRANSPORT_YANDEX,
+        transport = transport.takeIf { it in TRANSPORTS } ?: TRANSPORT_YANDEX,
         docUrl = docUrl.trim(),
         maxToken = maxToken.trim(),
         maxUid = maxUid.trim(),
@@ -463,12 +464,19 @@ data class OpenFluxConfig(
     )
 
     /** One-line summary for the location list. */
-    fun summary(): String = if (usesMax()) "MAX · звонок $maxUid" else "Яндекс Документы"
+    fun summary(): String = when (transport) {
+        TRANSPORT_MAX -> "MAX · звонок $maxUid"
+        TRANSPORT_VYANDEX -> "Яндекс Документы (новый редактор)"
+        else -> "Яндекс Документы"
+    }
 
     companion object {
         const val TRANSPORT_YANDEX = "yandex"
+        /** Upstream's "vyandex": Yandex Docs in the new Volga editor. */
+        const val TRANSPORT_VYANDEX = "vyandex"
         /** Upstream calls the MAX transport "oneme". */
         const val TRANSPORT_MAX = "oneme"
+        val TRANSPORTS = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAX)
         const val DEFAULT_DNS = "1.1.1.1:53"
     }
 }

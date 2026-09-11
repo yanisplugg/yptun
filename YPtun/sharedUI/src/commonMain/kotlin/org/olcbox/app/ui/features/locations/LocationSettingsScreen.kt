@@ -1476,11 +1476,15 @@ private fun LazyListScope.openFluxSection(
             SettingsDropdown(
                 label = "Транспорт",
                 selectedValue = config.transport,
-                options = listOf(OpenFluxConfig.TRANSPORT_YANDEX, OpenFluxConfig.TRANSPORT_MAX),
+                options = OpenFluxConfig.TRANSPORTS,
                 enabled = enabled,
                 onValueSelected = { v -> onChange { it.copy(transport = v) } },
                 valueLabel = {
-                    if (it == OpenFluxConfig.TRANSPORT_MAX) "MAX (WebRTC-звонок)" else "Яндекс Документы (курсоры)"
+                    when (it) {
+                        OpenFluxConfig.TRANSPORT_MAX -> "MAX (WebRTC-звонок)"
+                        OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы — новый редактор"
+                        else -> "Яндекс Документы — старый редактор"
+                    }
                 }
             )
             if (config.usesMax()) {
@@ -1507,7 +1511,13 @@ private fun LazyListScope.openFluxSection(
                     label = { Text("Ссылка на Яндекс Документ") },
                     placeholder = { Text("https://docs.yandex.ru/…") },
                     supportingText = {
-                        Text("Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода.")
+                        Text(
+                            if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
+                                "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
+                            } else {
+                                "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
+                            }
+                        )
                     },
                     enabled = enabled,
                     minLines = 1,
