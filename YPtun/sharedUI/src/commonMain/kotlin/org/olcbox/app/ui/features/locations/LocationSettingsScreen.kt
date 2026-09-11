@@ -1768,7 +1768,7 @@ private fun WdttInstallDialog(
     var wdttPass by remember { mutableStateOf(draft.wdttPassword) }
     var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
     var running by remember { mutableStateOf(false) }
-    var result by remember { mutableStateOf<Result<String>?>(null) }
+    var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.wdtt.WdttInstallResult>?>(null) }
     val log = remember { mutableStateListOf<String>() }
     val logScroll = rememberScrollState()
 
@@ -1876,7 +1876,7 @@ private fun WdttInstallDialog(
                 }
                 if (succeeded) {
                     Text(
-                        result?.getOrNull().orEmpty(),
+                        result?.getOrNull()?.message.orEmpty(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -1920,6 +1920,12 @@ private fun WdttInstallDialog(
                             ) { line -> log.add(line) }
                             // Fold the final error into the log too, so the copied log includes it.
                             res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            // The server moved to a free port (the requested one was taken): the
+                            // location has to dial that one.
+                            res.getOrNull()?.port?.takeIf { it != port }?.let { actual ->
+                                wdttPortText = actual.toString()
+                                onApplyDraft { d -> d.copy(wdttPort = actual.toString()) }
+                            }
                             result = res
                             running = false
                         }
