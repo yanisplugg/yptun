@@ -976,10 +976,12 @@ if (currentBuildOs.isLinux) {
             [Desktop Entry]
             Type=Application
             Name=$desktopPackageName
-            Exec=$desktopPackageName
+            Comment=Fast, versatile VPN client to bypass censorship
+            Exec=$desktopPackageName %u
             Icon=olcbox
             Categories=Network;Utility;
             Terminal=false
+            MimeType=x-scheme-handler/yptun;x-scheme-handler/vless;x-scheme-handler/vmess;x-scheme-handler/ss;x-scheme-handler/trojan;x-scheme-handler/hysteria2;x-scheme-handler/tuic;
             DESKTOP
 
             cp "${'$'}icon_file" "${'$'}target_dir/olcbox.png"

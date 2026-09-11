@@ -18,10 +18,7 @@ internal class LinuxTunController(
 
     /**
      * Writes hev's config/up/down scripts and returns the command to launch it — does NOT start the
-     * process. Linux TUN needs both hev and olcRTC running as root under the SAME pkexec
-     * authorization (see DesktopVpnManager.startOlcRtcProcess's combined launch), so the caller
-     * backgrounds this command inside its own privileged process instead of us spawning it directly
-     * under a second, separate pkexec.
+     * process. Used when bundling hev launch with another privileged process (e.g. olcRTC).
      */
     fun prepareHevLaunch(
         hevBinary: Path,
@@ -37,10 +34,65 @@ internal class LinuxTunController(
     }
 
     /**
-     * Polls for the TUN interface + route rule hev's up-script installs. olcRTC's own SOCKS5
-     * readiness check runs first and takes several seconds (WebRTC handshake) — hev, started earlier
-     * in the same combined launch well before olcRTC's exec, has had a comfortable head start by the
-     * time we get here, so this rarely waits long in practice.
+     * Starts hev-socks5-tunnel as an independent privileged process under pkexec/sudo.
+     * Used for non-olcRTC engines (sing-box, xray, amneziawg, etc.) where the proxy core
+     * runs in-process via yptuncore and only hev needs elevation for TUN & route installation.
+     */
+    suspend fun start(
+        hevBinary: Path,
+        socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
+        socksUsername: String = "",
+        socksPassword: String = ""
+    ): Process = withContext(Dispatchers.IO) {
+        val hevCommand = prepareHevLaunch(hevBinary, socksPort, socksUsername, socksPassword)
+        val command = LinuxPrivilege.command(hevCommand)
+        addLog("Starting Linux TUN bridge: ${hevBinary.fileName} -> 127.0.0.1:$socksPort")
+        val process = ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .start()
+        try {
+            awaitReady()
+            process
+        } catch (e: Exception) {
+            runCatching { stop(process) }
+            throw e
+        }
+    }
+
+    /**
+     * Stops the privileged hev process and cleans up routes and DNS settings.
+     */
+    suspend fun stop(process: Process?) {
+        val commands = privilegedCleanupCommands()
+        if (commands.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                val script = commands.joinToString("\n")
+                val runtimeDir = DesktopPaths.appDataDir().resolve("runtime")
+                Files.createDirectories(runtimeDir)
+                val scriptFile = Files.createTempFile(runtimeDir, "linux-tun-cleanup-", ".sh")
+                runCatching {
+                    Files.writeString(scriptFile, script)
+                    ProcessBuilder(LinuxPrivilege.command(listOf("sh", scriptFile.toString())))
+                        .redirectErrorStream(true)
+                        .start()
+                        .waitFor(3000, TimeUnit.MILLISECONDS)
+                }.onFailure {
+                    addLog("Failed to clean up Linux TUN routes: ${it.message}")
+                }
+                runCatching { Files.deleteIfExists(scriptFile) }
+            }
+        }
+        if (process != null && process.isAlive) {
+            process.destroy()
+            if (!process.waitFor(1000, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly()
+            }
+        }
+        onStopped()
+    }
+
+    /**
+     * Polls for the TUN interface + route rule hev's up-script installs.
      */
     suspend fun awaitReady() {
         val deadline = System.currentTimeMillis() + TUN_READY_TIMEOUT_MS
@@ -62,8 +114,7 @@ internal class LinuxTunController(
      * Returns commands only, doesn't invoke pkexec itself — the caller bundles these with olcRTC's
      * own privileged kill into ONE combined pkexec call instead of each of us prompting separately.
      * Best-effort by design (`|| true` throughout): always included, never gates on whether hev is
-     * actually still around, because the caller's pkexec call is happening either way (olcRTC runs
-     * as root in this mode, so an unprivileged kill can never reach it) — bundling this in is free.
+     * actually still around.
      */
     fun privilegedCleanupCommands(): List<String> {
         val commands = mutableListOf<String>()
@@ -254,6 +305,8 @@ internal class LinuxTunController(
                   resolvectl dns $TUN_NAME $MAPDNS_ADDRESS >/dev/null 2>&1 || true
                   resolvectl domain $TUN_NAME '~.' >/dev/null 2>&1 || true
                   resolvectl default-route $TUN_NAME yes >/dev/null 2>&1 || true
+                elif command -v resolvconf >/dev/null 2>&1; then
+                  printf "nameserver %s\n" "$MAPDNS_ADDRESS" | resolvconf -a "$TUN_NAME" 2>/dev/null || true
                 fi
             """.trimIndent()
         }
@@ -266,6 +319,8 @@ internal class LinuxTunController(
                 ip route flush table $ROUTE_TABLE 2>/dev/null || true
                 if command -v resolvectl >/dev/null 2>&1; then
                   resolvectl revert $TUN_NAME >/dev/null 2>&1 || true
+                elif command -v resolvconf >/dev/null 2>&1; then
+                  resolvconf -d "$TUN_NAME" 2>/dev/null || true
                 fi
             """.trimIndent()
         }

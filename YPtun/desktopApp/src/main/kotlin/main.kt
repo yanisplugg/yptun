@@ -253,9 +253,9 @@ fun main(args: Array<String>) {
     val relaunchedAfterElevation = DesktopElevation.STARTUP_ELEVATION_ARGUMENT in args ||
         WINDOWS_ELEVATED_START_ARGUMENT in args
     val claimed = if (relaunchedAfterElevation) {
-        DesktopSingleInstance.claimAfterPredecessorExits(::requestWindowToFront)
+        DesktopSingleInstance.claimAfterPredecessorExits(::handleInstanceCommand)
     } else {
-        DesktopSingleInstance.claim(::requestWindowToFront)
+        DesktopSingleInstance.claimWithArgs(args, ::handleInstanceCommand)
     }
     if (!claimed) return
 
@@ -263,15 +263,18 @@ fun main(args: Array<String>) {
 }
 
 /**
- * Set by the running app so a second launch can raise its window (see [DesktopSingleInstance]).
+ * Set by the running app so a second launch can raise its window or pass an import link.
  * Held here rather than inside the composition because it is called from a plain socket thread.
  */
 @Volatile
-private var showWindowRequest: (() -> Unit)? = null
+private var instanceCommandHandler: ((String) -> Unit)? = null
 
-private fun requestWindowToFront() {
-    val request = showWindowRequest ?: return
-    javax.swing.SwingUtilities.invokeLater { runCatching { request() } }
+private fun handleInstanceCommand(command: String) {
+    javax.swing.SwingUtilities.invokeLater {
+        runCatching {
+            instanceCommandHandler?.invoke(command)
+        }
+    }
 }
 
 /**
@@ -432,6 +435,15 @@ private fun runApp(args: Array<String>) = application {
             dependencies.homeViewModel.loadCurrentConfig {
                 dependencies.homeViewModel.ToggleVpn()
             }
+        }
+        val startupLink = args.firstOrNull { it.contains("://") || it.startsWith("vless:") || it.startsWith("vmess:") }
+        if (!startupLink.isNullOrBlank()) {
+            dependencies.homeViewModel.onImportFullConfig(startupLink, onComplete = {
+                dependencies.locationViewModel.loadLocations {
+                    dependencies.homeViewModel.loadCurrentConfig()
+                }
+                desktopNotice = strings().importedFromClipboard
+            })
         }
         // Launch check, then re-check while the app sits in the tray; checkUpdate skips ticks until
         // the chosen interval (1–24 h) has passed.
@@ -808,9 +820,9 @@ private fun runApp(args: Array<String>) = application {
             }
         }
 
-        // A second launch of the .exe hands its "show yourself" here instead of starting a duplicate.
+        // A second launch hands its "show" or imported link here instead of starting a duplicate.
         DisposableEffect(Unit) {
-            showWindowRequest = {
+            instanceCommandHandler = { cmd ->
                 isWindowVisible = true
                 runCatching {
                     window.isVisible = true
@@ -818,8 +830,19 @@ private fun runApp(args: Array<String>) = application {
                     window.toFront()
                     window.requestFocus()
                 }
+                val link = cmd.removePrefix("show").trim()
+                if (link.isNotBlank() && (link.contains("://") || link.startsWith("vless:") || link.startsWith("vmess:"))) {
+                    scope.launch {
+                        dependencies.homeViewModel.onImportFullConfig(link, onComplete = {
+                            dependencies.locationViewModel.loadLocations {
+                                dependencies.homeViewModel.loadCurrentConfig()
+                            }
+                            desktopNotice = strings().importedFromClipboard
+                        })
+                    }
+                }
             }
-            onDispose { showWindowRequest = null }
+            onDispose { instanceCommandHandler = null }
         }
 
         val dynamicTheme by dependencies.settings.dynamicTheme.collectAsState()
