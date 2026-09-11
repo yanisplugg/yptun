@@ -580,6 +580,8 @@ fun registerYpTunCoreBuildTask(
     val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
 
     inputs.dir(coresRepoDir.resolve("cmd"))
+    // cmd/yptuncore is only the C-ABI wrapper; the cores live in coreapi (shared with iOS).
+    inputs.dir(coresRepoDir.resolve("coreapi"))
     inputs.file(coresRepoDir.resolve("go.mod"))
     // olcrtc/mobile is compiled into this core through the path-replace in
     // cores/go.mod, so a core re-sync has to invalidate it as well.
