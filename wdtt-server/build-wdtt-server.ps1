@@ -3,8 +3,9 @@
 #
 #   pwsh -File build-wdtt-server.ps1
 #
-# Requires Go (1.25+). Server source = the root package of github.com/Ivan4537/WDTT-Plus (GPLv3),
-# vendored here with its module renamed to wdtt-server — see WDTT-SERVER-README.md.
+# Requires Go (1.25+). Server source = server/ of github.com/SpaceNeuroX/proxy-turn-vk-android (qWDTT, GPLv3),
+# vendored here with its module renamed to wdtt-server — see WDTT-SERVER-README.md. Installed on the VPS
+# by that project's own deploy.sh (assets/wdtt/deploy.sh), driven by SshWdttServerInstaller.
 
 $ErrorActionPreference = "Stop"
 $go = if (Test-Path "C:\Program Files\Go\bin\go.exe") { "C:\Program Files\Go\bin\go.exe" } else { "go" }
