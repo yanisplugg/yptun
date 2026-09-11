@@ -32,7 +32,7 @@ data class CustomGroup(
  * keeps it in sync with [AppBehaviorSettings.subscriptionUserAgent] on load and on every change.
  */
 object SubscriptionUserAgentHolder {
-    @Volatile
+    @kotlin.concurrent.Volatile
     var mode: String = AppBehaviorSettings.SUB_UA_YPTUN
 }
 

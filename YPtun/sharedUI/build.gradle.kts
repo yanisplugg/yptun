@@ -205,6 +205,10 @@ kotlin {
     iosArm64()
     iosSimulatorArm64()
 
+    // The explicit jvmSharedMain edges below switch the default hierarchy off, and without it
+    // iosArm64Main/iosSimulatorArm64Main never depend on iosMain — every iOS actual went missing.
+    applyDefaultHierarchyTemplate()
+
     sourceSets {
         commonMain {
             kotlin.srcDir(generateAppInfo)

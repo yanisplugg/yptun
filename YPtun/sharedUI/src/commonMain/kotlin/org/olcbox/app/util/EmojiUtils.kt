@@ -11,22 +11,32 @@ fun parseEmojiAndName(rawName: String, defaultEmoji: String = ""): Pair<String, 
     val trimmed = rawName.trim()
     if (trimmed.isEmpty()) return defaultEmoji to ""
 
-    if (!isEmojiCodePoint(trimmed.codePointAt(0))) {
+    if (!isEmojiCodePoint(codePointAt(trimmed, 0))) {
         return defaultEmoji to ""
     }
 
     var end = 0
     val length = trimmed.length
     while (end < length) {
-        val cp = trimmed.codePointAt(end)
+        val cp = codePointAt(trimmed, end)
         if (!isEmojiCodePoint(cp) && !isEmojiJoiner(cp)) break
-        end += Character.charCount(cp)
+        end += if (cp >= 0x10000) 2 else 1
     }
 
     if (end == 0) return defaultEmoji to ""
     val emoji = trimmed.substring(0, end)
     val name = trimmed.substring(end).trim()
     return emoji to name
+}
+
+// String.codePointAt is JVM-only; this is its surrogate-pair logic for every target.
+private fun codePointAt(s: String, i: Int): Int {
+    val hi = s[i]
+    if (hi.isHighSurrogate() && i + 1 < s.length) {
+        val lo = s[i + 1]
+        if (lo.isLowSurrogate()) return ((hi.code - 0xD800) shl 10) + (lo.code - 0xDC00) + 0x10000
+    }
+    return hi.code
 }
 
 private fun isEmojiCodePoint(cp: Int): Boolean {
