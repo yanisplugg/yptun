@@ -59,6 +59,16 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           brew install xcodegen
 
+      # Compose Multiplatform 1.12 references iOS 26 UIKit (UIViewLayoutRegion): the iOS 26 SDK is needed
+      # to LINK (the deployment target stays 15 — newer API is weak-linked). The runner defaults to an
+      # older Xcode, so pick the newest one installed.
+      - name: Select the newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+
       - name: Report toolchain
         run: |
           xcodebuild -version
@@ -94,8 +104,10 @@ jobs:
             -derivedDataPath build/dd \
             MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$CODE" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build | tee build/xcodebuild.log | grep -E "error:|warning: .*(Swift|swift)|\*\* BUILD" || true
-          test -d build/dd/Build/Products/Release-iphoneos/YPtun.app
+            build > build/xcodebuild.log 2>&1 && STATUS=0 || STATUS=$?
+          # The full log is an artifact; here only what matters.
+          grep -E "error:|Undefined symbols|referenced from|\*\* BUILD" build/xcodebuild.log | head -80 || true
+          exit $STATUS
 
       - name: Pack .ipa
         working-directory: YPtun/iosApp
