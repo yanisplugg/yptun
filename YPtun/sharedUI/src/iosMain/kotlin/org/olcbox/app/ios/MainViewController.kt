@@ -221,7 +221,24 @@ private fun IosApp(
                         onError = onError
                     )
                 },
-                onScanQrRequested = {},
+                onScanQrRequested = {
+                    IosQrScanner.present(
+                        onResult = { text ->
+                            dependencies.homeViewModel.onImportFullConfig(
+                                rawText = text,
+                                onComplete = {
+                                    reloadLocationsAfterImport {
+                                        platformBridge.showMessage(org.olcbox.app.ui.i18n.stringsFor(
+                                            org.olcbox.app.ui.i18n.LocalizationState.effective
+                                        ).qrImported)
+                                    }
+                                },
+                                onError = platformBridge::showMessage
+                            )
+                        },
+                        onError = platformBridge::showMessage
+                    )
+                },
                 onCopyConfigRequested = {
                     dependencies.homeViewModel.onCopyFullConfigClicked()
                 },
@@ -238,7 +255,7 @@ private fun IosApp(
                 },
                 showAppSettingsButton = true,
                 showSplitTunnelingButton = false,
-                canScanQr = false,
+                canScanQr = true,
                 onAppSettingsClick = { isAppSettingsOpen = true },
                 onSplitTunnelingClick = {}
             )
