@@ -466,6 +466,16 @@ class DesktopVpnManager private constructor(
             // them and reactivates ones it had dropped, so every resolver has to be carved out, not just
             // the one in use.
             config.masterDns?.resolverHosts()?.forEach { add(it) }
+            // OpenFlux runs as its own subprocess (no protect() here either): its carrier endpoints go
+            // around the TUN, or the tunnel would carry itself. The dynamic ones come as prefixes below.
+            config.openFlux?.let { of ->
+                if (of.usesMax()) {
+                    addAll(OPENFLUX_MAX_HOSTS)
+                } else {
+                    runCatching { java.net.URI(of.docUrl).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    add("docs.yandex.ru")
+                }
+            }
             // The Telegram-over-WARP proxy is a SECOND tunnel living in this same process. Android
             // keeps its UDP off the VPN with VpnService.protect(); desktop has no protect, so route
             // WARP around the TUN instead — otherwise enabling the main VPN kills the Telegram proxy.
@@ -500,7 +510,8 @@ class DesktopVpnManager private constructor(
                 emptyList()
             }
         }
-        return (resolved + vkTurnMediaPrefixes(config) + lanPrefixes).distinct().filter { it != "127.0.0.1" }
+        return (resolved + vkTurnMediaPrefixes(config) + openFluxCarrierPrefixes(config) + lanPrefixes)
+            .distinct().filter { it != "127.0.0.1" }
     }
 
     /**
@@ -528,6 +539,23 @@ class DesktopVpnManager private constructor(
         } else {
             addLog("VK-TURN: routing ${prefixes.size} VK/OK prefix(es) around the TUN so the relay keeps its own path")
         }
+        return prefixes
+    }
+
+    /**
+     * The carrier networks an OpenFlux location rides, kept OUT of the TUN for the same reason as
+     * [vkTurnMediaPrefixes]: the Yandex Docs balancer host and the MAX call's TURN relays are only known
+     * at runtime. Yandex Docs → Yandex's AS13238; MAX → VK's networks (MAX is VK's messenger).
+     */
+    private suspend fun openFluxCarrierPrefixes(config: LocationConfig): List<String> {
+        val of = config.openFlux ?: return emptyList()
+        val asns = if (of.usesMax()) VK_TURN_ASNS else OPENFLUX_YANDEX_ASNS
+        val prefixes = runCatching { JvmAsnResolver.ensure(asns) }.getOrDefault(emptyMap())
+            .values.flatten()
+            .filter { it.contains('.') }
+            .distinct()
+            .take(MAX_VK_TURN_BYPASS_PREFIXES)
+        addLog("OpenFlux: routing ${prefixes.size} ${if (of.usesMax()) "VK/MAX" else "Yandex"} prefix(es) around the TUN")
         return prefixes
     }
 
@@ -1621,6 +1649,12 @@ class DesktopVpnManager private constructor(
         val VK_TURN_CONTROL_HOSTS = listOf(
             "login.vk.ru", "api.vk.ru", "id.vk.ru", "vk.ru", "calls.okcdn.ru", "ok.ru",
         )
+
+        /** Yandex (Docs balancers live there) — the OpenFlux Yandex Docs carrier. */
+        val OPENFLUX_YANDEX_ASNS = setOf("13238")
+
+        /** MAX control plane the OpenFlux MAX carrier talks to (TURN relays come via [VK_TURN_ASNS]). */
+        val OPENFLUX_MAX_HOSTS = listOf("web.max.ru", "ws-api.oneme.ru", "api.oneme.ru")
 
         /** Ceiling on the VK/OK carve-out so a surprising ASN answer can't install thousands of routes. */
         const val MAX_VK_TURN_BYPASS_PREFIXES = 400

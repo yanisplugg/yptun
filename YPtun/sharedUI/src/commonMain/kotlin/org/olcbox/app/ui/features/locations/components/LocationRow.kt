@@ -258,7 +258,8 @@ fun LocationRow(
         val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
         // MasterDNS (DNS tunnel) can't be probed directly either: a NULL ping = "not measurable", not
         // "offline". Show "—" instead of a red fail when there's no ms; a live end-to-end RTT still shows.
-        val isMasterDns = location.config?.engine == org.olcbox.app.data.model.EngineType.MasterDns
+        val isMasterDns = location.config?.engine == org.olcbox.app.data.model.EngineType.MasterDns ||
+            location.config?.engine == org.olcbox.app.data.model.EngineType.OpenFlux
         // "Значок" mode shows a check/cross instead of the raw latency (per user setting).
         val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
 
@@ -388,6 +389,8 @@ private fun locationSubtitle(location: LocationItem): String {
             config.masterDns?.domainList()?.firstOrNull(),
             config.masterDns?.resolverList()?.size?.takeIf { it > 1 }?.let { "$it резолверов" }
         )
+
+        EngineType.OpenFlux -> listOfNotNull("OpenFlux", config.openFlux?.summary())
 
         else -> listOf(
             config?.providerName()
@@ -623,7 +626,8 @@ private fun CompactPingIndicator(
     // MasterDNS is an obfuscated DNS tunnel: it has no directly-probeable endpoint, so a NULL ping means
     // "not measurable" (disconnected), NOT "offline" — showing a red fail was wrong. Render "—" instead
     // when there's no ping; a real end-to-end RTT (measured through the live tunnel) still shows as ms.
-    val isMasterDns = location.config?.engine == EngineType.MasterDns
+    val isMasterDns = location.config?.engine == EngineType.MasterDns ||
+        location.config?.engine == EngineType.OpenFlux
     val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
     when {
         isVkTurn -> Text(

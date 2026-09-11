@@ -10,7 +10,9 @@ import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -79,6 +81,9 @@ data class VkTurnConfig(
     /** WDTT worker count; 0 → core default. Clamped to [9,108] and rounded to a multiple of 9 in-core. */
     @SerialName("wdtt_workers")
     val wdttWorkers: Int = 0,
+    /** The WDTT Plus core's advanced knobs (network modes, VK auth, reserves). */
+    @SerialName("wdtt_plus")
+    val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
     /**
      * Master switch for multi-server freeturn. When off, only the primary [uri] is used (today's exact
      * single-server behaviour) even if [extraFreeturnUris] is non-empty. When on, the extra servers
@@ -161,7 +166,83 @@ data class VkTurnConfig(
         usesWdtt() -> wdttPeer.isNotBlank()
         else -> uri.startsWith("freeturn://")
     }
+
+    /**
+     * The WDTT Plus core options (wdttmobile.Options JSON) for this location — ONE builder for both the
+     * Android gomobile binding and the desktop core. [listen] is the local UDP address WireGuard dials,
+     * [masqueConfigPath] a private writable file for the WARP enrollment.
+     */
+    fun wdttCoreOptionsJson(listen: String, deviceId: String, masqueConfigPath: String): String {
+        val p = wdttPlus
+        return buildJsonObject {
+            put("peer", wdttPeerAddr())
+            put("vk_hashes", vkLink)
+            put("password", wdttPassword)
+            put("listen", listen)
+            put("workers", wdttWorkers)
+            put("device_id", deviceId)
+            put("fingerprint", wdttFingerprint.ifBlank { "chrome" })
+            put("client_ids", p.clientIds.trim())
+            put("captcha_mode", "auto")
+            put("turn_host", p.turnHost.trim())
+            put("turn_port", p.turnPort.trim())
+            put("vkcalls_preflight", p.vkCallsPreflight)
+            put("config_first_start", p.configFirstStart)
+            put("hash_fallback", p.hashFallback)
+            put("turn_stream_first", p.rtNetworkMode)
+            put("turn_sni", p.turnSni.trim())
+            put("masque", p.masque)
+            put("masque_config_path", masqueConfigPath)
+            put("masque_accept_tos", p.masqueAcceptTos)
+            put("custom_vk_client_id", p.customVkClientId.trim())
+            put("custom_vk_client_secret", p.customVkClientSecret.trim())
+        }.toString()
+    }
 }
+
+/**
+ * Advanced options of the WDTT Plus VK-TURN core (github.com/Ivan4537/WDTT-Plus). Defaults reproduce
+ * the core's own defaults, so an untouched location behaves exactly like upstream.
+ */
+@Serializable
+data class WdttPlusOptions(
+    /**
+     * «Сеть РТ»: try TURN/TLS, then TURN/TCP to every VK address first and keep UDP as the reserve —
+     * for networks (Rostelecom and the like) that throttle or cut UDP to VK.
+     */
+    @SerialName("rt_network_mode")
+    val rtNetworkMode: Boolean = false,
+    /** Whitelisted SNI for the outer TURN/TLS connection («Сеть РТ» only). Blank = none. */
+    @SerialName("turn_sni")
+    val turnSni: String = "",
+    /** Cloudflare WARP CONNECT-IP (HTTP/2, then HTTP/3) reserve after the direct «Сеть РТ» paths. */
+    val masque: Boolean = false,
+    /** The user accepted Cloudflare's terms for the first WARP enrollment (required by [masque]). */
+    @SerialName("masque_accept_tos")
+    val masqueAcceptTos: Boolean = false,
+    /** Try the VK Calls API before the captcha chain (upstream default: on). */
+    @SerialName("vkcalls_preflight")
+    val vkCallsPreflight: Boolean = true,
+    /** Wait for the server's WireGuard config before starting the rest of the workers. */
+    @SerialName("config_first_start")
+    val configFirstStart: Boolean = false,
+    /** A group whose own VK hash died falls back to the remaining hashes. */
+    @SerialName("hash_fallback")
+    val hashFallback: Boolean = false,
+    /** VK client IDs override, comma-separated. Blank = the core's built-in set. */
+    @SerialName("client_ids")
+    val clientIds: String = "",
+    /** An independent VK app as an extra credential provider: both fields or neither. */
+    @SerialName("custom_vk_client_id")
+    val customVkClientId: String = "",
+    @SerialName("custom_vk_client_secret")
+    val customVkClientSecret: String = "",
+    /** TURN server IP / port override (blank = the ones VK hands out). */
+    @SerialName("turn_host")
+    val turnHost: String = "",
+    @SerialName("turn_port")
+    val turnPort: String = "",
+)
 
 /**
  * Advanced per-location options for the sing-box / Xray proxy core (shown in the editor only when a
@@ -271,13 +352,8 @@ data class MasterDnsConfig(
      *  [VkTurnConfig.resolvedProxyCore], but defaults to Xray: chaining the exit over the tunnel's
      *  SOCKS needs socket-level dialerProxy chaining (Xray) to keep a vless reality/xtls-vision
      *  transport intact — other paths reset it. An explicit per-location or global core still wins. */
-    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
-        proxyCore != ProxyCore.Auto -> proxyCore
-        !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
-        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
-        globalCore != ProxyCore.Auto -> globalCore
-        else -> ProxyCore.Xray
-    }
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore =
+        overTunnelProxyCore(proxyCore, profile, globalCore)
 
     fun normalized(): MasterDnsConfig = MasterDnsConfig(
         domains = domainList().joinToString(","),
@@ -307,6 +383,93 @@ data class MasterDnsConfig(
 
         /** Comma, semicolon or any whitespace all read as "next entry" in the list fields. */
         private val SEPARATORS = Regex("[,;\\s]+")
+    }
+}
+
+/**
+ * Core for a proxy chained OVER a tunnel's local SOCKS (MasterDNS, OpenFlux). Like
+ * [VkTurnConfig.resolvedProxyCore], but Auto means Xray: chaining through the tunnel's SOCKS needs
+ * socket-level dialerProxy chaining to keep a vless reality/xtls-vision transport intact — other paths
+ * reset it. An explicit per-location or global core still wins.
+ */
+internal fun overTunnelProxyCore(chosen: ProxyCore, profile: ProxyProfile?, globalCore: ProxyCore): ProxyCore = when {
+    chosen != ProxyCore.Auto -> chosen
+    !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
+    profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+    globalCore != ProxyCore.Auto -> globalCore
+    else -> ProxyCore.Xray
+}
+
+/**
+ * OpenFlux (github.com/p1neappleXpress/OpenFlux) transport for [EngineType.OpenFlux]: a TCP tunnel that
+ * carries IP packets through a carrier service to the user's own exit node on a VPS. The client serves a
+ * local SOCKS5 the TUN bridge consumes. Two carriers:
+ * - [TRANSPORT_YANDEX]: cursor messages of a Yandex Docs document ([docUrl], the legacy editor), shared
+ *   by the client and the exit node;
+ * - [TRANSPORT_MAX]: a WebRTC DataChannel of a MAX call — the client logs in with [maxToken] and calls
+ *   the exit node's account [maxUid] (the exit node runs with ITS OWN MAX token).
+ */
+@Serializable
+data class OpenFluxConfig(
+    @SerialName("transport")
+    val transport: String = TRANSPORT_YANDEX,
+    /** Yandex Docs document URL (legacy editor), the same one the exit node uses. */
+    @SerialName("doc_url")
+    val docUrl: String = "",
+    /** The CLIENT's MAX web token ([TRANSPORT_MAX]). */
+    @SerialName("max_token")
+    val maxToken: String = "",
+    /** MAX user id of the EXIT NODE's account — the client calls it ([TRANSPORT_MAX]). */
+    @SerialName("max_uid")
+    val maxUid: String = "",
+    /**
+     * DNS server reached THROUGH the tunnel for domain lookups (`ip:port`). The device DNS would leak
+     * every name to the ISP and, for blocked sites, answer with spoofed addresses. Blank = device DNS.
+     */
+    @SerialName("dns")
+    val dnsServer: String = DEFAULT_DNS,
+    /** Verbose client log (upstream `--debug`): every SOCKS CONNECT and transport event. */
+    @SerialName("debug")
+    val debug: Boolean = false,
+    /**
+     * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the tunnel: dialled THROUGH the
+     * OpenFlux SOCKS, so the public exit is the proxy — and the traffic is encrypted end to end, which
+     * OpenFlux alone doesn't do. Blank = exit straight through the exit node.
+     */
+    @SerialName("proxy_link")
+    val proxyLink: String = "",
+    @SerialName("proxy_core")
+    val proxyCore: ProxyCore = ProxyCore.Auto,
+) {
+    fun usesMax(): Boolean = transport == TRANSPORT_MAX
+
+    fun hasProxy(): Boolean = proxyLink.isNotBlank()
+
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore =
+        overTunnelProxyCore(proxyCore, profile, globalCore)
+
+    fun isComplete(): Boolean = when (transport) {
+        TRANSPORT_MAX -> maxToken.isNotBlank() && maxUid.trim().toLongOrNull() != null
+        else -> docUrl.trim().startsWith("http", ignoreCase = true)
+    }
+
+    fun normalized(): OpenFluxConfig = copy(
+        transport = if (transport == TRANSPORT_MAX) TRANSPORT_MAX else TRANSPORT_YANDEX,
+        docUrl = docUrl.trim(),
+        maxToken = maxToken.trim(),
+        maxUid = maxUid.trim(),
+        dnsServer = dnsServer.trim(),
+        proxyLink = proxyLink.trim(),
+    )
+
+    /** One-line summary for the location list. */
+    fun summary(): String = if (usesMax()) "MAX · звонок $maxUid" else "Яндекс Документы"
+
+    companion object {
+        const val TRANSPORT_YANDEX = "yandex"
+        /** Upstream calls the MAX transport "oneme". */
+        const val TRANSPORT_MAX = "oneme"
+        const val DEFAULT_DNS = "1.1.1.1:53"
     }
 }
 
@@ -367,6 +530,9 @@ data class LocationConfig(
     /** MasterDNS (DNS tunnel) transport for the [EngineType.MasterDns] engine. Null for other engines. */
     @SerialName("masterdns")
     val masterDns: MasterDnsConfig? = null,
+    /** OpenFlux transport for the [EngineType.OpenFlux] engine. Null for other engines. */
+    @SerialName("openflux")
+    val openFlux: OpenFluxConfig? = null,
     /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
     val advanced: AdvancedCoreConfig? = null,
     /**
@@ -439,6 +605,7 @@ data class LocationConfig(
             core = core,
             vkturn = vkturn,
             masterDns = masterDns?.normalized(),
+            openFlux = openFlux?.normalized(),
             routingProfileId = routingProfileId.trim(),
             fakeDns = fakeDns,
         )
@@ -508,6 +675,8 @@ data class LocationConfig(
         EngineType.VkTurn -> vkturn?.isComplete() == true && vkTurnExitPresent()
         // MasterDNS needs the tunnel domain(s), the shared encryption key and at least one resolver.
         EngineType.MasterDns -> masterDns?.isComplete() == true
+        // OpenFlux needs the carrier's coordinates: the Yandex Docs URL, or the MAX token + callee id.
+        EngineType.OpenFlux -> openFlux?.isComplete() == true
     }
 
     /**
@@ -921,6 +1090,8 @@ data class LocationEntry(
     val vkturn: VkTurnConfig? = null,
     @SerialName("masterdns")
     val masterDns: MasterDnsConfig? = null,
+    @SerialName("openflux")
+    val openFlux: OpenFluxConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
@@ -1004,6 +1175,7 @@ data class LocationEntry(
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
                 masterDns = masterDns,
+                openFlux = openFlux,
                 advanced = advanced,
                 fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
@@ -1035,6 +1207,7 @@ data class LocationEntry(
             core = config.core,
             vkturn = config.vkturn,
             masterDns = config.masterDns,
+            openFlux = config.openFlux,
             advanced = config.advanced,
             fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
@@ -1074,6 +1247,7 @@ data class LocationEntry(
                 core = config.core,
                 vkturn = config.vkturn,
                 masterDns = config.masterDns,
+                openFlux = config.openFlux,
                 advanced = config.advanced,
                 fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },

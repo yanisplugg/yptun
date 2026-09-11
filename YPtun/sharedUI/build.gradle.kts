@@ -270,7 +270,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.android)
             implementation(libs.ktor.client.okhttp)
             implementation(libs.kstore.file)
+            // zxing-core only draws share QRs; the camera scanner decodes with native zxing-cpp.
             implementation(libs.zxing.core)
+            implementation(libs.zxing.cpp)
             implementation(coresAndroidAarDependency)
             // Trust Tunnel (AdGuard) client — vendored prebuilt AAR (com.adguard.trusttunnel:
             // trusttunnel-client-android:1.1.5-rc.1) carrying libtrusttunnel_android.so (all ABIs) +

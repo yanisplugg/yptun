@@ -4,21 +4,31 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
 import android.os.Bundle
+import android.util.Size
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.CameraState
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageProxy
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import androidx.camera.core.TorchState
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.view.CameraController
+import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +44,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.FlashOff
+import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,26 +56,19 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.DecodeHintType
-import com.google.zxing.LuminanceSource
-import com.google.zxing.MultiFormatReader
-import com.google.zxing.NotFoundException
-import com.google.zxing.PlanarYUVLuminanceSource
-import com.google.zxing.common.HybridBinarizer
+import org.olcbox.app.ui.i18n.LocalizationState
+import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.ui.theme.AppTheme
 import org.olcbox.app.ui.theme.ThemeState
-import java.nio.ByteBuffer
+import zxingcpp.BarcodeReader
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -71,29 +76,32 @@ import java.util.concurrent.atomic.AtomicBoolean
 class QrScannerActivity : ComponentActivity() {
     private val handled = AtomicBoolean(false)
     private lateinit var cameraExecutor: ExecutorService
-    private val qrReader = MultiFormatReader().apply {
-        setHints(
-            mapOf(
-                DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-                // TRY_HARDER maximizes decode reliability; combined with center autofocus the scan
-                // is both fast and dependable.
-                DecodeHintType.TRY_HARDER to true
+    private lateinit var controller: LifecycleCameraController
+
+    // zxing-cpp (native) instead of zxing-java: reads blurred, tilted, dense and inverted codes that
+    // the Java port gives up on, several times faster, so more frames per second get a try.
+    private val reader by lazy {
+        BarcodeReader(
+            BarcodeReader.Options(
+                formats = setOf(BarcodeReader.Format.QR_CODE),
+                tryHarder = true,
+                tryInvert = true, // white-on-black codes from dark-themed panels/screens
+                tryDownscale = true // a close-up code filling the frame reads better downscaled
             )
         )
     }
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var previewView: PreviewView? = null
-    private var hasCameraPermission = false
-    private var cameraStarted = false
+
+    private val torchAvailable = mutableStateOf(false)
+    private val torchOn = mutableStateOf(false)
+    private var cameraStateObserved = false
 
     private val requestCameraPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            hasCameraPermission = true
-            maybeStartCamera()
+            startCamera()
         } else {
-            Toast.makeText(this, org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).cameraPermissionDenied, Toast.LENGTH_SHORT).show()
+            toast(stringsFor(LocalizationState.effective).cameraPermissionDenied)
             finish()
         }
     }
@@ -102,73 +110,58 @@ class QrScannerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        // CameraController gives tap-to-focus and pinch-to-zoom on the PreviewView for free, and crops
+        // analysis frames to what the preview shows.
+        controller = LifecycleCameraController(this).apply {
+            setEnabledUseCases(CameraController.IMAGE_ANALYSIS)
+            // CameraX analyses 640x480 by default — too coarse for dense config QRs (AWG, xhttp/reality
+            // links): modules blur into each other and nothing decodes however well it's focused.
+            setImageAnalysisResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            ANALYSIS_SIZE,
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
+                        )
+                    )
+                    .build()
+            )
+            setImageAnalysisAnalyzer(cameraExecutor, ::analyzeImage)
+            // Emits once a camera is bound — the first point where cameraInfo is available.
+            zoomState.observe(this@QrScannerActivity) { observeCameraState() }
+            torchState.observe(this@QrScannerActivity) { torchOn.value = it == TorchState.ON }
+        }
         enableEdgeToEdge()
 
         setContent {
             QrScannerScreen(
-                onClose = { finish() },
-                onPreviewReady = { preview ->
-                    previewView = preview
-                    maybeStartCamera()
-                }
+                controller = controller,
+                torchAvailable = torchAvailable.value,
+                torchOn = torchOn.value,
+                onToggleTorch = { controller.enableTorch(!torchOn.value) },
+                onClose = { finish() }
             )
         }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
         ) {
-            hasCameraPermission = true
-            maybeStartCamera()
+            startCamera()
         } else {
             requestCameraPermission.launch(Manifest.permission.CAMERA)
         }
     }
 
-    private fun maybeStartCamera() {
-        if (!hasCameraPermission || previewView == null || cameraStarted) return
-        startCamera()
-    }
-
     private fun startCamera() {
-        val previewView = previewView ?: return
-        cameraStarted = true
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-
-        cameraProviderFuture.addListener(
+        controller.bindToLifecycle(this)
+        val init = controller.initializationFuture
+        init.addListener(
             {
-                val provider = runCatching { cameraProviderFuture.get() }
-                    .getOrElse {
-                        cameraStarted = false
-                        Toast.makeText(this, org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).cameraUnavailable, Toast.LENGTH_SHORT).show()
-                        finish()
-                        return@addListener
-                    }
-                cameraProvider = provider
-
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
-                val analysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-                    .also { imageAnalysis ->
-                        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                            analyzeImage(imageProxy)
-                        }
-                    }
-
-                runCatching {
-                    provider.unbindAll()
-                    val camera = provider.bindToLifecycle(
-                        this,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        analysis
-                    )
-                    startContinuousAutoFocus(camera, previewView)
-                }.onFailure {
-                    cameraStarted = false
-                    Toast.makeText(this, org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).cameraUnavailable, Toast.LENGTH_SHORT).show()
+                val ok = runCatching { init.get() }.isSuccess &&
+                    controller.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)
+                if (!ok) {
+                    toast(stringsFor(LocalizationState.effective).cameraUnavailable)
                     finish()
                 }
             },
@@ -176,130 +169,69 @@ class QrScannerActivity : ComponentActivity() {
         )
     }
 
-    /** Triggers autofocus on the frame centre (where the QR frame is) and lets it re-run. */
-    private fun startContinuousAutoFocus(
-        camera: androidx.camera.core.Camera,
-        previewView: androidx.camera.view.PreviewView
-    ) {
-        previewView.post {
-            runCatching {
-                val w = previewView.width.toFloat().takeIf { it > 0f } ?: return@post
-                val h = previewView.height.toFloat().takeIf { it > 0f } ?: return@post
-                val point = previewView.meteringPointFactory.createPoint(w / 2f, h / 2f)
-                val action = androidx.camera.core.FocusMeteringAction.Builder(
-                    point,
-                    androidx.camera.core.FocusMeteringAction.FLAG_AF
-                ).setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS).build()
-                camera.cameraControl.startFocusAndMetering(action)
-            }
+    private fun observeCameraState() {
+        if (cameraStateObserved) return
+        val info = controller.cameraInfo ?: return
+        cameraStateObserved = true
+        torchAvailable.value = info.hasFlashUnit()
+        // CameraX resets zoom and metering every time the camera closes (app backgrounded, screen
+        // off), so tune on every OPEN, not once.
+        info.cameraState.observe(this) { state ->
+            if (state.type == CameraState.Type.OPEN) tuneCamera(info)
         }
     }
 
-    private fun analyzeImage(imageProxy: ImageProxy) {
-        try {
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun tuneCamera(info: CameraInfo) {
+        // Centre-weighted exposure: with whole-frame metering a QR on a bright phone/monitor screen
+        // in a dim room is blown out to white. AE only — AF stays continuous (tap still refocuses).
+        val centre = SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(0.5f, 0.5f, 0.4f)
+        controller.cameraControl?.startFocusAndMetering(
+            FocusMeteringAction.Builder(centre, FocusMeteringAction.FLAG_AE)
+                .disableAutoCancel()
+                .build()
+        )
+
+        // Flagship main cameras (Galaxy S Ultra: big 200 MP sensor) can't focus closer than ~15-20 cm,
+        // and people bring a QR to ~10 cm to fill the frame — permanently out of focus. Start zoomed
+        // in so the code fills the frame from a distance the lens can focus at. The 1080p-ish
+        // analysis stream is cut from a 12 MP binned readout, so up to ~2.5x costs no detail.
+        // ponytail: heuristic (framing of an ideal 8 cm-focus camera), pinch-to-zoom covers the rest.
+        val diopters = Camera2CameraInfo.from(info)
+            .getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+            ?: 0f // 0 = fixed focus
+        val zoom = info.zoomState.value ?: return
+        if (diopters <= 0f) return
+        val start = (100f / diopters / REFERENCE_FOCUS_CM)
+            .coerceAtMost(MAX_START_ZOOM)
+            .coerceIn(zoom.minZoomRatio, zoom.maxZoomRatio)
+        if (start > 1.05f) controller.setZoomRatio(start)
+    }
+
+    private fun analyzeImage(image: ImageProxy) {
+        image.use {
             if (handled.get()) return
-
-            val rawValue = runCatching {
-                decodeQr(imageProxy.toLuminanceSource())
-            }.getOrNull()
-
-            // Only accept QR codes that actually look like a supported config/link — otherwise the
-            // scanner keeps running instead of returning a random QR (URLs, vCards, etc.).
-            if (rawValue != null && isAcceptableQr(rawValue) && handled.compareAndSet(false, true)) {
-                setResult(
-                    Activity.RESULT_OK,
-                    Intent().putExtra(EXTRA_QR_TEXT, rawValue)
-                )
+            val text = runCatching { reader.read(it) }.getOrNull()
+                ?.firstNotNullOfOrNull { result -> result.text?.trim()?.takeIf(::isAcceptableQr) }
+            if (text != null && handled.compareAndSet(false, true)) {
+                setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_QR_TEXT, text))
                 finish()
             }
-        } finally {
-            imageProxy.close()
         }
     }
 
-    private fun isAcceptableQr(text: String): Boolean {
-        val t = text.trim()
-        val lower = t.lowercase()
-        val schemes = listOf(
-            "olcrtc://", "freeturn://", "vless://", "vmess://", "trojan://", "ss://",
-            "http://", "https://"
-        )
-        if (schemes.any { lower.startsWith(it) }) return true
-        if (t.startsWith("{")) return true // raw sing-box / panel JSON
-        return t.contains("[Interface]", ignoreCase = true) // AmneziaWG / WireGuard config
-    }
+    /**
+     * Only config-looking QRs end the scan — otherwise a random QR (vCard, Wi-Fi, plain text) would be
+     * returned. Any `scheme://` passes: the old scheme whitelist silently rejected the app's own share
+     * QRs (yptun://, hysteria2://, naive+https://, tt://, happ://…) and kept "scanning" forever.
+     */
+    private fun isAcceptableQr(text: String): Boolean =
+        text.isNotEmpty() && ("://" in text || text.startsWith("{") || text.startsWith("[") ||
+            text.contains("[Interface]", ignoreCase = true)) // AmneziaWG / WireGuard config
 
-    private fun decodeQr(source: LuminanceSource): String? {
-        var current = source
-        repeat(QR_ROTATION_ATTEMPTS) { attempt ->
-            val decoded = runCatching {
-                qrReader.decodeWithState(BinaryBitmap(HybridBinarizer(current)))
-                    .text
-                    .trim()
-                    .takeIf { it.isNotBlank() }
-            }.getOrElse { error ->
-                if (error is NotFoundException) null else null
-            }
-            qrReader.reset()
-            if (decoded != null) return decoded
-
-            if (attempt < QR_ROTATION_ATTEMPTS - 1 && current.isRotateSupported) {
-                current = current.rotateCounterClockwise()
-            }
-        }
-        return null
-    }
-
-    private fun ImageProxy.toLuminanceSource(): PlanarYUVLuminanceSource {
-        val yPlane = planes.first()
-        val luminance = yPlane.buffer.copyLuminance(
-            width = width,
-            height = height,
-            rowStride = yPlane.rowStride,
-            pixelStride = yPlane.pixelStride
-        )
-
-        return PlanarYUVLuminanceSource(
-            luminance,
-            width,
-            height,
-            0,
-            0,
-            width,
-            height,
-            false
-        )
-    }
-
-    private fun ByteBuffer.copyLuminance(
-        width: Int,
-        height: Int,
-        rowStride: Int,
-        pixelStride: Int
-    ): ByteArray {
-        val output = ByteArray(width * height)
-
-        if (pixelStride == 1 && rowStride == width) {
-            val duplicate = duplicate()
-            duplicate.rewind()
-            duplicate.get(output, 0, output.size)
-            return output
-        }
-
-        for (y in 0 until height) {
-            val rowOffset = y * rowStride
-            val outputOffset = y * width
-            for (x in 0 until width) {
-                output[outputOffset + x] = get(rowOffset + x * pixelStride)
-            }
-        }
-
-        return output
-    }
+    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
-        cameraProvider?.unbindAll()
-        previewView = null
         if (::cameraExecutor.isInitialized) {
             cameraExecutor.shutdown()
         }
@@ -308,22 +240,34 @@ class QrScannerActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_QR_TEXT = "org.olcbox.app.QR_TEXT"
-        private const val QR_ROTATION_ATTEMPTS = 4
+        private val ANALYSIS_SIZE = Size(1920, 1440)
+        private const val REFERENCE_FOCUS_CM = 8f
+        // Stay below 3x: on logical multi-cameras (Samsung) 3x switches to the telephoto, whose
+        // minimum focus distance is half a metre.
+        private const val MAX_START_ZOOM = 2.5f
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QrScannerScreen(
-    onClose: () -> Unit,
-    onPreviewReady: (PreviewView) -> Unit
+    controller: CameraController,
+    torchAvailable: Boolean,
+    torchOn: Boolean,
+    onToggleTorch: () -> Unit,
+    onClose: () -> Unit
 ) {
     // Match the main screen's theme (custom vs device-dynamic) instead of always using dynamic.
     AppTheme(useDynamicColor = ThemeState.dynamicEnabled) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.surface,
             topBar = {
-                QrScannerTopBar(onClose = onClose)
+                QrScannerTopBar(
+                    torchAvailable = torchAvailable,
+                    torchOn = torchOn,
+                    onToggleTorch = onToggleTorch,
+                    onClose = onClose
+                )
             }
         ) { innerPadding ->
             Column(
@@ -334,7 +278,7 @@ private fun QrScannerScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 QrScannerPreview(
-                    onPreviewReady = onPreviewReady,
+                    controller = controller,
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1f)
@@ -348,7 +292,12 @@ private fun QrScannerScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QrScannerTopBar(onClose: () -> Unit) {
+private fun QrScannerTopBar(
+    torchAvailable: Boolean,
+    torchOn: Boolean,
+    onToggleTorch: () -> Unit,
+    onClose: () -> Unit
+) {
     CenterAlignedTopAppBar(
         title = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -372,13 +321,24 @@ private fun QrScannerTopBar(onClose: () -> Unit) {
                     tint = MaterialTheme.colorScheme.onSurface
                 )
             }
+        },
+        actions = {
+            if (torchAvailable) {
+                IconButton(onClick = onToggleTorch) {
+                    Icon(
+                        imageVector = if (torchOn) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
+                        contentDescription = "Flashlight",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
         }
     )
 }
 
 @Composable
 private fun QrScannerPreview(
-    onPreviewReady: (PreviewView) -> Unit,
+    controller: CameraController,
     modifier: Modifier = Modifier
 ) {
     val previewShape = RoundedCornerShape(16.dp)
@@ -400,7 +360,7 @@ private fun QrScannerPreview(
                     PreviewView(context).apply {
                         scaleType = PreviewView.ScaleType.FILL_CENTER
                         implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-                        onPreviewReady(this)
+                        this.controller = controller
                     }
                 },
                 modifier = Modifier.fillMaxSize()

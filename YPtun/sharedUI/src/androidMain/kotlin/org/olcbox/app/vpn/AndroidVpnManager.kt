@@ -783,7 +783,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         // tunnel, so proxy GET/HEAD failed INSTANTLY). They ONLY measure end-to-end through the live
         // tunnel, so ignore the manual ping-mode override and fall through to the tunnelPing branch below.
         val tunnelOnlyEngine =
-            locationConfig.engine == EngineType.VkTurn || locationConfig.engine == EngineType.MasterDns
+            locationConfig.engine == EngineType.VkTurn || locationConfig.engine == EngineType.MasterDns ||
+                locationConfig.engine == EngineType.OpenFlux
         if (!tunnelOnlyEngine) {
             when (behavior.pingMode) {
                 AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
@@ -801,6 +802,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // MasterDNS has no TCP endpoint (its "server" is a DNS resolver), so it only measures
             // end-to-end through the live tunnel once connected.
             locationConfig.engine == EngineType.MasterDns -> tunnelPing()
+            // OpenFlux: its "server" is a Yandex document / a MAX account — only the live tunnel measures.
+            locationConfig.engine == EngineType.OpenFlux -> tunnelPing()
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
                 // Connected → measure through the live tunnel; otherwise a standalone WG-handshake
                 // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).

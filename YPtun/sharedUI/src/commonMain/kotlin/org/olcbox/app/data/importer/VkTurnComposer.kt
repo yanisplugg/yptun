@@ -16,6 +16,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.data.model.WdttPlusOptions
 
 /**
  * Editable representation of a VK-TURN (freeturn) location. The connection path consumes two
@@ -82,6 +83,8 @@ data class VkTurnDraft(
     val wdttFingerprint: String = "chrome",
     /** WDTT worker count; blank/0 → core default. */
     val wdttWorkers: String = "",
+    /** WDTT Plus advanced knobs, edited in place. */
+    val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
     /** Master switch for multi-server freeturn (the [extraFreeturnUris] are only used when on). */
     val freeturnMultiServer: Boolean = false,
     /**
@@ -185,6 +188,7 @@ object VkTurnComposer {
             wdttPassword = draft.wdttPassword.trim(),
             wdttFingerprint = draft.wdttFingerprint.trim(),
             wdttWorkers = draft.wdttWorkers.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
+            wdttPlus = draft.wdttPlus,
             freeturnMultiServer = draft.freeturnMultiServer,
             extraFreeturnUris = draft.extraFreeturnUris
                 .split('\n')
@@ -207,6 +211,79 @@ object VkTurnComposer {
             .copy(listenPort = localPort.toString(), outbound = VkTurnConfig.OUTBOUND_WIREGUARD)
         if (draft.wgPrivateKey.isBlank() || draft.wgPeerPublicKey.isBlank()) return null
         return compose(draft, name).second
+    }
+
+    /**
+     * Largest WireGuard/AmneziaWG MTU that survives the VK TURN path.
+     *
+     * The tunnel's packets ride inside DTLS + the RTP/Opus obfuscation on top of the carrier's own
+     * UDP, so the real path MTU is far below the 1500 a WireGuard config normally assumes. A larger
+     * value does NOT fail loudly — small exchanges (a page's HTML, an API call) fit and look fine,
+     * while anything that fills a segment (uploads, media, big TLS records) is silently dropped. That
+     * is exactly the "сайты открываются, а в приложениях нет соединения / плохая скорость" shape.
+     * The WDTT branch already hard-caps at this value; freeturn links take whatever MTU the panel
+     * baked into their `wg=` (commonly 1280, sometimes 1420), so they need the same clamp.
+     */
+    const val VKTURN_MAX_WG_MTU = 1200
+
+    /**
+     * Returns [profile] with its WireGuard/AmneziaWG MTU clamped to at most [maxMtu]
+     * ([VKTURN_MAX_WG_MTU] by default) — a smaller value the server picked is honoured, a missing one
+     * is filled in. Covers both shapes a VK-TURN exit can take: the sing-box WireGuard outbound JSON
+     * in [ProxyProfile.rawOutbound] and the wg-quick INI in [ProxyProfile.awgConfig]. Anything else
+     * (a proxy exit, an empty profile) is returned untouched.
+     */
+    fun clampVkTurnMtu(profile: ProxyProfile?, maxMtu: Int = VKTURN_MAX_WG_MTU): ProxyProfile? {
+        if (profile == null || maxMtu <= 0) return profile
+        // Explicit type: a captured `var` gets no smart cast inside the lambdas below.
+        var result: ProxyProfile = profile
+        profile.rawOutbound?.takeIf { it.isNotBlank() }?.let { raw ->
+            val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
+            if (obj != null && obj["type"]?.jsonPrimitive?.contentOrNull == "wireguard") {
+                val current = obj["mtu"]?.jsonPrimitive?.intOrNull ?: 0
+                val clamped = (if (current > 0) current else maxMtu).coerceAtMost(maxMtu)
+                if (clamped != current) {
+                    val patched = buildJsonObject {
+                        obj.forEach { (k, v) -> if (k != "mtu") put(k, v) }
+                        put("mtu", clamped)
+                    }
+                    result = result.copy(rawOutbound = patched.toString())
+                }
+            }
+        }
+        if (profile.awgConfig.isNotBlank()) {
+            clampWgConfMtu(profile.awgConfig, maxMtu)?.let { result = result.copy(awgConfig = it) }
+        }
+        return result
+    }
+
+    /**
+     * Rewrites the `MTU = …` of a wg-quick INI to at most [maxMtu], adding the line to `[Interface]`
+     * when the config carries none (awgproxy would otherwise default to 1280 — over the cap). Returns
+     * null when nothing needed changing, so callers can keep the original string.
+     */
+    internal fun clampWgConfMtu(conf: String, maxMtu: Int): String? {
+        val lines = conf.split("\n")
+        var seen = false
+        var changed = false
+        val out = lines.map { rawLine ->
+            val line = rawLine.trim().removeSuffix("\r")
+            val eq = line.indexOf('=')
+            if (eq <= 0 || !line.substring(0, eq).trim().equals("MTU", ignoreCase = true)) return@map rawLine
+            seen = true
+            val current = line.substring(eq + 1).trim().toIntOrNull() ?: 0
+            val clamped = (if (current > 0) current else maxMtu).coerceAtMost(maxMtu)
+            if (clamped == current) rawLine else { changed = true; "MTU = $clamped" }
+        }.toMutableList()
+        if (!seen) {
+            // No MTU at all → awgproxy's own 1280 default would apply. Pin ours right after
+            // [Interface] so the section it belongs to is unambiguous.
+            val at = out.indexOfFirst { it.trim().equals("[Interface]", ignoreCase = true) }
+            if (at < 0) return null
+            out.add(at + 1, "MTU = $maxMtu")
+            changed = true
+        }
+        return if (changed) out.joinToString("\n") else null
     }
 
     /** Reconstructs an editable [VkTurnDraft] from a stored [vkturn] config + WG [proxy]. */
@@ -233,6 +310,7 @@ object VkTurnComposer {
                 wdttPassword = vkturn.wdttPassword,
                 wdttFingerprint = vkturn.wdttFingerprint.ifBlank { "chrome" },
                 wdttWorkers = vkturn.wdttWorkers.takeIf { it > 0 }?.toString() ?: "",
+                wdttPlus = vkturn.wdttPlus,
                 freeturnMultiServer = vkturn.freeturnMultiServer,
                 extraFreeturnUris = vkturn.extraFreeturnUris.joinToString("\n"),
             )

@@ -3,8 +3,8 @@
 #
 #   pwsh -File build-wdtt-server.ps1
 #
-# Requires Go (1.25+). Server source is server.go (vendored from
-# github.com/amurcanov/proxy-turn-vk-android, GPLv3 — see WDTT-SERVER-README.md).
+# Requires Go (1.25+). Server source = the root package of github.com/Ivan4537/WDTT-Plus (GPLv3),
+# vendored here with its module renamed to wdtt-server — see WDTT-SERVER-README.md.
 
 $ErrorActionPreference = "Stop"
 $go = if (Test-Path "C:\Program Files\Go\bin\go.exe") { "C:\Program Files\Go\bin\go.exe" } else { "go" }
@@ -18,7 +18,7 @@ try {
     foreach ($arch in @("amd64", "arm64")) {
         $env:GOOS = "linux"; $env:GOARCH = $arch
         $bin = Join-Path $here "wdtt-server-linux-$arch"
-        & $go build -trimpath -ldflags="-s -w" -o $bin server.go
+        & $go build -trimpath -ldflags="-s -w" -o $bin .
         if ($LASTEXITCODE -ne 0) { throw "build failed for $arch" }
 
         $gz = Join-Path $assets "wdtt-server-linux-$arch.gz"

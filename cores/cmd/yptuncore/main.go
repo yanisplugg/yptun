@@ -588,18 +588,31 @@ func (s wdttSink) OnConfig(wgConf string) {
 	}
 }
 
+// YpWdttStart starts WDTT Plus from a wdttmobile.Options JSON. Returns NULL, or the error text when
+// the JSON doesn't parse.
+//
 //export YpWdttStart
-func YpWdttStart(peer, vkHashes, password, listen *C.char, numWorkers C.int, deviceID, fingerprint, clientIDs *C.char) *C.char {
+func YpWdttStart(optionsJSON *C.char) *C.char {
 	wdttMu.Lock()
 	ch := make(chan string, 1)
 	wdttConfigCh = ch
 	wdttMu.Unlock()
-	wdttmobile.Start(
-		C.GoString(peer), C.GoString(vkHashes), C.GoString(password), C.GoString(listen),
-		int(numWorkers), C.GoString(deviceID), C.GoString(fingerprint), C.GoString(clientIDs),
-		wdttSink{ch: ch},
-	)
+	if err := wdttmobile.Start(C.GoString(optionsJSON), wdttSink{ch: ch}); err != nil {
+		return cs(err.Error())
+	}
 	return nil
+}
+
+// YpWdttLastError is why the core stopped on its own ("" while fine).
+//
+//export YpWdttLastError
+func YpWdttLastError() *C.char { return cs(wdttmobile.LastError()) }
+
+// YpWdttCheckHashes probes VK call hashes; "index|hash|status|message" lines. Blocks.
+//
+//export YpWdttCheckHashes
+func YpWdttCheckHashes(vkHashes *C.char) *C.char {
+	return cs(wdttmobile.CheckHashes(C.GoString(vkHashes)))
 }
 
 // YpWdttWaitConfig blocks up to timeoutMs for the wdtt-server's WireGuard config (GETCONF).

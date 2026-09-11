@@ -900,6 +900,127 @@ class LocationsRepositoryImplTest {
         assertEquals("https://example.test/b", ConfigShareService.subscriptionQrText(items[1].url))
     }
 
+    /**
+     * A subscription that grows between refreshes must not lose servers. All proxy locations used to
+     * share one refresh signature, so old ids were handed out by POSITION, and a new server's generated
+     * id (`imported_location` for a Cyrillic name) could equal an id just reused by position — the
+     * bundle's distinctBy(storageId) then silently dropped the LAST server, on every later refresh too.
+     */
+    @Test
+    fun growingSubscriptionKeepsEveryServerAndItsId() = runTest {
+        fun link(host: String, name: String) =
+            "vless://11111111-2222-3333-4444-555555555555@$host:443?type=tcp&security=tls#$name"
+        var body = listOf(link("a.test", "Рига"), link("b.test", "Хельсинки")).joinToString("\n")
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(
+            dataSource = source,
+            httpClient = HttpClient(MockEngine { respond(body) }),
+            deviceIdentityProvider = StaticIdentityProvider("hwid-test")
+        )
+        val url = "https://example.test/grow"
+        repo.importText(url)
+        val rigaId = source.stored!!.locations.single { it.name == "Рига" }.storageId
+
+        body += "\n" + link("c.test", "Стокгольм")
+        repo.refreshSubscription(url)
+        // A server inserted at the FRONT shifts every position.
+        body = link("d.test", "Алматы") + "\n" + body + "\n" + link("e.test", "Нюрнберг")
+        repo.refreshSubscription(url)
+
+        val locations = source.stored!!.locations
+        assertEquals(
+            listOf("Алматы", "Рига", "Хельсинки", "Стокгольм", "Нюрнберг"),
+            locations.map { it.name }
+        )
+        assertEquals(locations.size, locations.map { it.storageId }.toSet().size)
+        // The id (selection, pings) follows the server, not its position in the list.
+        assertEquals(rigaId, locations.single { it.name == "Рига" }.storageId)
+    }
+
+    /** VK-TURN servers keep their ids across a refresh that inserts a server AND renames one upstream. */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    @Test
+    fun freeturnSubscriptionKeepsEveryServerAndItsId() = runTest {
+        val wgConf = listOf(
+            "[Interface]",
+            "PrivateKey = QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoxMjM0NTY3OD0=",
+            "Address = 10.7.3.2/32",
+            "",
+            "[Peer]",
+            "PublicKey = cGVlcl9wdWJsaWNfa2V5X2Jhc2U2NF8zMl9ieXRlc19vaz0=",
+            "Endpoint = 127.0.0.1:9000",
+            "AllowedIPs = 0.0.0.0/0",
+        ).joinToString("\n")
+        val wg = kotlin.io.encoding.Base64.UrlSafe.encode(wgConf.encodeToByteArray()).trimEnd('=')
+        fun link(ip: String, name: String) =
+            "freeturn://vk?tcp<mode=udp&obf-profile=rtpopus&wg=$wg>@$ip:56000#deadbeef${'$'}$name"
+        var body = listOf(link("198.51.100.1", "Нода 1"), link("198.51.100.2", "Нода 2")).joinToString("\n")
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(
+            dataSource = source,
+            httpClient = HttpClient(MockEngine { respond(body) }),
+            deviceIdentityProvider = StaticIdentityProvider("hwid-test")
+        )
+        val url = "https://example.test/freeturn-grow"
+        repo.importText(url)
+        val imported = source.stored!!.locations
+        assertEquals(listOf("Нода 1", "Нода 2"), imported.map { it.name })
+        val node1Id = imported.single { it.name == "Нода 1" }.storageId
+
+        body = listOf(
+            link("198.51.100.3", "Нода 0"),
+            link("198.51.100.1", "Нода 1 (NL)"),
+            link("198.51.100.2", "Нода 2"),
+        ).joinToString("\n")
+        repo.refreshSubscription(url)
+
+        val locations = source.stored!!.locations
+        assertEquals(listOf("Нода 0", "Нода 1 (NL)", "Нода 2"), locations.map { it.name })
+        assertEquals(locations.size, locations.map { it.storageId }.toSet().size)
+        assertEquals(node1Id, locations.single { it.name == "Нода 1 (NL)" }.storageId)
+    }
+
+    /**
+     * A panel serving links to our UA and full Xray JSON to Happ's: a plain tcp/tls server whose JSON
+     * brings its OWN routing must run that JSON verbatim — before only xhttp got the swap, so every other
+     * server lost the panel's routing (RU direct, torrents blocked) on the link-parsed typed path.
+     */
+    @Test
+    fun jsonSubscriptionRoutingIsKeptForEveryServer() = runTest {
+        val link = "vless://732c8764-e31d-49ab-852b-54cb0f7cc3de@spb.example.test:443" +
+            "?type=tcp&security=tls&sni=spb.example.test#SPB"
+        val json = """
+            [{
+              "remarks": "SPB",
+              "dns": { "hosts": { "regexp:(^|\\.)ru${'$'}": "198.18.0.2" }, "servers": ["1.1.1.1"] },
+              "routing": { "domainStrategy": "IPOnDemand", "rules": [
+                { "type": "field", "ip": ["198.18.0.0/15"], "outboundTag": "direct" },
+                { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" }
+              ] },
+              "outbounds": [
+                { "tag": "proxy", "protocol": "vless", "settings": { "vnext": [ { "address": "spb.example.test", "port": 443,
+                  "users": [ { "id": "732c8764-e31d-49ab-852b-54cb0f7cc3de", "encryption": "none" } ] } ] },
+                  "streamSettings": { "network": "tcp", "security": "tls" } },
+                { "tag": "direct", "protocol": "freedom" },
+                { "tag": "block", "protocol": "blackhole" }
+              ]
+            }]
+        """.trimIndent()
+        val engine = MockEngine { request ->
+            val happ = request.headers[HttpHeaders.UserAgent].orEmpty().startsWith("Happ")
+            respond(if (happ) json else link)
+        }
+        val source = FakeLocationsDataSource()
+        LocationsRepositoryImpl(source, HttpClient(engine), StaticIdentityProvider("hwid-test"))
+            .importText("https://example.test/panel")
+
+        val entry = source.stored!!.locations.single()
+        assertEquals("SPB", entry.name)
+        assertEquals(org.olcbox.app.data.model.ProxyCore.Xray, entry.core)
+        val raw = entry.proxy?.rawXrayConfig.orEmpty()
+        assertTrue("bittorrent" in raw && "198.18.0.0/15" in raw, raw)
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),

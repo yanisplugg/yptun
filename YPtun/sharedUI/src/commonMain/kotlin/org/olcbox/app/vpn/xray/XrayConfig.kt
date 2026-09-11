@@ -608,6 +608,8 @@ object XrayConfig {
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
+        // hosts entries that only exist to steer routing become domain rules (see liftHostsIntoRouting).
+        val (configDns, configRouting) = liftHostsIntoRouting(root["dns"] as? JsonObject, root["routing"] as? JsonObject)
 
         // Only inject when the user's config doesn't already opt into FakeDNS (honor wins).
         val injectFake = fakeDnsEnabled && root["fakedns"] == null
@@ -656,7 +658,7 @@ object XrayConfig {
         // Merge profile routing (direct/block buckets) into the user's config, if requested.
         val userOutbounds = (root["outbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
         val userOutboundTags = userOutbounds.mapNotNull { it["tag"]?.jsonPrimitive?.contentOrNull }.toSet()
-        val userRouting = root["routing"] as? JsonObject
+        val userRouting = configRouting
 
         // CASCADE: a standard second proxy chained on top of the verbatim config. Its exit outbound
         // reaches its server THROUGH the config's main proxy outbound and becomes the default exit, so
@@ -751,7 +753,7 @@ object XrayConfig {
 
         // FakeDNS injection (only when the raw config doesn't already define it): augment `dns` with a
         // `fakedns` server, add the synthetic-IP pool, and hijack DNS ports to a `dns-out` outbound.
-        val rawDns = root["dns"] as? JsonObject
+        val rawDns = configDns
         val augmentedDns = if (injectFake) buildJsonObject {
             rawDns?.forEach { (k, v) -> if (k != "servers") put(k, v) }
             putJsonArray("servers") {
@@ -780,7 +782,7 @@ object XrayConfig {
 
         // The dns to write: injected-fakedns version if any, else the config's own — geo-stripped when
         // requested so unresolvable geosite: DNS categories can't fail the load.
-        val baseDns = augmentedDns ?: (root["dns"] as? JsonObject)
+        val baseDns = augmentedDns ?: configDns
         val strippedDns = if (stripGeoSelectors) stripGeoFromDns(baseDns) else baseDns
         // Force A-only resolution under ipv4_only/prefer_ipv4 so dual-stack sites never learn an AAAA.
         val outDns = if (forceIpv4 && strippedDns != null) buildJsonObject {
@@ -1011,6 +1013,77 @@ object XrayConfig {
     }
 
     /** Forces a `freedom` outbound to ForceIPv4 (so it never dials IPv6, incl. raw v6 literals). */
+    /**
+     * Moves `dns.hosts` entries whose address is routed by a plain IP rule of the config into DOMAIN rules
+     * with the same outbound, placed right before that rule, and drops them from `hosts`.
+     *
+     * Panels (Remnawave/Happ-style JSON subscriptions) steer sites through the resolver: RU domains map to
+     * 198.18.0.x in `hosts`, and `ip: 198.18.0.0/15 → direct` sends them direct. That relies on the
+     * `direct` freedom resolving the domain by the SYSTEM resolver (AsIs). With any freedom
+     * domainStrategy — and under ipv4_only we force ForceIPv4 — xray resolves through its own DNS, where
+     * `hosts` applies first, so every such site was dialled at 198.18.0.x: a dead address. As domain rules
+     * they route identically without the synthetic hop, and the direct dial gets the real address.
+     * Only entries mapped to one IPv4 caught by a rule matching on `ip` alone are moved; the rest stay.
+     */
+    internal fun liftHostsIntoRouting(dns: JsonObject?, routing: JsonObject?): Pair<JsonObject?, JsonObject?> {
+        val hosts = dns?.get("hosts") as? JsonObject ?: return dns to routing
+        val rules = (routing?.get("rules") as? JsonArray)?.map { it as? JsonObject } ?: return dns to routing
+        fun ruleFor(ip: String): Int = rules.indexOfFirst { rule ->
+            rule != null && rule["outboundTag"] != null &&
+                (rule.keys - setOf("type", "ip", "outboundTag", "ruleTag")).isEmpty() &&
+                (rule["ip"] as? JsonArray)?.any { cidr -> ipv4InCidr(ip, (cidr as? JsonPrimitive)?.contentOrNull) } == true
+        }
+        val lifted = mutableMapOf<Int, MutableList<String>>()
+        val keptHosts = buildJsonObject {
+            hosts.forEach { (key, value) ->
+                val ip = ((value as? JsonArray)?.singleOrNull() ?: value).let { (it as? JsonPrimitive)?.contentOrNull }
+                val at = ip?.let(::ruleFor) ?: -1
+                if (at < 0) {
+                    put(key, value)
+                } else {
+                    // hosts reads an unprefixed key as a FULL match; in routing it would be a substring.
+                    val domain = if (key.substringBefore(':', "").isEmpty()) "full:$key" else key
+                    lifted.getOrPut(at) { mutableListOf() }.add(domain)
+                }
+            }
+        }
+        if (lifted.isEmpty()) return dns to routing
+        val newDns = buildJsonObject {
+            dns.forEach { (k, v) -> if (k == "hosts") { if (keptHosts.isNotEmpty()) put(k, keptHosts) } else put(k, v) }
+        }
+        val newRouting = buildJsonObject {
+            routing.forEach { (k, v) -> if (k != "rules") put(k, v) }
+            putJsonArray("rules") {
+                rules.forEachIndexed { i, rule ->
+                    lifted[i]?.let { domains ->
+                        addJsonObject {
+                            put("type", "field")
+                            putJsonArray("domain") { domains.forEach { add(it) } }
+                            put("outboundTag", rule!!["outboundTag"]!!)
+                        }
+                    }
+                    add(rule ?: JsonObject(emptyMap()))
+                }
+            }
+        }
+        return newDns to newRouting
+    }
+
+    /** True when [ip] (dotted IPv4) lies in [cidr] ("a.b.c.d" or "a.b.c.d/n"); geoip:/IPv6 entries → false. */
+    private fun ipv4InCidr(ip: String, cidr: String?): Boolean {
+        if (cidr == null) return false
+        fun toLong(v: String): Long? {
+            val parts = v.split('.')
+            if (parts.size != 4) return null
+            return parts.fold(0L) { acc, p -> (acc shl 8) or (p.toIntOrNull()?.takeIf { it in 0..255 } ?: return null).toLong() }
+        }
+        val addr = toLong(ip) ?: return false
+        val base = toLong(cidr.substringBefore('/')) ?: return false
+        val bits = if ('/' in cidr) cidr.substringAfter('/').toIntOrNull()?.takeIf { it in 0..32 } ?: return false else 32
+        val mask = if (bits == 0) 0L else (0xFFFFFFFFL shl (32 - bits)) and 0xFFFFFFFFL
+        return (addr and mask) == (base and mask)
+    }
+
     private fun forceIpv4Freedom(outbound: JsonObject): JsonObject {
         if (outbound["protocol"]?.jsonPrimitive?.contentOrNull != "freedom") return outbound
         val settings = outbound["settings"] as? JsonObject

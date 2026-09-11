@@ -2,12 +2,23 @@ package wdtt
 
 import (
 	"context"
+	"encoding/binary"
 	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+const (
+	wireGuardTransportDataType = 4
+	wireGuardEmptyDataSize     = 32
+)
+
+func isWireGuardUserDataPacket(packet []byte) bool {
+	return len(packet) > wireGuardEmptyDataSize &&
+		binary.LittleEndian.Uint32(packet[:4]) == wireGuardTransportDataType
+}
 
 var pktPool = sync.Pool{
 	New: func() interface{} {
@@ -31,27 +42,55 @@ func putPktBuf(b []byte) {
 }
 
 const (
-	returnChBuf = 512
-	chunkSize   = 12
+	returnChBuf           = 384
+	deviceWakeHealthGrace = 60 * time.Second
+
+	// chunkSize — количество последовательных пакетов, отправляемых в один worker
+	// перед переключением на следующий.
+	//
+	// Зачем: при round-robin (chunk=1) каждый пакет летит через разный TURN relay
+	// с разным latency, что приводит к reorder на сервере. TCP внутри WireGuard
+	// интерпретирует reorder как потери → cwnd collapse → скорость single-flow
+	// падает до ~8 KB/s.
+	//
+	// С chunk=16 пакеты реже перескакивают между путями с разной задержкой. Это
+	// уменьшает reorder на активной многоканальной сессии, сохраняя равномерную
+	// загрузку всех workers.
+	// Reorder возможен только между chunk-границами, что покрывается WG replay
+	// window (2048 пакетов).
+	//
+	// Все workers по-прежнему получают одинаковую долю трафика за полный цикл;
+	// фактический выигрыш зависит от различия задержек между TURN-путями.
+	chunkSize = 16
 )
 
 type WorkerSlot struct {
 	ID     int
 	SendCh chan []byte
+	WakeCh chan struct{}
 }
 
 type Dispatcher struct {
 	localConn  net.PacketConn
 	clientAddr atomic.Pointer[net.Addr]
 	workers    atomic.Pointer[[]*WorkerSlot]
-	mu         sync.Mutex
-	rrIndex    atomic.Int32
-	rrCount    atomic.Int32
+	mu         sync.Mutex // Используется только для записи
+	rrIndex    int
+	rrCount    int
 	ReturnCh   chan []byte
 	ctx        context.Context
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	stats      *Stats
+	// firstUnansweredUserTxAt is global for the dispatcher because a reply may
+	// return through a different worker than the one that sent the request.
+	// Keeping the first (rather than latest) unanswered send also prevents a
+	// continuous stream of retries from postponing stall detection forever.
+	firstUnansweredUserTxAt atomic.Int64
+	stalledUserTraffic      atomic.Bool
+	deviceSleeping          atomic.Bool
+	wakeGeneration          atomic.Uint64
+	wakeHealthGraceUntil    atomic.Int64
 }
 
 func NewDispatcher(ctx context.Context, localConn net.PacketConn, stats *Stats) *Dispatcher {
@@ -103,6 +142,77 @@ func (d *Dispatcher) Unregister(slot *WorkerSlot) {
 	log.Printf("[ДИСП] Воркер #%d отключён (осталось: %d)", slot.ID, len(newWorkers))
 }
 
+func (d *Dispatcher) noteUserTrafficSent(now time.Time) {
+	d.firstUnansweredUserTxAt.CompareAndSwap(0, now.UnixNano())
+}
+
+func (d *Dispatcher) noteUserTrafficResponse() bool {
+	d.firstUnansweredUserTxAt.Store(0)
+	return d.stalledUserTraffic.Swap(false)
+}
+
+func (d *Dispatcher) resetUserTrafficHealth() {
+	d.firstUnansweredUserTxAt.Store(0)
+	d.stalledUserTraffic.Store(false)
+}
+
+func (d *Dispatcher) noteDeviceSleep() {
+	d.deviceSleeping.Store(true)
+	d.wakeHealthGraceUntil.Store(0)
+	d.resetUserTrafficHealth()
+}
+
+func (d *Dispatcher) noteDeviceWake(now time.Time) uint64 {
+	d.resetUserTrafficHealth()
+	d.wakeHealthGraceUntil.Store(now.Add(deviceWakeHealthGrace).UnixNano())
+	generation := d.wakeGeneration.Add(1)
+	d.deviceSleeping.Store(false)
+
+	workers := d.workers.Load()
+	if workers == nil {
+		return generation
+	}
+	for _, worker := range *workers {
+		if worker.WakeCh == nil {
+			continue
+		}
+		select {
+		case worker.WakeCh <- struct{}{}:
+		default:
+		}
+	}
+	return generation
+}
+
+func (d *Dispatcher) shouldSuppressTransportHealth(now time.Time) bool {
+	if d.deviceSleeping.Load() {
+		return true
+	}
+	graceUntil := d.wakeHealthGraceUntil.Load()
+	return graceUntil > 0 && now.UnixNano() < graceUntil
+}
+
+func (d *Dispatcher) claimStalledUserTraffic(now time.Time, timeout time.Duration) (time.Duration, bool) {
+	startedAt := d.firstUnansweredUserTxAt.Load()
+	if startedAt == 0 {
+		return 0, false
+	}
+	stalledFor := now.Sub(time.Unix(0, startedAt))
+	if stalledFor <= timeout || !d.firstUnansweredUserTxAt.CompareAndSwap(startedAt, 0) {
+		return 0, false
+	}
+	d.stalledUserTraffic.Store(true)
+	return stalledFor, true
+}
+
+// readLoop читает WireGuard-пакеты и распределяет по workers chunk'ами.
+//
+// Логика: отправляем chunkSize подряд пакетов в один worker, потом переходим
+// к следующему. Если текущий worker перегружен (канал полный) — немедленно
+// ищем свободный worker и начинаем новый chunk на нём. Это гарантирует:
+//   - В рамках chunk пакеты идут через один TURN relay → in-order delivery
+//   - Между chunks — разные relay → максимальная агрегатная скорость
+//   - Нет блокировки, нет буферизации, нет дополнительного latency
 func (d *Dispatcher) readLoop() {
 	defer d.wg.Done()
 
@@ -125,7 +235,7 @@ func (d *Dispatcher) readLoop() {
 		pkt = pkt[:n]
 
 		d.clientAddr.Store(&addr)
-		atomic.AddInt64(&d.stats.TotalBytesUp, int64(n))
+		d.stats.TotalBytesUp.Add(int64(n))
 
 		workersPtr := d.workers.Load()
 		if workersPtr == nil || len(*workersPtr) == 0 {
@@ -137,26 +247,27 @@ func (d *Dispatcher) readLoop() {
 		nw := len(ws)
 
 		sent := false
-		idx := int(d.rrIndex.Load()) % nw
+		idx := d.rrIndex % nw
 
+		// Пробуем текущий worker (chunk affinity)
 		w := ws[idx]
 		select {
 		case w.SendCh <- pkt:
 			sent = true
-			count := d.rrCount.Add(1)
-			if count >= int32(chunkSize) {
-				d.rrIndex.Store(int32((idx + 1) % nw))
-				d.rrCount.Store(0)
+			d.rrCount++
+			if d.rrCount >= chunkSize {
+				d.rrIndex = (idx + 1) % nw
+				d.rrCount = 0
 			}
 		default:
-
+			// Текущий worker перегружен — ищем свободный, начинаем новый chunk
 			for i := 1; i < nw; i++ {
 				altIdx := (idx + i) % nw
 				select {
 				case ws[altIdx].SendCh <- pkt:
 					sent = true
-					d.rrIndex.Store(int32(altIdx))
-					d.rrCount.Store(1)
+					d.rrIndex = altIdx
+					d.rrCount = 1 // первый пакет нового chunk'а уже отправлен
 				default:
 				}
 				if sent {
@@ -166,9 +277,9 @@ func (d *Dispatcher) readLoop() {
 		}
 
 		if !sent {
-
-			d.rrIndex.Store(int32((idx + 1) % nw))
-			d.rrCount.Store(0)
+			// Все workers перегружены — сдвигаем указатель, пакет дропается
+			d.rrIndex = (idx + 1) % nw
+			d.rrCount = 0
 			putPktBuf(pkt)
 		}
 	}
@@ -194,7 +305,7 @@ func (d *Dispatcher) writeLoop() {
 					return
 				}
 			}
-			atomic.AddInt64(&d.stats.TotalBytesDown, int64(len(pkt)))
+			d.stats.TotalBytesDown.Add(int64(len(pkt)))
 			putPktBuf(pkt)
 		}
 	}

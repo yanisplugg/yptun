@@ -36,6 +36,7 @@ import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.MasterDnsConfig
+import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.ShareLinkComposer
@@ -149,6 +150,10 @@ class LocationViewModel(
     var editingMasterDns by mutableStateOf(MasterDnsConfig())
         private set
 
+    /** Editable OpenFlux fields for the [EngineType.OpenFlux] engine. */
+    var editingOpenFlux by mutableStateOf(OpenFluxConfig())
+        private set
+
     var proxyError by mutableStateOf<String?>(null)
         private set
 
@@ -202,6 +207,7 @@ class LocationViewModel(
             EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
             EngineType.VkTurn -> vkTurnFieldsValid
             EngineType.MasterDns -> masterDnsFieldsValid
+            EngineType.OpenFlux -> editingOpenFlux.isComplete()
         }
 
     init {
@@ -563,6 +569,7 @@ class LocationViewModel(
             VkTurnDraft()
         }
         editingMasterDns = editingConfig.masterDns ?: MasterDnsConfig()
+        editingOpenFlux = editingConfig.openFlux ?: OpenFluxConfig()
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
             LocationConfig.DEFAULT_BYPASS_PROVIDER
@@ -697,6 +704,13 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(vkturn = vkturn, proxy = proxy)
     }
 
+    /** Applies an edit to the OpenFlux config and keeps [editingConfig] in sync. */
+    fun updateOpenFlux(transform: (OpenFluxConfig) -> OpenFluxConfig) {
+        val updated = transform(editingOpenFlux)
+        editingOpenFlux = updated
+        editingConfig = editingConfig.copy(openFlux = updated)
+    }
+
     /** Applies an edit to the MasterDNS (DNS tunnel) config and keeps [editingConfig] in sync. */
     fun updateMasterDns(transform: (MasterDnsConfig) -> MasterDnsConfig) {
         val updated = transform(editingMasterDns)
@@ -729,6 +743,11 @@ class LocationViewModel(
             editingConfig = editingConfig.copy(masterDns = editingMasterDns)
         } else if (previous == EngineType.MasterDns) {
             editingConfig = editingConfig.copy(masterDns = null)
+        }
+        if (engine == EngineType.OpenFlux) {
+            editingConfig = editingConfig.copy(openFlux = editingOpenFlux)
+        } else if (previous == EngineType.OpenFlux) {
+            editingConfig = editingConfig.copy(openFlux = null)
         }
     }
 
@@ -995,9 +1014,12 @@ class LocationViewModel(
         val pings = currentPingsSnapshot()
         return locations
             .filter { it.subscriptionUrl.isNullOrBlank() }
-            // VK-TURN / MasterDNS can't be pinged off-tunnel (their result is null until connected) —
-            // NEVER treat them as unreachable / delete them.
-            .filter { it.config?.engine != EngineType.VkTurn && it.config?.engine != EngineType.MasterDns }
+            // VK-TURN / MasterDNS / OpenFlux can't be pinged off-tunnel (their result is null until
+            // connected) — NEVER treat them as unreachable / delete them.
+            .filter {
+                it.config?.engine != EngineType.VkTurn && it.config?.engine != EngineType.MasterDns &&
+                    it.config?.engine != EngineType.OpenFlux
+            }
             .map { it.storageId }
             .filter { pings.containsKey(it) && pings[it] == null }
     }

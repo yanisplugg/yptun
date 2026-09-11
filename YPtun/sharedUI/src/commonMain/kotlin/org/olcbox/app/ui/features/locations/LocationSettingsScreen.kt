@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.padding
@@ -88,6 +87,8 @@ import org.olcbox.app.vpn.freeturn.FreeturnInstallOptions
 import org.olcbox.app.vpn.freeturn.rememberFreeturnServerInstaller
 import org.olcbox.app.vpn.masterdns.MasterDnsInstallOptions
 import org.olcbox.app.vpn.masterdns.rememberMasterDnsServerInstaller
+import org.olcbox.app.vpn.openflux.OpenFluxInstallOptions
+import org.olcbox.app.vpn.openflux.rememberOpenFluxServerInstaller
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,7 +96,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -104,11 +104,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.MasterDnsConfig
+import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
@@ -116,6 +115,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.ui.components.PingButton
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 
@@ -175,9 +175,11 @@ fun LocationSettingsScreen(
         config.transport,
         config.bypassProvider
     )
-    val density = LocalDensity.current
-    val isKeyboardVisible = WindowInsets.ime.getBottom(density) > 0
-
+    // No WindowInsets.ime here (issue #40): the activity runs adjustPan like the rest of the app, and in
+    // that mode Compose's IME insets are not reliable — after a long-press "Вставить" toolbar the value
+    // stuck at the keyboard height once the keyboard was gone, so imePadding() left the bottom half of
+    // the screen black and the Save bar hidden. adjustPan already moves the focused field above the
+    // keyboard, so the screen needs no IME handling of its own.
     var showWdttInstall by remember { mutableStateOf(false) }
     if (showWdttInstall) {
         WdttInstallDialog(
@@ -225,6 +227,14 @@ fun LocationSettingsScreen(
         )
     }
 
+    var showOpenFluxInstall by remember { mutableStateOf(false) }
+    if (showOpenFluxInstall) {
+        OpenFluxInstallDialog(
+            config = viewModel.editingOpenFlux,
+            onApplyConfig = { update -> viewModel.updateOpenFlux(update) },
+            onDismiss = { showOpenFluxInstall = false }
+        )
+    }
     var showMasterDnsInstall by remember { mutableStateOf(false) }
     if (showMasterDnsInstall) {
         MasterDnsInstallDialog(
@@ -243,35 +253,32 @@ fun LocationSettingsScreen(
             )
         },
         bottomBar = {
-            if (!isKeyboardVisible) {
-                Column {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    ActionsBar(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 24.dp, vertical = 16.dp),
-                        showDelete = viewModel.editingId != null,
-                        isSaving = isSaving,
-                        isFormValid = viewModel.isFormValid,
-                        onDelete = { if (confirmBeforeDelete) confirmDelete = true else deleteNow() },
-                        onSave = {
-                            viewModel.saveEditing {
-                                homeViewModel.loadCurrentConfig()
-                                homeViewModel.restartVpnIfRunning()
-                                onBack()
-                            }
+            Column {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                ActionsBar(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
+                    showDelete = viewModel.editingId != null,
+                    isSaving = isSaving,
+                    isFormValid = viewModel.isFormValid,
+                    onDelete = { if (confirmBeforeDelete) confirmDelete = true else deleteNow() },
+                    onSave = {
+                        viewModel.saveEditing {
+                            homeViewModel.loadCurrentConfig()
+                            homeViewModel.restartVpnIfRunning()
+                            onBack()
                         }
-                    )
-                }
+                    }
+                )
             }
         }
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding(),
+                .padding(innerPadding),
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -387,6 +394,16 @@ fun LocationSettingsScreen(
                     showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateMasterDns,
                     onMasterDnsAutoInstall = { showMasterDnsInstall = true }
+                )
+            }
+
+            if (config.engine == EngineType.OpenFlux) {
+                openFluxSection(
+                    config = viewModel.editingOpenFlux,
+                    enabled = !isSaving,
+                    showAutoInstall = allowVpsAutoInstall,
+                    onChange = viewModel::updateOpenFlux,
+                    onAutoInstall = { showOpenFluxInstall = true }
                 )
             }
 
@@ -677,7 +694,8 @@ private fun EngineSelector(
         EngineType.Standard,
         EngineType.Chain,
         EngineType.VkTurn,
-        EngineType.MasterDns
+        EngineType.MasterDns,
+        EngineType.OpenFlux
     )
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -880,31 +898,55 @@ private fun LazyListScope.masterDnsSection(
     // Optional proxy chained ON TOP of the MasterDNS tunnel: traffic → MasterDNS → proxy → internet (the
     // proxy server is dialled THROUGH the MasterDNS SOCKS), so the public exit is the proxy. Same idea as
     // "proxy over VK-TURN".
+    proxyOverTunnelSection(
+        tunnel = "MasterDNS",
+        exitName = "MasterDNS-сервер",
+        proxyLink = config.proxyLink,
+        proxyCore = config.proxyCore,
+        enabled = enabled,
+        onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
+        onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
+    )
+}
+
+/**
+ * "Proxy over <tunnel>": a VLESS/Trojan/SS server dialled THROUGH the tunnel's local SOCKS, so the public
+ * exit is that proxy instead of the tunnel's own server. Shared by the MasterDNS and OpenFlux editors.
+ */
+private fun LazyListScope.proxyOverTunnelSection(
+    tunnel: String,
+    exitName: String,
+    proxyLink: String,
+    proxyCore: ProxyCore,
+    enabled: Boolean,
+    onLinkChange: (String) -> Unit,
+    onCoreChange: (ProxyCore) -> Unit,
+) {
     item {
-        var proxyOn by remember(config.proxyLink.isNotBlank()) {
-            mutableStateOf(config.proxyLink.isNotBlank())
+        var proxyOn by remember(proxyLink.isNotBlank()) {
+            mutableStateOf(proxyLink.isNotBlank())
         }
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
-                title = "Прокси поверх MasterDNS",
-                subtitle = "VLESS/Trojan/SS, который дозванивается ЧЕРЕЗ MasterDNS-туннель — выходной IP будет прокси, а не MasterDNS-сервер"
+                title = "Прокси поверх $tunnel",
+                subtitle = "VLESS/Trojan/SS, который дозванивается ЧЕРЕЗ туннель $tunnel — выходной IP будет прокси, а не $exitName"
             )
             VkTurnSwitchRow(
-                label = "Прокси поверх MasterDNS",
+                label = "Прокси поверх $tunnel",
                 checked = proxyOn,
                 enabled = enabled,
                 onCheckedChange = { on ->
                     proxyOn = on
-                    if (!on) onChange { it.copy(proxyLink = "") }
+                    if (!on) onLinkChange("")
                 }
             )
             if (proxyOn) {
                 OutlinedTextField(
-                    value = config.proxyLink,
-                    onValueChange = { v -> onChange { it.copy(proxyLink = v) } },
+                    value = proxyLink,
+                    onValueChange = onLinkChange,
                     label = { Text(LocalStrings.current.proxyLink) },
                     placeholder = { Text("vless://… / trojan://… / ss://…") },
                     enabled = enabled,
@@ -912,9 +954,9 @@ private fun LazyListScope.masterDnsSection(
                     modifier = Modifier.fillMaxWidth()
                 )
                 CoreSelector(
-                    selected = config.proxyCore,
+                    selected = proxyCore,
                     enabled = enabled,
-                    onSelected = { v -> onChange { it.copy(proxyCore = v) } }
+                    onSelected = onCoreChange
                 )
             }
         }
@@ -950,7 +992,7 @@ private fun LazyListScope.vkTurnSection(
         ) {
             SectionTitle(
                 title = "Транспортное ядро VK-TURN",
-                subtitle = "freeturn — стандартный клиент; WDTT — агрегация одного WG-потока по звонкам (chunk-dispatch)"
+                subtitle = "freeturn — стандартный клиент; WDTT Plus — агрегация одного WG-потока по звонкам, режим «Сеть РТ», резерв через WARP"
             )
             SettingsDropdown(
                 label = "Ядро",
@@ -958,7 +1000,7 @@ private fun LazyListScope.vkTurnSection(
                 options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT),
                 enabled = enabled,
                 onValueSelected = { v -> onChange { it.copy(core = v) } },
-                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "WDTT (агрегация по звонкам)" else "freeturn (стандарт)" }
+                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "WDTT Plus (агрегация по звонкам)" else "freeturn (стандарт)" }
             )
             if (draft.core == VkTurnConfig.CORE_WDTT) {
                 Row(
@@ -1019,6 +1061,11 @@ private fun LazyListScope.vkTurnSection(
                     placeholder = "0 — авто; кратно 9, максимум 108",
                     enabled = enabled,
                     keyboardType = KeyboardType.Number
+                )
+                WdttPlusAdvanced(
+                    options = draft.wdttPlus,
+                    enabled = enabled,
+                    onChange = { transform -> onChange { it.copy(wdttPlus = transform(it.wdttPlus)) } }
                 )
             }
         }
@@ -1414,6 +1461,285 @@ internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
 }
 
 /**
+ * OpenFlux editor: the carrier (Yandex Docs or a MAX call) with its coordinates, the DNS server reached
+ * through the tunnel, and the exit-node auto-install. The client serves a local SOCKS5 the TUN bridge
+ * consumes directly; the exit node on the VPS is the internet exit.
+ */
+private fun LazyListScope.openFluxSection(
+    config: OpenFluxConfig,
+    enabled: Boolean,
+    showAutoInstall: Boolean,
+    onChange: ((OpenFluxConfig) -> OpenFluxConfig) -> Unit,
+    onAutoInstall: () -> Unit
+) {
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "OpenFlux — туннель через сервисы",
+                subtitle = "TCP-туннель до твоей выходной ноды на VPS: пакеты идут через Яндекс Документы или звонок в MAX"
+            )
+            SettingsDropdown(
+                label = "Транспорт",
+                selectedValue = config.transport,
+                options = listOf(OpenFluxConfig.TRANSPORT_YANDEX, OpenFluxConfig.TRANSPORT_MAX),
+                enabled = enabled,
+                onValueSelected = { v -> onChange { it.copy(transport = v) } },
+                valueLabel = {
+                    if (it == OpenFluxConfig.TRANSPORT_MAX) "MAX (WebRTC-звонок)" else "Яндекс Документы (курсоры)"
+                }
+            )
+            if (config.usesMax()) {
+                VkTurnField(
+                    value = config.maxToken,
+                    onValueChange = { v -> onChange { it.copy(maxToken = v.trim()) } },
+                    label = "Твой токен MAX (веб)",
+                    placeholder = "токен аккаунта, с которого звонит клиент",
+                    enabled = enabled
+                )
+                VkTurnField(
+                    value = config.maxUid,
+                    onValueChange = { v -> onChange { it.copy(maxUid = v.filter(Char::isDigit)) } },
+                    label = "ID аккаунта выходной ноды в MAX",
+                    placeholder = "кому звонить; у ноды свой токен",
+                    enabled = enabled,
+                    isError = config.maxUid.isNotBlank() && config.maxUid.toLongOrNull() == null,
+                    keyboardType = KeyboardType.Number
+                )
+            } else {
+                OutlinedTextField(
+                    value = config.docUrl,
+                    onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
+                    label = { Text("Ссылка на Яндекс Документ") },
+                    placeholder = { Text("https://docs.yandex.ru/…") },
+                    supportingText = {
+                        Text("Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода.")
+                    },
+                    enabled = enabled,
+                    minLines = 1,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            VkTurnField(
+                value = config.dnsServer,
+                onValueChange = { v -> onChange { it.copy(dnsServer = v.trim()) } },
+                label = "DNS через туннель",
+                placeholder = "1.1.1.1:53; пусто — DNS устройства (утекает провайдеру)",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+            VkTurnSwitchRow("Подробный журнал ядра", config.debug, enabled) { v ->
+                onChange { it.copy(debug = v) }
+            }
+            Text(
+                "OpenFlux сам трафик не шифрует — остаётся только шифрование сайтов (HTTPS); для полного " +
+                    "шифрования включи прокси поверх OpenFlux ниже. Скорость невысокая: это исследовательский " +
+                    "туннель на случай, когда остальное заблокировано.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (showAutoInstall) {
+                OutlinedButton(
+                    onClick = onAutoInstall,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Автоустановка выходной ноды на VPS")
+                }
+            }
+        }
+    }
+
+    // Proxy over OpenFlux — also the way to get encryption end to end: OpenFlux itself carries plain packets.
+    proxyOverTunnelSection(
+        tunnel = "OpenFlux",
+        exitName = "выходная нода OpenFlux",
+        proxyLink = config.proxyLink,
+        proxyCore = config.proxyCore,
+        enabled = enabled,
+        onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
+        onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
+    )
+}
+
+/**
+ * One-tap OpenFlux exit-node installer ([rememberOpenFluxServerInstaller]). The Yandex Docs link comes
+ * from the location (both ends share one document); for MAX the node needs ITS OWN account token, which
+ * only the server keeps — the location stores the client's token and the node's account id.
+ */
+@Composable
+private fun OpenFluxInstallDialog(
+    config: OpenFluxConfig,
+    onApplyConfig: (((OpenFluxConfig) -> OpenFluxConfig)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberOpenFluxServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf("") }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    var docUrl by remember { mutableStateOf(config.docUrl) }
+    var exitToken by remember { mutableStateOf("") }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<String>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+    val usesMax = config.usesMax()
+    val succeeded = result?.isSuccess == true
+    val carrierReady = if (usesMax) exitToken.isNotBlank() else docUrl.startsWith("http", ignoreCase = true)
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Автоустановка выходной ноды OpenFlux") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH, загружу OpenFlux и запущу выходную ноду службой systemd. " +
+                        "Пока служба работает, VPS не отправляет исходящие TCP RST (так требует нода) — " +
+                        "другим сервисам на этом VPS это может мешать.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                if (usesMax) {
+                    OutlinedTextField(
+                        value = exitToken,
+                        onValueChange = { exitToken = it.trim() },
+                        label = { Text("Токен MAX выходной ноды") },
+                        supportingText = { Text("Отдельный аккаунт, которому звонит клиент. Хранится только на VPS.") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = docUrl,
+                        onValueChange = { docUrl = it.trim() },
+                        label = { Text("Ссылка на Яндекс Документ") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull().orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() && carrierReady &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        // Both ends must share the document: write it back into the location.
+                        if (!usesMax) onApplyConfig { it.copy(docUrl = docUrl.trim()) }
+                        scope.launch {
+                            val res = installer.install(
+                                OpenFluxInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    transport = config.transport,
+                                    docUrl = docUrl.trim(),
+                                    exitMaxToken = exitToken.trim(),
+                                )
+                            ) { line -> log.add(line) }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
+    )
+}
+
+/**
  * One-tap WDTT server installer. Collects SSH access to the VPS and, on confirm, connects over SSH,
  * uploads the bundled wdtt-server binary matching the VPS architecture and runs it as a systemd
  * service ([rememberWdttServerInstaller]). Progress is streamed live into a log area. The WDTT
@@ -1456,14 +1782,14 @@ private fun WdttInstallDialog(
 
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
-        title = { Text("Автоустановка WDTT на VPS") },
+        title = { Text("Автоустановка WDTT Plus на VPS") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    "Подключусь к VPS по SSH, загружу и запущу wdtt-сервер на порту $port. " +
+                    "Подключусь к VPS по SSH, загружу и запущу сервер WDTT Plus на порту $port. " +
                         "Порт, пароль и DNS можно изменить ниже — они сохранятся в настройки локации.",
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -2175,6 +2501,110 @@ private fun VkTurnSwitchRow(
     }
 }
 
+/**
+ * WDTT Plus core knobs ([WdttPlusOptions]). Collapsed by default and opened automatically when any of
+ * them differs from the core's defaults, so a customised location shows what it changed.
+ */
+@Composable
+private fun WdttPlusAdvanced(
+    options: WdttPlusOptions,
+    enabled: Boolean,
+    onChange: ((WdttPlusOptions) -> WdttPlusOptions) -> Unit
+) {
+    var expanded by remember { mutableStateOf(options != WdttPlusOptions()) }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        VkTurnSwitchRow("Расширенные настройки WDTT Plus", expanded, enabled) { expanded = it }
+        if (!expanded) return@Column
+
+        VkTurnSwitchRow("Режим «Сеть РТ»: TURN/TLS и TCP, UDP — резерв", options.rtNetworkMode, enabled) { v ->
+            onChange { it.copy(rtNetworkMode = v) }
+        }
+        if (options.rtNetworkMode) {
+            VkTurnField(
+                value = options.turnSni,
+                onValueChange = { v -> onChange { it.copy(turnSni = v.trim()) } },
+                label = "SNI для TURN/TLS (белый список)",
+                placeholder = "пусто — без SNI",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+            VkTurnSwitchRow("Резерв через Cloudflare WARP (MASQUE)", options.masque, enabled) { v ->
+                onChange { it.copy(masque = v) }
+            }
+            if (options.masque) {
+                VkTurnSwitchRow("Принимаю условия Cloudflare WARP", options.masqueAcceptTos, enabled) { v ->
+                    onChange { it.copy(masqueAcceptTos = v) }
+                }
+            }
+        }
+        VkTurnSwitchRow("Сначала VK Calls API, потом капча", options.vkCallsPreflight, enabled) { v ->
+            onChange { it.copy(vkCallsPreflight = v) }
+        }
+        VkTurnSwitchRow("Резервные VK-хеши для групп", options.hashFallback, enabled) { v ->
+            onChange { it.copy(hashFallback = v) }
+        }
+        VkTurnSwitchRow("Дождаться конфига сервера до запуска потоков", options.configFirstStart, enabled) { v ->
+            onChange { it.copy(configFirstStart = v) }
+        }
+        VkTurnField(
+            value = options.clientIds,
+            onValueChange = { v -> onChange { it.copy(clientIds = v.trim()) } },
+            label = "ID клиентов VK",
+            placeholder = "через запятую; пусто — встроенные",
+            enabled = enabled
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            VkTurnField(
+                value = options.customVkClientId,
+                onValueChange = { v -> onChange { it.copy(customVkClientId = v.trim()) } },
+                label = "Свой VK client_id",
+                placeholder = "необязательно",
+                enabled = enabled,
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f)
+            )
+            VkTurnField(
+                value = options.customVkClientSecret,
+                onValueChange = { v -> onChange { it.copy(customVkClientSecret = v.trim()) } },
+                label = "client_secret",
+                placeholder = "вместе с client_id",
+                enabled = enabled,
+                isError = (options.customVkClientId.isBlank()) != (options.customVkClientSecret.isBlank()),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            VkTurnField(
+                value = options.turnHost,
+                onValueChange = { v -> onChange { it.copy(turnHost = v.trim()) } },
+                label = "IP TURN (вручную)",
+                placeholder = "пусто — от VK",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri,
+                modifier = Modifier.weight(2f)
+            )
+            VkTurnField(
+                value = options.turnPort,
+                onValueChange = { v -> onChange { it.copy(turnPort = v.filter(Char::isDigit)) } },
+                label = "Порт",
+                placeholder = "авто",
+                enabled = enabled,
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
 /** Per-location advanced options for the chosen proxy core (mux / TFO / sniff / TLS fragment). */
 @Composable
 private fun AdvancedCoreSection(
@@ -2426,6 +2856,7 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.Chain -> "Chain"
     EngineType.VkTurn -> "VK-TURN"
     EngineType.MasterDns -> "MasterDNS"
+    EngineType.OpenFlux -> "OpenFlux"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {
@@ -2434,6 +2865,7 @@ private fun engineSubtitle(engine: EngineType): String = when (engine) {
     EngineType.Chain -> "Proxy wrapped inside the olcRTC tunnel"
     EngineType.VkTurn -> "WireGuard over a VK TURN tunnel (free-turn-proxy)"
     EngineType.MasterDns -> "Туннель через DNS (MasterDnsVPN: несколько резолверов + ARQ)"
+    EngineType.OpenFlux -> "TCP-туннель через Яндекс Документы или звонок MAX до своей выходной ноды"
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {

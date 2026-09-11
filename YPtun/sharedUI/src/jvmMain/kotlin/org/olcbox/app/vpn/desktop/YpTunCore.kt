@@ -56,17 +56,8 @@ internal interface YpTunCoreLib : Library {
 
     fun YpFtCaptchaActive(): Int
 
-    fun YpWdttStart(
-        peer: String,
-        vkHashes: String,
-        password: String,
-        listen: String,
-        numWorkers: Int,
-        deviceId: String,
-        fingerprint: String,
-        clientIds: String,
-    ): Pointer?
-
+    fun YpWdttStart(optionsJson: String): Pointer?
+    fun YpWdttLastError(): Pointer?
     fun YpWdttWaitConfig(timeoutMs: Int): Pointer?
     fun YpWdttStop()
     fun YpWdttRunning(): Int
@@ -298,20 +289,12 @@ internal object YpTunCore {
     /** True while the user is solving a VK captcha — the relay cannot come up until they are done. */
     fun ftCaptchaActive(): Boolean = (libOrNull?.YpFtCaptchaActive() ?: 0) == 1
 
-    // VK-TURN / WDTT core (wg-turn-client) --------------------------------------------------
-    fun wdttStart(
-        peer: String,
-        vkHashes: String,
-        password: String,
-        listen: String,
-        numWorkers: Int,
-        deviceId: String,
-        fingerprint: String,
-        clientIds: String = "",
-    ) = check(
-        lib().YpWdttStart(peer, vkHashes, password, listen, numWorkers, deviceId, fingerprint, clientIds),
-        "WDTT start failed"
-    )
+    // VK-TURN / WDTT Plus core (wg-turn-client) ---------------------------------------------
+    /** Starts WDTT Plus from [org.olcbox.app.data.model.VkTurnConfig.wdttCoreOptionsJson]. */
+    fun wdttStart(optionsJson: String) = check(lib().YpWdttStart(optionsJson), "WDTT start failed")
+
+    /** Why the core stopped on its own ("" while fine). */
+    fun wdttLastError(): String = takeString(libOrNull?.YpWdttLastError()).orEmpty()
 
     /** The wdtt-server's WireGuard config (GETCONF), or null if it didn't arrive within [timeoutMs]. */
     fun wdttWaitConfig(timeoutMs: Int): String? =

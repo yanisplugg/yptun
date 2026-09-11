@@ -421,7 +421,31 @@ val copyOlcRtcDataAssets = tasks.register<Copy>("copyOlcRtcDataAssets") {
     into(generatedNativeResources.map { it.dir("olcrtc-data") })
 }
 
+// OpenFlux client (TCP tunnel over Yandex Docs / MAX WebRTC), vendored at ../openflux and driven as a
+// subprocess — its transports are young code whose panics must not take the app down with them. Pure
+// Go (CGO off): the desktop Go resolver works without cgo, unlike Android's.
+val openfluxRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("openflux")
+val buildOpenFluxHost = tasks.register<Exec>("buildOpenFluxHost") {
+    val goos = when {
+        currentBuildOs.isWindows -> "windows"
+        currentBuildOs.isMacOsX -> "darwin"
+        else -> "linux"
+    }
+    val suffix = if (currentBuildOs.isWindows) ".exe" else ""
+    val outputFile = generatedNativeResources.map { it.file("native/openflux-$goos-$hostDesktopArch$suffix") }
+    inputs.files(fileTree(openfluxRepoDir) { include("**/*.go", "go.mod", "go.sum"); exclude("**/*_test.go") })
+    outputs.file(outputFile)
+    workingDir = openfluxRepoDir
+    environment("GOOS", goos)
+    environment("GOARCH", hostDesktopArch)
+    environment("CGO_ENABLED", "0")
+    commandLine("go", "build", "-trimpath", "-ldflags", "-s -w -checklinkname=0",
+        "-o", outputFile.get().asFile.absolutePath, ".")
+    doFirst { outputFile.get().asFile.parentFile.mkdirs() }
+}
+
 val desktopNativeAssetTasks = mutableListOf<Any>(
+    buildOpenFluxHost,
     buildOlcRtcDarwinArm64,
     buildOlcRtcDarwinAmd64,
     buildOlcRtcWindowsAmd64,
@@ -437,7 +461,8 @@ val desktopNativeAssetTasks = mutableListOf<Any>(
     copyOlcRtcDataAssets
 )
 val hostDesktopNativeAssetTasks = mutableListOf<Any>(
-    copyOlcRtcDataAssets
+    copyOlcRtcDataAssets,
+    buildOpenFluxHost
 )
 
 when {
@@ -648,7 +673,7 @@ if (currentBuildOs.isLinux) {
 
 // Windows natives are built/downloaded for the HOST arch only: the cores are CGo (a c-shared .dll),
 // so cross-building them needs a full cross C toolchain. amd64 comes off a normal runner, arm64 off a
-// native windows-11-arm runner (see .github/workflows/windows-arm64.yml).
+// native windows-11-arm runner (see .github/workflows/windows-desktop.yml).
 if (currentBuildOs.isWindows) {
     val buildYpTunCoreWindows = registerYpTunCoreBuildTask(
         taskName = "buildYpTunCoreWindows${hostDesktopArch.replaceFirstChar { it.uppercase() }}",
@@ -746,8 +771,10 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/yptuncore-windows-$hostDesktopArch.dll")
             add("native/trusttunnel-client-windows-$hostDesktopArch.exe")
             add("native/trusttunnel-wizard-windows-$hostDesktopArch.exe")
+            add("native/openflux-windows-$hostDesktopArch.exe")
         }
         currentBuildOs.isLinux -> {
+            add("native/openflux-linux-$hostDesktopArch")
             add("native/olcrtc-linux-$hostDesktopArch")
             add("native/libolcrtc-linux-$hostDesktopArch.so")
             add("native/hev-socks5-tunnel-linux-$hostDesktopArch")

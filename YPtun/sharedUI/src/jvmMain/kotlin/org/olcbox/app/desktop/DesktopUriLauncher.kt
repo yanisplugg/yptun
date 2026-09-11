@@ -14,11 +14,15 @@ import java.util.Locale
  * cannot hand the URL to the running one and quietly dies, which is exactly how "«Открыть» does
  * nothing" presents.
  *
- * `explorer.exe <uri>` is the standard way out for **web** links: explorer runs as the logged-on user
- * at medium integrity, so the browser it invokes lands in the SAME session as the user's other
- * windows.
+ * De-elevating through `explorer.exe <uri>` was the first way out — explorer runs as the logged-on
+ * user at medium integrity, so what it invokes lands in the SAME session as the user's other windows.
+ * But explorer is a shell, not a launcher: it decides for itself what the string means, and an
+ * `http://localhost:<port>/…` URL (the VK captcha page freeturn serves) can be read as a network
+ * location and open a **File Explorer window** instead of the browser. So http(s) now resolves the
+ * user's chosen browser from the registry ([WindowsShellLaunch.browserCommandLine]) and starts it
+ * directly, with explorer demoted to a late fallback; `file:` still goes to explorer, whose job it is.
  *
- * It is NOT a way out for custom schemes. explorer only resolves file-system paths and http(s) URLs;
+ * explorer is NOT a way out for custom schemes either. It only resolves file-system paths and http(s);
  * handed `tg://…` it exits silently without ever activating the registered handler — verified on
  * Windows 11 with a throwaway test scheme, whose handler ran under `rundll32 url.dll,…` and never
  * under explorer. Since `ProcessBuilder.start()` succeeds either way, the old code reported success
@@ -60,6 +64,23 @@ object DesktopUriLauncher {
                 add { exec("rundll32.exe", "url.dll,FileProtocolHandler", uri) }
                 add { browse(uri) }
             }
+            isWindows && isHttpLink(uri) -> buildList {
+                // A web link goes to the BROWSER the user chose, resolved from the registry and
+                // started ourselves. explorer.exe used to lead here, and it is not a browser launcher:
+                // it decides for itself what a string means, and an `http://localhost:<port>/…` URL
+                // (which is exactly what freeturn serves the VK captcha on) can be taken for a network
+                // location — so the captcha "opened" as a File Explorer window and the user was stuck.
+                WindowsShellLaunch.browserCommandLine(uri)?.let { command ->
+                    if (WindowsShellLaunch.isElevated()) {
+                        add { require(WindowsShellLaunch.startAsShellUser(command)) { "shell-token launch failed" } }
+                    }
+                    add { startCommandLine(command) }
+                }
+                add { exec("rundll32.exe", "url.dll,FileProtocolHandler", uri) }
+                add { exec("explorer.exe", uri) }
+                add { browse(uri) }
+            }
+            // `file:` — a folder or a document, which IS explorer's job.
             isWindows -> listOf(
                 { exec("explorer.exe", uri) },
                 { exec("rundll32.exe", "url.dll,FileProtocolHandler", uri) },
@@ -74,6 +95,58 @@ object DesktopUriLauncher {
         return false
     }
 
+    /**
+     * Opens [uri] in a **dedicated browser window** — no tabs, no address bar, no other pages —
+     * instead of dropping it into whatever the user already has open. Used for the VK captcha, which
+     * freeturn serves on `http://localhost:8765/…`: the page is a step of connecting, so it should
+     * feel like a dialog of the app, and it must not be lost behind thirty tabs while the relay waits.
+     *
+     * There is no embedded web engine in this build (a Chromium runtime would add hundreds of MB to a
+     * VPN client), so the window is the user's OWN browser driven into application mode: Chromium
+     * family (Chrome/Edge/Brave/Opera/Vivaldi/Yandex) via `--app=<url>`, Firefox family via
+     * `-new-window`. Both leave the browser's normal profile — and therefore its cookies and its
+     * captcha-solving JavaScript — fully intact, which a stripped-down embedded view would not.
+     *
+     * Falls back to [open] whenever the browser cannot be resolved or refuses to start, so the captcha
+     * still reaches the user. Returns true when something was launched.
+     */
+    fun openBrowserWindow(uri: String): Boolean {
+        if (uri.isBlank()) return false
+        if (isWindows) {
+            val command = WindowsShellLaunch.browserCommandLine(uri)
+            val exe = command?.let { splitCommandLine(it).firstOrNull() }?.takeIf { it.isNotBlank() }
+            val appArgs = exe?.let { appWindowArgs(it, uri) }
+            if (appArgs != null) {
+                val quoted = appArgs.joinToString(" ") { if (it.contains(' ')) "\"$it\"" else it }
+                // Elevated (TUN mode) we must hand the window to the shell's token, or it lands at a
+                // different integrity level than the browser the user already has running and dies.
+                if (WindowsShellLaunch.isElevated() &&
+                    runCatching { WindowsShellLaunch.startAsShellUser(quoted) }.getOrDefault(false)
+                ) return true
+                if (runCatching { ProcessBuilder(appArgs).start() }.isSuccess) return true
+            }
+        }
+        return open(uri)
+    }
+
+    /**
+     * Browser arguments that open [uri] as its own window, or null when [exe] is a browser we have no
+     * app-mode flag for (then the caller falls back to an ordinary open).
+     */
+    private fun appWindowArgs(exe: String, uri: String): List<String>? {
+        val name = exe.substringAfterLast('\\').substringAfterLast('/').lowercase(Locale.ROOT)
+        val chromium = setOf(
+            "chrome.exe", "msedge.exe", "brave.exe", "opera.exe", "opera_gx.exe",
+            "vivaldi.exe", "browser.exe", "yandex.exe", "chromium.exe", "thorium.exe",
+        )
+        val firefox = setOf("firefox.exe", "waterfox.exe", "librewolf.exe", "palemoon.exe")
+        return when (name) {
+            in chromium -> listOf(exe, "--app=$uri", "--window-size=520,760")
+            in firefox -> listOf(exe, "-new-window", uri)
+            else -> null
+        }
+    }
+
     /** `"tg://socks?…"` → `"tg"`; the scheme is what decides how the URI has to be launched. */
     private fun schemeOf(uri: String): String =
         uri.substringBefore("://", missingDelimiterValue = uri.substringBefore(':'))
@@ -81,6 +154,12 @@ object DesktopUriLauncher {
             .lowercase(Locale.ROOT)
 
     private fun isWebLink(uri: String): Boolean = schemeOf(uri) in setOf("http", "https", "file")
+
+    /**
+     * Only http(s) belongs to a browser. `file:` stays with explorer/ShellExecute — it is a folder or
+     * a document, and handing it to the browser would be worse, not better.
+     */
+    private fun isHttpLink(uri: String): Boolean = schemeOf(uri) in setOf("http", "https")
 
     /**
      * Starts a registry handler command line (`"C:\…\Telegram.exe"  -- "tg://…"`) as a process.
