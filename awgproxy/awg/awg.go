@@ -359,6 +359,7 @@ func Stop() {
 type wgConfig struct {
 	privateKeyHex string
 	peerPublicHex string
+	presharedHex  string
 	endpoint      string
 	allowedIPs    []string
 	keepalive     int
@@ -428,6 +429,15 @@ func parseConfig(ini string) (*wgConfig, error) {
 				return nil, fmt.Errorf("publickey: %w", err)
 			}
 			c.peerPublicHex = h
+		case "presharedkey":
+			// Its absence doesn't show up until the handshake: the PSK is mixed into the response
+			// keys, so without it the client can't open the server's reply — "connected", no handshake.
+			// Every AmneziaVPN config carries a PSK; WARP ones don't, which is why only they worked.
+			h, err := keyToHex(val)
+			if err != nil {
+				return nil, fmt.Errorf("presharedkey: %w", err)
+			}
+			c.presharedHex = h
 		case "endpoint":
 			c.endpoint = val
 		case "allowedips":
@@ -524,6 +534,9 @@ func (c *wgConfig) uapi() (string, error) {
 	// идемпотентной: без replace_peers каждая попытка добавляла бы пиру ещё один allowed_ip.
 	b.WriteString("replace_peers=true\n")
 	fmt.Fprintf(&b, "public_key=%s\n", c.peerPublicHex)
+	if c.presharedHex != "" {
+		fmt.Fprintf(&b, "preshared_key=%s\n", c.presharedHex)
+	}
 	fmt.Fprintf(&b, "endpoint=%s\n", ep)
 	for _, a := range c.allowedIPs {
 		fmt.Fprintf(&b, "allowed_ip=%s\n", a)

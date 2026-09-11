@@ -107,6 +107,18 @@ HeaderProtectionKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 	}
 }
 
+// Every AmneziaVPN config has a PresharedKey in [Peer]. It was silently ignored, so the client could
+// never open the server's handshake response: "connected", no handshake, only WARP configs worked.
+func TestPresharedKeyReachesThePeer(t *testing.T) {
+	psk := "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg="
+	cfg := loadInto(t, "[Interface]\n"+testKeys+"Jc = 4\nH1 = 1000000-2000000\n"+testPeer+"PresharedKey = "+psk+"\n")
+	want, _ := keyToHex(psk)
+	uapi, _ := cfg.uapi()
+	if !strings.Contains(uapi, "preshared_key="+want) {
+		t.Fatalf("uapi lost the preshared key:\n%s", uapi)
+	}
+}
+
 // A WARP config (Reserved, no obfuscation knobs at all) must keep working exactly as before.
 func TestWarpConfigStillStarts(t *testing.T) {
 	cfg := loadInto(t, "[Interface]\n"+testKeys+"Reserved = 12, 34, 56\n"+testPeer)
