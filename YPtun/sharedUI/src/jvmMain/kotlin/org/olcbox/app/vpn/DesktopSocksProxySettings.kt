@@ -1,8 +1,8 @@
 package org.olcbox.app.vpn
 
 import kotlinx.serialization.Serializable
-import org.olcbox.app.vpn.desktop.DesktopOs
-import org.olcbox.app.vpn.desktop.DesktopPaths
+import org.olcbox.app.desktop.DesktopOs
+import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.desktop.PacServer
 
 @Serializable
