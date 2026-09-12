@@ -559,6 +559,8 @@ interface Strings {
     val widgetShowControls: String
     val widgetDone: String
     val vkCaptchaTitle: String
+    /** Linux proxy mode without GNOME/KDE: the local proxy runs, but nothing points the system at it. */
+    fun proxyManualSetup(httpHostPort: String): String
     val noFileSelected: String
     val qrImported: String
     val importedFromLink: String
@@ -1200,6 +1202,8 @@ object RuStrings : Strings {
     override val widgetShowControls = "Кнопки «Авто» и ‹ ›"
     override val widgetDone = "Готово"
     override val vkCaptchaTitle = "Капча VK"
+    override fun proxyManualSetup(httpHostPort: String) =
+        "Системный прокси сам не включается (нет GNOME/KDE) — укажите в браузере HTTP-прокси $httpHostPort"
     override val noFileSelected = "Файл не выбран"
     override val qrImported = "QR-код импортирован"
     override val importedFromLink = "Импортировано по ссылке"
@@ -1824,6 +1828,8 @@ object EnStrings : Strings {
     override val widgetShowControls = "Auto and ‹ › buttons"
     override val widgetDone = "Done"
     override val vkCaptchaTitle = "VK captcha"
+    override fun proxyManualSetup(httpHostPort: String) =
+        "No GNOME/KDE to set the system proxy — point your browser at HTTP proxy $httpHostPort"
     override val noFileSelected = "No file selected"
     override val qrImported = "QR imported"
     override val importedFromLink = "Imported from link"
@@ -2448,6 +2454,8 @@ object FaStrings : Strings {
     override val widgetShowControls = "دکمه‌های خودکار و ‹ ›"
     override val widgetDone = "تمام"
     override val vkCaptchaTitle = "کپچای VK"
+    override fun proxyManualSetup(httpHostPort: String) =
+        "بدون GNOME/KDE پراکسی سیستم تنظیم نمی‌شود — در مرورگر پراکسی HTTP $httpHostPort را وارد کنید"
     override val noFileSelected = "پرونده‌ای انتخاب نشد"
     override val qrImported = "QR وارد شد"
     override val importedFromLink = "از پیوند وارد شد"
@@ -3072,6 +3080,8 @@ object ZhStrings : Strings {
     override val widgetShowControls = "自动与 ‹ › 按钮"
     override val widgetDone = "完成"
     override val vkCaptchaTitle = "VK 验证码"
+    override fun proxyManualSetup(httpHostPort: String) =
+        "没有 GNOME/KDE，无法自动设置系统代理 — 请在浏览器中填写 HTTP 代理 $httpHostPort"
     override val noFileSelected = "未选择文件"
     override val qrImported = "二维码已导入"
     override val importedFromLink = "已从链接导入"
