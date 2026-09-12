@@ -125,6 +125,14 @@ class DesktopVpnManager private constructor(
     /** The mode actually used by the current/last connection — drives the matching cleanup. */
     private var activeDesktopMode: DesktopMode? = null
 
+    /**
+     * The local SOCKS the running session really listens on: proxy mode drops the credentials and TUN
+     * mode may have moved off a port another program holds (see [withFreeTunPort]).
+     */
+    @Volatile private var sessionSocks: DesktopSocksProxySettings? = null
+
+    private fun liveSocks(): DesktopSocksProxySettings = sessionSocks ?: _socksProxySettings.value.normalized()
+
     /** Proxy mode only: the HTTP front the OS system proxy points at (see [startSystemProxy]). */
     private var httpProxyBridge: DesktopHttpProxyBridge? = null
 
@@ -298,7 +306,7 @@ class DesktopVpnManager private constructor(
      */
     private suspend fun tunnelPing(): Long? = kotlinx.coroutines.withContext(Dispatchers.IO) {
         if (!isConnected.value) return@withContext null
-        val socks = _socksProxySettings.value.normalized()
+        val socks = liveSocks()
         var best: Long? = null
         repeat(TCP_PING_ATTEMPTS) {
             val ms = runCatching {
@@ -590,7 +598,7 @@ class DesktopVpnManager private constructor(
             return null
         }
 
-        val socks = _socksProxySettings.value.normalized()
+        val socks = liveSocks()
         return SubscriptionFetchProxy(
             host = socks.host,
             port = socks.port,
@@ -654,8 +662,9 @@ class DesktopVpnManager private constructor(
             // Android forces no-auth in Proxy mode for exactly this reason; TUN keeps its private
             // credentials (that listener is internal to the tun2socks/front bridge).
             val socksSettings = _socksProxySettings.value.normalized().let {
-                if (desktopMode == DesktopMode.SystemProxy) it.copy(username = "", password = "") else it
+                if (desktopMode == DesktopMode.SystemProxy) it.copy(username = "", password = "") else withFreeTunPort(it)
             }
+            sessionSocks = socksSettings
             if (desktopMode == DesktopMode.SystemProxy &&
                 _socksProxySettings.value.normalized().username.isNotBlank()
             ) {
@@ -664,6 +673,10 @@ class DesktopVpnManager private constructor(
 
             if (desktopMode == DesktopMode.WindowsTun) {
                 windowsTunController.ensureAdministratorOrRequestRestart()
+            }
+            if (desktopMode == DesktopMode.LinuxTun) {
+                // BEFORE the interface probe and the cores: a leftover TUN would capture both.
+                linuxTunController.clearStale(DesktopNativeAssets.resolveHevSocks5TunnelBinary())
             }
             if (desktopMode != DesktopMode.SystemProxy) {
                 // Pin Xray's sockets to the physical adapter BEFORE anything is started — desktop
@@ -766,7 +779,9 @@ class DesktopVpnManager private constructor(
                     requestGeneration = requestGeneration,
                     bypassServerIps = bypassServerIps,
                     socksUsername = bridgeSettings.username,
-                    socksPassword = bridgeSettings.password
+                    socksPassword = bridgeSettings.password,
+                    // Same split as Android's hev config: these SOCKS servers have no UDP ASSOCIATE.
+                    udpOverTcp = location.engine == EngineType.MasterDns || location.engine == EngineType.OpenFlux
                 )
                 DesktopMode.WindowsTun -> if (engineController.tunHandledInCore) {
                     // sing-box raised the wintun adapter itself (per-process split tunneling);
@@ -801,9 +816,10 @@ class DesktopVpnManager private constructor(
             }
 
             when (activeDesktopMode ?: DesktopMode.current()) {
-                // Cleanup (hev + routes, bundled with olcRTC's own kill into one pkexec call) happens
-                // below via stopProcess(process, privileged = ...) — see LinuxTunController.onStopped.
+                // The standalone bridge's root wrapper tears itself down (release); whatever is left —
+                // olcRTC's hev and routes — is cleaned in ONE pkexec call by stopProcess below.
                 DesktopMode.LinuxTun -> {
+                    tunProcess?.let { linuxTunController.release(it) }
                     tunProcess = null
                 }
                 DesktopMode.WindowsTun -> {
@@ -838,6 +854,23 @@ class DesktopVpnManager private constructor(
             }
         }
     }
+
+    /**
+     * TUN mode's SOCKS listener is internal to the TUN bridge, so a port another program holds (v2rayN
+     * and Happ both default to 10808, our Linux default) must not fail the connect with "port is still
+     * in use": move the whole block the cores derive their helper ports from. Proxy mode keeps the
+     * configured port — the user points apps at it by hand.
+     */
+    private suspend fun withFreeTunPort(settings: DesktopSocksProxySettings): DesktopSocksProxySettings =
+        withContext(Dispatchers.IO) {
+            fun blockFree(base: Int) = base + PORT_BLOCK <= DesktopSocksProxySettings.MAX_PORT &&
+                (0 until PORT_BLOCK).none { canConnectToSocks(base + it) }
+            if (blockFree(settings.port)) return@withContext settings
+            val base = generateSequence(TUN_FALLBACK_PORT) { it + PORT_BLOCK }.take(64).firstOrNull(::blockFree)
+                ?: return@withContext settings
+            addLog("Local port ${settings.port} is taken by another program — this session uses $base")
+            settings.copy(port = base)
+        }
 
     /**
      * Offers to close another VPN client before we start. Returns once the user has answered (or
@@ -893,7 +926,8 @@ class DesktopVpnManager private constructor(
         requestGeneration: Long,
         bypassServerIps: List<String>,
         socksUsername: String,
-        socksPassword: String
+        socksPassword: String,
+        udpOverTcp: Boolean
     ) {
         if (process == null) {
             val started = linuxTunController.start(
@@ -901,7 +935,8 @@ class DesktopVpnManager private constructor(
                 socksPort = socksPort,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                bypassPrefixes = bypassServerIps
+                bypassPrefixes = bypassServerIps,
+                udpOverTcp = udpOverTcp
             )
             tunProcess = started
             // hev logs to stderr; left unread, the pipe fills and hev blocks mid-session.
@@ -1073,9 +1108,9 @@ class DesktopVpnManager private constructor(
 
         val stoppingDesktopMode = activeDesktopMode ?: DesktopMode.current()
         when (stoppingDesktopMode) {
-            // Cleanup (hev + routes, bundled with olcRTC's own kill into one pkexec call) happens
-            // below via stopProcess(process, privileged = ...) — see LinuxTunController.onStopped.
+            // See the failure path in startDesktopMode: release first, stopProcess cleans the rest.
             DesktopMode.LinuxTun -> {
+                tunProcess?.let { linuxTunController.release(it) }
                 tunProcess = null
             }
             DesktopMode.WindowsTun -> {
@@ -1105,6 +1140,7 @@ class DesktopVpnManager private constructor(
         // adapter index changes with the network the machine is on.
         runCatching { org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0) }
         engineLocation = null
+        sessionSocks = null
 
         stopProcess(process, privileged = stoppingDesktopMode == DesktopMode.LinuxTun)
         process = null
@@ -1451,7 +1487,7 @@ class DesktopVpnManager private constructor(
         val host = if (provider.contains("2ip.io")) "2ip.io" else "2ip.ru"
         // Only proxy mode needs an explicit SOCKS dial; TUN/disconnected use the default route.
         val proxy = if (isConnected.value && connectionModeProvider() == AndroidConnectionMode.Proxy) {
-            val s = _socksProxySettings.value.normalized()
+            val s = liveSocks()
             java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress(s.host, s.port))
         } else null
 
@@ -1585,7 +1621,9 @@ class DesktopVpnManager private constructor(
      * Now the line lands in a bounded deque in O(1), and the immutable snapshot the UI observes is
      * published at most once per [LOG_FLUSH_INTERVAL_MS]. Same visible content, ~1/1000th the churn.
      */
-    private fun addLog(message: String) {
+    private fun addLog(raw: String) {
+        // The Go cores' log writers hand over whole lines WITH their "\n" — a blank line after each.
+        val message = raw.trimEnd()
         synchronized(logBuffer) {
             if (logBuffer.size >= MAX_LOG_ENTRIES) logBuffer.removeFirst()
             logBuffer.addLast(message)
@@ -1668,6 +1706,10 @@ class DesktopVpnManager private constructor(
         const val OLC_STARTUP_STABILITY_MS = 1_500L
         const val READY_POLL_INTERVAL_MS = 200L
         const val TCP_CONNECT_TIMEOUT_MS = 250L
+
+        /** The cores derive helper ports up to +6 from the SOCKS port (DesktopEngineController). */
+        const val PORT_BLOCK = 8
+        const val TUN_FALLBACK_PORT = 27960
         const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
 

@@ -27,7 +27,8 @@ internal object PhysicalInterface {
         if (local == null || local.isAnyLocalAddress || local.isLoopbackAddress) return 0
         val nic = NetworkInterface.getByInetAddress(local) ?: return 0
         val names = listOfNotNull(nic.name, nic.displayName)
-        if (names.any { it.contains(WindowsTunController.TUN_NAME, ignoreCase = true) }) return 0
+        val tunNames = listOf(WindowsTunController.TUN_NAME, LinuxTunController.TUN_NAME)
+        if (names.any { name -> tunNames.any { name.contains(it, ignoreCase = true) } }) return 0
         nic.index.takeIf { it > 0 } ?: 0
     }.getOrDefault(0)
 

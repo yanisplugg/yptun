@@ -374,7 +374,8 @@ data class UpdatePlatform(
         get() = when (os) {
             "windows" -> listOf(".msi", ".exe", ".zip")
             "macos" -> listOf(".dmg")
-            "linux" -> listOf(".appimage")
+            // .deb is the shipped Linux package (and the only one for arm64); AppImage is a fallback.
+            "linux" -> listOf(".deb", ".appimage")
             "android" -> listOf(".apk")
             else -> emptyList()
         }

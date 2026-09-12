@@ -977,13 +977,17 @@ private fun ConnectionSettingsContent(
                 enabled = enabled,
                 onClick = onProxySettingsClick
             )
-            SettingsNavigationRow(
-                title = s.splitTunneling,
-                value = splitTunnelSettings.settingsSummary(),
-                icon = Icons.Outlined.Apps,
-                enabled = enabled,
-                onClick = onSplitTunnelingClick
-            )
+            // Per-app routing needs the TUN owner to attribute traffic to processes: only sing-box's
+            // in-core TUN on Windows can. Linux's hev bridge and macOS's proxy mode silently ignored it.
+            if (org.olcbox.app.update.UpdatePlatform.current().os !in setOf("linux", "macos")) {
+                SettingsNavigationRow(
+                    title = s.splitTunneling,
+                    value = splitTunnelSettings.settingsSummary(),
+                    icon = Icons.Outlined.Apps,
+                    enabled = enabled,
+                    onClick = onSplitTunnelingClick
+                )
+            }
 
             RoutingToggleRow(
                 title = s.telegramProxyTitle,

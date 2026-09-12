@@ -115,6 +115,19 @@ class AppUpdateServiceTest {
     }
 
     @Test
+    fun linuxTakesTheDebOfItsArch() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-3.5.1-amd64.AppImage", "https://example/appimage"),
+            GithubReleaseAsset("YPtun-3.5.1-amd64.deb", "https://example/deb-amd64"),
+            GithubReleaseAsset("YPtun-3.5.1-arm64.deb", "https://example/deb-arm64"),
+            GithubReleaseAsset("YPtun-3.5.1-x64-installer.exe", "https://example/exe")
+        )
+
+        assertEquals("YPtun-3.5.1-amd64.deb", AppUpdateService.selectAsset(assets, UpdatePlatform("linux", "amd64"))?.name)
+        assertEquals("YPtun-3.5.1-arm64.deb", AppUpdateService.selectAsset(assets, UpdatePlatform("linux", "arm64"))?.name)
+    }
+
+    @Test
     fun universalApkInstallTakesTheUniversalDelta() {
         val assets = listOf(
             GithubReleaseAsset("YPtun-delta-3.3.2-3.4.4-arm64-v8a.patch.gz", "https://example/arm64"),

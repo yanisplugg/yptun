@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
+import org.olcbox.app.desktop.DesktopToast
 
 internal interface DesktopProxyController {
     /**
@@ -89,9 +90,14 @@ internal class LinuxProxyController : DesktopProxyController {
         val host = httpProxyHostPort.substringBefore(':')
         val port = httpProxyHostPort.substringAfter(':').toInt()
         val kde = kdeWrite
-        // Neither desktop's settings tool: "connected" would carry nothing, so say so instead.
+        // XFCE, LXQt, sway, Hyprland…: no system proxy to set. Failing the connect used to throw away
+        // a working local proxy, and the error never reached the screen — keep it up and say where it is.
         if (!hasGsettings && kde == null) {
-            error("System proxy on Linux needs GNOME (gsettings) or KDE (kwriteconfig5/6)")
+            DesktopToast.show(
+                org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+                    .proxyManualSetup(httpProxyHostPort)
+            )
+            return
         }
         active = true
 

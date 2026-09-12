@@ -384,6 +384,42 @@ class DesktopProxyModeTest {
         assertContains(config, "network: 100.64.0.0")
     }
 
+    /** Xray/sing-box speak standard SOCKS5 UDP; hev's UDP-in-TCP framing silently killed all UDP. */
+    @Test
+    fun linuxTunConfigUsesStandardSocksUdpForTheCores() {
+        assertContains(LinuxTunController.configContent(udpOverTcp = false), "udp: 'udp'")
+    }
+
+    /** The tunnel must not outlive the app: the root wrapper waits for YPtun's stdin to close, then tears down. */
+    @Test
+    fun linuxTunRunScriptTearsDownWhenStdinCloses() {
+        val script = LinuxTunController.runScriptContent(
+            listOf("/home/u/.yptun/bin/hev", "/home/u/.yptun/linux-tun.yml"),
+            "/home/u/.yptun/linux-tun-down.sh"
+        ).lines()
+
+        val hev = script.indexOf("'/home/u/.yptun/bin/hev' '/home/u/.yptun/linux-tun.yml' &")
+        val wait = script.indexOf("cat >/dev/null")
+        val kill = script.indexOf("kill \$HEV 2>/dev/null")
+        val down = script.indexOf("sh '/home/u/.yptun/linux-tun-down.sh' >/dev/null 2>&1")
+        assertTrue(hev in 0 until wait && wait < kill && kill < down, script.joinToString("\n"))
+    }
+
+    /** The TUN is IPv4-only: IPv6 must not go around it while it is up, and must come back after. */
+    @Test
+    fun linuxTunScriptsBlockIpv6AroundTheTunnel() {
+        val up = LinuxTunController.upScriptContent()
+        val down = LinuxTunController.downScriptContent()
+
+        assertContains(up, "ip -6 route add unreachable default table 51820")
+        assertContains(up, "ip -6 rule add lookup 51820 pref 20")
+        assertContains(up, "ip -6 rule add lookup main suppress_prefixlength 0 pref 19")
+        assertContains(down, "ip -6 route flush table 51820")
+        assertContains(down, "ip -6 rule del lookup 51820 pref 20")
+        // A kernel without IPv6 must not abort the set -e up-script.
+        up.lineSequence().filter { it.startsWith("ip -6 ") }.forEach { assertTrue(it.endsWith("|| true"), it) }
+    }
+
     @Test
     fun windowsTunCommandUsesTun2SocksWintunAndLocalSocks() {
         val command = WindowsTunController.tun2SocksCommand(

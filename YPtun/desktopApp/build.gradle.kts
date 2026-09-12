@@ -941,6 +941,41 @@ if (currentBuildOs.isLinux) {
     val appImageFile = layout.buildDirectory.file(
         "compose/binaries/main-release/appimage/$desktopPackageName-$desktopPackageVersion-$hostDesktopArch.AppImage"
     )
+    val linuxUrlSchemes = listOf("yptun", "vless", "vmess", "ss", "trojan", "hysteria2", "tuic")
+        .joinToString("") { "x-scheme-handler/$it;" }
+
+    // jpackage's maintainer scripts run `xdg-desktop-menu` under `set -e`; it exits 3 wherever there is
+    // no XDG menu directory (sway, i3, minimal installs) and dpkg leaves the package half-configured.
+    // Its .desktop also registers no URL schemes, so yptun://, vless://… links never reached the .deb
+    // build (only the AppImage had them). Rewrite both in the finished package.
+    val fixReleaseDeb = tasks.register<Exec>("fixReleaseDeb") {
+        group = "distribution"
+        description = "Makes the .deb's menu registration non-fatal and registers the URL schemes."
+        commandLine(
+            "sh",
+            "-c",
+            """
+            set -eu
+            deb=${'$'}(ls "${'$'}1"/*.deb | head -1)
+            work=${'$'}(mktemp -d)
+            dpkg-deb -R "${'$'}deb" "${'$'}work"
+            for s in postinst prerm postrm; do
+              f="${'$'}work/DEBIAN/${'$'}s"
+              if [ -f "${'$'}f" ]; then sed -i '/^xdg-desktop-menu /{/|| true${'$'}/!s/${'$'}/ || true/}' "${'$'}f"; fi
+            done
+            for d in "${'$'}work"/opt/*/lib/*.desktop; do
+              sed -i -e 's|^\(Exec=[^ ]*\).*${'$'}|\1 %u|' -e "s|^MimeType=.*${'$'}|MimeType=${'$'}2|" "${'$'}d"
+            done
+            dpkg-deb --root-owner-group --build "${'$'}work" "${'$'}deb" >/dev/null
+            rm -rf "${'$'}work"
+            echo "fixed ${'$'}deb"
+            """.trimIndent(),
+            "fixReleaseDeb",
+            layout.buildDirectory.dir("compose/binaries/main-release/deb").get().asFile.absolutePath,
+            linuxUrlSchemes
+        )
+    }
+    tasks.matching { it.name == "packageReleaseDeb" }.configureEach { finalizedBy(fixReleaseDeb) }
 
     val prepareReleaseLinuxAppDir = tasks.register<Exec>("prepareReleaseLinuxAppDir") {
         group = "distribution"
@@ -981,7 +1016,7 @@ if (currentBuildOs.isLinux) {
             Icon=olcbox
             Categories=Network;Utility;
             Terminal=false
-            MimeType=x-scheme-handler/yptun;x-scheme-handler/vless;x-scheme-handler/vmess;x-scheme-handler/ss;x-scheme-handler/trojan;x-scheme-handler/hysteria2;x-scheme-handler/tuic;
+            MimeType=$linuxUrlSchemes
             DESKTOP
 
             cp "${'$'}icon_file" "${'$'}target_dir/olcbox.png"

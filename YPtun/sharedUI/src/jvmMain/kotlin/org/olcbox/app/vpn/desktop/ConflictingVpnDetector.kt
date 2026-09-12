@@ -1,5 +1,7 @@
 package org.olcbox.app.vpn.desktop
 
+import org.olcbox.app.desktop.DesktopOs
+import org.olcbox.app.desktop.DesktopPaths
 import java.util.Locale
 
 /**
@@ -64,7 +66,8 @@ internal object ConflictingVpnDetector {
         val found = LinkedHashMap<String, MutableList<ProcessHandle>>()
         runningExecutables().forEach { (pid, exe) ->
             if (pid in ours) return@forEach
-            val product = KNOWN[exe] ?: return@forEach
+            // Linux/macOS binaries carry no ".exe": the same table covers them (happ, v2rayn, nekoray…).
+            val product = KNOWN[exe] ?: KNOWN["$exe.exe"] ?: return@forEach
             val handle = ProcessHandle.of(pid).orElse(null) ?: return@forEach
             found.getOrPut(product) { mutableListOf() }.add(handle)
         }
@@ -80,7 +83,8 @@ internal object ConflictingVpnDetector {
      * kernel and lists them all. ProcessHandle stays the fallback (and is what terminates).
      */
     private fun runningExecutables(): List<Pair<Long, String>> {
-        val fromTasklist = runCatching {
+        // Windows only: under WSL interop tasklist.exe exists too and lists the HOST's processes.
+        val fromTasklist = if (DesktopPaths.os != DesktopOs.Windows) emptyList() else runCatching {
             val process = ProcessBuilder("tasklist.exe", "/FO", "CSV", "/NH")
                 .redirectErrorStream(true)
                 .start()
