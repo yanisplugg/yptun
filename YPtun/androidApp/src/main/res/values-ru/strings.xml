@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_vpn_on">Включить VPN</string>
+    <string name="shortcut_vpn_off">Выключить VPN</string>
+    <string name="shortcut_vpn_toggle">Вкл/выкл VPN</string>
+</resources>

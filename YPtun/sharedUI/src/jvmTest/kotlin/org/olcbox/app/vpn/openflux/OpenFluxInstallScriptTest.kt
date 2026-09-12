@@ -38,4 +38,20 @@ class OpenFluxInstallScriptTest {
         assertTrue(execStart.endsWith("--transport \${OPENFLUX_TRANSPORT}"), execStart)
         assertFalse("--url" in execStart, "MAX transport should not have --url on ExecStart: $execStart")
     }
+
+    /** The node must run the SAME transport as the client — the new-editor one used to collapse to "yandex". */
+    @Test
+    fun newEditorTransportReachesTheNodeWithItsDocument() {
+        val script = buildOpenFluxInstallScript(
+            OpenFluxInstallOptions(
+                host = "203.0.113.7", sshPassword = "x",
+                transport = OpenFluxConfig.TRANSPORT_VYANDEX, docUrl = url,
+            )
+        )
+        assertTrue(script.lines().any { it == "OPENFLUX_TRANSPORT=\"vyandex\"" }, script)
+        val execStart = script.lines().single { it.startsWith("ExecStart=") }
+        assertTrue(execStart.endsWith("--transport \${OPENFLUX_TRANSPORT} --url \${OPENFLUX_DOC_URL}"), execStart)
+        assertTrue(OpenFluxConfig(transport = "vyandex").normalized().transport == "vyandex")
+        assertTrue(OpenFluxConfig(transport = "bogus").normalized().transport == OpenFluxConfig.TRANSPORT_YANDEX)
+    }
 }

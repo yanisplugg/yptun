@@ -1,7 +1,11 @@
 # OpenFlux in YPtun
 
-Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), commit a8a8937 (2026-09-10, release 0.0.1),
-without `.idea/` and the iOS/Android shell scripts. Engine `EngineType.OpenFlux`.
+Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), `main` at 3249724 (2026-09-11; first vendored
+a8a8937, release 0.0.1), without `.idea/` and the iOS/Android shell scripts. Engine `EngineType.OpenFlux`.
+
+Re-vendor: `git diff <old> <new>` in an upstream clone, `git apply --directory=openflux --exclude=openflux/main.go`,
+then port the upstream `main.go` hunks by hand (it carries patch 2 below), then `build-openflux-server.ps1`.
+Since 3249724 there is a third carrier, `vyandex` (Yandex Docs in the new Volga editor) — `OpenFluxConfig.TRANSPORTS`.
 
 ## How it runs
 

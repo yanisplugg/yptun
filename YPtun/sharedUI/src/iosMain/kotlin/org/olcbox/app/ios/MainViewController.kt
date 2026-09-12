@@ -12,7 +12,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.ComposeUIViewController
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.datasource.IosLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.IosLogExporter
@@ -38,6 +42,7 @@ import org.olcbox.app.update.isDownloaded
 import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
 import org.olcbox.app.vpn.IosVpnManager
+import org.olcbox.app.vpn.VpnStatus
 import platform.UIKit.UIViewController
 
 class IosAppFactory {
@@ -67,6 +72,28 @@ class IosAppSession internal constructor(
         IosPlatformHooks.core = coreBridge
     }
 
+    fun startVpn() {
+        dependencies.vpnManager.startVpn()
+    }
+
+    fun stopVpn() {
+        dependencies.vpnManager.stopVpn()
+    }
+
+    /** Stop, wait until the tunnel is really down (a start while it is still stopping gets lost), start. */
+    fun restartVpn() {
+        restartScope.launch {
+            val vpn = dependencies.vpnManager
+            vpn.stopVpn()
+            withTimeoutOrNull(RESTART_STOP_TIMEOUT_MS) {
+                vpn.status.first { it is VpnStatus.Disconnected || it is VpnStatus.Error }
+            }
+            vpn.startVpn()
+        }
+    }
+
+    private val restartScope = MainScope()
+
     fun createViewController(): UIViewController {
         return ComposeUIViewController {
             IosApp(platformBridge, dependencies)
@@ -74,7 +101,12 @@ class IosAppSession internal constructor(
     }
 
     fun close() {
+        restartScope.cancel()
         dependencies.close()
+    }
+
+    private companion object {
+        const val RESTART_STOP_TIMEOUT_MS = 10_000L
     }
 }
 

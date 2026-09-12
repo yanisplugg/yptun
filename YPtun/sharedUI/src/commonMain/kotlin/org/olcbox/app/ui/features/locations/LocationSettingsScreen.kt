@@ -689,24 +689,28 @@ private fun EngineSelector(
     enabled: Boolean,
     onSelected: (EngineType) -> Unit
 ) {
-    val options = listOf(
-        EngineType.Stealth,
-        EngineType.Standard,
-        EngineType.Chain,
-        EngineType.VkTurn,
-        EngineType.MasterDns,
-        EngineType.OpenFlux
-    )
+    // OpenFlux has no iOS engine. The build platform, not UIDevice.systemName — that one reads
+    // "iPadOS" on an iPad, which a check for "iOS" would miss.
+    val options = remember {
+        val ios = org.olcbox.app.update.UpdatePlatform.current().os == "ios"
+        listOf(
+            EngineType.Stealth,
+            EngineType.Standard,
+            EngineType.Chain,
+            EngineType.VkTurn,
+            EngineType.MasterDns,
+            EngineType.OpenFlux
+        ).filterNot { ios && it == EngineType.OpenFlux }
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         SectionTitle(title = LocalStrings.current.engineSection, subtitle = engineSubtitle(selected))
 
-        // ONE cohesive 2×2 block: a single rounded outline drawn ONCE around all four engines, with thin
-        // inner dividers between the cells — no per-row pills, no offset hack, no seam/gap. Two rows of
-        // two equal-width cells; the row height tracks the tallest cell (IntrinsicSize.Min) so the
-        // vertical divider spans it. clip() rounds the selected-cell highlight to the block's corners.
+        // ONE cohesive block: a single rounded outline drawn ONCE around all engines, with thin
+        // inner dividers between the cells. Two equal-width cells per row; the row height tracks the
+        // tallest cell (IntrinsicSize.Min) so the vertical divider spans it.
         val shape = RoundedCornerShape(20.dp)
         val outline = MaterialTheme.colorScheme.outline
         Column(
@@ -731,6 +735,10 @@ private fun EngineSelector(
                             onClick = { onSelected(engine) },
                             modifier = Modifier.weight(1f)
                         )
+                    }
+                    if (rowOptions.size == 1) {
+                        VerticalDivider(color = outline)
+                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
             }
@@ -1476,11 +1484,15 @@ private fun LazyListScope.openFluxSection(
             SettingsDropdown(
                 label = "Транспорт",
                 selectedValue = config.transport,
-                options = listOf(OpenFluxConfig.TRANSPORT_YANDEX, OpenFluxConfig.TRANSPORT_MAX),
+                options = OpenFluxConfig.TRANSPORTS,
                 enabled = enabled,
                 onValueSelected = { v -> onChange { it.copy(transport = v) } },
                 valueLabel = {
-                    if (it == OpenFluxConfig.TRANSPORT_MAX) "MAX (WebRTC-звонок)" else "Яндекс Документы (курсоры)"
+                    when (it) {
+                        OpenFluxConfig.TRANSPORT_MAX -> "MAX (WebRTC-звонок)"
+                        OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы — новый редактор"
+                        else -> "Яндекс Документы — старый редактор"
+                    }
                 }
             )
             if (config.usesMax()) {
@@ -1507,7 +1519,13 @@ private fun LazyListScope.openFluxSection(
                     label = { Text("Ссылка на Яндекс Документ") },
                     placeholder = { Text("https://docs.yandex.ru/…") },
                     supportingText = {
-                        Text("Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода.")
+                        Text(
+                            if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
+                                "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
+                            } else {
+                                "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
+                            }
+                        )
                     },
                     enabled = enabled,
                     minLines = 1,
@@ -2518,7 +2536,7 @@ private fun WdttPlusAdvanced(
     enabled: Boolean,
     onChange: ((WdttPlusOptions) -> WdttPlusOptions) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(options.copy(rawMode = false, rawPort = 0) != WdttPlusOptions()) }
+    var expanded by remember { mutableStateOf(options.copy(rawMode = false, rawPort = 0, rawDirect = false) != WdttPlusOptions()) }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -2526,12 +2544,31 @@ private fun WdttPlusAdvanced(
         // The primary choice, so it sits outside the collapsible block.
         SettingsDropdown(
             label = "Режим подключения",
-            selectedValue = if (options.rawMode) "raw" else "wg",
-            options = listOf("wg", "raw"),
+            selectedValue = when {
+                !options.rawMode -> "wg"
+                options.rawDirect -> "raw_direct"
+                else -> "raw"
+            },
+            options = listOf("wg", "raw", "raw_direct"),
             enabled = enabled,
-            onValueSelected = { v -> onChange { it.copy(rawMode = v == "raw") } },
-            valueLabel = { if (it == "raw") "Raw — без WireGuard, быстрее" else "WG — WireGuard, любой сервер" }
+            onValueSelected = { v -> onChange { it.copy(rawMode = v != "wg", rawDirect = v == "raw_direct") } },
+            valueLabel = {
+                when (it) {
+                    "raw" -> "Raw — без WireGuard, быстрее"
+                    "raw_direct" -> "Raw напрямую — максимум скорости"
+                    else -> "WG — WireGuard, любой сервер"
+                }
+            }
         )
+        if (options.rawMode && options.rawDirect) {
+            Text(
+                text = "Туннель Android идёт прямо в ядро qWDTT, как в самом qWDTT: быстрее всего, но профили " +
+                    "маршрутизации и второй прокси здесь не работают (выбор приложений — работает). " +
+                    "Только Android в режиме VPN; в режиме «Прокси» и на ПК — как обычный Raw.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         if (options.rawMode) {
             VkTurnField(
                 value = options.rawPort.takeIf { it > 0 }?.toString().orEmpty(),

@@ -2,12 +2,10 @@ package org.olcbox.app
 
 import android.app.PendingIntent
 import android.content.Intent
-import android.net.VpnService
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.annotation.RequiresApi
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,7 +13,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import org.olcbox.app.vpn.VpnStatus
-import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
 
 /**
@@ -62,45 +59,18 @@ class QuickSettingsTileService : TileService() {
         val isConnected = OlcboxVpnState.isConnected.value
 
         if (isConnected) {
-            stopVpn()
-        } else {
-            // VpnService.prepare() returns null when permission is already held.
-            val prepIntent = VpnService.prepare(applicationContext)
-            if (prepIntent == null) {
-                // Connect the active location in the background. After an "Auto = fastest" pick the
-                // active location IS the chosen fastest server, so the tile silently reconnects it —
-                // no app launch, no re-ping (re-running Auto is an in-app action).
-                startVpn()
-            } else {
-                // Permission not yet granted — open the main app so the dialog can appear.
-                openMainApp()
-            }
+            VpnServiceControl.stop(applicationContext)
+        } else if (!VpnServiceControl.start(applicationContext)) {
+            // Permission not yet granted — open the main app so the dialog can appear. Otherwise the
+            // active location connects in the background: after an "Auto = fastest" pick it IS the chosen
+            // fastest server, so the tile silently reconnects it (re-running Auto is an in-app action).
+            openMainApp()
         }
     }
 
     // ──────────────────────────────────────────────────────────────────────
     // VPN control
     // ──────────────────────────────────────────────────────────────────────
-
-    private fun startVpn() {
-        val intent = Intent().apply {
-            setClassName(packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
-            action = OlcboxVpnActions.ACTION_START_VPN
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(applicationContext, intent)
-        } else {
-            startService(intent)
-        }
-    }
-
-    private fun stopVpn() {
-        val intent = Intent().apply {
-            setClassName(packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
-            action = OlcboxVpnActions.ACTION_STOP_VPN
-        }
-        startService(intent)
-    }
 
     private fun openMainApp() {
         val intent = Intent(applicationContext, AppActivity::class.java).apply {

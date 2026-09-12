@@ -156,6 +156,14 @@ fun HomeScreen(
     val state by viewModel.state.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(state.connectError) {
+        val error = state.connectError
+        if (!error.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(error)
+            viewModel.clearConnectError()
+        }
+    }
     // True while an "Auto = fastest" pass (ping → pick → connect) is in flight, so the Auto button
     // shows a spinner and ignores re-taps instead of launching a second concurrent pass.
     var autoRunning by remember { mutableStateOf(false) }

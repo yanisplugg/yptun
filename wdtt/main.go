@@ -226,6 +226,9 @@ type Config struct {
 	// -listen-raw port (Peer must point there). YPtun has no TUN fd to hand over, so the packets land in a
 	// userspace netstack served as a SOCKS5 (TCP + UDP) on Listen — see raw_socks.go.
 	RawMode bool
+	// RawTunFromHost (with RawMode): no SOCKS — the host builds its TUN from the RAWCONF it gets via
+	// OnConfig and hands the fd over with AttachTunFD, upstream's exact rawtun path (Android only).
+	RawTunFromHost bool
 
 	// OnConfig receives the WireGuard config fetched from the server (GETCONF), with an MTU line
 	// guaranteed. The host parses it and brings up the WG tunnel. In RawMode it gets the server's
@@ -244,6 +247,7 @@ func Run(parent context.Context, cfg Config) error {
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	dropStaleTunFD()
 
 	goDNS := strings.TrimSpace(cfg.GoDNS)
 	if goDNS == "" {
@@ -397,6 +401,20 @@ func Run(parent context.Context, cfg Config) error {
 			}
 			if strings.HasPrefix(rawConf, "RAWCONF:") {
 				if !cfg.RawMode {
+					return
+				}
+				if cfg.RawTunFromHost {
+					if cfg.OnConfig != nil {
+						cfg.OnConfig(rawConf)
+					}
+					tunDev, err := waitHostTun(ctx)
+					if err != nil {
+						log.Printf("[RAW] TUN хоста: %v", err)
+						return
+					}
+					context.AfterFunc(ctx, func() { _ = tunDev.Close() })
+					disp.AttachTUN(tunDev)
+					log.Println("[RAW] TUN хоста подключён, трафик пошёл")
 					return
 				}
 				if err := startRawSocks(ctx, rawConf, disp, listen); err != nil {

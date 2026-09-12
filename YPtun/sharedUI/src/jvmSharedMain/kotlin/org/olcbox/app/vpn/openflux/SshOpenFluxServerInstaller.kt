@@ -74,8 +74,7 @@ private fun envFileValue(value: String): String =
  * instead of being left on the machine for good.
  */
 internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String {
-    val transport = if (options.transport == OpenFluxConfig.TRANSPORT_MAX) OpenFluxConfig.TRANSPORT_MAX
-    else OpenFluxConfig.TRANSPORT_YANDEX
+    val transport = options.transport.takeIf { it in OpenFluxConfig.TRANSPORTS } ?: OpenFluxConfig.TRANSPORT_YANDEX
     val rst = "OUTPUT -p tcp --tcp-flags RST RST -j DROP"
     val execArgs = if (transport == OpenFluxConfig.TRANSPORT_MAX) {
         "--exit-node --transport ${'$'}{OPENFLUX_TRANSPORT}"

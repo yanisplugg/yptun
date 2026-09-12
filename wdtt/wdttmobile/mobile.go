@@ -42,24 +42,28 @@ type Options struct {
 	// Raw is qWDTT's Raw mode (no WireGuard): Peer is the server's raw port and Listen becomes a local
 	// SOCKS5; the sink then gets "RAWCONF:…" instead of a WireGuard config.
 	Raw bool `json:"raw"`
+	// RawTun (with Raw): no SOCKS — the host builds its TUN from the "RAWCONF:…" the sink gets and hands
+	// the fd over with AttachTunFd. Android only.
+	RawTun bool `json:"raw_tun"`
 }
 
 func (o Options) config() core.Config {
 	return core.Config{
-		Peer:        o.Peer,
-		VKHashes:    o.VKHashes,
-		Password:    o.Password,
-		Listen:      o.Listen,
-		NumWorkers:  o.NumWorkers,
-		DeviceID:    o.DeviceID,
-		CaptchaMode: o.CaptchaMode,
-		TurnHost:    o.TurnHost,
-		TurnPort:    o.TurnPort,
-		TurnTCP:     o.TurnTCP,
-		Obfs:        o.Obfs,
-		GoDNS:       o.GoDNS,
-		VKAnonPath:  o.VKAnonPath,
-		RawMode:     o.Raw,
+		Peer:           o.Peer,
+		VKHashes:       o.VKHashes,
+		Password:       o.Password,
+		Listen:         o.Listen,
+		NumWorkers:     o.NumWorkers,
+		DeviceID:       o.DeviceID,
+		CaptchaMode:    o.CaptchaMode,
+		TurnHost:       o.TurnHost,
+		TurnPort:       o.TurnPort,
+		TurnTCP:        o.TurnTCP,
+		Obfs:           o.Obfs,
+		GoDNS:          o.GoDNS,
+		VKAnonPath:     o.VKAnonPath,
+		RawMode:        o.Raw,
+		RawTunFromHost: o.Raw && o.RawTun,
 		// Anonymous VK only: an account login needs upstream's WebView flow, which no host of ours has.
 		VKAuthMode: "anonymous",
 	}
@@ -108,6 +112,10 @@ func Start(optionsJSON string, sink ConfigSink) error {
 	}()
 	return nil
 }
+
+// AttachTunFd hands the host's TUN fd (a dup the core then owns and closes) to a Raw run started with
+// raw_tun. Android only.
+func AttachTunFd(fd int) { core.AttachTunFD(fd) }
 
 // Stop cancels the running core. Idempotent.
 func Stop() {
