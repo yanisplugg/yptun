@@ -365,6 +365,12 @@ func run(ctx context.Context, cfg *config.Client, links []string, connected *ato
 	if err != nil {
 		return fmt.Errorf("udprelay listen %s: %w", cfg.Proxy.Listen, err)
 	}
+	// Free the port the moment the session is cancelled. Run only closes it once it returns, which
+	// can be minutes after Stop (in-flight DTLS/TURN handshakes), past Stop's bounded wait — and the
+	// next Start then failed "bind: address already in use" while the app reported "connected".
+	// Same as tcprelay does with its listener.
+	stopCloser := context.AfterFunc(ctx, func() { _ = listenConn.Close() })
+	defer stopCloser()
 	return udprelay.Run(ctx, udpDtlsDialer, prov, logger, connectedStreams, nil, udpParams, peer, listenConn, cfg.TURN.N)
 }
 
