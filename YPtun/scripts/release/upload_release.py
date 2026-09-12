@@ -71,6 +71,7 @@ def upload(name):
     path = os.path.join(DIR, name)
     size = os.path.getsize(path)
     ctype = ("application/vnd.android.package-archive" if name.endswith(".apk")
+             else "application/vnd.debian.binary-package" if name.endswith(".deb")
              else "application/gzip" if name.endswith(".gz") else "application/octet-stream")
     conn = http.client.HTTPSConnection("uploads.github.com", timeout=STALL_SEC)
     try:
@@ -98,7 +99,7 @@ def upload(name):
 
 
 local = {f: os.path.getsize(os.path.join(DIR, f)) for f in os.listdir(DIR)
-         if f.endswith((".apk", ".exe", ".patch.gz"))}
+         if f.endswith((".apk", ".exe", ".patch.gz", ".deb"))}
 log(f"файлов: {len(local)}, всего {sum(local.values()) / 1e9:.2f} ГБ")
 while True:
     have = assets()
