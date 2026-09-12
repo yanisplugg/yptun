@@ -2,7 +2,7 @@
 
 # YPtun
 
-### Fast censorship-resistant VPN · Android and Windows
+### Fast censorship-resistant VPN · Android, Windows and Linux · iOS in beta
 
 *VLESS · Reality · XHTTP over **Xray** and **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **MasterDNS** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, which disguises traffic as a video call.*
 
@@ -13,6 +13,9 @@
 [![Stars](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
 
 ![Platform](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)
+![Platform](https://img.shields.io/badge/platform-iOS%20beta-8e8e93?style=flat-square&logo=apple&logoColor=white)
 ![Cores](https://img.shields.io/badge/cores-Xray%20%2B%20sing--box-blueviolet?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
 

@@ -2,7 +2,7 @@
 
 # YPtun
 
-### 快速抗审查 VPN · Android 与 Windows
+### 快速抗审查 VPN · Android、Windows 与 Linux · iOS 测试中
 
 *基于 **Xray** 与 **sing-box** 的 VLESS · Reality · XHTTP，**Hysteria2**（QUIC），混淆的 **AmneziaWG**，通过 **VK-TURN** 通话的隧道，**MasterDNS** DNS 隧道，基于 **WARP** 的独立 Telegram 代理 —— 以及把流量伪装成视频通话的 **olcRTC**。*
 
@@ -13,6 +13,9 @@
 [![星标](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
 
 ![平台](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
+![平台](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
+![平台](https://img.shields.io/badge/platform-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)
+![平台](https://img.shields.io/badge/platform-iOS%20%E6%B5%8B%E8%AF%95%E7%89%88-8e8e93?style=flat-square&logo=apple&logoColor=white)
 ![内核](https://img.shields.io/badge/cores-Xray%20%2B%20sing--box-blueviolet?style=flat-square)
 ![许可证](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
 

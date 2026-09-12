@@ -2,7 +2,7 @@
 
 # YPtun
 
-### VPN-клиент для обхода блокировок · Android и Windows
+### VPN-клиент для обхода блокировок · Android, Windows и Linux · iOS в бете
 
 *VLESS · Reality · XHTTP поверх **Xray** и **sing-box**, **Hysteria2** (QUIC), обфусцированный **AmneziaWG**, туннель через звонки **VK-TURN**, DNS-туннель **MasterDNS**, отдельный Telegram-прокси через **WARP** — и **olcRTC**, маскирующий трафик под видеозвонок.*
 
@@ -14,6 +14,8 @@
 
 ![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
+![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)
+![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-iOS%20%D0%B1%D0%B5%D1%82%D0%B0-8e8e93?style=flat-square&logo=apple&logoColor=white)
 ![Ядра](https://img.shields.io/badge/%D1%8F%D0%B4%D1%80%D0%B0-Xray%20%2B%20sing--box-blueviolet?style=flat-square)
 ![Лицензия](https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-GPL--3.0-blue?style=flat-square)
 
