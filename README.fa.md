@@ -2,7 +2,7 @@
 
 # YPtun
 
-### وی‌پی‌ان سریع و مقاوم در برابر سانسور · اندروید و ویندوز
+### وی‌پی‌ان سریع و مقاوم در برابر سانسور · اندروید، ویندوز و لینوکس · iOS در مرحله‌ی بتا
 
 *VLESS · Reality · XHTTP روی **Xray** و **sing-box**، **Hysteria2** (QUIC)، وایرگارد مبهم‌سازی‌شده‌ی **AmneziaWG**، تونل از طریق تماس‌های **VK-TURN**، تونل DNS با **MasterDNS**، پروکسی مستقل تلگرام روی **WARP** — و **olcRTC** که ترافیک را شبیه تماس تصویری می‌کند.*
 
@@ -13,6 +13,9 @@
 [![ستاره‌ها](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
 
 ![پلتفرم](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
+![پلتفرم](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
+![پلتفرم](https://img.shields.io/badge/platform-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)
+![پلتفرم](https://img.shields.io/badge/platform-iOS%20beta-8e8e93?style=flat-square&logo=apple&logoColor=white)
 ![هسته‌ها](https://img.shields.io/badge/cores-Xray%20%2B%20sing--box-blueviolet?style=flat-square)
 ![مجوز](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
 
