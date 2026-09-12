@@ -4,8 +4,28 @@ import SwiftUI
 import UIKit
 import WidgetKit
 
+/// Home-screen quick actions («Подключить / Отключить VPN»). A scene-based app gets them in two places:
+/// a cold launch brings the item in the scene's connection options, a running app through the WINDOW
+/// SCENE delegate — `application(_:performActionFor:)` is never called once scenes are on.
 final class AppDelegate: NSObject, UIApplicationDelegate {
-    static var onShortcut: ((UIApplicationShortcutItem) -> Void)?
+    static var onShortcut: ((UIApplicationShortcutItem) -> Void)? {
+        didSet {
+            // A cold-launch item may arrive before the app has wired the handler.
+            if let item = pendingShortcut, let handler = onShortcut {
+                pendingShortcut = nil
+                handler(item)
+            }
+        }
+    }
+    private static var pendingShortcut: UIApplicationShortcutItem?
+
+    static func deliver(_ item: UIApplicationShortcutItem) {
+        if let handler = onShortcut {
+            handler(item)
+        } else {
+            pendingShortcut = item
+        }
+    }
 
     func application(
         _ application: UIApplication,
@@ -13,17 +33,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
         if let shortcutItem = options.shortcutItem {
-            Self.onShortcut?(shortcutItem)
+            Self.deliver(shortcutItem)
         }
-        return UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = QuickActionSceneDelegate.self
+        return configuration
     }
+}
 
-    func application(
-        _ application: UIApplication,
+/// Receives quick actions while the app is running; SwiftUI keeps managing the window itself.
+final class QuickActionSceneDelegate: NSObject, UIWindowSceneDelegate {
+    func windowScene(
+        _ windowScene: UIWindowScene,
         performActionFor shortcutItem: UIApplicationShortcutItem,
         completionHandler: @escaping (Bool) -> Void
     ) {
-        Self.onShortcut?(shortcutItem)
+        AppDelegate.deliver(shortcutItem)
         completionHandler(true)
     }
 }
@@ -93,10 +118,7 @@ struct OlcboxIosApp: App {
             } else if path == "stop" {
                 appSession.stopVpn()
             } else if path == "restart" {
-                appSession.stopVpn()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.appSession.startVpn()
-                }
+                appSession.restartVpn()
             }
         }
     }

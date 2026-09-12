@@ -157,10 +157,11 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(state.startBlockedReason) {
-        val reason = state.startBlockedReason
-        if (!reason.isNullOrBlank()) {
-            snackbarHostState.showSnackbar(reason)
+    LaunchedEffect(state.connectError) {
+        val error = state.connectError
+        if (!error.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(error)
+            viewModel.clearConnectError()
         }
     }
     // True while an "Auto = fastest" pass (ping → pick → connect) is in flight, so the Auto button

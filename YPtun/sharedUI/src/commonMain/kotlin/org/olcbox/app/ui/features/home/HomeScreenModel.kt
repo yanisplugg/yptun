@@ -71,7 +71,7 @@ class HomeScreenViewModel(
                         is VpnStatus.Error -> it.copy(
                             isVpnConnected = false,
                             isVpnLoading = false,
-                            startBlockedReason = status.message
+                            connectError = status.message
                         )
                     }
                 }
@@ -155,7 +155,7 @@ class HomeScreenViewModel(
         }
 
         viewModelScope.launch {
-            _state.update { it.copy(isVpnLoading = true, startBlockedReason = null) }
+            _state.update { it.copy(isVpnLoading = true, connectError = null) }
             try {
                 if (_state.value.isVpnConnected || vpnManager.status.value is VpnStatus.Connected) {
                     vpnManager.stopVpn()
@@ -233,6 +233,11 @@ class HomeScreenViewModel(
             if (connectedName == null) _state.update { it.copy(isVpnLoading = false) }
             onResult(connectedName)
         }
+    }
+
+    /** The Home snackbar showed [HomeScreenState.connectError]; don't show it again on the next visit. */
+    fun clearConnectError() {
+        _state.update { it.copy(connectError = null) }
     }
 
     fun restartVpnIfRunning() {
@@ -659,6 +664,11 @@ data class HomeScreenState(
     val shouldShowConfigInvalidReminder: Boolean,
     val canStartVpn: Boolean,
     val startBlockedReason: String?,
+    /**
+     * Why the last connect failed ([VpnStatus.Error]), for a one-off snackbar on Home. Separate from
+     * [startBlockedReason], which holds standing states ("Add a location first") that must not pop up.
+     */
+    val connectError: String? = null,
     /** Wall-clock epoch-ms when the connection started (0 = not connected); drives the on-screen timer. */
     val connectedSinceEpochMs: Long = 0L,
     /** Set after importing a VK-TURN link that still needs a per-client VK Calls link. */
