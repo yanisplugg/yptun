@@ -52,12 +52,8 @@ import platform.NetworkExtension.NEVPNStatusReasserting
 import platform.UIKit.UIApplication
 import platform.UIKit.UIImpactFeedbackGenerator
 import platform.UIKit.UIImpactFeedbackStyle
-import platform.UIKit.UIImpactFeedbackStyleLight
-import platform.UIKit.UIImpactFeedbackStyleMedium
 import platform.UIKit.UINotificationFeedbackGenerator
 import platform.UIKit.UINotificationFeedbackType
-import platform.UIKit.UINotificationFeedbackTypeError
-import platform.UIKit.UINotificationFeedbackTypeSuccess
 import kotlin.coroutines.resume
 
 /**
@@ -130,7 +126,7 @@ class IosVpnManager(
     override fun needsPermission(): Boolean = false
 
     override fun startVpn() {
-        triggerImpactHaptic(UIImpactFeedbackStyleMedium)
+        triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
         scope.launch {
             val active = locationsRepository.getActiveLocation()?.location?.normalized()
             if (active == null || !active.isComplete()) {
@@ -171,7 +167,7 @@ class IosVpnManager(
     }
 
     override fun stopVpn() {
-        triggerImpactHaptic(UIImpactFeedbackStyleLight)
+        triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
         scope.launch {
             setStatus(VpnStatus.Stopping)
             manager?.connection?.stopVPNTunnel() ?: setStatus(VpnStatus.Disconnected)
@@ -327,7 +323,7 @@ class IosVpnManager(
                 _connectedSince.value = m.connection.connectedDate
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
                 setStatus(VpnStatus.Connected)
-                triggerNotificationHaptic(UINotificationFeedbackTypeSuccess)
+                triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
             }
             NEVPNStatusReasserting -> setStatus(VpnStatus.Reconnecting)
             NEVPNStatusDisconnecting -> setStatus(VpnStatus.Stopping)
@@ -336,7 +332,7 @@ class IosVpnManager(
                 val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
                 if (wasConnecting && failure.isNotEmpty()) {
                     setStatus(VpnStatus.Error(failure))
-                    triggerNotificationHaptic(UINotificationFeedbackTypeError)
+                    triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeError)
                 } else {
                     setStatus(VpnStatus.Disconnected)
                 }
