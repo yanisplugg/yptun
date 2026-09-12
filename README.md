@@ -239,7 +239,8 @@ amneziawg-go/     реализация AmneziaWG                             (в
 - [x] Движки AmneziaWG, VK-TURN и MasterDNS
 - [x] Профили маршрутизации (Happ-совместимые) + ASN
 - [x] Сборка под **Windows** (x64 и ARM64)
-- [ ] Сборка под **Linux** — *в работе*
+- [x] Сборка под **Linux** (`.deb`, x64 и ARM64)
+- [ ] Сборка под **iOS** — *в бете*
 
 ---
 

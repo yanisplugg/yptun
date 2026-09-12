@@ -228,7 +228,8 @@ amneziawg-go/     AmneziaWG 实现                                   (已 vendor
 - [x] AmneziaWG、VK-TURN 与 MasterDNS 引擎
 - [x] 分流配置（兼容 Happ）+ ASN
 - [x] **Windows** 版本（x64 与 ARM64）
-- [ ] **Linux** 版本 —— *开发中*
+- [x] **Linux** 版本（`.deb`，x64 与 ARM64）
+- [ ] **iOS** 版本 —— *测试中*
 
 > 共享引擎已能在 JVM（`desktopApp`）上运行，所以桌面端是下一步。
 

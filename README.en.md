@@ -228,7 +228,8 @@ amneziawg-go/     AmneziaWG implementation                         (vendored)
 - [x] AmneziaWG, VK-TURN and MasterDNS engines
 - [x] Routing profiles (Happ-compatible) + ASN
 - [x] **Windows** build (x64 and ARM64)
-- [ ] **Linux** build — *in progress*
+- [x] **Linux** build (`.deb`, x64 and ARM64)
+- [ ] **iOS** build — *in beta*
 
 > The shared engine already runs on the JVM (`desktopApp`), so desktop is next.
 
