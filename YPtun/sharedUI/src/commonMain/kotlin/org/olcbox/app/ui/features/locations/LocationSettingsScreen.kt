@@ -1465,6 +1465,7 @@ internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
  * through the tunnel, and the exit-node auto-install. The client serves a local SOCKS5 the TUN bridge
  * consumes directly; the exit node on the VPS is the internet exit.
  */
+@OptIn(ExperimentalLayoutApi::class)
 private fun LazyListScope.openFluxSection(
     config: OpenFluxConfig,
     enabled: Boolean,
@@ -1481,20 +1482,34 @@ private fun LazyListScope.openFluxSection(
                 title = "OpenFlux — туннель через сервисы",
                 subtitle = "TCP-туннель до твоей выходной ноды на VPS: пакеты идут через Яндекс Документы или звонок в MAX"
             )
-            SettingsDropdown(
-                label = "Транспорт",
-                selectedValue = config.transport,
-                options = OpenFluxConfig.TRANSPORTS,
-                enabled = enabled,
-                onValueSelected = { v -> onChange { it.copy(transport = v) } },
-                valueLabel = {
-                    when (it) {
-                        OpenFluxConfig.TRANSPORT_MAX -> "MAX (WebRTC-звонок)"
-                        OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы — новый редактор"
-                        else -> "Яндекс Документы — старый редактор"
-                    }
-                }
+            // All three carriers on screen at once: behind a dropdown the new-editor one went unnoticed.
+            Text(
+                text = "Транспорт",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
             )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OpenFluxConfig.TRANSPORTS.forEach { transport ->
+                    FilterChip(
+                        selected = config.transport == transport,
+                        onClick = { onChange { it.copy(transport = transport) } },
+                        enabled = enabled,
+                        label = {
+                            Text(
+                                when (transport) {
+                                    OpenFluxConfig.TRANSPORT_MAX -> "MAX (звонок)"
+                                    OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы · новый редактор"
+                                    else -> "Яндекс Документы · старый редактор"
+                                }
+                            )
+                        }
+                    )
+                }
+            }
             if (config.usesMax()) {
                 VkTurnField(
                     value = config.maxToken,
@@ -2891,7 +2906,7 @@ private fun engineSubtitle(engine: EngineType): String = when (engine) {
     EngineType.Chain -> "Proxy wrapped inside the olcRTC tunnel"
     EngineType.VkTurn -> "WireGuard over a VK TURN tunnel (free-turn-proxy)"
     EngineType.MasterDns -> "Туннель через DNS (MasterDnsVPN: несколько резолверов + ARQ)"
-    EngineType.OpenFlux -> "TCP-туннель через Яндекс Документы или звонок MAX до своей выходной ноды"
+    EngineType.OpenFlux -> "TCP-туннель через Яндекс Документы (старый или новый редактор) или звонок MAX до своей выходной ноды"
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {
