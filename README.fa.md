@@ -251,11 +251,18 @@ PR و issue پذیرفته می‌شوند. پیش از شروع ببینید:
 [Xray-core](https://github.com/XTLS/Xray-core) ·
 [sing-box](https://github.com/SagerNet/sing-box) ·
 [olcRTC](https://github.com/openlibrecommunity/olcrtc) ·
-[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go).
+[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) ·
+[OpenFlux](https://github.com/p1neappleXpress/OpenFlux) ·
+[qWDTT](https://github.com/SpaceNeuroX/proxy-turn-vk-android) ·
+[MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN) ·
+[free-turn-proxy](https://github.com/samosvalishe/free-turn-proxy) ·
+[TrustTunnel](https://github.com/TrustTunnel/TrustTunnelClient) ·
+[hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) ·
+[tun2socks](https://github.com/xjasonlyu/tun2socks).
 
 ## مجوز
 
-[GPL-3.0](LICENSE) — اپ تحت GNU GPL v3.0 منتشر می‌شود چون **sing-box** (آن هم GPL-3.0) را در خود دارد: کپی‌لفت بر کل محصول اعمال می‌شود. اجزای vendored مجوز خود را حفظ می‌کنند (`sing-box` — GPL-3.0، Xray — MPL-2.0، `amneziawg-go` — MIT، `olcrtc` — WTFPL).
+[GPL-3.0](LICENSE) — اپ تحت GNU GPL v3.0 منتشر می‌شود چون **sing-box** (آن هم GPL-3.0) را در خود دارد: کپی‌لفت بر کل محصول اعمال می‌شود. اجزای vendored مجوز خود را حفظ می‌کنند (`sing-box` — GPL-3.0، Xray — MPL-2.0، `amneziawg-go` — MIT، `olcrtc` — WTFPL، OpenFlux — GPL-3.0، qWDTT (`wdtt`) — GPL-3.0، MasterDnsVPN (`masterdns`) — MIT، `free-turn-proxy` — Happy Bunny License (شبیه MIT)، Trust Tunnel — Apache-2.0، `hev-socks5-tunnel` — MIT، `tun2socks` — MIT).
 
 </div>
 

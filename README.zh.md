@@ -253,11 +253,18 @@ amneziawg-go/     AmneziaWG 实现                                   (已 vendor
 [Xray-core](https://github.com/XTLS/Xray-core) ·
 [sing-box](https://github.com/SagerNet/sing-box) ·
 [olcRTC](https://github.com/openlibrecommunity/olcrtc) ·
-[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go)。
+[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) ·
+[OpenFlux](https://github.com/p1neappleXpress/OpenFlux) ·
+[qWDTT](https://github.com/SpaceNeuroX/proxy-turn-vk-android) ·
+[MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN) ·
+[free-turn-proxy](https://github.com/samosvalishe/free-turn-proxy) ·
+[TrustTunnel](https://github.com/TrustTunnel/TrustTunnelClient) ·
+[hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) ·
+[tun2socks](https://github.com/xjasonlyu/tun2socks)。
 
 ## 许可证
 
-[GPL-3.0](LICENSE) —— 本应用以 GNU GPL v3.0 发布，因为它打包了 **sing-box**（同为 GPL-3.0）：copyleft 适用于整个产品。Vendored 组件保留各自的许可证（`sing-box` — GPL-3.0，Xray — MPL-2.0，`amneziawg-go` — MIT，`olcrtc` — WTFPL）。
+[GPL-3.0](LICENSE) —— 本应用以 GNU GPL v3.0 发布，因为它打包了 **sing-box**（同为 GPL-3.0）：copyleft 适用于整个产品。Vendored 组件保留各自的许可证（`sing-box` — GPL-3.0，Xray — MPL-2.0，`amneziawg-go` — MIT，`olcrtc` — WTFPL，OpenFlux — GPL-3.0，qWDTT（`wdtt`）— GPL-3.0，MasterDnsVPN（`masterdns`）— MIT，`free-turn-proxy` — Happy Bunny License（类 MIT），Trust Tunnel — Apache-2.0，`hev-socks5-tunnel` — MIT，`tun2socks` — MIT）。
 
 <div align="center">
 <br>

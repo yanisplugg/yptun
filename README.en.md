@@ -253,7 +253,14 @@ Standing on the shoulders of giants:
 [Xray-core](https://github.com/XTLS/Xray-core) ·
 [sing-box](https://github.com/SagerNet/sing-box) ·
 [olcRTC](https://github.com/openlibrecommunity/olcrtc) ·
-[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go).
+[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) ·
+[OpenFlux](https://github.com/p1neappleXpress/OpenFlux) ·
+[qWDTT](https://github.com/SpaceNeuroX/proxy-turn-vk-android) ·
+[MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN) ·
+[free-turn-proxy](https://github.com/samosvalishe/free-turn-proxy) ·
+[TrustTunnel](https://github.com/TrustTunnel/TrustTunnelClient) ·
+[hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) ·
+[tun2socks](https://github.com/xjasonlyu/tun2socks).
 
 ## Code signing policy
 
@@ -267,7 +274,7 @@ Privacy: this program will not transfer any information to other networked syste
 
 ## License
 
-[GPL-3.0](LICENSE) — the app ships under the GNU GPL v3.0 because it bundles **sing-box** (also GPL-3.0): copyleft applies to the whole product. Vendored components keep their own licenses (`sing-box` — GPL-3.0, Xray — MPL-2.0, `amneziawg-go` — MIT, `olcrtc` — WTFPL).
+[GPL-3.0](LICENSE) — the app ships under the GNU GPL v3.0 because it bundles **sing-box** (also GPL-3.0): copyleft applies to the whole product. Vendored components keep their own licenses (`sing-box` — GPL-3.0, Xray — MPL-2.0, `amneziawg-go` — MIT, `olcrtc` — WTFPL, OpenFlux — GPL-3.0, qWDTT (`wdtt`) — GPL-3.0, MasterDnsVPN (`masterdns`) — MIT, `free-turn-proxy` — Happy Bunny License (MIT-style), Trust Tunnel — Apache-2.0, `hev-socks5-tunnel` — MIT, `tun2socks` — MIT).
 
 <div align="center">
 <br>
