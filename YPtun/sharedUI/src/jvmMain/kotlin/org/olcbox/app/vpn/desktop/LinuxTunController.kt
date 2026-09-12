@@ -25,12 +25,13 @@ internal class LinuxTunController(
         socksPort: Int = PacServer.LOCAL_SOCKS_PORT,
         socksUsername: String = "",
         socksPassword: String = "",
-        bypassPrefixes: List<String> = emptyList()
+        bypassPrefixes: List<String> = emptyList(),
+        udpOverTcp: Boolean = true
     ): List<String> {
         this.hevBinary = hevBinary
         val upScript = writeScript("linux-tun-up.sh", upScriptContent(bypassPrefixes))
         val downScript = writeDownScript()
-        val config = writeConfig(socksPort, upScript, downScript, socksUsername, socksPassword)
+        val config = writeConfig(socksPort, upScript, downScript, socksUsername, socksPassword, udpOverTcp)
         return listOf(hevBinary.toString(), config.toString())
     }
 
@@ -42,28 +43,74 @@ internal class LinuxTunController(
      * own dials — [bypassPrefixes] (their upstreams, see DesktopVpnManager.resolveBypassServerIps)
      * are routed around the TUN instead, or the tunnel would carry itself.
      *
-     * Cleanup stays with the caller's single privileged stop (see [privilegedCleanupCommands]).
+     * hev runs under a root wrapper ([runScriptContent]) that lives exactly as long as this JVM holds
+     * its stdin: stopping is closing that pipe ([release]) — no second password — and a crash, kill or
+     * logout closes it too, so the tunnel never outlives the app. It used to: hev (root) kept running
+     * with its rules in place and the whole machine stayed routed into a dead TUN until a reboot.
+     *
+     * [udpOverTcp]: hev's own UDP-in-TCP framing, which only olcRTC/MasterDNS/OpenFlux-style SOCKS
+     * servers need (they have no UDP ASSOCIATE). Xray and sing-box speak standard SOCKS5 UDP and do
+     * NOT understand the framing — with it every UDP flow (DNS to any resolver but the mapped one,
+     * QUIC, calls, games) silently died. Same split as Android's hev config.
      */
     suspend fun start(
         hevBinary: Path,
         socksPort: Int,
         socksUsername: String,
         socksPassword: String,
-        bypassPrefixes: List<String>
+        bypassPrefixes: List<String>,
+        udpOverTcp: Boolean
     ): Process = withContext(Dispatchers.IO) {
-        val hevCommand = prepareHevLaunch(hevBinary, socksPort, socksUsername, socksPassword, bypassPrefixes)
+        val hevCommand = prepareHevLaunch(hevBinary, socksPort, socksUsername, socksPassword, bypassPrefixes, udpOverTcp)
+        val runScript = writeScript("linux-tun-run.sh", runScriptContent(hevCommand, writeDownScript().toString()))
         addLog("Starting Linux TUN bridge: ${hevBinary.fileName} -> 127.0.0.1:$socksPort")
-        val process = ProcessBuilder(LinuxPrivilege.command(hevCommand))
+        val process = ProcessBuilder(LinuxPrivilege.command(listOf("sh", runScript.toString())))
             .redirectErrorStream(true)
             .start()
         try {
             // The wait includes the pkexec password dialog, so it gets far longer than the olcRTC path.
             awaitReady(launcher = process, timeoutMs = AUTH_READY_TIMEOUT_MS)
         } catch (e: Exception) {
-            process.destroy()
+            release(process)
             throw e
         }
         process
+    }
+
+    /**
+     * Stops a bridge started by [start]: closing its stdin makes the root wrapper take hev and the
+     * routes down itself. Once it has exited nothing is left for [privilegedCleanupCommands], so the
+     * disconnect needs no authorization; if it hangs, the privileged cleanup still runs as before.
+     */
+    suspend fun release(process: Process) = withContext(Dispatchers.IO) {
+        runCatching { process.outputStream.close() }
+        if (process.waitFor(RELEASE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            hevBinary = null
+            routesInstalled = false
+        }
+    }
+
+    /**
+     * A tunnel left by something that could not clean up after itself (an olcRTC session that crashed,
+     * an older YPtun) still owns [TUN_NAME] and the default route: the next hev cannot create the
+     * device and every upstream dial of the cores lands in the dead TUN. Take it down before we start.
+     */
+    suspend fun clearStale(hevBinary: Path) = withContext(Dispatchers.IO) {
+        if (!interfaceExists() && !routeRuleExists()) return@withContext
+        addLog("A previous $TUN_NAME tunnel is still up — removing it before connecting")
+        val script = writeScript(
+            "linux-tun-clear.sh",
+            "#!/bin/sh\npkill -f ${shellQuoted(hevBinary.toString())} >/dev/null 2>&1\n" +
+                "sh ${shellQuoted(writeDownScript().toString())} >/dev/null 2>&1\nexit 0\n"
+        )
+        runCatching {
+            ProcessBuilder(LinuxPrivilege.command(listOf("sh", script.toString())))
+                .redirectErrorStream(true)
+                .start()
+                .waitFor(AUTH_READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        }
+        val deadline = System.currentTimeMillis() + ROUTE_CLEANUP_TIMEOUT_MS
+        while (interfaceExists() && System.currentTimeMillis() < deadline) delay(TUN_READY_POLL_MS)
     }
 
     /**
@@ -104,7 +151,9 @@ internal class LinuxTunController(
         hevBinary?.let { binary ->
             commands += "pkill -f ${shellQuoted(binary.toString())} >/dev/null 2>&1 || true"
         }
-        if (routesInstalled) {
+        // Not only once readiness was confirmed: hev's up-script may already have run when the start
+        // fails (olcRTC never came up), and a killed hev leaves its rules behind.
+        if (routesInstalled || hevBinary != null) {
             commands += "sh ${shellQuoted(writeDownScript().toString())} >/dev/null 2>&1 || true"
         }
         return commands
@@ -123,7 +172,8 @@ internal class LinuxTunController(
         upScript: Path,
         downScript: Path,
         socksUsername: String,
-        socksPassword: String
+        socksPassword: String,
+        udpOverTcp: Boolean
     ): Path {
         val config = DesktopPaths.appDataDir().resolve("linux-tun.yml")
         Files.writeString(
@@ -133,7 +183,8 @@ internal class LinuxTunController(
                 postUpScript = upScript.toString(),
                 preDownScript = downScript.toString(),
                 socksUsername = socksUsername,
-                socksPassword = socksPassword
+                socksPassword = socksPassword,
+                udpOverTcp = udpOverTcp
             )
         )
         return config
@@ -189,9 +240,6 @@ internal class LinuxTunController(
         }
     }
 
-    /** POSIX single-quoted: the only escape inside is closing the quote, inserting a literal ', reopening. */
-    private fun shellQuoted(value: String): String = "'" + value.replace("'", "'\\''") + "'"
-
     internal companion object {
         const val TUN_NAME = "olcbox0"
         const val TUN_MTU = 1500
@@ -203,11 +251,17 @@ internal class LinuxTunController(
         const val ROOT_BYPASS_RULE_PREF = "10"
         const val UPSTREAM_BYPASS_RULE_PREF = "15"
         const val TUN_RULE_PREF = "20"
+        const val IPV6_LAN_RULE_PREF = "19"
+        private const val IPV6_CLEANUP = """ip -6 rule del uidrange 0-0 lookup main pref $ROOT_BYPASS_RULE_PREF 2>/dev/null || true
+ip -6 rule del lookup main suppress_prefixlength 0 pref $IPV6_LAN_RULE_PREF 2>/dev/null || true
+ip -6 rule del lookup $ROUTE_TABLE pref $TUN_RULE_PREF 2>/dev/null || true
+ip -6 route flush table $ROUTE_TABLE 2>/dev/null || true"""
         const val TUN_READY_TIMEOUT_MS = 10_000L
         const val AUTH_READY_TIMEOUT_MS = 120_000L
         private val IPV4_PREFIX = Regex("""\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?""")
         const val TUN_READY_POLL_MS = 100L
         const val ROUTE_CLEANUP_TIMEOUT_MS = 2_000L
+        const val RELEASE_TIMEOUT_MS = 5_000L
 
         /**
          * hev-socks5-tunnel bridges the TUN into the core's local SOCKS inbound. That inbound is
@@ -220,7 +274,8 @@ internal class LinuxTunController(
             postUpScript: String? = null,
             preDownScript: String? = null,
             socksUsername: String = "",
-            socksPassword: String = ""
+            socksPassword: String = "",
+            udpOverTcp: Boolean = true
         ): String {
             return buildString {
                 appendLine("tunnel:")
@@ -238,7 +293,7 @@ internal class LinuxTunController(
                 appendLine("socks5:")
                 appendLine("  address: ${PacServer.LOCAL_SOCKS_HOST}")
                 appendLine("  port: $socksPort")
-                appendLine("  udp: 'tcp'")
+                appendLine("  udp: '${if (udpOverTcp) "tcp" else "udp"}'")
                 appendLine("  pipeline: false")
                 if (socksUsername.isNotBlank()) {
                     appendLine("  username: ${yamlQuoted(socksUsername)}")
@@ -264,6 +319,24 @@ internal class LinuxTunController(
             }.trimEnd()
         }
 
+        /**
+         * The root wrapper around hev (see [start]): hev in the background, then block on stdin until
+         * YPtun closes it — on purpose or by dying — and take hev and its routes down.
+         */
+        fun runScriptContent(hevCommand: List<String>, downScript: String): String = buildString {
+            appendLine("#!/bin/sh")
+            appendLine(hevCommand.joinToString(" ") { shellQuoted(it) } + " &")
+            appendLine("HEV=\$!")
+            appendLine("cat >/dev/null")
+            appendLine("kill \$HEV 2>/dev/null")
+            appendLine("wait \$HEV 2>/dev/null")
+            appendLine("sh ${shellQuoted(downScript)} >/dev/null 2>&1")
+            appendLine("exit 0")
+        }
+
+        /** POSIX single-quoted: the only escape inside is closing the quote, inserting a literal ', reopening. */
+        private fun shellQuoted(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
         /** YAML single-quoted scalar: the only escape inside is a doubled quote. */
         private fun yamlQuoted(value: String): String = "'" + value.replace("'", "''") + "'"
 
@@ -284,6 +357,7 @@ internal class LinuxTunController(
                 while ip rule del pref $UPSTREAM_BYPASS_RULE_PREF 2>/dev/null; do :; done
                 ip rule del lookup $ROUTE_TABLE pref $TUN_RULE_PREF 2>/dev/null || true
                 ip route flush table $ROUTE_TABLE 2>/dev/null || true
+            """.trimIndent() + "\n" + IPV6_CLEANUP + "\n" + """
                 sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
                 sysctl -w net.ipv4.conf.$TUN_NAME.rp_filter=0 >/dev/null 2>&1 || true
                 ip link set $TUN_NAME up
@@ -291,6 +365,15 @@ internal class LinuxTunController(
             """.trimIndent() + bypassRules + "\n" + """
                 ip route add default dev $TUN_NAME table $ROUTE_TABLE
                 ip rule add lookup $ROUTE_TABLE pref $TUN_RULE_PREF
+                # The TUN is IPv4-only: without this every AAAA answer went AROUND the tunnel. Make the
+                # IPv6 default unreachable instead (apps fall back to IPv4 at once), the way Android
+                # blocks a family the VPN does not route; LAN/link-local keep their own routes (pref
+                # $IPV6_LAN_RULE_PREF), root keeps IPv6 like it keeps IPv4 (olcRTC's own ICE). Best-effort:
+                # a kernel booted with IPv6 disabled has nothing to leak.
+                ip -6 rule add uidrange 0-0 lookup main pref $ROOT_BYPASS_RULE_PREF 2>/dev/null || true
+                ip -6 rule add lookup main suppress_prefixlength 0 pref $IPV6_LAN_RULE_PREF 2>/dev/null || true
+                ip -6 route add unreachable default table $ROUTE_TABLE 2>/dev/null || true
+                ip -6 rule add lookup $ROUTE_TABLE pref $TUN_RULE_PREF 2>/dev/null || true
                 if command -v resolvectl >/dev/null 2>&1; then
                   resolvectl dns $TUN_NAME $MAPDNS_ADDRESS >/dev/null 2>&1 || true
                   resolvectl domain $TUN_NAME '~.' >/dev/null 2>&1 || true
@@ -308,6 +391,7 @@ internal class LinuxTunController(
                 while ip rule del pref $UPSTREAM_BYPASS_RULE_PREF 2>/dev/null; do :; done
                 ip rule del lookup $ROUTE_TABLE pref $TUN_RULE_PREF 2>/dev/null || true
                 ip route flush table $ROUTE_TABLE 2>/dev/null || true
+            """.trimIndent() + "\n" + IPV6_CLEANUP + "\n" + """
                 if command -v resolvectl >/dev/null 2>&1; then
                   resolvectl revert $TUN_NAME >/dev/null 2>&1 || true
                 elif command -v resolvconf >/dev/null 2>&1; then
