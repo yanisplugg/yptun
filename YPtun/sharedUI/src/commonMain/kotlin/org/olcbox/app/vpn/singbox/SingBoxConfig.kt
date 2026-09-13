@@ -941,11 +941,12 @@ object SingBoxConfig {
                     put("uuid", profile.uuid)
                     if (profile.flow.isNotBlank()) {
                         put("flow", profile.flow)
+                    } else {
+                        // xudp is only valid when flow is blank (non-vision).
+                        // Combining xudp with xtls-rprx-vision violates XTLS Vision framing
+                        // and crashes Xray-core / Remnawave servers.
+                        put("packet_encoding", "xudp")
                     }
-                    // xudp coexists with vision flow and is what makes UDP (DNS/QUIC) actually ride the
-                    // vless tunnel. Omitting it (the old "flow XOR xudp") left UDP DNS over the proxy
-                    // stalling on desktop. xray-based vision servers speak xudp, so set it always.
-                    put("packet_encoding", "xudp")
                 }
 
                 ProxyProfile.TYPE_VMESS -> {

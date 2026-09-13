@@ -208,14 +208,17 @@ internal class IosEngineController(
             activeProxyCore = ProxyCore.Xray
         }
         if (activeProxyCore == ProxyCore.SingBox &&
-            (traffic.blockRuDomains || profileWantsXray) &&
             effectiveProfile.rawOutbound.isNullOrBlank() &&
-            effectiveProfile.type in XRAY_SUPPORTED_TYPES
+            effectiveProfile.type in XRAY_SUPPORTED_TYPES &&
+            (traffic.blockRuDomains || profileWantsXray || (config.core == ProxyCore.Auto && globalCore == ProxyCore.Auto))
         ) {
             activeProxyCore = ProxyCore.Xray
             log(
-                if (profileWantsXray) "Switching to Xray core for routing profile (native domain:/geoip: matching)"
-                else "Switching to Xray core for RU-domain blocklist"
+                when {
+                    profileWantsXray -> "Switching to Xray core for routing profile (native domain:/geoip: matching)"
+                    traffic.blockRuDomains -> "Switching to Xray core for RU-domain blocklist"
+                    else -> "Using Xray core for ${effectiveProfile.type} (Happ-compatible)"
+                }
             )
         }
         if (activeProxyCore == ProxyCore.Xray &&
