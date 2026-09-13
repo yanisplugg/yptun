@@ -170,10 +170,22 @@ jobs:
           cp "$RUNNER_TEMP/tunnel.mobileprovision" Payload/YPtun.app/PlugIns/PacketTunnel.appex/embedded.mobileprovision
           cp "$RUNNER_TEMP/widget.mobileprovision" Payload/YPtun.app/PlugIns/YPtunWidget.appex/embedded.mobileprovision
 
-          # 5. Extract entitlements from provisioning profiles
+          # 5. Extract and sanitize entitlements
           security cms -D -i "$RUNNER_TEMP/app.mobileprovision" | plutil -extract Entitlements xml1 - -o "$RUNNER_TEMP/app.entitlements"
           security cms -D -i "$RUNNER_TEMP/tunnel.mobileprovision" | plutil -extract Entitlements xml1 - -o "$RUNNER_TEMP/tunnel.entitlements"
           security cms -D -i "$RUNNER_TEMP/widget.mobileprovision" | plutil -extract Entitlements xml1 - -o "$RUNNER_TEMP/widget.entitlements"
+
+          # Apple profiles contain wildcard networkextension capabilities (hotspot-provider, app-proxy, etc.)
+          # and com.apple.token keychain group, which are rejected by App Store / TestFlight validation.
+          for ent in "$RUNNER_TEMP/app.entitlements" "$RUNNER_TEMP/tunnel.entitlements"; do
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.networking.networkextension" "$ent" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.developer.networking.networkextension array" "$ent"
+            /usr/libexec/PlistBuddy -c "Add :com.apple.developer.networking.networkextension:0 string packet-tunnel-provider" "$ent"
+            /usr/libexec/PlistBuddy -c "Delete :keychain-access-groups:1" "$ent" 2>/dev/null || true
+          done
+          # Widget does not use networkextension
+          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.networking.networkextension" "$RUNNER_TEMP/widget.entitlements" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :keychain-access-groups:1" "$RUNNER_TEMP/widget.entitlements" 2>/dev/null || true
 
           # 6. Codesign frameworks
           if [ -d Payload/YPtun.app/Frameworks ]; then
