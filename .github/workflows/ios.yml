@@ -86,6 +86,10 @@ jobs:
         working-directory: YPtun
         run: ./gradlew :sharedUI:linkReleaseFrameworkIosArm64 --no-configuration-cache
 
+      - name: Generate App Icons
+        working-directory: YPtun/iosApp
+        run: bash generate_icons.sh
+
       - name: Generate the Xcode project
         working-directory: YPtun/iosApp
         run: xcodegen generate
