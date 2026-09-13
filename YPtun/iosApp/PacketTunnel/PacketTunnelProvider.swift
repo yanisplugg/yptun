@@ -33,18 +33,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let configURL = containerURL.appendingPathComponent("hev_config.yml")
             do {
                 try hevConfig.write(to: configURL, atomically: true, encoding: .utf8)
-                session.log("Saved hev-socks5-tunnel config to \(configURL.path)")
+                session.log(line: "Saved hev-socks5-tunnel config to \(configURL.path)")
             } catch {
-                session.log("Failed to write hev config file: \(error.localizedDescription)")
+                session.log(line: "Failed to write hev config file: \(error.localizedDescription)")
             }
 
             if let sockFd = self.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32 {
-                session.log("utun packetFlow socket fd: \(sockFd)")
+                session.log(line: "utun packetFlow socket fd: \(sockFd)")
             }
 
-            session.log("Launching hev-socks5-tunnel...")
+            session.log(line: "Launching hev-socks5-tunnel...")
             Socks5Tunnel.run(withConfig: .file(path: configURL)) { code in
-                session.log("hev-socks5-tunnel exited with code \(code)")
+                session.log(line: "hev-socks5-tunnel exited with code \(code)")
                 NSLog("YPtun: hev-socks5-tunnel exited with \(code)")
             }
             completionHandler(nil)
@@ -61,7 +61,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        session?.log("Tunnel stopping with reason: \(reason.rawValue)")
+        session?.log(line: "Tunnel stopping with reason: \(reason.rawValue)")
         Socks5Tunnel.quit()
         session?.stop()
         session = nil
