@@ -1604,7 +1604,7 @@ class OlcboxVpnService : VpnService() {
             if (activeProxyCore == ProxyCore.Xray &&
                 routingProfile?.needsGeoFiles() == true &&
                 effectiveProfile.rawXrayConfig.isNullOrBlank() &&
-                effectiveProfile.network != ProxyProfile.NETWORK_XHTTP &&
+                !effectiveProfile.requiresXray() &&
                 effectiveProfile.rawOutbound.isNullOrBlank() &&
                 ensureGeoAssetPath(routingProfile).isEmpty()
             ) {
@@ -1613,7 +1613,7 @@ class OlcboxVpnService : VpnService() {
             }
             // The cascade runs both hops in one core. An xhttp second proxy can only run on Xray, so
             // force it (overriding the geo fallback above) — sing-box can't carry xhttp.
-            if (secondProfile?.network == ProxyProfile.NETWORK_XHTTP && activeProxyCore != ProxyCore.Xray) {
+            if (secondProfile?.requiresXray() == true && activeProxyCore != ProxyCore.Xray) {
                 activeProxyCore = ProxyCore.Xray
                 addLog("Second (cascade) proxy uses xhttp → forcing Xray core")
             }

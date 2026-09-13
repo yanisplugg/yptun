@@ -1,5 +1,7 @@
 package org.olcbox.app.data.importer
 
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import org.olcbox.app.data.model.ProxyProfile
 
 /**
@@ -83,7 +85,7 @@ object VlessUriParser {
             realityShortId = params["sid"].orEmpty(),
             path = path,
             host = (params["host"]).orEmpty(),
-        )
+        ).withXrayParams(params)
     }
 
     /** Parse a subscription body, keeping only VLESS entries. */
@@ -92,4 +94,35 @@ object VlessUriParser {
             .mapNotNull { parse(it) }
             .filter { it.isComplete() }
     }
+}
+
+/**
+ * Copies the Xray-only link params (3x-ui & co, shared by vless/trojan/vmess) onto this profile.
+ * `mode` is only xhttp's — grpc reuses the name for `mode=multi`.
+ */
+internal fun ProxyProfile.withXrayParams(params: Map<String, String>): ProxyProfile = copy(
+    vlessEncryption = params["encryption"].orEmpty().takeUnless { it.equals("none", ignoreCase = true) }.orEmpty(),
+    xhttpMode = if (network == ProxyProfile.NETWORK_XHTTP) params["mode"].orEmpty() else "",
+    xhttpExtra = if (network == ProxyProfile.NETWORK_XHTTP) params["extra"].orEmpty() else "",
+    finalMask = params["fm"].orEmpty(),
+    pinnedCertSha256 = params["pcs"].orEmpty().split(',').map(::pinHex).filter { it.isNotEmpty() }.joinToString(","),
+    verifyCertByName = params["vcn"].orEmpty(),
+    echConfigList = params["ech"].orEmpty(),
+    realityMldsa65Verify = params["pqv"].orEmpty(),
+    realitySpiderX = params["spx"].orEmpty(),
+)
+
+/**
+ * xray-core only takes hex pins, but 3x-ui stores them as base64 too (its own generate button).
+ * Hex (bare or colon-separated) → lowercase hex; a 32-byte base64 → hex; anything else unchanged.
+ */
+@OptIn(ExperimentalEncodingApi::class)
+internal fun pinHex(pin: String): String {
+    val p = pin.trim().replace(' ', '+') // a raw '+' in a query is decoded as a space
+    val hex = p.replace(":", "")
+    if (hex.length == 64 && hex.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) return hex.lowercase()
+    val std = p.replace('-', '+').replace('_', '/').let { it + "=".repeat((4 - it.length % 4) % 4) }
+    val bytes = runCatching { Base64.decode(std) }.getOrNull()
+    if (bytes?.size == 32) return bytes.joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+    return p
 }

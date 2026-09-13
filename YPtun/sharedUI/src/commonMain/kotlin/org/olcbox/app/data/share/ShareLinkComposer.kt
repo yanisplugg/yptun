@@ -136,6 +136,16 @@ object ShareLinkComposer {
             if (p.path.isNotBlank()) {
                 if (p.network == ProxyProfile.NETWORK_GRPC) add("serviceName" to p.path) else add("path" to p.path)
             }
+            // Xray-only knobs (see ProxyProfile) — same names 3x-ui/v2rayN/Happ use.
+            if (includeFlow && p.vlessEncryption.isNotBlank()) add("encryption" to p.vlessEncryption)
+            if (p.xhttpMode.isNotBlank()) add("mode" to p.xhttpMode)
+            if (p.xhttpExtra.isNotBlank()) add("extra" to p.xhttpExtra)
+            if (p.finalMask.isNotBlank()) add("fm" to p.finalMask)
+            if (p.pinnedCertSha256.isNotBlank()) add("pcs" to p.pinnedCertSha256)
+            if (p.verifyCertByName.isNotBlank()) add("vcn" to p.verifyCertByName)
+            if (p.echConfigList.isNotBlank()) add("ech" to p.echConfigList)
+            if (p.realityMldsa65Verify.isNotBlank()) add("pqv" to p.realityMldsa65Verify)
+            if (p.realitySpiderX.isNotBlank()) add("spx" to p.realitySpiderX)
         }
         return params.joinToString("&") { (k, v) -> "$k=${percentEncode(v)}" }
     }
