@@ -35,7 +35,13 @@ def wait_online():
     announced = False
     while True:
         try:
-            urllib.request.urlopen("https://api.github.com/zen", timeout=15).read()
+            # With the token: this runs before EVERY api call, and the anonymous 60/h limit ran out
+            # mid-release (403 read as "offline" → waited for the limit reset). Any HTTP answer = online.
+            try:
+                req = urllib.request.Request("https://api.github.com/zen", headers=AUTH)
+                urllib.request.urlopen(req, timeout=15).read()
+            except urllib.error.HTTPError:
+                pass
             if announced:
                 log("связь вернулась")
             return
