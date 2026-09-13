@@ -50,7 +50,7 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         let ret = connect(fd, info.pointee.ai_addr, info.pointee.ai_addrlen)
         if ret == 0 {
             let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
-            return Int64(elapsed / 1_000_000)
+            return max(1, Int64(elapsed / 1_000_000))
         }
         if errno != EINPROGRESS {
             return -1
@@ -58,13 +58,12 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
 
         var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
         let pollRet = poll(&pfd, 1, Int32(timeoutMs))
-        if pollRet > 0 {
+        if pollRet > 0 && (pfd.revents & Int16(POLLOUT)) != 0 && (pfd.revents & (Int16(POLLERR) | Int16(POLLHUP))) == 0 {
             var errVal: Int32 = 0
             var len = socklen_t(MemoryLayout<Int32>.size)
-            getsockopt(fd, SOL_SOCKET, SO_ERROR, &errVal, &len)
-            if errVal == 0 {
+            if getsockopt(fd, SOL_SOCKET, SO_ERROR, &errVal, &len) == 0 && errVal == 0 {
                 let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
-                return Int64(elapsed / 1_000_000)
+                return max(1, Int64(elapsed / 1_000_000))
             }
         }
         return -1

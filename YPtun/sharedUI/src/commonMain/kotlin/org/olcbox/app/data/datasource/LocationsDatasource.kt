@@ -207,7 +207,10 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun getBundle(): LocationBundleV4 {
-        cachedBundle?.let { return it }
+        val token = dataSource.bundleVersionToken()
+        cachedBundle?.let { cached ->
+            if (token != null && token == cachedToken) return cached
+        }
         return mutationMutex.withLock {
             getBundleUnlocked()
         }

@@ -334,7 +334,9 @@ internal class IosEngineController(
                 secondProfile = secondProfile,
                 fakeDnsSpec = config.fakeDns,
                 preferTcpRemoteDns = isAwg && secondProfile == null,
+                remoteDnsOverHttps = true,
                 cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
+                logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
             core.sbStart(json).orThrow("sing-box start failed")

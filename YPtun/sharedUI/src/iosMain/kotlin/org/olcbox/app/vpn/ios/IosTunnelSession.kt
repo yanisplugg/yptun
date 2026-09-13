@@ -82,8 +82,8 @@ class IosTunnelSession(
                 check(location.isComplete()) { "Локация настроена не полностью" }
                 log("Connecting ${location.displayName()} (engine=${location.engine})")
 
-                val user = credential(12)
-                val pass = credential(24)
+                val user = ""
+                val pass = ""
                 engine.start(location, SOCKS_PORT, user, pass, request.deviceId)
                 engineType = location.engine
 
@@ -181,8 +181,7 @@ class IosTunnelSession(
           port: $SOCKS_PORT
           udp: '${if (tcpOnlyUdp) "tcp" else "udp"}'
           pipeline: false
-          username: '$user'
-          password: '$pass'
+          ${if (user.isNotBlank()) "username: '$user'\n          password: '$pass'" else "# no auth"}
 
         mapdns:
           address: $MAPDNS_ADDRESS
