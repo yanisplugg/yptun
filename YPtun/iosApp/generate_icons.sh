@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-SRC="../androidApp/src/main/res/playstore_icon.png"
+SRC="../androidApp/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
 DEST="iosApp/Assets.xcassets/AppIcon.appiconset"
 mkdir -p "$DEST"
 

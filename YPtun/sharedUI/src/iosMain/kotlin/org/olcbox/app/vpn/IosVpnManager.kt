@@ -142,6 +142,10 @@ class IosVpnManager(
             val result = runCatching {
                 publishRequest(active)
                 IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
+                // Always reload manager from system preferences before connecting.
+                // iOS invalidates the cached NETunnelProviderManager when the app is backgrounded,
+                // causing NEVPNErrorDomain error 2 on the next connect attempt.
+                manager = null
                 val m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
                 val connection = m.connection
                 // A running tunnel keeps its old location; restart it on the new request.
