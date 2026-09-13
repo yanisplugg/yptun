@@ -4,6 +4,13 @@ SRC="../androidApp/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
 DEST="iosApp/Assets.xcassets/AppIcon.appiconset"
 mkdir -p "$DEST"
 
+# Apple rejects App Store / TestFlight icons if the large 1024x1024 icon has an alpha channel.
+# Create a solid black RGB base and overlay the icon without alpha.
+sips -s format bmp "$SRC" --out "$DEST/temp.bmp"
+sips -s format png "$DEST/temp.bmp" --out "$DEST/icon_ios-marketing_1024x1024_1x.png"
+sips -z 1024 1024 "$DEST/icon_ios-marketing_1024x1024_1x.png"
+rm -f "$DEST/temp.bmp"
+
 sips -z 40 40 "$SRC" --out "$DEST/icon_iphone_20x20_2x.png"
 sips -z 60 60 "$SRC" --out "$DEST/icon_iphone_20x20_3x.png"
 sips -z 58 58 "$SRC" --out "$DEST/icon_iphone_29x29_2x.png"
@@ -21,4 +28,3 @@ sips -z 80 80 "$SRC" --out "$DEST/icon_ipad_40x40_2x.png"
 sips -z 76 76 "$SRC" --out "$DEST/icon_ipad_76x76_1x.png"
 sips -z 152 152 "$SRC" --out "$DEST/icon_ipad_76x76_2x.png"
 sips -z 167 167 "$SRC" --out "$DEST/icon_ipad_83.5x83.5_2x.png"
-sips -z 1024 1024 "$SRC" --out "$DEST/icon_ios-marketing_1024x1024_1x.png"

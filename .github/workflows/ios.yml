@@ -76,7 +76,15 @@ jobs:
           go version
           java -version
 
+      - name: Cache Go cores (Coreapi.xcframework)
+        id: cache-cores
+        uses: actions/cache@v4
+        with:
+          path: YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework
+          key: cores-ios-${{ hashFiles('sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'YPtun/sharedUI/src/commonMain/kotlin/org/olcbox/app/vpn/coreapi/**') }}
+
       - name: Go cores → Coreapi.xcframework
+        if: steps.cache-cores.outputs.cache-hit != 'true'
         working-directory: YPtun
         run: |
           gomobile init
