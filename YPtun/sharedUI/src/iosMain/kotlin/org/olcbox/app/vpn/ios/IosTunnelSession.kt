@@ -135,7 +135,7 @@ class IosTunnelSession(
     }
 
     private suspend fun applyNetworkSettings(mtu: Int, bypassLan: Boolean) {
-        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = "127.0.0.1")
+        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = "198.18.0.2")
         settings.setMTU(NSNumber(int = mtu))
         settings.setIPv4Settings(
             NEIPv4Settings(addresses = listOf(TUN_IPV4_ADDRESS), subnetMasks = listOf("255.255.255.0")).apply {
@@ -226,7 +226,7 @@ class IosTunnelSession(
         }
     }
 
-    private fun log(line: String) {
+    fun log(line: String) {
         val path = IosSharedStore.path(LOG_FILE)
         if (!NSFileManager.defaultManager.fileExistsAtPath(path)) IosSharedStore.writeText(LOG_FILE, "")
         val data: NSData = NSString.create(string = "$line\n").dataUsingEncoding(NSUTF8StringEncoding) ?: return
@@ -247,7 +247,7 @@ class IosTunnelSession(
         const val ERROR_FILE = "tunnel_error.txt"
 
         private const val SOCKS_PORT = 10808
-        private const val TUN_IPV4_ADDRESS = "10.0.88.88"
+        private const val TUN_IPV4_ADDRESS = "198.18.0.1"
         private const val TUN_IPV6_ADDRESS = "fdfe:dcba:9876::1"
         private const val MAPDNS_ADDRESS = "1.1.1.1"
         private const val WATCHDOG_INTERVAL_MS = 5_000L

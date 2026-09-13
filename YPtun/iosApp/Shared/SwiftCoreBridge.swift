@@ -28,6 +28,48 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         CoreapiXrayMeasureDelay(configJson, url, method, Int(timeoutMs))
     }
 
+    func tcpPing(host: String, port: Int32, timeoutMs: Int32) -> Int64 {
+        guard !host.isEmpty, port > 0, port <= 65535 else { return -1 }
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &hints, &res) == 0, let info = res else {
+            return -1
+        }
+        defer { freeaddrinfo(info) }
+
+        let fd = socket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
+        guard fd >= 0 else { return -1 }
+        defer { close(fd) }
+
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
+        let start = DispatchTime.now()
+        let ret = connect(fd, info.pointee.ai_addr, info.pointee.ai_addrlen)
+        if ret == 0 {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+            return Int64(elapsed / 1_000_000)
+        }
+        if errno != EINPROGRESS {
+            return -1
+        }
+
+        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        let pollRet = poll(&pfd, 1, Int32(timeoutMs))
+        if pollRet > 0 {
+            var errVal: Int32 = 0
+            var len = socklen_t(MemoryLayout<Int32>.size)
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &errVal, &len)
+            if errVal == 0 {
+                let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+                return Int64(elapsed / 1_000_000)
+            }
+        }
+        return -1
+    }
+
     func awgVersion() -> String { CoreapiAwgVersion() }
     func awgStart(iniConfig: String, listenAddr: String) -> String { err { CoreapiAwgStart(iniConfig, listenAddr, $0) } }
     func awgStop() { CoreapiAwgStop() }

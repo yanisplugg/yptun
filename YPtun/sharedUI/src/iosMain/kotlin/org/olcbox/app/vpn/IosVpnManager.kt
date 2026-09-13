@@ -186,11 +186,18 @@ class IosVpnManager(
         when {
             config.engine == EngineType.Stealth -> rtcPing(config)
             profile == null -> null
+            behavior.pingMode == AppBehaviorSettings.PING_TCP || behavior.pingMode == AppBehaviorSettings.PING_AUTO -> {
+                val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
+                if (ms >= 0) ms else null
+            }
             profile.type == ProxyProfile.TYPE_AMNEZIAWG ->
                 profile.awgConfig.takeIf { it.isNotBlank() }
                     ?.let { core.awgMeasureDelay(it, behavior.effectivePingUrl(), method, PING_TIMEOUT_MS) }
                     ?.takeIf { it >= 0 }
-            else -> proxyUrlTest(profile, behavior.effectivePingUrl(), method)
+            else -> {
+                proxyUrlTest(profile, behavior.effectivePingUrl(), method)
+                    ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it >= 0 }
+            }
         }
     }
 

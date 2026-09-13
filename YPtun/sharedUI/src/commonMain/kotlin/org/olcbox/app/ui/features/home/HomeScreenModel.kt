@@ -522,6 +522,9 @@ class HomeScreenViewModel(
 
     private fun startSubscriptionAutoRefresh() {
         viewModelScope.launch {
+            // Initial delay so cold startup renders cached locations and subscriptions instantly without
+            // locking the mutation mutex behind slow/blocked subscription network calls.
+            delay(5_000L)
             backfillMissingSubscriptionExpiry()
             // Once per launch: retry overdue subscriptions even if they failed last time (keyed off the
             // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.

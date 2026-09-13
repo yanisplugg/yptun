@@ -207,6 +207,7 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun getBundle(): LocationBundleV4 {
+        cachedBundle?.let { return it }
         return mutationMutex.withLock {
             getBundleUnlocked()
         }
