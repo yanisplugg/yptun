@@ -1423,7 +1423,7 @@ object XrayConfig {
                                 addJsonObject {
                                     put("id", profile.uuid)
                                     if (profile.type == ProxyProfile.TYPE_VLESS) {
-                                        put("encryption", "none")
+                                        put("encryption", profile.vlessEncryption.ifBlank { "none" })
                                         // XTLS Vision (xtls-rprx-vision) splices the RAW TLS connection to
                                         // ITS OWN server — it can't ride a chain. When this vless dials
                                         // through a detour (cascade exit over the main, an olcRTC/VK-TURN/
@@ -1526,6 +1526,10 @@ object XrayConfig {
         }
     }
 
+    /** A link-supplied JSON blob (xhttp `extra`, `fm`) as an object; blank/garbage → null, never a config error. */
+    private fun jsonObjectOrNull(text: String): JsonObject? =
+        text.takeIf { it.isNotBlank() }?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+
     private fun buildStreamSettings(
         profile: ProxyProfile,
         fragmentDialer: Boolean = false,
@@ -1565,6 +1569,9 @@ object XrayConfig {
                     if (profile.alpn.isNotEmpty()) {
                         putJsonArray("alpn") { profile.alpn.forEach { add(it) } }
                     }
+                    if (profile.pinnedCertSha256.isNotBlank()) put("pinnedPeerCertSha256", profile.pinnedCertSha256)
+                    if (profile.verifyCertByName.isNotBlank()) put("verifyPeerCertByName", profile.verifyCertByName)
+                    if (profile.echConfigList.isNotBlank()) put("echConfigList", profile.echConfigList)
                 }
             }
 
@@ -1575,11 +1582,14 @@ object XrayConfig {
                     if (profile.fingerprint.isNotBlank()) put("fingerprint", profile.fingerprint)
                     put("publicKey", profile.realityPublicKey)
                     put("shortId", profile.realityShortId)
+                    if (profile.realityMldsa65Verify.isNotBlank()) put("mldsa65Verify", profile.realityMldsa65Verify)
+                    if (profile.realitySpiderX.isNotBlank()) put("spiderX", profile.realitySpiderX)
                 }
             }
 
             else -> put("security", "none")
         }
+        jsonObjectOrNull(profile.finalMask)?.let { put("finalmask", it) }
 
         when (network) {
             "ws" -> putJsonObject("wsSettings") {
@@ -1594,12 +1604,13 @@ object XrayConfig {
             "xhttp" -> putJsonObject("xhttpSettings") {
                 if (profile.path.isNotBlank()) put("path", profile.path)
                 if (profile.host.isNotBlank()) put("host", profile.host)
-                put("mode", "auto")
+                // The server may pin a mode (e.g. packet-up) and then refuses the one "auto" picks.
+                put("mode", profile.xhttpMode.ifBlank { "auto" })
                 // Cascade base: spread the loopback's per-app-flow tunnels across a SMALL POOL of reused
                 // H2 connections (4-8). Funnelling everything onto 1 connection (high maxConcurrency)
                 // chokes on H2 head-of-line blocking; opening one-per-flow (no xmux) overran the server
                 // past ~14 (the 18-connection broken-pipe). A 4-8 pool is under that cap yet parallel.
-                if (xhttpHighConcurrency) putJsonObject("xmux") {
+                val xmux = if (xhttpHighConcurrency) buildJsonObject {
                     put("maxConnections", "4-8")
                     put("cMaxReuseTimes", "64-128")
                     // Xray only applies its own xmux defaults when the WHOLE block is absent, so an
@@ -1608,6 +1619,14 @@ object XrayConfig {
                     // XmuxConfig — it was dropped on parse). Restate Xray's defaults explicitly.
                     put("hMaxRequestTimes", "600-900")
                     put("hMaxReusableSecs", "1800-3000")
+                } else null
+                // The link's `extra` (padding/obfs/session…) must match the server. Xray REPLACES the
+                // settings with `extra` (keeping only host/path/mode), so our xmux has to go inside it.
+                val extra = jsonObjectOrNull(profile.xhttpExtra)
+                if (extra != null) {
+                    put("extra", if (xmux != null && "xmux" !in extra) JsonObject(extra + ("xmux" to xmux)) else extra)
+                } else if (xmux != null) {
+                    put("xmux", xmux)
                 }
             }
 

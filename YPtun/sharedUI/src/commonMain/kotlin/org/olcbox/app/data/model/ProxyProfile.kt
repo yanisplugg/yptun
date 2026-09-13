@@ -52,7 +52,7 @@ enum class EngineType {
 
 /**
  * Which proxy backend runs the [ProxyProfile] for Standard/Chain engines.
- * [Auto] picks Xray when the transport requires it (xhttp), otherwise sing-box.
+ * [Auto] picks Xray when the profile requires it ([ProxyProfile.requiresXray]), otherwise sing-box.
  */
 @Serializable
 enum class ProxyCore {
@@ -179,7 +179,44 @@ data class ProxyProfile(
      */
     @SerialName("naive_quic")
     val naiveQuic: Boolean = false,
+    /*
+     * Xray-only knobs that modern panel links carry (3x-ui: encryption/mode/extra/fm/pcs/vcn/ech/pqv/spx).
+     * They used to be dropped at parse time, so a server that needs one was dead in YPtun while Happ
+     * connected fine. sing-box has no equivalent, hence [requiresXray].
+     */
+    /** VLESS `encryption` (vlessenc / ML-KEM, e.g. "mlkem768x25519plus.native.0rtt.…"); blank = none. */
+    @SerialName("vless_encryption")
+    val vlessEncryption: String = "",
+    /** xhttp `mode`: auto / packet-up / stream-up / stream-one; blank = auto. */
+    @SerialName("xhttp_mode")
+    val xhttpMode: String = "",
+    /** xhttp `extra` JSON object (padding/obfs/session/xmux/downloadSettings…), verbatim. */
+    @SerialName("xhttp_extra")
+    val xhttpExtra: String = "",
+    /** streamSettings `finalmask` JSON (`fm`), verbatim. */
+    @SerialName("final_mask")
+    val finalMask: String = "",
+    /** TLS pinnedPeerCertSha256 (`pcs`), comma-separated hex — the self-signed-cert successor of allowInsecure. */
+    @SerialName("pinned_cert_sha256")
+    val pinnedCertSha256: String = "",
+    /** TLS verifyPeerCertByName (`vcn`), comma-separated. */
+    @SerialName("verify_cert_name")
+    val verifyCertByName: String = "",
+    /** TLS echConfigList (`ech`). */
+    @SerialName("ech_config")
+    val echConfigList: String = "",
+    /** REALITY mldsa65Verify (`pqv`). */
+    @SerialName("reality_pqv")
+    val realityMldsa65Verify: String = "",
+    /** REALITY spiderX (`spx`). */
+    @SerialName("reality_spx")
+    val realitySpiderX: String = "",
 ) {
+    /** Only xray-core can serve this profile: sing-box can't speak xhttp nor any of the Xray-only knobs above. */
+    fun requiresXray(): Boolean = network == NETWORK_XHTTP ||
+        vlessEncryption.isNotBlank() || finalMask.isNotBlank() ||
+        pinnedCertSha256.isNotBlank() || verifyCertByName.isNotBlank() || echConfigList.isNotBlank()
+
     fun isComplete(): Boolean {
         if (type == TYPE_HYSTERIA2) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_NAIVE) return server.isNotBlank() && serverPort in 1..65535

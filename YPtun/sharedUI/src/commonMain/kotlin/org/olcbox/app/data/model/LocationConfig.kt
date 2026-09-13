@@ -146,7 +146,7 @@ data class VkTurnConfig(
     fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
         proxyCore != ProxyCore.Auto -> proxyCore
         !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
-        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        profile?.requiresXray() == true -> ProxyCore.Xray
         globalCore != ProxyCore.Auto -> globalCore
         else -> ProxyCore.SingBox
     }
@@ -404,7 +404,7 @@ data class MasterDnsConfig(
 internal fun overTunnelProxyCore(chosen: ProxyCore, profile: ProxyProfile?, globalCore: ProxyCore): ProxyCore = when {
     chosen != ProxyCore.Auto -> chosen
     !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
-    profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+    profile?.requiresXray() == true -> ProxyCore.Xray
     globalCore != ProxyCore.Auto -> globalCore
     else -> ProxyCore.Xray
 }
@@ -644,7 +644,7 @@ data class LocationConfig(
      * the sing-box choice.
      */
     fun requiresXray(): Boolean = listOfNotNull(proxy, proxy2).any { p ->
-        p.network == ProxyProfile.NETWORK_XHTTP
+        p.requiresXray()
     }
 
     /**
@@ -660,7 +660,7 @@ data class LocationConfig(
         // Explicit per-location override beats the global default.
         core != ProxyCore.Auto -> core
         // xhttp/splithttp can only be served by xray-core.
-        proxy?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        proxy?.requiresXray() == true -> ProxyCore.Xray
         // App-wide engine preference (ranks below the per-location setting).
         globalCore != ProxyCore.Auto -> globalCore
         else -> ProxyCore.SingBox

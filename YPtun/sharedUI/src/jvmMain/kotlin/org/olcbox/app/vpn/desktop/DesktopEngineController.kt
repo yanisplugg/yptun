@@ -397,14 +397,14 @@ internal class DesktopEngineController(
         if (activeProxyCore == ProxyCore.Xray &&
             routingProfile?.needsGeoFiles() == true &&
             effectiveProfile.rawXrayConfig.isNullOrBlank() &&
-            effectiveProfile.network != ProxyProfile.NETWORK_XHTTP &&
+            !effectiveProfile.requiresXray() &&
             effectiveProfile.rawOutbound.isNullOrBlank() &&
             ensureGeoAssetPath(routingProfile).isEmpty()
         ) {
             activeProxyCore = ProxyCore.SingBox
             log("Geo databases unavailable for Xray → using sing-box for routing")
         }
-        if (secondProfile?.network == ProxyProfile.NETWORK_XHTTP && activeProxyCore != ProxyCore.Xray) {
+        if (secondProfile?.requiresXray() == true && activeProxyCore != ProxyCore.Xray) {
             activeProxyCore = ProxyCore.Xray
             log("Second (cascade) proxy uses xhttp → forcing Xray core")
         }

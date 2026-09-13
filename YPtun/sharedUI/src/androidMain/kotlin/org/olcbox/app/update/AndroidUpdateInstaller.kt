@@ -53,10 +53,7 @@ class AndroidUpdateInstaller(
             // Update-channel hardening: never hand the OS an APK that isn't signed with the official
             // YPtun key (a MITM on the download could otherwise swap in a malicious build). The OS
             // install would reject a mismatched signature anyway, but we abort early + delete it.
-            if (!org.olcbox.app.security.IntegrityGuard.isOfficialApk(appContext, file)) {
-                file.delete()
-                error("Update signature mismatch — download rejected for safety")
-            }
+            requireOfficialApk(file)
             val installIntent = installIntent(file)
             try {
                 appContext.startActivity(installIntent)
@@ -121,11 +118,17 @@ class AndroidUpdateInstaller(
             // Any delta failure → fall through to the full download below.
         }
         val full = download(info.asset, onProgress).getOrThrow()
-        if (!org.olcbox.app.security.IntegrityGuard.isOfficialApk(appContext, full)) {
-            full.delete()
-            error("Update signature mismatch — download rejected for safety")
-        }
+        requireOfficialApk(full)
         full
+    }
+
+    /** Unreadable signature = damaged file (a bad download), not a forged one — say so separately. */
+    private fun requireOfficialApk(apk: File) {
+        val sha = org.olcbox.app.security.IntegrityGuard.apkSigningSha256(appContext, apk)
+        if (sha.equals(org.olcbox.app.security.IntegrityGuard.OFFICIAL_SIGNING_SHA256, ignoreCase = true)) return
+        apk.delete()
+        if (sha == null) error("Downloaded APK is damaged — try again or download from GitHub")
+        error("Update signature mismatch — download rejected for safety")
     }
 
     private suspend fun applyDeltaUpdate(
@@ -174,11 +177,13 @@ class AndroidUpdateInstaller(
         } as HttpURLConnection
         connection.connectTimeout = 10_000
         connection.readTimeout = 60_000
+        val code = connection.responseCode
+        if (code !in 200..299) error("HTTP $code while downloading ${asset.name}")
         val total = connection.contentLengthLong.takeIf { it > 0L } ?: asset.sizeBytes ?: -1L
+        var copied = 0L
         connection.inputStream.use { input ->
             target.outputStream().use { output ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var copied = 0L
                 while (true) {
                     val read = input.read(buffer)
                     if (read < 0) break
@@ -192,6 +197,12 @@ class AndroidUpdateInstaller(
                     }
                 }
             }
+        }
+        // A connection closed mid-stream on mobile data ends as a clean EOF, not an exception —
+        // without this the truncated APK reached the signature check and was reported as a mismatch.
+        if (total > 0L && copied != total) {
+            target.delete()
+            error("Download interrupted (${copied / 1_048_576} of ${total / 1_048_576} MB) — try again")
         }
         reportProgress(1f, onProgress)
         target

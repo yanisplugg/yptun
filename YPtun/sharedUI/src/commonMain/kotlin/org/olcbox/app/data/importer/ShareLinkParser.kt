@@ -86,7 +86,7 @@ object ShareLinkParser {
             fingerprint = str("fp"),
             path = pathOrService,
             host = str("host"),
-        )
+        ).withXrayParams(listOf("mode", "fm", "pcs", "vcn", "ech").associateWith { str(it) })
     }
 
     // --- trojan://password@host:port?params#name ---
@@ -138,7 +138,7 @@ object ShareLinkParser {
             realityShortId = params["sid"].orEmpty(),
             path = path,
             host = params["host"].orEmpty(),
-        )
+        ).withXrayParams(params)
     }
 
     // --- hysteria2://auth@host:port/?sni=&insecure=&obfs=salamander&obfs-password=&mport=&up=&down=#name ---
