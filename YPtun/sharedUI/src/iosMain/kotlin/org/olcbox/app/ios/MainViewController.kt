@@ -358,11 +358,12 @@ private fun IosApp(
                 customGroups = appBehavior.customGroups,
                 onCreateFolder = { name, memberKeys ->
                     val folder = org.olcbox.app.data.model.CustomGroup(
-                        id = org.olcbox.app.util.randomUuid(),
+                        id = "folder_${kotlin.random.Random.nextInt(100_000, 999_999)}",
                         name = name.trim(),
                         members = memberKeys
                     )
-                    val updated = appBehavior.copy(customGroups = appBehavior.customGroups + folder)
+                    val cleaned = appBehavior.customGroups.map { g -> g.copy(members = g.members - memberKeys.toSet()) }
+                    val updated = appBehavior.copy(customGroups = cleaned + folder)
                     appBehavior = updated
                     IosSharedStore.saveAppBehavior(updated)
                 },

@@ -333,8 +333,9 @@ internal class IosEngineController(
                 sniffOverrideDestination = isAwg,
                 secondProfile = secondProfile,
                 fakeDnsSpec = config.fakeDns,
-                preferTcpRemoteDns = isAwg && secondProfile == null,
-                remoteDnsOverHttps = true,
+                preferTcpRemoteDns = true,
+                remoteDnsOverHttps = false,
+                forceFamilyResolve = false,
                 cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
                 logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
             )
