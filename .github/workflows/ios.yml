@@ -129,7 +129,6 @@ jobs:
           if-no-files-found: error
 
       - name: Sign IPA with Apple Distribution certificate
-        if: ${{ secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 != '' }}
         working-directory: YPtun/iosApp
         env:
           IOS_DISTRIBUTION_CERT_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 }}
@@ -138,6 +137,10 @@ jobs:
           PROVISIONING_PROFILE_TUNNEL_BASE64: ${{ secrets.PROVISIONING_PROFILE_TUNNEL_BASE64 }}
           PROVISIONING_PROFILE_WIDGET_BASE64: ${{ secrets.PROVISIONING_PROFILE_WIDGET_BASE64 }}
         run: |
+          if [ -z "$IOS_DISTRIBUTION_CERT_P12_BASE64" ]; then
+            echo "Signing secret not configured, skipping."
+            exit 0
+          fi
           set -e
           VERSION=$(grep '^olcbox.version=' ../gradle.properties | cut -d= -f2 | tr -d '\r')
 
@@ -197,13 +200,16 @@ jobs:
           ls -lh *.ipa
 
       - name: Upload to TestFlight
-        if: ${{ secrets.APP_STORE_CONNECT_KEY_ID != '' && secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 != '' }}
         working-directory: YPtun/iosApp
         env:
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
         run: |
+          if [ -z "$APP_STORE_CONNECT_KEY_ID" ] || [ ! -f YPtun-*-signed.ipa ]; then
+            echo "TestFlight credentials or signed IPA missing, skipping."
+            exit 0
+          fi
           set -e
           VERSION=$(grep '^olcbox.version=' ../gradle.properties | cut -d= -f2 | tr -d '\r')
           mkdir -p ~/.appstoreconnect/private_keys
@@ -218,7 +224,6 @@ jobs:
             --show-progress
 
       - uses: actions/upload-artifact@v4
-        if: ${{ secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 != '' }}
         with:
           name: YPtun-ios-signed
           path: YPtun/iosApp/*-signed.ipa
