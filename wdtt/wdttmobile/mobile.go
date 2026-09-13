@@ -76,7 +76,7 @@ var (
 )
 
 // wdttVersion identifies the vendored core: qWDTT release + upstream commit.
-const wdttVersion = "qWDTT 1.4.3 (fae121e)"
+const wdttVersion = "qWDTT 1.4.4 (a296c57)"
 
 // Version returns the VK-TURN (qWDTT) core version for display in the app's settings.
 func Version() string { return wdttVersion }
