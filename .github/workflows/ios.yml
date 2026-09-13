@@ -13,6 +13,7 @@ on:
   push:
     branches:
       - Beta
+      - feat/testflight-deploy
     paths:
       - ".github/workflows/ios.yml"
       - "YPtun/iosApp/**"
@@ -126,6 +127,102 @@ jobs:
           name: YPtun-ios-unsigned
           path: YPtun/iosApp/*.ipa
           if-no-files-found: error
+
+      - name: Sign IPA with Apple Distribution certificate
+        if: ${{ secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 != '' }}
+        working-directory: YPtun/iosApp
+        env:
+          IOS_DISTRIBUTION_CERT_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 }}
+          IOS_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
+          PROVISIONING_PROFILE_APP_BASE64: ${{ secrets.PROVISIONING_PROFILE_APP_BASE64 }}
+          PROVISIONING_PROFILE_TUNNEL_BASE64: ${{ secrets.PROVISIONING_PROFILE_TUNNEL_BASE64 }}
+          PROVISIONING_PROFILE_WIDGET_BASE64: ${{ secrets.PROVISIONING_PROFILE_WIDGET_BASE64 }}
+        run: |
+          set -e
+          VERSION=$(grep '^olcbox.version=' ../gradle.properties | cut -d= -f2 | tr -d '\r')
+
+          # 1. Create temporary keychain
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # 2. Import distribution certificate
+          echo "$IOS_DISTRIBUTION_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$IOS_DISTRIBUTION_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Apple Distribution" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "Identified signing certificate: $IDENTITY"
+
+          # 3. Decode provisioning profiles
+          echo "$PROVISIONING_PROFILE_APP_BASE64" | base64 --decode > "$RUNNER_TEMP/app.mobileprovision"
+          echo "$PROVISIONING_PROFILE_TUNNEL_BASE64" | base64 --decode > "$RUNNER_TEMP/tunnel.mobileprovision"
+          echo "$PROVISIONING_PROFILE_WIDGET_BASE64" | base64 --decode > "$RUNNER_TEMP/widget.mobileprovision"
+
+          # 4. Copy embedded profiles
+          cp "$RUNNER_TEMP/app.mobileprovision" Payload/YPtun.app/embedded.mobileprovision
+          cp "$RUNNER_TEMP/tunnel.mobileprovision" Payload/YPtun.app/PlugIns/PacketTunnel.appex/embedded.mobileprovision
+          cp "$RUNNER_TEMP/widget.mobileprovision" Payload/YPtun.app/PlugIns/YPtunWidget.appex/embedded.mobileprovision
+
+          # 5. Extract entitlements from provisioning profiles
+          security cms -D -i "$RUNNER_TEMP/app.mobileprovision" | plutil -extract Entitlements xml1 - -o "$RUNNER_TEMP/app.entitlements"
+          security cms -D -i "$RUNNER_TEMP/tunnel.mobileprovision" | plutil -extract Entitlements xml1 - -o "$RUNNER_TEMP/tunnel.entitlements"
+          security cms -D -i "$RUNNER_TEMP/widget.mobileprovision" | plutil -extract Entitlements xml1 - -o "$RUNNER_TEMP/widget.entitlements"
+
+          # 6. Codesign frameworks
+          if [ -d Payload/YPtun.app/Frameworks ]; then
+            find Payload/YPtun.app/Frameworks -depth \( -name "*.framework" -o -name "*.dylib" \) | while read fw; do
+              echo "Signing $fw"
+              codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" "$fw"
+            done
+          fi
+
+          # 7. Codesign extensions and main app
+          echo "Signing YPtunWidget.appex..."
+          codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --entitlements "$RUNNER_TEMP/widget.entitlements" Payload/YPtun.app/PlugIns/YPtunWidget.appex
+
+          echo "Signing PacketTunnel.appex..."
+          codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --entitlements "$RUNNER_TEMP/tunnel.entitlements" Payload/YPtun.app/PlugIns/PacketTunnel.appex
+
+          echo "Signing YPtun.app..."
+          codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --entitlements "$RUNNER_TEMP/app.entitlements" Payload/YPtun.app
+
+          codesign --verify --deep --strict --verbose=2 Payload/YPtun.app
+
+          # 8. Repack into signed IPA
+          zip -qry "YPtun-$VERSION-signed.ipa" Payload
+          ls -lh *.ipa
+
+      - name: Upload to TestFlight
+        if: ${{ secrets.APP_STORE_CONNECT_KEY_ID != '' && secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 != '' }}
+        working-directory: YPtun/iosApp
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -e
+          VERSION=$(grep '^olcbox.version=' ../gradle.properties | cut -d= -f2 | tr -d '\r')
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8
+
+          echo "Uploading YPtun-$VERSION-signed.ipa to TestFlight..."
+          xcrun altool --upload-app \
+            -f "YPtun-$VERSION-signed.ipa" \
+            -t ios \
+            --apiKey "$APP_STORE_CONNECT_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --show-progress
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 != '' }}
+        with:
+          name: YPtun-ios-signed
+          path: YPtun/iosApp/*-signed.ipa
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         if: always()
