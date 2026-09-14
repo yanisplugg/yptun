@@ -138,7 +138,7 @@ class IosTunnelSession(
     }
 
     private suspend fun applyNetworkSettings(mtu: Int, bypassLan: Boolean) {
-        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = "198.18.0.2")
+        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = TUN_IPV4_REMOTE)
         settings.setMTU(NSNumber(int = mtu))
         settings.setIPv4Settings(
             NEIPv4Settings(addresses = listOf(TUN_IPV4_ADDRESS), subnetMasks = listOf("255.255.255.0")).apply {
@@ -250,7 +250,12 @@ class IosTunnelSession(
         const val ERROR_FILE = "tunnel_error.txt"
 
         private const val SOCKS_PORT = 10808
-        private const val TUN_IPV4_ADDRESS = "198.18.0.1"
+        // TEST-NET-2 (RFC 5737, 198.51.100.0/24): never a real internet destination, so a safe TUN
+        // address — and, unlike the old 198.18.0.1, OUTSIDE the FakeDNS pool (198.18.0.0/15) so an
+        // app handed a synthetic FakeDNS IP can't collide with the tunnel interface, and outside the
+        // 10/8·172.16/12·192.168/16 ranges that «Обход LAN» excludes from the tunnel.
+        private const val TUN_IPV4_ADDRESS = "198.51.100.1"
+        private const val TUN_IPV4_REMOTE = "198.51.100.2"
         private const val TUN_IPV6_ADDRESS = "fdfe:dcba:9876::1"
         private const val MAPDNS_ADDRESS = "1.1.1.1"
         private const val WATCHDOG_INTERVAL_MS = 5_000L
