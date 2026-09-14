@@ -286,7 +286,7 @@ class IosVpnManager(
             if (!isLoopbackHost(peer)) host = peer
         }
         if (host.isBlank() && vk?.uri?.isNotBlank() == true) {
-            host = runCatching { FreeturnUriParser.parse(vk.uri).turnHost }.getOrNull().orEmpty()
+            host = FreeturnUriParser.parse(vk.uri)?.serverIp.orEmpty()
             if (isLoopbackHost(host)) host = ""
         }
         val port = draft.peerPort.toIntOrNull() ?: config.proxy?.serverPort ?: vk?.wdttPort?.takeIf { it > 0 } ?: 0
