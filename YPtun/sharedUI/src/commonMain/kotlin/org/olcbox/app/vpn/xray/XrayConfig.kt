@@ -2,6 +2,7 @@ package org.olcbox.app.vpn.xray
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -956,15 +957,17 @@ object XrayConfig {
         val stream = outbound["streamSettings"] as? JsonObject ?: return outbound
         val xhttp = stream["xhttpSettings"] as? JsonObject ?: return outbound
         val extra = xhttp["extra"] as? JsonObject ?: return outbound
+        val safeExtra = sanitizeXhttpExtra(extra)
         val topHost = xhttp["host"]?.jsonPrimitive?.contentOrNull
         val topPath = xhttp["path"]?.jsonPrimitive?.contentOrNull
         val extraHost = extra["host"]?.jsonPrimitive?.contentOrNull
         val extraPath = extra["path"]?.jsonPrimitive?.contentOrNull
         val newHost = if (topHost.isNullOrBlank() && !extraHost.isNullOrBlank()) extraHost else topHost
         val newPath = if (topPath.isNullOrBlank() && !extraPath.isNullOrBlank()) extraPath else topPath
-        if (newHost == topHost && newPath == topPath) return outbound
+        if (newHost == topHost && newPath == topPath && safeExtra == extra) return outbound
         val newXhttp = buildJsonObject {
-            xhttp.forEach { (k, v) -> if (k != "host" && k != "path") put(k, v) }
+            xhttp.forEach { (k, v) -> if (k != "host" && k != "path" && k != "extra") put(k, v) }
+            put("extra", safeExtra)
             if (!newHost.isNullOrBlank()) put("host", newHost)
             if (!newPath.isNullOrBlank()) put("path", newPath)
         }
@@ -1530,6 +1533,48 @@ object XrayConfig {
     private fun jsonObjectOrNull(text: String): JsonObject? =
         text.takeIf { it.isNotBlank() }?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
 
+    // xhttp `extra` fields typed `Int32Range` in xray-core (infra/conf SplitHTTPConfig + XmuxConfig):
+    // each accepts a plain integer, an "a-b" range string, or "" — anything else aborts the WHOLE
+    // outbound build ("Failed to unmarshal extra > Invalid integer range").
+    private val XHTTP_INT32_RANGE_KEYS = setOf(
+        "xPaddingBytes", "sessionIDLength", "uplinkChunkSize",
+        "scMaxEachPostBytes", "scMinPostsIntervalMs", "scStreamUpServerSecs",
+        "maxConcurrency", "maxConnections", "cMaxReuseTimes", "hMaxRequestTimes", "hMaxReusableSecs",
+    )
+    private val INT32_RANGE_REGEX = Regex("""^-?\d+--?\d+$""")
+
+    /**
+     * Normalizes the xhttp `extra` blob so a value xray-core can't parse into an `Int32Range` never
+     * aborts the whole outbound build. Some panels emit a range field (xmux/padding/…) as a float or a
+     * stray string; Happ drops such fields, we passed them through verbatim and xray rejected the ENTIRE
+     * config ("Failed to unmarshal extra > Invalid integer range"). A VALID value — a plain integer, an
+     * "a-b" range, or an empty string — is kept byte-for-byte, so working configs are untouched; only a
+     * value xray would reject is coerced (float → integer) or dropped (xray then uses its default).
+     * Recurses so nested `xmux` and `downloadSettings` are covered too.
+     */
+    private fun sanitizeXhttpExtra(obj: JsonObject): JsonObject = buildJsonObject {
+        for ((k, v) in obj) {
+            when {
+                k in XHTTP_INT32_RANGE_KEYS -> normalizeInt32Range(v)?.let { put(k, it) } // else: drop the field
+                v is JsonObject -> put(k, sanitizeXhttpExtra(v))
+                else -> put(k, v)
+            }
+        }
+    }
+
+    /** A value valid for xray's Int32Range → returned unchanged; a float → its integer; else null (drop). */
+    private fun normalizeInt32Range(v: JsonElement): JsonElement? {
+        val prim = v as? JsonPrimitive ?: return null // an object/array is never a valid range
+        if (prim.isString) {
+            val s = prim.content
+            if (s.isEmpty() || s.toIntOrNull() != null || INT32_RANGE_REGEX.matches(s)) return prim
+            return s.toDoubleOrNull()?.let { JsonPrimitive(it.toLong()) } // "1000.0" → 1000, else drop
+        }
+        val c = prim.content // a JSON number / bool / null literal
+        if (c.toIntOrNull() != null) return prim                       // plain integer — keep verbatim
+        return c.toDoubleOrNull()?.let { JsonPrimitive(it.toLong()) }  // float → integer; bool/null → drop
+    }
+
     private fun buildStreamSettings(
         profile: ProxyProfile,
         fragmentDialer: Boolean = false,
@@ -1622,7 +1667,7 @@ object XrayConfig {
                 } else null
                 // The link's `extra` (padding/obfs/session…) must match the server. Xray REPLACES the
                 // settings with `extra` (keeping only host/path/mode), so our xmux has to go inside it.
-                val extra = jsonObjectOrNull(profile.xhttpExtra)
+                val extra = jsonObjectOrNull(profile.xhttpExtra)?.let { sanitizeXhttpExtra(it) }
                 if (extra != null) {
                     put("extra", if (xmux != null && "xmux" !in extra) JsonObject(extra + ("xmux" to xmux)) else extra)
                 } else if (xmux != null) {

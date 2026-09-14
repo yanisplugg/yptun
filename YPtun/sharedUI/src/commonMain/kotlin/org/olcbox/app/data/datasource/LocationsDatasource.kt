@@ -7,6 +7,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLParameter
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +30,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
+import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
 import org.olcbox.app.data.identity.DeviceIdentityProvider
@@ -189,12 +191,13 @@ class LocationsRepositoryImpl(
     // JSON-decodes + normalizes the whole bundle; app startup alone fires many reads (active config,
     // the full location list, subscription backfill, expiry-notify, provider-report), so with hundreds
     // of configs that repeated decode is what makes the list appear with a lag. The bundle is read ONLY
-    // via getBundleUnlocked and written ONLY via saveBundleUnlocked, both always under [mutationMutex]
-    // (which also gives the memory visibility), and the cache is keyed on [LocationsDataSource.bundleVersionToken]
+    // via getBundleUnlocked and written ONLY via saveBundleUnlocked, both always under [mutationMutex];
+    // getBundle's lock-free fast path reads it too, so bundle and token live in ONE @Volatile pair —
+    // never a new bundle with an old token. The cache is keyed on [LocationsDataSource.bundleVersionToken]
     // so a write from ANY instance (the VPN service keeps its own repository) invalidates it — the
     // service can never connect with a stale config. A null token disables the cache (always reload).
-    private var cachedBundle: LocationBundleV4? = null
-    private var cachedToken: Long? = null
+    @Volatile
+    private var cached: Pair<LocationBundleV4, Long?>? = null
     private val _changes = MutableStateFlow(0L)
     override val changes: StateFlow<Long> = _changes.asStateFlow()
 
@@ -207,6 +210,9 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun getBundle(): LocationBundleV4 {
+        // Fast path without the mutex: a cold start must not wait behind a long mutation
+        // (a subscription refresh) just to paint an unchanged bundle.
+        cachedFor(dataSource.bundleVersionToken())?.let { return it }
         return mutationMutex.withLock {
             getBundleUnlocked()
         }
@@ -220,9 +226,7 @@ class LocationsRepositoryImpl(
 
     private suspend fun getBundleUnlocked(): LocationBundleV4 {
         val token = dataSource.bundleVersionToken()
-        cachedBundle?.let { cached ->
-            if (token != null && token == cachedToken) return cached
-        }
+        cachedFor(token)?.let { return it }
 
         // Normalization happens HERE (the repository is the single read funnel), so the platform
         // datasources do raw IO + decode only and we never pay a double normalize+filter+dedup pass over
@@ -247,9 +251,11 @@ class LocationsRepositoryImpl(
 
     /** Stores [bundle] as the in-memory cache under its [token] (null token = effectively uncached). */
     private fun cacheBundle(bundle: LocationBundleV4, token: Long?) {
-        cachedBundle = bundle
-        cachedToken = token
+        cached = bundle to token
     }
+
+    private fun cachedFor(token: Long?): LocationBundleV4? =
+        cached?.takeIf { token != null && it.second == token }?.first
 
     override suspend fun saveBundle(bundle: LocationBundleV4) {
         mutationMutex.withLock {
@@ -1177,6 +1183,9 @@ class LocationsRepositoryImpl(
         // VK-TURN share links (freeturn://): WireGuard-over-VK locations.
         parseFreeturnText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
+        // qWDTT quick links (qwdtt://config?…): VK-TURN locations on the WDTT core.
+        parseQwdttText(linkText, subscriptionUrl)?.let { linkBundles += it }
+
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
             // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
@@ -1817,6 +1826,44 @@ class LocationsRepositoryImpl(
             location = location,
             subscriptionUrl = subscriptionUrl,
         )
+    }
+
+    /**
+     * Parses every [QwdttUriParser.SCHEME] quick link into a WDTT-core [EngineType.VkTurn] location.
+     * The link carries the VK hashes, so the location is immediately connectable (no vkLink prompt);
+     * the WireGuard config is fetched from the wdtt-server at runtime, so there is no proxy profile.
+     */
+    private fun parseQwdttText(
+        text: String,
+        subscriptionUrl: String? = null
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith(QwdttUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { QwdttUriParser.parse(it) }
+            .map { link ->
+                val name = link.name.ifBlank { "qWDTT ${link.peer}" }
+                val location = LocationConfig(
+                    name = name,
+                    engine = EngineType.VkTurn,
+                    vkturn = VkTurnConfig(
+                        core = VkTurnConfig.CORE_WDTT,
+                        wdttPeer = link.peer,
+                        wdttPassword = link.password,
+                        wdttWorkers = link.workers,
+                        vkLink = link.hashes,
+                        listenPort = link.listenPort.takeIf { it in 1..65535 }
+                            ?: LocationConfig.DEFAULT_FREETURN_PORT,
+                    ),
+                ).normalized()
+                val base = link.peer.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val storageId = uniqueStorageId("imported_qwdtt_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
 
     /** Parses a whole AmneziaWG wg-quick .conf into a [EngineType.Standard] location. */

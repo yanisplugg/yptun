@@ -19,15 +19,20 @@ internal actual fun deflateOrNull(data: ByteArray): ByteArray? = runCatching {
 }.getOrNull()
 
 internal actual fun inflateOrNull(data: ByteArray): ByteArray? = runCatching {
-    val inflater = Inflater()
-    inflater.setInput(data)
-    val out = ByteArrayOutputStream()
-    val buf = ByteArray(4096)
-    while (!inflater.finished()) {
-        val n = inflater.inflate(buf)
-        if (n == 0 && inflater.needsInput()) break
-        out.write(buf, 0, n)
-    }
-    inflater.end()
-    out.toByteArray()
+    fun inflateWith(nowrap: Boolean): ByteArray? = runCatching {
+        val inflater = Inflater(nowrap)
+        inflater.setInput(data)
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        while (!inflater.finished()) {
+            val n = inflater.inflate(buf)
+            if (n == 0 && inflater.needsInput()) break
+            out.write(buf, 0, n)
+        }
+        inflater.end()
+        out.toByteArray()
+    }.getOrNull()
+
+    // Try RFC 1950 (zlib header) first, then RFC 1951 (raw deflate / nowrap = true)
+    inflateWith(nowrap = false) ?: inflateWith(nowrap = true)
 }.getOrNull()

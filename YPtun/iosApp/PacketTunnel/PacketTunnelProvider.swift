@@ -13,7 +13,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         let session = IosTunnelSession(core: SwiftCoreBridge(), provider: self)
         self.session = session
-        session.start { hevConfig, error in
+        session.start { [weak session] hevConfig, error in
+            guard let session else {
+                completionHandler(NSError(domain: "org.yptun.tunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tunnel deallocated"]))
+                return
+            }
             guard let hevConfig, error == nil else {
                 completionHandler(NSError(
                     domain: "org.yptun.tunnel",
@@ -22,8 +26,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 ))
                 return
             }
-            // Blocks its own thread until quit(); the tunnel settings are applied already.
-            Socks5Tunnel.run(withConfig: .string(content: hevConfig)) { code in
+            // Write config to file: Tun2SocksKit .string mode has known YAML parsing/length issues, .file mode is reliable.
+            let appGroup = "group.org.yptun.app"
+            let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+                ?? FileManager.default.temporaryDirectory
+            let configURL = containerURL.appendingPathComponent("hev_config.yml")
+            let config: Socks5Tunnel.Config
+            do {
+                try hevConfig.write(to: configURL, atomically: true, encoding: .utf8)
+                config = .file(path: configURL)
+            } catch {
+                session.log(line: "Failed to write hev config file: \(error.localizedDescription)")
+                config = .string(content: hevConfig)
+            }
+
+            session.log(line: "Launching hev-socks5-tunnel...")
+            Socks5Tunnel.run(withConfig: config) { code in
+                session.log(line: "hev-socks5-tunnel exited with code \(code)")
                 NSLog("YPtun: hev-socks5-tunnel exited with \(code)")
             }
             completionHandler(nil)
@@ -40,6 +59,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        session?.log(line: "Tunnel stopping with reason: \(reason.rawValue)")
         Socks5Tunnel.quit()
         session?.stop()
         session = nil

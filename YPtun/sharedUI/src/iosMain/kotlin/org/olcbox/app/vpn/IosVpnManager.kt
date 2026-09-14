@@ -19,10 +19,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ios.IosCoreBridge
@@ -93,6 +96,8 @@ class IosVpnManager(
     private var captchaJob: Job? = null
     private var wasConnecting = false
     private var lastCaptchaUrl = ""
+    private val vpnMutex = Mutex()
+    private var connectJob: Job? = null
 
     init {
         scope.launch {
@@ -127,50 +132,83 @@ class IosVpnManager(
 
     override fun startVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
-        scope.launch {
-            val active = locationsRepository.getActiveLocation()?.location?.normalized()
-            if (active == null || !active.isComplete()) {
-                setStatus(VpnStatus.Error("No active location"))
-                addLog("Add a valid location before connecting")
-                return@launch
-            }
-            if (active.engine == EngineType.OpenFlux) {
-                setStatus(VpnStatus.Error("OpenFlux на iOS пока не поддерживается"))
-                return@launch
-            }
-            setStatus(VpnStatus.Connecting)
-            val result = runCatching {
-                publishRequest(active)
-                IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
-                val m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
-                val connection = m.connection
-                // A running tunnel keeps its old location; restart it on the new request.
-                if (connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
-                    connection.status != platform.NetworkExtension.NEVPNStatusInvalid
-                ) {
-                    connection.stopVPNTunnel()
-                    awaitDisconnected(m)
+        connectJob?.cancel()
+        connectJob = scope.launch {
+            vpnMutex.withLock {
+                val active = locationsRepository.getActiveLocation()?.location?.normalized()
+                if (active == null || !active.isComplete()) {
+                    setStatus(VpnStatus.Error("No active location"))
+                    addLog("Add a valid location before connecting")
+                    return@withLock
                 }
-                memScoped {
-                    val err = alloc<ObjCObjectVar<NSError?>>()
-                    if (!connection.startVPNTunnelAndReturnError(err.ptr)) {
-                        error(err.value?.localizedDescription ?: "VPN start failed")
+                if (active.engine == EngineType.OpenFlux) {
+                    setStatus(VpnStatus.Error("OpenFlux на iOS пока не поддерживается"))
+                    return@withLock
+                }
+                setStatus(VpnStatus.Connecting)
+                wasConnecting = true
+                val result = runCatching {
+                    publishRequest(active)
+                    IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
+                    // Always reload manager from system preferences before connecting.
+                    // iOS invalidates the cached NETunnelProviderManager when the app is backgrounded,
+                    // causing NEVPNErrorDomain error 2 on the next connect attempt.
+                    manager = null
+                    var m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
+                    var connection = m.connection
+                    // A running tunnel keeps its old location; restart it on the new request.
+                    if (connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
+                        connection.status != platform.NetworkExtension.NEVPNStatusInvalid
+                    ) {
+                        connection.stopVPNTunnel()
+                        awaitDisconnected(connection)
+                        // Reload manager from system preferences so the connection state is clean after stop.
+                        suspendCancellableCoroutine<Unit> { cont ->
+                            m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
+                        }
+                        connection = m.connection
+                    }
+                    memScoped {
+                        val err = alloc<ObjCObjectVar<NSError?>>()
+                        if (!connection.startVPNTunnelAndReturnError(err.ptr)) {
+                            // Brief retry if connection was still transitioning in background
+                            delay(500)
+                            suspendCancellableCoroutine<Unit> { cont ->
+                                m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
+                            }
+                            if (!m.connection.startVPNTunnelAndReturnError(err.ptr)) {
+                                error(err.value?.localizedDescription ?: "VPN start failed")
+                            }
+                        }
                     }
                 }
-            }
-            result.onFailure {
-                val message = it.message ?: "VPN start failed"
-                addLog("VPN start failed: $message")
-                setStatus(VpnStatus.Error(message))
+                result.onFailure {
+                    val message = it.message ?: "VPN start failed"
+                    addLog("VPN start failed: $message")
+                    setStatus(VpnStatus.Error(message))
+                    wasConnecting = false
+                }
             }
         }
     }
 
     override fun stopVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
+        connectJob?.cancel()
         scope.launch {
-            setStatus(VpnStatus.Stopping)
-            manager?.connection?.stopVPNTunnel() ?: setStatus(VpnStatus.Disconnected)
+            vpnMutex.withLock {
+                setStatus(VpnStatus.Stopping)
+                val m = manager ?: loadManager(createIfMissing = false)
+                if (m != null &&
+                    m.connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
+                    m.connection.status != platform.NetworkExtension.NEVPNStatusInvalid
+                ) {
+                    m.connection.stopVPNTunnel()
+                    awaitDisconnected(m.connection)
+                }
+                setStatus(VpnStatus.Disconnected)
+                wasConnecting = false
+            }
         }
     }
 
@@ -181,13 +219,90 @@ class IosVpnManager(
         val method = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD"
         when {
             config.engine == EngineType.Stealth -> rtcPing(config)
+            config.engine == EngineType.VkTurn -> {
+                if (status.value == VpnStatus.Connected) {
+                    val ms = tunnelPing()
+                    if (ms != null && ms > 0) return@withContext ms
+                }
+                vkTurnProbePing(config)
+            }
+            config.engine == EngineType.MasterDns -> {
+                if (status.value == VpnStatus.Connected) {
+                    val ms = tunnelPing()
+                    if (ms != null && ms > 0) return@withContext ms
+                }
+                masterDnsProbePing(config)
+            }
             profile == null -> null
-            profile.type == ProxyProfile.TYPE_AMNEZIAWG ->
-                profile.awgConfig.takeIf { it.isNotBlank() }
-                    ?.let { core.awgMeasureDelay(it, behavior.effectivePingUrl(), method, PING_TIMEOUT_MS) }
-                    ?.takeIf { it >= 0 }
-            else -> proxyUrlTest(profile, behavior.effectivePingUrl(), method)
+            behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
+                val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
+                if (ms > 0) ms else null
+            }
+            profile.type == ProxyProfile.TYPE_AMNEZIAWG -> {
+                if (status.value == VpnStatus.Connected) {
+                    val ms = tunnelPing()
+                    if (ms != null && ms > 0) return@withContext ms
+                }
+                val awgConfig = profile.awgConfig.orEmpty()
+                val probeMs = if (awgConfig.isNotBlank()) core.awgProbe(awgConfig) else -1L
+                if (probeMs > 0) probeMs
+                else {
+                    val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
+                    if (ms > 0) ms else null
+                }
+            }
+            else -> {
+                proxyUrlTest(profile, behavior.effectivePingUrl(), method)?.takeIf { it > 0 }
+                    ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
+            }
         }
+    }
+
+    private suspend fun vkTurnProbePing(config: LocationConfig): Long? = withContext(Dispatchers.Default) {
+        val vk = config.vkturn
+        val draft = VkTurnComposer.decompose(config.vkturn, config.proxy)
+        val host = draft.peerHost.ifBlank { config.proxy?.server.orEmpty() }.ifBlank { vk?.wdttPeer.orEmpty() }
+        val port = draft.peerPort.toIntOrNull() ?: config.proxy?.serverPort ?: vk?.wdttPort?.takeIf { it > 0 } ?: 0
+
+        val awgConf = config.proxy?.awgConfig.orEmpty()
+        if (awgConf.isNotBlank()) {
+            val probeMs = runCatching { core.awgProbe(awgConf) }.getOrDefault(-1L)
+            if (probeMs > 0) return@withContext probeMs
+        }
+
+        if (host.isNotBlank() && port > 0) {
+            val ms = core.tcpPing(host, port, PING_TIMEOUT_MS)
+            if (ms > 0) return@withContext ms
+        }
+        if (host.isNotBlank()) {
+            val ms443 = core.tcpPing(host, 443, PING_TIMEOUT_MS)
+            if (ms443 > 0) return@withContext ms443
+            val ms80 = core.tcpPing(host, 80, PING_TIMEOUT_MS)
+            if (ms80 > 0) return@withContext ms80
+        }
+        null
+    }
+
+    private suspend fun masterDnsProbePing(config: LocationConfig): Long? = withContext(Dispatchers.Default) {
+        val md = config.masterDns
+        val resolver = md?.resolverList()?.firstOrNull() ?: return@withContext null
+        val host = resolver.substringBefore(':')
+        val port = resolver.substringAfter(':', "53").toIntOrNull() ?: 53
+        val ms = core.tcpPing(host, port, PING_TIMEOUT_MS)
+        if (ms > 0) ms else null
+    }
+
+    private suspend fun tunnelPing(): Long? = withContext(Dispatchers.Default) {
+        if (status.value != VpnStatus.Connected) return@withContext null
+        val msYandexDns = core.tcpPing("77.88.8.8", 53, PING_TIMEOUT_MS)
+        if (msYandexDns > 0) return@withContext msYandexDns
+        val msGoogleDns = core.tcpPing("8.8.8.8", 53, PING_TIMEOUT_MS)
+        if (msGoogleDns > 0) return@withContext msGoogleDns
+        val msYa = core.tcpPing("ya.ru", 80, PING_TIMEOUT_MS)
+        if (msYa > 0) return@withContext msYa
+        val msCf = core.tcpPing("1.1.1.1", 80, PING_TIMEOUT_MS)
+        if (msCf > 0) return@withContext msCf
+        null
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? = ping(locationConfig)
@@ -204,6 +319,7 @@ class IosVpnManager(
 
     fun close() {
         statusObserver?.let { NSNotificationCenter.defaultCenter.removeObserver(it) }
+        connectJob?.cancel()
         scope.cancel()
     }
 
@@ -304,23 +420,27 @@ class IosVpnManager(
         statusObserver?.let { NSNotificationCenter.defaultCenter.removeObserver(it) }
         statusObserver = NSNotificationCenter.defaultCenter.addObserverForName(
             name = NEVPNStatusDidChangeNotification,
-            `object` = m.connection,
+            `object` = null,
             queue = NSOperationQueue.mainQueue,
-        ) { _ -> onSystemStatus(m) }
-        onSystemStatus(m)
+        ) { notif ->
+            val conn = notif?.`object` as? platform.NetworkExtension.NEVPNConnection ?: manager?.connection
+            onSystemStatus(conn)
+        }
+        onSystemStatus(m.connection)
     }
 
-    private fun onSystemStatus(m: NETunnelProviderManager) {
-        val s: NEVPNStatus = m.connection.status
+    private fun onSystemStatus(connection: platform.NetworkExtension.NEVPNConnection?) {
+        val conn = connection ?: manager?.connection ?: return
+        val s: NEVPNStatus = conn.status
         when (s) {
             NEVPNStatusConnecting -> {
                 wasConnecting = true
                 setStatus(VpnStatus.Connecting)
-                watchCaptcha(m)
+                manager?.let { watchCaptcha(it) }
             }
             NEVPNStatusConnected -> {
                 wasConnecting = false
-                _connectedSince.value = m.connection.connectedDate
+                _connectedSince.value = conn.connectedDate
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
                 setStatus(VpnStatus.Connected)
                 triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
@@ -341,9 +461,9 @@ class IosVpnManager(
         }
     }
 
-    private suspend fun awaitDisconnected(m: NETunnelProviderManager) {
-        repeat(50) {
-            val s = m.connection.status
+    private suspend fun awaitDisconnected(connection: platform.NetworkExtension.NEVPNConnection) {
+        repeat(60) {
+            val s = connection.status
             if (s == platform.NetworkExtension.NEVPNStatusDisconnected || s == platform.NetworkExtension.NEVPNStatusInvalid) return
             delay(100)
         }

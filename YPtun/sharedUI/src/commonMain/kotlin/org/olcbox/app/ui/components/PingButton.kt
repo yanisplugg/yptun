@@ -59,22 +59,14 @@ fun PingButton(
         engine == org.olcbox.app.data.model.EngineType.OpenFlux
 
     val descriptionText = when {
-        isVkTurn -> "—"
+        pingState is PingState.Success -> "${s.notifConnected} ${(pingState as PingState.Success).latency}ms"
         pingState is PingState.Error -> s.pingOffline
         pingState is PingState.Loading -> s.pingChecking
-        pingState is PingState.Success -> "${s.notifConnected} ${(pingState as PingState.Success).latency}ms"
         else -> s.pingVerify
     }
 
     val stateIcon: @Composable () -> Unit = {
-        if (isVkTurn) {
-            Text(
-                text = "—",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else when (pingState) {
+        when (pingState) {
             is PingState.Error -> Icon(
                 imageVector = Icons.Rounded.PriorityHigh,
                 contentDescription = null,
@@ -109,7 +101,7 @@ fun PingButton(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(enabled = !isVkTurn && pingState !is PingState.Loading) {
+            .clickable(enabled = pingState !is PingState.Loading) {
                 homeViewModel.viewModelScope.launch {
                     pingState = PingState.Loading
                     val config = configGetter()

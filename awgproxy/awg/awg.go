@@ -508,11 +508,13 @@ func parseConfig(ini string) (*wgConfig, error) {
 	if len(c.addresses) == 0 {
 		return nil, errors.New("missing Address")
 	}
-	if len(c.allowedIPs) == 0 {
-		c.allowedIPs = []string{"0.0.0.0/0", "::/0"}
-	}
+	// In client mode / SOCKS proxy mode, all internet traffic routes through this single peer.
+	// Always force allowedIPs to 0.0.0.0/0 and ::/0 so amneziawg cryptokey routing
+	// never drops packets to or from internet destinations (e.g. if the imported config
+	// contained a restricted server-side internal subnet like 10.7.1.0/24 or only IPv4).
+	c.allowedIPs = []string{"0.0.0.0/0", "::/0"}
 	if len(c.dns) == 0 {
-		c.dns = []netip.Addr{netip.MustParseAddr("1.1.1.1")}
+		c.dns = []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("8.8.8.8")}
 	}
 	return c, nil
 }

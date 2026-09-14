@@ -82,6 +82,8 @@ class IosTunnelSession(
                 check(location.isComplete()) { "Локация настроена не полностью" }
                 log("Connecting ${location.displayName()} (engine=${location.engine})")
 
+                // Loopback is shared by every app on the device: without a login any app could use
+                // this SOCKS (and learn the VPN exit). hev authenticates the same way on Android.
                 val user = credential(12)
                 val pass = credential(24)
                 engine.start(location, SOCKS_PORT, user, pass, request.deviceId)
@@ -96,7 +98,8 @@ class IosTunnelSession(
                     user = user,
                     pass = pass,
                     tcpOnlyUdp = location.engine in TCP_ONLY_ENGINES,
-                    dropIpv6 = traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
+                    dropIpv6 = location.engine == EngineType.VkTurn ||
+                        traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
                     slowTunnel = location.engine in SLOW_ENGINES,
                 )
             }
@@ -135,7 +138,7 @@ class IosTunnelSession(
     }
 
     private suspend fun applyNetworkSettings(mtu: Int, bypassLan: Boolean) {
-        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = "127.0.0.1")
+        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = TUN_IPV4_REMOTE)
         settings.setMTU(NSNumber(int = mtu))
         settings.setIPv4Settings(
             NEIPv4Settings(addresses = listOf(TUN_IPV4_ADDRESS), subnetMasks = listOf("255.255.255.0")).apply {
@@ -226,7 +229,7 @@ class IosTunnelSession(
         }
     }
 
-    private fun log(line: String) {
+    fun log(line: String) {
         val path = IosSharedStore.path(LOG_FILE)
         if (!NSFileManager.defaultManager.fileExistsAtPath(path)) IosSharedStore.writeText(LOG_FILE, "")
         val data: NSData = NSString.create(string = "$line\n").dataUsingEncoding(NSUTF8StringEncoding) ?: return
@@ -247,7 +250,12 @@ class IosTunnelSession(
         const val ERROR_FILE = "tunnel_error.txt"
 
         private const val SOCKS_PORT = 10808
-        private const val TUN_IPV4_ADDRESS = "10.0.88.88"
+        // TEST-NET-2 (RFC 5737, 198.51.100.0/24): never a real internet destination, so a safe TUN
+        // address — and, unlike the old 198.18.0.1, OUTSIDE the FakeDNS pool (198.18.0.0/15) so an
+        // app handed a synthetic FakeDNS IP can't collide with the tunnel interface, and outside the
+        // 10/8·172.16/12·192.168/16 ranges that «Обход LAN» excludes from the tunnel.
+        private const val TUN_IPV4_ADDRESS = "198.51.100.1"
+        private const val TUN_IPV4_REMOTE = "198.51.100.2"
         private const val TUN_IPV6_ADDRESS = "fdfe:dcba:9876::1"
         private const val MAPDNS_ADDRESS = "1.1.1.1"
         private const val WATCHDOG_INTERVAL_MS = 5_000L

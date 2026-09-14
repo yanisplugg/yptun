@@ -13,7 +13,7 @@ data class TrafficSettings(
     /** Optional SECOND remote DNS, also resolved through the proxy (fallback resolver). Blank = none. */
     val remoteDns2: String = "",
     /** DNS used for direct/bootstrap lookups (e.g. resolving the proxy server domain). */
-    val directDns: String = "223.5.5.5",
+    val directDns: String = "77.88.8.8",
     /** sing-box DNS resolution strategy. One of [STRATEGIES]. */
     val domainStrategy: String = "ipv4_only",
     /** Enable connection multiplexing on the proxy outbound. */
@@ -51,7 +51,7 @@ data class TrafficSettings(
         fakeDnsEnabled = false,
         remoteDns = remoteDns.trim().ifBlank { "8.8.8.8" },
         remoteDns2 = remoteDns2.trim(),
-        directDns = directDns.trim().ifBlank { "223.5.5.5" },
+        directDns = directDns.trim().let { if (it.isBlank() || it == "223.5.5.5") "77.88.8.8" else it },
         domainStrategy = domainStrategy.takeIf { it in STRATEGIES } ?: "ipv4_only",
         muxProtocol = muxProtocol.takeIf { it in MUX_PROTOCOLS } ?: "h2mux",
         muxMaxConnections = muxMaxConnections.coerceIn(1, 64),
