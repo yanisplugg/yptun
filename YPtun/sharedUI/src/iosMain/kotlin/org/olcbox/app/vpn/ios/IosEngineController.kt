@@ -101,6 +101,7 @@ internal class IosEngineController(
         socksPassword: String,
         deviceId: String,
     ) {
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
         startOlcRtc(config, listenPort, socksUsername, socksPassword, deviceId)
         log("olcRTC ready on 127.0.0.1:$listenPort")
@@ -170,6 +171,7 @@ internal class IosEngineController(
             } else second
         }
 
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
         if (chained) {
@@ -208,14 +210,17 @@ internal class IosEngineController(
             activeProxyCore = ProxyCore.Xray
         }
         if (activeProxyCore == ProxyCore.SingBox &&
-            (traffic.blockRuDomains || profileWantsXray) &&
             effectiveProfile.rawOutbound.isNullOrBlank() &&
-            effectiveProfile.type in XRAY_SUPPORTED_TYPES
+            effectiveProfile.type in XRAY_SUPPORTED_TYPES &&
+            (traffic.blockRuDomains || profileWantsXray || (config.core == ProxyCore.Auto && globalCore == ProxyCore.Auto))
         ) {
             activeProxyCore = ProxyCore.Xray
             log(
-                if (profileWantsXray) "Switching to Xray core for routing profile (native domain:/geoip: matching)"
-                else "Switching to Xray core for RU-domain blocklist"
+                when {
+                    profileWantsXray -> "Switching to Xray core for routing profile (native domain:/geoip: matching)"
+                    traffic.blockRuDomains -> "Switching to Xray core for RU-domain blocklist"
+                    else -> "Using Xray core for ${effectiveProfile.type} (Happ-compatible)"
+                }
             )
         }
         if (activeProxyCore == ProxyCore.Xray &&
@@ -333,8 +338,11 @@ internal class IosEngineController(
                 sniffOverrideDestination = isAwg,
                 secondProfile = secondProfile,
                 fakeDnsSpec = config.fakeDns,
-                preferTcpRemoteDns = isAwg && secondProfile == null,
+                preferTcpRemoteDns = true,
+                remoteDnsOverHttps = false,
+                forceFamilyResolve = false,
                 cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
+                logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
             core.sbStart(json).orThrow("sing-box start failed")
@@ -370,6 +378,7 @@ internal class IosEngineController(
         masterDnsProxyActive = useProxy
         val masterDnsPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
 
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
         val masterDnsAddr = "$LISTEN_HOST:$masterDnsPort"
@@ -512,6 +521,7 @@ internal class IosEngineController(
         }
         check(vk != null && vk.isComplete() && outboundConfigured) { "VK-TURN not configured" }
 
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
         val listenAddr = "127.0.0.1:${vk.listenPort}"
@@ -599,6 +609,7 @@ internal class IosEngineController(
                         traffic = traffic,
                         routingProfile = null,
                         blockQuic = false,
+                        forceFamilyResolve = false,
                     )
                 }
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
@@ -613,6 +624,7 @@ internal class IosEngineController(
                         traffic = traffic,
                         routingProfile = null,
                         blockQuic = false,
+                        forceFamilyResolve = false,
                         chainViaDialerProxy = true,
                         directViaBase = true,
                     )
@@ -629,6 +641,7 @@ internal class IosEngineController(
                         traffic = traffic,
                         routingProfile = null,
                         blockQuic = false,
+                        forceFamilyResolve = false,
                     )
                 }
             }
@@ -697,7 +710,7 @@ internal class IosEngineController(
         profilesState: RoutingProfilesState,
         wireguardBase: ProxyProfile? = null,
         chainPort: Int? = null,
-        sniffOverrideDestination: Boolean = false,
+        sniffOverrideDestination: Boolean = true,
         preferTcpRemoteDns: Boolean = false,
         directViaBase: Boolean = false,
     ): String = SingBoxConfig.build(
@@ -719,7 +732,10 @@ internal class IosEngineController(
         sniffOverrideDestination = sniffOverrideDestination,
         preferTcpRemoteDns = preferTcpRemoteDns,
         directViaBase = directViaBase,
+        forceFamilyResolve = false,
+        allowLocalResolve = false,
         cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
+        logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
     )
 
     /**
@@ -783,13 +799,37 @@ internal class IosEngineController(
         if (profile.type != ProxyProfile.TYPE_AMNEZIAWG) return profile
         runCatching { core.awgStop() }
         val port = awgLocalPort(socksPort)
+        IosNet.awaitLocalPortClosed(port, 3000)
         val listen = "127.0.0.1:$port"
         log("Starting AmneziaWG SOCKS on $listen")
-        core.awgStart(profile.awgConfig, listen).orThrow("AmneziaWG start failed")
+        val conf = ensureAllowedIpsFullRoute(profile.awgConfig)
+        core.awgStart(conf, listen).orThrow("AmneziaWG start failed")
         if (!IosNet.awaitLocalPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("AmneziaWG SOCKS port $port did not open")
         }
         return localSocksProfile(profile.tag.ifBlank { "AmneziaWG" }, port)
+    }
+
+    /** Ensures AllowedIPs = 0.0.0.0/0, ::/0 in the WireGuard/AmneziaWG INI so cryptokey routing never drops internet traffic. */
+    private fun ensureAllowedIpsFullRoute(ini: String): String {
+        if (ini.isBlank()) return ini
+        var hasAllowedIps = false
+        val lines = ini.lineSequence().map { line ->
+            val trim = line.trim()
+            if (trim.startsWith("allowedips", ignoreCase = true) && '=' in trim) {
+                hasAllowedIps = true
+                "AllowedIPs = 0.0.0.0/0, ::/0"
+            } else line
+        }.toMutableList()
+        if (!hasAllowedIps) {
+            val peerIdx = lines.indexOfLast { it.trim().equals("[peer]", ignoreCase = true) }
+            if (peerIdx >= 0) {
+                lines.add(peerIdx + 1, "AllowedIPs = 0.0.0.0/0, ::/0")
+            } else {
+                lines.add("AllowedIPs = 0.0.0.0/0, ::/0")
+            }
+        }
+        return lines.joinToString("\n")
     }
 
     /** A SOCKS5 outbound to a loopback listener one of our cores serves (AmneziaWG, qWDTT Raw). */

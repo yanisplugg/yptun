@@ -137,11 +137,11 @@ func parseWgQuick(conf string) (*wgQuickConfig, error) {
 	if cfg.endpoint == "" {
 		return nil, fmt.Errorf("config missing Endpoint")
 	}
-	if len(cfg.allowedIPs) == 0 {
-		cfg.allowedIPs = []string{"0.0.0.0/0"}
-	}
+	// Client SOCKS proxy routes all internet traffic through this peer.
+	// Force 0.0.0.0/0 and ::/0 so cryptokey routing never drops packets.
+	cfg.allowedIPs = []string{"0.0.0.0/0", "::/0"}
 	if len(cfg.dns) == 0 {
-		cfg.dns = []netip.Addr{netip.MustParseAddr("1.1.1.1")}
+		cfg.dns = []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("8.8.8.8")}
 	}
 	return cfg, nil
 }

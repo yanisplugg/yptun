@@ -43,6 +43,7 @@ import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
 import org.olcbox.app.vpn.IosVpnManager
 import org.olcbox.app.vpn.VpnStatus
+import org.olcbox.app.vpn.ios.IosSharedStore
 import platform.UIKit.UIViewController
 
 class IosAppFactory {
@@ -221,6 +222,8 @@ private fun IosApp(
         val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
         val connectionSummary = "Системный VPN (Network Extension)"
 
+        var appBehavior by remember { mutableStateOf(IosSharedStore.loadAppBehavior()) }
+
         Box(modifier = Modifier.fillMaxSize()) {
             OlcboxAppContent(
                 homeViewModel = dependencies.homeViewModel,
@@ -289,7 +292,132 @@ private fun IosApp(
                 showSplitTunnelingButton = false,
                 canScanQr = true,
                 onAppSettingsClick = { isAppSettingsOpen = true },
-                onSplitTunnelingClick = {}
+                onSplitTunnelingClick = {},
+                collapsedGroups = appBehavior.collapsedSubscriptionGroups,
+                pinnedGroups = appBehavior.pinnedSubscriptionGroups,
+                pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,
+                pingSortDescendingGroups = appBehavior.pingSortDescendingSubscriptionGroups,
+                pinnedCustomLocations = appBehavior.pinnedCustomLocations,
+                customLocationsPingSorted = appBehavior.customLocationsPingSorted,
+                customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
+                onToggleGroupCollapsed = { key ->
+                    val current = appBehavior.collapsedSubscriptionGroups
+                    val updated = if (key in current) current - key else current + key
+                    val newBehavior = appBehavior.copy(collapsedSubscriptionGroups = updated)
+                    appBehavior = newBehavior
+                    IosSharedStore.saveAppBehavior(newBehavior)
+                },
+                onToggleGroupPinned = { key ->
+                    val current = appBehavior.pinnedSubscriptionGroups
+                    val updated = if (key in current) current - key else current + key
+                    val newBehavior = appBehavior.copy(pinnedSubscriptionGroups = updated)
+                    appBehavior = newBehavior
+                    IosSharedStore.saveAppBehavior(newBehavior)
+                },
+                onToggleGroupPingSort = { key ->
+                    val sorted = appBehavior.pingSortedSubscriptionGroups
+                    val desc = appBehavior.pingSortDescendingSubscriptionGroups
+                    val updated = when {
+                        key !in sorted -> appBehavior.copy(
+                            pingSortedSubscriptionGroups = sorted + key,
+                            pingSortDescendingSubscriptionGroups = desc - key,
+                        )
+                        key !in desc -> appBehavior.copy(pingSortDescendingSubscriptionGroups = desc + key)
+                        else -> appBehavior.copy(
+                            pingSortedSubscriptionGroups = sorted - key,
+                            pingSortDescendingSubscriptionGroups = desc - key,
+                        )
+                    }
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                },
+                onToggleCustomLocationPinned = { id ->
+                    val current = appBehavior.pinnedCustomLocations
+                    val updated = if (id in current) current - id else current + id
+                    val newBehavior = appBehavior.copy(pinnedCustomLocations = updated)
+                    appBehavior = newBehavior
+                    IosSharedStore.saveAppBehavior(newBehavior)
+                },
+                onToggleCustomLocationsPingSort = {
+                    val updated = when {
+                        !appBehavior.customLocationsPingSorted -> appBehavior.copy(
+                            customLocationsPingSorted = true,
+                            customLocationsPingSortDescending = false,
+                        )
+                        !appBehavior.customLocationsPingSortDescending -> appBehavior.copy(
+                            customLocationsPingSortDescending = true
+                        )
+                        else -> appBehavior.copy(
+                            customLocationsPingSorted = false,
+                            customLocationsPingSortDescending = false,
+                        )
+                    }
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                },
+                customGroups = appBehavior.customGroups,
+                onCreateFolder = { name, memberKeys ->
+                    val folder = org.olcbox.app.data.model.CustomGroup(
+                        id = "folder_${kotlin.random.Random.nextInt(100_000, 999_999)}",
+                        name = name.trim(),
+                        members = memberKeys
+                    )
+                    val cleaned = appBehavior.customGroups.map { g -> g.copy(members = g.members - memberKeys.toSet()) }
+                    val updated = appBehavior.copy(customGroups = cleaned + folder)
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                },
+                onRenameFolder = { id, name ->
+                    val updated = appBehavior.copy(
+                        customGroups = appBehavior.customGroups.map {
+                            if (it.id == id) it.copy(name = name.trim()) else it
+                        }
+                    )
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                },
+                onDeleteFolder = { id ->
+                    val updated = appBehavior.copy(customGroups = appBehavior.customGroups.filter { it.id != id })
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                },
+                onAddToFolder = { id, memberKeys ->
+                    val updated = appBehavior.copy(
+                        customGroups = appBehavior.customGroups.map {
+                            if (it.id == id) it.copy(members = (it.members + memberKeys).distinct()) else it
+                        }
+                    )
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                },
+                onRemoveFromFolder = { memberKeys ->
+                    val removeSet = memberKeys.toSet()
+                    val updated = appBehavior.copy(
+                        customGroups = appBehavior.customGroups.map {
+                            it.copy(members = it.members.filter { m -> m !in removeSet })
+                        }
+                    )
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                },
+                onToggleFolderPinned = { id ->
+                    val updated = appBehavior.copy(
+                        customGroups = appBehavior.customGroups.map {
+                            if (it.id == id) it.copy(pinned = !it.pinned) else it
+                        }
+                    )
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                },
+                onToggleFolderCollapsed = { id ->
+                    val updated = appBehavior.copy(
+                        customGroups = appBehavior.customGroups.map {
+                            if (it.id == id) it.copy(collapsed = !it.collapsed) else it
+                        }
+                    )
+                    appBehavior = updated
+                    IosSharedStore.saveAppBehavior(updated)
+                }
             )
 
             if (isAppSettingsOpen) {

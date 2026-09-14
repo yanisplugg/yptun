@@ -82,8 +82,8 @@ class IosTunnelSession(
                 check(location.isComplete()) { "Локация настроена не полностью" }
                 log("Connecting ${location.displayName()} (engine=${location.engine})")
 
-                val user = credential(12)
-                val pass = credential(24)
+                val user = ""
+                val pass = ""
                 engine.start(location, SOCKS_PORT, user, pass, request.deviceId)
                 engineType = location.engine
 
@@ -96,7 +96,8 @@ class IosTunnelSession(
                     user = user,
                     pass = pass,
                     tcpOnlyUdp = location.engine in TCP_ONLY_ENGINES,
-                    dropIpv6 = traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
+                    dropIpv6 = location.engine == EngineType.VkTurn ||
+                        traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
                     slowTunnel = location.engine in SLOW_ENGINES,
                 )
             }
@@ -135,7 +136,7 @@ class IosTunnelSession(
     }
 
     private suspend fun applyNetworkSettings(mtu: Int, bypassLan: Boolean) {
-        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = "127.0.0.1")
+        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = "198.18.0.2")
         settings.setMTU(NSNumber(int = mtu))
         settings.setIPv4Settings(
             NEIPv4Settings(addresses = listOf(TUN_IPV4_ADDRESS), subnetMasks = listOf("255.255.255.0")).apply {
@@ -181,8 +182,7 @@ class IosTunnelSession(
           port: $SOCKS_PORT
           udp: '${if (tcpOnlyUdp) "tcp" else "udp"}'
           pipeline: false
-          username: '$user'
-          password: '$pass'
+          ${if (user.isNotBlank()) "username: '$user'\n          password: '$pass'" else "# no auth"}
 
         mapdns:
           address: $MAPDNS_ADDRESS
@@ -226,7 +226,7 @@ class IosTunnelSession(
         }
     }
 
-    private fun log(line: String) {
+    fun log(line: String) {
         val path = IosSharedStore.path(LOG_FILE)
         if (!NSFileManager.defaultManager.fileExistsAtPath(path)) IosSharedStore.writeText(LOG_FILE, "")
         val data: NSData = NSString.create(string = "$line\n").dataUsingEncoding(NSUTF8StringEncoding) ?: return
@@ -247,7 +247,7 @@ class IosTunnelSession(
         const val ERROR_FILE = "tunnel_error.txt"
 
         private const val SOCKS_PORT = 10808
-        private const val TUN_IPV4_ADDRESS = "10.0.88.88"
+        private const val TUN_IPV4_ADDRESS = "198.18.0.1"
         private const val TUN_IPV6_ADDRESS = "fdfe:dcba:9876::1"
         private const val MAPDNS_ADDRESS = "1.1.1.1"
         private const val WATCHDOG_INTERVAL_MS = 5_000L
