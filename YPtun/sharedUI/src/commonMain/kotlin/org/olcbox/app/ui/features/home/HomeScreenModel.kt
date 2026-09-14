@@ -244,13 +244,14 @@ class HomeScreenViewModel(
         when (vpnManager.status.value) {
             VpnStatus.Connected,
             VpnStatus.Connecting,
-            VpnStatus.Reconnecting,
-            VpnStatus.Stopping -> viewModelScope.launch {
+            VpnStatus.Reconnecting -> viewModelScope.launch {
                 _state.update { it.copy(isVpnLoading = true, connectError = null) }
                 vpnManager.startVpn()
             }
 
-            VpnStatus.Disconnected -> Unit
+            // Stopping = the user pressed Stop: a settings change must not bring the VPN back.
+            VpnStatus.Disconnected,
+            VpnStatus.Stopping -> Unit
             is VpnStatus.Error -> {
                 _state.update { it.copy(isVpnLoading = false) }
             }
@@ -527,6 +528,7 @@ class HomeScreenViewModel(
             // Initial delay so cold startup renders cached locations and subscriptions instantly without
             // locking the mutation mutex behind slow/blocked subscription network calls.
             delay(15_000L)
+            backfillMissingSubscriptionExpiry()
             // Once per launch: retry overdue subscriptions even if they failed last time (keyed off the
             // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.
             refreshDueSubscriptionsIfNeeded(retryFailed = true)
