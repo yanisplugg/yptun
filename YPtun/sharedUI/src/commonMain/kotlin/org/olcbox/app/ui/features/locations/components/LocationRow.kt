@@ -264,15 +264,6 @@ fun LocationRow(
         val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
 
         when {
-            isVkTurn -> {
-                Text(
-                    text = "—",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
             isLoading -> {
                 ShimmeringPingSkeleton()
             }
@@ -295,7 +286,7 @@ fun LocationRow(
                 }
             }
 
-            isMasterDns -> {
+            isVkTurn || isMasterDns -> {
                 Text(
                     text = "—",
                     fontSize = 14.sp,
@@ -630,13 +621,6 @@ private fun CompactPingIndicator(
         location.config?.engine == EngineType.OpenFlux
     val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
     when {
-        isVkTurn -> Text(
-            text = "—",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
         isLoading -> ShimmeringPingSkeleton()
 
         pingMs != null -> if (iconResult) {
@@ -655,7 +639,7 @@ private fun CompactPingIndicator(
             )
         }
 
-        isMasterDns -> Text(
+        isVkTurn || isMasterDns -> Text(
             text = "—",
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,

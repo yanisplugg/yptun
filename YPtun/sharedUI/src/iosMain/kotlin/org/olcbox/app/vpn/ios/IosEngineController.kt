@@ -659,7 +659,7 @@ internal class IosEngineController(
                         listenPort = listenPort, socksUsername = socksUsername, socksPassword = socksPassword,
                         routing = routing, traffic = traffic, profilesState = profilesState,
                         sniffOverrideDestination = true,
-                        preferTcpRemoteDns = false,
+                        preferTcpRemoteDns = chainProxy == null,
                         directViaBase = chainProxy != null,
                     )
                 }

@@ -206,6 +206,7 @@ class IosVpnManager(
         val method = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD"
         when {
             config.engine == EngineType.Stealth -> rtcPing(config)
+            config.engine == EngineType.VkTurn || config.engine == EngineType.MasterDns -> tunnelPing()
             profile == null -> null
             behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
                 val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
@@ -220,6 +221,16 @@ class IosVpnManager(
                     ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
             }
         }
+    }
+
+    private suspend fun tunnelPing(): Long? = withContext(Dispatchers.Default) {
+        if (status.value != VpnStatus.Connected) return@withContext null
+        val ms = core.tcpPing("1.1.1.1", 443, PING_TIMEOUT_MS)
+        if (ms > 0) return@withContext ms
+        val msDns = core.tcpPing("1.1.1.1", 53, PING_TIMEOUT_MS)
+        if (msDns > 0) return@withContext msDns
+        val msYandex = core.tcpPing("77.88.8.8", 443, PING_TIMEOUT_MS)
+        if (msYandex > 0) msYandex else null
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? = ping(locationConfig)
