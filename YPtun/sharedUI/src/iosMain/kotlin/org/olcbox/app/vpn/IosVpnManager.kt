@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
@@ -93,6 +95,8 @@ class IosVpnManager(
     private var captchaJob: Job? = null
     private var wasConnecting = false
     private var lastCaptchaUrl = ""
+    private val vpnMutex = Mutex()
+    private var connectJob: Job? = null
 
     init {
         scope.launch {
@@ -127,54 +131,71 @@ class IosVpnManager(
 
     override fun startVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
-        scope.launch {
-            val active = locationsRepository.getActiveLocation()?.location?.normalized()
-            if (active == null || !active.isComplete()) {
-                setStatus(VpnStatus.Error("No active location"))
-                addLog("Add a valid location before connecting")
-                return@launch
-            }
-            if (active.engine == EngineType.OpenFlux) {
-                setStatus(VpnStatus.Error("OpenFlux на iOS пока не поддерживается"))
-                return@launch
-            }
-            setStatus(VpnStatus.Connecting)
-            val result = runCatching {
-                publishRequest(active)
-                IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
-                // Always reload manager from system preferences before connecting.
-                // iOS invalidates the cached NETunnelProviderManager when the app is backgrounded,
-                // causing NEVPNErrorDomain error 2 on the next connect attempt.
-                manager = null
-                val m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
-                val connection = m.connection
-                // A running tunnel keeps its old location; restart it on the new request.
-                if (connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
-                    connection.status != platform.NetworkExtension.NEVPNStatusInvalid
-                ) {
-                    connection.stopVPNTunnel()
-                    awaitDisconnected(m)
+        connectJob?.cancel()
+        connectJob = scope.launch {
+            vpnMutex.withLock {
+                val active = locationsRepository.getActiveLocation()?.location?.normalized()
+                if (active == null || !active.isComplete()) {
+                    setStatus(VpnStatus.Error("No active location"))
+                    addLog("Add a valid location before connecting")
+                    return@withLock
                 }
-                memScoped {
-                    val err = alloc<ObjCObjectVar<NSError?>>()
-                    if (!connection.startVPNTunnelAndReturnError(err.ptr)) {
-                        error(err.value?.localizedDescription ?: "VPN start failed")
+                if (active.engine == EngineType.OpenFlux) {
+                    setStatus(VpnStatus.Error("OpenFlux на iOS пока не поддерживается"))
+                    return@withLock
+                }
+                setStatus(VpnStatus.Connecting)
+                wasConnecting = true
+                val result = runCatching {
+                    publishRequest(active)
+                    IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
+                    // Always reload manager from system preferences before connecting.
+                    // iOS invalidates the cached NETunnelProviderManager when the app is backgrounded,
+                    // causing NEVPNErrorDomain error 2 on the next connect attempt.
+                    manager = null
+                    val m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
+                    val connection = m.connection
+                    // A running tunnel keeps its old location; restart it on the new request.
+                    if (connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
+                        connection.status != platform.NetworkExtension.NEVPNStatusInvalid
+                    ) {
+                        connection.stopVPNTunnel()
+                        awaitDisconnected(connection)
+                    }
+                    memScoped {
+                        val err = alloc<ObjCObjectVar<NSError?>>()
+                        if (!connection.startVPNTunnelAndReturnError(err.ptr)) {
+                            error(err.value?.localizedDescription ?: "VPN start failed")
+                        }
                     }
                 }
-            }
-            result.onFailure {
-                val message = it.message ?: "VPN start failed"
-                addLog("VPN start failed: $message")
-                setStatus(VpnStatus.Error(message))
+                result.onFailure {
+                    val message = it.message ?: "VPN start failed"
+                    addLog("VPN start failed: $message")
+                    setStatus(VpnStatus.Error(message))
+                    wasConnecting = false
+                }
             }
         }
     }
 
     override fun stopVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
+        connectJob?.cancel()
         scope.launch {
-            setStatus(VpnStatus.Stopping)
-            manager?.connection?.stopVPNTunnel() ?: setStatus(VpnStatus.Disconnected)
+            vpnMutex.withLock {
+                setStatus(VpnStatus.Stopping)
+                val m = manager ?: loadManager(createIfMissing = false)
+                if (m != null &&
+                    m.connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
+                    m.connection.status != platform.NetworkExtension.NEVPNStatusInvalid
+                ) {
+                    m.connection.stopVPNTunnel()
+                    awaitDisconnected(m.connection)
+                }
+                setStatus(VpnStatus.Disconnected)
+                wasConnecting = false
+            }
         }
     }
 
@@ -215,6 +236,7 @@ class IosVpnManager(
 
     fun close() {
         statusObserver?.let { NSNotificationCenter.defaultCenter.removeObserver(it) }
+        connectJob?.cancel()
         scope.cancel()
     }
 
@@ -315,23 +337,27 @@ class IosVpnManager(
         statusObserver?.let { NSNotificationCenter.defaultCenter.removeObserver(it) }
         statusObserver = NSNotificationCenter.defaultCenter.addObserverForName(
             name = NEVPNStatusDidChangeNotification,
-            `object` = m.connection,
+            `object` = null,
             queue = NSOperationQueue.mainQueue,
-        ) { _ -> onSystemStatus(m) }
-        onSystemStatus(m)
+        ) { notif ->
+            val conn = notif?.`object` as? platform.NetworkExtension.NEVPNConnection ?: manager?.connection
+            onSystemStatus(conn)
+        }
+        onSystemStatus(m.connection)
     }
 
-    private fun onSystemStatus(m: NETunnelProviderManager) {
-        val s: NEVPNStatus = m.connection.status
+    private fun onSystemStatus(connection: platform.NetworkExtension.NEVPNConnection?) {
+        val conn = connection ?: manager?.connection ?: return
+        val s: NEVPNStatus = conn.status
         when (s) {
             NEVPNStatusConnecting -> {
                 wasConnecting = true
                 setStatus(VpnStatus.Connecting)
-                watchCaptcha(m)
+                manager?.let { watchCaptcha(it) }
             }
             NEVPNStatusConnected -> {
                 wasConnecting = false
-                _connectedSince.value = m.connection.connectedDate
+                _connectedSince.value = conn.connectedDate
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
                 setStatus(VpnStatus.Connected)
                 triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
@@ -352,9 +378,9 @@ class IosVpnManager(
         }
     }
 
-    private suspend fun awaitDisconnected(m: NETunnelProviderManager) {
-        repeat(50) {
-            val s = m.connection.status
+    private suspend fun awaitDisconnected(connection: platform.NetworkExtension.NEVPNConnection) {
+        repeat(60) {
+            val s = connection.status
             if (s == platform.NetworkExtension.NEVPNStatusDisconnected || s == platform.NetworkExtension.NEVPNStatusInvalid) return
             delay(100)
         }

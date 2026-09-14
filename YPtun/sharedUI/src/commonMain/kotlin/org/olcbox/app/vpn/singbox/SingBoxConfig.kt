@@ -648,8 +648,9 @@ object SingBoxConfig {
                     // back to IPv4. A hard RST ("reject" default) instead surfaced as ERR_CONNECTION_RESET
                     // on google.com (the app "jumped to DoH over IPv6" and got reset). Dropping silently
                     // makes the v6 attempt time out and the app retries on IPv4 — no leak, no reset.
-                    if (forceFamily) {
-                        when (expertStrategy) {
+                    if (forceFamily || effectiveStrategy == "ipv4_only" || effectiveStrategy == "ipv6_only") {
+                        val dropFamilyStrategy = if (forceFamily) expertStrategy else effectiveStrategy
+                        when (dropFamilyStrategy) {
                             "ipv4_only" -> addJsonObject {
                                 putJsonArray("ip_cidr") { add("::/0") }
                                 put("action", "reject")
