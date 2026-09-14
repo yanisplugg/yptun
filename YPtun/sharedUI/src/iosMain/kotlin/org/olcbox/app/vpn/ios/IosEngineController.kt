@@ -605,6 +605,7 @@ internal class IosEngineController(
                         traffic = traffic,
                         routingProfile = null,
                         blockQuic = false,
+                        forceFamilyResolve = false,
                     )
                 }
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
@@ -619,6 +620,7 @@ internal class IosEngineController(
                         traffic = traffic,
                         routingProfile = null,
                         blockQuic = false,
+                        forceFamilyResolve = false,
                         chainViaDialerProxy = true,
                         directViaBase = true,
                     )
@@ -635,6 +637,7 @@ internal class IosEngineController(
                         traffic = traffic,
                         routingProfile = null,
                         blockQuic = false,
+                        forceFamilyResolve = false,
                     )
                 }
             }
@@ -656,7 +659,7 @@ internal class IosEngineController(
                         listenPort = listenPort, socksUsername = socksUsername, socksPassword = socksPassword,
                         routing = routing, traffic = traffic, profilesState = profilesState,
                         sniffOverrideDestination = true,
-                        preferTcpRemoteDns = chainProxy == null,
+                        preferTcpRemoteDns = false,
                         directViaBase = chainProxy != null,
                     )
                 }
@@ -725,7 +728,10 @@ internal class IosEngineController(
         sniffOverrideDestination = sniffOverrideDestination,
         preferTcpRemoteDns = preferTcpRemoteDns,
         directViaBase = directViaBase,
+        forceFamilyResolve = false,
+        allowLocalResolve = false,
         cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
+        logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
     )
 
     /**
