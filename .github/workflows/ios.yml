@@ -5,6 +5,8 @@
 # paid Apple Developer team can sign. The .ipa is for re-signing (your own team, AltStore/SideStore
 # with a paid account, TrollStore) and, above all, proves the whole iOS tree compiles — nothing iOS
 # can be built on the Windows machine the rest of the project is developed on.
+# When the Apple Distribution secrets are set, the same .ipa is also signed and sent to TestFlight;
+# CFBundleVersion = versionCode.run_number, so every run uploads a unique build without bumping versionCode.
 
 name: iOS
 
@@ -13,7 +15,6 @@ on:
   push:
     branches:
       - Beta
-      - feat/testflight-deploy
     paths:
       - ".github/workflows/ios.yml"
       - "YPtun/iosApp/**"
@@ -81,7 +82,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework
-          key: cores-ios-${{ hashFiles('sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'YPtun/sharedUI/src/commonMain/kotlin/org/olcbox/app/vpn/coreapi/**') }}
+          # Every Go module goes into the one gomobile bind (cores/, awgproxy/, wdtt/, olcrtc, …).
+          key: cores-ios-${{ hashFiles('**/*.go', '**/go.mod', '**/go.sum', 'YPtun/sharedUI/build.gradle.kts') }}
 
       - name: Go cores → Coreapi.xcframework
         if: steps.cache-cores.outputs.cache-hit != 'true'
@@ -115,7 +117,7 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/dd \
-            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$CODE" \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$CODE.$GITHUB_RUN_NUMBER" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build > build/xcodebuild.log 2>&1 && STATUS=0 || STATUS=$?
           # The full log is an artifact; here only what matters.
@@ -189,15 +191,16 @@ jobs:
 
           # Apple profiles contain wildcard networkextension capabilities (hotspot-provider, app-proxy, etc.)
           # and com.apple.token keychain group, which are rejected by App Store / TestFlight validation.
-          for ent in "$RUNNER_TEMP/app.entitlements" "$RUNNER_TEMP/tunnel.entitlements"; do
-            /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.networking.networkextension" "$ent" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add :com.apple.developer.networking.networkextension array" "$ent"
-            /usr/libexec/PlistBuddy -c "Add :com.apple.developer.networking.networkextension:0 string packet-tunnel-provider" "$ent"
+          # The widget starts/stops the VPN itself (NETunnelProviderManager), so it keeps packet-tunnel-provider
+          # whenever its profile grants Network Extensions at all.
+          for ent in "$RUNNER_TEMP/app.entitlements" "$RUNNER_TEMP/tunnel.entitlements" "$RUNNER_TEMP/widget.entitlements"; do
+            if /usr/libexec/PlistBuddy -c "Print :com.apple.developer.networking.networkextension" "$ent" >/dev/null 2>&1; then
+              /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.networking.networkextension" "$ent"
+              /usr/libexec/PlistBuddy -c "Add :com.apple.developer.networking.networkextension array" "$ent"
+              /usr/libexec/PlistBuddy -c "Add :com.apple.developer.networking.networkextension:0 string packet-tunnel-provider" "$ent"
+            fi
             /usr/libexec/PlistBuddy -c "Delete :keychain-access-groups:1" "$ent" 2>/dev/null || true
           done
-          # Widget does not use networkextension
-          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.networking.networkextension" "$RUNNER_TEMP/widget.entitlements" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Delete :keychain-access-groups:1" "$RUNNER_TEMP/widget.entitlements" 2>/dev/null || true
 
           # 6. Codesign frameworks
           if [ -d Payload/YPtun.app/Frameworks ]; then
