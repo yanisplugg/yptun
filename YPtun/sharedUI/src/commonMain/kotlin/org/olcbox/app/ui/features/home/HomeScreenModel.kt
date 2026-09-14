@@ -244,14 +244,16 @@ class HomeScreenViewModel(
         when (vpnManager.status.value) {
             VpnStatus.Connected,
             VpnStatus.Connecting,
-            VpnStatus.Reconnecting -> viewModelScope.launch {
-                _state.update { it.copy(isVpnLoading = true) }
+            VpnStatus.Reconnecting,
+            VpnStatus.Stopping -> viewModelScope.launch {
+                _state.update { it.copy(isVpnLoading = true, connectError = null) }
                 vpnManager.startVpn()
             }
 
-            VpnStatus.Disconnected,
-            VpnStatus.Stopping,
-            is VpnStatus.Error -> Unit
+            VpnStatus.Disconnected -> Unit
+            is VpnStatus.Error -> {
+                _state.update { it.copy(isVpnLoading = false) }
+            }
         }
     }
     private fun updateLocationConfig(block: (LocationConfig) -> LocationConfig) {

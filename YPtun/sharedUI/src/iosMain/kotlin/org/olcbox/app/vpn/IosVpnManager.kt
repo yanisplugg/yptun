@@ -25,6 +25,7 @@ import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ios.IosCoreBridge
@@ -153,19 +154,31 @@ class IosVpnManager(
                     // iOS invalidates the cached NETunnelProviderManager when the app is backgrounded,
                     // causing NEVPNErrorDomain error 2 on the next connect attempt.
                     manager = null
-                    val m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
-                    val connection = m.connection
+                    var m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
+                    var connection = m.connection
                     // A running tunnel keeps its old location; restart it on the new request.
                     if (connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
                         connection.status != platform.NetworkExtension.NEVPNStatusInvalid
                     ) {
                         connection.stopVPNTunnel()
                         awaitDisconnected(connection)
+                        // Reload manager from system preferences so the connection state is clean after stop.
+                        suspendCancellableCoroutine<Unit> { cont ->
+                            m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
+                        }
+                        connection = m.connection
                     }
                     memScoped {
                         val err = alloc<ObjCObjectVar<NSError?>>()
                         if (!connection.startVPNTunnelAndReturnError(err.ptr)) {
-                            error(err.value?.localizedDescription ?: "VPN start failed")
+                            // Brief retry if connection was still transitioning in background
+                            delay(500)
+                            suspendCancellableCoroutine<Unit> { cont ->
+                                m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
+                            }
+                            if (!m.connection.startVPNTunnelAndReturnError(err.ptr)) {
+                                error(err.value?.localizedDescription ?: "VPN start failed")
+                            }
                         }
                     }
                 }
@@ -206,16 +219,38 @@ class IosVpnManager(
         val method = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD"
         when {
             config.engine == EngineType.Stealth -> rtcPing(config)
-            config.engine == EngineType.VkTurn || config.engine == EngineType.MasterDns -> tunnelPing()
+            config.engine == EngineType.VkTurn -> {
+                if (status.value == VpnStatus.Connected) {
+                    val ms = tunnelPing()
+                    if (ms != null && ms > 0) return@withContext ms
+                }
+                vkTurnProbePing(config)
+            }
+            config.engine == EngineType.MasterDns -> {
+                if (status.value == VpnStatus.Connected) {
+                    val ms = tunnelPing()
+                    if (ms != null && ms > 0) return@withContext ms
+                }
+                masterDnsProbePing(config)
+            }
             profile == null -> null
             behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
                 val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
                 if (ms > 0) ms else null
             }
-            profile.type == ProxyProfile.TYPE_AMNEZIAWG ->
-                profile.awgConfig.takeIf { it.isNotBlank() }
-                    ?.let { core.awgMeasureDelay(it, behavior.effectivePingUrl(), method, PING_TIMEOUT_MS) }
-                    ?.takeIf { it > 0 }
+            profile.type == ProxyProfile.TYPE_AMNEZIAWG -> {
+                if (status.value == VpnStatus.Connected) {
+                    val ms = tunnelPing()
+                    if (ms != null && ms > 0) return@withContext ms
+                }
+                val awgConfig = profile.awgConfig.orEmpty()
+                val probeMs = if (awgConfig.isNotBlank()) core.awgProbe(awgConfig) else -1L
+                if (probeMs > 0) probeMs
+                else {
+                    val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
+                    if (ms > 0) ms else null
+                }
+            }
             else -> {
                 proxyUrlTest(profile, behavior.effectivePingUrl(), method)?.takeIf { it > 0 }
                     ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
@@ -223,14 +258,51 @@ class IosVpnManager(
         }
     }
 
+    private suspend fun vkTurnProbePing(config: LocationConfig): Long? = withContext(Dispatchers.Default) {
+        val vk = config.vkturn
+        val draft = VkTurnComposer.decompose(config.vkturn, config.proxy)
+        val host = draft.peerHost.ifBlank { config.proxy?.server.orEmpty() }.ifBlank { vk?.wdttPeer.orEmpty() }
+        val port = draft.peerPort.toIntOrNull() ?: config.proxy?.serverPort ?: vk?.wdttPort?.takeIf { it > 0 } ?: 0
+
+        val awgConf = config.proxy?.awgConfig.orEmpty()
+        if (awgConf.isNotBlank()) {
+            val probeMs = runCatching { core.awgProbe(awgConf) }.getOrDefault(-1L)
+            if (probeMs > 0) return@withContext probeMs
+        }
+
+        if (host.isNotBlank() && port > 0) {
+            val ms = core.tcpPing(host, port, PING_TIMEOUT_MS)
+            if (ms > 0) return@withContext ms
+        }
+        if (host.isNotBlank()) {
+            val ms443 = core.tcpPing(host, 443, PING_TIMEOUT_MS)
+            if (ms443 > 0) return@withContext ms443
+            val ms80 = core.tcpPing(host, 80, PING_TIMEOUT_MS)
+            if (ms80 > 0) return@withContext ms80
+        }
+        null
+    }
+
+    private suspend fun masterDnsProbePing(config: LocationConfig): Long? = withContext(Dispatchers.Default) {
+        val md = config.masterDns
+        val resolver = md?.resolverList()?.firstOrNull() ?: return@withContext null
+        val host = resolver.substringBefore(':')
+        val port = resolver.substringAfter(':', "53").toIntOrNull() ?: 53
+        val ms = core.tcpPing(host, port, PING_TIMEOUT_MS)
+        if (ms > 0) ms else null
+    }
+
     private suspend fun tunnelPing(): Long? = withContext(Dispatchers.Default) {
         if (status.value != VpnStatus.Connected) return@withContext null
-        val ms = core.tcpPing("1.1.1.1", 443, PING_TIMEOUT_MS)
-        if (ms > 0) return@withContext ms
-        val msDns = core.tcpPing("1.1.1.1", 53, PING_TIMEOUT_MS)
-        if (msDns > 0) return@withContext msDns
-        val msYandex = core.tcpPing("77.88.8.8", 443, PING_TIMEOUT_MS)
-        if (msYandex > 0) msYandex else null
+        val msYandexDns = core.tcpPing("77.88.8.8", 53, PING_TIMEOUT_MS)
+        if (msYandexDns > 0) return@withContext msYandexDns
+        val msGoogleDns = core.tcpPing("8.8.8.8", 53, PING_TIMEOUT_MS)
+        if (msGoogleDns > 0) return@withContext msGoogleDns
+        val msYa = core.tcpPing("ya.ru", 80, PING_TIMEOUT_MS)
+        if (msYa > 0) return@withContext msYa
+        val msCf = core.tcpPing("1.1.1.1", 80, PING_TIMEOUT_MS)
+        if (msCf > 0) return@withContext msCf
+        null
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? = ping(locationConfig)

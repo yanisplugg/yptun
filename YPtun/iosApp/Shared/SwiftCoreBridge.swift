@@ -76,6 +76,9 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
     func awgMeasureDelay(iniConfig: String, url: String, method: String, timeoutMs: Int32) -> Int64 {
         CoreapiAwgMeasureDelay(iniConfig, url, method, Int(timeoutMs))
     }
+    func awgProbe(iniConfig: String) -> Int64 {
+        CoreapiAwgProbe(iniConfig)
+    }
 
     func ftVersion() -> String { CoreapiFtVersion() }
     func ftStart(uri: String, listenAddr: String, vkLink: String, nStreams: Int32) -> String {

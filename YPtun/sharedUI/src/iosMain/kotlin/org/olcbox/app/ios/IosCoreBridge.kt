@@ -29,6 +29,7 @@ interface IosCoreBridge {
     fun awgStop()
     fun awgRunning(): Boolean
     fun awgMeasureDelay(iniConfig: String, url: String, method: String, timeoutMs: Int): Long
+    fun awgProbe(iniConfig: String): Long
 
     fun ftVersion(): String
     fun ftStart(uri: String, listenAddr: String, vkLink: String, nStreams: Int): String

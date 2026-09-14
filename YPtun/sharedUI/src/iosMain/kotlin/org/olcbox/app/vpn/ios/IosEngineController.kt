@@ -101,6 +101,7 @@ internal class IosEngineController(
         socksPassword: String,
         deviceId: String,
     ) {
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
         startOlcRtc(config, listenPort, socksUsername, socksPassword, deviceId)
         log("olcRTC ready on 127.0.0.1:$listenPort")
@@ -170,6 +171,7 @@ internal class IosEngineController(
             } else second
         }
 
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
         if (chained) {
@@ -376,6 +378,7 @@ internal class IosEngineController(
         masterDnsProxyActive = useProxy
         val masterDnsPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
 
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
         val masterDnsAddr = "$LISTEN_HOST:$masterDnsPort"
@@ -518,6 +521,7 @@ internal class IosEngineController(
         }
         check(vk != null && vk.isComplete() && outboundConfigured) { "VK-TURN not configured" }
 
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
 
         val listenAddr = "127.0.0.1:${vk.listenPort}"
@@ -795,6 +799,7 @@ internal class IosEngineController(
         if (profile.type != ProxyProfile.TYPE_AMNEZIAWG) return profile
         runCatching { core.awgStop() }
         val port = awgLocalPort(socksPort)
+        IosNet.awaitLocalPortClosed(port, 3000)
         val listen = "127.0.0.1:$port"
         log("Starting AmneziaWG SOCKS on $listen")
         val conf = ensureAllowedIpsFullRoute(profile.awgConfig)

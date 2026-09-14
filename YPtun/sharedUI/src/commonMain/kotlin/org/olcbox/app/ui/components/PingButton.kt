@@ -60,28 +60,13 @@ fun PingButton(
 
     val descriptionText = when {
         pingState is PingState.Success -> "${s.notifConnected} ${(pingState as PingState.Success).latency}ms"
-        isVkTurn -> "—"
         pingState is PingState.Error -> s.pingOffline
         pingState is PingState.Loading -> s.pingChecking
         else -> s.pingVerify
     }
 
     val stateIcon: @Composable () -> Unit = {
-        if (pingState is PingState.Success) {
-            Icon(
-                imageVector = Icons.Rounded.Check,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(24.dp)
-            )
-        } else if (isVkTurn) {
-            Text(
-                text = "—",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else when (pingState) {
+        when (pingState) {
             is PingState.Error -> Icon(
                 imageVector = Icons.Rounded.PriorityHigh,
                 contentDescription = null,
@@ -116,7 +101,7 @@ fun PingButton(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(enabled = !isVkTurn && pingState !is PingState.Loading) {
+            .clickable(enabled = pingState !is PingState.Loading) {
                 homeViewModel.viewModelScope.launch {
                     pingState = PingState.Loading
                     val config = configGetter()

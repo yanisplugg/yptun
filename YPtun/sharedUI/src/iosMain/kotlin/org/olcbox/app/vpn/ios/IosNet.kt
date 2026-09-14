@@ -48,4 +48,13 @@ internal object IosNet {
         }
         return false
     }
+
+    suspend fun awaitLocalPortClosed(port: Int, timeoutMs: Int = 3000): Boolean {
+        val deadline = TimeSource.Monotonic.markNow()
+        while (deadline.elapsedNow().inWholeMilliseconds < timeoutMs) {
+            if (!isLocalPortOpen(port)) return true
+            delay(50)
+        }
+        return !isLocalPortOpen(port)
+    }
 }
