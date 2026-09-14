@@ -648,9 +648,8 @@ object SingBoxConfig {
                     // back to IPv4. A hard RST ("reject" default) instead surfaced as ERR_CONNECTION_RESET
                     // on google.com (the app "jumped to DoH over IPv6" and got reset). Dropping silently
                     // makes the v6 attempt time out and the app retries on IPv4 — no leak, no reset.
-                    if (forceFamily || effectiveStrategy == "ipv4_only" || effectiveStrategy == "ipv6_only") {
-                        val dropFamilyStrategy = if (forceFamily) expertStrategy else effectiveStrategy
-                        when (dropFamilyStrategy) {
+                    if (forceFamily) {
+                        when (expertStrategy) {
                             "ipv4_only" -> addJsonObject {
                                 putJsonArray("ip_cidr") { add("::/0") }
                                 put("action", "reject")
@@ -942,12 +941,11 @@ object SingBoxConfig {
                     put("uuid", profile.uuid)
                     if (profile.flow.isNotBlank()) {
                         put("flow", profile.flow)
-                    } else {
-                        // xudp is only valid when flow is blank (non-vision).
-                        // Combining xudp with xtls-rprx-vision violates XTLS Vision framing
-                        // and crashes Xray-core / Remnawave servers.
-                        put("packet_encoding", "xudp")
                     }
+                    // xudp coexists with vision flow and is what makes UDP (DNS/QUIC) actually ride the
+                    // vless tunnel. Omitting it (the old "flow XOR xudp") left UDP DNS over the proxy
+                    // stalling on desktop. xray-based vision servers speak xudp, so set it always.
+                    put("packet_encoding", "xudp")
                 }
 
                 ProxyProfile.TYPE_VMESS -> {
