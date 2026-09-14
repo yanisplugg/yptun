@@ -96,7 +96,8 @@ class IosTunnelSession(
                     user = user,
                     pass = pass,
                     tcpOnlyUdp = location.engine in TCP_ONLY_ENGINES,
-                    dropIpv6 = traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
+                    dropIpv6 = location.engine == EngineType.VkTurn ||
+                        traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
                     slowTunnel = location.engine in SLOW_ENGINES,
                 )
             }

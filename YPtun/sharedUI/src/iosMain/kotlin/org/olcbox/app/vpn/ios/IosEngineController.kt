@@ -706,7 +706,7 @@ internal class IosEngineController(
         profilesState: RoutingProfilesState,
         wireguardBase: ProxyProfile? = null,
         chainPort: Int? = null,
-        sniffOverrideDestination: Boolean = false,
+        sniffOverrideDestination: Boolean = true,
         preferTcpRemoteDns: Boolean = false,
         directViaBase: Boolean = false,
     ): String = SingBoxConfig.build(
@@ -797,11 +797,34 @@ internal class IosEngineController(
         val port = awgLocalPort(socksPort)
         val listen = "127.0.0.1:$port"
         log("Starting AmneziaWG SOCKS on $listen")
-        core.awgStart(profile.awgConfig, listen).orThrow("AmneziaWG start failed")
+        val conf = ensureAllowedIpsFullRoute(profile.awgConfig)
+        core.awgStart(conf, listen).orThrow("AmneziaWG start failed")
         if (!IosNet.awaitLocalPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("AmneziaWG SOCKS port $port did not open")
         }
         return localSocksProfile(profile.tag.ifBlank { "AmneziaWG" }, port)
+    }
+
+    /** Ensures AllowedIPs = 0.0.0.0/0, ::/0 in the WireGuard/AmneziaWG INI so cryptokey routing never drops internet traffic. */
+    private fun ensureAllowedIpsFullRoute(ini: String): String {
+        if (ini.isBlank()) return ini
+        var hasAllowedIps = false
+        val lines = ini.lineSequence().map { line ->
+            val trim = line.trim()
+            if (trim.startsWith("allowedips", ignoreCase = true) && '=' in trim) {
+                hasAllowedIps = true
+                "AllowedIPs = 0.0.0.0/0, ::/0"
+            } else line
+        }.toMutableList()
+        if (!hasAllowedIps) {
+            val peerIdx = lines.indexOfLast { it.trim().equals("[peer]", ignoreCase = true) }
+            if (peerIdx >= 0) {
+                lines.add(peerIdx + 1, "AllowedIPs = 0.0.0.0/0, ::/0")
+            } else {
+                lines.add("AllowedIPs = 0.0.0.0/0, ::/0")
+            }
+        }
+        return lines.joinToString("\n")
     }
 
     /** A SOCKS5 outbound to a loopback listener one of our cores serves (AmneziaWG, qWDTT Raw). */
