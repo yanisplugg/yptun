@@ -30,6 +30,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
+import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
 import org.olcbox.app.data.identity.DeviceIdentityProvider
@@ -1182,6 +1183,9 @@ class LocationsRepositoryImpl(
         // VK-TURN share links (freeturn://): WireGuard-over-VK locations.
         parseFreeturnText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
+        // qWDTT quick links (qwdtt://config?…): VK-TURN locations on the WDTT core.
+        parseQwdttText(linkText, subscriptionUrl)?.let { linkBundles += it }
+
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
             // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
@@ -1822,6 +1826,44 @@ class LocationsRepositoryImpl(
             location = location,
             subscriptionUrl = subscriptionUrl,
         )
+    }
+
+    /**
+     * Parses every [QwdttUriParser.SCHEME] quick link into a WDTT-core [EngineType.VkTurn] location.
+     * The link carries the VK hashes, so the location is immediately connectable (no vkLink prompt);
+     * the WireGuard config is fetched from the wdtt-server at runtime, so there is no proxy profile.
+     */
+    private fun parseQwdttText(
+        text: String,
+        subscriptionUrl: String? = null
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith(QwdttUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { QwdttUriParser.parse(it) }
+            .map { link ->
+                val name = link.name.ifBlank { "qWDTT ${link.peer}" }
+                val location = LocationConfig(
+                    name = name,
+                    engine = EngineType.VkTurn,
+                    vkturn = VkTurnConfig(
+                        core = VkTurnConfig.CORE_WDTT,
+                        wdttPeer = link.peer,
+                        wdttPassword = link.password,
+                        wdttWorkers = link.workers,
+                        vkLink = link.hashes,
+                        listenPort = link.listenPort.takeIf { it in 1..65535 }
+                            ?: LocationConfig.DEFAULT_FREETURN_PORT,
+                    ),
+                ).normalized()
+                val base = link.peer.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val storageId = uniqueStorageId("imported_qwdtt_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
 
     /** Parses a whole AmneziaWG wg-quick .conf into a [EngineType.Standard] location. */

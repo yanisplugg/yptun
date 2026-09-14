@@ -1,5 +1,6 @@
 package org.olcbox.app.data.share
 
+import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
@@ -9,9 +10,12 @@ object ConfigShareService {
 
     fun olcRtcUri(config: LocationConfig): String {
         val normalized = config.normalized()
-        // VK-TURN locations share their freeturn:// link verbatim (it carries the WG config).
+        // VK-TURN locations share their freeturn:// link verbatim (it carries the WG config); the WDTT
+        // core has no freeturn:// link, so re-emit the wdtt-server's qwdtt:// quick link instead.
         if (normalized.engine == EngineType.VkTurn) {
-            return normalized.vkturn?.uri.orEmpty()
+            val vk = normalized.vkturn
+            if (vk?.usesWdtt() == true) return QwdttUriParser.compose(normalized.name, vk)
+            return vk?.uri.orEmpty()
         }
         // Standard/Chain run a sing-box/Xray proxy — share the matching proxy link (vless/…/awg),
         // NOT an olcrtc:// link (which only makes sense for the Stealth olcRTC engine).
