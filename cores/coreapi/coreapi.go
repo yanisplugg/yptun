@@ -10,9 +10,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +52,20 @@ func PushLog(tag, line string) {
 type tagWriter struct{ tag string }
 
 func (w tagWriter) WriteLog(line string) { PushLog(w.tag, line) }
+
+type wdttLogBridge struct{}
+
+func (wdttLogBridge) Write(p []byte) (int, error) {
+	line := strings.TrimSpace(string(p))
+	if line != "" {
+		PushLog("wdtt", line)
+	}
+	return len(p), nil
+}
+
+func init() {
+	log.SetOutput(wdttLogBridge{})
+}
 
 // PollLog returns the next buffered log line, waiting up to timeoutMs; "" when none arrived.
 func PollLog(timeoutMs int) string {

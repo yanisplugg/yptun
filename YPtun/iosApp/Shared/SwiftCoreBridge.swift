@@ -30,6 +30,10 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
 
     func tcpPing(host: String, port: Int32, timeoutMs: Int32) -> Int64 {
         guard !host.isEmpty, port > 0, port <= 65535 else { return -1 }
+        let h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "0.0.0.0" {
+            return -1
+        }
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
         hints.ai_socktype = SOCK_STREAM

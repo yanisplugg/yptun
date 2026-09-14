@@ -61,7 +61,10 @@ func (t tunPackets) Read(p []byte) (int, error) {
 }
 
 func (t tunPackets) Write(p []byte) (int, error) {
-	if _, err := t.dev.Write([][]byte{p}, 0); err != nil {
+	// Must copy: gVisor's InjectInbound takes a view of the buffer asynchronously,
+	// while the dispatcher's writeLoop recycles p immediately via putPktBuf.
+	cp := append([]byte(nil), p...)
+	if _, err := t.dev.Write([][]byte{cp}, 0); err != nil {
 		return 0, err
 	}
 	return len(p), nil
@@ -140,10 +143,12 @@ func handleRawSocks(client net.Conn, tnet *netstack.Net) {
 		remote, err := tnet.DialContext(ctx, "tcp", target)
 		cancel()
 		if err != nil {
+			log.Printf("[RAW-SOCKS] CONNECT to %s failed: %v", target, err)
 			_ = writeRawSocksReply(client, 0x05)
 			return
 		}
 		defer remote.Close()
+		log.Printf("[RAW-SOCKS] CONNECT to %s established", target)
 		if writeRawSocksReply(client, 0x00) != nil {
 			return
 		}

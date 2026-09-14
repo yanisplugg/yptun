@@ -212,22 +212,28 @@ class IosVpnManager(
         }
     }
 
+    private fun isLoopbackHost(host: String): Boolean {
+        val h = host.trim().lowercase()
+        return h.isEmpty() || h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "0.0.0.0"
+    }
+
     override suspend fun ping(locationConfig: LocationConfig): Long? = withContext(Dispatchers.Default) {
         val config = locationConfig.normalized()
         val behavior = IosSharedStore.loadAppBehavior()
         val profile = config.proxy
         val method = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD"
+        val isActiveLocation = locationsRepository.getActiveLocation()?.id == locationConfig.id
         when {
             config.engine == EngineType.Stealth -> rtcPing(config)
             config.engine == EngineType.VkTurn -> {
-                if (status.value == VpnStatus.Connected) {
+                if (status.value == VpnStatus.Connected && isActiveLocation) {
                     val ms = tunnelPing()
                     if (ms != null && ms > 0) return@withContext ms
                 }
                 vkTurnProbePing(config)
             }
             config.engine == EngineType.MasterDns -> {
-                if (status.value == VpnStatus.Connected) {
+                if (status.value == VpnStatus.Connected && isActiveLocation) {
                     val ms = tunnelPing()
                     if (ms != null && ms > 0) return@withContext ms
                 }
@@ -235,25 +241,32 @@ class IosVpnManager(
             }
             profile == null -> null
             behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
-                val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
-                if (ms > 0) ms else null
+                if (isLoopbackHost(profile.server)) null
+                else {
+                    val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
+                    if (ms > 0) ms else null
+                }
             }
             profile.type == ProxyProfile.TYPE_AMNEZIAWG -> {
-                if (status.value == VpnStatus.Connected) {
+                if (status.value == VpnStatus.Connected && isActiveLocation) {
                     val ms = tunnelPing()
                     if (ms != null && ms > 0) return@withContext ms
                 }
                 val awgConfig = profile.awgConfig.orEmpty()
                 val probeMs = if (awgConfig.isNotBlank()) core.awgProbe(awgConfig) else -1L
                 if (probeMs > 0) probeMs
+                else if (isLoopbackHost(profile.server)) null
                 else {
                     val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
                     if (ms > 0) ms else null
                 }
             }
             else -> {
-                proxyUrlTest(profile, behavior.effectivePingUrl(), method)?.takeIf { it > 0 }
-                    ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
+                if (isLoopbackHost(profile.server)) null
+                else {
+                    proxyUrlTest(profile, behavior.effectivePingUrl(), method)?.takeIf { it > 0 }
+                        ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
+                }
             }
         }
     }
@@ -261,7 +274,20 @@ class IosVpnManager(
     private suspend fun vkTurnProbePing(config: LocationConfig): Long? = withContext(Dispatchers.Default) {
         val vk = config.vkturn
         val draft = VkTurnComposer.decompose(config.vkturn, config.proxy)
-        val host = draft.peerHost.ifBlank { config.proxy?.server.orEmpty() }.ifBlank { vk?.wdttPeer.orEmpty() }
+        var host = draft.peerHost
+        if (isLoopbackHost(host)) host = ""
+        if (host.isBlank()) {
+            val srv = config.proxy?.server.orEmpty()
+            if (!isLoopbackHost(srv)) host = srv
+        }
+        if (host.isBlank()) {
+            val peer = vk?.wdttPeer.orEmpty()
+            if (!isLoopbackHost(peer)) host = peer
+        }
+        if (host.isBlank() && vk?.uri?.isNotBlank() == true) {
+            host = runCatching { FreeturnUriParser.parse(vk.uri).turnHost }.getOrNull().orEmpty()
+            if (isLoopbackHost(host)) host = ""
+        }
         val port = draft.peerPort.toIntOrNull() ?: config.proxy?.serverPort ?: vk?.wdttPort?.takeIf { it > 0 } ?: 0
 
         val awgConf = config.proxy?.awgConfig.orEmpty()
@@ -270,11 +296,11 @@ class IosVpnManager(
             if (probeMs > 0) return@withContext probeMs
         }
 
-        if (host.isNotBlank() && port > 0) {
+        if (host.isNotBlank() && !isLoopbackHost(host) && port > 0) {
             val ms = core.tcpPing(host, port, PING_TIMEOUT_MS)
             if (ms > 0) return@withContext ms
         }
-        if (host.isNotBlank()) {
+        if (host.isNotBlank() && !isLoopbackHost(host)) {
             val ms443 = core.tcpPing(host, 443, PING_TIMEOUT_MS)
             if (ms443 > 0) return@withContext ms443
             val ms80 = core.tcpPing(host, 80, PING_TIMEOUT_MS)
