@@ -732,8 +732,6 @@ internal class IosEngineController(
         sniffOverrideDestination = sniffOverrideDestination,
         preferTcpRemoteDns = preferTcpRemoteDns,
         directViaBase = directViaBase,
-        forceFamilyResolve = false,
-        allowLocalResolve = false,
         cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
         logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
     )

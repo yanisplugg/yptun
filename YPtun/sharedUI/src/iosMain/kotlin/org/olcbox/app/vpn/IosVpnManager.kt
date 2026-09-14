@@ -25,6 +25,7 @@ import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.repository.LocationsRepository
@@ -222,7 +223,7 @@ class IosVpnManager(
         val behavior = IosSharedStore.loadAppBehavior()
         val profile = config.proxy
         val method = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD"
-        val isActiveLocation = locationsRepository.getActiveLocation()?.id == locationConfig.id
+        val isActiveLocation = locationsRepository.getActiveLocationId() == locationConfig.id
         when {
             config.engine == EngineType.Stealth -> rtcPing(config)
             config.engine == EngineType.VkTurn -> {
