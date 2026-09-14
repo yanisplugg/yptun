@@ -467,8 +467,7 @@ object VkTurnComposer {
             when (key) {
                 "dns" -> result = result.copy(wgDns = value)
                 "persistentkeepalive" -> result = result.copy(wgKeepalive = value)
-                // Client WireGuard/AmneziaWG must always route 0.0.0.0/0, ::/0 to avoid dropping internet traffic
-                "allowedips" -> result = result.copy(wgAllowedIps = "0.0.0.0/0, ::/0")
+                "allowedips" -> result = result.copy(wgAllowedIps = value)
                 // [Interface] PrivateKey, [Peer] PublicKey (the peer's), [Interface] Address/MTU.
                 "privatekey" -> result = result.copy(wgPrivateKey = value)
                 "publickey" -> result = result.copy(wgPeerPublicKey = value)
@@ -505,7 +504,7 @@ object VkTurnComposer {
         appendLine("[Peer]")
         appendLine("PublicKey = ${draft.wgPeerPublicKey.trim()}")
         appendLine("Endpoint = 127.0.0.1:$listenPort")
-        appendLine("AllowedIPs = 0.0.0.0/0, ::/0")
+        appendLine("AllowedIPs = ${draft.wgAllowedIps.trim().ifBlank { "0.0.0.0/0" }}")
         draft.wgKeepalive.trim().takeIf { it.isNotBlank() }?.let { appendLine("PersistentKeepalive = $it") }
     }
 
