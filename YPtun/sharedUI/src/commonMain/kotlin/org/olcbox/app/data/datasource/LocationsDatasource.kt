@@ -7,6 +7,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLParameter
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -189,12 +190,13 @@ class LocationsRepositoryImpl(
     // JSON-decodes + normalizes the whole bundle; app startup alone fires many reads (active config,
     // the full location list, subscription backfill, expiry-notify, provider-report), so with hundreds
     // of configs that repeated decode is what makes the list appear with a lag. The bundle is read ONLY
-    // via getBundleUnlocked and written ONLY via saveBundleUnlocked, both always under [mutationMutex]
-    // (which also gives the memory visibility), and the cache is keyed on [LocationsDataSource.bundleVersionToken]
+    // via getBundleUnlocked and written ONLY via saveBundleUnlocked, both always under [mutationMutex];
+    // getBundle's lock-free fast path reads it too, so bundle and token live in ONE @Volatile pair —
+    // never a new bundle with an old token. The cache is keyed on [LocationsDataSource.bundleVersionToken]
     // so a write from ANY instance (the VPN service keeps its own repository) invalidates it — the
     // service can never connect with a stale config. A null token disables the cache (always reload).
-    private var cachedBundle: LocationBundleV4? = null
-    private var cachedToken: Long? = null
+    @Volatile
+    private var cached: Pair<LocationBundleV4, Long?>? = null
     private val _changes = MutableStateFlow(0L)
     override val changes: StateFlow<Long> = _changes.asStateFlow()
 
@@ -207,10 +209,9 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun getBundle(): LocationBundleV4 {
-        val token = dataSource.bundleVersionToken()
-        cachedBundle?.let { cached ->
-            if (token != null && token == cachedToken) return cached
-        }
+        // Fast path without the mutex: a cold start must not wait behind a long mutation
+        // (a subscription refresh) just to paint an unchanged bundle.
+        cachedFor(dataSource.bundleVersionToken())?.let { return it }
         return mutationMutex.withLock {
             getBundleUnlocked()
         }
@@ -224,9 +225,7 @@ class LocationsRepositoryImpl(
 
     private suspend fun getBundleUnlocked(): LocationBundleV4 {
         val token = dataSource.bundleVersionToken()
-        cachedBundle?.let { cached ->
-            if (token != null && token == cachedToken) return cached
-        }
+        cachedFor(token)?.let { return it }
 
         // Normalization happens HERE (the repository is the single read funnel), so the platform
         // datasources do raw IO + decode only and we never pay a double normalize+filter+dedup pass over
@@ -251,9 +250,11 @@ class LocationsRepositoryImpl(
 
     /** Stores [bundle] as the in-memory cache under its [token] (null token = effectively uncached). */
     private fun cacheBundle(bundle: LocationBundleV4, token: Long?) {
-        cachedBundle = bundle
-        cachedToken = token
+        cached = bundle to token
     }
+
+    private fun cachedFor(token: Long?): LocationBundleV4? =
+        cached?.takeIf { token != null && it.second == token }?.first
 
     override suspend fun saveBundle(bundle: LocationBundleV4) {
         mutationMutex.withLock {
