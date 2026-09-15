@@ -21,9 +21,9 @@ internal object IosGeoAssets {
     private const val MIN_DAT_BYTES = 64L * 1024
 
     private const val DEFAULT_GEOIP_URL =
-        "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
+        "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat"
     private const val DEFAULT_GEOSITE_URL =
-        "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
+        "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat"
 
     val assetDir: String by lazy {
         IosSharedStore.path("geo").also {

@@ -553,18 +553,28 @@ object XrayConfig {
             val adBlockRule = if (routing.blockAds) buildJsonObject {
                 put("type", "field")
                 putJsonArray("domain") {
-                    if (hasGeoAssets) {
-                        add("geosite:category-ads-all")
-                    } else {
-                        add("domain:doubleclick.net")
-                        add("domain:googlesyndication.com")
-                        add("domain:googleadservices.com")
-                        add("domain:adservice.google.com")
-                        add("domain:an.yandex.ru")
-                        add("domain:pagead2.googlesyndication.com")
-                        add("domain:adcolony.com")
-                        add("domain:unityads.unity3d.com")
-                    }
+                    add("domain:doubleclick.net")
+                    add("domain:googlesyndication.com")
+                    add("domain:googleadservices.com")
+                    add("domain:adservice.google.com")
+                    add("domain:pagead2.googlesyndication.com")
+                    add("domain:an.yandex.ru")
+                    add("domain:admob.com")
+                    add("domain:adcolony.com")
+                    add("domain:unityads.unity3d.com")
+                    add("domain:applovin.com")
+                    add("domain:vungle.com")
+                    add("domain:ironsource.com")
+                    add("domain:chartboost.com")
+                    add("domain:advertising.apple.com")
+                    add("domain:ads.google.com")
+                    add("domain:ads.youtube.com")
+                    add("domain:adguard.com")
+                    add("domain:adform.net")
+                    add("domain:adnxs.com")
+                    add("domain:criteo.com")
+                    add("domain:popads.net")
+                    add("domain:propellerads.com")
                 }
                 put("outboundTag", "block")
             } else null
@@ -626,24 +636,17 @@ object XrayConfig {
                     add("domain:tele2.ru")
                     add("domain:rostelecom.ru")
                     add("domain:rt.ru")
-                    if (hasGeoAssets) {
-                        add("geosite:ru")
-                    }
                 }
                 put("outboundTag", "direct")
             } else null
-            val bypassRussiaIpRule = if (routing.bypassRussia && hasGeoAssets) buildJsonObject {
-                put("type", "field")
-                putJsonArray("ip") { add("geoip:ru") }
-                put("outboundTag", "direct")
-            } else null
+            val bypassRussiaIpRule = null
             putJsonObject("routing") {
                 if (routingProfile != null) {
                     // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
                     // blocklist (item 5): the toggles run alongside the profile, not instead of it.
                     val base = XrayRouting.routingObject(routingProfile)
                     val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
-                    val strategy = if (forceFamily || (hasGeoAssets && routing.bypassRussia)) JsonPrimitive("IPIfNonMatch") else baseStrategy
+                    val strategy = if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy
                     put("domainStrategy", strategy)
                     putJsonArray("rules") {
                         // Loopback relay → xhttp main, before anything that could drop/redirect it.
@@ -664,7 +667,7 @@ object XrayConfig {
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
-                    put("domainStrategy", if (forceFamily || (hasGeoAssets && routing.bypassRussia)) "IPIfNonMatch" else "AsIs")
+                    put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }

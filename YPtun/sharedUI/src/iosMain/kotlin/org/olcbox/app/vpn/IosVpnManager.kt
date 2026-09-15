@@ -16,12 +16,19 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
@@ -131,6 +138,11 @@ class IosVpnManager(
                 ?.takeIf { it.isComplete() }
                 ?.let { runCatching { publishRequest(it) } }
             startLogTail()
+            locationsRepository.changes.collect {
+                locationsRepository.getActiveLocation()?.location?.normalized()
+                    ?.takeIf { it.isComplete() }
+                    ?.let { runCatching { publishRequest(it) } }
+            }
         }
     }
 
@@ -248,7 +260,7 @@ class IosVpnManager(
         val profile = config.proxy
         val method = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD"
         val isActiveLocation = locationsRepository.getActiveLocationId() == locationConfig.id
-        when {
+        val pingMs = when {
             config.engine == EngineType.Stealth -> rtcPing(config)
             config.engine == EngineType.VkTurn -> {
                 if (status.value == VpnStatus.Connected && isActiveLocation) {
@@ -294,6 +306,10 @@ class IosVpnManager(
                 }
             }
         }
+        if (pingMs != null && pingMs > 0 && isActiveLocation) {
+            updateWidgetPing(pingMs)
+        }
+        pingMs
     }
 
     private suspend fun vkTurnProbePing(config: LocationConfig): Long? = withContext(Dispatchers.Default) {
@@ -403,17 +419,51 @@ class IosVpnManager(
      * both in the App Group container.
      */
     private suspend fun publishRequest(location: LocationConfig) {
-        val request = IosTunnelRequest(location, locationsRepository.getDeviceIdentity())
+        val deviceId = locationsRepository.getDeviceIdentity()
+        val request = IosTunnelRequest(location, deviceId)
         IosSharedStore.writeText(
             IosTunnelSession.REQUEST_FILE,
             IosTunnelSession.json.encodeToString(IosTunnelRequest.serializer(), request)
         )
+        val routing = IosSharedStore.loadRouting()
+        val bundle = runCatching { locationsRepository.getBundle() }.getOrNull()
+        val items = bundle?.locations?.mapNotNull { entry ->
+            val loc = entry.location.normalized()
+            if (!loc.isComplete()) return@mapNotNull null
+            val req = IosTunnelRequest(loc, deviceId)
+            val reqJson = IosTunnelSession.json.encodeToString(IosTunnelRequest.serializer(), req)
+            buildJsonObject {
+                put("id", JsonPrimitive(entry.storageId))
+                put("name", JsonPrimitive(loc.displayName()))
+                put("ping", JsonPrimitive(entry.ping ?: -1L))
+                put("requestJson", JsonPrimitive(reqJson))
+            }
+        } ?: emptyList()
+
+        val pingMs = locationsRepository.getActiveLocation()?.ping ?: -1L
         IosSharedStore.writeText(
             WIDGET_FILE,
-            kotlinx.serialization.json.buildJsonObject {
-                put("name", kotlinx.serialization.json.JsonPrimitive(location.displayName()))
+            buildJsonObject {
+                put("id", JsonPrimitive(location.id))
+                put("name", JsonPrimitive(location.displayName()))
+                put("ping", JsonPrimitive(pingMs))
+                put("bypassRussia", JsonPrimitive(routing.bypassRussia))
+                put("locations", JsonArray(items))
             }.toString()
         )
+    }
+
+    private fun updateWidgetPing(pingMs: Long) {
+        val current = IosSharedStore.readText(WIDGET_FILE) ?: return
+        val root = runCatching { Json.parseToJsonElement(current).jsonObject }.getOrNull() ?: return
+        val updated = buildJsonObject {
+            root.forEach { (k, v) ->
+                if (k == "ping") put(k, JsonPrimitive(pingMs))
+                else put(k, v)
+            }
+            if (!root.containsKey("ping")) put("ping", JsonPrimitive(pingMs))
+        }
+        IosSharedStore.writeText(WIDGET_FILE, updated.toString())
     }
 
     private suspend fun rtcPing(config: LocationConfig): Long? =
@@ -495,6 +545,13 @@ class IosVpnManager(
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
                 setStatus(VpnStatus.Connected)
                 triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
+                scope.launch {
+                    delay(1500)
+                    val ms = tunnelPing()
+                    if (ms != null && ms > 0) {
+                        updateWidgetPing(ms)
+                    }
+                }
             }
             NEVPNStatusReasserting -> setStatus(VpnStatus.Reconnecting)
             NEVPNStatusDisconnecting -> setStatus(VpnStatus.Stopping)
