@@ -278,6 +278,9 @@ internal class IosEngineController(
                 )
             } else {
                 assetPath = ensureGeoAssetPath(routingProfile, profilesState)
+                if (assetPath.isEmpty() && (IosGeoAssets.hasGeosite() || IosGeoAssets.hasGeoip())) {
+                    assetPath = IosGeoAssets.assetDir
+                }
                 XrayConfig.build(
                     profile = effectiveProfile,
                     listenPort = listenPort,
@@ -299,14 +302,17 @@ internal class IosEngineController(
                         } ?: t
                     },
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
-                    hasGeoAssets = assetPath.isNotEmpty(),
+                    hasGeoAssets = assetPath.isNotEmpty() && IosGeoAssets.hasGeosite(),
                     secondProfile = secondProfile,
                     bypassLan = routing.bypassLan,
                     fakeDnsSpec = config.fakeDns,
                 )
             }
             log("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
-            if (assetPath.isNotEmpty()) core.xraySetAssetPath(assetPath)
+            if (assetPath.isNotEmpty()) {
+                log("Xray asset path set to $assetPath")
+                core.xraySetAssetPath(assetPath)
+            }
             core.xrayStart(json).orThrow("xray start failed")
         } else {
             if (isAwg) log("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4")
@@ -863,7 +869,7 @@ internal class IosEngineController(
     }
 
     private fun ensureGeoAssetPath(profile: RoutingProfile?, state: RoutingProfilesState): String {
-        if (IosGeoAssets.hasAssets()) return IosGeoAssets.assetDir
+        if (IosGeoAssets.hasGeosite() || IosGeoAssets.hasGeoip()) return IosGeoAssets.assetDir
         if (profile == null || !profile.needsGeoFiles()) return ""
         val ok = runCatching {
             IosGeoAssets.ensureAssets(profile.geoipUrl.ifBlank { state.geoipUrl }, profile.geositeUrl.ifBlank { state.geositeUrl })

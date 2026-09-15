@@ -35,8 +35,9 @@ internal object IosGeoAssets {
         (NSFileManager.defaultManager.attributesOfItemAtPath(path, null)?.get(NSFileSize) as? NSNumber)
             ?.longLongValue ?: 0L
 
-    fun hasAssets(): Boolean =
-        sizeOf("$assetDir/$GEOIP_FILE") >= MIN_DAT_BYTES && sizeOf("$assetDir/$GEOSITE_FILE") >= MIN_DAT_BYTES
+    fun hasGeosite(): Boolean = sizeOf("$assetDir/$GEOSITE_FILE") >= MIN_DAT_BYTES
+    fun hasGeoip(): Boolean = sizeOf("$assetDir/$GEOIP_FILE") >= MIN_DAT_BYTES
+    fun hasAssets(): Boolean = hasGeosite() && hasGeoip()
 
     /** True when both .dat files are present, downloading any that are missing. */
     fun ensureAssets(geoipUrl: String, geositeUrl: String): Boolean {

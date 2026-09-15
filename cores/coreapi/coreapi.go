@@ -149,9 +149,11 @@ var (
 func XraySetAssetPath(dir string) {
 	if dir == "" {
 		_ = os.Unsetenv("xray.location.asset")
+		_ = os.Unsetenv("XRAY_LOCATION_ASSET")
 		return
 	}
 	_ = os.Setenv("xray.location.asset", dir)
+	_ = os.Setenv("XRAY_LOCATION_ASSET", dir)
 }
 
 func XrayVersion() string { return core.Version() }
