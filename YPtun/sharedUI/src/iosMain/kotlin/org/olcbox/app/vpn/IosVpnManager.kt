@@ -435,18 +435,23 @@ class IosVpnManager(
             buildJsonObject {
                 put("id", JsonPrimitive(entry.storageId))
                 put("name", JsonPrimitive(loc.displayName()))
-                put("ping", JsonPrimitive(entry.ping ?: -1L))
                 put("requestJson", JsonPrimitive(reqJson))
             }
         } ?: emptyList()
 
-        val pingMs = locationsRepository.getActiveLocation()?.ping ?: -1L
+        val existingPing = runCatching {
+            IosSharedStore.readText(WIDGET_FILE)?.let {
+                val element = Json.parseToJsonElement(it).jsonObject["ping"] as? JsonPrimitive
+                element?.content?.toLongOrNull()
+            }
+        }.getOrNull() ?: -1L
+
         IosSharedStore.writeText(
             WIDGET_FILE,
             buildJsonObject {
                 put("id", JsonPrimitive(location.id))
                 put("name", JsonPrimitive(location.displayName()))
-                put("ping", JsonPrimitive(pingMs))
+                put("ping", JsonPrimitive(existingPing))
                 put("bypassRussia", JsonPrimitive(routing.bypassRussia))
                 put("locations", JsonArray(items))
             }.toString()
