@@ -28,9 +28,11 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ios.IosCoreBridge
 import org.olcbox.app.ui.components.ApplicationSocksProxySettings
+import org.olcbox.app.vpn.ios.IosSettingsController
 import org.olcbox.app.vpn.ios.IosSharedStore
 import org.olcbox.app.vpn.ios.IosTunnelRequest
 import org.olcbox.app.vpn.ios.IosTunnelSession
@@ -90,6 +92,25 @@ class IosVpnManager(
     // exposed to other apps, so these only survive as preferences for now.
     private val _socksProxySettings = MutableStateFlow(ApplicationSocksProxySettings())
     val socksProxySettings: StateFlow<ApplicationSocksProxySettings> = _socksProxySettings.asStateFlow()
+
+    /**
+     * Set once by the app's dependency container, after both objects exist (the controller is not a
+     * constructor argument so the tunnel-side manager stays usable without the UI layer). While it is
+     * null the routing-profile hooks below fall back to reading the shared store directly.
+     */
+    var settingsController: IosSettingsController? = null
+
+    /**
+     * Happ-style routing profiles. iOS persisted them all along (IosSharedStore.loadRoutingProfiles)
+     * but left the VpnManager defaults in place, so the per-location selector was always empty and
+     * `happ://routing/add/...` links silently did nothing.
+     */
+    override fun routingProfileChoices(): List<RoutingProfile> =
+        settingsController?.routingProfiles?.value?.profiles
+            ?: IosSharedStore.loadRoutingProfiles().profiles
+
+    override fun importRoutingProfileLink(link: String): Boolean =
+        settingsController?.importRoutingProfileLink(link) ?: false
 
     private var manager: NETunnelProviderManager? = null
     private var statusObserver: Any? = null

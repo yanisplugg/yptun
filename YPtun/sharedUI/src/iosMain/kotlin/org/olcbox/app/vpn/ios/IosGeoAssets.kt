@@ -46,6 +46,20 @@ internal object IosGeoAssets {
         return hasAssets()
     }
 
+    /** Total size of the stored databases, for the "updated, N MB" line in settings. */
+    fun totalBytes(): Long = sizeOf("$assetDir/$GEOIP_FILE") + sizeOf("$assetDir/$GEOSITE_FILE")
+
+    /**
+     * Drops the stored databases and re-downloads them — [ensureAssets] alone is a no-op once the
+     * files exist, so the settings screen's "update now" needs this to actually refetch (same trick
+     * as the desktop, which clears its asset dir first).
+     */
+    fun forceRefresh(geoipUrl: String, geositeUrl: String): Boolean {
+        NSFileManager.defaultManager.removeItemAtPath("$assetDir/$GEOIP_FILE", null)
+        NSFileManager.defaultManager.removeItemAtPath("$assetDir/$GEOSITE_FILE", null)
+        return ensureAssets(geoipUrl, geositeUrl)
+    }
+
     // NSData follows redirects (GitHub's latest/download → objects host) on its own.
     private fun download(url: String, target: String) {
         if (sizeOf(target) >= MIN_DAT_BYTES) return

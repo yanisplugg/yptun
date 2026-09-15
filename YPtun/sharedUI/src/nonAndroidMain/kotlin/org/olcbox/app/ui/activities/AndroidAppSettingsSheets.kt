@@ -698,14 +698,19 @@ private fun AppSettingsHubContent(
 
         Spacer(Modifier.height(8.dp))
 
-        SettingsSwitchRow(
-            title = s.dynamicTheme,
-            value = if (dynamicThemeEnabled) s.dynamicThemeOn else s.dynamicThemeOff,
-            icon = Icons.Outlined.Palette,
-            checked = dynamicThemeEnabled,
-            enabled = true,
-            onCheckedChange = onDynamicThemeChanged
-        )
+        // "Dynamic theme" derives the accent from the OS (Material You on Android, the system accent
+        // on Windows). iOS exposes no such color, so the switch would change nothing while hiding the
+        // swatches below it.
+        if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
+            SettingsSwitchRow(
+                title = s.dynamicTheme,
+                value = if (dynamicThemeEnabled) s.dynamicThemeOn else s.dynamicThemeOff,
+                icon = Icons.Outlined.Palette,
+                checked = dynamicThemeEnabled,
+                enabled = true,
+                onCheckedChange = onDynamicThemeChanged
+            )
+        }
 
         SettingsSwitchRow(
             title = s.lightTheme,
@@ -963,13 +968,17 @@ private fun ConnectionSettingsContent(
         Spacer(Modifier.height(20.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SettingsNavigationRow(
-                title = s.connectionMode,
-                value = selectedMode.settingsSummary(),
-                icon = selectedMode.icon(),
-                enabled = enabled,
-                onClick = onConnectionModeClick
-            )
+            // iOS runs one mode only — a Network Extension packet tunnel; there is no proxy-only
+            // mode to switch to, so the picker would offer a choice that does nothing.
+            if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
+                SettingsNavigationRow(
+                    title = s.connectionMode,
+                    value = selectedMode.settingsSummary(),
+                    icon = selectedMode.icon(),
+                    enabled = enabled,
+                    onClick = onConnectionModeClick
+                )
+            }
             SettingsNavigationRow(
                 title = s.socks5Proxy,
                 value = "${proxySettings.host}:${proxySettings.port}",
@@ -978,8 +987,9 @@ private fun ConnectionSettingsContent(
                 onClick = onProxySettingsClick
             )
             // Per-app routing needs the TUN owner to attribute traffic to processes: only sing-box's
-            // in-core TUN on Windows can. Linux's hev bridge and macOS's proxy mode silently ignored it.
-            if (org.olcbox.app.update.UpdatePlatform.current().os !in setOf("linux", "macos")) {
+            // in-core TUN on Windows can. Linux's hev bridge and macOS's proxy mode silently ignored it;
+            // iOS cannot enumerate installed apps at all (no PackageManager equivalent).
+            if (org.olcbox.app.update.UpdatePlatform.current().os !in setOf("linux", "macos", "ios")) {
                 SettingsNavigationRow(
                     title = s.splitTunneling,
                     value = splitTunnelSettings.settingsSummary(),
@@ -989,121 +999,126 @@ private fun ConnectionSettingsContent(
                 )
             }
 
-            RoutingToggleRow(
-                title = s.telegramProxyTitle,
-                subtitle = s.telegramProxySubtitle,
-                checked = appBehavior.telegramProxyEnabled
-            ) { onAppBehaviorChanged(appBehavior.copy(telegramProxyEnabled = it)) }
+            // The Telegram-over-WARP proxy is an Android/desktop feature (vpn/telegram); iOS has no
+            // implementation and SettingsPlatform.telegramProxyEndpoint is empty there, so the whole
+            // section would be a dead toggle. Hide it rather than show something that does nothing.
+            if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
+                RoutingToggleRow(
+                    title = s.telegramProxyTitle,
+                    subtitle = s.telegramProxySubtitle,
+                    checked = appBehavior.telegramProxyEnabled
+                ) { onAppBehaviorChanged(appBehavior.copy(telegramProxyEnabled = it)) }
 
-            val tgStatus = when (val st = telegramProxyState) {
-                is TelegramProxyState.Generating -> s.telegramProxyGenerating
-                is TelegramProxyState.Running ->
-                    "${s.telegramProxyRunning}: SOCKS5 ${st.host}:${st.port}"
-                is TelegramProxyState.Error -> "${s.telegramProxyError}: ${st.message}"
-                is TelegramProxyState.Stopped -> if (appBehavior.telegramProxyEnabled) {
-                    "${s.telegramProxyRunning}: SOCKS5 " +
-                        SettingsPlatform.telegramProxyEndpoint
-                } else {
-                    null
-                }
-            }
-            if (tgStatus != null) {
-                Text(
-                    text = tgStatus,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (telegramProxyState is TelegramProxyState.Error) {
-                        MaterialTheme.colorScheme.error
+                val tgStatus = when (val st = telegramProxyState) {
+                    is TelegramProxyState.Generating -> s.telegramProxyGenerating
+                    is TelegramProxyState.Running ->
+                        "${s.telegramProxyRunning}: SOCKS5 ${st.host}:${st.port}"
+                    is TelegramProxyState.Error -> "${s.telegramProxyError}: ${st.message}"
+                    is TelegramProxyState.Stopped -> if (appBehavior.telegramProxyEnabled) {
+                        "${s.telegramProxyRunning}: SOCKS5 " +
+                            SettingsPlatform.telegramProxyEndpoint
                     } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-            }
-            // WARP-based: the proxy depends on Cloudflare WARP reachability, which is throttled or
-            // blocked on some networks — warn that it works mainly in Russia and not on every ISP.
-            if (appBehavior.telegramProxyEnabled) {
-                Text(
-                    text = s.telegramProxyRegionNote,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-            }
-            // Auto-generated SOCKS5 credentials — selectable so the user can copy them into Telegram.
-            (telegramProxyState as? TelegramProxyState.Running)
-                ?.takeIf { it.user.isNotBlank() }
-                ?.let { running ->
-                    SelectionContainer {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = "${s.telegramProxyLogin}: ${running.user}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
-                            Text(
-                                text = "${s.telegramProxyPassword}: ${running.pass}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
-                        }
-                    }
-                    // One-tap copyable t.me/socks link: opening it in Telegram auto-fills the SOCKS5
-                    // proxy (server/port/user/pass), no manual entry.
-                    val clipboard = LocalClipboardManager.current
-                    val tgLink = remember(running) {
-                        "https://t.me/socks?server=${running.host}&port=${running.port}" +
-                            "&user=${running.user}&pass=${running.pass}"
-                    }
-                    // Side-by-side (equal weights) so BOTH actions fit on one row and stay fully
-                    // visible without scrolling the sheet.
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // One tap → Telegram Desktop's "Enable proxy?" dialog via the tg:// deep link
-                        // (it registers the scheme on Windows), falling back to the https link when
-                        // no handler is registered. Launched through [DesktopUriLauncher], NOT
-                        // LocalUriHandler: in TUN mode this process is elevated, and a handler
-                        // ShellExecute'd from here starts elevated too — it can't reach the Telegram
-                        // the user already has open, so the click did nothing at all.
-                        Button(
-                            onClick = {
-                                val tgDeep = "tg://socks?server=${running.host}&port=${running.port}" +
-                                    "&user=${running.user}&pass=${running.pass}"
-                                val target = if (SettingsPlatform.schemeRegistered("tg")) tgDeep else tgLink
-                                SettingsPlatform.openUri(target)
-                            },
-                            contentPadding = PaddingValues(horizontal = 12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.Send,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                clipboard.setText(AnnotatedString(tgLink))
-                                SettingsPlatform.toast(s.telegramProxyLinkCopied)
-                            },
-                            contentPadding = PaddingValues(horizontal = 12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.ContentCopy,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(s.telegramProxyCopyLink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
+                        null
                     }
                 }
+                if (tgStatus != null) {
+                    Text(
+                        text = tgStatus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (telegramProxyState is TelegramProxyState.Error) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
+                // WARP-based: the proxy depends on Cloudflare WARP reachability, which is throttled or
+                // blocked on some networks — warn that it works mainly in Russia and not on every ISP.
+                if (appBehavior.telegramProxyEnabled) {
+                    Text(
+                        text = s.telegramProxyRegionNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
+                // Auto-generated SOCKS5 credentials — selectable so the user can copy them into Telegram.
+                (telegramProxyState as? TelegramProxyState.Running)
+                    ?.takeIf { it.user.isNotBlank() }
+                    ?.let { running ->
+                        SelectionContainer {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "${s.telegramProxyLogin}: ${running.user}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                                Text(
+                                    text = "${s.telegramProxyPassword}: ${running.pass}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                            }
+                        }
+                        // One-tap copyable t.me/socks link: opening it in Telegram auto-fills the SOCKS5
+                        // proxy (server/port/user/pass), no manual entry.
+                        val clipboard = LocalClipboardManager.current
+                        val tgLink = remember(running) {
+                            "https://t.me/socks?server=${running.host}&port=${running.port}" +
+                                "&user=${running.user}&pass=${running.pass}"
+                        }
+                        // Side-by-side (equal weights) so BOTH actions fit on one row and stay fully
+                        // visible without scrolling the sheet.
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // One tap → Telegram Desktop's "Enable proxy?" dialog via the tg:// deep link
+                            // (it registers the scheme on Windows), falling back to the https link when
+                            // no handler is registered. Launched through [DesktopUriLauncher], NOT
+                            // LocalUriHandler: in TUN mode this process is elevated, and a handler
+                            // ShellExecute'd from here starts elevated too — it can't reach the Telegram
+                            // the user already has open, so the click did nothing at all.
+                            Button(
+                                onClick = {
+                                    val tgDeep = "tg://socks?server=${running.host}&port=${running.port}" +
+                                        "&user=${running.user}&pass=${running.pass}"
+                                    val target = if (SettingsPlatform.schemeRegistered("tg")) tgDeep else tgLink
+                                    SettingsPlatform.openUri(target)
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.Send,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    clipboard.setText(AnnotatedString(tgLink))
+                                    SettingsPlatform.toast(s.telegramProxyLinkCopied)
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ContentCopy,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(s.telegramProxyCopyLink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+            }
         }
     }
 }

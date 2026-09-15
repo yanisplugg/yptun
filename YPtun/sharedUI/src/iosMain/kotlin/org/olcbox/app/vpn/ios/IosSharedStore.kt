@@ -3,6 +3,7 @@ package org.olcbox.app.vpn.ios
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.RoutingProfilesState
@@ -75,4 +76,21 @@ object IosSharedStore {
         load("app_behavior.json", AppBehaviorSettings.serializer()) { AppBehaviorSettings() }
     fun saveAppBehavior(value: AppBehaviorSettings) =
         save("app_behavior.json", AppBehaviorSettings.serializer(), value)
+
+    fun loadUi(): IosUiSettings = load("ui.json", IosUiSettings.serializer()) { IosUiSettings() }
+    fun saveUi(value: IosUiSettings) = save("ui.json", IosUiSettings.serializer(), value)
 }
+
+/**
+ * UI preferences that never reach the tunnel process (language, theme, custom colors) — the iOS
+ * counterpart of the desktop's `settings/ui.json` (see DesktopUiSettings). Kept out of the models
+ * above because the extension has no use for them.
+ */
+@Serializable
+data class IosUiSettings(
+    val language: String = "system",
+    val lightTheme: Boolean = false,
+    val accentArgb: Int? = null,
+    val textArgb: Int? = null,
+    val backgroundArgb: Int? = null,
+)

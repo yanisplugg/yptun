@@ -26,7 +26,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.share.ConfigShareService
 import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.ui.OlcboxAppContent
-import org.olcbox.app.ui.components.ApplicationSettingsSheet
+import org.olcbox.app.ui.activities.AppSettingsSheet
 import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationItem
@@ -41,9 +41,13 @@ import org.olcbox.app.update.identity
 import org.olcbox.app.update.isDownloaded
 import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
+import org.olcbox.app.vpn.AndroidConnectionMode
+import org.olcbox.app.vpn.AndroidSocksProxySettings
+import org.olcbox.app.vpn.AndroidSplitTunnelSettings
 import org.olcbox.app.vpn.IosVpnManager
 import org.olcbox.app.vpn.VpnStatus
-import org.olcbox.app.vpn.ios.IosSharedStore
+import org.olcbox.app.vpn.ios.IosSettingsController
+import org.olcbox.app.vpn.telegram.TelegramProxyState
 import platform.UIKit.UIViewController
 
 class IosAppFactory {
@@ -129,6 +133,13 @@ private class IosAppDependencies(
         logExporter = IosLogExporter(platformBridge)
     )
     val locationViewModel = LocationViewModel(locationsRepository)
+    val settings = IosSettingsController()
+
+    init {
+        // Routing profiles are read through the VpnManager interface (the per-location selector and
+        // happ:// link import); hand it the controller so both sides see one state.
+        vpnManager.settingsController = settings
+    }
 
     fun close() {
         vpnManager.close()
@@ -220,9 +231,20 @@ private fun IosApp(
         val logs by dependencies.homeViewModel.logs.collectAsState()
         val homeState by dependencies.homeViewModel.state.collectAsState()
         val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
-        val connectionSummary = "Системный VPN (Network Extension)"
 
-        var appBehavior by remember { mutableStateOf(IosSharedStore.loadAppBehavior()) }
+        val appBehavior by dependencies.settings.appBehavior.collectAsState()
+        val routing by dependencies.settings.routing.collectAsState()
+        val routingProfiles by dependencies.settings.routingProfiles.collectAsState()
+        val trafficSettings by dependencies.settings.traffic.collectAsState()
+        val geoUpdateStatus by dependencies.settings.geoUpdateStatus.collectAsState()
+        val language by dependencies.settings.language.collectAsState()
+        val lightTheme by dependencies.settings.lightTheme.collectAsState()
+        // Shown in settings as the device id the panel sees; reading it touches storage, so it is
+        // resolved once off the composition.
+        var hwid by remember { mutableStateOf("") }
+        LaunchedEffect(Unit) {
+            hwid = runCatching { dependencies.locationsRepository.getDeviceIdentity() }.getOrDefault("")
+        }
 
         Box(modifier = Modifier.fillMaxSize()) {
             OlcboxAppContent(
@@ -304,15 +326,13 @@ private fun IosApp(
                     val current = appBehavior.collapsedSubscriptionGroups
                     val updated = if (key in current) current - key else current + key
                     val newBehavior = appBehavior.copy(collapsedSubscriptionGroups = updated)
-                    appBehavior = newBehavior
-                    IosSharedStore.saveAppBehavior(newBehavior)
+                    dependencies.settings.setAppBehavior(newBehavior)
                 },
                 onToggleGroupPinned = { key ->
                     val current = appBehavior.pinnedSubscriptionGroups
                     val updated = if (key in current) current - key else current + key
                     val newBehavior = appBehavior.copy(pinnedSubscriptionGroups = updated)
-                    appBehavior = newBehavior
-                    IosSharedStore.saveAppBehavior(newBehavior)
+                    dependencies.settings.setAppBehavior(newBehavior)
                 },
                 onToggleGroupPingSort = { key ->
                     val sorted = appBehavior.pingSortedSubscriptionGroups
@@ -328,15 +348,13 @@ private fun IosApp(
                             pingSortDescendingSubscriptionGroups = desc - key,
                         )
                     }
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 },
                 onToggleCustomLocationPinned = { id ->
                     val current = appBehavior.pinnedCustomLocations
                     val updated = if (id in current) current - id else current + id
                     val newBehavior = appBehavior.copy(pinnedCustomLocations = updated)
-                    appBehavior = newBehavior
-                    IosSharedStore.saveAppBehavior(newBehavior)
+                    dependencies.settings.setAppBehavior(newBehavior)
                 },
                 onToggleCustomLocationsPingSort = {
                     val updated = when {
@@ -352,8 +370,7 @@ private fun IosApp(
                             customLocationsPingSortDescending = false,
                         )
                     }
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 },
                 customGroups = appBehavior.customGroups,
                 onCreateFolder = { name, memberKeys ->
@@ -364,8 +381,7 @@ private fun IosApp(
                     )
                     val cleaned = appBehavior.customGroups.map { g -> g.copy(members = g.members - memberKeys.toSet()) }
                     val updated = appBehavior.copy(customGroups = cleaned + folder)
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 },
                 onRenameFolder = { id, name ->
                     val updated = appBehavior.copy(
@@ -373,13 +389,11 @@ private fun IosApp(
                             if (it.id == id) it.copy(name = name.trim()) else it
                         }
                     )
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 },
                 onDeleteFolder = { id ->
                     val updated = appBehavior.copy(customGroups = appBehavior.customGroups.filter { it.id != id })
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 },
                 onAddToFolder = { id, memberKeys ->
                     val updated = appBehavior.copy(
@@ -387,8 +401,7 @@ private fun IosApp(
                             if (it.id == id) it.copy(members = (it.members + memberKeys).distinct()) else it
                         }
                     )
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 },
                 onRemoveFromFolder = { memberKeys ->
                     val removeSet = memberKeys.toSet()
@@ -397,8 +410,7 @@ private fun IosApp(
                             it.copy(members = it.members.filter { m -> m !in removeSet })
                         }
                     )
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 },
                 onToggleFolderPinned = { id ->
                     val updated = appBehavior.copy(
@@ -406,8 +418,7 @@ private fun IosApp(
                             if (it.id == id) it.copy(pinned = !it.pinned) else it
                         }
                     )
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 },
                 onToggleFolderCollapsed = { id ->
                     val updated = appBehavior.copy(
@@ -415,24 +426,57 @@ private fun IosApp(
                             if (it.id == id) it.copy(collapsed = !it.collapsed) else it
                         }
                     )
-                    appBehavior = updated
-                    IosSharedStore.saveAppBehavior(updated)
+                    dependencies.settings.setAppBehavior(updated)
                 }
             )
 
             if (isAppSettingsOpen) {
-                ApplicationSettingsSheet(
+                AppSettingsSheet(
+                    // iOS runs a single connection mode (a Network Extension packet tunnel). The
+                    // mode picker is hidden on this platform, so the value is fixed.
+                    selectedMode = AndroidConnectionMode.Tun,
+                    proxySettings = AndroidSocksProxySettings(
+                        host = socksProxySettings.host,
+                        port = socksProxySettings.port,
+                        username = socksProxySettings.username,
+                        password = socksProxySettings.password,
+                        // iOS has no separate flag: the local SOCKS listener is secured exactly when
+                        // it carries credentials.
+                        secured = socksProxySettings.username.isNotBlank()
+                    ),
+                    // Per-app routing is impossible on iOS — there is no way to enumerate installed
+                    // apps or attribute traffic to them — so the section is hidden and these stay at
+                    // their defaults.
+                    splitTunnelSettings = AndroidSplitTunnelSettings(),
+                    installedApps = emptyList(),
+                    logs = logs,
+                    // No Material You equivalent on iOS; the switch is hidden there.
+                    dynamicThemeEnabled = false,
+                    lightThemeEnabled = lightTheme,
+                    hwid = hwid,
+                    routing = routing,
+                    onRoutingChanged = dependencies.settings::setRouting,
+                    routingProfilesState = routingProfiles,
+                    geoUpdateStatus = geoUpdateStatus,
+                    onRoutingProfileSaved = { dependencies.settings.saveRoutingProfile(it) },
+                    onRoutingProfileDeleted = dependencies.settings::deleteRoutingProfile,
+                    onGlobalRoutingProfileChanged = dependencies.settings::setGlobalRoutingProfile,
+                    onRoutingProfileLinkImported = dependencies.settings::importRoutingProfileLink,
+                    onGeoSourcesChanged = dependencies.settings::setGeoSources,
+                    onUpdateGeoNow = dependencies.settings::updateGeoAssetsNow,
+                    trafficSettings = trafficSettings,
+                    onTrafficChanged = dependencies.settings::setTrafficSettings,
+                    appBehavior = appBehavior,
+                    onAppBehaviorChanged = dependencies.settings::setAppBehavior,
+                    // Telegram-over-WARP is an Android/desktop feature; the section is hidden on iOS.
+                    telegramProxyState = TelegramProxyState.Stopped,
+                    language = language,
+                    onLanguageChanged = dependencies.settings::setLanguage,
                     updateSettings = updateSettings,
                     updateStatusText = updateStatusText,
                     updateDownloadProgress = updateDownloadProgress,
-                    updateOffer = updateOffer,
                     subscriptions = iosSubscriptionItems(dependencies.locationViewModel.locations.toList()),
-                    logs = logs,
-                    connectionSummary = connectionSummary,
-                    connectionDetails = listOf(
-                        "Mode" to "System VPN (packet tunnel)"
-                    ),
-                    socksProxySettings = socksProxySettings,
+                    enabled = !homeState.isVpnLoading,
                     isConnectionActive = homeState.isVpnConnected,
                     onDismiss = { isAppSettingsOpen = false },
                     onCopyConfigClick = {
@@ -457,8 +501,6 @@ private fun IosApp(
                         }
                     },
                     onCheckUpdatesClick = { checkUpdate(manual = true) },
-                    onDownloadUpdateClick = ::downloadUpdate,
-                    onLaterUpdateClick = ::laterUpdate,
                     onSubscriptionShareClick = { url ->
                         platformBridge.shareText("Subscription", ConfigShareService.subscriptionQrText(url))
                     },
@@ -472,18 +514,40 @@ private fun IosApp(
                             }
                         }
                     },
-                    onSocksProxySettingsSaved = { username, password, port ->
+                    onDynamicThemeChanged = {},
+                    onLightThemeChanged = dependencies.settings::setLightTheme,
+                    onAccentColorSelected = dependencies.settings::setAccentColor,
+                    onTextColorSelected = dependencies.settings::setTextColor,
+                    onBackgroundColorSelected = dependencies.settings::setBackgroundColor,
+                    onModeSelected = {},
+                    // The host is fixed at 127.0.0.1 on iOS (the listener lives in the tunnel
+                    // process), so only the credentials and the port are applied.
+                    onProxySettingsSaved = { _, username, password, port ->
                         dependencies.vpnManager.updateSocksProxySettings(username, password, port)
                         if (homeState.isVpnConnected) {
                             dependencies.homeViewModel.restartVpnIfRunning()
                         }
                     },
-                    onSocksProxyPasswordRegenerated = {
+                    onProxyPasswordRegenerated = {
                         dependencies.vpnManager.regenerateSocksProxyPassword()
                         if (homeState.isVpnConnected) {
                             dependencies.homeViewModel.restartVpnIfRunning()
                         }
-                    }
+                    },
+                    onSecuredProxyChanged = { on ->
+                        // Turning it off drops the credentials; turning it on seeds a password so the
+                        // form is not empty.
+                        val user = if (on) socksProxySettings.username.ifBlank { "yptun" } else ""
+                        val pass = if (on) socksProxySettings.password.ifBlank { randomProxyPassword() } else ""
+                        dependencies.vpnManager.updateSocksProxySettings(user, pass, socksProxySettings.port)
+                        if (homeState.isVpnConnected) {
+                            dependencies.homeViewModel.restartVpnIfRunning()
+                        }
+                    },
+                    // Split tunneling is hidden on iOS (see above) — nothing can reach these.
+                    onSplitTunnelModeSelected = {},
+                    onSplitTunnelAppToggled = { _, _ -> },
+                    onSplitTunnelAppsSelected = { _, _ -> }
                 )
             }
 
@@ -497,6 +561,12 @@ private fun IosApp(
             }
         }
     }
+}
+
+/** Seed for the local SOCKS password when the user switches credentials on (no UUID on Native). */
+private fun randomProxyPassword(): String {
+    val alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return buildString { repeat(14) { append(alphabet[kotlin.random.Random.nextInt(alphabet.length)]) } }
 }
 
 private fun iosSubscriptionItems(items: List<LocationItem>): List<SubscriptionShareItem> {
