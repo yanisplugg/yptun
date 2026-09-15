@@ -20,6 +20,10 @@ import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.theme.ThemeState
 import org.olcbox.app.vpn.GeoUpdateStatus
 import platform.Foundation.NSLocale
+// Class properties that Objective-C declares in a category (here NSLocale's NSLocaleGeneralInfo)
+// become companion EXTENSIONS in Kotlin/Native, so they need their own import — unlike
+// NSFileManager.defaultManager, which lives in the main @interface and resolves from the class alone.
+import platform.Foundation.preferredLanguages
 import kotlin.random.Random
 import kotlin.time.Clock
 
