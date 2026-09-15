@@ -2440,6 +2440,18 @@ private fun MasterDnsInstallDialog(
 }
 
 /**
+ * A VK call field is only wrong when it holds an http(s) URL that is NOT a call-join link. A BARE
+ * HASH is fine: both cores normalize it the same way (`wdtt/group.go` `normalizeVKJoinHash`), and the
+ * qwdtt:// quick link delivers hashes, not links — flagging those painted every imported field red.
+ */
+private fun isBadVkCallLink(value: String): Boolean {
+    val v = value.trim()
+    if (v.isEmpty()) return false
+    val isUrl = v.startsWith("http://", ignoreCase = true) || v.startsWith("https://", ignoreCase = true)
+    return isUrl && !v.contains("/call/join/", ignoreCase = true)
+}
+
+/**
  * VK call links: one primary field plus a toggle revealing up to 4 more (5 total). The links are
  * stored newline-joined in [value]; each extra call is an independent VK call → more bandwidth
  * (freeturn fans the tunnel's TURN streams across them).
@@ -2451,15 +2463,20 @@ private fun VkTurnLinksField(
     onChange: (String) -> Unit
 ) {
     val maxLinks = 5
-    val lines = value.split("\n")
+    // Split on commas too: a location imported from a qwdtt:// link before the parser normalized them
+    // has all its hashes comma-joined in one line, which used to fill only the first field. Editing any
+    // field rewrites the value newline-joined, so this also heals the stored value.
+    val lines = value.split('\n', ',').map { it.trim() }
     fun line(i: Int) = lines.getOrElse(i) { "" }
     fun setLine(i: Int, v: String) {
-        val list = MutableList(maxLinks) { line(it) }
+        // Keep anything past the 5 editable fields (a qwdtt:// link may carry more hashes than that) —
+        // the core takes them all, and editing one field must not silently drop the rest.
+        val list = MutableList(maxOf(maxLinks, lines.size)) { line(it) }
         list[i] = v
         onChange(list.joinToString("\n").trimEnd('\n'))
     }
     var expanded by remember {
-        mutableStateOf((1 until maxLinks).any { value.split("\n").getOrElse(it) { "" }.isNotBlank() })
+        mutableStateOf((1 until maxLinks).any { line(it).isNotBlank() })
     }
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -2475,7 +2492,7 @@ private fun VkTurnLinksField(
             label = LocalStrings.current.vkCallLink,
             placeholder = "https://vk.com/call/join/…",
             enabled = enabled,
-            isError = line(0).isNotBlank() && !line(0).contains("/call/join/")
+            isError = isBadVkCallLink(line(0))
         )
         VkTurnSwitchRow(LocalStrings.current.additionalCalls, expanded, enabled) { expanded = it }
         if (expanded) {
@@ -2486,7 +2503,7 @@ private fun VkTurnLinksField(
                     label = LocalStrings.current.vkCallLinkNumbered(i + 1),
                     placeholder = "https://vk.com/call/join/…",
                     enabled = enabled,
-                    isError = line(i).isNotBlank() && !line(i).contains("/call/join/")
+                    isError = isBadVkCallLink(line(i))
                 )
             }
         }

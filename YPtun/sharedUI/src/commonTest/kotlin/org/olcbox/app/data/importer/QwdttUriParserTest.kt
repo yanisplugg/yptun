@@ -18,7 +18,10 @@ class QwdttUriParserTest {
         val l = QwdttUriParser.parse(link)!!
         assertEquals("qWDTT - Main (51.15.1.2)", l.name)
         assertEquals("51.15.1.2", l.peer)
-        assertEquals("ab12,cd34", l.hashes)      // VK hashes → stored as vkLink
+        // The server packs the hashes comma-separated; we store them ONE PER LINE, which is the
+        // format the location settings edit (one «Ссылка на звонок VK» field per line). Keeping the
+        // commas put every hash into the first field and painted it red.
+        assertEquals("ab12\ncd34", l.hashes)     // VK hashes → stored as vkLink
         assertEquals("p@ss word", l.password)
         assertEquals(9000, l.listenPort)
         assertEquals(9, l.workers)
