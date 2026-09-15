@@ -212,26 +212,17 @@ internal class IosEngineController(
         if (activeProxyCore == ProxyCore.SingBox &&
             effectiveProfile.rawOutbound.isNullOrBlank() &&
             effectiveProfile.type in XRAY_SUPPORTED_TYPES &&
-            (profileWantsXray || traffic.fragmentEnabled)
+            (profileWantsXray || traffic.blockRuDomains || traffic.fragmentEnabled || (config.core == ProxyCore.Auto && globalCore == ProxyCore.Auto))
         ) {
             activeProxyCore = ProxyCore.Xray
             log(
                 when {
                     profileWantsXray -> "Switching to Xray core for routing profile (native domain:/geoip: matching)"
+                    traffic.blockRuDomains -> "Switching to Xray core for RU-domain blocklist"
                     traffic.fragmentEnabled -> "Switching to Xray core for TLS fragmentation"
-                    else -> "Using Xray core for ${effectiveProfile.type}"
+                    else -> "Using Xray core for ${effectiveProfile.type} (Happ-compatible)"
                 }
             )
-        }
-        if (activeProxyCore == ProxyCore.Xray &&
-            routingProfile?.needsGeoFiles() == true &&
-            effectiveProfile.rawXrayConfig.isNullOrBlank() &&
-            effectiveProfile.network != ProxyProfile.NETWORK_XHTTP &&
-            effectiveProfile.rawOutbound.isNullOrBlank() &&
-            ensureGeoAssetPath(routingProfile, profilesState).isEmpty()
-        ) {
-            activeProxyCore = ProxyCore.SingBox
-            log("Geo databases unavailable for Xray → using sing-box for routing")
         }
         if (secondProfile?.network == ProxyProfile.NETWORK_XHTTP && activeProxyCore != ProxyCore.Xray) {
             activeProxyCore = ProxyCore.Xray
@@ -308,6 +299,7 @@ internal class IosEngineController(
                         } ?: t
                     },
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                    hasGeoAssets = assetPath.isNotEmpty(),
                     secondProfile = secondProfile,
                     bypassLan = routing.bypassLan,
                     fakeDnsSpec = config.fakeDns,
@@ -451,8 +443,10 @@ internal class IosEngineController(
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
                 olcrtcChainPort = tunnelPort,
+                routing = routing,
                 traffic = traffic,
                 routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                hasGeoAssets = assetPath.isNotEmpty(),
                 blockQuic = true,
                 forceFamilyResolve = false,
                 chainViaDialerProxy = true,
@@ -869,6 +863,7 @@ internal class IosEngineController(
     }
 
     private fun ensureGeoAssetPath(profile: RoutingProfile?, state: RoutingProfilesState): String {
+        if (IosGeoAssets.hasAssets()) return IosGeoAssets.assetDir
         if (profile == null || !profile.needsGeoFiles()) return ""
         val ok = runCatching {
             IosGeoAssets.ensureAssets(profile.geoipUrl.ifBlank { state.geoipUrl }, profile.geositeUrl.ifBlank { state.geositeUrl })

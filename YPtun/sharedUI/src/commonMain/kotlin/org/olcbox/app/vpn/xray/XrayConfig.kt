@@ -181,6 +181,9 @@ object XrayConfig {
         // with geosite:/geoip:/domain: selectors) and its dns.hosts are merged. The referenced
         // geoip.dat/geosite.dat must be present in XRAY_LOCATION_ASSET.
         routingProfile: org.olcbox.app.data.model.RoutingProfile? = null,
+        // True when geoip.dat and geosite.dat are available on disk in asset directory.
+        // If false, geosite:/geoip: rules MUST NOT be emitted (xray crashes on startup if files are missing).
+        hasGeoAssets: Boolean = false,
         // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
         // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
         blockQuic: Boolean = true,
@@ -549,7 +552,20 @@ object XrayConfig {
             } else null
             val adBlockRule = if (routing.blockAds) buildJsonObject {
                 put("type", "field")
-                putJsonArray("domain") { add("geosite:category-ads-all") }
+                putJsonArray("domain") {
+                    if (hasGeoAssets) {
+                        add("geosite:category-ads-all")
+                    } else {
+                        add("domain:doubleclick.net")
+                        add("domain:googlesyndication.com")
+                        add("domain:googleadservices.com")
+                        add("domain:adservice.google.com")
+                        add("domain:an.yandex.ru")
+                        add("domain:pagead2.googlesyndication.com")
+                        add("domain:adcolony.com")
+                        add("domain:unityads.unity3d.com")
+                    }
+                }
                 put("outboundTag", "block")
             } else null
             val userDirectDomainsRule = if (routing.directDomains.isNotEmpty()) buildJsonObject {
@@ -562,19 +578,61 @@ object XrayConfig {
             val bypassRussiaDomainRule = if (routing.bypassRussia) buildJsonObject {
                 put("type", "field")
                 putJsonArray("domain") {
+                    add("domain:ru")
+                    add("domain:su")
+                    add("domain:xn--p1ai")
                     add("regexp:(^|\\.)(ru|su|xn--p1ai)$")
                     add("domain:vk.com")
+                    add("domain:vk.me")
+                    add("domain:userapi.com")
+                    add("domain:vk-portal.net")
                     add("domain:ya.ru")
                     add("domain:yandex.ru")
+                    add("domain:yandex.net")
+                    add("domain:yastatic.net")
                     add("domain:mail.ru")
                     add("domain:dzen.ru")
                     add("domain:gosuslugi.ru")
                     add("domain:kinopoisk.ru")
-                    add("geosite:ru")
+                    add("domain:avito.ru")
+                    add("domain:ozon.ru")
+                    add("domain:wildberries.ru")
+                    add("domain:sberbank.ru")
+                    add("domain:sber.ru")
+                    add("domain:tinkoff.ru")
+                    add("domain:t-bank.ru")
+                    add("domain:rutube.ru")
+                    add("domain:ok.ru")
+                    add("domain:rbc.ru")
+                    add("domain:kp.ru")
+                    add("domain:hh.ru")
+                    add("domain:2gis.ru")
+                    add("domain:2gis.com")
+                    add("domain:cdek.ru")
+                    add("domain:mos.ru")
+                    add("domain:spb.ru")
+                    add("domain:auto.ru")
+                    add("domain:cian.ru")
+                    add("domain:habr.com")
+                    add("domain:pikabu.ru")
+                    add("domain:ivi.ru")
+                    add("domain:premier.one")
+                    add("domain:start.ru")
+                    add("domain:kion.ru")
+                    add("domain:megafon.ru")
+                    add("domain:mts.ru")
+                    add("domain:beeline.ru")
+                    add("domain:t2.ru")
+                    add("domain:tele2.ru")
+                    add("domain:rostelecom.ru")
+                    add("domain:rt.ru")
+                    if (hasGeoAssets) {
+                        add("geosite:ru")
+                    }
                 }
                 put("outboundTag", "direct")
             } else null
-            val bypassRussiaIpRule = if (routing.bypassRussia) buildJsonObject {
+            val bypassRussiaIpRule = if (routing.bypassRussia && hasGeoAssets) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") { add("geoip:ru") }
                 put("outboundTag", "direct")
@@ -585,7 +643,8 @@ object XrayConfig {
                     // blocklist (item 5): the toggles run alongside the profile, not instead of it.
                     val base = XrayRouting.routingObject(routingProfile)
                     val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
-                    put("domainStrategy", if (forceFamily || routing.bypassRussia) JsonPrimitive("IPIfNonMatch") else baseStrategy)
+                    val strategy = if (forceFamily || (hasGeoAssets && routing.bypassRussia)) JsonPrimitive("IPIfNonMatch") else baseStrategy
+                    put("domainStrategy", strategy)
                     putJsonArray("rules") {
                         // Loopback relay → xhttp main, before anything that could drop/redirect it.
                         cascadeLoopRule?.let { add(it) }
@@ -605,7 +664,7 @@ object XrayConfig {
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
-                    put("domainStrategy", if (forceFamily || routing.bypassRussia) "IPIfNonMatch" else "AsIs")
+                    put("domainStrategy", if (forceFamily || (hasGeoAssets && routing.bypassRussia)) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
