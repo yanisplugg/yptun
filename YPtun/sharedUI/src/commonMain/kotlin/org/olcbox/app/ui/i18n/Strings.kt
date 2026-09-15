@@ -495,6 +495,8 @@ interface Strings {
     val twoColumnLayoutSubtitle: String
     val showSubscriptionExpiryTitle: String
     val showSubscriptionExpirySubtitle: String
+    val showSubscriptionDescriptionTitle: String
+    val showSubscriptionDescriptionSubtitle: String
     val subscriptionUserAgentLabel: String
     val subscriptionUserAgentSubtitle: String
     val globalEngineLabel: String
@@ -1138,6 +1140,8 @@ object RuStrings : Strings {
     override val twoColumnLayoutSubtitle = "Показывать список конфигураций на главном экране в виде сетки из двух колонок."
     override val showSubscriptionExpiryTitle = "Показывать срок подписки"
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
+    override val showSubscriptionDescriptionTitle = "Показывать описание подписки"
+    override val showSubscriptionDescriptionSubtitle = "Текст от панели (announce) под названием подписки"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 запрашивает полный конфиг (FakeDNS, dns.hosts); YPtun — обычно только ссылки"
     override val globalEngineLabel = "Движок для VLESS (глобально)"
@@ -1764,6 +1768,8 @@ object EnStrings : Strings {
     override val twoColumnLayoutSubtitle = "Show the configuration list on the home screen as a two-column grid."
     override val showSubscriptionExpiryTitle = "Show subscription expiry"
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
+    override val showSubscriptionDescriptionTitle = "Show subscription description"
+    override val showSubscriptionDescriptionSubtitle = "Show the panel's text (announce) under the subscription name"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 fetches the full config (FakeDNS, dns.hosts); YPtun usually returns only links"
     override val globalEngineLabel = "VLESS engine (global)"
@@ -2406,6 +2412,8 @@ object FaStrings : Strings {
     override val twoColumnLayoutSubtitle = "نمایش فهرست پیکربندی‌ها در صفحه اصلی به صورت شبکه دو ستونی."
     override val showSubscriptionExpiryTitle = "نمایش تاریخ انقضای اشتراک"
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
+    override val showSubscriptionDescriptionTitle = "نمایش توضیحات اشتراک"
+    override val showSubscriptionDescriptionSubtitle = "نمایش متن پنل (announce) زیر نام اشتراک"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 پیکربندی کامل (FakeDNS، dns.hosts) را می‌گیرد؛ YPtun معمولاً فقط لینک‌ها"
     override val globalEngineLabel = "موتور VLESS (سراسری)"
@@ -3016,6 +3024,8 @@ object ZhStrings : Strings {
     override val twoColumnLayoutSubtitle = "在主屏幕上以双列网格显示配置列表。"
     override val showSubscriptionExpiryTitle = "显示订阅到期"
     override val showSubscriptionExpirySubtitle = "在刷新日期下方显示“至 dd.mm.yyyy”"
+    override val showSubscriptionDescriptionTitle = "显示订阅说明"
+    override val showSubscriptionDescriptionSubtitle = "在订阅名称下方显示面板文本（announce）"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 会获取完整配置（FakeDNS、dns.hosts）；YPtun 通常只返回链接"
     override val globalEngineLabel = "VLESS 内核（全局）"

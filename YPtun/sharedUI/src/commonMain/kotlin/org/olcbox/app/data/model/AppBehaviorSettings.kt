@@ -151,6 +151,11 @@ data class AppBehaviorSettings(
      */
     val showSubscriptionAliveCount: Boolean = false,
     /**
+     * Show the panel's own subscription description (Remnawave/Happ `announce` header) under the
+     * subscription group title in the location list, like Happ. Off by default.
+     */
+    val showSubscriptionDescription: Boolean = false,
+    /**
      * Hide the protocol + server IP (the "endpoint" line) on a location row WHEN that location has a
      * description — so a subscription's human description is shown instead of the technical endpoint.
      * Rows without a description always show the endpoint. On by default.
