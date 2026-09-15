@@ -17,6 +17,8 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.data.model.RoutingProfile
+import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
 
 /**
@@ -170,6 +172,7 @@ object XrayConfig {
         olcrtcChainPass: String = "",
         logLevel: String = "debug",
         traffic: TrafficSettings = TrafficSettings(),
+        routing: RoutingRules = RoutingRules(),
         // VK-TURN chain: when set, [profile] dials its server THROUGH this WireGuard outbound (the
         // WG-over-VK base). Mirrors SingBoxConfig.wireguardBase. The ProxyProfile carries the
         // sing-box-format WG outbound in [ProxyProfile.rawOutbound]; we convert it to Xray schema.
@@ -521,12 +524,59 @@ object XrayConfig {
                 }
                 put("outboundTag", if (directViaBase) PROXY_BASE_TAG else PROXY_TAG)
             } else null
-            val lanBypassRule = if (bypassLan && !directViaBase) buildJsonObject {
+            val lanBypassRule = if (routing.bypassLan && bypassLan && !directViaBase) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
                     add("10.0.0.0/8"); add("172.16.0.0/12"); add("192.168.0.0/16")
                     add("127.0.0.0/8"); add("169.254.0.0/16")
                 }
+                put("outboundTag", "direct")
+            } else null
+            // Direct domain matching for RU blocklist (handles SOCKS5 domain connections from hev-socks5-tunnel)
+            val ruBlockRule = if (traffic.blockRuDomains) buildJsonObject {
+                put("type", "field")
+                putJsonArray("domain") {
+                    RuBlocklist.hostRegexps.forEach { add(it) }
+                }
+                put("outboundTag", "block")
+            } else null
+            val userBlockDomainsRule = if (routing.blockDomains.isNotEmpty()) buildJsonObject {
+                put("type", "field")
+                putJsonArray("domain") {
+                    routing.blockDomains.forEach { add("domain:$it") }
+                }
+                put("outboundTag", "block")
+            } else null
+            val adBlockRule = if (routing.blockAds) buildJsonObject {
+                put("type", "field")
+                putJsonArray("domain") { add("geosite:category-ads-all") }
+                put("outboundTag", "block")
+            } else null
+            val userDirectDomainsRule = if (routing.directDomains.isNotEmpty()) buildJsonObject {
+                put("type", "field")
+                putJsonArray("domain") {
+                    routing.directDomains.forEach { add("domain:$it") }
+                }
+                put("outboundTag", "direct")
+            } else null
+            val bypassRussiaDomainRule = if (routing.bypassRussia) buildJsonObject {
+                put("type", "field")
+                putJsonArray("domain") {
+                    add("regexp:(^|\\.)(ru|su|xn--p1ai)$")
+                    add("domain:vk.com")
+                    add("domain:ya.ru")
+                    add("domain:yandex.ru")
+                    add("domain:mail.ru")
+                    add("domain:dzen.ru")
+                    add("domain:gosuslugi.ru")
+                    add("domain:kinopoisk.ru")
+                    add("geosite:ru")
+                }
+                put("outboundTag", "direct")
+            } else null
+            val bypassRussiaIpRule = if (routing.bypassRussia) buildJsonObject {
+                put("type", "field")
+                putJsonArray("ip") { add("geoip:ru") }
                 put("outboundTag", "direct")
             } else null
             putJsonObject("routing") {
@@ -535,7 +585,7 @@ object XrayConfig {
                     // blocklist (item 5): the toggles run alongside the profile, not instead of it.
                     val base = XrayRouting.routingObject(routingProfile)
                     val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
-                    put("domainStrategy", if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy)
+                    put("domainStrategy", if (forceFamily || routing.bypassRussia) JsonPrimitive("IPIfNonMatch") else baseStrategy)
                     putJsonArray("rules") {
                         // Loopback relay → xhttp main, before anything that could drop/redirect it.
                         cascadeLoopRule?.let { add(it) }
@@ -546,10 +596,16 @@ object XrayConfig {
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (blockZero) add(blockZeroRule)
+                        ruBlockRule?.let { add(it) }
+                        userBlockDomainsRule?.let { add(it) }
+                        adBlockRule?.let { add(it) }
+                        userDirectDomainsRule?.let { add(it) }
+                        bypassRussiaDomainRule?.let { add(it) }
+                        bypassRussiaIpRule?.let { add(it) }
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
-                    put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
+                    put("domainStrategy", if (forceFamily || routing.bypassRussia) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
@@ -558,6 +614,12 @@ object XrayConfig {
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (blockZero) add(blockZeroRule)
+                        ruBlockRule?.let { add(it) }
+                        userBlockDomainsRule?.let { add(it) }
+                        adBlockRule?.let { add(it) }
+                        userDirectDomainsRule?.let { add(it) }
+                        bypassRussiaDomainRule?.let { add(it) }
+                        bypassRussiaIpRule?.let { add(it) }
                     }
                 }
             }

@@ -212,14 +212,14 @@ internal class IosEngineController(
         if (activeProxyCore == ProxyCore.SingBox &&
             effectiveProfile.rawOutbound.isNullOrBlank() &&
             effectiveProfile.type in XRAY_SUPPORTED_TYPES &&
-            (traffic.blockRuDomains || profileWantsXray || (config.core == ProxyCore.Auto && globalCore == ProxyCore.Auto))
+            (profileWantsXray || traffic.fragmentEnabled)
         ) {
             activeProxyCore = ProxyCore.Xray
             log(
                 when {
                     profileWantsXray -> "Switching to Xray core for routing profile (native domain:/geoip: matching)"
-                    traffic.blockRuDomains -> "Switching to Xray core for RU-domain blocklist"
-                    else -> "Using Xray core for ${effectiveProfile.type} (Happ-compatible)"
+                    traffic.fragmentEnabled -> "Switching to Xray core for TLS fragmentation"
+                    else -> "Using Xray core for ${effectiveProfile.type}"
                 }
             )
         }
@@ -296,6 +296,7 @@ internal class IosEngineController(
                     olcrtcChainPort = if (chained) chainPort else null,
                     olcrtcChainUser = if (chained) socksUsername else "",
                     olcrtcChainPass = if (chained) socksPassword else "",
+                    routing = routing,
                     traffic = traffic.let { t ->
                         config.advanced?.let {
                             t.copy(
@@ -521,8 +522,11 @@ internal class IosEngineController(
         }
         check(vk != null && vk.isComplete() && outboundConfigured) { "VK-TURN not configured" }
 
+        runCatching { core.ftStop() }
+        runCatching { core.wdttStop() }
         IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        IosNet.awaitLocalPortClosed(vk.listenPort, 3000)
 
         val listenAddr = "127.0.0.1:${vk.listenPort}"
         if (usesWdtt) {
@@ -548,6 +552,7 @@ internal class IosEngineController(
         // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
         val traffic = IosSharedStore.loadTraffic().copy(domainStrategy = "ipv4_only")
         val profilesState = IosSharedStore.loadRoutingProfiles()
+        val routingProfile = profilesState.resolve(config.routingProfileId)
 
         if (usesWdtt) {
             // The config only arrives once the first worker has a TURN session, so waiting on it doubles
@@ -577,7 +582,11 @@ internal class IosEngineController(
         } else if (awaitVkTurnRelayReady(VKTURN_RELAY_READY_TIMEOUT_MS)) {
             log("VK-TURN relay up (${core.ftConnectedStreams()} stream(s)); starting WireGuard")
         } else {
-            log("VK-TURN relay not ready yet; starting outbound anyway (will retry)")
+            val streams = core.ftConnectedStreams()
+            if (streams == 0) {
+                throw IllegalStateException("VK-TURN: не удалось установить соединение с реле (0 стримов). Попробуйте переподключиться через несколько секунд.")
+            }
+            log("VK-TURN relay not ready yet ($streams stream(s)); starting outbound anyway")
         }
 
         activeProxyCore = ProxyCore.SingBox
@@ -606,8 +615,9 @@ internal class IosEngineController(
                         listenHost = LISTEN_HOST,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
+                        routing = routing,
                         traffic = traffic,
-                        routingProfile = null,
+                        routingProfile = routingProfile,
                         blockQuic = false,
                         forceFamilyResolve = false,
                     )
@@ -621,8 +631,9 @@ internal class IosEngineController(
                         listenHost = LISTEN_HOST,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
+                        routing = routing,
                         traffic = traffic,
-                        routingProfile = null,
+                        routingProfile = routingProfile,
                         blockQuic = false,
                         forceFamilyResolve = false,
                         chainViaDialerProxy = true,
@@ -638,8 +649,9 @@ internal class IosEngineController(
                         listenHost = LISTEN_HOST,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
+                        routing = routing,
                         traffic = traffic,
-                        routingProfile = null,
+                        routingProfile = routingProfile,
                         blockQuic = false,
                         forceFamilyResolve = false,
                     )
@@ -662,6 +674,7 @@ internal class IosEngineController(
                         chainPort = if (chainProxy != null) awgLocalPort(listenPort) else null,
                         listenPort = listenPort, socksUsername = socksUsername, socksPassword = socksPassword,
                         routing = routing, traffic = traffic, profilesState = profilesState,
+                        routingProfile = routingProfile,
                         sniffOverrideDestination = true,
                         preferTcpRemoteDns = chainProxy == null,
                         directViaBase = chainProxy != null,
@@ -673,6 +686,7 @@ internal class IosEngineController(
                         profile = exitProfile, listenPort = listenPort,
                         socksUsername = socksUsername, socksPassword = socksPassword,
                         routing = routing, traffic = traffic, profilesState = profilesState,
+                        routingProfile = routingProfile,
                     )
                 }
                 else -> if (chainProxy != null) {
@@ -681,12 +695,14 @@ internal class IosEngineController(
                         profile = chainProxy, wireguardBase = exitProfile, listenPort = listenPort,
                         socksUsername = socksUsername, socksPassword = socksPassword,
                         routing = routing, traffic = traffic, profilesState = profilesState,
+                        routingProfile = routingProfile,
                     )
                 } else {
                     vkTurnSingBox(
                         profile = exitProfile, listenPort = listenPort,
                         socksUsername = socksUsername, socksPassword = socksPassword,
                         routing = routing, traffic = traffic, profilesState = profilesState,
+                        routingProfile = routingProfile,
                     )
                 }
             }
@@ -708,6 +724,7 @@ internal class IosEngineController(
         routing: RoutingRules,
         traffic: TrafficSettings,
         profilesState: RoutingProfilesState,
+        routingProfile: RoutingProfile? = null,
         wireguardBase: ProxyProfile? = null,
         chainPort: Int? = null,
         sniffOverrideDestination: Boolean = true,
@@ -723,7 +740,7 @@ internal class IosEngineController(
         socksPassword = socksPassword,
         routing = routing,
         traffic = traffic,
-        routingProfile = null,
+        routingProfile = routingProfile,
         singboxGeositeBase = profilesState.singboxGeositeBase,
         singboxGeoipBase = profilesState.singboxGeoipBase,
         dnsStrategyOverride = "ipv4_only",

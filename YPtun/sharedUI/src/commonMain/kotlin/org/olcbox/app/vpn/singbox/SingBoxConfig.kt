@@ -22,6 +22,7 @@ import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.vpn.xray.RuBlocklist
 
 /**
  * Builds a sing-box (1.11+) JSON configuration from a [ProxyProfile].
@@ -584,6 +585,14 @@ object SingBoxConfig {
                             put("action", "reject")
                         }
                     }
+                    if (traffic.blockRuDomains) {
+                        addJsonObject {
+                            putJsonArray("domain_regex") {
+                                RuBlocklist.hostRegexps.map { it.removePrefix("regexp:") }.forEach { add(it) }
+                            }
+                            put("action", "reject")
+                        }
+                    }
                     // Routing profile and the advanced toggles are COMBINED (not either/or): the
                     // profile's buckets run alongside the user's verbatim rules and the
                     // bypassRussia/blockAds/block-direct toggles.
@@ -1115,6 +1124,7 @@ object SingBoxConfig {
             return buildJsonObject {
                 put("enabled", true)
                 put("protocol", advanced.muxProtocol)
+                put("max_connections", advanced.muxMaxStreams)
                 put("max_streams", advanced.muxMaxStreams)
             }
         }

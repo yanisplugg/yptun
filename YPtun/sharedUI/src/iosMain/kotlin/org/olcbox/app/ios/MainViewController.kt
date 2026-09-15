@@ -455,19 +455,41 @@ private fun IosApp(
                     lightThemeEnabled = lightTheme,
                     hwid = hwid,
                     routing = routing,
-                    onRoutingChanged = dependencies.settings::setRouting,
+                    onRoutingChanged = {
+                        dependencies.settings.setRouting(it)
+                        if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                    },
                     routingProfilesState = routingProfiles,
                     geoUpdateStatus = geoUpdateStatus,
-                    onRoutingProfileSaved = { dependencies.settings.saveRoutingProfile(it) },
-                    onRoutingProfileDeleted = dependencies.settings::deleteRoutingProfile,
-                    onGlobalRoutingProfileChanged = dependencies.settings::setGlobalRoutingProfile,
-                    onRoutingProfileLinkImported = dependencies.settings::importRoutingProfileLink,
+                    onRoutingProfileSaved = {
+                        dependencies.settings.saveRoutingProfile(it)
+                        if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                    },
+                    onRoutingProfileDeleted = {
+                        dependencies.settings.deleteRoutingProfile(it)
+                        if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                    },
+                    onGlobalRoutingProfileChanged = {
+                        dependencies.settings.setGlobalRoutingProfile(it)
+                        if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                    },
+                    onRoutingProfileLinkImported = {
+                        val ok = dependencies.settings.importRoutingProfileLink(it)
+                        if (ok && homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                        ok
+                    },
                     onGeoSourcesChanged = dependencies.settings::setGeoSources,
                     onUpdateGeoNow = dependencies.settings::updateGeoAssetsNow,
                     trafficSettings = trafficSettings,
-                    onTrafficChanged = dependencies.settings::setTrafficSettings,
+                    onTrafficChanged = {
+                        dependencies.settings.setTrafficSettings(it)
+                        if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                    },
                     appBehavior = appBehavior,
-                    onAppBehaviorChanged = dependencies.settings::setAppBehavior,
+                    onAppBehaviorChanged = {
+                        dependencies.settings.setAppBehavior(it)
+                        if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                    },
                     // Telegram-over-WARP is an Android/desktop feature; the section is hidden on iOS.
                     telegramProxyState = TelegramProxyState.Stopped,
                     language = language,

@@ -205,6 +205,9 @@ class IosVpnManager(
                     }
                 }
                 result.onFailure {
+                    if (it is kotlinx.coroutines.CancellationException || it.message?.contains("cancelled", ignoreCase = true) == true) {
+                        return@launch
+                    }
                     val message = it.message ?: "VPN start failed"
                     addLog("VPN start failed: $message")
                     setStatus(VpnStatus.Error(message))
