@@ -2568,39 +2568,36 @@ private fun WdttPlusAdvanced(
     enabled: Boolean,
     onChange: ((WdttPlusOptions) -> WdttPlusOptions) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(options.copy(rawMode = false, rawPort = 0, rawDirect = false) != WdttPlusOptions()) }
+    var expanded by remember { mutableStateOf(options.copy(rawMode = false, rawPort = 0) != WdttPlusOptions()) }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // The primary choice, so it sits outside the collapsible block.
-        SettingsDropdown(
-            label = "Режим подключения",
-            selectedValue = when {
-                !options.rawMode -> "wg"
-                options.rawDirect -> "raw_direct"
-                else -> "raw"
-            },
-            options = listOf("wg", "raw", "raw_direct"),
-            enabled = enabled,
-            onValueSelected = { v -> onChange { it.copy(rawMode = v != "wg", rawDirect = v == "raw_direct") } },
-            valueLabel = {
-                when (it) {
-                    "raw" -> "Raw — без WireGuard, быстрее"
-                    "raw_direct" -> "Raw напрямую — максимум скорости"
-                    else -> "WG — WireGuard, любой сервер"
-                }
-            }
+        Text(
+            text = "Режим подключения",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface
         )
-        if (options.rawMode && options.rawDirect) {
-            Text(
-                text = "Туннель Android идёт прямо в ядро qWDTT, как в самом qWDTT: быстрее всего, но профили " +
-                    "маршрутизации и второй прокси здесь не работают (выбор приложений — работает). " +
-                    "Только Android в режиме VPN; в режиме «Прокси» и на ПК — как обычный Raw.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            listOf(false to "WG", true to "Raw").forEach { (raw, label) ->
+                FilterChip(
+                    selected = options.rawMode == raw,
+                    onClick = { onChange { it.copy(rawMode = raw) } },
+                    enabled = enabled,
+                    label = { Text(label, style = MaterialTheme.typography.titleMedium) },
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
+            }
         }
+        Text(
+            text = if (options.rawMode) "Raw — без WireGuard, быстрее" else "WG — WireGuard, любой сервер",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         if (options.rawMode) {
             VkTurnField(
                 value = options.rawPort.takeIf { it > 0 }?.toString().orEmpty(),
