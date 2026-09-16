@@ -31,19 +31,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
                 ?? FileManager.default.temporaryDirectory
             let configURL = containerURL.appendingPathComponent("hev_config.yml")
+            let config: Socks5Tunnel.Config
             do {
                 try hevConfig.write(to: configURL, atomically: true, encoding: .utf8)
-                session.log(line: "Saved hev-socks5-tunnel config to \(configURL.path)")
+                config = .file(path: configURL)
             } catch {
                 session.log(line: "Failed to write hev config file: \(error.localizedDescription)")
-            }
-
-            if let sockFd = self.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32 {
-                session.log(line: "utun packetFlow socket fd: \(sockFd)")
+                config = .string(content: hevConfig)
             }
 
             session.log(line: "Launching hev-socks5-tunnel...")
-            Socks5Tunnel.run(withConfig: .file(path: configURL)) { code in
+            Socks5Tunnel.run(withConfig: config) { code in
                 session.log(line: "hev-socks5-tunnel exited with code \(code)")
                 NSLog("YPtun: hev-socks5-tunnel exited with \(code)")
             }
