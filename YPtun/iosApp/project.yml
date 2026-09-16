@@ -125,6 +125,7 @@ targets:
       - path: YPtunWidget
     settings:
       base:
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         PRODUCT_NAME: YPtunWidget
         PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.widget
         INFOPLIST_FILE: YPtunWidget/Info.plist

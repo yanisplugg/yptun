@@ -556,6 +556,7 @@ struct MediumWidgetView: View {
 
 // MARK: - Lock Screen Views
 
+@available(iOS 16.0, *)
 struct LockScreenCircularView: View {
     let entry: VpnEntry
 
@@ -579,6 +580,7 @@ struct LockScreenCircularView: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct LockScreenRectangularView: View {
     let entry: VpnEntry
 
@@ -619,6 +621,19 @@ struct VpnWidgetView: View {
             SmallWidgetView(entry: entry)
         case .systemMedium:
             MediumWidgetView(entry: entry)
+        default:
+            if #available(iOS 16.0, *) {
+                lockScreenContent(for: family)
+            } else {
+                SmallWidgetView(entry: entry)
+            }
+        }
+    }
+
+    @available(iOS 16.0, *)
+    @ViewBuilder
+    private func lockScreenContent(for family: WidgetFamily) -> some View {
+        switch family {
         case .accessoryCircular:
             LockScreenCircularView(entry: entry)
         case .accessoryRectangular:
@@ -642,6 +657,20 @@ private extension View {
     }
 }
 
+private var widgetSupportedFamilies: [WidgetFamily] {
+    if #available(iOS 16.0, *) {
+        return [
+            .systemSmall,
+            .systemMedium,
+            .accessoryCircular,
+            .accessoryRectangular,
+            .accessoryInline
+        ]
+    } else {
+        return [.systemSmall, .systemMedium]
+    }
+}
+
 struct VpnWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "org.yptun.app.vpn-widget", provider: VpnProvider()) { entry in
@@ -649,13 +678,7 @@ struct VpnWidget: Widget {
         }
         .configurationDisplayName("YPtun")
         .description(L.ru ? "Состояние VPN и быстрое управление" : "VPN status and quick controls")
-        .supportedFamilies([
-            .systemSmall,
-            .systemMedium,
-            .accessoryCircular,
-            .accessoryRectangular,
-            .accessoryInline
-        ])
+        .supportedFamilies(widgetSupportedFamilies)
     }
 }
 
