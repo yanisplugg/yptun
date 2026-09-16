@@ -7,10 +7,16 @@
 # can be built on the Windows machine the rest of the project is developed on.
 
 name: iOS
+run-name: ${{ inputs.comment != '' && format('iOS: {0}', inputs.comment) || (github.event.head_commit.message != '' && github.event.head_commit.message || format('iOS ({0})', github.ref_name)) }}
 
 on:
   workflow_dispatch:
     inputs:
+      comment:
+        description: 'Комментарий к сборке (отобразится в названии запуска)'
+        required: false
+        type: string
+        default: ''
       upload_to_testflight:
         description: 'Upload build to TestFlight'
         required: false
