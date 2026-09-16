@@ -18,18 +18,6 @@ on:
         required: false
         type: boolean
         default: true
-  push:
-    branches:
-      - feat/testflight-deploy
-    paths:
-      - ".github/workflows/ios.yml"
-      - "YPtun/iosApp/**"
-      - "YPtun/sharedUI/src/iosMain/**"
-      - "YPtun/sharedUI/src/commonMain/**"
-      - "YPtun/sharedUI/build.gradle.kts"
-      - "YPtun/gradle.properties"
-      - "YPtun/gradlew"
-      - "cores/**"
 
 permissions:
   contents: read
