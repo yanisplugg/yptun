@@ -78,6 +78,12 @@ val LocalShowSubscriptionExpiry = staticCompositionLocalOf { false }
 val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
 
 /**
+ * Whether the subscription group header shows the panel's description (`announce` header) under the
+ * title. Provided near the app root from the persisted app-behavior toggle; off by default.
+ */
+val LocalShowSubscriptionDescription = staticCompositionLocalOf { false }
+
+/**
  * When true, a location row that HAS a description hides its protocol/IP "endpoint" subtitle (showing
  * the description in its place). Rows without a description always show the endpoint. On by default.
  */

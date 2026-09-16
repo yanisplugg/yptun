@@ -887,6 +887,8 @@ private fun runApp(args: Array<String>) = application {
                     appBehavior.showSubscriptionExpiry,
                 org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides
                     appBehavior.showSubscriptionAliveCount,
+                org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription provides
+                    appBehavior.showSubscriptionDescription,
                 org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides
                     appBehavior.hideEndpointWhenDescription,
                 org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides

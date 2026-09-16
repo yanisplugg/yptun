@@ -24,7 +24,11 @@ object QwdttUriParser {
         val name: String,
         /** wdtt-server host (no port — the DTLS port defaults to 56000 on the client). */
         val peer: String,
-        /** VK hashes (comma-separated), stored as the VK-TURN vkLink for the WDTT core. */
+        /**
+         * VK hashes, ONE PER LINE — the storage format `VkTurnConfig.vkLink` uses everywhere else
+         * (the location settings edit it as one field per line). The server link packs them
+         * comma-separated; [parse] splits them so each hash lands in its own «Ссылка на звонок VK».
+         */
         val hashes: String,
         val password: String,
         /** Local WireGuard listen port; 0 → the default. */
@@ -48,7 +52,7 @@ object QwdttUriParser {
         return QwdttLink(
             name = p["name"]?.trim().orEmpty(),
             peer = peer,
-            hashes = p["hashes"]?.trim().orEmpty(),
+            hashes = splitHashes(p["hashes"].orEmpty()).joinToString("\n"),
             password = password,
             listenPort = p["port"]?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 0,
             workers = p["workers"]?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: 0,
@@ -61,13 +65,21 @@ object QwdttUriParser {
         val params = buildList {
             if (name.isNotBlank()) add("name" to name)
             add("peer" to vk.wdttPeer.trim())
-            if (vk.vkLink.isNotBlank()) add("hashes" to vk.vkLink.trim())
+            splitHashes(vk.vkLink).takeIf { it.isNotEmpty() }?.let { add("hashes" to it.joinToString(",")) }
             if (vk.wdttWorkers > 0) add("workers" to vk.wdttWorkers.toString())
             add("port" to port.toString())
             add("pass" to vk.wdttPassword.trim())
         }
         return SCHEME + "config?" + params.joinToString("&") { (k, v) -> "$k=${encode(v)}" }
     }
+
+    /**
+     * Splits a hash list the way the qWDTT core does (`wdtt/group.go` `ParseHashes`): commas,
+     * semicolons or any whitespace, blanks dropped. Lets the server's comma-separated `hashes=` and
+     * our newline-separated [VkTurnConfig.vkLink] round-trip through the same parser.
+     */
+    private fun splitHashes(raw: String): List<String> =
+        raw.split(',', ';', '\n', '\r', '\t', ' ').map { it.trim() }.filter { it.isNotEmpty() }
 
     /** Minimal RFC 3986 percent-encoding for query values. */
     private fun encode(value: String): String = buildString {

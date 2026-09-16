@@ -1143,6 +1143,24 @@ private fun SubscriptionGroupHeader(
             }
         }
 
+        // The panel's own description for this subscription (Remnawave/Happ `announce` header),
+        // right under the title like Happ. Gated on the app-settings toggle (off by default) and
+        // independent of [info], so a sub that carries ONLY a description still shows it.
+        if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription.current) {
+            first?.metadata?.subscription?.announce?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+
         if (info != null) {
             // Stacked, small font so nothing gets squeezed: last-refresh time on top, auto-refresh
             // interval beneath it.
