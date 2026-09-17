@@ -78,6 +78,24 @@ jobs:
           go version
           java -version
 
+      - name: Cache Kotlin/Native toolchain (~/.konan)
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('YPtun/gradle/libs.versions.toml') }}
+          restore-keys: |
+            konan-${{ runner.os }}-
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('YPtun/gradle/libs.versions.toml', 'YPtun/gradle.properties', 'YPtun/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Cache Go cores (Coreapi.xcframework)
         id: cache-cores
         uses: actions/cache@v4
