@@ -1,11 +1,13 @@
 package org.olcbox.app.vpn.ssh
 
 import com.jcraft.jsch.ChannelExec
+import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Logger
 import com.jcraft.jsch.Session
 import com.jcraft.jsch.UIKeyboardInteractive
 import com.jcraft.jsch.UserInfo
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.Properties
 import java.util.zip.GZIPOutputStream
@@ -218,12 +220,94 @@ internal fun sshOneShot(
 }
 
 /**
- * Lands [data] at [remotePath] using only [sshOneShot] steps: truncate the file, then append the
- * base64-decoded bytes in chunks — each chunk a separate small `printf '…' | base64 -d >> file`
- * command on its OWN fresh connection. base64 is split on 4-char boundaries so the per-chunk decodes
- * concatenate to the exact original. Reports progress through [onLog].
+ * Lands [data] at [remotePath]: **one SFTP transfer first**, chunked base64 only if that fails.
+ *
+ * The chunked path costs one full SSH login per 100 KB — a 20 MB core is ~270 logins and minutes of
+ * wall time. It exists because ONE server (the owner's VPS) resets the link on a second channel, so
+ * it was made the only path for everyone. SFTP on a fresh connection is what every normal server
+ * does in a single transfer, so it is tried first and the slow path stays as the safety net.
+ *
+ * Either way the landed file is verified against [data] before this returns — a truncated upload
+ * used to reach `gunzip` as a corrupt binary with no hint of why.
  */
-internal fun sshUploadInChunks(
+internal fun sshUpload(
+    target: SshTarget,
+    data: ByteArray,
+    remotePath: String,
+    onLog: (String) -> Unit,
+) {
+    val viaSftp = runCatching {
+        sshUploadViaSftp(target, data, remotePath, onLog)
+        sshVerifyUpload(target, data, remotePath, onLog)
+    }
+    if (viaSftp.isSuccess) return
+    onLog("…одним файлом не вышло (${viaSftp.exceptionOrNull()?.message?.take(200)}), грузим частями")
+    sshUploadInChunks(target, data, remotePath, onLog)
+    sshVerifyUpload(target, data, remotePath, onLog)
+}
+
+/** One fresh connection, one SFTP channel, the whole file in one `put`. */
+private fun sshUploadViaSftp(
+    target: SshTarget,
+    data: ByteArray,
+    remotePath: String,
+    onLog: (String) -> Unit,
+) {
+    onLog("…заливаю ${data.size / 1024} КБ одним файлом (SFTP)")
+    val session = openSshSession(
+        target.host, target.port, target.login, target.password, onLog, logProgress = false,
+        privateKey = target.privateKey, privateKeyPassphrase = target.passphrase,
+    )
+    try {
+        val channel = session.openChannel("sftp") as ChannelSftp
+        channel.connect(SSH_CONNECT_TIMEOUT_MS)
+        try {
+            ByteArrayInputStream(data).use { channel.put(it, remotePath, ChannelSftp.OVERWRITE) }
+        } finally {
+            channel.disconnect()
+        }
+    } finally {
+        session.disconnect()
+    }
+}
+
+/**
+ * Confirms the remote file is byte-for-byte what we sent. sha256sum when the server has it (every
+ * mainstream image does), otherwise the byte count — which still catches the realistic failure, a
+ * transfer that stopped early.
+ */
+private fun sshVerifyUpload(
+    target: SshTarget,
+    data: ByteArray,
+    remotePath: String,
+    onLog: (String) -> Unit,
+) {
+    val q = remotePath.shellSingleQuote()
+    val probe = sshOneShot(
+        target,
+        "if command -v sha256sum >/dev/null 2>&1; then sha256sum < $q | cut -d' ' -f1; " +
+            "else printf 'size:'; wc -c < $q; fi",
+        onLog,
+    ).trim()
+    val expected = if (probe.startsWith("size:")) {
+        "size:${data.size}"
+    } else {
+        java.security.MessageDigest.getInstance("SHA-256").digest(data)
+            .joinToString("") { "%02x".format(it) }
+    }
+    val actual = probe.replace(" ", "")
+    if (!actual.equals(expected, ignoreCase = true)) {
+        throw RuntimeException("Загруженный файл не совпал с исходным (ожидали $expected, получили $actual)")
+    }
+}
+
+/**
+ * Fallback path: truncate the file, then append the base64-decoded bytes in chunks — each chunk a
+ * separate small `printf '…' | base64 -d >> file` command on its OWN fresh connection. base64 is
+ * split on 4-char boundaries so the per-chunk decodes concatenate to the exact original. Reports
+ * progress through [onLog].
+ */
+private fun sshUploadInChunks(
     target: SshTarget,
     data: ByteArray,
     remotePath: String,

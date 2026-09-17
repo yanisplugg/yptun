@@ -6,7 +6,7 @@ import org.olcbox.app.vpn.ssh.SshTarget
 import org.olcbox.app.vpn.ssh.ServerBinarySource
 import org.olcbox.app.vpn.ssh.loadServerBinaryGz
 import org.olcbox.app.vpn.ssh.sshOneShot
-import org.olcbox.app.vpn.ssh.sshUploadInChunks
+import org.olcbox.app.vpn.ssh.sshUpload
 
 /**
  * SSH-установщик olcRTC-сервера. Тот же приём, что у freeturn/WDTT/MasterDNS: определяем архитектуру,
@@ -33,7 +33,7 @@ internal class SshOlcRtcServerInstaller(private val binaries: ServerBinarySource
 
             val gz = loadServerBinaryGz(binaries, "olcrtc/olcrtc-linux-$goArch")
             onLog("Загрузка olcRTC (${gz.size / 1024} КБ, по частям)…")
-            sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
+            sshUpload(target, gz, REMOTE_GZ, onLog)
             onLog("Бинарник загружен, ставлю ${options.rooms.size} комнат(ы)…")
 
             val output = sshOneShot(target, script, onLog)

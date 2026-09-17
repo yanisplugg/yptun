@@ -7,7 +7,7 @@ import org.olcbox.app.vpn.ssh.ServerBinarySource
 import org.olcbox.app.vpn.ssh.SshTarget
 import org.olcbox.app.vpn.ssh.loadServerBinaryGz
 import org.olcbox.app.vpn.ssh.sshOneShot
-import org.olcbox.app.vpn.ssh.sshUploadInChunks
+import org.olcbox.app.vpn.ssh.sshUpload
 
 /**
  * SSH-based OpenFlux exit-node installer — the same one-command-per-connection shape as the other
@@ -45,7 +45,7 @@ internal class SshOpenFluxServerInstaller(private val binaries: ServerBinarySour
 
             val gz = loadServerBinaryGz(binaries, "openflux/openflux-server-linux-$goArch")
             onLog("Загрузка выходной ноды (${gz.size / 1024} КБ, по частям)…")
-            sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
+            sshUpload(target, gz, REMOTE_GZ, onLog)
             onLog("Бинарник загружен, ставлю службу…")
 
             val output = sshOneShot(target, buildOpenFluxInstallScript(options), onLog)
