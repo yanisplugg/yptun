@@ -368,9 +368,9 @@ class IosVpnManager(
 
     private val pingClient: HttpClient by lazy {
         createProxyHttpClient(
-            connectTimeoutMs = PING_TIMEOUT_MS,
-            requestTimeoutMs = PING_TIMEOUT_MS,
-            socketTimeoutMs = PING_TIMEOUT_MS,
+            connectTimeoutMs = PING_TIMEOUT_MS.toLong(),
+            requestTimeoutMs = PING_TIMEOUT_MS.toLong(),
+            socketTimeoutMs = PING_TIMEOUT_MS.toLong(),
         )
     }
 
