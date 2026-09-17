@@ -36,6 +36,17 @@ internal class IosEngineController(
     var activeProxyCore: ProxyCore = ProxyCore.SingBox
         private set
 
+    /**
+     * Proxy mode only: the HTTP port the device's proxy settings are pointed at, 0 while the tunnel
+     * must capture packets. Stays 0 for engines whose exit is a bare SOCKS listener with no core in
+     * front of it (Stealth, MasterDNS without a proxy) — there is no HTTP to advertise, so the caller
+     * falls back to TUN rather than raising a tunnel that carries nothing.
+     */
+    var httpProxyPort: Int = 0
+        private set
+
+    private var proxyMode = false
+
     private var masterDnsProxyActive = false
 
     /** olcRTC's local SOCKS port when chaining; the proxy core dials its outbound through it. */
@@ -43,6 +54,9 @@ internal class IosEngineController(
 
     /** AmneziaWG's local SOCKS port (awgproxy). */
     private fun awgLocalPort(socksPort: Int) = socksPort + 2
+
+    /** Where xray's SOCKS inbound moves in proxy mode, so HTTP can take the advertised port. */
+    private fun httpLocalPort(socksPort: Int) = socksPort + 3
 
     /**
      * Starts the engine(s) for [location]; on return the SOCKS5 endpoint accepts connections.
@@ -56,6 +70,8 @@ internal class IosEngineController(
         deviceId: String,
     ) {
         masterDnsProxyActive = false
+        proxyMode = IosSharedStore.loadConnectionMode() == IosSharedStore.MODE_PROXY
+        httpProxyPort = 0
         val config = location.normalized()
         when (config.engine) {
             EngineType.Stealth -> startStealth(config, listenPort, socksUsername, socksPassword, deviceId)
@@ -97,8 +113,24 @@ internal class IosEngineController(
      * downloaded yet. The extension has a deadline to report the tunnel up, and a rule-set fetch that
      * misses it — or fails, which aborts the whole core — is a tunnel that never connects.
      */
-    private fun startSingBox(configJson: String) {
-        core.sbStart(IosRuleSets.localize(configJson, log)).orThrow("sing-box start failed")
+    private fun startSingBox(configJson: String, listenPort: Int) {
+        var prepared = IosRuleSets.localize(configJson, log)
+        if (proxyMode) prepared = IosProxyMode.singBoxMixedInbound(prepared, listenPort)
+        core.sbStart(prepared).orThrow("sing-box start failed")
+        // `mixed` serves HTTP on the very same port as SOCKS, so there is nothing extra to open.
+        if (proxyMode) httpProxyPort = listenPort
+    }
+
+    /** The xray twin of [startSingBox]; see [IosProxyMode] for why HTTP needs its own inbound here. */
+    private fun startXray(configJson: String, listenPort: Int) {
+        val prepared = if (proxyMode) {
+            IosProxyMode.xrayHttpInbound(configJson, LISTEN_HOST, listenPort, httpLocalPort(listenPort))
+        } else {
+            configJson
+        }
+        core.xrayStart(prepared).orThrow("xray start failed")
+        // HTTP takes over the advertised port; xray's SOCKS moved one slot over (see IosProxyMode).
+        if (proxyMode) httpProxyPort = listenPort
     }
 
     // ---------------------------------------------------------------------------------------
@@ -328,7 +360,7 @@ internal class IosEngineController(
                 log("Xray asset path set to $assetPath")
                 core.xraySetAssetPath(assetPath)
             }
-            core.xrayStart(json).orThrow("xray start failed")
+            startXray(json, listenPort)
         } else {
             if (isAwg) log("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4")
             if (isHy2) log("Hysteria2 outbound: native sing-box (QUIC allowed)")
@@ -365,7 +397,7 @@ internal class IosEngineController(
                 logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
-            startSingBox(json)
+            startSingBox(json, listenPort)
         }
 
         if (!IosNet.awaitLocalPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
@@ -482,7 +514,7 @@ internal class IosEngineController(
             )
             activeProxyCore = ProxyCore.Xray
             if (assetPath.isNotEmpty()) core.xraySetAssetPath(assetPath)
-            core.xrayStart(xrayJson).orThrow("xray start failed")
+            startXray(xrayJson, listenPort)
         } else {
             val json = SingBoxConfig.build(
                 profile = proxy,
@@ -503,7 +535,7 @@ internal class IosEngineController(
                 cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
             )
             activeProxyCore = ProxyCore.SingBox
-            startSingBox(json)
+            startSingBox(json, listenPort)
         }
 
         if (!IosNet.awaitLocalPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
@@ -680,7 +712,7 @@ internal class IosEngineController(
             }
             activeProxyCore = ProxyCore.Xray
             log("Starting Xray (VK-TURN, $outboundType) via $listenAddr")
-            core.xrayStart(xrayJson).orThrow("xray start failed")
+            startXray(xrayJson, listenPort)
         } else {
             val json = when (outboundType) {
                 VkTurnConfig.OUTBOUND_AMNEZIAWG -> {
@@ -728,7 +760,7 @@ internal class IosEngineController(
                 }
             }
             log("Starting sing-box (VK-TURN, $outboundType) via $listenAddr")
-            startSingBox(json)
+            startSingBox(json, listenPort)
         }
 
         if (!IosNet.awaitLocalPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {

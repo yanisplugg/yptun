@@ -26,6 +26,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 ))
                 return
             }
+            // Proxy mode (empty bridge config): nothing is captured, the device is just pointed at the
+            // core's HTTP listener. Kotlin deliberately leaves these settings to Swift.
+            if hevConfig.isEmpty {
+                self.applyProxySettings(port: Int(session.httpProxyPort), session: session, completionHandler: completionHandler)
+                return
+            }
             // Write config to file: Tun2SocksKit .string mode has known YAML parsing/length issues, .file mode is reliable.
             let appGroup = "group.org.yptun.app"
             let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
@@ -45,6 +51,44 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 session.log(line: "hev-socks5-tunnel exited with code \(code)")
                 NSLog("YPtun: hev-socks5-tunnel exited with \(code)")
             }
+            completionHandler(nil)
+            PacketTunnelProvider.refreshWidgets()
+        }
+    }
+
+    /// Proxy mode: a tunnel that routes nothing and only advertises an HTTP proxy.
+    ///
+    /// The address stays on loopback — on iOS `lo0` is shared between processes, so a listener the
+    /// extension opened is reachable from every app on the device. No included routes, so no packet
+    /// ever enters the tunnel: apps that honour the system proxy (anything on URLSession/CFNetwork)
+    /// go through the core, the rest keep talking to the network directly.
+    private func applyProxySettings(
+        port: Int,
+        session: IosTunnelSession,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "198.51.100.2")
+        let ipv4 = NEIPv4Settings(addresses: ["198.51.100.1"], subnetMasks: ["255.255.255.255"])
+        ipv4.includedRoutes = []
+        settings.ipv4Settings = ipv4
+
+        let server = NEProxyServer(address: "127.0.0.1", port: port)
+        let proxy = NEProxySettings()
+        proxy.httpEnabled = true
+        proxy.httpServer = server
+        proxy.httpsEnabled = true
+        proxy.httpsServer = server
+        proxy.excludeSimpleHostnames = true
+        proxy.matchDomains = [""]
+        settings.proxySettings = proxy
+
+        setTunnelNetworkSettings(settings) { error in
+            if let error {
+                session.log(line: "Proxy mode settings failed: \(error.localizedDescription)")
+                completionHandler(error)
+                return
+            }
+            session.log(line: "Proxy mode active on 127.0.0.1:\(port)")
             completionHandler(nil)
             PacketTunnelProvider.refreshWidgets()
         }

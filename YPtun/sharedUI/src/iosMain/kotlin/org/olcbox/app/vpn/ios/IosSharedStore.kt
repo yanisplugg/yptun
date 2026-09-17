@@ -119,6 +119,22 @@ object IosSharedStore {
 
     fun loadUi(): IosUiSettings = load("ui.json", IosUiSettings.serializer()) { IosUiSettings() }
     fun saveUi(value: IosUiSettings) = save("ui.json", IosUiSettings.serializer(), value)
+
+    /**
+     * "tun" (default) or "proxy" — read by the extension when it decides whether to capture the
+     * device's packets or only advertise an HTTP proxy. A plain file rather than a field on
+     * AppBehaviorSettings: that model is shared with every other platform, and this choice is
+     * meaningless on them.
+     */
+    fun loadConnectionMode(): String =
+        readText(CONNECTION_MODE_FILE)?.trim()?.takeIf { it == MODE_PROXY } ?: MODE_TUN
+
+    fun saveConnectionMode(value: String) =
+        writeText(CONNECTION_MODE_FILE, if (value == MODE_PROXY) MODE_PROXY else MODE_TUN)
+
+    const val MODE_TUN = "tun"
+    const val MODE_PROXY = "proxy"
+    private const val CONNECTION_MODE_FILE = "connection_mode.txt"
 }
 
 /**

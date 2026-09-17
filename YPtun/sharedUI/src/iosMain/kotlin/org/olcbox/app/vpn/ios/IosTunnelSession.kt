@@ -67,6 +67,13 @@ class IosTunnelSession(
     private var engineType: EngineType? = null
 
     /**
+     * Proxy mode: the HTTP port the device's proxy settings must point at, 0 in TUN mode. Swift reads
+     * it after [start] reports success with an empty bridge config and applies NEProxySettings itself.
+     */
+    var httpProxyPort: Int = 0
+        private set
+
+    /**
      * Starts the cores and applies the tunnel settings; [completion] gets the hev-socks5-tunnel YAML to
      * run, or an error text (then nothing is left running).
      */
@@ -88,6 +95,22 @@ class IosTunnelSession(
                 engineType = location.engine
 
                 val traffic = IosSharedStore.loadTraffic()
+
+                // Proxy mode: no packets are captured, so there is no bridge to run and no routes to
+                // install — the app tells the system to send proxy-aware traffic to the core's own HTTP
+                // listener instead. An empty bridge config is how Swift is told to take that path. The
+                // engine reports 0 when its exit is a bare SOCKS listener with no HTTP in front of it
+                // (Stealth, MasterDNS without a proxy); then this falls back to the normal tunnel rather
+                // than raising one that carries nothing.
+                httpProxyPort = engine.httpProxyPort
+                if (httpProxyPort > 0) {
+                    log("Proxy mode: HTTP proxy on $PROXY_HOST:$httpProxyPort, packets are NOT captured")
+                    return@runCatching ""
+                }
+                if (IosSharedStore.loadConnectionMode() == IosSharedStore.MODE_PROXY) {
+                    log("Proxy mode is not available for engine=${location.engine} — using the tunnel")
+                }
+
                 val bypassLan = IosSharedStore.loadRouting().bypassLan
                 applyNetworkSettings(traffic.mtu, bypassLan)
                 log("Tunnel settings applied (mtu=${traffic.mtu}, bypassLan=$bypassLan)")
@@ -269,6 +292,8 @@ class IosTunnelSession(
         private const val MAX_LOG_BYTES = 512L * 1024
 
         private const val SOCKS_PORT = 10808
+        /** Loopback is shared between processes on iOS, so other apps reach the extension's listener. */
+        const val PROXY_HOST = "127.0.0.1"
         // TEST-NET-2 (RFC 5737): outside FakeDNS pool (198.18.0.0/15) and LAN bypass ranges
         private const val TUN_IPV4_ADDRESS = "198.51.100.1"
         private const val TUN_IPV4_REMOTE = "198.51.100.2"

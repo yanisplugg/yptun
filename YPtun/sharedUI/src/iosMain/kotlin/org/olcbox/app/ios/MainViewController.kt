@@ -49,6 +49,7 @@ import org.olcbox.app.vpn.AndroidSplitTunnelSettings
 import org.olcbox.app.vpn.IosVpnManager
 import org.olcbox.app.vpn.VpnStatus
 import org.olcbox.app.vpn.ios.IosSettingsController
+import org.olcbox.app.vpn.ios.IosSharedStore
 import org.olcbox.app.vpn.telegram.TelegramProxyState
 import platform.UIKit.UIViewController
 
@@ -189,6 +190,12 @@ private fun IosApp(
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf<AppScreen>(AppScreen.Home) }
     var isAppSettingsOpen by remember { mutableStateOf(false) }
+    // TUN (capture every packet, the default) vs Proxy (advertise the core's HTTP proxy to the system
+    // and capture nothing) — see IosProxyMode. Kept in the App Group so the extension reads the same
+    // choice when the tunnel is started from Settings or the widget.
+    var connectionMode by remember {
+        mutableStateOf(AndroidConnectionMode.fromValue(IosSharedStore.loadConnectionMode()))
+    }
     var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
     var updateStatusText by remember { mutableStateOf<String?>(null) }
     var updateDownloadProgress by remember { mutableStateOf<Float?>(null) }
@@ -508,9 +515,7 @@ private fun IosApp(
 
             if (isAppSettingsOpen) {
                 AppSettingsSheet(
-                    // iOS runs a single connection mode (a Network Extension packet tunnel). The
-                    // mode picker is hidden on this platform, so the value is fixed.
-                    selectedMode = AndroidConnectionMode.Tun,
+                    selectedMode = connectionMode,
                     proxySettings = AndroidSocksProxySettings(
                         host = socksProxySettings.host,
                         port = socksProxySettings.port,
@@ -617,7 +622,13 @@ private fun IosApp(
                     onAccentColorSelected = dependencies.settings::setAccentColor,
                     onTextColorSelected = dependencies.settings::setTextColor,
                     onBackgroundColorSelected = dependencies.settings::setBackgroundColor,
-                    onModeSelected = {},
+                    onModeSelected = { mode ->
+                        connectionMode = mode
+                        IosSharedStore.saveConnectionMode(mode.value)
+                        // The mode decides how the extension sets the tunnel up, so it only takes
+                        // effect on the next connect.
+                        if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                    },
                     // The host is fixed at 127.0.0.1 on iOS (the listener lives in the tunnel
                     // process), so only the credentials and the port are applied.
                     onProxySettingsSaved = { _, username, password, port ->

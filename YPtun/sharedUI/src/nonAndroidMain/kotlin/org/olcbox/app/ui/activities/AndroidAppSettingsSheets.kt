@@ -968,17 +968,13 @@ private fun ConnectionSettingsContent(
         Spacer(Modifier.height(20.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            // iOS runs one mode only — a Network Extension packet tunnel; there is no proxy-only
-            // mode to switch to, so the picker would offer a choice that does nothing.
-            if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
-                SettingsNavigationRow(
-                    title = s.connectionMode,
-                    value = selectedMode.settingsSummary(),
-                    icon = selectedMode.icon(),
-                    enabled = enabled,
-                    onClick = onConnectionModeClick
-                )
-            }
+            SettingsNavigationRow(
+                title = s.connectionMode,
+                value = selectedMode.settingsSummary(),
+                icon = selectedMode.icon(),
+                enabled = enabled,
+                onClick = onConnectionModeClick
+            )
             SettingsNavigationRow(
                 title = s.socks5Proxy,
                 value = "${proxySettings.host}:${proxySettings.port}",
