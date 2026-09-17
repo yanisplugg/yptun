@@ -1719,9 +1719,29 @@ class LocationsRepositoryImpl(
             val payload = value.removePrefix("base64:").trim()
             SubscriptionDecoder.decodeBase64Chunk(payload) ?: payload
         } else {
-            value
+            repairLatin1Utf8(value)
         }
         return decoded.trim().takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Repairs a header whose UTF-8 bytes were read as ISO-8859-1.
+     *
+     * HTTP header values are Latin-1 by the letter of RFC 7230, so a panel that puts a Cyrillic
+     * subscription name straight into `profile-title` (3x-ui and Marzban do; Remnawave wraps it in
+     * `base64:` instead) arrives with every UTF-8 byte turned into its own Latin-1 character — the
+     * "Ð¿Ñ€Ð¾Ñ„Ð¸Ð»ÑŒ" mojibake the user sees as a wrong subscription name.
+     *
+     * Only a string that is (a) entirely representable in Latin-1 and (b) valid UTF-8 when read back
+     * as bytes can be that mis-decoding, and for such a string the UTF-8 reading is the intended text.
+     * Plain ASCII fails (a) trivially — no byte is ≥ 0x80 — and text that already decoded correctly
+     * carries characters above U+00FF, so both are returned untouched.
+     */
+    private fun repairLatin1Utf8(value: String): String {
+        if (value.none { it.code in 0x80..0xFF }) return value
+        if (value.any { it.code > 0xFF }) return value
+        val bytes = ByteArray(value.length) { value[it].code.toByte() }
+        return runCatching { bytes.decodeToString(throwOnInvalidSequence = true) }.getOrDefault(value)
     }
 
     /** Formats a byte count into a compact human string, e.g. "230.4 GB". */

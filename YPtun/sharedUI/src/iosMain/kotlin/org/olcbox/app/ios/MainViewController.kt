@@ -31,6 +31,8 @@ import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.LocationViewModel
+import org.olcbox.app.ui.i18n.LocalizationState
+import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.ui.navigation.AppScreen
 import org.olcbox.app.ui.theme.AppTheme
 import org.olcbox.app.update.AppUpdateInfo
@@ -83,6 +85,39 @@ class IosAppSession internal constructor(
 
     fun stopVpn() {
         dependencies.vpnManager.stopVpn()
+    }
+
+    /** The widget's / a `yptun://control/auto` link's "pick the fastest server" request. */
+    fun requestAutoSelect() {
+        org.olcbox.app.widget.WidgetAutoSignal.request()
+    }
+
+    /**
+     * A `yptun://` link that is not a control command — an inbound share, a subscription URL, a
+     * `yptun://routing/…` profile bundle or the payload of `yptun://import/…`. Swift percent-decodes
+     * the payload and hands the text over; from here it is the same importer the paste / QR paths use,
+     * mirroring Android's AppActivity.handleDeepLink. Without this, tapping one of our own share links
+     * on an iPhone opened the app and did nothing at all.
+     */
+    fun importLink(text: String) {
+        val link = text.trim()
+        if (link.isEmpty()) return
+        val strings = stringsFor(LocalizationState.effective)
+        // Routing profiles are a separate store from locations; this returns false for anything else.
+        if (dependencies.settings.importRoutingProfileLink(link)) {
+            platformBridge.showMessage(strings.routingImportApply)
+            return
+        }
+        dependencies.homeViewModel.onImportFullConfig(
+            rawText = link,
+            onComplete = {
+                dependencies.locationViewModel.loadLocations {
+                    dependencies.homeViewModel.loadCurrentConfig()
+                }
+                platformBridge.showMessage(strings.importedFromLink)
+            },
+            onError = { message -> platformBridge.showMessage(message) }
+        )
     }
 
     /** Stop, wait until the tunnel is really down (a start while it is still stopping gets lost), start. */
@@ -246,7 +281,47 @@ private fun IosApp(
             hwid = runCatching { dependencies.locationsRepository.getDeviceIdentity() }.getOrDefault("")
         }
 
+        // «Сохранять результаты пингов»: seed the list from the saved pass once, then route each
+        // completed pass back into the persisted settings. The mechanism is shared (seedPings /
+        // onPingsCompleted); only Android had ever hooked it up, so on iOS the toggle did nothing and
+        // every launch showed a blank list until the user pinged again. Same block as AndroidMainScreen's.
+        val pingsSeeded = remember { mutableStateOf(false) }
+        LaunchedEffect(appBehavior.savePingResults) {
+            if (appBehavior.savePingResults) {
+                if (!pingsSeeded.value && appBehavior.lastPingResults.isNotEmpty()) {
+                    dependencies.locationViewModel.seedPings(appBehavior.lastPingResults)
+                }
+                pingsSeeded.value = true
+                dependencies.locationViewModel.onPingsCompleted = { results ->
+                    dependencies.settings.setAppBehavior(
+                        dependencies.settings.appBehavior.value.copy(lastPingResults = results)
+                    )
+                }
+            } else {
+                dependencies.locationViewModel.onPingsCompleted = null
+                if (dependencies.settings.appBehavior.value.lastPingResults.isNotEmpty()) {
+                    dependencies.settings.setAppBehavior(
+                        dependencies.settings.appBehavior.value.copy(lastPingResults = emptyMap())
+                    )
+                }
+            }
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
+            // The row/header switches the settings screen offers are read through composition locals.
+            // iOS never provided them, so "ping as a tick", the live/total badge, the subscription end
+            // date and the description-instead-of-endpoint subtitle were dead switches on the phone —
+            // the defaults in LocationRow.kt applied forever. Same block as AndroidMainScreen's.
+            androidx.compose.runtime.CompositionLocalProvider(
+                org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides
+                    appBehavior.pingResultDisplay,
+                org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides
+                    appBehavior.showSubscriptionExpiry,
+                org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides
+                    appBehavior.showSubscriptionAliveCount,
+                org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides
+                    appBehavior.hideEndpointWhenDescription
+            ) {
             OlcboxAppContent(
                 homeViewModel = dependencies.homeViewModel,
                 locationViewModel = dependencies.locationViewModel,
@@ -429,6 +504,7 @@ private fun IosApp(
                     dependencies.settings.setAppBehavior(updated)
                 }
             )
+            }
 
             if (isAppSettingsOpen) {
                 AppSettingsSheet(
@@ -611,7 +687,13 @@ private fun iosSubscriptionItems(items: List<LocationItem>): List<SubscriptionSh
                     ?: locations.first().fullName,
                 updateIntervalHours = metadata?.updateIntervalHours,
                 lastRefreshAtEpochMs = metadata?.lastRefreshAtEpochMs,
-                locationCount = locations.size
+                locationCount = locations.size,
+                // The panel's own description of the subscription: the support link, the page where it
+                // is managed/renewed and the broadcast notice. iOS dropped all three, so the
+                // subscription card showed a bare name while Android showed the panel's text.
+                supportUrl = metadata?.supportUrl,
+                webPageUrl = metadata?.webPageUrl,
+                announce = metadata?.announce
             )
         }
 }

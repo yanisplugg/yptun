@@ -109,18 +109,39 @@ struct OlcboxIosApp: App {
         }
     }
 
+    /// `yptun://` deep links, same contract as Android's AppActivity.handleDeepLink:
+    /// `control/{start,stop,restart,auto}` drives the tunnel, everything else is a config to import —
+    /// `import/<payload>` (percent-encoded), `inbound?…` (our own share link), `routing/…` (a routing
+    /// profile bundle). Only `control` was handled before, so tapping a shared YPtun link did nothing.
     private func handleUrl(_ url: URL) {
         guard url.scheme?.lowercased() == "yptun" else { return }
-        if url.host == "control" {
-            let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            if path == "start" {
-                appSession.startVpn()
-            } else if path == "stop" {
-                appSession.stopVpn()
-            } else if path == "restart" {
-                appSession.restartVpn()
+        let host = url.host?.lowercased() ?? ""
+
+        if host == "control" {
+            switch url.lastPathComponent.lowercased() {
+            case "start": appSession.startVpn()
+            case "stop": appSession.stopVpn()
+            case "restart": appSession.restartVpn()
+            // The Home screen consumes this and runs the fastest-server search.
+            case "auto": appSession.requestAutoSelect()
+            default: break
             }
+            return
         }
+
+        let text = url.absoluteString
+        if host == "import" {
+            // Everything after `yptun://import/` is the config itself, usually percent-encoded.
+            let prefix = "yptun://import/"
+            guard text.count > prefix.count else { return }
+            let raw = String(text.dropFirst(prefix.count))
+            appSession.importLink(text: raw.removingPercentEncoding ?? raw)
+            return
+        }
+
+        // `inbound?…`, `routing/…` and anything else we may add: the shared importer recognises the
+        // whole link, so hand it over verbatim rather than guessing at its shape here.
+        appSession.importLink(text: text)
     }
 }
 

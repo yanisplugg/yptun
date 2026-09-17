@@ -550,6 +550,11 @@ class IosVpnManager(
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
                 setStatus(VpnStatus.Connected)
                 triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
+                // Now that traffic goes through the tunnel, retry the geo databases if they are still
+                // missing: without them a verbatim Xray config loses every geosite:/geoip: rule, and the
+                // one moment they are needed (the connect path, inside the extension) is the one moment
+                // the device has no working route to fetch them. No-op once they are on disk.
+                settingsController?.ensureGeoAssets()
                 scope.launch {
                     delay(1500)
                     val ms = tunnelPing()

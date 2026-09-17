@@ -78,6 +78,35 @@ class IosSettingsController {
         ThemeState.accent = ui.accentArgb?.let { Color(it) }
         ThemeState.textColor = ui.textArgb?.let { Color(it) }
         ThemeState.background = ui.backgroundArgb?.let { Color(it) }
+        ensureGeoAssets()
+    }
+
+    /**
+     * Downloads geoip.dat / geosite.dat from the APP the first time they are missing.
+     *
+     * They used to be fetched only from inside the packet-tunnel extension, on the connect path: an
+     * extension has a ~50 MB memory budget and is reached at the one moment the device has no working
+     * tunnel yet, so on exactly the networks this app exists for the download failed — and xray then
+     * ran the user's config with EVERY `geosite:` / `geoip:` selector stripped out (see
+     * IosEngineController.ensureRawConfigGeoAssetPath). To the user that reads as "the JSON config
+     * imported, but its rules are empty". Here there is no memory cap, no hurry, and a failure costs
+     * nothing: the extension still falls back to its own download.
+     *
+     * Called once at startup and again after each successful connect — the second call is the one that
+     * usually lands, because by then the traffic goes through the tunnel.
+     */
+    fun ensureGeoAssets() {
+        if (IosGeoAssets.hasAssets()) return
+        scope.launch {
+            val state = _routingProfiles.value
+            val ok = runCatching { IosGeoAssets.ensureAssets(state.geoipUrl, state.geositeUrl) }
+                .getOrDefault(false)
+            if (ok) {
+                setRoutingProfilesState(
+                    _routingProfiles.value.copy(geoLastUpdated = Clock.System.now().toEpochMilliseconds())
+                )
+            }
+        }
     }
 
     private fun systemLanguage(): AppLanguage {
