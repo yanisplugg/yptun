@@ -7,7 +7,7 @@ import org.olcbox.app.vpn.ssh.ServerBinarySource
 import org.olcbox.app.vpn.ssh.loadServerBinaryGz
 import org.olcbox.app.vpn.ssh.shellSingleQuote
 import org.olcbox.app.vpn.ssh.sshOneShot
-import org.olcbox.app.vpn.ssh.sshUploadInChunks
+import org.olcbox.app.vpn.ssh.sshUpload
 
 /**
  * SSH-based MasterDnsVPN server installer. Connects with password or key auth, detects the VPS
@@ -50,7 +50,7 @@ internal class SshMasterDnsServerInstaller(private val binaries: ServerBinarySou
 
             val gz = loadServerBinaryGz(binaries, "masterdns/masterdns-server-linux-$goArch")
             onLog("Загрузка сервера (${gz.size / 1024} КБ, по частям)…")
-            sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
+            sshUpload(target, gz, REMOTE_GZ, onLog)
             onLog("Бинарник загружен, ставлю службу и генерирую ключ…")
 
             val output = sshOneShot(target, buildInstallScript(options), onLog)

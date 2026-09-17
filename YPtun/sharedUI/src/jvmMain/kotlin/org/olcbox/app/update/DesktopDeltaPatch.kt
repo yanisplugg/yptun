@@ -71,6 +71,8 @@ internal object DesktopDeltaPatch {
         /** files in the app directory that the new build no longer has. */
         val deletions: List<Path>,
         val stagingDir: Path,
+        /** The installation being updated — what decides whether the swapper needs elevation. */
+        val appDir: Path,
     )
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -138,7 +140,12 @@ internal object DesktopDeltaPatch {
                     else -> error("unknown delta operation '${op.op}'")
                 }
             }
-            return Plan(moves = moves, deletions = deletions, stagingDir = stagingDir)
+            return Plan(
+                moves = moves,
+                deletions = deletions,
+                stagingDir = stagingDir,
+                appDir = appDir
+            )
         }
     }
 

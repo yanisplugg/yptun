@@ -66,7 +66,18 @@ class AppUpdateService(
     private val deviceIdentityProvider: DeviceIdentityProvider,
     private val mirror: ReleaseMirror = ReleaseMirror.GitHub,
     private val currentVersion: String = CurrentAppInfo.value.version,
-    private val platform: UpdatePlatform = UpdatePlatform.current()
+    private val platform: UpdatePlatform = UpdatePlatform.current(),
+    /**
+     * SHA-256 (lowercase hex) of the file a delta patch would be applied to on THIS installation —
+     * the installed APK on Android, the app image's `.cfg` on desktop. Null when it can't be read;
+     * the selector then falls back to matching patches by name alone.
+     *
+     * This is what tells "3.5.4 as published" apart from "3.5.4 as built locally", and an install
+     * off the universal APK from one off the arm64 one: same version, different bytes, and a patch
+     * generated against the other one can never apply. Without it the app downloaded a patch that
+     * was guaranteed to fail and then downloaded the whole APK anyway.
+     */
+    private val installedFingerprint: suspend () -> String? = { null }
 ) {
     suspend fun check(
         channel: ReleaseChannel,
@@ -96,7 +107,15 @@ class AppUpdateService(
             asset = asset,
             isUpdateAvailable = available,
             deltaAsset = if (available) {
-                selectDeltaAsset(release.assets, platform, currentVersion, resolvedVersion, asset.name)
+                selectDeltaAsset(
+                    assets = release.assets,
+                    platform = platform,
+                    fromVersion = currentVersion,
+                    toVersion = resolvedVersion,
+                    fullAssetName = asset.name,
+                    // Only hashed once an update actually exists — never on an up-to-date check.
+                    baseSha256 = runCatching { installedFingerprint() }.getOrNull()
+                )
             } else null
         )
     }
@@ -186,7 +205,8 @@ class AppUpdateService(
             platform: UpdatePlatform,
             fromVersion: String,
             toVersion: String,
-            fullAssetName: String
+            fullAssetName: String,
+            baseSha256: String? = null
         ): AppUpdateAsset? {
             val from = fromVersion.removePrefix("v")
             val to = toVersion.removePrefix("v")
@@ -209,9 +229,24 @@ class AppUpdateService(
                 (name.endsWith(".patch.gz") || name.endsWith(".patch")) &&
                     "delta" in name && from in name && to in name
             }
-            val chosen = targets.firstNotNullOfOrNull { target ->
-                candidates.firstOrNull { target in it.name.lowercase() }
-            } ?: candidates.singleOrNull()
+            // A patch name may end in "-<16 hex>" — the SHA-256 prefix of the exact file it was
+            // generated against. When we know what is installed, that beats every name heuristic:
+            // it is the only thing that separates the published 3.5.4 from a locally built one, and
+            // it picks the universal patch for a universal install even though the device's ABI
+            // would have pointed at the arm64 one. A tagged patch whose base is NOT ours can only
+            // fail, so it is dropped here instead of costing the user a wasted download.
+            val localBase = baseSha256?.lowercase()?.takeIf { it.length >= BASE_HASH_LENGTH }
+            val eligible = if (localBase == null) candidates else candidates.filter { asset ->
+                val declared = deltaBaseHashToken(asset.name) ?: return@filter true
+                localBase.startsWith(declared)
+            }
+            val exactBaseMatch = localBase?.let { base ->
+                eligible.firstOrNull { deltaBaseHashToken(it.name)?.let(base::startsWith) == true }
+            }
+            val chosen = exactBaseMatch
+                ?: targets.firstNotNullOfOrNull { target ->
+                    eligible.firstOrNull { target in it.name.lowercase() }
+                } ?: eligible.singleOrNull()
             return chosen?.let {
                 AppUpdateAsset(
                     name = it.name,
@@ -221,6 +256,20 @@ class AppUpdateService(
                 )
             }
         }
+
+        /**
+         * Length of the SHA-256 prefix a delta patch carries in its name. 16 hex characters = 64
+         * bits: far past any accidental collision between two of our own builds, and short enough
+         * to keep the asset name readable. Kept in sync with `scripts/patchgen/make-patch.ps1` and
+         * `make-desktop-patch.ps1`, which are what write it.
+         */
+        const val BASE_HASH_LENGTH = 16
+
+        private val deltaBaseHashRegex = Regex("""-([0-9a-f]{$BASE_HASH_LENGTH})\.patch(\.gz)?$""")
+
+        /** The base-file SHA-256 prefix a patch declares in its name, or null for an older patch. */
+        fun deltaBaseHashToken(name: String): String? =
+            deltaBaseHashRegex.find(name.lowercase())?.groupValues?.get(1)
 
         private fun selectAndroidAsset(
             assets: List<GithubReleaseAsset>,

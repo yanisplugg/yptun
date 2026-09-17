@@ -23,6 +23,7 @@ import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationViewModel
 import org.olcbox.app.ui.theme.AppTheme
 import org.olcbox.app.update.AppUpdateService
+import org.olcbox.app.update.InstalledApkFingerprint
 import org.olcbox.app.vpn.AndroidVpnManager
 
 class AppActivity : ComponentActivity() {
@@ -51,7 +52,10 @@ class AppActivity : ComponentActivity() {
         val configImporter = AndroidConfigImporter(this)
         val logExporter = AndroidLogExporter(this)
         val updateService = AppUpdateService(
-            deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
+            deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource),
+            // Lets the updater pick the delta patch built against THIS exact APK (see
+            // InstalledApkFingerprint) instead of guessing by ABI and downloading one that can't apply.
+            installedFingerprint = { InstalledApkFingerprint.of(applicationContext) }
         )
 
         viewModel = HomeScreenViewModel(

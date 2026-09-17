@@ -8,7 +8,7 @@ import org.olcbox.app.vpn.ssh.ServerBinarySource
 import org.olcbox.app.vpn.ssh.loadServerBinaryGz
 import org.olcbox.app.vpn.ssh.shellSingleQuote
 import org.olcbox.app.vpn.ssh.sshOneShot
-import org.olcbox.app.vpn.ssh.sshUploadInChunks
+import org.olcbox.app.vpn.ssh.sshUpload
 
 /**
  * One-tap qWDTT server install on a VPS, the way the qWDTT app itself deploys: its own `deploy.sh`
@@ -64,14 +64,14 @@ internal class SshWdttServerInstaller(private val binaries: ServerBinarySource) 
 
             val gz = loadServerBinaryGz(binaries, "wdtt/wdtt-server-linux-$goArch")
             onLog("Загрузка сервера qWDTT (${gz.size / 1024} КБ, по частям)…")
-            sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
+            sshUpload(target, gz, REMOTE_GZ, onLog)
             // CR stripped: a Windows checkout can hand the asset over with CRLF, and bash on the VPS
             // then dies on the first line ("syntax error near {\r").
             val script = binaries.bytesOrNull(DEPLOY_SCRIPT_ASSET)
                 ?.let { bytes -> String(bytes, Charsets.UTF_8).replace("\r", "").toByteArray(Charsets.UTF_8) }
                 ?: error("В сборке нет установщика $DEPLOY_SCRIPT_ASSET")
             onLog("Загрузка установщика qWDTT…")
-            sshUploadInChunks(target, script, REMOTE_SCRIPT, onLog)
+            sshUpload(target, script, REMOTE_SCRIPT, onLog)
 
             onLog("Установка qWDTT (пакеты, сеть, служба) — может занять пару минут…")
             val output = sshOneShot(

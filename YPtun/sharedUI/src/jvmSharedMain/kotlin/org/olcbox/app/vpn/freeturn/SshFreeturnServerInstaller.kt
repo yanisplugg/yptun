@@ -6,7 +6,7 @@ import org.olcbox.app.vpn.ssh.SshTarget
 import org.olcbox.app.vpn.ssh.ServerBinarySource
 import org.olcbox.app.vpn.ssh.loadServerBinaryGz
 import org.olcbox.app.vpn.ssh.sshOneShot
-import org.olcbox.app.vpn.ssh.sshUploadInChunks
+import org.olcbox.app.vpn.ssh.sshUpload
 
 /**
  * SSH-based free-turn-proxy server installer. Connects with password auth, detects the VPS
@@ -49,12 +49,12 @@ internal class SshFreeturnServerInstaller(private val binaries: ServerBinarySour
 
             val gz = loadServerBinaryGz(binaries, "freeturn/freeturn-server-linux-$goArch")
             onLog("Загрузка freeturn-сервера (${gz.size / 1024} КБ, по частям)…")
-            sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
+            sshUpload(target, gz, REMOTE_GZ, onLog)
 
             if (options.exit == FreeturnExit.AmneziaWG) {
                 val awgGz = loadServerBinaryGz(binaries, "freeturn/amneziawg-go-linux-$goArch")
                 onLog("Загрузка amneziawg-go (${awgGz.size / 1024} КБ, по частям)…")
-                sshUploadInChunks(target, awgGz, REMOTE_AWG_GZ, onLog)
+                sshUpload(target, awgGz, REMOTE_AWG_GZ, onLog)
             }
             onLog("Бинарники загружены, ставлю ${options.exit.label()} + службу…")
 

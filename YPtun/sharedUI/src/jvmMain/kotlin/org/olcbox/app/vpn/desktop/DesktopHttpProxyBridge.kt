@@ -109,7 +109,7 @@ internal class DesktopHttpProxyBridge(
             val remote = dialViaSocks(host, port)
             if (remote == null) { writeError(cout, "502 Bad Gateway"); client.close(); return }
             val originPath = originForm(target)
-            val rewrittenHead = "$method $originPath $version\r\n" + head.substringAfter("\r\n")
+            val rewrittenHead = plainHttpHead(method, originPath, version, head)
             val rout = remote.getOutputStream()
             rout.write(rewrittenHead.toByteArray(Charsets.ISO_8859_1))
             rout.flush()
@@ -195,6 +195,30 @@ internal class DesktopHttpProxyBridge(
         runCatching { b.close() }
     }
 
+    /**
+     * Rebuilds a plain-HTTP request head in origin form, drops the hop-by-hop headers and pins the
+     * connection to a single request.
+     *
+     * Everything after the head is piped through verbatim, which is only correct while the client
+     * sends ONE request per connection. A client that keeps the proxy connection alive — which every
+     * non-browser HTTP client does, and which is why proxy mode can "work in the browser but not in
+     * other programs" — sends its next absolute-form request down the same socket, and that request
+     * went to the PREVIOUS host whatever host it actually named. Asking for `Connection: close` costs
+     * a TCP handshake per plain-HTTP request (CONNECT/HTTPS, i.e. almost all real traffic, is
+     * untouched) and makes the blind pipe correct by construction.
+     */
+    private fun plainHttpHead(method: String, originPath: String, version: String, head: String): String {
+        val headers = head.substringAfter("\r\n")
+            .split("\r\n")
+            .filter { it.isNotBlank() }
+            .filterNot { line -> HOP_BY_HOP.any { line.startsWith(it, ignoreCase = true) } }
+        return buildString {
+            append(method).append(' ').append(originPath).append(' ').append(version).append("\r\n")
+            headers.forEach { append(it).append("\r\n") }
+            append("Connection: close\r\n\r\n")
+        }
+    }
+
     private fun readHttpHead(input: InputStream): String? {
         val buf = ByteArrayOutputStream()
         var last4 = 0
@@ -260,6 +284,14 @@ internal class DesktopHttpProxyBridge(
         private const val SOCKS_CONNECT_TIMEOUT_MS = 5_000
         private const val SOCKS_IO_TIMEOUT_MS = 20_000
         private const val MAX_HEAD_BYTES = 16 * 1024
+
+        /** Headers belonging to the client↔proxy hop; they must not reach the origin server. */
+        private val HOP_BY_HOP = listOf(
+            "Proxy-Connection:",
+            "Proxy-Authorization:",
+            "Connection:",
+            "Keep-Alive:"
+        )
 
         /**
          * Offset of the HTTP port from the configured SOCKS port. Same +4 Android uses, and clear of

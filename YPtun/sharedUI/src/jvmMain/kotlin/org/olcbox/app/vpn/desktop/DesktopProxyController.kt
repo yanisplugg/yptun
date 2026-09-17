@@ -1,5 +1,6 @@
 package org.olcbox.app.vpn.desktop
 
+import com.sun.jna.Memory
 import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.Advapi32Util
@@ -338,6 +339,7 @@ internal class WindowsProxyController : DesktopProxyController {
         // Best-effort per edit: deleting AutoConfigURL fails when the value is absent, and that
         // must NOT abort enabling the proxy.
         apply(enableHttpEdits(httpProxyHostPort))
+        applyPerConnectionOptions(httpProxyHostPort, PROXY_BYPASS)
         refreshProxySettings()
     }
 
@@ -346,6 +348,7 @@ internal class WindowsProxyController : DesktopProxyController {
         active = false
         if (state == null) return
         apply(restoreEdits(state))
+        applyPerConnectionOptions(state.proxyServer.takeIf { state.proxyEnable != "0x0" }, state.proxyOverride)
         refreshProxySettings()
         backup = null
         removeShutdownHook()
@@ -375,6 +378,7 @@ internal class WindowsProxyController : DesktopProxyController {
             // A previous run left a loopback proxy set but nothing is serving it now → disable it so
             // the machine has working internet again.
             apply(restoreEdits(DISABLED_STATE))
+            applyPerConnectionOptions(null, null)
             refreshProxySettings()
         }
     }
@@ -413,6 +417,61 @@ internal class WindowsProxyController : DesktopProxyController {
     }.getOrNull()
 
     /**
+     * Pushes the proxy into WinINET's **per-connection** settings — what actually decides whether the
+     * machine uses a proxy.
+     *
+     * Writing ProxyEnable/ProxyServer and firing SETTINGS_CHANGED is only half of it: those values are
+     * the legacy mirror, while WinINET reads the ACTIVE CONNECTION's own settings. Until something
+     * rewrites those, the proxy is listed in the UI but not used — which is exactly "прокси
+     * применяется, только если в настройках Windows покопаться": opening Settings -> Proxy is what
+     * rewrote them. INTERNET_OPTION_PER_CONNECTION_OPTION (75) writes them directly, needs no admin
+     * rights, and is what v2rayN does.
+     *
+     * The buffers below are INTERNET_PER_CONN_OPTION_LIST / INTERNET_PER_CONN_OPTION laid out by hand:
+     * both carry a union, which JNA's Structure mapping makes far more error-prone than explicit
+     * offsets. 64-bit is what we ship (x64 + arm64); the 32-bit offsets are there so a 32-bit JRE
+     * degrades to correct rather than to garbage.
+     */
+    private fun applyPerConnectionOptions(proxyHostPort: String?, bypass: String?) {
+        runCatching {
+            val wide = Native.POINTER_SIZE == 8
+            val optionSize = if (wide) 16 else 12
+            val unionOffset = if (wide) 8L else 4L
+            // Every Memory stays referenced until AFTER the call: JNA frees native memory when the
+            // wrapper is collected, and the list points straight at these.
+            val server = proxyHostPort?.let { Memory((it.length + 1) * 2L).apply { setWideString(0, it) } }
+            val bypassText = bypass?.takeIf { it.isNotBlank() } ?: PROXY_BYPASS
+            val bypassMem = Memory((bypassText.length + 1) * 2L).apply { setWideString(0, bypassText) }
+            val count = if (server == null) 1 else 3
+            val options = Memory(optionSize.toLong() * count)
+            options.clear()
+            options.setInt(0L, OPTION_FLAGS)
+            options.setInt(
+                unionOffset,
+                if (server == null) PROXY_TYPE_DIRECT else PROXY_TYPE_DIRECT or PROXY_TYPE_PROXY
+            )
+            if (server != null) {
+                options.setInt(optionSize.toLong(), OPTION_PROXY_SERVER)
+                options.setPointer(optionSize + unionOffset, server)
+                options.setInt(2L * optionSize, OPTION_PROXY_BYPASS)
+                options.setPointer(2L * optionSize + unionOffset, bypassMem)
+            }
+            val listSize = if (wide) 32 else 20
+            val list = Memory(listSize.toLong())
+            list.clear()
+            list.setInt(0L, listSize)                        // dwSize
+            list.setPointer(if (wide) 8L else 4L, null)      // pszConnection: null = the LAN connection
+            val countOffset = if (wide) 16L else 8L
+            list.setInt(countOffset, count)                  // dwOptionCount
+            list.setInt(countOffset + 4, 0)                  // dwOptionError
+            list.setPointer(if (wide) 24L else 16L, options) // pOptions
+            WinINet.INSTANCE.InternetSetOptionW(null, INTERNET_OPTION_PER_CONNECTION_OPTION, list, listSize)
+            // Touched after the call so nothing above can be collected mid-flight.
+            listOfNotNull(server, bypassMem, options, list).size
+        }
+    }
+
+    /**
      * Tells WinINET — and therefore Edge, Chrome and everything else on the system proxy — to
      * re-read the settings. INTERNET_OPTION_SETTINGS_CHANGED = 39, INTERNET_OPTION_REFRESH = 37.
      */
@@ -425,6 +484,16 @@ internal class WindowsProxyController : DesktopProxyController {
 
     companion object {
         private const val REGISTRY_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
+
+        /** What never goes through the proxy. Mirrors v2rayN's default bypass list. */
+        const val PROXY_BYPASS = "<local>;localhost;127.*;10.*;172.16.*;192.168.*"
+
+        private const val INTERNET_OPTION_PER_CONNECTION_OPTION = 75
+        private const val OPTION_FLAGS = 1
+        private const val OPTION_PROXY_SERVER = 2
+        private const val OPTION_PROXY_BYPASS = 3
+        private const val PROXY_TYPE_DIRECT = 1
+        private const val PROXY_TYPE_PROXY = 2
 
         // Represents "no proxy configured" — restoring to this leaves a clean, online machine.
         private val DISABLED_STATE = WindowsProxyState(
@@ -440,9 +509,7 @@ internal class WindowsProxyController : DesktopProxyController {
                 RegistryEdit.Delete("AutoConfigURL"),
                 RegistryEdit.SetString("ProxyServer", hostPort),
                 // Let loopback/intranet bypass the proxy so localhost tooling keeps working.
-                RegistryEdit.SetString(
-                    "ProxyOverride", "<local>;localhost;127.*;10.*;172.16.*;192.168.*"
-                ),
+                RegistryEdit.SetString("ProxyOverride", PROXY_BYPASS),
                 RegistryEdit.SetDword("ProxyEnable", 1)
             )
         }
@@ -473,6 +540,13 @@ private interface WinINet : StdCallLibrary {
         hInternet: Pointer?,
         dwOption: Int,
         lpBuffer: Pointer?,
+        dwBufferLength: Int
+    ): Boolean
+
+    fun InternetSetOptionW(
+        hInternet: Pointer?,
+        dwOption: Int,
+        lpBuffer: Memory?,
         dwBufferLength: Int
     ): Boolean
 

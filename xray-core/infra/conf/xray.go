@@ -242,7 +242,7 @@ func validateOutboundTransportSecurity(rawConfig interface{}, senderSettings *pr
 		if vlessCfg.Encryption != "" && vlessCfg.Encryption != "none" {
 			return nil
 		}
-		if requiresTransportSecurity(vlessCfg.Vnext[0].Address) {
+		if requiresTransportSecurity(vlessCfg.Address) {
 			// LOCAL PATCH: upstream #6303 turns this into a hard error. In this client a plain VLESS
 			// outbound to a public address is a legitimate, already-working topology — it is routinely
 			// the inner leg of a cascade whose outer leg (olcRTC / VK-TURN / MasterDNS / an edge that

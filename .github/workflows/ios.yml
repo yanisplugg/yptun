@@ -12,18 +12,12 @@ name: iOS
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - Beta
-    paths:
-      - ".github/workflows/ios.yml"
-      - "YPtun/iosApp/**"
-      - "YPtun/sharedUI/src/iosMain/**"
-      - "YPtun/sharedUI/src/commonMain/**"
-      - "YPtun/sharedUI/build.gradle.kts"
-      - "YPtun/gradle.properties"
-      - "YPtun/gradlew"
-      - "cores/**"
+    inputs:
+      upload_to_testflight:
+        description: 'Upload build to TestFlight'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -227,6 +221,7 @@ jobs:
           ls -lh *.ipa
 
       - name: Upload to TestFlight
+        if: github.event_name == 'workflow_dispatch' && (inputs.upload_to_testflight == true || inputs.upload_to_testflight == 'true')
         working-directory: YPtun/iosApp
         env:
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}

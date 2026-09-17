@@ -40,7 +40,13 @@ if (-not (Test-Path (Join-Path $out "patchgen\PatchGen.class"))) {
 }
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-$patch = Join-Path $OutDir ("YPtun-delta-{0}-{1}-{2}.patch.gz" -f $FromVer, $ToVer, $Abi)
+# The name carries the first 16 hex of the base APK's SHA-256. The app hashes its own installed APK
+# and only downloads a patch whose base matches, so an install off a DIFFERENT build with the same
+# versionName (a local test build, or the universal APK on an arm64 phone) no longer pulls a patch
+# that is guaranteed to fail. Keep in sync with AppUpdateService.BASE_HASH_LENGTH.
+$baseSha = (Get-FileHash $OldApk -Algorithm SHA256).Hash.ToLower()
+$baseTag = $baseSha.Substring(0, 16)
+$patch = Join-Path $OutDir ("YPtun-delta-{0}-{1}-{2}-{3}.patch.gz" -f $FromVer, $ToVer, $Abi, $baseTag)
 & $java -Xmx2g -cp $out patchgen.PatchGen $OldApk $NewApk $patch
 if ($LASTEXITCODE -ne 0) { throw "patch generation failed" }
 
@@ -57,3 +63,4 @@ $patchMb = [math]::Round((Get-Item $patch).Length / 1MB, 2)
 Write-Host ""
 Write-Host "OK  $patch"
 Write-Host ("    full $fullMb MB -> patch $patchMb MB  (round-trip verified)")
+Write-Host ("    base APK sha256 $baseSha")

@@ -145,6 +145,89 @@ class AppUpdateServiceTest {
         assertEquals("YPtun-delta-3.3.2-3.4.4-universal.patch.gz", selected?.name)
     }
 
+    /**
+     * The real shape of the universal-install bug: on an arm64 phone [AppUpdateService.selectAsset]
+     * always returns the arm64 APK, so the ABI heuristic pointed at the arm64 patch even when the
+     * user had installed the universal one. Only the installed APK's own hash can tell them apart.
+     */
+    @Test
+    fun deltaIsPickedByTheInstalledHashNotTheAbi() {
+        val universalBase = "b".repeat(64)
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-delta-3.5.4-3.5.5-arm64-v8a-${"a".repeat(16)}.patch.gz", "https://example/arm64"),
+            GithubReleaseAsset("YPtun-delta-3.5.4-3.5.5-universal-${"b".repeat(16)}.patch.gz", "https://example/universal")
+        )
+
+        val selected = AppUpdateService.selectDeltaAsset(
+            assets = assets,
+            platform = UpdatePlatform("android", "arm64"),
+            fromVersion = "3.5.4",
+            toVersion = "3.5.5",
+            fullAssetName = "YPtun-v3.5.5-arm64-v8a.apk",
+            baseSha256 = universalBase
+        )
+
+        assertEquals("YPtun-delta-3.5.4-3.5.5-universal-${"b".repeat(16)}.patch.gz", selected?.name)
+    }
+
+    /** A locally built 3.5.4 has the published 3.5.4's version and none of its bytes. */
+    @Test
+    fun deltaFromAnotherBuildOfTheSameVersionIsSkipped() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-delta-3.5.4-3.5.5-arm64-v8a-${"a".repeat(16)}.patch.gz", "https://example/arm64")
+        )
+
+        val selected = AppUpdateService.selectDeltaAsset(
+            assets = assets,
+            platform = UpdatePlatform("android", "arm64"),
+            fromVersion = "3.5.4",
+            toVersion = "3.5.5",
+            fullAssetName = "YPtun-v3.5.5-arm64-v8a.apk",
+            baseSha256 = "c".repeat(64)
+        )
+
+        assertEquals(null, selected)
+    }
+
+    /** Releases published before the hash suffix existed must keep resolving by name alone. */
+    @Test
+    fun untaggedDeltasStillResolveWhenTheBaseHashIsKnown() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-delta-3.5.4-3.5.5-arm64-v8a.patch.gz", "https://example/arm64"),
+            GithubReleaseAsset("YPtun-delta-3.5.4-3.5.5-universal.patch.gz", "https://example/universal")
+        )
+
+        val selected = AppUpdateService.selectDeltaAsset(
+            assets = assets,
+            platform = UpdatePlatform("android", "arm64"),
+            fromVersion = "3.5.4",
+            toVersion = "3.5.5",
+            fullAssetName = "YPtun-v3.5.5-arm64-v8a.apk",
+            baseSha256 = "c".repeat(64)
+        )
+
+        assertEquals("YPtun-delta-3.5.4-3.5.5-arm64-v8a.patch.gz", selected?.name)
+    }
+
+    @Test
+    fun desktopDeltaIsPickedByTheInstalledImageHash() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-delta-3.5.4-3.5.5-windows-amd64-${"a".repeat(16)}.patch", "https://example/stale"),
+            GithubReleaseAsset("YPtun-delta-3.5.4-3.5.5-windows-amd64-${"d".repeat(16)}.patch", "https://example/mine")
+        )
+
+        val selected = AppUpdateService.selectDeltaAsset(
+            assets = assets,
+            platform = UpdatePlatform("windows", "amd64"),
+            fromVersion = "3.5.4",
+            toVersion = "3.5.5",
+            fullAssetName = "YPtun-3.5.5-x64-installer.exe",
+            baseSha256 = "d".repeat(64)
+        )
+
+        assertEquals("YPtun-delta-3.5.4-3.5.5-windows-amd64-${"d".repeat(16)}.patch", selected?.name)
+    }
+
     @Test
     fun selectsNightlyAndroidApk() {
         val selected = AppUpdateService.selectAsset(

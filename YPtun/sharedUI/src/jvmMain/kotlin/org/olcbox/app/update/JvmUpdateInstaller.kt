@@ -3,6 +3,7 @@ package org.olcbox.app.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.olcbox.app.desktop.DesktopPaths
+import org.olcbox.app.desktop.appendToYptunLog
 import java.awt.Desktop
 import java.net.HttpURLConnection
 import java.net.URI
@@ -38,8 +39,15 @@ class JvmUpdateInstaller(
         onProgress: (Float) -> Unit = {}
     ): Result<DesktopUpdateOutcome> = runCatching {
         info.deltaAsset?.let { delta ->
-            val staged = runCatching { applyDelta(delta, onProgress) }.getOrNull()
+            val staged = runCatching { applyDelta(delta, onProgress) }
+                // Why a ~230 MB installer is being pulled instead of a few-MB bundle used to be
+                // invisible — the failure was swallowed. yptun.log is the first place anyone looks.
+                .onFailure { appendToYptunLog("update: delta ${delta.name} not applied: ${it.message}") }
+                .getOrNull()
             if (staged != null) return@runCatching staged
+        }
+        if (info.deltaAsset == null) {
+            appendToYptunLog("update: no delta bundle for this install — downloading ${info.asset.name} in full")
         }
         DesktopUpdateOutcome.InstallerOpened(openInstaller(info.asset, onProgress))
     }
@@ -65,10 +73,21 @@ class JvmUpdateInstaller(
         delta: AppUpdateAsset,
         onProgress: (Float) -> Unit
     ): DesktopUpdateOutcome.RestartRequired? = withContext(Dispatchers.IO) {
-        val appDir = DesktopAppImage.appDir() ?: return@withContext null
+        val appDir = DesktopAppImage.appDir()
+            ?: error("not running from an installed app image (portable or development run)")
         val bundle = download(delta, onProgress)
-        // Staged INSIDE the app directory so every commit is a rename on the same volume.
-        val stagingDir = appDir.resolve(".yptun-update")
+        // Staged INSIDE the app directory when we may write there, so every commit is a rename on
+        // the same volume. When we may NOT — a deb install under root-owned /opt/yptun, or Program
+        // Files without elevation — creating that directory threw and the delta died here, before
+        // the swapper (which knows how to elevate) was ever reached. Stage in our own data
+        // directory instead and let the elevated swapper move the files in; a cross-volume `mv` is
+        // a copy, but the commit order already tolerates a half-finished swap: new jars carry new
+        // names, the classpath file moves last, and old files are removed only after that.
+        val stagingDir = if (Files.isWritable(appDir)) {
+            appDir.resolve(".yptun-update")
+        } else {
+            directory.resolve("staging")
+        }
         val plan = try {
             DesktopDeltaPatch.stage(
                 appDir = appDir,
@@ -97,10 +116,10 @@ class JvmUpdateInstaller(
         connection.connectTimeout = 10_000
         connection.readTimeout = 60_000
         val total = connection.contentLengthLong.takeIf { it > 0L } ?: asset.sizeBytes ?: -1L
+        var copied = 0L
         connection.inputStream.use { input ->
             target.outputStream().use { output ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var copied = 0L
                 while (true) {
                     val read = input.read(buffer)
                     if (read < 0) break
@@ -113,6 +132,12 @@ class JvmUpdateInstaller(
                         )
                     }
                 }
+            }
+            // A connection dropped mid-stream ends as a clean EOF, not an exception. Without this the
+            // truncated file was handed to the OS as an installer, or to the patcher as a bundle.
+            if (total > 0L && copied != total) {
+                target.deleteIfExists()
+                error("Download interrupted (${copied / 1_048_576} of ${total / 1_048_576} MB) — try again")
             }
         }
         reportProgress(1f, onProgress)

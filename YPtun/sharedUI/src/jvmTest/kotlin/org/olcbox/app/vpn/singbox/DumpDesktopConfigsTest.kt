@@ -2,6 +2,7 @@ package org.olcbox.app.vpn.singbox
 
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.vpn.xray.XrayConfig
 import java.io.File
 import kotlin.test.Test
 
@@ -26,6 +27,13 @@ class DumpDesktopConfigsTest {
             "local_address":["10.7.0.2/32"],
             "private_key":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
             "peer_public_key":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="}""",
+    )
+
+    private val xhttp = ProxyProfile(
+        type = ProxyProfile.TYPE_VLESS, server = "vbn.azz.su", serverPort = 443,
+        uuid = "11111111-1111-1111-1111-111111111111",
+        network = ProxyProfile.NETWORK_XHTTP, security = ProxyProfile.SECURITY_TLS, sni = "vbn.azz.su",
+        path = "/xh", xhttpMode = "packet-up",
     )
 
     @Test
@@ -109,6 +117,29 @@ class DumpDesktopConfigsTest {
             splitTunnelMode = SingBoxConfig.SPLIT_TUNNEL_BYPASS,
             splitTunnelProcesses = listOf("chrome.exe"),
             tunExcludeAddresses = listOf("1.2.3.4/32"), mixedInbound = true, hijackDns = true,
+        ))
+
+        // --- Xray side (same idea: `xray run -test -c <file>` over every shape after a re-vendor) ---
+        // 21. plain vless+tls
+        w("21-xray-plain", XrayConfig.build(profile = vless, listenPort = 10810))
+        // 22. vless WITHOUT tls to a public address — upstream #6303 makes this a hard error, our
+        //     local patch downgrades it to a warning (see cores/xraybridge/patches_test.go).
+        w("22-xray-vless-notls", XrayConfig.build(
+            profile = vless.copy(security = "", sni = ""), listenPort = 10810,
+        ))
+        // 23. xhttp main + second proxy (cascade loopback) with the legacy session* keys
+        w("23-xray-xhttp-cascade", XrayConfig.build(
+            profile = xhttp, secondProfile = vless, listenPort = 10810,
+        ))
+        // 24. VK-TURN: the proxy dials through an Xray wireguard base outbound
+        w("24-xray-wg-base", XrayConfig.build(
+            profile = vless, wireguardBase = wgBase, listenPort = 10810, blockQuic = false,
+        ))
+        // 25. MasterDNS: chain via sockopt.dialerProxy, direct bucket kept inside the tunnel
+        w("25-xray-masterdns", XrayConfig.build(
+            profile = vless, listenPort = 10810, olcrtcChainPort = 10812,
+            chainViaDialerProxy = true, directViaBase = true, forceFamilyResolve = false,
+            handshakeTimeoutSec = 30,
         ))
     }
 }
