@@ -105,7 +105,10 @@ internal object DesktopSelfUpdate {
      * app already running as administrator (TUN mode restarts itself that way) never prompts.
      */
     private fun start(script: Path, plan: DesktopDeltaPatch.Plan) {
-        val needsElevation = !Files.isWritable(plan.stagingDir.parent ?: plan.stagingDir)
+        // The app directory is what the swapper writes into. Reading it off the staging directory
+        // was only correct while staging lived inside the installation — which is exactly what a
+        // root-owned /opt (deb) or Program Files install does not allow.
+        val needsElevation = !Files.isWritable(plan.appDir)
         val command = when {
             DesktopPaths.os == DesktopOs.Windows && needsElevation -> listOf(
                 "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",

@@ -76,8 +76,18 @@ class JvmUpdateInstaller(
         val appDir = DesktopAppImage.appDir()
             ?: error("not running from an installed app image (portable or development run)")
         val bundle = download(delta, onProgress)
-        // Staged INSIDE the app directory so every commit is a rename on the same volume.
-        val stagingDir = appDir.resolve(".yptun-update")
+        // Staged INSIDE the app directory when we may write there, so every commit is a rename on
+        // the same volume. When we may NOT — a deb install under root-owned /opt/yptun, or Program
+        // Files without elevation — creating that directory threw and the delta died here, before
+        // the swapper (which knows how to elevate) was ever reached. Stage in our own data
+        // directory instead and let the elevated swapper move the files in; a cross-volume `mv` is
+        // a copy, but the commit order already tolerates a half-finished swap: new jars carry new
+        // names, the classpath file moves last, and old files are removed only after that.
+        val stagingDir = if (Files.isWritable(appDir)) {
+            appDir.resolve(".yptun-update")
+        } else {
+            directory.resolve("staging")
+        }
         val plan = try {
             DesktopDeltaPatch.stage(
                 appDir = appDir,

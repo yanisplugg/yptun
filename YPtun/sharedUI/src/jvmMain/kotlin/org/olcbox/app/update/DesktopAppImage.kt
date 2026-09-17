@@ -57,7 +57,14 @@ internal object DesktopAppImage {
         val candidates = if (windows) {
             listOf(root.resolve("YPtun.exe"))
         } else {
-            listOf(root.resolve("bin").resolve("YPtun"), root.resolve("YPtun"))
+            // jpackage's deb layout is /opt/yptun/{bin/YPtun, lib/{app,runtime}}, so [installDir]
+            // here is .../lib and the launcher sits one level ABOVE it — the two paths below it
+            // never matched, and a Linux delta update therefore never restarted the app.
+            listOfNotNull(
+                root.parent?.resolve("bin")?.resolve("YPtun"),
+                root.resolve("bin").resolve("YPtun"),
+                root.resolve("YPtun")
+            )
         }
         return candidates.firstOrNull { it.exists() }
     }
