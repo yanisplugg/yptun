@@ -6,6 +6,7 @@ package kcpmux
 import (
 	"fmt"
 	"net"
+	"runtime"
 	"time"
 
 	"github.com/xtaci/kcp-go/v5"
@@ -118,8 +119,13 @@ func Accept(conn net.Conn, profile Profile) (*ServerSession, error) {
 // SmuxConfig - параметры smux, общие для клиента и сервера (буферы должны совпадать).
 func SmuxConfig() *smux.Config {
 	cfg := smux.DefaultConfig()
-	cfg.MaxReceiveBuffer = 4 * 1024 * 1024
-	cfg.MaxStreamBuffer = 1 * 1024 * 1024
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" || runtime.GOOS == "android" {
+		cfg.MaxReceiveBuffer = 512 * 1024
+		cfg.MaxStreamBuffer = 128 * 1024
+	} else {
+		cfg.MaxReceiveBuffer = 4 * 1024 * 1024
+		cfg.MaxStreamBuffer = 1 * 1024 * 1024
+	}
 	cfg.KeepAliveInterval = 10 * time.Second
 	cfg.KeepAliveTimeout = 30 * time.Second
 	return cfg

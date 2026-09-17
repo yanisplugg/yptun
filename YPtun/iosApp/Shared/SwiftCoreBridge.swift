@@ -50,6 +50,17 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         let flags = fcntl(fd, F_GETFL, 0)
         _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
 
+        let IP_BOUND_IF: Int32 = 25
+        let IPV6_BOUND_IF: Int32 = 125
+        if let ifIndex = SwiftCoreBridge.getPhysicalInterfaceIndex() {
+            var idx = ifIndex
+            if info.pointee.ai_family == AF_INET {
+                _ = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &idx, socklen_t(MemoryLayout<UInt32>.size))
+            } else if info.pointee.ai_family == AF_INET6 {
+                _ = setsockopt(fd, IPPROTO_IPV6, IPV6_BOUND_IF, &idx, socklen_t(MemoryLayout<UInt32>.size))
+            }
+        }
+
         let start = DispatchTime.now()
         let ret = connect(fd, info.pointee.ai_addr, info.pointee.ai_addrlen)
         if ret == 0 {
@@ -155,4 +166,29 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
     ) -> Int64 {
         CoreapiRtcPing(carrier, transport, roomId, clientId, keyHex, Int(socksPort), Int(timeoutMs), pingUrl, Int(vp8Fps), Int(vp8Batch))
     }
+
+    private static func getPhysicalInterfaceIndex() -> UInt32? {
+        var ifaddrs: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrs) == 0, let first = ifaddrs else { return nil }
+        defer { freeifaddrs(first) }
+
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let cur = ptr {
+            let name = String(cString: cur.pointee.ifa_name)
+            let flags = Int32(cur.pointee.ifa_flags)
+            if (flags & IFF_UP) != 0 && (flags & IFF_RUNNING) != 0 && (flags & IFF_LOOPBACK) == 0 {
+                if !name.hasPrefix("utun") && !name.hasPrefix("lo") && !name.hasPrefix("awdl") && !name.hasPrefix("llw") && !name.hasPrefix("p2p") {
+                    if let addr = cur.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) || addr.pointee.sa_family == UInt8(AF_INET6) {
+                        let idx = if_nametoindex(cur.pointee.ifa_name)
+                        if idx > 0 {
+                            return idx
+                        }
+                    }
+                }
+            }
+            ptr = cur.pointee.ifa_next
+        }
+        return nil
+    }
 }
+

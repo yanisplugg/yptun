@@ -1123,7 +1123,7 @@ class LocationsRepositoryImpl(
                     // announcement via headers (the last is often base64-wrapped like profile-title).
                     supportUrl = response.headers["support-url"]?.let { decodeMaybeBase64Header(it) },
                     webPageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) },
-                    announce = response.headers["announce"]?.let { decodeMaybeBase64Header(it) },
+                    announce = (response.headers["announce"] ?: response.headers["announcement"] ?: response.headers["description"] ?: response.headers["subscription-description"])?.let { decodeMaybeBase64Header(it) },
                     // Happ/Remnawave provider tracking id (lowercase `providerid`; lookup is
                     // case-insensitive). Plain string — not base64.
                     providerId = response.headers["providerid"]?.trim()?.takeIf { it.isNotBlank() }
@@ -1659,27 +1659,45 @@ class LocationsRepositoryImpl(
      */
     private fun subscriptionMetadataFromBody(content: String): SubscriptionMetadata? {
         val trimmed = content.trim()
-        if (!trimmed.startsWith("{")) return null
-        val root = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: return null
+        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null
+        val element = runCatching { json.parseToJsonElement(trimmed) }.getOrNull() ?: return null
+        val root = element.jsonObjectOrNull()
+            ?: (element as? kotlinx.serialization.json.JsonArray)?.firstOrNull()?.jsonObjectOrNull()
+            ?: return null
         // The `/info` endpoint wraps it as {response:{user:{…}}}; the bare body uses {user:{…}}.
         val user = root["response"]?.jsonObjectOrNull()?.get("user")?.jsonObjectOrNull()
             ?: root["user"]?.jsonObjectOrNull()
-            ?: return null
 
-        val expiresAtEpochMs = IsoTime.parseIsoToEpochMs(user.string("expiresAt"))
-        val used = user.string("trafficUsed")?.trim()?.takeIf { it.isNotBlank() && it != "0" }
-        val limit = user.string("trafficLimit")?.trim()
+        val expiresAtEpochMs = user?.string("expiresAt")?.let { IsoTime.parseIsoToEpochMs(it) }
+        val used = user?.string("trafficUsed")?.trim()?.takeIf { it.isNotBlank() && it != "0" }
+        val limit = user?.string("trafficLimit")?.trim()
         // trafficLimit "0" / blank = unlimited (NO_RESET plans report a 0 limit).
         val available = when {
             limit.isNullOrBlank() || limit == "0" || limit == "0 B" -> if (used != null) "∞" else null
             else -> limit
         }
 
-        if (expiresAtEpochMs == null && used == null && available == null) return null
+        val announce = root.string("announce")
+            ?: root.string("announcement")
+            ?: root.string("description")
+            ?: root["meta"]?.jsonObjectOrNull()?.string("announce")
+            ?: root["meta"]?.jsonObjectOrNull()?.string("announcement")
+            ?: root["meta"]?.jsonObjectOrNull()?.string("description")
+            ?: root["meta"]?.jsonObjectOrNull()?.get("subscription")?.jsonObjectOrNull()?.string("announce")
+            ?: root["meta"]?.jsonObjectOrNull()?.get("subscription")?.jsonObjectOrNull()?.string("description")
+            ?: root["response"]?.jsonObjectOrNull()?.string("announce")
+            ?: root["response"]?.jsonObjectOrNull()?.string("announcement")
+            ?: root["response"]?.jsonObjectOrNull()?.string("description")
+            ?: user?.string("announce")
+            ?: user?.string("announcement")
+            ?: user?.string("description")
+
+        if (expiresAtEpochMs == null && used == null && available == null && announce.isNullOrBlank()) return null
         return SubscriptionMetadata(
             used = used,
             available = available,
-            expiresAtEpochMs = expiresAtEpochMs
+            expiresAtEpochMs = expiresAtEpochMs,
+            announce = announce?.trim()?.takeIf { it.isNotBlank() }
         ).normalized().takeUnless { it.isEmpty() }
     }
 
@@ -1704,7 +1722,7 @@ class LocationsRepositoryImpl(
             lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs,
             supportUrl = primary.supportUrl ?: secondary.supportUrl,
             webPageUrl = primary.webPageUrl ?: secondary.webPageUrl,
-            announce = primary.announce ?: secondary.announce,
+            announce = secondary.announce ?: primary.announce,
             providerId = primary.providerId ?: secondary.providerId
         ).normalized().takeUnless { it.isEmpty() }
     }
@@ -1735,13 +1753,21 @@ class LocationsRepositoryImpl(
      * actually base64. Returns null for blank input.
      */
     private fun decodeMaybeBase64Header(raw: String): String? {
-        val value = raw.trim()
+        val value = raw.trim().removeSurrounding("\"")
         if (value.isEmpty()) return null
-        val decoded = if (value.startsWith("base64:")) {
-            val payload = value.removePrefix("base64:").trim()
+        val decoded = if (value.startsWith("base64:", ignoreCase = true)) {
+            val payload = value.substring(7).trim()
             SubscriptionDecoder.decodeBase64Chunk(payload) ?: payload
         } else {
-            repairLatin1Utf8(value)
+            val urlDecoded = if ('%' in value) runCatching { UriCodec.percentDecode(value) }.getOrDefault(value) else value
+            val b64 = if (urlDecoded.length >= 8 && urlDecoded.length % 4 == 0 && !urlDecoded.contains(' ') && !urlDecoded.contains('\n')) {
+                SubscriptionDecoder.decodeBase64Chunk(urlDecoded)
+            } else null
+            if (b64 != null && b64.all { it.code >= 32 || it == '\n' || it == '\r' || it == '\t' }) {
+                b64
+            } else {
+                repairLatin1Utf8(urlDecoded)
+            }
         }
         return decoded.trim().takeIf { it.isNotBlank() }
     }
@@ -2041,7 +2067,8 @@ class LocationsRepositoryImpl(
                 ?.mapNotNull { it.jsonObjectOrNull() } ?: return null
         }
 
-        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+        val effectiveMeta = subscriptionMetadata ?: subscriptionMetadataFromBody(trimmed)
+        val locationMetadata = effectiveMeta?.let { LocationMetadata(subscription = it) }
         val usedStorageIds = mutableSetOf<String>()
         val entries = configs.mapNotNull { parseSingleRawXrayEntry(it, usedStorageIds, subscriptionUrl, locationMetadata) }
         if (entries.isEmpty()) return null
@@ -2483,7 +2510,8 @@ class LocationsRepositoryImpl(
             color = fields["color"],
             icon = fields["icon"],
             used = fields["used"],
-            available = fields["available"]
+            available = fields["available"],
+            announce = fields["announce"] ?: fields["announcement"] ?: fields["description"]
         ).normalized().takeUnless { it.isEmpty() }
     }
 

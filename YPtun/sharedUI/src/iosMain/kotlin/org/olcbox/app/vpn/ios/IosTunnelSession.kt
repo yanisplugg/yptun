@@ -226,9 +226,9 @@ class IosTunnelSession(
           cache-size: 10000
 
         misc:
-          task-stack-size: 24576
+          task-stack-size: 16384
           tcp-buffer-size: 4096
-          max-session-count: 1200
+          max-session-count: 512
           connect-timeout: ${if (slowTunnel) 30000 else 10000}
           tcp-read-write-timeout: 300000
           udp-read-write-timeout: 60000
@@ -238,14 +238,21 @@ class IosTunnelSession(
     /** A dead core means a tunnel that carries nothing — drop it so iOS shows "disconnected". */
     private fun startWatchdog() {
         watchdog = scope.launch {
+            var failCount = 0
             while (isActive) {
                 delay(WATCHDOG_INTERVAL_MS)
                 val type = engineType ?: continue
                 if (!engine.coreRunning(type)) {
-                    log("Core stopped unexpectedly — closing the tunnel")
-                    engine.stopAll()
-                    provider.cancelTunnelWithError(null)
-                    return@launch
+                    failCount++
+                    log("Core check failed ($failCount/3)")
+                    if (failCount >= 3) {
+                        log("Core stopped unexpectedly — closing the tunnel")
+                        engine.stopAll()
+                        provider.cancelTunnelWithError(null)
+                        return@launch
+                    }
+                } else {
+                    failCount = 0
                 }
             }
         }
@@ -297,7 +304,7 @@ class IosTunnelSession(
 
         /** Engines whose SOCKS carries TCP only: hev tunnels UDP over TCP for them. */
         private val TCP_ONLY_ENGINES = setOf(EngineType.Stealth, EngineType.MasterDns, EngineType.OpenFlux)
-        private val SLOW_ENGINES = setOf(EngineType.MasterDns, EngineType.OpenFlux)
+        private val SLOW_ENGINES = setOf(EngineType.MasterDns, EngineType.OpenFlux, EngineType.VkTurn)
 
         private val LAN_ROUTES = listOf(
             "10.0.0.0" to "255.0.0.0",

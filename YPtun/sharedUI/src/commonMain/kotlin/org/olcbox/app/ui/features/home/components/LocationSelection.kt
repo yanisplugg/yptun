@@ -271,7 +271,8 @@ fun LazyListScope.locationSelectorContent(
 
                     if (!isCollapsed) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        TrafficProgressBar(location = group.firstOrNull())
+                        val subLoc = group.firstOrNull { it.metadata?.subscription?.announce?.isNotBlank() == true } ?: group.firstOrNull()
+                        TrafficProgressBar(location = subLoc)
                     }
                 }
             }
@@ -419,7 +420,8 @@ fun LazyListScope.locationSelectorContent(
                                         }
                                         if (!mCollapsed) {
                                             Spacer(modifier = Modifier.height(8.dp))
-                                            TrafficProgressBar(location = mGroup.firstOrNull())
+                                            val mSubLoc = mGroup.firstOrNull { it.metadata?.subscription?.announce?.isNotBlank() == true } ?: mGroup.firstOrNull()
+                                            TrafficProgressBar(location = mSubLoc)
                                             val ordered = if (mPingSorted) {
                                                 mGroup.sortedWith(pingComparator(pingsState, mPingDesc))
                                             } else {
@@ -710,50 +712,69 @@ private fun TrafficProgressBar(location: LocationItem?) {
     val subscription = location?.metadata?.subscription ?: return
     val used = subscription.used?.takeIf { it.isNotBlank() }
     val available = subscription.available?.takeIf { it.isNotBlank() }
-    if (used == null && available == null) return
+    val announce = subscription.announce?.trim()?.takeIf { it.isNotBlank() }
+    if (used == null && available == null && announce == null) return
 
-    val usedBytes = parseTrafficBytes(used)
-    val totalBytes = parseTrafficBytes(available)
-    val fraction = if (usedBytes != null && totalBytes != null && totalBytes > 0L) {
-        (usedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
-    } else {
-        null
-    }
-
-    val text = when {
-        used != null && available != null -> "$used / $available"
-        used != null -> used
-        else -> available!!
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp)
-            .height(24.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center
-    ) {
-        // Filled portion: exact fraction when total is known, otherwise full pill.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(fraction ?: 1f)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.primary)
-                .align(Alignment.CenterStart)
-        )
-        Text(
-            text = text,
-            color = if (fraction == null || fraction > 0.5f) {
-                MaterialTheme.colorScheme.onPrimary
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (used != null || available != null) {
+            val usedBytes = parseTrafficBytes(used)
+            val totalBytes = parseTrafficBytes(available)
+            val fraction = if (usedBytes != null && totalBytes != null && totalBytes > 0L) {
+                (usedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
             } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
+                null
+            }
+
+            val text = when {
+                used != null && available != null -> "$used / $available"
+                used != null -> used
+                else -> available!!
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = if (announce != null) 8.dp else 8.dp)
+                    .height(24.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                // Filled portion: exact fraction when total is known, otherwise full pill.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction ?: 1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+                        .align(Alignment.CenterStart)
+                )
+                Text(
+                    text = text,
+                    color = if (fraction == null || fraction > 0.5f) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        if (announce != null) {
+            Text(
+                text = announce,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                lineHeight = 18.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+        }
     }
 }
 

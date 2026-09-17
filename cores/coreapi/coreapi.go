@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,6 +67,18 @@ func (wdttLogBridge) Write(p []byte) (int, error) {
 
 func init() {
 	log.SetOutput(wdttLogBridge{})
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+		// Strict memory budget for iOS NetworkExtension (15 MB Jetsam limit)
+		debug.SetMemoryLimit(12 * 1024 * 1024)
+		debug.SetGCPercent(20)
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				debug.FreeOSMemory()
+			}
+		}()
+	}
 }
 
 // PollLog returns the next buffered log line, waiting up to timeoutMs; "" when none arrived.

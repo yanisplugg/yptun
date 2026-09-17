@@ -294,12 +294,8 @@ class IosVpnManager(
             }
             else -> {
                 if (isLoopbackHost(profile.server)) null
-                else if (status.value == VpnStatus.Connected) {
-                    if (isActiveLocation) {
-                        tunnelPing() ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
-                    } else {
-                        core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
-                    }
+                else if (behavior.pingMode == AppBehaviorSettings.PING_TCP) {
+                    core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
                 } else {
                     proxyUrlTest(profile, behavior.effectivePingUrl(), method)?.takeIf { it > 0 }
                         ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
@@ -361,15 +357,33 @@ class IosVpnManager(
 
     private suspend fun tunnelPing(): Long? = withContext(Dispatchers.Default) {
         if (status.value != VpnStatus.Connected) return@withContext null
-        val msYandexDns = core.tcpPing("77.88.8.8", 53, PING_TIMEOUT_MS)
-        if (msYandexDns > 0) return@withContext msYandexDns
-        val msGoogleDns = core.tcpPing("8.8.8.8", 53, PING_TIMEOUT_MS)
-        if (msGoogleDns > 0) return@withContext msGoogleDns
-        val msYa = core.tcpPing("ya.ru", 80, PING_TIMEOUT_MS)
-        if (msYa > 0) return@withContext msYa
-        val msCf = core.tcpPing("1.1.1.1", 80, PING_TIMEOUT_MS)
-        if (msCf > 0) return@withContext msCf
-        null
+        val behavior = IosSharedStore.loadAppBehavior()
+        val urlString = behavior.effectivePingUrl()
+        val nsUrl = NSURL.URLWithString(urlString) ?: return@withContext null
+        val request = platform.Foundation.NSMutableURLRequest.requestWithURL(
+            nsUrl,
+            cachePolicy = platform.Foundation.NSURLRequestReloadIgnoringLocalCacheData,
+            timeoutInterval = PING_TIMEOUT_MS / 1000.0
+        ).apply {
+            setHTTPMethod(if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD")
+        }
+        val mark = kotlin.time.TimeSource.Monotonic.markNow()
+        suspendCancellableCoroutine { cont ->
+            val task = platform.Foundation.NSURLSession.sharedSession.dataTaskWithRequest(request) { _, response, error ->
+                if (error == null && response != null) {
+                    val httpResp = response as? platform.Foundation.NSHTTPURLResponse
+                    val code = httpResp?.statusCode?.toInt() ?: 0
+                    if (code in 200..399 || code == 204) {
+                        val elapsedMs = mark.elapsedNow().inWholeMilliseconds
+                        cont.resume(maxOf(1L, elapsedMs))
+                        return@dataTaskWithRequest
+                    }
+                }
+                cont.resume(null)
+            }
+            task.resume()
+            cont.invokeOnCancellation { task.cancel() }
+        }
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? = ping(locationConfig)

@@ -596,8 +596,9 @@ internal class IosEngineController(
                 )
             ).orThrow("WDTT start failed")
         } else {
-            log("Starting VK-TURN freeturn listener on $listenAddr")
-            core.ftStart(vk.uri, listenAddr, vk.vkLink, vk.streams).orThrow("VK-TURN start failed")
+            val iosStreams = if (vk.streams <= 0) 2 else vk.streams.coerceIn(1, 3)
+            log("Starting VK-TURN freeturn listener on $listenAddr (streams=$iosStreams)")
+            core.ftStart(vk.uri, listenAddr, vk.vkLink, iosStreams).orThrow("VK-TURN start failed")
         }
 
         // Prepared while the relay handshake (VK auth → DTLS → TURN) is in flight.
