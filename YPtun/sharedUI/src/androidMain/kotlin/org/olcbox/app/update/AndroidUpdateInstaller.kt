@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import android.provider.Settings
 import android.net.Uri
 import androidx.core.content.FileProvider
@@ -113,9 +114,16 @@ class AndroidUpdateInstaller(
         onProgress: (Float) -> Unit = {}
     ): Result<File> = runCatching {
         info.deltaAsset?.let { delta ->
-            val patched = runCatching { applyDeltaUpdate(delta, onProgress) }.getOrNull()
+            val patched = runCatching { applyDeltaUpdate(delta, onProgress) }
+                // Why a full APK is being downloaded instead of a 1.5 MB patch used to be
+                // invisible: the failure was swallowed and the user just saw a 112 MB download.
+                .onFailure { Log.w(TAG, "delta ${delta.name} not applied: ${it.message}") }
+                .getOrNull()
             if (patched != null) return@runCatching patched
             // Any delta failure → fall through to the full download below.
+        }
+        if (info.deltaAsset == null) {
+            Log.i(TAG, "no delta patch for this install — downloading ${info.asset.name} in full")
         }
         val full = download(info.asset, onProgress).getOrThrow()
         requireOfficialApk(full)
@@ -212,6 +220,10 @@ class AndroidUpdateInstaller(
         withContext(Dispatchers.Main.immediate) {
             onProgress(progress)
         }
+    }
+
+    private companion object {
+        const val TAG = "YPtunUpdate"
     }
 
     private fun mimeType(name: String): String {

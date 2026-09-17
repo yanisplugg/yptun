@@ -1641,25 +1641,7 @@ class DesktopVpnManager private constructor(
      * journal and nowhere else, so its side of the story was never recoverable after the fact.
      * `singbox.log` sits next to this and is rotated the same way.
      */
-    private fun appendToLogFile(message: String) {
-        runCatching {
-            val path = logFilePath ?: return
-            val file = path.toFile()
-            if (file.length() > MAX_LOG_FILE_BYTES) file.delete()
-            file.appendText("${logTimestamp()} $message${System.lineSeparator()}")
-        }
-    }
-
-    private val logFilePath: Path? by lazy {
-        runCatching {
-            val path = DesktopPaths.appDataDir().resolve("yptun.log")
-            Files.createDirectories(path.parent)
-            path
-        }.getOrNull()
-    }
-
-    private fun logTimestamp(): String =
-        java.time.LocalDateTime.now().format(LOG_TIMESTAMP_FORMAT)
+    private fun appendToLogFile(message: String) = org.olcbox.app.desktop.DesktopFileLog.append(message)
 
     /** Publishes the buffer to [_logs] on a timer; coalesces a burst of lines into one emission. */
     private fun scheduleLogFlush() {
@@ -1684,12 +1666,6 @@ class DesktopVpnManager private constructor(
 
         /** How long a connect waits for an answer to the "another VPN is running" prompt. */
         const val CONFLICT_DECISION_TIMEOUT_MS = 60_000L
-
-        /** Size past which yptun.log is dropped instead of appended to (matches singbox.log's cap). */
-        const val MAX_LOG_FILE_BYTES = 32L * 1024 * 1024
-
-        val LOG_TIMESTAMP_FORMAT: java.time.format.DateTimeFormatter =
-            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
 
         /**
          * How long a burst of log lines is coalesced before the UI sees them. Long enough to turn a
