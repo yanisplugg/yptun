@@ -126,11 +126,10 @@ object IosSharedStore {
      * AppBehaviorSettings: that model is shared with every other platform, and this choice is
      * meaningless on them.
      */
-    fun loadConnectionMode(): String =
-        readText(CONNECTION_MODE_FILE)?.trim()?.takeIf { it == MODE_PROXY } ?: MODE_TUN
-
+    fun loadConnectionMode(): String = MODE_TUN
+ 
     fun saveConnectionMode(value: String) =
-        writeText(CONNECTION_MODE_FILE, if (value == MODE_PROXY) MODE_PROXY else MODE_TUN)
+        writeText(CONNECTION_MODE_FILE, MODE_TUN)
 
     const val MODE_TUN = "tun"
     const val MODE_PROXY = "proxy"

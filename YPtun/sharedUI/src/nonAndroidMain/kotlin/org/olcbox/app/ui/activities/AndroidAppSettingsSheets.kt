@@ -968,13 +968,15 @@ private fun ConnectionSettingsContent(
         Spacer(Modifier.height(20.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SettingsNavigationRow(
-                title = s.connectionMode,
-                value = selectedMode.settingsSummary(),
-                icon = selectedMode.icon(),
-                enabled = enabled,
-                onClick = onConnectionModeClick
-            )
+            if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
+                SettingsNavigationRow(
+                    title = s.connectionMode,
+                    value = selectedMode.settingsSummary(),
+                    icon = selectedMode.icon(),
+                    enabled = enabled,
+                    onClick = onConnectionModeClick
+                )
+            }
             SettingsNavigationRow(
                 title = s.socks5Proxy,
                 value = "${proxySettings.host}:${proxySettings.port}",

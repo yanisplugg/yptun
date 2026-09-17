@@ -103,13 +103,6 @@ class IosTunnelSession(
                 // (Stealth, MasterDNS without a proxy); then this falls back to the normal tunnel rather
                 // than raising one that carries nothing.
                 httpProxyPort = engine.httpProxyPort
-                if (httpProxyPort > 0) {
-                    log("Proxy mode: HTTP proxy on $PROXY_HOST:$httpProxyPort, packets are NOT captured")
-                    return@runCatching ""
-                }
-                if (IosSharedStore.loadConnectionMode() == IosSharedStore.MODE_PROXY) {
-                    log("Proxy mode is not available for engine=${location.engine} — using the tunnel")
-                }
 
                 val bypassLan = IosSharedStore.loadRouting().bypassLan
                 applyNetworkSettings(traffic.mtu, bypassLan)

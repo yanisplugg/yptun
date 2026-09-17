@@ -18,4 +18,5 @@ interface IosPlatformBridge {
     fun saveLogs(defaultName: String, content: String, callback: IosMessageCallback)
     fun shareLogs(defaultName: String, content: String, callback: IosMessageCallback)
     fun showMessage(message: String)
+    fun readTunnelStats(): String
 }

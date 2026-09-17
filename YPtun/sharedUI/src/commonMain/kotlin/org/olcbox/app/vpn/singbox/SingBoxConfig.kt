@@ -1000,11 +1000,17 @@ object SingBoxConfig {
                     if (profile.password.isNotBlank()) put("password", profile.password)
                     if (profile.naiveQuic) put("quic", true)
                 }
+
+                ProxyProfile.TYPE_SOCKS -> {
+                    put("version", "5")
+                    if (profile.username.isNotBlank()) put("username", profile.username)
+                    if (profile.password.isNotBlank()) put("password", profile.password)
+                }
             }
 
-            // TLS/transport apply to vless/vmess/trojan; shadowsocks ignores them. hysteria2 and
+            // TLS/transport apply to vless/vmess/trojan; shadowsocks and socks ignore them. hysteria2 and
             // naive carry their own protocol: TLS yes (mandatory), but no v2ray transport layer.
-            if (profile.type != ProxyProfile.TYPE_SHADOWSOCKS) {
+            if (profile.type != ProxyProfile.TYPE_SHADOWSOCKS && profile.type != ProxyProfile.TYPE_SOCKS) {
                 buildTls(profile)?.let { put("tls", it) }
                 if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE) {
                     buildTransport(profile)?.let { put("transport", it) }
@@ -1012,8 +1018,8 @@ object SingBoxConfig {
             }
 
             if (detourTag != null) put("detour", detourTag)
-            // hysteria2/naive have no plain TCP leg and no smux support: skip tcp_fast_open + multiplex.
-            if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE) {
+            // hysteria2/naive/socks have no smux support: skip tcp_fast_open + multiplex.
+            if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE && profile.type != ProxyProfile.TYPE_SOCKS) {
                 if (tfo) put("tcp_fast_open", true)
                 buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
             }

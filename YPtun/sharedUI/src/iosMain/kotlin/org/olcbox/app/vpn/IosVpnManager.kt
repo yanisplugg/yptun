@@ -262,13 +262,7 @@ class IosVpnManager(
         val isActiveLocation = locationsRepository.getActiveLocationId() == locationConfig.id
         val pingMs = when {
             config.engine == EngineType.Stealth -> rtcPing(config)
-            config.engine == EngineType.VkTurn -> {
-                if (status.value == VpnStatus.Connected && isActiveLocation) {
-                    val ms = tunnelPing()
-                    if (ms != null && ms > 0) return@withContext ms
-                }
-                vkTurnProbePing(config)
-            }
+            config.engine == EngineType.VkTurn -> null
             config.engine == EngineType.MasterDns -> {
                 if (status.value == VpnStatus.Connected && isActiveLocation) {
                     val ms = tunnelPing()
@@ -300,7 +294,13 @@ class IosVpnManager(
             }
             else -> {
                 if (isLoopbackHost(profile.server)) null
-                else {
+                else if (status.value == VpnStatus.Connected) {
+                    if (isActiveLocation) {
+                        tunnelPing() ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
+                    } else {
+                        core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
+                    }
+                } else {
                     proxyUrlTest(profile, behavior.effectivePingUrl(), method)?.takeIf { it > 0 }
                         ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
                 }

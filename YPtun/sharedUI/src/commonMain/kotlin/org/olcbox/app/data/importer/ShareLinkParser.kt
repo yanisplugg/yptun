@@ -29,6 +29,14 @@ object ShareLinkParser {
             AmneziaWgParser.looksLikeAmneziaWg(trimmed) -> AmneziaWgParser.parse(trimmed)
             // tt://<base64> — AdGuard Trust Tunnel deep-link (decoded natively at connect time).
             TrustTunnelParser.looksLikeTrustTunnel(trimmed) -> TrustTunnelParser.parse(trimmed)
+            trimmed.startsWith("yptun://inbound", true) -> {
+                org.olcbox.app.data.share.YptunInboundCodec.parse(trimmed)?.let { it.proxy2 ?: it.proxy }
+            }
+            trimmed.startsWith("yptun://import/", true) -> {
+                val raw = trimmed.substring("yptun://import/".length).trim()
+                val decoded = runCatching { UriCodec.percentDecode(raw) }.getOrNull() ?: raw
+                parse(decoded)
+            }
             else -> null
         }
     }

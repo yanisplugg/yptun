@@ -14,9 +14,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.ComposeUIViewController
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.olcbox.app.ui.features.locations.components.SpeedSample
 import org.olcbox.app.data.datasource.IosLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.IosLogExporter
@@ -314,6 +317,39 @@ private fun IosApp(
             }
         }
 
+        val isVpnConnected = homeState.isVpnConnected
+        var liveSpeed by remember { mutableStateOf<SpeedSample?>(null) }
+        LaunchedEffect(isVpnConnected, appBehavior.showSpeedOnHome) {
+            if (!isVpnConnected || !appBehavior.showSpeedOnHome) {
+                liveSpeed = null
+                return@LaunchedEffect
+            }
+            var lastIn = 0L
+            var lastOut = 0L
+            var lastTime = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            val initial = platformBridge.readTunnelStats().split(',')
+            if (initial.size == 2) {
+                lastIn = initial[0].toLongOrNull() ?: 0L
+                lastOut = initial[1].toLongOrNull() ?: 0L
+            }
+            while (isActive) {
+                delay(1000)
+                val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+                val deltaSec = (now - lastTime).coerceAtLeast(1) / 1000.0
+                lastTime = now
+                val current = platformBridge.readTunnelStats().split(',')
+                if (current.size == 2) {
+                    val curIn = current[0].toLongOrNull() ?: 0L
+                    val curOut = current[1].toLongOrNull() ?: 0L
+                    val downRate = if (lastIn > 0 && curIn >= lastIn) ((curIn - lastIn) / deltaSec).toLong() else 0L
+                    val upRate = if (lastOut > 0 && curOut >= lastOut) ((curOut - lastOut) / deltaSec).toLong() else 0L
+                    lastIn = curIn
+                    lastOut = curOut
+                    liveSpeed = SpeedSample(downBytesPerSec = downRate, upBytesPerSec = upRate)
+                }
+            }
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
             // The row/header switches the settings screen offers are read through composition locals.
             // iOS never provided them, so "ping as a tick", the live/total badge, the subscription end
@@ -327,7 +363,9 @@ private fun IosApp(
                 org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides
                     appBehavior.showSubscriptionAliveCount,
                 org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides
-                    appBehavior.hideEndpointWhenDescription
+                    appBehavior.hideEndpointWhenDescription,
+                org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides
+                    (if (appBehavior.showSpeedOnHome && isVpnConnected) liveSpeed else null)
             ) {
             OlcboxAppContent(
                 homeViewModel = dependencies.homeViewModel,

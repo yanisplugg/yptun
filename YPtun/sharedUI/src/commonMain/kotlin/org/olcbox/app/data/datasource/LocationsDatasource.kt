@@ -1112,7 +1112,9 @@ class LocationsRepositoryImpl(
                 DownloadedSubscription(
                     content = content,
                     updateIntervalHours = response.profileUpdateIntervalHours(),
-                    profileTitle = response.headers["profile-title"]?.let { decodeProfileTitle(it) },
+                    profileTitle = response.headers["profile-title"]?.let { decodeProfileTitle(it) }
+                        ?.takeIf { it.isNotBlank() }
+                        ?: parseContentDispositionFilename(response.headers["content-disposition"]),
                     userInfo = response.headers["subscription-userinfo"]?.trim(),
                     infoJson = infoJson,
                     fakednsJson = fakednsJson,
@@ -1174,18 +1176,18 @@ class LocationsRepositoryImpl(
 
         // Our own universal inbound link (yptun://inbound?…&d=<base64 LocationConfig JSON>): carries
         // the WHOLE location (engine, transport, proxy/AWG/VK outbound, every toggle).
-        parseYptunInboundText(linkText, subscriptionUrl)?.let { linkBundles += it }
+        parseYptunInboundText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
         parseOlcRtcText(linkText, subscriptionUrl, updateIntervalHours)?.let { linkBundles += it }
 
         // VK-TURN share links (freeturn://): WireGuard-over-VK locations.
-        parseFreeturnText(linkText, subscriptionUrl)?.let { linkBundles += it }
+        parseFreeturnText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
             // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
             // and would not see the multi-line config).
-            parseAmneziaWgText(text, subscriptionUrl)?.let {
+            parseAmneziaWgText(text, subscriptionUrl, subscriptionMetadata)?.let {
                 return ParsedImport(it, ImportMode.Additive)
             }
 
@@ -1193,7 +1195,7 @@ class LocationsRepositoryImpl(
             // ship one complete Xray config per server, each with its own dns.hosts / routing / fakedns).
             // MUST run before the proxy/sing-box parsers, otherwise the config is downgraded to a bare
             // sing-box vless and its fakedns / RU-direct DNS hosts are lost.
-            parseRawXray(text, subscriptionUrl)?.let {
+            parseRawXray(text, subscriptionUrl, subscriptionMetadata)?.let {
                 return ParsedImport(it, ImportMode.Additive)
             }
         }
@@ -1208,7 +1210,7 @@ class LocationsRepositoryImpl(
 
         // Raw sing-box config (full config with "outbounds", a single outbound object, or an
         // array of outbounds) → Standard locations carrying the outbound JSON verbatim.
-        parseRawSingBox(text, subscriptionUrl)?.let {
+        parseRawSingBox(text, subscriptionUrl, subscriptionMetadata)?.let {
             return ParsedImport(it, ImportMode.Additive)
         }
 
@@ -1463,9 +1465,11 @@ class LocationsRepositoryImpl(
     /** Parses one or more `yptun://inbound…` links (one per line) into Standard/custom locations. */
     private fun parseYptunInboundText(
         text: String,
-        subscriptionUrl: String? = null
+        subscriptionUrl: String? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
     ): LocationBundleV4? {
         if (!text.contains(YptunInboundCodec.PREFIX)) return null
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
         val usedStorageIds = mutableSetOf<String>()
         // ONE link that arrived wrapped is still one link: chat clients and QR overlays break a long
         // base64 payload across lines, and splitting by line then kept only the first fragment, so the
@@ -1492,7 +1496,7 @@ class LocationsRepositoryImpl(
                     storageId = storageId,
                     location = location,
                     subscriptionUrl = subscriptionUrl,
-                    metadata = null
+                    metadata = locationMetadata
                 )
             }
             .toList()
@@ -1707,6 +1711,23 @@ class LocationsRepositoryImpl(
     /** Decodes a `profile-title` header, which Remnawave sends as `base64:<payload>`. */
     private fun decodeProfileTitle(raw: String): String? = decodeMaybeBase64Header(raw)
 
+    /** Extracts a filename from Content-Disposition header (e.g. `attachment; filename="name"` or `filename*=UTF-8''name`). */
+    private fun parseContentDispositionFilename(raw: String?): String? {
+        val header = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val fnStar = header.substringAfter("filename*=", "").substringBefore(';').trim()
+        if (fnStar.isNotBlank()) {
+            val decoded = if (fnStar.contains("''")) fnStar.substringAfter("''") else fnStar
+            val unquoted = decoded.trim('"').trim('\'')
+            runCatching { UriCodec.percentDecode(unquoted) }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+        val fn = header.substringAfter("filename=", "").substringBefore(';').trim()
+        if (fn.isNotBlank()) {
+            val unquoted = fn.trim('"').trim('\'').trim()
+            if (unquoted.isNotBlank()) return unquoted
+        }
+        return null
+    }
+
     /**
      * Decodes a header value that Remnawave may send either plain or `base64:`-prefixed (used for
      * `profile-title`, `announce`, and occasionally the URLs). Falls back to the raw value if it isn't
@@ -1766,15 +1787,17 @@ class LocationsRepositoryImpl(
      */
     private fun parseFreeturnText(
         text: String,
-        subscriptionUrl: String? = null
+        subscriptionUrl: String? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
     ): LocationBundleV4? {
         val usedStorageIds = mutableSetOf<String>()
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
         // EVERY freeturn:// line, not just the first: a subscription may list several VK-TURN servers.
         val entries = text.trim().lineSequence()
             .map { it.trim() }
             .filter { it.startsWith(FreeturnUriParser.SCHEME, ignoreCase = true) }
             .mapNotNull { FreeturnUriParser.parse(it) }
-            .map { link -> freeturnEntry(link, subscriptionUrl, usedStorageIds) }
+            .map { link -> freeturnEntry(link, subscriptionUrl, usedStorageIds, locationMetadata) }
             .toList()
         if (entries.isEmpty()) return null
         return LocationBundleV4(
@@ -1786,7 +1809,8 @@ class LocationsRepositoryImpl(
     private fun freeturnEntry(
         link: FreeturnUriParser.FreeturnLink,
         subscriptionUrl: String?,
-        usedStorageIds: MutableSet<String>
+        usedStorageIds: MutableSet<String>,
+        metadata: LocationMetadata? = null
     ): LocationEntry {
         val name = link.comment.ifBlank { "VK-TURN ${link.serverIp}" }
         val location = if (link.mode == "tcp") {
@@ -1840,11 +1864,16 @@ class LocationsRepositoryImpl(
             storageId = storageId,
             location = location,
             subscriptionUrl = subscriptionUrl,
+            metadata = metadata,
         )
     }
 
     /** Parses a whole AmneziaWG wg-quick .conf into a [EngineType.Standard] location. */
-    private fun parseAmneziaWgText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
+    private fun parseAmneziaWgText(
+        text: String,
+        subscriptionUrl: String? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
+    ): LocationBundleV4? {
         val trimmed = text.trim()
         if (!AmneziaWgParser.looksLikeAmneziaWg(trimmed)) return null
         val profile = AmneziaWgParser.parse(trimmed) ?: return null
@@ -1859,10 +1888,12 @@ class LocationsRepositoryImpl(
             .map { if (it.isLetterOrDigit()) it else '_' }
             .joinToString("")
         val storageId = uniqueStorageId("imported_awg_$base", mutableSetOf())
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
         val entry = LocationEntry.from(
             storageId = storageId,
             location = location,
             subscriptionUrl = subscriptionUrl,
+            metadata = locationMetadata,
         )
         return LocationBundleV4(activeLocationId = entry.storageId, locations = listOf(entry))
     }
@@ -1910,7 +1941,8 @@ class LocationsRepositoryImpl(
      */
     private fun parseRawSingBox(
         text: String,
-        subscriptionUrl: String? = null
+        subscriptionUrl: String? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
     ): LocationBundleV4? {
         val trimmed = text.trim()
         if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null
@@ -1937,12 +1969,17 @@ class LocationsRepositoryImpl(
         // pool while the same subscription in Xray form kept it.
         val fakeDnsSpec = (element as? JsonObject)?.let { fakeDnsSpecFromSingBox(it) }
 
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
         val usedStorageIds = mutableSetOf<String>()
         val entries = servers.mapIndexedNotNull { index, outbound ->
             val server = outbound.string("server") ?: return@mapIndexedNotNull null
             val port = outbound["server_port"]?.jsonPrimitive?.intOrNull ?: return@mapIndexedNotNull null
             val type = outbound.string("type") ?: return@mapIndexedNotNull null
             val tag = outbound.string("tag")?.takeIf { it.isNotBlank() } ?: "$server:$port"
+            val description = outbound["meta"]?.jsonObjectOrNull()?.string("serverDescription")
+                ?: outbound.string("description")
+                ?: (element as? JsonObject)?.get("meta")?.jsonObjectOrNull()?.string("serverDescription")
+                .orEmpty()
 
             val profile = ProxyProfile(
                 tag = tag,
@@ -1954,6 +1991,7 @@ class LocationsRepositoryImpl(
             )
             val location = LocationConfig(
                 name = tag,
+                description = description,
                 engine = EngineType.Standard,
                 proxy = profile,
                 fakeDns = fakeDnsSpec
@@ -1967,7 +2005,7 @@ class LocationsRepositoryImpl(
                 storageId = storageId,
                 location = location,
                 subscriptionUrl = subscriptionUrl,
-                metadata = null
+                metadata = locationMetadata
             )
         }
         if (entries.isEmpty()) return null
@@ -1986,7 +2024,8 @@ class LocationsRepositoryImpl(
      */
     private fun parseRawXray(
         text: String,
-        subscriptionUrl: String? = null
+        subscriptionUrl: String? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
     ): LocationBundleV4? {
         val trimmed = text.trim()
         if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null
@@ -2001,8 +2040,9 @@ class LocationsRepositoryImpl(
                 ?.mapNotNull { it.jsonObjectOrNull() } ?: return null
         }
 
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
         val usedStorageIds = mutableSetOf<String>()
-        val entries = configs.mapNotNull { parseSingleRawXrayEntry(it, usedStorageIds, subscriptionUrl) }
+        val entries = configs.mapNotNull { parseSingleRawXrayEntry(it, usedStorageIds, subscriptionUrl, locationMetadata) }
         if (entries.isEmpty()) return null
 
         return LocationBundleV4(
@@ -2104,7 +2144,8 @@ class LocationsRepositoryImpl(
     private fun parseSingleRawXrayEntry(
         root: JsonObject,
         usedStorageIds: MutableSet<String>,
-        subscriptionUrl: String?
+        subscriptionUrl: String?,
+        metadata: LocationMetadata? = null
     ): LocationEntry? {
         val outbounds = runCatching { root["outbounds"]?.jsonArray }.getOrNull()
             ?.mapNotNull { it.jsonObjectOrNull() } ?: return null
@@ -2186,7 +2227,7 @@ class LocationsRepositoryImpl(
             storageId = storageId,
             location = location,
             subscriptionUrl = subscriptionUrl,
-            metadata = null
+            metadata = metadata
         )
     }
 

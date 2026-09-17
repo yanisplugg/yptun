@@ -88,6 +88,27 @@ final class SwiftPlatformBridge: NSObject, @preconcurrency IosPlatformBridge, UI
         }
     }
 
+    func readTunnelStats() -> String {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return "0,0" }
+        defer { freeifaddrs(ifaddr) }
+
+        var totalIn: UInt64 = 0
+        var totalOut: UInt64 = 0
+
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let current = cursor {
+            let name = String(cString: current.pointee.ifa_name)
+            if name.hasPrefix("utun"), let data = current.pointee.ifa_data {
+                let networkData = data.assumingMemoryBound(to: if_data.self)
+                totalIn += UInt64(networkData.pointee.ifi_ibytes)
+                totalOut += UInt64(networkData.pointee.ifi_obytes)
+            }
+            cursor = current.pointee.ifa_next
+        }
+        return "\(totalIn),\(totalOut)"
+    }
+
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         guard let action = documentAction else { return }
         documentAction = nil

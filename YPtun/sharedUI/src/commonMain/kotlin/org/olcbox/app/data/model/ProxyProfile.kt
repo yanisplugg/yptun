@@ -239,6 +239,7 @@ data class ProxyProfile(
         const val TYPE_TRUSTTUNNEL = "trusttunnel"
         const val TYPE_HYSTERIA2 = "hysteria2"
         const val TYPE_NAIVE = "naive"
+        const val TYPE_SOCKS = "socks"
 
         const val NETWORK_TCP = "tcp"
         const val NETWORK_WS = "ws"

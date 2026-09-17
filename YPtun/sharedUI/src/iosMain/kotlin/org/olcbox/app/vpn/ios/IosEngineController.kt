@@ -383,7 +383,7 @@ internal class IosEngineController(
                 blockQuic = !(isAwg || isHy2 || (isNaive && effectiveProfile.naiveQuic)),
                 sniffOverrideDestination = isAwg,
                 secondProfile = secondProfile,
-                fakeDnsSpec = config.fakeDns,
+                fakeDnsSpec = if (isAwg) null else config.fakeDns,
                 preferTcpRemoteDns = true,
                 remoteDnsOverHttps = false,
                 forceFamilyResolve = false,
@@ -648,7 +648,11 @@ internal class IosEngineController(
         // Chained exit proxy on top of the tunnel (WireGuard/WDTT and AmneziaWG exits).
         val chainProxy = if (outboundType != VkTurnConfig.OUTBOUND_PROXY) {
             vk.chainProxyLink.takeIf { it.isNotBlank() }
-                ?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
+                ?.let { link ->
+                    (ShareLinkParser.parse(link)
+                        ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy2 ?: it.proxy })
+                        ?.takeIf { it.isComplete() }
+                }
         } else null
 
         val awgSocks = if (outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG) {
@@ -880,16 +884,22 @@ internal class IosEngineController(
         return localSocksProfile(profile.tag.ifBlank { "AmneziaWG" }, port)
     }
 
-    /** Ensures AllowedIPs = 0.0.0.0/0, ::/0 in the WireGuard/AmneziaWG INI so cryptokey routing never drops internet traffic. */
+    /** Ensures AllowedIPs = 0.0.0.0/0, ::/0 and fallback DNS in the WireGuard/AmneziaWG INI so cryptokey routing never drops internet traffic. */
     private fun ensureAllowedIpsFullRoute(ini: String): String {
         if (ini.isBlank()) return ini
         var hasAllowedIps = false
+        var hasDns = false
         val lines = ini.lineSequence().map { line ->
             val trim = line.trim()
             if (trim.startsWith("allowedips", ignoreCase = true) && '=' in trim) {
                 hasAllowedIps = true
                 "AllowedIPs = 0.0.0.0/0, ::/0"
-            } else line
+            } else {
+                if (trim.startsWith("dns", ignoreCase = true) && '=' in trim) {
+                    hasDns = true
+                }
+                line
+            }
         }.toMutableList()
         if (!hasAllowedIps) {
             val peerIdx = lines.indexOfLast { it.trim().equals("[peer]", ignoreCase = true) }
@@ -897,6 +907,12 @@ internal class IosEngineController(
                 lines.add(peerIdx + 1, "AllowedIPs = 0.0.0.0/0, ::/0")
             } else {
                 lines.add("AllowedIPs = 0.0.0.0/0, ::/0")
+            }
+        }
+        if (!hasDns) {
+            val ifaceIdx = lines.indexOfFirst { it.trim().equals("[interface]", ignoreCase = true) }
+            if (ifaceIdx >= 0) {
+                lines.add(ifaceIdx + 1, "DNS = 1.1.1.1, 8.8.8.8")
             }
         }
         return lines.joinToString("\n")
