@@ -1,4 +1,5 @@
 import Coreapi
+import Darwin
 import Foundation
 import SharedUI
 
@@ -175,8 +176,8 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let cur = ptr {
             let name = String(cString: cur.pointee.ifa_name)
-            let flags = Int32(cur.pointee.ifa_flags)
-            if (flags & IFF_UP) != 0 && (flags & IFF_RUNNING) != 0 && (flags & IFF_LOOPBACK) == 0 {
+            let flags = Int(cur.pointee.ifa_flags)
+            if (flags & Int(IFF_UP)) != 0 && (flags & Int(IFF_RUNNING)) != 0 && (flags & Int(IFF_LOOPBACK)) == 0 {
                 if !name.hasPrefix("utun") && !name.hasPrefix("lo") && !name.hasPrefix("awdl") && !name.hasPrefix("llw") && !name.hasPrefix("p2p") {
                     if let addr = cur.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) || addr.pointee.sa_family == UInt8(AF_INET6) {
                         let idx = if_nametoindex(cur.pointee.ifa_name)

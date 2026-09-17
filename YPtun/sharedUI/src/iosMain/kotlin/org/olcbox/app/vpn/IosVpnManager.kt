@@ -1,5 +1,11 @@
 package org.olcbox.app.vpn
 
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.request.head
+import io.ktor.client.statement.HttpResponse
+import org.olcbox.app.data.datasource.createProxyHttpClient
+
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
@@ -262,7 +268,13 @@ class IosVpnManager(
         val isActiveLocation = locationsRepository.getActiveLocationId() == locationConfig.id
         val pingMs = when {
             config.engine == EngineType.Stealth -> rtcPing(config)
-            config.engine == EngineType.VkTurn -> null
+            config.engine == EngineType.VkTurn -> {
+                if (status.value == VpnStatus.Connected && isActiveLocation) {
+                    tunnelPing()
+                } else {
+                    null
+                }
+            }
             config.engine == EngineType.MasterDns -> {
                 if (status.value == VpnStatus.Connected && isActiveLocation) {
                     val ms = tunnelPing()
@@ -271,6 +283,9 @@ class IosVpnManager(
                 masterDnsProbePing(config)
             }
             profile == null -> null
+            status.value == VpnStatus.Connected && isActiveLocation -> {
+                tunnelPing() ?: if (isLoopbackHost(profile.server)) null else core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
+            }
             behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
                 if (isLoopbackHost(profile.server)) null
                 else {
@@ -279,10 +294,6 @@ class IosVpnManager(
                 }
             }
             profile.type == ProxyProfile.TYPE_AMNEZIAWG -> {
-                if (status.value == VpnStatus.Connected && isActiveLocation) {
-                    val ms = tunnelPing()
-                    if (ms != null && ms > 0) return@withContext ms
-                }
                 val awgConfig = profile.awgConfig.orEmpty()
                 val probeMs = if (awgConfig.isNotBlank()) core.awgProbe(awgConfig) else -1L
                 if (probeMs > 0) probeMs
@@ -355,34 +366,33 @@ class IosVpnManager(
         if (ms > 0) ms else null
     }
 
+    private val pingClient: HttpClient by lazy {
+        createProxyHttpClient(
+            connectTimeoutMs = PING_TIMEOUT_MS,
+            requestTimeoutMs = PING_TIMEOUT_MS,
+            socketTimeoutMs = PING_TIMEOUT_MS,
+        )
+    }
+
     private suspend fun tunnelPing(): Long? = withContext(Dispatchers.Default) {
         if (status.value != VpnStatus.Connected) return@withContext null
         val behavior = IosSharedStore.loadAppBehavior()
         val urlString = behavior.effectivePingUrl()
-        val nsUrl = NSURL.URLWithString(urlString) ?: return@withContext null
-        val request = platform.Foundation.NSMutableURLRequest.requestWithURL(
-            nsUrl,
-            cachePolicy = platform.Foundation.NSURLRequestReloadIgnoringLocalCacheData,
-            timeoutInterval = PING_TIMEOUT_MS / 1000.0
-        ).apply {
-            setHTTPMethod(if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD")
-        }
         val mark = kotlin.time.TimeSource.Monotonic.markNow()
-        suspendCancellableCoroutine { cont ->
-            val task = platform.Foundation.NSURLSession.sharedSession.dataTaskWithRequest(request) { _, response, error ->
-                if (error == null && response != null) {
-                    val httpResp = response as? platform.Foundation.NSHTTPURLResponse
-                    val code = httpResp?.statusCode?.toInt() ?: 0
-                    if (code in 200..399 || code == 204) {
-                        val elapsedMs = mark.elapsedNow().inWholeMilliseconds
-                        cont.resume(maxOf(1L, elapsedMs))
-                        return@dataTaskWithRequest
-                    }
-                }
-                cont.resume(null)
+        val ok = runCatching {
+            val response: HttpResponse = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) {
+                pingClient.get(urlString)
+            } else {
+                pingClient.head(urlString)
             }
-            task.resume()
-            cont.invokeOnCancellation { task.cancel() }
+            response.status.value in 200..399 || response.status.value == 204
+        }.getOrDefault(false)
+
+        if (ok) {
+            val elapsedMs = mark.elapsedNow().inWholeMilliseconds
+            maxOf(1L, elapsedMs)
+        } else {
+            null
         }
     }
 
