@@ -106,7 +106,7 @@ class IosAppSession internal constructor(
         val strings = stringsFor(LocalizationState.effective)
         // Routing profiles are a separate store from locations; this returns false for anything else.
         if (dependencies.settings.importRoutingProfileLink(link)) {
-            platformBridge.showMessage(strings.routingImportApply)
+            platformBridge.showMessage(strings.importedFromLink)
             return
         }
         dependencies.homeViewModel.onImportFullConfig(
