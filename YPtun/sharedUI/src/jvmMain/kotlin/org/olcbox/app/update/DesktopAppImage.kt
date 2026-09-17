@@ -62,6 +62,20 @@ internal object DesktopAppImage {
         return candidates.firstOrNull { it.exists() }
     }
 
+    /**
+     * The app image's classpath file (`app/YPtun.cfg`) — jpackage names every jar in it by exact
+     * filename, and those names carry a content hash, so this one small file changes whenever any
+     * jar does. That makes it the cheap identity of an installed build.
+     */
+    fun classpathFile(): Path? {
+        val dir = appDir() ?: return null
+        return runCatching {
+            Files.list(dir).use { stream ->
+                stream.filter { it.name.endsWith(".cfg", ignoreCase = true) }.findFirst().orElse(null)
+            }
+        }.getOrNull()
+    }
+
     /** Lowercase hex SHA-256 of [path]. */
     fun sha256(path: Path): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -76,3 +90,13 @@ internal object DesktopAppImage {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 }
+
+/**
+ * SHA-256 of what identifies this installation, or null outside an installed app image (a Gradle
+ * `run`, an IDE). A published delta bundle names the build it was generated against, so the updater
+ * can tell up front whether it fits instead of downloading it to find out — and a portable or
+ * hand-patched image no longer pulls a bundle that can only be rejected.
+ */
+fun installedDesktopFingerprint(): String? = runCatching {
+    DesktopAppImage.classpathFile()?.let(DesktopAppImage::sha256)
+}.getOrNull()

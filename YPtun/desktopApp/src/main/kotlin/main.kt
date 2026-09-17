@@ -137,6 +137,7 @@ import org.olcbox.app.ui.theme.AppTheme
 import org.olcbox.app.update.AppUpdateInfo
 import org.olcbox.app.update.AppUpdateSettings
 import org.olcbox.app.update.AppUpdateService
+import org.olcbox.app.update.installedDesktopFingerprint
 import org.olcbox.app.update.DesktopUpdateOutcome
 import org.olcbox.app.update.JvmUpdateInstaller
 import org.olcbox.app.update.JvmUpdateSettingsStore
@@ -154,7 +155,9 @@ private class DesktopAppDependencies {
 
     val locationsRepository = LocationsRepositoryImpl(locationsDataSource)
     val updateService = AppUpdateService(
-        deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
+        deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource),
+        // Picks the delta bundle generated against THIS installed image (see installedDesktopFingerprint).
+        installedFingerprint = { installedDesktopFingerprint() }
     )
     val updateSettingsStore = JvmUpdateSettingsStore()
     val updateInstaller = JvmUpdateInstaller()

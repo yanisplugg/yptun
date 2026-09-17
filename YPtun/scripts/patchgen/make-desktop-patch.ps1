@@ -104,6 +104,15 @@ foreach ($dir in @($oldApp, $newApp)) {
 
 $oldFiles = @{}
 Get-ChildItem $oldApp -File | ForEach-Object { $oldFiles[$_.Name] = $_ }
+
+# app/YPtun.cfg names every jar by exact filename and those names carry a content hash, so it is the
+# cheap identity of a build. The bundle name carries the first 16 hex of its SHA-256; the app hashes
+# its own YPtun.cfg and skips a bundle generated against a different image instead of downloading it
+# to find out. Keep in sync with AppUpdateService.BASE_HASH_LENGTH / installedDesktopFingerprint().
+$oldCfg = @($oldFiles.Values | Where-Object { $_.Name -like "*.cfg" })
+if ($oldCfg.Count -ne 1) { throw "expected exactly one .cfg in $oldApp, found $($oldCfg.Count)" }
+$baseSha = Get-Sha $oldCfg[0].FullName
+$baseTag = $baseSha.Substring(0, 16)
 $newFiles = @{}
 Get-ChildItem $newApp -File | ForEach-Object { $newFiles[$_.Name] = $_ }
 
@@ -166,7 +175,7 @@ $manifestPath = Join-Path $work "manifest.json"
   $manifestPath, ($manifest | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-$bundle = Join-Path $OutDir ("YPtun-delta-{0}-{1}-{2}.patch" -f $FromVer, $ToVer, $Target)
+$bundle = Join-Path $OutDir ("YPtun-delta-{0}-{1}-{2}-{3}.patch" -f $FromVer, $ToVer, $Target, $baseTag)
 if (Test-Path $bundle) { Remove-Item $bundle -Force }
 # ZipFile, not Compress-Archive: the latter refuses any destination that isn't named *.zip.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -178,4 +187,5 @@ $bundleMb = [math]::Round((Get-Item $bundle).Length / 1MB, 2)
 Remove-Item $work -Recurse -Force
 Write-Host ""
 Write-Host "OK  $bundle"
+Write-Host ("    base image YPtun.cfg sha256 $baseSha")
 Write-Host ("    app image $imageMb MB -> bundle $bundleMb MB  ({0} operation(s), every patch round-trip verified)" -f $ops.Count)
