@@ -171,6 +171,10 @@ object XrayConfig {
         olcrtcChainUser: String = "",
         olcrtcChainPass: String = "",
         logLevel: String = "debug",
+        // Absolute path for xray's error log. Unset everywhere the core's stdout is already captured
+        // (Android's logcat, the desktop console); iOS runs the core inside an app extension whose
+        // stdout goes nowhere, so there it points at the shared tunnel log the app tails.
+        logFilePath: String? = null,
         traffic: TrafficSettings = TrafficSettings(),
         routing: RoutingRules = RoutingRules(),
         // VK-TURN chain: when set, [profile] dials its server THROUGH this WireGuard outbound (the
@@ -243,7 +247,14 @@ object XrayConfig {
         // Internal loopback SOCKS port: one above the app's listen port (127.0.0.1 only, not exposed).
         val cascadeLoopPort = listenPort + 1
         val config = buildJsonObject {
-            putJsonObject("log") { put("loglevel", logLevel) }
+            putJsonObject("log") {
+                put("loglevel", logLevel)
+                if (!logFilePath.isNullOrBlank()) {
+                    put("error", logFilePath)
+                    // The access log is one line per connection; the error log is the one worth keeping.
+                    put("access", "none")
+                }
+            }
 
             // Stretch the handshake (and idle) budget for slow chained tunnels so Xray doesn't kill a
             // still-completing handshake. Only emitted when a caller asks for it (e.g. MasterDNS).
@@ -729,6 +740,10 @@ object XrayConfig {
         // here — AmneziaWG/WireGuard/Hysteria2 aren't Xray exit outbounds and are ignored (logged by the
         // caller). Null = single hop.
         secondProfile: ProxyProfile? = null,
+        // Absolute path for xray's error log, overriding whatever `log` the user's config carries.
+        // Only iOS sets it: the core runs inside an app extension whose stdout goes nowhere, so
+        // without this a verbatim config that fails to load fails silently. See [build].
+        logFilePath: String? = null,
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
@@ -942,9 +957,18 @@ object XrayConfig {
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
                 if (key != "inbounds" && key != "outbounds" && key != "routing" && key != "dns" &&
-                    !(injectFake && key == "fakedns")
+                    !(injectFake && key == "fakedns") &&
+                    !(!logFilePath.isNullOrBlank() && key == "log")
                 ) {
                     put(key, value)
+                }
+            }
+            if (!logFilePath.isNullOrBlank()) {
+                putJsonObject("log") {
+                    // Keep the config's own level when it set one; errors only otherwise.
+                    put("loglevel", (root["log"] as? JsonObject)?.get("loglevel") ?: JsonPrimitive("warning"))
+                    put("error", logFilePath)
+                    put("access", "none")
                 }
             }
             if (outDns != null) put("dns", outDns)

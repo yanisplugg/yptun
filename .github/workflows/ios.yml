@@ -80,7 +80,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework
-          key: cores-ios-${{ hashFiles('sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'YPtun/sharedUI/src/commonMain/kotlin/org/olcbox/app/vpn/coreapi/**') }}
+          # Must cover every input of :sharedUI:buildCoresIosXcframework. It used to point at a
+          # Kotlin path that does not exist and left `cores/` out entirely, so a change to the Go
+          # cores restored a stale framework and shipped without the change in it.
+          key: cores-ios-${{ hashFiles('cores/**', 'sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'awgproxy/**', 'free-turn-proxy/**', 'wdtt/**', 'masterdns/**', 'olcrtc/**', 'YPtun/sharedUI/build.gradle.kts') }}
 
       - name: Go cores → Coreapi.xcframework
         if: steps.cache-cores.outputs.cache-hit != 'true'

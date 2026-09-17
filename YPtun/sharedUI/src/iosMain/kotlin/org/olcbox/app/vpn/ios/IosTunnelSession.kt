@@ -71,7 +71,7 @@ class IosTunnelSession(
      * run, or an error text (then nothing is left running).
      */
     fun start(completion: (hevConfig: String?, error: String?) -> Unit) {
-        IosSharedStore.writeText(LOG_FILE, "")
+        openLogSession()
         startLogPump()
         scope.launch {
             val result = runCatching {
@@ -115,10 +115,28 @@ class IosTunnelSession(
     }
 
     fun stop() {
-        log("Stopping")
+        log("Stopping (session #${IosSharedStore.readText(SESSION_COUNT_FILE)?.trim().orEmpty()})")
         watchdog?.cancel()
         engine.stopAll()
         scope.cancel()
+    }
+
+    /**
+     * Opens the log for one tunnel session.
+     *
+     * It used to be wiped on every connect, which erased the one piece of evidence that matters when
+     * the tunnel keeps coming back by itself: whether the previous session ended with a "Stopping"
+     * line (the user or the app asked for it) or simply stopped mid-sentence (iOS killed the
+     * extension — over its memory budget, say — and restarted it). Now the file is only cleared once
+     * it gets large, and each session opens with a numbered banner, so a restart loop is plainly
+     * visible in the log sheet. sing-box appends to this same file, which is why the banner is
+     * written before the cores start.
+     */
+    private fun openLogSession() {
+        if (IosSharedStore.fileSize(LOG_FILE) > MAX_LOG_BYTES) IosSharedStore.writeText(LOG_FILE, "")
+        val session = (IosSharedStore.readText(SESSION_COUNT_FILE)?.trim()?.toIntOrNull() ?: 0) + 1
+        IosSharedStore.writeText(SESSION_COUNT_FILE, session.toString())
+        log("===== tunnel session #$session =====")
     }
 
     /**
@@ -245,6 +263,10 @@ class IosTunnelSession(
         const val LOG_FILE = "tunnel.log"
         /** Why the last connect failed ("" after a good one) — the app shows it as the error. */
         const val ERROR_FILE = "tunnel_error.txt"
+        /** Monotonic counter of tunnel sessions, so the log banner says which one this is. */
+        private const val SESSION_COUNT_FILE = "tunnel_sessions.txt"
+        /** The log is cleared only once it passes this; see [openLogSession]. */
+        private const val MAX_LOG_BYTES = 512L * 1024
 
         private const val SOCKS_PORT = 10808
         // TEST-NET-2 (RFC 5737): outside FakeDNS pool (198.18.0.0/15) and LAN bypass ranges

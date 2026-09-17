@@ -96,8 +96,12 @@ class IosSettingsController {
      * usually lands, because by then the traffic goes through the tunnel.
      */
     fun ensureGeoAssets() {
-        if (IosGeoAssets.hasAssets()) return
         scope.launch {
+            // sing-box's .srs rule-sets, for the same reason and with the same timing: the extension
+            // refuses to download them on the connect path, so whatever it reported missing is fetched
+            // here instead (see IosRuleSets).
+            runCatching { IosRuleSets.fetchWanted() }
+            if (IosGeoAssets.hasAssets()) return@launch
             val state = _routingProfiles.value
             val ok = runCatching { IosGeoAssets.ensureAssets(state.geoipUrl, state.geositeUrl) }
                 .getOrDefault(false)

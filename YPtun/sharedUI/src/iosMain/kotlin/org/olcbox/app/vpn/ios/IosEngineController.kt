@@ -91,6 +91,16 @@ internal class IosEngineController(
     private fun proxyCoreRunning(): Boolean =
         if (activeProxyCore == ProxyCore.Xray) core.xrayRunning() else core.sbRunning()
 
+    /**
+     * Every sing-box start on iOS goes through here so the core never has to reach the network to come
+     * up: [IosRuleSets.localize] turns its remote geo rule-sets into local files and drops the ones not
+     * downloaded yet. The extension has a deadline to report the tunnel up, and a rule-set fetch that
+     * misses it — or fails, which aborts the whole core — is a tunnel that never connects.
+     */
+    private fun startSingBox(configJson: String) {
+        core.sbStart(IosRuleSets.localize(configJson, log)).orThrow("sing-box start failed")
+    }
+
     // ---------------------------------------------------------------------------------------
     // Stealth (olcRTC)
 
@@ -275,6 +285,9 @@ internal class IosEngineController(
                     stripGeoSelectors = stripGeo,
                     forceIpv4 = traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
                     secondProfile = secondProfile,
+                    // The extension's stdout goes nowhere, so a verbatim config that xray refuses to
+                    // load used to fail with nothing in the log at all.
+                    logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
                 )
             } else {
                 assetPath = ensureGeoAssetPath(routingProfile, profilesState)
@@ -306,6 +319,8 @@ internal class IosEngineController(
                     secondProfile = secondProfile,
                     bypassLan = routing.bypassLan,
                     fakeDnsSpec = config.fakeDns,
+                    logLevel = "warning",
+                    logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
                 )
             }
             log("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -341,10 +356,16 @@ internal class IosEngineController(
                 remoteDnsOverHttps = false,
                 forceFamilyResolve = false,
                 cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
+                // Unlike every other platform, iOS points sing-box's log at a FILE in the App Group —
+                // and the app re-reads that file to show the log sheet. At the shared default ('debug')
+                // sing-box writes a line per connection event, so a single session grew the file without
+                // bound inside the extension's container while the app kept re-reading it. Warnings and
+                // errors are what a post-mortem needs anyway; the file is truncated on every connect.
+                logLevel = "warn",
                 logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
-            core.sbStart(json).orThrow("sing-box start failed")
+            startSingBox(json)
         }
 
         if (!IosNet.awaitLocalPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
@@ -482,7 +503,7 @@ internal class IosEngineController(
                 cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
             )
             activeProxyCore = ProxyCore.SingBox
-            core.sbStart(json).orThrow("sing-box start failed")
+            startSingBox(json)
         }
 
         if (!IosNet.awaitLocalPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
@@ -707,7 +728,7 @@ internal class IosEngineController(
                 }
             }
             log("Starting sing-box (VK-TURN, $outboundType) via $listenAddr")
-            core.sbStart(json).orThrow("sing-box start failed")
+            startSingBox(json)
         }
 
         if (!IosNet.awaitLocalPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
@@ -750,6 +771,8 @@ internal class IosEngineController(
         preferTcpRemoteDns = preferTcpRemoteDns,
         directViaBase = directViaBase,
         cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
+        // See the note on the Standard/Chain path: this log goes to a file the app tails.
+        logLevel = "warn",
         logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
     )
 

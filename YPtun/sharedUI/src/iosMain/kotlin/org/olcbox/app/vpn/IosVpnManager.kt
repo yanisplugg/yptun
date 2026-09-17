@@ -631,7 +631,11 @@ class IosVpnManager(
         logJob = scope.launch {
             var last = ""
             while (isActive) {
-                val text = withContext(Dispatchers.Default) { IosSharedStore.readText(IosTunnelSession.LOG_FILE) }.orEmpty()
+                // Tail only: the extension keeps the log across sessions now, so re-reading the whole
+                // file once a second would cost more the longer the tunnel had been up.
+                val text = withContext(Dispatchers.Default) {
+                    IosSharedStore.readTextTail(IosTunnelSession.LOG_FILE, LOG_TAIL_BYTES)
+                }.orEmpty()
                 if (text != last) {
                     last = text
                     _logs.value = text.lineSequence().filter { it.isNotBlank() }.toList().takeLast(MAX_LOG_LINES)
@@ -655,6 +659,8 @@ class IosVpnManager(
         /** Read by the WidgetKit extension (YPtunWidget/VpnWidget.swift). */
         const val WIDGET_FILE = "widget.json"
         const val MAX_LOG_LINES = 500
+        /** Enough for [MAX_LOG_LINES] of tunnel log; the rest of the file is history we don't show. */
+        const val LOG_TAIL_BYTES = 192L * 1024
         const val PING_TIMEOUT_MS = 8_000
         const val HTTP_PING_URL = "https://www.google.com/generate_204"
     }

@@ -10,12 +10,21 @@ import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
 import platform.Foundation.NSDocumentDirectory
+import platform.Foundation.NSFileHandle
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSFileSize
+import platform.Foundation.NSNumber
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSString
 import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.NSUserDomainMask
+import platform.Foundation.closeFile
+// Category methods on NSFileHandle (NSFileHandleCreation / the seek+read category) need their own
+// import in Kotlin/Native — see the note in IosSettingsController about class properties.
 import platform.Foundation.create
+import platform.Foundation.fileHandleForReadingAtPath
+import platform.Foundation.readDataToEndOfFile
+import platform.Foundation.seekToFileOffset
 import platform.Foundation.stringWithContentsOfFile
 import platform.Foundation.writeToFile
 
@@ -52,6 +61,37 @@ object IosSharedStore {
 
     fun writeText(fileName: String, text: String) {
         NSString.create(string = text).writeToFile(path(fileName), true, NSUTF8StringEncoding, null)
+    }
+
+    /** Size in bytes, 0 when the file does not exist. */
+    fun fileSize(fileName: String): Long =
+        (NSFileManager.defaultManager.attributesOfItemAtPath(path(fileName), null)?.get(NSFileSize) as? NSNumber)
+            ?.longLongValue ?: 0L
+
+    /**
+     * The last [maxBytes] of a file, starting at the first whole line inside that window.
+     *
+     * The tunnel log is appended to by two processes and tailed once a second by the app; reading the
+     * whole thing every tick made the app's cost grow with the length of the session. Cutting into the
+     * middle of a UTF-8 sequence makes NSString reject the ENTIRE buffer, so the offset is nudged
+     * forward a few bytes until it decodes (a UTF-8 character is at most 4 bytes long).
+     */
+    fun readTextTail(fileName: String, maxBytes: Long): String? {
+        val size = fileSize(fileName)
+        if (size <= maxBytes) return readText(fileName)
+        val handle = NSFileHandle.fileHandleForReadingAtPath(path(fileName)) ?: return readText(fileName)
+        try {
+            for (nudge in 0..3) {
+                handle.seekToFileOffset((size - maxBytes + nudge).toULong())
+                val data = handle.readDataToEndOfFile()
+                val text = NSString.create(data, NSUTF8StringEncoding)?.toString() ?: continue
+                // The first line in the window is almost certainly a fragment — drop it.
+                return text.substringAfter('\n', text)
+            }
+        } finally {
+            handle.closeFile()
+        }
+        return null
     }
 
     fun <T> load(fileName: String, serializer: KSerializer<T>, default: () -> T): T =

@@ -260,6 +260,13 @@ func XrayMeasureDelay(configJSON, url, method string, timeoutMs int) (result int
 
 func AwgStart(iniConfig, listenAddr string) error {
 	awg.SetLogWriter(tagWriter{"awg"})
+	// Verbose device logging (handshake init/response, "handshake did not complete", peer errors).
+	// Without it a stalled AmneziaWG is invisible: at error level the device stays silent while the
+	// tunnel is up and carrying nothing, which is exactly the "AWG doesn't work" report. Handshakes
+	// are a control path, not per-packet, so this does not flood the journal during transfer — the
+	// Android host has been calling Awg.setDebug(true) for the same reason; every other host relied on
+	// coreapi and got nothing.
+	awg.SetDebug(true)
 	return awg.Start(iniConfig, listenAddr)
 }
 
