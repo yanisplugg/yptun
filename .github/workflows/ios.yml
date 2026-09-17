@@ -7,7 +7,10 @@
 # can be built on the Windows machine the rest of the project is developed on.
 
 name: iOS
-run-name: ${{ inputs.comment != '' && format('iOS: {0}', inputs.comment) || (github.event.head_commit.message != '' && github.event.head_commit.message || format('iOS ({0})', github.ref_name)) }}
+# Quoted on purpose: the expression contains `format('iOS: {0}', …)`, and a plain YAML scalar may
+# not contain ": " — unquoted, the whole file fails to parse and every run dies in 0 s named after
+# its path instead of "iOS" (and `workflow_dispatch` stops being offered at all).
+run-name: "${{ inputs.comment != '' && format('iOS: {0}', inputs.comment) || (github.event.head_commit.message != '' && github.event.head_commit.message || format('iOS ({0})', github.ref_name)) }}"
 
 on:
   workflow_dispatch:
