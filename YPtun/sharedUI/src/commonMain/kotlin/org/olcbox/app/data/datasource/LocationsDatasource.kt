@@ -31,6 +31,7 @@ import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
+import org.olcbox.app.data.importer.UriCodec
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
@@ -1718,7 +1719,7 @@ class LocationsRepositoryImpl(
         if (fnStar.isNotBlank()) {
             val decoded = if (fnStar.contains("''")) fnStar.substringAfter("''") else fnStar
             val unquoted = decoded.trim('"').trim('\'')
-            runCatching { UriCodec.percentDecode(unquoted) }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+            runCatching<String> { UriCodec.percentDecode(unquoted) }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
         }
         val fn = header.substringAfter("filename=", "").substringBefore(';').trim()
         if (fn.isNotBlank()) {
