@@ -23,7 +23,6 @@ import org.olcbox.app.ui.features.locations.components.SpeedSample
 import org.olcbox.app.data.datasource.IosLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.IosLogExporter
-import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.importer.IosConfigImporter
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.share.ConfigShareService
@@ -153,10 +152,6 @@ private class IosAppDependencies(
     private val locationsDataSource = IosLocationsDataSourceImpl()
     val locationsRepository = LocationsRepositoryImpl(locationsDataSource)
     val vpnManager = IosVpnManager(locationsRepository, coreBridge)
-    val updateService = AppUpdateService(
-        deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
-    )
-    val updateSettingsStore = IosUpdateSettingsStore()
     val homeViewModel = HomeScreenViewModel(
         vpnManager = vpnManager,
         locationsRepository = locationsRepository,
