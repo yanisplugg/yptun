@@ -358,6 +358,10 @@ interface Strings {
     val freeServers: String
     val freeServersSubtitle: String
     val freeServersLoading: String
+    val selectAll: String
+    val deselectAll: String
+    val freeServersDisclaimer: String
+    fun addSelectedServers(count: Int): String
     fun freeServersImported(working: Int, total: Int): String
     val updateSubscriptionsAction: String
     val updateSubscriptionsSubtitle: String
@@ -1028,6 +1032,10 @@ object RuStrings : Strings {
     override val freeServers = "Бесплатные серверы"
     override val freeServersSubtitle = "Публичный список VLESS — скачать и отсеять нерабочие"
     override val freeServersLoading = "Загрузка и проверка бесплатных серверов…"
+    override val selectAll = "Выбрать все"
+    override val deselectAll = "Снять все"
+    override val freeServersDisclaimer = "Публичные серверы быстро устаревают. Рекомендуется периодически очищать старые и добавлять новые."
+    override fun addSelectedServers(count: Int) = "Добавить выбранные ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Добавлено рабочих серверов: $working из $total"
     override val updateSubscriptionsAction = "Обновить подписки"
     override val updateSubscriptionsSubtitle = "Обновить локации импортированных подписок"
@@ -1658,6 +1666,10 @@ object EnStrings : Strings {
     override val freeServers = "Free servers"
     override val freeServersSubtitle = "Public VLESS list — download & filter working"
     override val freeServersLoading = "Downloading and testing free servers…"
+    override val selectAll = "Select all"
+    override val deselectAll = "Deselect all"
+    override val freeServersDisclaimer = "Public servers expire quickly. It is recommended to periodically clean old ones and add fresh servers."
+    override fun addSelectedServers(count: Int) = "Add selected ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Added working servers: $working of $total"
     override val updateSubscriptionsAction = "Update subscriptions"
     override val updateSubscriptionsSubtitle = "Refresh imported subscription locations"
@@ -2288,6 +2300,10 @@ object FaStrings : Strings {
     override val freeServers = "سرورهای رایگان"
     override val freeServersSubtitle = "فهرست عمومی VLESS — دریافت و غربال سرورها"
     override val freeServersLoading = "در حال بارگیری و آزمایش سرورهای رایگان…"
+    override val selectAll = "انتخاب همه"
+    override val deselectAll = "لغو انتخاب همه"
+    override val freeServersDisclaimer = "سرورهای عمومی سریعاً منقضی می‌شوند. توصیه می‌شود سرورهای قدیمی را پاک کرده و سرورهای جدید اضافه کنید."
+    override fun addSelectedServers(count: Int) = "افزودن موارد انتخاب‌شده ($count)"
     override fun freeServersImported(working: Int, total: Int) = "سرورهای فعال افزوده شد: $working از $total"
     override val updateSubscriptionsAction = "به‌روزرسانی اشتراک‌ها"
     override val updateSubscriptionsSubtitle = "بازآوری موقعیت‌های اشتراک‌های واردشده"
@@ -2918,6 +2934,10 @@ object ZhStrings : Strings {
     override val freeServers = "免费节点"
     override val freeServersSubtitle = "公共 VLESS 列表 — 下载并过滤可用节点"
     override val freeServersLoading = "正在下载并测试免费节点…"
+    override val selectAll = "全选"
+    override val deselectAll = "取消全选"
+    override val freeServersDisclaimer = "公共免费节点时效性较短，建议定期清理旧节点并重新添加。"
+    override fun addSelectedServers(count: Int) = "添加所选节点 ($count)"
     override fun freeServersImported(working: Int, total: Int) = "已添加可用节点：$working / $total"
     override val updateSubscriptionsAction = "更新订阅"
     override val updateSubscriptionsSubtitle = "刷新已导入的订阅节点"

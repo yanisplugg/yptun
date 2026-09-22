@@ -290,7 +290,16 @@ object XrayConfig {
                     // so they aren't dropped by an exit that blocks port 53 (the 4s-serial-timeout →
                     // ERR_CONNECTION_ABORTED bug).
                     add(proxiedDns(traffic.remoteDns))
-                    if (traffic.remoteDns2.isNotBlank()) add(proxiedDns(traffic.remoteDns2))
+                    if (traffic.remoteDns2.isNotBlank()) {
+                        add(proxiedDns(traffic.remoteDns2))
+                    } else {
+                        // Fallback remote DNS resolvers if primary DoH fails or times out
+                        if (!traffic.remoteDns.contains("1.1.1.1")) {
+                            add(proxiedDns("1.1.1.1"))
+                        }
+                        add("tcp://8.8.8.8")
+                        add("tcp://1.1.1.1")
+                    }
                     add(traffic.directDns)
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())

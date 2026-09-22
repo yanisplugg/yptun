@@ -27,9 +27,13 @@ import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.YptunInboundCodec
+import org.olcbox.app.ui.features.home.components.FreeServerItem
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.vpn.ExpiringSubscriptionInfo
 import org.olcbox.app.vpn.PanelAnnouncementInfo
@@ -410,13 +414,24 @@ class HomeScreenViewModel(
         }
     }
 
-    fun importFreeServers(
-        onComplete: (working: Int, total: Int) -> Unit = { _, _ -> },
-        onError: (String) -> Unit = {}
-    ) {
-        viewModelScope.launch {
+    private var freeServersJob: Job? = null
+
+    fun cancelFreeServersLoad() {
+        freeServersJob?.cancel()
+        freeServersJob = null
+        _state.update { it.copy(isFreeServersLoading = false) }
+    }
+
+    fun dismissFreeServersSheet() {
+        _state.update { it.copy(availableFreeServers = null) }
+    }
+
+    fun loadFreeServers(onError: (String) -> Unit = {}) {
+        freeServersJob?.cancel()
+        _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null) }
+        freeServersJob = viewModelScope.launch {
             try {
-                val url = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+                val url = FREE_SERVERS_URL
                 val rawText = withContext(Dispatchers.IO) {
                     val client = createProxyHttpClient(vpnManager.subscriptionFetchProxy())
                     try {
@@ -427,17 +442,18 @@ class HomeScreenViewModel(
                 }
 
                 if (rawText.isBlank()) {
+                    _state.update { it.copy(isFreeServersLoading = false) }
                     onError("Не удалось загрузить список серверов")
                     return@launch
                 }
 
                 val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }
                 if (allLines.isEmpty()) {
+                    _state.update { it.copy(isFreeServersLoading = false) }
                     onError("В списке не найдено серверов VLESS")
                     return@launch
                 }
 
-                // Парсим профили
                 val parsedItems = allLines.mapNotNull { line ->
                     val profile = ShareLinkParser.parse(line)
                     if (profile != null && profile.isComplete()) {
@@ -446,14 +462,15 @@ class HomeScreenViewModel(
                 }
 
                 if (parsedItems.isEmpty()) {
+                    _state.update { it.copy(isFreeServersLoading = false) }
                     onError("Не удалось распознать конфигурации серверов")
                     return@launch
                 }
 
                 // Быстрый параллельный TCP-прозвон портов (отсеиваем нерабочие)
-                val workingLines = withContext(Dispatchers.IO) {
-                    val sem = Semaphore(15)
-                    parsedItems.map { (line, profile) ->
+                val workingServers = withContext(Dispatchers.IO) {
+                    val sem = Semaphore(25)
+                    parsedItems.mapIndexed { index, (line, profile) ->
                         async {
                             sem.withPermit {
                                 val config = LocationConfig(
@@ -461,51 +478,107 @@ class HomeScreenViewModel(
                                     engine = EngineType.Standard,
                                     proxy = profile
                                 ).normalized()
-                                val ping = withTimeoutOrNull(2500L) {
+                                val ping = withTimeoutOrNull(2000L) {
                                     vpnManager.ping(config)
                                 }
-                                if (ping != null && ping > 0) line else null
+                                if (ping != null && ping > 0) {
+                                    FreeServerItem(
+                                        id = "free_${profile.server}_${profile.serverPort}_$index",
+                                        line = line,
+                                        profile = profile,
+                                        displayName = profile.displayName(),
+                                        pingMs = ping
+                                    )
+                                } else null
                             }
                         }
-                    }.awaitAll().filterNotNull()
+                    }.awaitAll().filterNotNull().sortedBy { it.pingMs }
                 }
 
-                // Если рабочие найдены - берем их, если ни один не ответил за таймаут - берем первые 10 чтобы не оставлять пустым
-                val linesToImport = if (workingLines.isNotEmpty()) workingLines else allLines.take(10)
-                val textToImport = linesToImport.joinToString("\n")
+                _state.update { it.copy(isFreeServersLoading = false) }
 
-                val imported = withContext(Dispatchers.IO) {
-                    locationsRepository.importText(
-                        text = textToImport,
-                        subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                if (workingServers.isEmpty()) {
+                    onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
+                } else {
+                    _state.update { it.copy(availableFreeServers = workingServers) }
+                }
+            } catch (e: CancellationException) {
+                _state.update { it.copy(isFreeServersLoading = false) }
+            } catch (e: Exception) {
+                _state.update { it.copy(isFreeServersLoading = false) }
+                onError(e.message ?: "Ошибка загрузки бесплатных серверов")
+            }
+        }
+    }
+
+    fun saveSelectedFreeServers(
+        selectedServers: List<FreeServerItem>,
+        onComplete: (Int) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        _state.update { it.copy(availableFreeServers = null) }
+        if (selectedServers.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+                val newEntries = selectedServers.mapIndexed { index, item ->
+                    val profile = item.profile
+                    val location = LocationConfig(
+                        name = item.displayName,
+                        engine = EngineType.Standard,
+                        proxy = profile
+                    ).normalized()
+                    val base = "${profile.server}_${profile.serverPort}"
+                        .lowercase()
+                        .map { if (it.isLetterOrDigit()) it else '_' }
+                        .joinToString("")
+                    val storageId = "free_${base}_${now}_$index"
+                    LocationEntry.from(
+                        storageId = storageId,
+                        location = location,
+                        subscriptionUrl = FREE_SERVERS_URL,
+                        metadata = LocationMetadata(
+                            subscription = SubscriptionMetadata(
+                                name = "Бесплатные серверы",
+                                updateIntervalHours = 0,
+                                autoUpdateEnabled = false,
+                                lastRefreshAtEpochMs = now,
+                                lastAttemptAtEpochMs = now
+                            )
+                        )
                     )
                 }
 
-                if (!imported) {
-                    onError("Не удалось сохранить серверы в список")
-                    return@launch
+                val currentBundle = locationsRepository.getBundle()
+                // Убираем ТОЛЬКО старые бесплатные серверы, никогда не затрагивая остальные локации пользователя
+                val nonFreeLocations = currentBundle.locations.filterNot {
+                    it.subscriptionUrl?.trim() == FREE_SERVERS_URL
+                }
+                val updatedLocations = nonFreeLocations + newEntries
+
+                val oldFreeIds = currentBundle.locations
+                    .filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
+                    .map { it.storageId }
+                    .toSet()
+
+                val updatedActiveId = if (currentBundle.activeLocationId in oldFreeIds) {
+                    newEntries.firstOrNull()?.storageId ?: currentBundle.activeLocationId
+                } else {
+                    currentBundle.activeLocationId
                 }
 
-                // Убедимся, что для созданной группы/серверов проставлено имя и ссылка на подписку для автообновления
-                val bundle = locationsRepository.getBundle()
-                val updatedLocations = bundle.locations.map { entry ->
-                    if (entry.proxy != null && linesToImport.any { it.contains(entry.proxy.server) }) {
-                        val subMeta = (entry.metadata?.subscription ?: SubscriptionMetadata(name = "Бесплатные серверы"))
-                            .copy(name = "Бесплатные серверы", updateIntervalHours = 1)
-                        entry.copy(
-                            subscriptionUrl = url,
-                            metadata = (entry.metadata ?: LocationMetadata()).copy(subscription = subMeta)
-                        ).normalized()
-                    } else {
-                        entry
-                    }
-                }
-                locationsRepository.saveBundle(bundle.copy(locations = updatedLocations))
+                locationsRepository.saveBundle(
+                    currentBundle.copy(
+                        locations = updatedLocations,
+                        activeLocationId = updatedActiveId
+                    )
+                )
 
                 loadCurrentConfigNow()
-                onComplete(workingLines.size, parsedItems.size)
+                onComplete(newEntries.size)
             } catch (e: Exception) {
-                onError(e.message ?: "Ошибка загрузки бесплатных серверов")
+                onError(e.message ?: "Ошибка сохранения серверов")
             }
         }
     }
@@ -786,8 +859,12 @@ data class HomeScreenState(
     /** Wall-clock epoch-ms when the connection started (0 = not connected); drives the on-screen timer. */
     val connectedSinceEpochMs: Long = 0L,
     /** Set after importing a VK-TURN link that still needs a per-client VK Calls link. */
-    val vkTurnLinkPrompt: VkTurnLinkPrompt? = null
+    val vkTurnLinkPrompt: VkTurnLinkPrompt? = null,
+    val isFreeServersLoading: Boolean = false,
+    val availableFreeServers: List<FreeServerItem>? = null
 )
+
+const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
 
 /** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */
 data class VkTurnLinkPrompt(
