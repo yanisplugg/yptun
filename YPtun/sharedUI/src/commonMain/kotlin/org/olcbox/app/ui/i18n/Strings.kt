@@ -355,6 +355,10 @@ interface Strings {
     val pasteLinkSubtitle: String
     val importFile: String
     val importFileSubtitle: String
+    val freeServers: String
+    val freeServersSubtitle: String
+    val freeServersLoading: String
+    fun freeServersImported(working: Int, total: Int): String
     val updateSubscriptionsAction: String
     val updateSubscriptionsSubtitle: String
     val createCustomLocation: String
@@ -1021,6 +1025,10 @@ object RuStrings : Strings {
     override val pasteLinkSubtitle = "Подписка, olcrtc или конфигурация sing-box"
     override val importFile = "Импорт из файла"
     override val importFileSubtitle = "Подписка, olcrtc или конфигурация sing-box"
+    override val freeServers = "Бесплатные серверы"
+    override val freeServersSubtitle = "Публичный список VLESS — скачать и отсеять нерабочие"
+    override val freeServersLoading = "Загрузка и проверка бесплатных серверов…"
+    override fun freeServersImported(working: Int, total: Int) = "Добавлено рабочих серверов: $working из $total"
     override val updateSubscriptionsAction = "Обновить подписки"
     override val updateSubscriptionsSubtitle = "Обновить локации импортированных подписок"
     override val createCustomLocation = "Создать собственную локацию"
@@ -1130,7 +1138,7 @@ object RuStrings : Strings {
     override val notifySubExpirySubtitle = "Локальное уведомление за несколько дней до конца подписки."
     override val panelAnnouncementsTitle = "Уведомления от панели"
     override val panelAnnouncementsSubtitle = "Показывать системное уведомление, когда владелец панели присылает объявление."
-    override val vpsAutoInstallTitle = "Автоустановка на VPS"
+    override val vpsAutoInstallTitle = "Автоустановка на VPS (Beta)"
     override val vpsAutoInstallSubtitle = "Выполняет развёртывание движка на VPS."
     override val hideEndpointWhenDescriptionTitle = "Скрывать IP и протокол при описании"
     override val hideEndpointWhenDescriptionSubtitle = "Если у локации есть описание — показывать его вместо протокола и IP в точке подключения."
@@ -1647,6 +1655,10 @@ object EnStrings : Strings {
     override val pasteLinkSubtitle = "Subscription, olcrtc or sing-box config"
     override val importFile = "Import from file"
     override val importFileSubtitle = "Subscription, olcrtc or sing-box config"
+    override val freeServers = "Free servers"
+    override val freeServersSubtitle = "Public VLESS list — download & filter working"
+    override val freeServersLoading = "Downloading and testing free servers…"
+    override fun freeServersImported(working: Int, total: Int) = "Added working servers: $working of $total"
     override val updateSubscriptionsAction = "Update subscriptions"
     override val updateSubscriptionsSubtitle = "Refresh imported subscription locations"
     override val createCustomLocation = "Create custom location"
@@ -1756,7 +1768,7 @@ object EnStrings : Strings {
     override val notifySubExpirySubtitle = "Local notification a few days before the subscription ends."
     override val panelAnnouncementsTitle = "Panel announcements"
     override val panelAnnouncementsSubtitle = "Show a system notification when the panel owner sends an announcement."
-    override val vpsAutoInstallTitle = "Auto-install on VPS"
+    override val vpsAutoInstallTitle = "Auto-install on VPS (Beta)"
     override val vpsAutoInstallSubtitle = "Deploys the engine onto a VPS."
     override val hideEndpointWhenDescriptionTitle = "Hide IP & protocol when described"
     override val hideEndpointWhenDescriptionSubtitle = "If a location has a description, show it instead of the protocol and IP at the connection point."
@@ -2273,6 +2285,10 @@ object FaStrings : Strings {
     override val pasteLinkSubtitle = "اشتراک، olcrtc یا پیکربندی sing-box"
     override val importFile = "ورود از پرونده"
     override val importFileSubtitle = "اشتراک، olcrtc یا پیکربندی sing-box"
+    override val freeServers = "سرورهای رایگان"
+    override val freeServersSubtitle = "فهرست عمومی VLESS — دریافت و غربال سرورها"
+    override val freeServersLoading = "در حال بارگیری و آزمایش سرورهای رایگان…"
+    override fun freeServersImported(working: Int, total: Int) = "سرورهای فعال افزوده شد: $working از $total"
     override val updateSubscriptionsAction = "به‌روزرسانی اشتراک‌ها"
     override val updateSubscriptionsSubtitle = "بازآوری موقعیت‌های اشتراک‌های واردشده"
     override val createCustomLocation = "ساخت موقعیت سفارشی"
@@ -2398,7 +2414,7 @@ object FaStrings : Strings {
     override val notifySubExpirySubtitle = "اعلان محلی چند روز پیش از پایان اشتراک."
     override val panelAnnouncementsTitle = "اعلان‌های پنل"
     override val panelAnnouncementsSubtitle = "نمایش اعلان سیستمی هنگامی که مالک پنل اطلاعیه‌ای می‌فرستد."
-    override val vpsAutoInstallTitle = "نصب خودکار روی VPS"
+    override val vpsAutoInstallTitle = "نصب خودکار روی VPS (Beta)"
     override val vpsAutoInstallSubtitle = "موتور را روی یک VPS مستقر می‌کند."
     override val hideEndpointWhenDescriptionTitle = "پنهان کردن IP و پروتکل هنگام وجود توضیح"
     override val hideEndpointWhenDescriptionSubtitle = "اگر مکان توضیح دارد، به جای پروتکل و IP در نقطه اتصال نمایش داده شود."
@@ -2899,6 +2915,10 @@ object ZhStrings : Strings {
     override val pasteLinkSubtitle = "订阅、olcrtc 或 sing-box 配置"
     override val importFile = "从文件导入"
     override val importFileSubtitle = "订阅、olcrtc 或 sing-box 配置"
+    override val freeServers = "免费节点"
+    override val freeServersSubtitle = "公共 VLESS 列表 — 下载并过滤可用节点"
+    override val freeServersLoading = "正在下载并测试免费节点…"
+    override fun freeServersImported(working: Int, total: Int) = "已添加可用节点：$working / $total"
     override val updateSubscriptionsAction = "更新订阅"
     override val updateSubscriptionsSubtitle = "刷新已导入的订阅节点"
     override val createCustomLocation = "创建自定义节点"
@@ -3008,7 +3028,7 @@ object ZhStrings : Strings {
     override val notifySubExpirySubtitle = "在订阅结束前几天发送本地通知。"
     override val panelAnnouncementsTitle = "面板公告"
     override val panelAnnouncementsSubtitle = "当面板所有者发送公告时显示系统通知。"
-    override val vpsAutoInstallTitle = "在 VPS 上自动安装"
+    override val vpsAutoInstallTitle = "在 VPS 上自动安装 (Beta)"
     override val vpsAutoInstallSubtitle = "将引擎部署到 VPS。"
     override val hideEndpointWhenDescriptionTitle = "有描述时隐藏 IP 和协议"
     override val hideEndpointWhenDescriptionSubtitle = "如果位置有描述，则在连接点显示描述而非协议和 IP。"

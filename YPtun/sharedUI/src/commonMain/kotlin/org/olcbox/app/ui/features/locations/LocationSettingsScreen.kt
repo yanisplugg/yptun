@@ -897,7 +897,7 @@ private fun LazyListScope.masterDnsSection(
                 ) {
                     Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Автоустановка на VPS")
+                    Text("Автоустановка на VPS (Beta)")
                 }
             }
         }
@@ -1051,7 +1051,7 @@ private fun LazyListScope.vkTurnSection(
                     ) {
                         Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Автоустановка на VPS")
+                        Text("Автоустановка на VPS (Beta)")
                     }
                 }
                 VkTurnField(
@@ -2291,7 +2291,7 @@ private fun MasterDnsInstallDialog(
 
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
-        title = { Text("Автоустановка MasterDNS на VPS") },
+        title = { Text("Автоустановка MasterDNS на VPS (Beta)") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2896,7 +2896,7 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.Standard -> "Standard"
     EngineType.Chain -> "Chain"
     EngineType.VkTurn -> "VK-TURN"
-    EngineType.MasterDns -> "MasterDNS"
+    EngineType.MasterDns -> "MasterDNS (Beta)"
     EngineType.OpenFlux -> "OpenFlux"
 }
 

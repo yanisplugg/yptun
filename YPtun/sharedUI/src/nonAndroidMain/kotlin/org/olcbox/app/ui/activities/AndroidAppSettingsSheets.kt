@@ -180,6 +180,7 @@ fun AppSettingsSheet(
     updateSettings: AppUpdateSettings,
     updateStatusText: String?,
     updateDownloadProgress: Float?,
+    showUpdates: Boolean = true,
     subscriptions: List<SubscriptionShareItem>,
     enabled: Boolean,
     isConnectionActive: Boolean,
@@ -275,6 +276,7 @@ fun AppSettingsSheet(
                     dynamicThemeEnabled = dynamicThemeEnabled,
                     lightThemeEnabled = lightThemeEnabled,
                     updateSettings = updateSettings,
+                    showUpdates = showUpdates,
                     subscriptionsCount = subscriptions.size,
                     enabled = enabled,
                     hwid = hwid,
@@ -660,6 +662,7 @@ private fun AppSettingsHubContent(
     dynamicThemeEnabled: Boolean,
     lightThemeEnabled: Boolean,
     updateSettings: AppUpdateSettings,
+    showUpdates: Boolean = true,
     subscriptionsCount: Int,
     enabled: Boolean,
     hwid: String,
@@ -767,14 +770,16 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = onSubscriptionsSharingClick
             )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.updates,
-                subtitle = "${LocalStrings.current.releaseChannelLabel} · ${LocalStrings.current.hoursShort(updateSettings.intervalHours)}",
-                icon = Icons.Outlined.Refresh,
-                enabled = true,
-                onClick = onUpdatesClick
-            )
+            if (showUpdates) {
+                SettingsGroupDivider()
+                SettingsGroupRow(
+                    title = s.updates,
+                    subtitle = "${LocalStrings.current.releaseChannelLabel} · ${LocalStrings.current.hoursShort(updateSettings.intervalHours)}",
+                    icon = Icons.Outlined.Refresh,
+                    enabled = true,
+                    onClick = onUpdatesClick
+                )
+            }
             SettingsGroupDivider()
             SettingsGroupRow(
                 title = s.applicationSettings,

@@ -30,7 +30,6 @@ import org.olcbox.app.data.share.ConfigShareService
 import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.ui.OlcboxAppContent
 import org.olcbox.app.ui.activities.AppSettingsSheet
-import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.LocationViewModel
@@ -38,14 +37,7 @@ import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.ui.navigation.AppScreen
 import org.olcbox.app.ui.theme.AppTheme
-import org.olcbox.app.update.AppUpdateInfo
 import org.olcbox.app.update.AppUpdateSettings
-import org.olcbox.app.update.AppUpdateService
-import org.olcbox.app.update.IosUpdateSettingsStore
-import org.olcbox.app.update.identity
-import org.olcbox.app.update.isDownloaded
-import org.olcbox.app.update.isUpdateCheckDue
-import org.olcbox.app.update.shouldShowOffer
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
 import org.olcbox.app.vpn.AndroidSplitTunnelSettings
@@ -199,77 +191,15 @@ private fun IosApp(
     var connectionMode by remember {
         mutableStateOf(AndroidConnectionMode.fromValue(IosSharedStore.loadConnectionMode()))
     }
-    var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
-    var updateStatusText by remember { mutableStateOf<String?>(null) }
-    var updateDownloadProgress by remember { mutableStateOf<Float?>(null) }
-    var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
-
     fun reloadLocationsAfterImport(onComplete: () -> Unit = {}) {
         dependencies.locationViewModel.loadLocations {
             dependencies.homeViewModel.loadCurrentConfig(onComplete)
         }
     }
 
-    suspend fun saveUpdateSettings(settings: AppUpdateSettings) {
-        val normalized = settings.normalized()
-        updateSettings = normalized
-        dependencies.updateSettingsStore.save(normalized)
-    }
-
-    fun checkUpdate(manual: Boolean) {
-        scope.launch {
-            val previousSettings = updateSettings
-            val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
-            if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
-
-            updateStatusText = "Checking ${previousSettings.channel.name.lowercase()}..."
-            val result = dependencies.updateService.check(previousSettings.channel)
-            val checkedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
-            val checkedSettings = previousSettings.copy(lastCheckAtEpochMs = checkedAt).normalized()
-            saveUpdateSettings(checkedSettings)
-            result.fold(
-                onSuccess = { info ->
-                    if (manual || info.shouldShowOffer(previousSettings, checkedAt)) {
-                        if (info.isDownloaded(checkedSettings)) {
-                            updateOffer = null
-                            updateStatusText = "Latest ${info.channel.name.lowercase()} is already downloaded"
-                        } else if (info.isUpdateAvailable) {
-                            updateOffer = info
-                            updateStatusText = "${info.channel.name} update available: ${info.version}"
-                        } else {
-                            updateOffer = null
-                            updateStatusText = "Olcbox is up to date"
-                        }
-                    } else {
-                        updateOffer = null
-                        updateStatusText = null
-                    }
-                },
-                onFailure = { error ->
-                    updateStatusText = error.message ?: "Update check failed"
-                }
-            )
-        }
-    }
-
-    fun laterUpdate(info: AppUpdateInfo) {
-        scope.launch {
-            saveUpdateSettings(updateSettings.copy(lastSeenUpdateVersion = info.identity()))
-            updateOffer = null
-        }
-    }
-
-    fun downloadUpdate(info: AppUpdateInfo) {
-        updateStatusText = "Install ${info.version} from the release page"
-        updateOffer = null
-    }
-
     LaunchedEffect(Unit) {
-        val loaded = dependencies.updateSettingsStore.load()
-        updateSettings = loaded
         dependencies.locationViewModel.loadLocations()
         dependencies.homeViewModel.loadCurrentConfig()
-        checkUpdate(manual = false)
     }
 
     AppTheme {
@@ -279,6 +209,19 @@ private fun IosApp(
 
         val appBehavior by dependencies.settings.appBehavior.collectAsState()
         val routing by dependencies.settings.routing.collectAsState()
+
+        var autoConnectTried by remember { mutableStateOf(false) }
+        LaunchedEffect(appBehavior.autoConnectOnLaunch, homeState.canStartVpn) {
+            if (!autoConnectTried &&
+                appBehavior.autoConnectOnLaunch &&
+                homeState.canStartVpn &&
+                !homeState.isVpnConnected &&
+                !homeState.isVpnLoading
+            ) {
+                autoConnectTried = true
+                dependencies.homeViewModel.ToggleVpn()
+            }
+        }
         val routingProfiles by dependencies.settings.routingProfiles.collectAsState()
         val trafficSettings by dependencies.settings.traffic.collectAsState()
         val geoUpdateStatus by dependencies.settings.geoUpdateStatus.collectAsState()
@@ -613,9 +556,10 @@ private fun IosApp(
                     telegramProxyState = TelegramProxyState.Stopped,
                     language = language,
                     onLanguageChanged = dependencies.settings::setLanguage,
-                    updateSettings = updateSettings,
-                    updateStatusText = updateStatusText,
-                    updateDownloadProgress = updateDownloadProgress,
+                    updateSettings = AppUpdateSettings(),
+                    updateStatusText = null,
+                    updateDownloadProgress = null,
+                    showUpdates = false,
                     subscriptions = iosSubscriptionItems(dependencies.locationViewModel.locations.toList()),
                     enabled = !homeState.isVpnLoading,
                     isConnectionActive = homeState.isVpnConnected,
@@ -636,12 +580,8 @@ private fun IosApp(
                             onError = platformBridge::showMessage
                         )
                     },
-                    onUpdateIntervalSelected = { hours ->
-                        scope.launch {
-                            saveUpdateSettings(updateSettings.copy(intervalHours = hours))
-                        }
-                    },
-                    onCheckUpdatesClick = { checkUpdate(manual = true) },
+                    onUpdateIntervalSelected = {},
+                    onCheckUpdatesClick = {},
                     onSubscriptionShareClick = { url ->
                         platformBridge.shareText("Subscription", ConfigShareService.subscriptionQrText(url))
                     },
@@ -695,15 +635,6 @@ private fun IosApp(
                     onSplitTunnelModeSelected = {},
                     onSplitTunnelAppToggled = { _, _ -> },
                     onSplitTunnelAppsSelected = { _, _ -> }
-                )
-            }
-
-            updateOffer?.let { info ->
-                ApplicationUpdateOfferSheet(
-                    info = info,
-                    downloadProgress = updateDownloadProgress,
-                    onLater = { laterUpdate(info) },
-                    onDownload = { downloadUpdate(info) }
                 )
             }
         }

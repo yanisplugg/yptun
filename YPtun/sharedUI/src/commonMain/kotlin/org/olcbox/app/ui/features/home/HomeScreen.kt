@@ -659,6 +659,24 @@ fun HomeScreen(
                 onCreateGroupClick = {
                     isAddSheetOpen = false
                     folderDialog = FolderDialog.Create(emptyList())
+                },
+                onFreeServersClick = {
+                    isAddSheetOpen = false
+                    scope.launch {
+                        snackbarHostState.showSnackbar(s.freeServersLoading)
+                    }
+                    viewModel.importFreeServers(
+                        onComplete = { working, total ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(s.freeServersImported(working, total))
+                            }
+                        },
+                        onError = { message ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(message)
+                            }
+                        }
+                    )
                 }
             )
         }

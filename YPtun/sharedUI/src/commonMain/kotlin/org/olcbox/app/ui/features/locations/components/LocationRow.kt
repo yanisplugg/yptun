@@ -376,7 +376,7 @@ private fun locationSubtitle(location: LocationItem): String {
         )
 
         EngineType.MasterDns -> listOfNotNull(
-            "MasterDNS",
+            "MasterDNS (Beta)",
             config.masterDns?.domainList()?.firstOrNull(),
             config.masterDns?.resolverList()?.size?.takeIf { it > 1 }?.let { "$it резолверов" }
         )

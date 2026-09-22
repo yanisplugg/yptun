@@ -14,10 +14,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import org.olcbox.app.data.datasource.createProxyHttpClient
 import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
+import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.ui.features.locations.LocationItem
@@ -396,6 +406,106 @@ class HomeScreenViewModel(
                     )
                 }
                 onError(message)
+            }
+        }
+    }
+
+    fun importFreeServers(
+        onComplete: (working: Int, total: Int) -> Unit = { _, _ -> },
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val url = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+                val rawText = withContext(Dispatchers.IO) {
+                    val client = createProxyHttpClient(vpnManager.subscriptionFetchProxy())
+                    try {
+                        client.get(url).bodyAsText()
+                    } finally {
+                        client.close()
+                    }
+                }
+
+                if (rawText.isBlank()) {
+                    onError("Не удалось загрузить список серверов")
+                    return@launch
+                }
+
+                val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }
+                if (allLines.isEmpty()) {
+                    onError("В списке не найдено серверов VLESS")
+                    return@launch
+                }
+
+                // Парсим профили
+                val parsedItems = allLines.mapNotNull { line ->
+                    val profile = ShareLinkParser.parse(line)
+                    if (profile != null && profile.isComplete()) {
+                        line to profile
+                    } else null
+                }
+
+                if (parsedItems.isEmpty()) {
+                    onError("Не удалось распознать конфигурации серверов")
+                    return@launch
+                }
+
+                // Быстрый параллельный TCP-прозвон портов (отсеиваем нерабочие)
+                val workingLines = withContext(Dispatchers.IO) {
+                    val sem = Semaphore(15)
+                    parsedItems.map { (line, profile) ->
+                        async {
+                            sem.withPermit {
+                                val config = LocationConfig(
+                                    name = profile.displayName(),
+                                    engine = EngineType.Standard,
+                                    proxy = profile
+                                ).normalized()
+                                val ping = withTimeoutOrNull(2500L) {
+                                    vpnManager.ping(config)
+                                }
+                                if (ping != null && ping > 0) line else null
+                            }
+                        }
+                    }.awaitAll().filterNotNull()
+                }
+
+                // Если рабочие найдены - берем их, если ни один не ответил за таймаут - берем первые 10 чтобы не оставлять пустым
+                val linesToImport = if (workingLines.isNotEmpty()) workingLines else allLines.take(10)
+                val textToImport = linesToImport.joinToString("\n")
+
+                val imported = withContext(Dispatchers.IO) {
+                    locationsRepository.importText(
+                        text = textToImport,
+                        subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                    )
+                }
+
+                if (!imported) {
+                    onError("Не удалось сохранить серверы в список")
+                    return@launch
+                }
+
+                // Убедимся, что для созданной группы/серверов проставлено имя и ссылка на подписку для автообновления
+                val bundle = locationsRepository.getBundle()
+                val updatedLocations = bundle.locations.map { entry ->
+                    if (entry.proxy != null && linesToImport.any { it.contains(entry.proxy.server) }) {
+                        val subMeta = (entry.metadata?.subscription ?: SubscriptionMetadata(name = "Бесплатные серверы"))
+                            .copy(name = "Бесплатные серверы", updateIntervalHours = 1)
+                        entry.copy(
+                            subscriptionUrl = url,
+                            metadata = (entry.metadata ?: LocationMetadata()).copy(subscription = subMeta)
+                        ).normalized()
+                    } else {
+                        entry
+                    }
+                }
+                locationsRepository.saveBundle(bundle.copy(locations = updatedLocations))
+
+                loadCurrentConfigNow()
+                onComplete(workingLines.size, parsedItems.size)
+            } catch (e: Exception) {
+                onError(e.message ?: "Ошибка загрузки бесплатных серверов")
             }
         }
     }

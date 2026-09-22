@@ -1112,10 +1112,11 @@ class LocationsRepositoryImpl(
 
                 DownloadedSubscription(
                     content = content,
-                    updateIntervalHours = response.profileUpdateIntervalHours(),
-                    profileTitle = response.headers["profile-title"]?.let { decodeProfileTitle(it) }
+                    updateIntervalHours = if (url.contains("vless_universal.txt", ignoreCase = true)) 1 else response.profileUpdateIntervalHours(),
+                    profileTitle = (response.headers["profile-title"]?.let { decodeProfileTitle(it) }
                         ?.takeIf { it.isNotBlank() }
-                        ?: parseContentDispositionFilename(response.headers["content-disposition"]),
+                        ?: parseContentDispositionFilename(response.headers["content-disposition"]))
+                        ?: if (url.contains("vless_universal.txt", ignoreCase = true)) "Бесплатные серверы" else null,
                     userInfo = response.headers["subscription-userinfo"]?.trim(),
                     infoJson = infoJson,
                     fakednsJson = fakednsJson,
