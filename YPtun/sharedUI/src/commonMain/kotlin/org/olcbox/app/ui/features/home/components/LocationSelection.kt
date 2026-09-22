@@ -199,106 +199,190 @@ fun LazyListScope.locationSelectorContent(
         val isPingSorted = groupKey in pingSortedGroups
         val isPingDescending = groupKey in pingSortDescendingGroups
 
-        item(key = "group-header-$groupKey") {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp)
+        if (isCollapsed) {
+            item(key = "group-header-$groupKey") {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp)
                     ) {
-                        // Tapping the title (with its chevron) collapses/expands the list.
                         Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onToggleGroupCollapsed(groupKey) },
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = if (isCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
-                                contentDescription = if (isCollapsed) "Expand" else "Collapse",
-                                modifier = Modifier.size(22.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            // Tapping the title (with its chevron) collapses/expands the list.
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onToggleGroupCollapsed(groupKey) },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ExpandMore,
+                                    contentDescription = "Expand",
+                                    modifier = Modifier.size(22.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                SubscriptionGroupHeader(
+                                    locations = group,
+                                    pingsState = pingsState,
+                                    isPinned = isPinned,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            val isGroupRefreshing = pingsState is PingsState.Loading &&
+                                    pingsState.pendingLocationIds.any { it in groupIds }
+
+                            RefreshButton(
+                                isRefreshing = isGroupRefreshing,
+                                onClick = { onRefreshClick(groupIds) },
+                                tint = MaterialTheme.colorScheme.primary
                             )
-                            SubscriptionGroupHeader(
-                                locations = group,
-                                pingsState = pingsState,
+
+                            // Overflow menu: pin, sort-by-ping, auto-update, delete.
+                            val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
+                            val groupSubUrl = group.firstOrNull()?.subscriptionUrl
+                            val groupWebPageUrl = group.firstNotNullOfOrNull {
+                                it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                            }
+                            SubscriptionGroupMenu(
                                 isPinned = isPinned,
-                                modifier = Modifier.weight(1f)
+                                isPingSorted = isPingSorted,
+                                isPingDescending = isPingDescending,
+                                autoUpdateEnabled = groupAutoUpdate,
+                                onTogglePin = { onToggleGroupPinned(groupKey) },
+                                onTogglePingSort = { onToggleGroupPingSort(groupKey) },
+                                onToggleAutoUpdate = {
+                                    groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
+                                },
+                                onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                                onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
+                                onDelete = { onDeleteSubscription(groupIds) },
+                                subscriptionPageUrl = groupWebPageUrl
                             )
                         }
-
-                        val isGroupRefreshing = pingsState is PingsState.Loading &&
-                                pingsState.pendingLocationIds.any { it in groupIds }
-
-                        RefreshButton(
-                            isRefreshing = isGroupRefreshing,
-                            onClick = { onRefreshClick(groupIds) },
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-
-                        // Overflow menu: pin, sort-by-ping, auto-update, delete.
-                        val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
-                        val groupSubUrl = group.firstOrNull()?.subscriptionUrl
-                        val groupWebPageUrl = group.firstNotNullOfOrNull {
-                            it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
-                        }
-                        SubscriptionGroupMenu(
-                            isPinned = isPinned,
-                            isPingSorted = isPingSorted,
-                            isPingDescending = isPingDescending,
-                            autoUpdateEnabled = groupAutoUpdate,
-                            onTogglePin = { onToggleGroupPinned(groupKey) },
-                            onTogglePingSort = { onToggleGroupPingSort(groupKey) },
-                            onToggleAutoUpdate = {
-                                groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
-                            },
-                            onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
-                            onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
-                            onDelete = { onDeleteSubscription(groupIds) },
-                            subscriptionPageUrl = groupWebPageUrl
-                        )
-                    }
-
-                    if (!isCollapsed) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        val subLoc = group.firstOrNull { it.metadata?.subscription?.announce?.isNotBlank() == true } ?: group.firstOrNull()
-                        TrafficProgressBar(location = subLoc)
                     }
                 }
             }
-        }
-
-        if (!isCollapsed) {
+        } else {
             val orderedGroup = if (isPingSorted) {
                 group.sortedWith(pingComparator(pingsState, isPingDescending))
             } else {
                 group
             }
 
-            locationCards(orderedGroup, twoColumns, keyPrefix = "row") { location, cellModifier ->
-                LocationSelectorRow(
-                    location = location,
-                    selectedLocationId = selectedLocationId,
-                    pingsState = pingsState,
-                    onLocationSelected = onLocationSelected,
-                    onLocationSettingsClick = onLocationSettingsClick,
-                    selectionMode = selectionMode,
-                    isChecked = location.storageId in selectedIds,
-                    onToggleSelect = onToggleSelect,
-                    onStartSelection = onStartSelection,
-                    twoColumns = twoColumns,
-                    modifier = cellModifier
-                )
+            // Expanded subscription is wrapped in a single container (secondaryContainer),
+            // giving it a continuous container background holding the header and all server cards together.
+            item(key = "group-$groupKey") {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { onToggleGroupCollapsed(groupKey) },
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.ExpandLess,
+                                            contentDescription = "Collapse",
+                                            modifier = Modifier.size(22.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        SubscriptionGroupHeader(
+                                            locations = group,
+                                            pingsState = pingsState,
+                                            isPinned = isPinned,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+
+                                    val isGroupRefreshing = pingsState is PingsState.Loading &&
+                                            pingsState.pendingLocationIds.any { it in groupIds }
+
+                                    RefreshButton(
+                                        isRefreshing = isGroupRefreshing,
+                                        onClick = { onRefreshClick(groupIds) },
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+
+                                    val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
+                                    val groupSubUrl = group.firstOrNull()?.subscriptionUrl
+                                    val groupWebPageUrl = group.firstNotNullOfOrNull {
+                                        it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                                    }
+                                    SubscriptionGroupMenu(
+                                        isPinned = isPinned,
+                                        isPingSorted = isPingSorted,
+                                        isPingDescending = isPingDescending,
+                                        autoUpdateEnabled = groupAutoUpdate,
+                                        onTogglePin = { onToggleGroupPinned(groupKey) },
+                                        onTogglePingSort = { onToggleGroupPingSort(groupKey) },
+                                        onToggleAutoUpdate = {
+                                            groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
+                                        },
+                                        onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                                        onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
+                                        onDelete = { onDeleteSubscription(groupIds) },
+                                        subscriptionPageUrl = groupWebPageUrl
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                val subLoc = group.firstOrNull { it.metadata?.subscription?.announce?.isNotBlank() == true } ?: group.firstOrNull()
+                                TrafficProgressBar(location = subLoc)
+                            }
+                        }
+
+                        LocationCardsColumn(orderedGroup, twoColumns) { location, cellModifier ->
+                            LocationSelectorRow(
+                                location = location,
+                                selectedLocationId = selectedLocationId,
+                                pingsState = pingsState,
+                                onLocationSelected = onLocationSelected,
+                                onLocationSettingsClick = onLocationSettingsClick,
+                                selectionMode = selectionMode,
+                                isChecked = location.storageId in selectedIds,
+                                onToggleSelect = onToggleSelect,
+                                onStartSelection = onStartSelection,
+                                twoColumns = twoColumns,
+                                modifier = cellModifier
+                            )
+                        }
+                    }
+                }
             }
         }
     }

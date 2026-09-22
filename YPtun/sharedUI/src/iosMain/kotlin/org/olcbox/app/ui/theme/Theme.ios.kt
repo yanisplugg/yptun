@@ -47,6 +47,31 @@ actual fun AppTheme(
         var colorScheme = if (isDark) OlcboxDarkColorScheme else OlcboxLightColorScheme
         if (accent != null) {
             val onAccent = if (accent.luminance() > 0.5f) Color(0xFF101010) else Color(0xFFFFFFFF)
+            val secondaryContainer = if (isDark) {
+                Color(
+                    red = (0.08f + accent.red * 0.18f).coerceIn(0f, 1f),
+                    green = (0.09f + accent.green * 0.18f).coerceIn(0f, 1f),
+                    blue = (0.11f + accent.blue * 0.18f).coerceIn(0f, 1f),
+                    alpha = 1f
+                )
+            } else {
+                Color(
+                    red = (0.90f + accent.red * 0.10f).coerceIn(0f, 1f),
+                    green = (0.90f + accent.green * 0.10f).coerceIn(0f, 1f),
+                    blue = (0.90f + accent.blue * 0.10f).coerceIn(0f, 1f),
+                    alpha = 1f
+                )
+            }
+            val onSecondaryContainer = if (isDark) {
+                Color(
+                    red = (0.85f + accent.red * 0.15f).coerceIn(0f, 1f),
+                    green = (0.85f + accent.green * 0.15f).coerceIn(0f, 1f),
+                    blue = (0.85f + accent.blue * 0.15f).coerceIn(0f, 1f),
+                    alpha = 1f
+                )
+            } else {
+                Color(0xFF101010)
+            }
             colorScheme = colorScheme.copy(
                 primary = accent,
                 onPrimary = onAccent,
@@ -54,6 +79,8 @@ actual fun AppTheme(
                 onPrimaryContainer = onAccent,
                 secondary = accent,
                 onSecondary = onAccent,
+                secondaryContainer = secondaryContainer,
+                onSecondaryContainer = onSecondaryContainer,
                 tertiary = accent,
                 inversePrimary = accent
             )
