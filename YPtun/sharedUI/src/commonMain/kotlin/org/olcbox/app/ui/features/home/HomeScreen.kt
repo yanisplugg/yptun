@@ -67,6 +67,7 @@ import org.olcbox.app.ui.features.home.components.folderMemberKey
 import org.olcbox.app.ui.components.StartButton
 import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
+import org.olcbox.app.ui.features.home.components.FreeServersSheet
 import org.olcbox.app.ui.features.home.components.HomeScreenAppBar
 import org.olcbox.app.ui.features.home.components.locationSelectorContent
 import org.olcbox.app.ui.features.home.components.LogsSheet
@@ -659,6 +660,64 @@ fun HomeScreen(
                 onCreateGroupClick = {
                     isAddSheetOpen = false
                     folderDialog = FolderDialog.Create(emptyList())
+                },
+                onFreeServersClick = {
+                    isAddSheetOpen = false
+                    viewModel.loadFreeServers(
+                        onError = { message ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(message)
+                            }
+                        }
+                    )
+                }
+            )
+        }
+
+        if (state.isFreeServersLoading) {
+            AlertDialog(
+                onDismissRequest = { viewModel.cancelFreeServersLoad() },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { viewModel.cancelFreeServersLoad() }) {
+                        Text(s.cancel)
+                    }
+                },
+                title = { Text(s.freeServers) },
+                text = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                        Column {
+                            Text(s.freeServersLoading, style = MaterialTheme.typography.bodyMedium)
+                            Text("Проверка рабочих серверов…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            )
+        }
+
+        state.availableFreeServers?.let { freeServers ->
+            FreeServersSheet(
+                servers = freeServers,
+                onDismiss = { viewModel.dismissFreeServersSheet() },
+                onAddSelected = { selected ->
+                    viewModel.saveSelectedFreeServers(
+                        selectedServers = selected,
+                        onComplete = { count ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(s.freeServersImported(count, freeServers.size))
+                            }
+                        },
+                        onError = { message ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(message)
+                            }
+                        }
+                    )
                 }
             )
         }
