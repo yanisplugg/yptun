@@ -556,6 +556,13 @@ private fun runApp(args: Array<String>) = application {
                 icon = Icons.Outlined.Public,
             ) { showMyIpDialog = true }
             Item(
+                label = if (trayRussian) "Бесплатные серверы" else "Free servers",
+                icon = Icons.Outlined.Public,
+            ) {
+                isWindowVisible = true
+                dependencies.homeViewModel.loadFreeServers()
+            }
+            Item(
                 label = if (trayRussian) "Горячая клавиша" else "Global hotkey",
                 icon = Icons.Outlined.Keyboard,
             ) { hotkeyDialogVisible = true }
@@ -684,6 +691,11 @@ private fun runApp(args: Array<String>) = application {
                         onOpen = { trayMenuVisible = false; isWindowVisible = true },
                         onToggle = { trayMenuVisible = false; dependencies.homeViewModel.ToggleVpn() },
                         onMyIp = { trayMenuVisible = false; showMyIpDialog = true },
+                        onFreeServers = {
+                            trayMenuVisible = false
+                            isWindowVisible = true
+                            dependencies.homeViewModel.loadFreeServers()
+                        },
                         onHotkey = { trayMenuVisible = false; hotkeyDialogVisible = true },
                         onSettings = {
                             trayMenuVisible = false
@@ -1689,6 +1701,7 @@ private fun TrayMenu(
     onOpen: () -> Unit,
     onToggle: () -> Unit,
     onMyIp: () -> Unit,
+    onFreeServers: () -> Unit,
     onHotkey: () -> Unit,
     onSettings: () -> Unit,
     onQuit: () -> Unit,
@@ -1754,6 +1767,11 @@ private fun TrayMenu(
                 onClick = onToggle,
             )
             TrayMenuItem(Icons.Outlined.Public, if (russian) "Мой IP" else "My IP", onClick = onMyIp)
+            TrayMenuItem(
+                Icons.Outlined.Public,
+                if (russian) "Бесплатные серверы" else "Free servers",
+                onClick = onFreeServers,
+            )
             TrayMenuItem(
                 Icons.Outlined.Keyboard,
                 if (russian) "Горячая клавиша" else "Global hotkey",
