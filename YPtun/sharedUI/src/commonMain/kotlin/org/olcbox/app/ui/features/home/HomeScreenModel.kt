@@ -20,6 +20,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.olcbox.app.data.datasource.createProxyHttpClient
 import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
@@ -419,16 +421,16 @@ class HomeScreenViewModel(
     fun cancelFreeServersLoad() {
         freeServersJob?.cancel()
         freeServersJob = null
-        _state.update { it.copy(isFreeServersLoading = false) }
+        _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
     }
 
     fun dismissFreeServersSheet() {
-        _state.update { it.copy(availableFreeServers = null) }
+        _state.update { it.copy(availableFreeServers = null, freeServersProgress = null) }
     }
 
     fun loadFreeServers(onError: (String) -> Unit = {}) {
         freeServersJob?.cancel()
-        _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null) }
+        _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
         freeServersJob = viewModelScope.launch {
             try {
                 val url = FREE_SERVERS_URL
@@ -442,14 +444,14 @@ class HomeScreenViewModel(
                 }
 
                 if (rawText.isBlank()) {
-                    _state.update { it.copy(isFreeServersLoading = false) }
+                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                     onError("Не удалось загрузить список серверов")
                     return@launch
                 }
 
                 val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }
                 if (allLines.isEmpty()) {
-                    _state.update { it.copy(isFreeServersLoading = false) }
+                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                     onError("В списке не найдено серверов VLESS")
                     return@launch
                 }
@@ -462,14 +464,22 @@ class HomeScreenViewModel(
                 }
 
                 if (parsedItems.isEmpty()) {
-                    _state.update { it.copy(isFreeServersLoading = false) }
+                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                     onError("Не удалось распознать конфигурации серверов")
                     return@launch
                 }
 
-                // Быстрый параллельный TCP-прозвон портов (отсеиваем нерабочие)
-                val workingServers = withContext(Dispatchers.IO) {
-                    val sem = Semaphore(25)
+                val total = parsedItems.size
+                _state.update { it.copy(freeServersProgress = FreeServersProgress(checked = 0, total = total, found = 0)) }
+
+                val mutex = Mutex()
+                var checkedCount = 0
+                val workingServers = mutableListOf<FreeServerItem>()
+
+                withContext(Dispatchers.IO) {
+                    // Используем умеренный пул параллельности (6), чтобы исключить конфликты портов
+                    // и исчерпание сетевых сокетов на iOS
+                    val sem = Semaphore(6)
                     parsedItems.mapIndexed { index, (line, profile) ->
                         async {
                             sem.withPermit {
@@ -478,10 +488,18 @@ class HomeScreenViewModel(
                                     engine = EngineType.Standard,
                                     proxy = profile
                                 ).normalized()
-                                val ping = withTimeoutOrNull(2000L) {
-                                    vpnManager.ping(config)
+                                // Увеличиваем таймаут до 4.0с: серверы успевают ответить через TLS/VLESS
+                                // без случайных отсечек из-за миллисекундных колебаний мобильной сети
+                                val ping = withTimeoutOrNull(4000L) {
+                                    try {
+                                        vpnManager.ping(config)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        null
+                                    }
                                 }
-                                if (ping != null && ping > 0) {
+                                val item = if (ping != null && ping > 0) {
                                     FreeServerItem(
                                         id = "free_${profile.server}_${profile.serverPort}_$index",
                                         line = line,
@@ -490,22 +508,38 @@ class HomeScreenViewModel(
                                         pingMs = ping
                                     )
                                 } else null
+
+                                val (curChecked, curFound) = mutex.withLock {
+                                    checkedCount++
+                                    if (item != null) workingServers.add(item)
+                                    checkedCount to workingServers.size
+                                }
+                                _state.update {
+                                    it.copy(
+                                        freeServersProgress = FreeServersProgress(
+                                            checked = curChecked,
+                                            total = total,
+                                            found = curFound
+                                        )
+                                    )
+                                }
                             }
                         }
-                    }.awaitAll().filterNotNull().sortedBy { it.pingMs }
+                    }.awaitAll()
                 }
 
-                _state.update { it.copy(isFreeServersLoading = false) }
+                val sortedWorking = workingServers.sortedBy { it.pingMs }
+                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
 
-                if (workingServers.isEmpty()) {
+                if (sortedWorking.isEmpty()) {
                     onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
                 } else {
-                    _state.update { it.copy(availableFreeServers = workingServers) }
+                    _state.update { it.copy(availableFreeServers = sortedWorking) }
                 }
             } catch (e: CancellationException) {
-                _state.update { it.copy(isFreeServersLoading = false) }
+                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
             } catch (e: Exception) {
-                _state.update { it.copy(isFreeServersLoading = false) }
+                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                 onError(e.message ?: "Ошибка загрузки бесплатных серверов")
             }
         }
@@ -861,7 +895,14 @@ data class HomeScreenState(
     /** Set after importing a VK-TURN link that still needs a per-client VK Calls link. */
     val vkTurnLinkPrompt: VkTurnLinkPrompt? = null,
     val isFreeServersLoading: Boolean = false,
+    val freeServersProgress: FreeServersProgress? = null,
     val availableFreeServers: List<FreeServerItem>? = null
+)
+
+data class FreeServersProgress(
+    val checked: Int = 0,
+    val total: Int = 0,
+    val found: Int = 0
 )
 
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"

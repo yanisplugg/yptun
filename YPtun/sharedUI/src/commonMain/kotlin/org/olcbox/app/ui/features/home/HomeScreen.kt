@@ -32,6 +32,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -685,15 +686,36 @@ fun HomeScreen(
                 },
                 title = { Text(s.freeServers) },
                 text = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.padding(vertical = 8.dp)
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(36.dp))
-                        Column {
-                            Text(s.freeServersLoading, style = MaterialTheme.typography.bodyMedium)
-                            Text("Проверка рабочих серверов…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(s.freeServersLoading, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    s.freeServersWaitNotice,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        state.freeServersProgress?.let { prog ->
+                            if (prog.total > 0) {
+                                LinearProgressIndicator(
+                                    progress = { (prog.checked.toFloat() / prog.total.toFloat()).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().height(4.dp)
+                                )
+                                Text(
+                                    s.freeServersProgressText(prog.checked, prog.total, prog.found),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }
