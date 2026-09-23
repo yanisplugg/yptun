@@ -105,7 +105,7 @@ def upload(name):
 
 
 local = {f: os.path.getsize(os.path.join(DIR, f)) for f in os.listdir(DIR)
-         if f.endswith((".apk", ".exe", ".patch.gz", ".deb"))}
+         if f.endswith((".apk", ".exe", ".patch.gz", ".deb", ".AppImage"))}
 log(f"файлов: {len(local)}, всего {sum(local.values()) / 1e9:.2f} ГБ")
 while True:
     have = assets()
