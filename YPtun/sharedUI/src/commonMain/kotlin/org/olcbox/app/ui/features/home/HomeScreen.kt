@@ -191,7 +191,7 @@ fun HomeScreen(
                 val message = if (updatedCount > 0) {
                     s.subscriptionsUpdatedCount(updatedCount)
                 } else {
-                    s.subscriptionsUpdated
+                    s.subscriptionsUpdateFailed
                 }
 
                 scope.launch {
@@ -212,7 +212,7 @@ fun HomeScreen(
                 val message = if (updatedCount > 0) {
                     s.subscriptionsUpdatedCount(updatedCount)
                 } else {
-                    s.subscriptionsUpdated
+                    s.subscriptionsUpdateFailed
                 }
                 scope.launch {
                     snackbarHostState.showSnackbar(message)

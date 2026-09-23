@@ -641,6 +641,7 @@ interface Strings {
     // Snackbars
     fun subscriptionsUpdatedCount(n: Int): String
     val subscriptionsUpdated: String
+    val subscriptionsUpdateFailed: String
     val subscriptionDeleted: String
     val subscriptionsDeleted: String
     val configsDeleted: String
@@ -1294,6 +1295,7 @@ object RuStrings : Strings {
     override val vp8OptionsSubtitle = "Тонкая настройка производительности потока"
     override fun subscriptionsUpdatedCount(n: Int) = "Подписки обновлены: $n"
     override val subscriptionsUpdated = "Подписки обновлены"
+    override val subscriptionsUpdateFailed = "Не удалось обновить подписки — проверьте интернет"
     override val subscriptionDeleted = "Подписка удалена"
     override val subscriptionsDeleted = "Подписки удалены"
     override val configsDeleted = "Конфигурации удалены"
@@ -1932,6 +1934,7 @@ object EnStrings : Strings {
     override val vp8OptionsSubtitle = "Fine-tune stream performance"
     override fun subscriptionsUpdatedCount(n: Int) = "Subscriptions updated: $n"
     override val subscriptionsUpdated = "Subscriptions updated"
+    override val subscriptionsUpdateFailed = "Couldn't update subscriptions — check your connection"
     override val subscriptionDeleted = "Subscription deleted"
     override val subscriptionsDeleted = "Subscriptions deleted"
     override val configsDeleted = "Configurations deleted"
@@ -2570,6 +2573,7 @@ object FaStrings : Strings {
     override val vp8OptionsSubtitle = "تنظیم دقیق کارایی جریان"
     override fun subscriptionsUpdatedCount(n: Int) = "اشتراک‌ها به‌روزرسانی شد: $n"
     override val subscriptionsUpdated = "اشتراک‌ها به‌روزرسانی شد"
+    override val subscriptionsUpdateFailed = "به‌روزرسانی اشتراک‌ها ناموفق بود — اتصال اینترنت را بررسی کنید"
     override val subscriptionDeleted = "اشتراک حذف شد"
     override val subscriptionsDeleted = "اشتراک‌ها حذف شد"
     override val configsDeleted = "پیکربندی‌ها حذف شد"
@@ -3208,6 +3212,7 @@ object ZhStrings : Strings {
     override val vp8OptionsSubtitle = "微调流性能"
     override fun subscriptionsUpdatedCount(n: Int) = "已更新订阅：$n"
     override val subscriptionsUpdated = "订阅已更新"
+    override val subscriptionsUpdateFailed = "订阅更新失败 — 请检查网络连接"
     override val subscriptionDeleted = "订阅已删除"
     override val subscriptionsDeleted = "订阅已删除"
     override val configsDeleted = "配置已删除"
