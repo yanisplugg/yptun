@@ -786,7 +786,7 @@ private fun runApp(args: Array<String>) = application {
         )
     }
 
-    val windowState = rememberWindowState(width = 430.dp, height = 780.dp)
+    val windowState = rememberWindowState(width = 1100.dp, height = 720.dp)
 
     // Ctrl+V (Cmd+V) imports a config link from the clipboard from anywhere in the app — the desktop
     // equivalent of the "Вставить ссылку" button, which was the ONLY way in. Declared before the
