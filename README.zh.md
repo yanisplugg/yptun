@@ -42,17 +42,17 @@
 
 ---
 
-## 3.5.0 新功能
+## 3.6.0 新功能
 
 | | |
 |---|---|
-| **WDTT Plus 取代 WDTT** | Android 与桌面端的客户端和服务端：「RT 网络」模式（TURN/TLS 与 TCP，UDP 作为备用）、Cloudflare WARP 备用、备用 VK 哈希、自定义 VK ID 与密钥、手动 TURN 地址。⚠️ 旧版 WDTT 服务端与新客户端不兼容 —— 请在节点设置中点「自动安装」重新安装服务端。freeturn 节点不受影响。 |
-| **新引擎 OpenFlux** | 通过 Yandex 文档或 MAX 通话连到你自己的出口节点的 TCP 隧道 —— 用于其他方式全被封锁的情况。节点可一键装到 VPS，DNS 走隧道本身，「OpenFlux 上的代理」可再加一层端到端加密。实验性功能，速度不快。 |
-| **二维码扫描器重写** | 采用 zxing-cpp，可识别模糊、倾斜、密集和反色的二维码；点按对焦、双指缩放、手电筒，大底旗舰机会自动放大。也能识别应用自己生成的二维码（`yptun://`、`hysteria2://`、`naive+https://`、`tt://`、`happ://`）。 |
-| **VK-TURN** | AmneziaWG 之上的第二代理可经由 Xray（xhttp 与原始配置），出口 MTU 限制为 1200，freeturn 连接更快。不带第二代理的 AmneziaWG 出口不再丢失 DNS。 |
-| **JSON 订阅中的分流** | 订阅中的每个服务器现在都会拿到带规则的完整配置，而不只是 xhttp 服务器。订阅通过 `dns.hosts` 指定的俄罗斯网站在「仅 IPv4」模式下重新可以直连。 |
-| **订阅不再丢服务器** | 订阅中服务器变多时，最后一个不再消失，已选服务器也不再跳到相邻的那个。感谢 @Zamotashka（#41）。 |
-| **小修复** | 在节点编辑器中粘贴后半个屏幕变黑（#40）；Windows 上 VK 验证码改在浏览器中打开，而不是资源管理器窗口。 |
+| ⚠️ **olcRTC 成为旧版内核** | 目前照常可用，但不再开发，并将在未来版本中移除。请提前准备替代方案：VK-TURN、OpenFlux、MasterDNS 或 Xray/sing-box。 |
+| **免费服务器目录** | Android 和桌面端：一键获取，自动检测可用性并剔除失效服务器，显示检测进度；Windows 和 Linux 可直接从托盘打开。感谢 @Zamotashka (#49, #50)。 |
+| **桌面端双栏界面** | 左侧为连接按钮、计时和状态，右侧为订阅和服务器；窗口默认宽屏。 |
+| **OpenFlux 0.0.3** | 新增 Mail.ru 和 cups.online 传输，默认启用压缩。⚠️ 旧节点请在应用内重新安装。 |
+| **服务器自动安装** | MasterDNS 会检查端口占用和服务是否真正运行，自动放行防火墙端口，并新增设置；OpenFlux 可在启用 ufw 的节点上工作，并提示 Yandex 验证码。 |
+| **修复** | AmneziaWG `RandomTrailers = on`（#51）；开启 VPN 时的免费服务器；无网络时误报"已更新"；桌面端"我的 IP"不再依赖 2ip。 |
+| **Linux AppImage** | 除 `.deb` 外提供 x64 和 arm64 的 AppImage，任意发行版免安装运行。 |
 
 ---
 
@@ -171,7 +171,7 @@ YPtun 只申请某项功能缺之不可的权限。相机、通知、不受电�
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.5.0 -Polcbox.versionCode=352
+  -Polcbox.version=3.6.0 -Polcbox.versionCode=381
 ```
 
 APK 会生成在 `YPtun/androidApp/build/outputs/apk/release/`。
