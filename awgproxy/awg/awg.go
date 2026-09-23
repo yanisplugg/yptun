@@ -403,6 +403,20 @@ var awgKnobs = map[string]string{
 	"disablecookies":         "disable_cookies",
 }
 
+// awgBoolKnobs — UAPI keys the device parses with strconv.ParseBool. AmneziaVPN writes them as
+// "on"/"off" in .conf (RandomTrailers = on), which ParseBool rejects and the whole IpcSet fails.
+var awgBoolKnobs = map[string]bool{"random_trailers": true, "disable_cookies": true}
+
+func uapiBool(v string) string {
+	switch strings.ToLower(v) {
+	case "on", "yes", "y", "1", "true", "enable", "enabled":
+		return "true"
+	case "off", "no", "n", "0", "false", "disable", "disabled":
+		return "false"
+	}
+	return v
+}
+
 func parseConfig(ini string) (*wgConfig, error) {
 	c := &wgConfig{mtu: 1280, keepalive: 25}
 	for _, raw := range strings.Split(ini, "\n") {
@@ -497,6 +511,9 @@ func parseConfig(ini string) (*wgConfig, error) {
 			if uapiKey, ok := awgKnobs[key]; ok && val != "" {
 				if uapiKey == "" {
 					uapiKey = key
+				}
+				if awgBoolKnobs[uapiKey] {
+					val = uapiBool(val)
 				}
 				c.awgParams = append(c.awgParams, [2]string{uapiKey, val})
 			}
