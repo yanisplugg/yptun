@@ -80,18 +80,23 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
     val transport = options.transport.takeIf { it in OpenFluxConfig.TRANSPORTS } ?: OpenFluxConfig.TRANSPORT_YANDEX
     val rst = "OUTPUT -p tcp --tcp-flags RST RST -j DROP"
     val execArgs = if (transport == OpenFluxConfig.TRANSPORT_MAX) {
-        "--role=exit --transport ${'$'}{OPENFLUX_TRANSPORT}"
+        "--role=exit --mode=l4 --transport ${'$'}{OPENFLUX_TRANSPORT}"
     } else {
-        "--role=exit --transport ${'$'}{OPENFLUX_TRANSPORT} --url ${'$'}{OPENFLUX_DOC_URL}"
+        "--role=exit --mode=l4 --transport ${'$'}{OPENFLUX_TRANSPORT} --url ${'$'}{OPENFLUX_DOC_URL}"
     }
     return """
         set -e
         gunzip -f /tmp/openflux.gz
-        if ! command -v iptables >/dev/null 2>&1; then
-          (apt-get install -y iptables || dnf install -y iptables || yum install -y iptables) >/dev/null 2>&1 || true
+        # An earlier install (any version) is replaced wholesale: stop it, drop its unit and the
+        # host-wide RST-drop rule the old l3 exit needed, then install fresh.
+        if [ -f /etc/systemd/system/openflux.service ] || [ -x /usr/local/bin/openflux ]; then
+          echo "Найдена прежняя установка OpenFlux — переустанавливаю"
+          systemctl disable --now openflux >/dev/null 2>&1 || true
+          rm -f /etc/systemd/system/openflux.service
         fi
-        command -v iptables >/dev/null 2>&1 || { echo "ОШИБКА: на VPS нет iptables, выходной ноде он нужен"; exit 1; }
-        systemctl stop openflux >/dev/null 2>&1 || true
+        if command -v iptables >/dev/null 2>&1; then
+          while iptables -D $rst 2>/dev/null; do :; done
+        fi
         install -m 0755 /tmp/openflux /usr/local/bin/openflux
         rm -f /tmp/openflux
         mkdir -p /etc/openflux
@@ -109,9 +114,7 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
         Wants=network-online.target
         [Service]
         EnvironmentFile=/etc/openflux/openflux.env
-        ExecStartPre=/bin/sh -c 'iptables -C $rst 2>/dev/null || iptables -A $rst'
         ExecStart=/usr/local/bin/openflux $execArgs
-        ExecStopPost=/bin/sh -c 'iptables -D $rst 2>/dev/null || true'
         Restart=always
         RestartSec=60
         [Install]

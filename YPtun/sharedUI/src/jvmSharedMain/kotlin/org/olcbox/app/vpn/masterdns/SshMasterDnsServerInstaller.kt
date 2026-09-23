@@ -109,7 +109,11 @@ internal fun buildInstallScript(options: MasterDnsInstallOptions): String {
         gunzip -f /tmp/masterdns-server.gz
         # Our own (possibly crash-looping) instance must not count as "port busy", and a plain
         # `enable --now` would NOT restart an already-running unit, silently keeping the old config.
-        systemctl stop masterdns-server 2>/dev/null || true
+        if [ -f /etc/systemd/system/masterdns-server.service ] || [ -x /usr/local/bin/masterdns-server ]; then
+          echo "Найдена прежняя установка MasterDNS — переустанавливаю (ключ сохраняется, если не выбран новый)"
+          systemctl disable --now masterdns-server >/dev/null 2>&1 || true
+          rm -f /etc/systemd/system/masterdns-server.service
+        fi
         holder=${'$'}(ss -Hulpn "sport = :$udp" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
         if [ -n "${'$'}holder" ]; then
           unit=${'$'}(ps -o unit= -p "${'$'}holder" 2>/dev/null | tr -d ' ')
@@ -156,8 +160,19 @@ internal fun buildInstallScript(options: MasterDnsInstallOptions): String {
         [Install]
         WantedBy=multi-user.target
         UNIT
-        if command -v ufw >/dev/null 2>&1; then ufw allow $udp/udp || true; fi
-        if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --add-port=$udp/udp --permanent && firewall-cmd --reload || true; fi
+        # Open the port on whatever firewall is in charge: ufw, firewalld, else raw iptables/ip6tables
+        # (a VPS with `-P INPUT DROP` and no front-end would silently eat every query).
+        if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+          ufw allow $udp/udp >/dev/null && echo "ufw: открыт UDP $udp"
+        elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+          firewall-cmd --add-port=$udp/udp --permanent >/dev/null && firewall-cmd --reload >/dev/null && echo "firewalld: открыт UDP $udp"
+        fi
+        for ipt in iptables ip6tables; do
+          if command -v ${'$'}ipt >/dev/null 2>&1 && ! ${'$'}ipt -C INPUT -p udp --dport $udp -j ACCEPT 2>/dev/null; then
+            ${'$'}ipt -I INPUT -p udp --dport $udp -j ACCEPT 2>/dev/null && echo "${'$'}ipt: открыт UDP $udp"
+          fi
+        done
+        if command -v netfilter-persistent >/dev/null 2>&1; then netfilter-persistent save >/dev/null 2>&1 || true; fi
         systemctl daemon-reload
         systemctl enable masterdns-server
         systemctl restart masterdns-server
