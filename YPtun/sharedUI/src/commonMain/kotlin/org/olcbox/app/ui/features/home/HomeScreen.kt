@@ -201,6 +201,10 @@ fun HomeScreen(
     }
 
     fun refreshOneSubscription(url: String) {
+        if (url.trim() == FREE_SERVERS_URL) {
+            viewModel.loadFreeServers(onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } })
+            return
+        }
         viewModel.refreshSubscription(url) { updatedCount ->
             locationViewModel.loadLocations {
                 viewModel.restartVpnIfRunning()
