@@ -2,6 +2,8 @@ package org.olcbox.app.vpn.xray
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -17,8 +19,6 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyProfile
-import org.olcbox.app.data.model.RoutingProfile
-import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
 
 /**
@@ -171,12 +171,7 @@ object XrayConfig {
         olcrtcChainUser: String = "",
         olcrtcChainPass: String = "",
         logLevel: String = "debug",
-        // Absolute path for xray's error log. Unset everywhere the core's stdout is already captured
-        // (Android's logcat, the desktop console); iOS runs the core inside an app extension whose
-        // stdout goes nowhere, so there it points at the shared tunnel log the app tails.
-        logFilePath: String? = null,
         traffic: TrafficSettings = TrafficSettings(),
-        routing: RoutingRules = RoutingRules(),
         // VK-TURN chain: when set, [profile] dials its server THROUGH this WireGuard outbound (the
         // WG-over-VK base). Mirrors SingBoxConfig.wireguardBase. The ProxyProfile carries the
         // sing-box-format WG outbound in [ProxyProfile.rawOutbound]; we convert it to Xray schema.
@@ -185,9 +180,6 @@ object XrayConfig {
         // with geosite:/geoip:/domain: selectors) and its dns.hosts are merged. The referenced
         // geoip.dat/geosite.dat must be present in XRAY_LOCATION_ASSET.
         routingProfile: org.olcbox.app.data.model.RoutingProfile? = null,
-        // True when geoip.dat and geosite.dat are available on disk in asset directory.
-        // If false, geosite:/geoip: rules MUST NOT be emitted (xray crashes on startup if files are missing).
-        hasGeoAssets: Boolean = false,
         // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
         // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
         blockQuic: Boolean = true,
@@ -247,14 +239,7 @@ object XrayConfig {
         // Internal loopback SOCKS port: one above the app's listen port (127.0.0.1 only, not exposed).
         val cascadeLoopPort = listenPort + 1
         val config = buildJsonObject {
-            putJsonObject("log") {
-                put("loglevel", logLevel)
-                if (!logFilePath.isNullOrBlank()) {
-                    put("error", logFilePath)
-                    // The access log is one line per connection; the error log is the one worth keeping.
-                    put("access", "none")
-                }
-            }
+            putJsonObject("log") { put("loglevel", logLevel) }
 
             // Stretch the handshake (and idle) budget for slow chained tunnels so Xray doesn't kill a
             // still-completing handshake. Only emitted when a caller asks for it (e.g. MasterDNS).
@@ -290,16 +275,7 @@ object XrayConfig {
                     // so they aren't dropped by an exit that blocks port 53 (the 4s-serial-timeout →
                     // ERR_CONNECTION_ABORTED bug).
                     add(proxiedDns(traffic.remoteDns))
-                    if (traffic.remoteDns2.isNotBlank()) {
-                        add(proxiedDns(traffic.remoteDns2))
-                    } else {
-                        // Fallback remote DNS resolvers if primary DoH fails or times out
-                        if (!traffic.remoteDns.contains("1.1.1.1")) {
-                            add(proxiedDns("1.1.1.1"))
-                        }
-                        add("tcp://8.8.8.8")
-                        add("tcp://1.1.1.1")
-                    }
+                    if (traffic.remoteDns2.isNotBlank()) add(proxiedDns(traffic.remoteDns2))
                     add(traffic.directDns)
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())
@@ -547,7 +523,7 @@ object XrayConfig {
                 }
                 put("outboundTag", if (directViaBase) PROXY_BASE_TAG else PROXY_TAG)
             } else null
-            val lanBypassRule = if (routing.bypassLan && bypassLan && !directViaBase) buildJsonObject {
+            val lanBypassRule = if (bypassLan && !directViaBase) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
                     add("10.0.0.0/8"); add("172.16.0.0/12"); add("192.168.0.0/16")
@@ -555,119 +531,13 @@ object XrayConfig {
                 }
                 put("outboundTag", "direct")
             } else null
-            // Direct domain matching for RU blocklist (handles SOCKS5 domain connections from hev-socks5-tunnel)
-            val ruBlockRule = if (traffic.blockRuDomains) buildJsonObject {
-                put("type", "field")
-                putJsonArray("domain") {
-                    RuBlocklist.hostRegexps.forEach { add(it) }
-                }
-                put("outboundTag", "block")
-            } else null
-            val userBlockDomainsRule = if (routing.blockDomains.isNotEmpty()) buildJsonObject {
-                put("type", "field")
-                putJsonArray("domain") {
-                    routing.blockDomains.forEach { add("domain:$it") }
-                }
-                put("outboundTag", "block")
-            } else null
-            val adBlockRule = if (routing.blockAds) buildJsonObject {
-                put("type", "field")
-                putJsonArray("domain") {
-                    add("domain:doubleclick.net")
-                    add("domain:googlesyndication.com")
-                    add("domain:googleadservices.com")
-                    add("domain:adservice.google.com")
-                    add("domain:pagead2.googlesyndication.com")
-                    add("domain:an.yandex.ru")
-                    add("domain:admob.com")
-                    add("domain:adcolony.com")
-                    add("domain:unityads.unity3d.com")
-                    add("domain:applovin.com")
-                    add("domain:vungle.com")
-                    add("domain:ironsource.com")
-                    add("domain:chartboost.com")
-                    add("domain:advertising.apple.com")
-                    add("domain:ads.google.com")
-                    add("domain:ads.youtube.com")
-                    add("domain:adguard.com")
-                    add("domain:adform.net")
-                    add("domain:adnxs.com")
-                    add("domain:criteo.com")
-                    add("domain:popads.net")
-                    add("domain:propellerads.com")
-                }
-                put("outboundTag", "block")
-            } else null
-            val userDirectDomainsRule = if (routing.directDomains.isNotEmpty()) buildJsonObject {
-                put("type", "field")
-                putJsonArray("domain") {
-                    routing.directDomains.forEach { add("domain:$it") }
-                }
-                put("outboundTag", "direct")
-            } else null
-            val bypassRussiaDomainRule = if (routing.bypassRussia) buildJsonObject {
-                put("type", "field")
-                putJsonArray("domain") {
-                    add("domain:ru")
-                    add("domain:su")
-                    add("domain:xn--p1ai")
-                    add("regexp:(^|\\.)(ru|su|xn--p1ai)$")
-                    add("domain:vk.com")
-                    add("domain:vk.me")
-                    add("domain:userapi.com")
-                    add("domain:vk-portal.net")
-                    add("domain:ya.ru")
-                    add("domain:yandex.ru")
-                    add("domain:yandex.net")
-                    add("domain:yastatic.net")
-                    add("domain:mail.ru")
-                    add("domain:dzen.ru")
-                    add("domain:gosuslugi.ru")
-                    add("domain:kinopoisk.ru")
-                    add("domain:avito.ru")
-                    add("domain:ozon.ru")
-                    add("domain:wildberries.ru")
-                    add("domain:sberbank.ru")
-                    add("domain:sber.ru")
-                    add("domain:tinkoff.ru")
-                    add("domain:t-bank.ru")
-                    add("domain:rutube.ru")
-                    add("domain:ok.ru")
-                    add("domain:rbc.ru")
-                    add("domain:kp.ru")
-                    add("domain:hh.ru")
-                    add("domain:2gis.ru")
-                    add("domain:2gis.com")
-                    add("domain:cdek.ru")
-                    add("domain:mos.ru")
-                    add("domain:spb.ru")
-                    add("domain:auto.ru")
-                    add("domain:cian.ru")
-                    add("domain:habr.com")
-                    add("domain:pikabu.ru")
-                    add("domain:ivi.ru")
-                    add("domain:premier.one")
-                    add("domain:start.ru")
-                    add("domain:kion.ru")
-                    add("domain:megafon.ru")
-                    add("domain:mts.ru")
-                    add("domain:beeline.ru")
-                    add("domain:t2.ru")
-                    add("domain:tele2.ru")
-                    add("domain:rostelecom.ru")
-                    add("domain:rt.ru")
-                }
-                put("outboundTag", "direct")
-            } else null
-            val bypassRussiaIpRule = null
             putJsonObject("routing") {
                 if (routingProfile != null) {
                     // Profile routing (direct/block/proxy buckets) COMBINED with QUIC block + RU
                     // blocklist (item 5): the toggles run alongside the profile, not instead of it.
                     val base = XrayRouting.routingObject(routingProfile)
                     val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
-                    val strategy = if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy
-                    put("domainStrategy", strategy)
+                    put("domainStrategy", if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy)
                     putJsonArray("rules") {
                         // Loopback relay → xhttp main, before anything that could drop/redirect it.
                         cascadeLoopRule?.let { add(it) }
@@ -678,12 +548,6 @@ object XrayConfig {
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (blockZero) add(blockZeroRule)
-                        ruBlockRule?.let { add(it) }
-                        userBlockDomainsRule?.let { add(it) }
-                        adBlockRule?.let { add(it) }
-                        userDirectDomainsRule?.let { add(it) }
-                        bypassRussiaDomainRule?.let { add(it) }
-                        bypassRussiaIpRule?.let { add(it) }
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
@@ -696,12 +560,6 @@ object XrayConfig {
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (blockZero) add(blockZeroRule)
-                        ruBlockRule?.let { add(it) }
-                        userBlockDomainsRule?.let { add(it) }
-                        adBlockRule?.let { add(it) }
-                        userDirectDomainsRule?.let { add(it) }
-                        bypassRussiaDomainRule?.let { add(it) }
-                        bypassRussiaIpRule?.let { add(it) }
                     }
                 }
             }
@@ -749,10 +607,6 @@ object XrayConfig {
         // here — AmneziaWG/WireGuard/Hysteria2 aren't Xray exit outbounds and are ignored (logged by the
         // caller). Null = single hop.
         secondProfile: ProxyProfile? = null,
-        // Absolute path for xray's error log, overriding whatever `log` the user's config carries.
-        // Only iOS sets it: the core runs inside an app extension whose stdout goes nowhere, so
-        // without this a verbatim config that fails to load fails silently. See [build].
-        logFilePath: String? = null,
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
@@ -966,18 +820,9 @@ object XrayConfig {
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
                 if (key != "inbounds" && key != "outbounds" && key != "routing" && key != "dns" &&
-                    !(injectFake && key == "fakedns") &&
-                    !(!logFilePath.isNullOrBlank() && key == "log")
+                    !(injectFake && key == "fakedns")
                 ) {
                     put(key, value)
-                }
-            }
-            if (!logFilePath.isNullOrBlank()) {
-                putJsonObject("log") {
-                    // Keep the config's own level when it set one; errors only otherwise.
-                    put("loglevel", (root["log"] as? JsonObject)?.get("loglevel") ?: JsonPrimitive("warning"))
-                    put("error", logFilePath)
-                    put("access", "none")
                 }
             }
             if (outDns != null) put("dns", outDns)
@@ -1108,20 +953,27 @@ object XrayConfig {
      * back to the reality SNI as the Host header → the fronted backend returns HTTP 400. Copying the
      * value up makes the override a no-op and the correct Host header is sent. No-op for configs that
      * already put host at the top level (the working ones) or have no xhttp `extra`.
+     *
+     * Also runs [sanitizeXhttpExtra] over the block so a wrong-typed field from a panel (a float where
+     * xray wants an integer, …) can't abort the whole build; a config xray already accepts is returned
+     * byte-for-byte unchanged.
      */
     private fun liftXhttpExtraHostPath(outbound: JsonObject): JsonObject {
         val stream = outbound["streamSettings"] as? JsonObject ?: return outbound
         val xhttp = stream["xhttpSettings"] as? JsonObject ?: return outbound
-        val extra = xhttp["extra"] as? JsonObject ?: return outbound
-        val topHost = xhttp["host"]?.jsonPrimitive?.contentOrNull
-        val topPath = xhttp["path"]?.jsonPrimitive?.contentOrNull
-        val extraHost = extra["host"]?.jsonPrimitive?.contentOrNull
-        val extraPath = extra["path"]?.jsonPrimitive?.contentOrNull
+        // Sanitize the WHOLE block, not just `extra`: a raw config states the same fields at the top
+        // level of `xhttpSettings`, where a wrong-typed value kills the build just as dead.
+        val safeXhttp = sanitizeXhttpExtra(xhttp)
+        val safeExtra = safeXhttp["extra"] as? JsonObject
+        val topHost = (safeXhttp["host"] as? JsonPrimitive)?.contentOrNull
+        val topPath = (safeXhttp["path"] as? JsonPrimitive)?.contentOrNull
+        val extraHost = (safeExtra?.get("host") as? JsonPrimitive)?.contentOrNull
+        val extraPath = (safeExtra?.get("path") as? JsonPrimitive)?.contentOrNull
         val newHost = if (topHost.isNullOrBlank() && !extraHost.isNullOrBlank()) extraHost else topHost
         val newPath = if (topPath.isNullOrBlank() && !extraPath.isNullOrBlank()) extraPath else topPath
-        if (newHost == topHost && newPath == topPath) return outbound
+        if (newHost == topHost && newPath == topPath && safeXhttp == xhttp) return outbound
         val newXhttp = buildJsonObject {
-            xhttp.forEach { (k, v) -> if (k != "host" && k != "path") put(k, v) }
+            safeXhttp.forEach { (k, v) -> if (k != "host" && k != "path") put(k, v) }
             if (!newHost.isNullOrBlank()) put("host", newHost)
             if (!newPath.isNullOrBlank()) put("path", newPath)
         }
@@ -1580,7 +1432,7 @@ object XrayConfig {
                                 addJsonObject {
                                     put("id", profile.uuid)
                                     if (profile.type == ProxyProfile.TYPE_VLESS) {
-                                        put("encryption", "none")
+                                        put("encryption", profile.vlessEncryption.ifBlank { "none" })
                                         // XTLS Vision (xtls-rprx-vision) splices the RAW TLS connection to
                                         // ITS OWN server — it can't ride a chain. When this vless dials
                                         // through a detour (cascade exit over the main, an olcRTC/VK-TURN/
@@ -1683,6 +1535,118 @@ object XrayConfig {
         }
     }
 
+    /** A link-supplied JSON blob (xhttp `extra`, `fm`) as an object; blank/garbage → null, never a config error. */
+    private fun jsonObjectOrNull(text: String): JsonObject? =
+        text.takeIf { it.isNotBlank() }?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+
+    // xhttp `extra` fields typed `Int32Range` in xray-core (infra/conf SplitHTTPConfig + XmuxConfig):
+    // each accepts a plain integer, an "a-b" range string, or "" — anything else aborts the WHOLE
+    // outbound build ("Failed to unmarshal extra > Invalid integer range").
+    private val XHTTP_INT32_RANGE_KEYS = setOf(
+        "xPaddingBytes", "sessionIDLength", "uplinkChunkSize",
+        "scMaxEachPostBytes", "scMinPostsIntervalMs", "scStreamUpServerSecs",
+        "maxConcurrency", "maxConnections", "cMaxReuseTimes", "hMaxRequestTimes", "hMaxReusableSecs",
+    )
+    private val INT32_RANGE_REGEX = Regex("""^-?\d+--?\d+$""")
+
+    // PLAIN integer fields (`int64`/`int32`, NOT Int32Range): xray takes a JSON integer and nothing
+    // else — a float from a panel kills the whole config with `json: cannot unmarshal number 20000.0
+    // into Go struct field SplitHTTPConfig.xmux.hKeepAlivePeriod of type int64`.
+    private val XHTTP_INT_KEYS = setOf("scMaxBufferedPosts", "serverMaxHeaderBytes", "hKeepAlivePeriod")
+
+    // `bool` fields — a "true"/1 (panels that round-trip the blob through a form) is not a JSON bool
+    // and fails the same unmarshal.
+    private val XHTTP_BOOL_KEYS = setOf("xPaddingObfsMode", "noGRPCHeader", "noSSEHeader")
+
+    // `string` fields — a bare number/bool (e.g. `"seqKey": 1`) fails the unmarshal just as hard.
+    private val XHTTP_STRING_KEYS = setOf(
+        "host", "path", "mode", "xPaddingKey", "xPaddingHeader", "xPaddingPlacement", "xPaddingMethod",
+        "uplinkHTTPMethod", "sessionIDPlacement", "sessionIDKey", "sessionIDTable", "seqPlacement",
+        "seqKey", "uplinkDataPlacement", "uplinkDataKey",
+        "sessionPlacement", "sessionKey", // pre-26.7.28 aliases, still read by our infra/conf patch
+    )
+
+    /**
+     * Normalizes an xhttp settings blob (`extra`, or a raw config's whole `xhttpSettings`) so a value
+     * xray-core can't unmarshal never aborts the outbound build. Some panels emit a field with the
+     * wrong JSON type — a range as a float, an integer as `20000.0`, a bool as `"true"`, a string as a
+     * number; Happ drops such fields, we passed them through verbatim and xray rejected the ENTIRE
+     * config ("Failed to unmarshal extra"). A VALID value — matching the type xray declares — is kept
+     * byte-for-byte, so working configs are untouched; only a value xray would reject is coerced
+     * (float → integer, `"true"` → true, number → string) or dropped (xray then uses its default).
+     * Recurses so nested `xmux`, `extra` and `downloadSettings.xhttpSettings` are covered too.
+     */
+    private fun sanitizeXhttpExtra(obj: JsonObject): JsonObject = buildJsonObject {
+        for ((k, v) in obj) {
+            when {
+                // Each `let` drops the field when the value can't be salvaged.
+                k in XHTTP_INT32_RANGE_KEYS -> normalizeInt32Range(v)?.let { put(k, it) }
+                k in XHTTP_INT_KEYS -> normalizeInt(v)?.let { put(k, it) }
+                k in XHTTP_BOOL_KEYS -> normalizeBool(v)?.let { put(k, it) }
+                k in XHTTP_STRING_KEYS -> normalizeString(v)?.let { put(k, it) }
+                // `headers` is map[string]string — its KEYS are arbitrary, so never treat them as fields.
+                k == "headers" -> (v as? JsonObject)?.let { put(k, sanitizeHeaders(it)) }
+                k == "downloadSettings" -> (v as? JsonObject)?.let { put(k, sanitizeDownloadSettings(it)) }
+                v is JsonObject -> put(k, sanitizeXhttpExtra(v)) // `xmux`, a nested `extra`
+                else -> put(k, v)
+            }
+        }
+    }
+
+    /** `downloadSettings` is a whole StreamConfig, not a SplitHTTPConfig — only its xhttp part is ours. */
+    private fun sanitizeDownloadSettings(obj: JsonObject): JsonObject = buildJsonObject {
+        for ((k, v) in obj) {
+            if (k == "xhttpSettings" && v is JsonObject) put(k, sanitizeXhttpExtra(v)) else put(k, v)
+        }
+    }
+
+    /** `headers` is map[string]string: a non-string value aborts the build, so coerce it or drop it. */
+    private fun sanitizeHeaders(obj: JsonObject): JsonObject = buildJsonObject {
+        for ((k, v) in obj) normalizeString(v)?.let { put(k, it) }
+    }
+
+    /** A value valid for xray's Int32Range → returned unchanged; a float → its integer; else null (drop). */
+    private fun normalizeInt32Range(v: JsonElement): JsonElement? {
+        val prim = v as? JsonPrimitive ?: return null // an object/array is never a valid range
+        if (prim.isString) {
+            val s = prim.content
+            if (s.isEmpty() || s.toIntOrNull() != null || INT32_RANGE_REGEX.matches(s)) return prim
+            return s.toDoubleOrNull()?.let { JsonPrimitive(it.toLong()) } // "1000.0" → 1000, else drop
+        }
+        val c = prim.content // a JSON number / bool / null literal
+        if (c.toIntOrNull() != null) return prim                       // plain integer — keep verbatim
+        return c.toDoubleOrNull()?.let { JsonPrimitive(it.toLong()) }  // float → integer; bool/null → drop
+    }
+
+    /** A JSON integer → kept verbatim; a float or its string form → the integer; else null (drop). */
+    private fun normalizeInt(v: JsonElement): JsonElement? {
+        val prim = v as? JsonPrimitive ?: return null
+        val c = prim.content
+        if (!prim.isString && c.toLongOrNull() != null) return prim // already a JSON integer
+        c.toLongOrNull()?.let { return JsonPrimitive(it) }          // "20000" → 20000
+        val d = c.toDoubleOrNull() ?: return null                   // bool/null/garbage → drop
+        return if (d.isFinite()) JsonPrimitive(d.toLong()) else null // 20000.0 → 20000
+    }
+
+    /** A JSON bool → kept verbatim; `"true"`/1 and friends → the bool; else null (drop). */
+    private fun normalizeBool(v: JsonElement): JsonElement? {
+        val prim = v as? JsonPrimitive ?: return null
+        if (!prim.isString && (prim.content == "true" || prim.content == "false")) return prim
+        return when (prim.content.lowercase()) {
+            "true", "1", "1.0" -> JsonPrimitive(true)
+            "false", "0", "0.0" -> JsonPrimitive(false)
+            else -> null
+        }
+    }
+
+    /** A JSON string → kept verbatim; a number/bool literal → its text; an object/array/null → drop. */
+    private fun normalizeString(v: JsonElement): JsonElement? {
+        val prim = v as? JsonPrimitive ?: return null
+        if (prim.isString) return prim
+        if (prim is JsonNull) return null
+        return JsonPrimitive(prim.content)
+    }
+
     private fun buildStreamSettings(
         profile: ProxyProfile,
         fragmentDialer: Boolean = false,
@@ -1722,6 +1686,9 @@ object XrayConfig {
                     if (profile.alpn.isNotEmpty()) {
                         putJsonArray("alpn") { profile.alpn.forEach { add(it) } }
                     }
+                    if (profile.pinnedCertSha256.isNotBlank()) put("pinnedPeerCertSha256", profile.pinnedCertSha256)
+                    if (profile.verifyCertByName.isNotBlank()) put("verifyPeerCertByName", profile.verifyCertByName)
+                    if (profile.echConfigList.isNotBlank()) put("echConfigList", profile.echConfigList)
                 }
             }
 
@@ -1732,11 +1699,14 @@ object XrayConfig {
                     if (profile.fingerprint.isNotBlank()) put("fingerprint", profile.fingerprint)
                     put("publicKey", profile.realityPublicKey)
                     put("shortId", profile.realityShortId)
+                    if (profile.realityMldsa65Verify.isNotBlank()) put("mldsa65Verify", profile.realityMldsa65Verify)
+                    if (profile.realitySpiderX.isNotBlank()) put("spiderX", profile.realitySpiderX)
                 }
             }
 
             else -> put("security", "none")
         }
+        jsonObjectOrNull(profile.finalMask)?.let { put("finalmask", it) }
 
         when (network) {
             "ws" -> putJsonObject("wsSettings") {
@@ -1751,12 +1721,13 @@ object XrayConfig {
             "xhttp" -> putJsonObject("xhttpSettings") {
                 if (profile.path.isNotBlank()) put("path", profile.path)
                 if (profile.host.isNotBlank()) put("host", profile.host)
-                put("mode", "auto")
+                // The server may pin a mode (e.g. packet-up) and then refuses the one "auto" picks.
+                put("mode", profile.xhttpMode.ifBlank { "auto" })
                 // Cascade base: spread the loopback's per-app-flow tunnels across a SMALL POOL of reused
                 // H2 connections (4-8). Funnelling everything onto 1 connection (high maxConcurrency)
                 // chokes on H2 head-of-line blocking; opening one-per-flow (no xmux) overran the server
                 // past ~14 (the 18-connection broken-pipe). A 4-8 pool is under that cap yet parallel.
-                if (xhttpHighConcurrency) putJsonObject("xmux") {
+                val xmux = if (xhttpHighConcurrency) buildJsonObject {
                     put("maxConnections", "4-8")
                     put("cMaxReuseTimes", "64-128")
                     // Xray only applies its own xmux defaults when the WHOLE block is absent, so an
@@ -1765,6 +1736,14 @@ object XrayConfig {
                     // XmuxConfig — it was dropped on parse). Restate Xray's defaults explicitly.
                     put("hMaxRequestTimes", "600-900")
                     put("hMaxReusableSecs", "1800-3000")
+                } else null
+                // The link's `extra` (padding/obfs/session…) must match the server. Xray REPLACES the
+                // settings with `extra` (keeping only host/path/mode), so our xmux has to go inside it.
+                val extra = jsonObjectOrNull(profile.xhttpExtra)?.let { sanitizeXhttpExtra(it) }
+                if (extra != null) {
+                    put("extra", if (xmux != null && "xmux" !in extra) JsonObject(extra + ("xmux" to xmux)) else extra)
+                } else if (xmux != null) {
+                    put("xmux", xmux)
                 }
             }
 
