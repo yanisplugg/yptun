@@ -313,7 +313,6 @@ private fun runApp(args: Array<String>) = application {
     // True while the "tunnel mode needs administrator rights" confirmation is on screen.
     var tunElevationPrompt by remember { mutableStateOf(false) }
     var showMyIpDialog by remember { mutableStateOf(false) }
-    var ipProvider by remember { mutableStateOf(loadIpProvider()) }
 
     // Global hotkey: start the Win32 listener once; it toggles the VPN from anywhere. No default —
     // only active when the user has bound a combination (persisted in java prefs).
@@ -778,10 +777,8 @@ private fun runApp(args: Array<String>) = application {
         MyIpDialog(
             russian = trayRussian,
             connected = trayConnected,
-            initialProvider = ipProvider,
             useDynamicColor = ipDynamic,
-            fetchIp = { provider -> dependencies.vpnManager.checkExitIp(provider) },
-            onProviderPersist = { ipProvider = it; saveIpProvider(it) },
+            fetchIp = { dependencies.vpnManager.checkExitIp() },
             onDismiss = { showMyIpDialog = false },
         )
     }
@@ -2083,23 +2080,13 @@ private fun HotkeyCaptureDialog(
 // ---------------------------------------------------------------------------------------
 // 2ip IP viewer: provider choice (2ip.ru / 2ip.io) + a dialog that shows the current IP in any state.
 
-private fun loadIpProvider(): String =
-    hotkeyPrefs().get("ip_provider", "2ip.ru")
-
-private fun saveIpProvider(provider: String) {
-    hotkeyPrefs().put("ip_provider", provider)
-    runCatching { hotkeyPrefs().flush() }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MyIpDialog(
     russian: Boolean,
     connected: Boolean,
-    initialProvider: String,
     useDynamicColor: Boolean,
-    fetchIp: suspend (String) -> String?,
-    onProviderPersist: (String) -> Unit,
+    fetchIp: suspend () -> String?,
     onDismiss: () -> Unit,
 ) {
     androidx.compose.ui.window.DialogWindow(
@@ -2110,7 +2097,6 @@ private fun MyIpDialog(
         AppTheme(useDynamicColor = useDynamicColor) {
             val scheme = MaterialTheme.colorScheme
             PaintNativeWindowBackground(window, scheme.surface)
-            var provider by remember { mutableStateOf(initialProvider) }
             var ip by remember { mutableStateOf<String?>(null) }
             var loading by remember { mutableStateOf(true) }
             val scope = rememberCoroutineScope()
@@ -2119,32 +2105,17 @@ private fun MyIpDialog(
                 loading = true
                 ip = null
                 scope.launch {
-                    ip = fetchIp(provider)
+                    ip = fetchIp()
                     loading = false
                 }
             }
-            LaunchedEffect(provider) { refresh() }
+            LaunchedEffect(Unit) { refresh() }
 
             Surface(color = scheme.surface, modifier = Modifier.fillMaxSize()) {
                 Column(
                     modifier = Modifier.fillMaxSize().padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    // Provider choice.
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        listOf("2ip.ru", "2ip.io").forEachIndexed { i, p ->
-                            SegmentedButton(
-                                selected = provider == p,
-                                onClick = {
-                                    if (provider != p) {
-                                        provider = p
-                                        onProviderPersist(p)
-                                    }
-                                },
-                                shape = SegmentedButtonDefaults.itemShape(i, 2),
-                            ) { Text(p) }
-                        }
-                    }
                     // The IP.
                     Surface(
                         shape = RoundedCornerShape(12.dp),
@@ -2182,11 +2153,6 @@ private fun MyIpDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        TextButton(onClick = {
-                            // Not Desktop.browse: in TUN mode this process is elevated, and a browser
-                            // launched from here can't reach the user's already-open session.
-                            org.olcbox.app.desktop.DesktopUriLauncher.open("https://$provider/")
-                        }) { Text(if (russian) "Открыть в браузере" else "Open in browser") }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = { refresh() }) {
                             Text(if (russian) "Обновить" else "Refresh")

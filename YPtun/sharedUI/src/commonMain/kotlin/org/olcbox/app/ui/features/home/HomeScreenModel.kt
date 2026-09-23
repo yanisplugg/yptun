@@ -436,9 +436,12 @@ class HomeScreenViewModel(
             try {
                 val url = FREE_SERVERS_URL
                 val rawText = withContext(Dispatchers.IO) {
-                    val client = createProxyHttpClient(vpnManager.subscriptionFetchProxy())
+                    // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
+                    // without withProxyAuthentication the fetch died with a SOCKS auth error.
+                    val proxy = vpnManager.subscriptionFetchProxy()
+                    val client = createProxyHttpClient(proxy)
                     try {
-                        client.get(url).bodyAsText()
+                        org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
                     } finally {
                         client.close()
                     }
