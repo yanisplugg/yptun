@@ -482,7 +482,11 @@ class DesktopVpnManager private constructor(
                     addAll(OPENFLUX_MAX_HOSTS)
                 } else {
                     runCatching { java.net.URI(of.docUrl).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    add("docs.yandex.ru")
+                    when (of.transport) {
+                        OpenFluxConfig.TRANSPORT_MAILRU -> addAll(listOf("cloud.mail.ru", "docs.datacloudmail.ru"))
+                        OpenFluxConfig.TRANSPORT_CUPS -> add("interview.cups.online")
+                        else -> add("docs.yandex.ru")
+                    }
                     // The new editor's relay, push channel and the Disk redirect it authorizes through.
                     if (of.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
                         addAll(listOf("volga.yandex.ru", "push.yandex.ru", "disk.yandex.ru"))

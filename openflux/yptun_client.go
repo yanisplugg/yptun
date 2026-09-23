@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"universal-bypass-tool/socks5"
-	"universal-bypass-tool/tunnel"
+	"openflux/socks5"
+	"openflux/tunnel"
 )
 
 // Secrets come from the environment rather than argv: a command line is readable by other processes

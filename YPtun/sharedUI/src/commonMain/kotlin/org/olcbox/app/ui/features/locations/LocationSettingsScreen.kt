@@ -1503,6 +1503,8 @@ private fun LazyListScope.openFluxSection(
                                 when (transport) {
                                     OpenFluxConfig.TRANSPORT_MAX -> "MAX (звонок)"
                                     OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы · новый редактор"
+                                    OpenFluxConfig.TRANSPORT_MAILRU -> "Mail.ru Документы"
+                                    OpenFluxConfig.TRANSPORT_CUPS -> "cups.online (комната собеседования)"
                                     else -> "Яндекс Документы · старый редактор"
                                 }
                             )
@@ -1531,11 +1533,31 @@ private fun LazyListScope.openFluxSection(
                 OutlinedTextField(
                     value = config.docUrl,
                     onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
-                    label = { Text("Ссылка на Яндекс Документ") },
-                    placeholder = { Text("https://docs.yandex.ru/…") },
+                    label = {
+                        Text(
+                            when (config.transport) {
+                                OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
+                                OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
+                                else -> "Ссылка на Яндекс Документ"
+                            }
+                        )
+                    },
+                    placeholder = {
+                        Text(
+                            when (config.transport) {
+                                OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
+                                OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
+                                else -> "https://docs.yandex.ru/…"
+                            }
+                        )
+                    },
                     supportingText = {
                         Text(
-                            if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
+                            if (config.transport == OpenFluxConfig.TRANSPORT_MAILRU) {
+                                "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
+                            } else if (config.transport == OpenFluxConfig.TRANSPORT_CUPS) {
+                                "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
+                            } else if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
                                 "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
                             } else {
                                 "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."

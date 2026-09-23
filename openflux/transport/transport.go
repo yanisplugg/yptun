@@ -138,6 +138,7 @@ func (b *BaseTransport) RecordReconnect() {
 	b.reconnectAttempts.Add(1)
 }
 
+
 func (b *BaseTransport) GetConfig() TransportConfig {
 	return b.config
 }

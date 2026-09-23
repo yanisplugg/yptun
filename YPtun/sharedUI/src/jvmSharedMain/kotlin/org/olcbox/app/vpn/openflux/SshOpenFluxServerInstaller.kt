@@ -27,7 +27,7 @@ internal class SshOpenFluxServerInstaller(private val binaries: ServerBinarySour
             if (options.transport == OpenFluxConfig.TRANSPORT_MAX) {
                 require(options.exitMaxToken.isNotBlank()) { "Не указан токен MAX выходной ноды" }
             } else {
-                require(options.docUrl.startsWith("http", ignoreCase = true)) { "Не указана ссылка на Яндекс Документ" }
+                require(options.docUrl.startsWith("http", ignoreCase = true)) { "Не указана ссылка на документ/комнату" }
             }
             val target = SshTarget(
                 options.host, options.sshPort, options.login, options.sshPassword,
@@ -50,6 +50,9 @@ internal class SshOpenFluxServerInstaller(private val binaries: ServerBinarySour
 
             val output = sshOneShot(target, buildOpenFluxInstallScript(options), onLog)
             output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach(onLog)
+            output.lineSequence().firstOrNull { it.trim().startsWith("ОШИБКА:") }?.let {
+                error(it.trim().removePrefix("ОШИБКА:").trim())
+            }
             "Выходная нода OpenFlux запущена на ${options.host}"
         }
     }
@@ -77,9 +80,9 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
     val transport = options.transport.takeIf { it in OpenFluxConfig.TRANSPORTS } ?: OpenFluxConfig.TRANSPORT_YANDEX
     val rst = "OUTPUT -p tcp --tcp-flags RST RST -j DROP"
     val execArgs = if (transport == OpenFluxConfig.TRANSPORT_MAX) {
-        "--exit-node --transport ${'$'}{OPENFLUX_TRANSPORT}"
+        "--role=exit --transport ${'$'}{OPENFLUX_TRANSPORT}"
     } else {
-        "--exit-node --transport ${'$'}{OPENFLUX_TRANSPORT} --url ${'$'}{OPENFLUX_DOC_URL}"
+        "--role=exit --transport ${'$'}{OPENFLUX_TRANSPORT} --url ${'$'}{OPENFLUX_DOC_URL}"
     }
     return """
         set -e
@@ -110,13 +113,25 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
         ExecStart=/usr/local/bin/openflux $execArgs
         ExecStopPost=/bin/sh -c 'iptables -D $rst 2>/dev/null || true'
         Restart=always
-        RestartSec=3
+        RestartSec=60
         [Install]
         WantedBy=multi-user.target
         UNIT
         systemctl daemon-reload
         systemctl enable --now openflux
-        sleep 2
+        # Upstream exits on a failed carrier login; with Restart=always the unit still looks "active",
+        # so read the journal for the verdict (RestartSec=60 keeps a failing node from hammering the
+        # carrier, which only deepens a captcha).
+        sleep 8
+        fail=${'$'}(journalctl -u openflux --since "-15s" -o cat 2>/dev/null | grep "Failed to start transport" | tail -1)
+        if [ -n "${'$'}fail" ]; then
+          if echo "${'$'}fail" | grep -q captcha; then
+            echo "ОШИБКА: Яндекс показывает IP этого VPS капчу — нода не может войти в документ. Попробуй другой VPS или транспорт (Mail.ru, cups.online)."
+          else
+            echo "ОШИБКА: нода не подключилась к площадке: ${'$'}{fail#*Failed to start transport: }"
+          fi
+          exit 1
+        fi
         systemctl is-active openflux && echo "Служба openflux активна (транспорт: $transport)"
     """.trimIndent()
 }
