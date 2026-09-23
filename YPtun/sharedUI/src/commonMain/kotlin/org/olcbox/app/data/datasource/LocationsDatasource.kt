@@ -367,14 +367,16 @@ class LocationsRepositoryImpl(
         val groupedByUrl = bundle.locations
             .mapNotNull { entry -> entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }?.let { it to entry } }
             .groupBy({ it.first }, { it.second })
-            .filterKeys { url -> onlyUrls == null || url in onlyUrls }
+            // The free-servers list is a raw public dump: re-fetching it would bring back every dead
+            // server the user filtered out. It is refreshed only via the ping-and-pick flow instead.
+            .filterKeys { url -> url != org.olcbox.app.ui.features.home.FREE_SERVERS_URL && (onlyUrls == null || url in onlyUrls) }
         if (groupedByUrl.isEmpty()) return 0
 
         val targetUrls = groupedByUrl.keys
         val refreshedLocations = bundle.locations
             .filter { entry ->
                 val url = entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }
-                url == null || (onlyUrls != null && url !in targetUrls)
+                url == null || url !in targetUrls
             }
             .toMutableList()
         val usedStorageIds = refreshedLocations.mapTo(mutableSetOf()) { it.storageId }

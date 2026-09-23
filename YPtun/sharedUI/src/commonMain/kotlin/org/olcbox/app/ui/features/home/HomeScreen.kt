@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -32,6 +34,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -67,6 +70,7 @@ import org.olcbox.app.ui.features.home.components.folderMemberKey
 import org.olcbox.app.ui.components.StartButton
 import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
+import org.olcbox.app.ui.features.home.components.FreeServersSheet
 import org.olcbox.app.ui.features.home.components.HomeScreenAppBar
 import org.olcbox.app.ui.features.home.components.locationSelectorContent
 import org.olcbox.app.ui.features.home.components.LogsSheet
@@ -189,7 +193,7 @@ fun HomeScreen(
                 val message = if (updatedCount > 0) {
                     s.subscriptionsUpdatedCount(updatedCount)
                 } else {
-                    s.subscriptionsUpdated
+                    s.subscriptionsUpdateFailed
                 }
 
                 scope.launch {
@@ -200,13 +204,17 @@ fun HomeScreen(
     }
 
     fun refreshOneSubscription(url: String) {
+        if (url.trim() == FREE_SERVERS_URL) {
+            viewModel.loadFreeServers(onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } })
+            return
+        }
         viewModel.refreshSubscription(url) { updatedCount ->
             locationViewModel.loadLocations {
                 viewModel.restartVpnIfRunning()
                 val message = if (updatedCount > 0) {
                     s.subscriptionsUpdatedCount(updatedCount)
                 } else {
-                    s.subscriptionsUpdated
+                    s.subscriptionsUpdateFailed
                 }
                 scope.launch {
                     snackbarHostState.showSnackbar(message)
@@ -540,28 +548,49 @@ fun HomeScreen(
         }
 
         if (wideLayout) {
+            // Desktop: the connect controls sit centred in a left pane with a status line under the
+            // button, the server list fills the right pane (capped so rows don't stretch on 4K).
             Row(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
                 LazyColumn(
-                    state = scrollState,
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    locationItems()
-                }
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
+                        .weight(0.85f)
+                        .fillMaxHeight()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically)
                 ) {
                     connectItems()
+                    item(key = "connection-status") {
+                        Text(
+                            text = when {
+                                state.isVpnConnected -> s.notifConnected
+                                state.isVpnLoading -> s.notifConnecting
+                                else -> s.widgetDisconnected
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (state.isVpnConnected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier.weight(1.15f).fillMaxHeight(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    LazyColumn(
+                        state = scrollState,
+                        modifier = Modifier
+                            .widthIn(max = 760.dp)
+                            .fillMaxHeight()
+                            .padding(start = 8.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        locationItems()
+                    }
                 }
             }
         } else {
@@ -659,6 +688,86 @@ fun HomeScreen(
                 onCreateGroupClick = {
                     isAddSheetOpen = false
                     folderDialog = FolderDialog.Create(emptyList())
+                },
+                onFreeServersClick = {
+                    isAddSheetOpen = false
+                    viewModel.loadFreeServers(
+                        onError = { message ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(message)
+                            }
+                        }
+                    )
+                }
+            )
+        }
+
+        if (state.isFreeServersLoading) {
+            AlertDialog(
+                onDismissRequest = {},
+                properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = false),
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { viewModel.cancelFreeServersLoad() }) {
+                        Text(s.cancel)
+                    }
+                },
+                title = { Text(s.freeServers) },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(s.freeServersLoading, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    s.freeServersWaitNotice,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        state.freeServersProgress?.let { prog ->
+                            if (prog.total > 0) {
+                                LinearProgressIndicator(
+                                    progress = { (prog.checked.toFloat() / prog.total.toFloat()).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().height(4.dp)
+                                )
+                                Text(
+                                    s.freeServersProgressText(prog.checked, prog.total, prog.found),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            )
+        }
+
+        state.availableFreeServers?.let { freeServers ->
+            FreeServersSheet(
+                servers = freeServers,
+                onDismiss = { viewModel.dismissFreeServersSheet() },
+                onAddSelected = { selected ->
+                    viewModel.saveSelectedFreeServers(
+                        selectedServers = selected,
+                        onComplete = { count ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(s.freeServersImported(count, freeServers.size))
+                            }
+                        },
+                        onError = { message ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(message)
+                            }
+                        }
+                    )
                 }
             )
         }

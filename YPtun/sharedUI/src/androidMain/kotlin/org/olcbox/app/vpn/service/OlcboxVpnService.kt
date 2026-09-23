@@ -1129,7 +1129,7 @@ class OlcboxVpnService : VpnService() {
             if (!exe.canExecute()) throw IllegalStateException("OpenFlux core is missing from this build")
             val listen = "$socksListenHost:$openFluxPort"
             val cmd = buildList {
-                addAll(listOf(exe.absolutePath, "--client", "--transport", openFlux.transport, "--socks5", listen))
+                addAll(listOf(exe.absolutePath, "--role=client", "--inbound=socks5", "--transport", openFlux.transport, "--socks5", listen))
                 if (openFlux.usesMax()) addAll(listOf("--maxUid", openFlux.maxUid)) else addAll(listOf("--url", openFlux.docUrl))
                 if (openFlux.dnsServer.isNotBlank()) addAll(listOf("--dns", openFlux.dnsServer))
                 if (openFlux.debug) add("--debug")

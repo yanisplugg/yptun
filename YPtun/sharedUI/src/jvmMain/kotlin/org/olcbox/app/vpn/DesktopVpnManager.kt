@@ -482,7 +482,11 @@ class DesktopVpnManager private constructor(
                     addAll(OPENFLUX_MAX_HOSTS)
                 } else {
                     runCatching { java.net.URI(of.docUrl).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    add("docs.yandex.ru")
+                    when (of.transport) {
+                        OpenFluxConfig.TRANSPORT_MAILRU -> addAll(listOf("cloud.mail.ru", "docs.datacloudmail.ru"))
+                        OpenFluxConfig.TRANSPORT_CUPS -> add("interview.cups.online")
+                        else -> add("docs.yandex.ru")
+                    }
                     // The new editor's relay, push channel and the Disk redirect it authorizes through.
                     if (of.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
                         addAll(listOf("volga.yandex.ru", "push.yandex.ru", "disk.yandex.ru"))
@@ -1478,13 +1482,12 @@ class DesktopVpnManager private constructor(
     }
 
     /**
-     * Fetch the current public IP as seen from the internet via 2ip ("2ip.ru" or "2ip.io"). Works
-     * BOTH connected (the request rides the tunnel — TUN captures it, or proxy mode dials the local
-     * SOCKS) and disconnected (shows the real ISP IP). Falls back to a plain echo if 2ip's HTML can't
-     * be parsed. Returns the IPv4 string, or null on failure.
+     * The current public IPv4 as the internet sees this PC, asked directly from plain-text IP echo
+     * services (no scraping a web page). Works connected (the request rides the tunnel — TUN
+     * captures it, proxy mode dials the local SOCKS) and disconnected (the real ISP IP). The first
+     * service that answers with a public IPv4 wins. Returns null when none do.
      */
-    suspend fun checkExitIp(provider: String = "2ip.ru"): String? = withContext(Dispatchers.IO) {
-        val host = if (provider.contains("2ip.io")) "2ip.io" else "2ip.ru"
+    suspend fun checkExitIp(): String? = withContext(Dispatchers.IO) {
         // Only proxy mode needs an explicit SOCKS dial; TUN/disconnected use the default route.
         val proxy = if (isConnected.value && connectionModeProvider() == AndroidConnectionMode.Proxy) {
             val s = liveSocks()
@@ -1500,15 +1503,15 @@ class DesktopVpnManager private constructor(
             conn.getInputStream().bufferedReader().use { it.readText() }
         }.getOrNull()
 
-        // 2ip embeds the visitor IP in its page — take the first PUBLIC IPv4 we find.
-        val page = fetch("https://$host/")
-        val fromPage = page?.let { body ->
-            Regex("""\b(\d{1,3}(?:\.\d{1,3}){3})\b""").findAll(body)
-                .map { it.groupValues[1] }
-                .firstOrNull { isPublicIpv4(it) }
-        }
-        fromPage ?: fetch("https://api.ipify.org")?.trim()?.takeIf { isPublicIpv4(it) }
+        IP_ECHO_URLS.firstNotNullOfOrNull { spec -> fetch(spec)?.trim()?.takeIf { isPublicIpv4(it) } }
     }
+
+    private val IP_ECHO_URLS = listOf(
+        "https://api.ipify.org",
+        "https://ipv4.icanhazip.com",
+        "https://ifconfig.me/ip",
+        "https://ipinfo.io/ip",
+    )
 
     private fun isPublicIpv4(ip: String): Boolean {
         val o = ip.split(".").mapNotNull { it.toIntOrNull() }

@@ -27,7 +27,7 @@ internal class DesktopOpenFlux(
         stop()
         val binary = DesktopNativeAssets.resolveOpenFluxBinary()
         val cmd = buildList {
-            addAll(listOf(binary.toString(), "--client", "--transport", config.transport, "--socks5", "$listenHost:$listenPort"))
+            addAll(listOf(binary.toString(), "--role=client", "--inbound=socks5", "--transport", config.transport, "--socks5", "$listenHost:$listenPort"))
             if (config.usesMax()) addAll(listOf("--maxUid", config.maxUid)) else addAll(listOf("--url", config.docUrl))
             if (config.dnsServer.isNotBlank()) addAll(listOf("--dns", config.dnsServer))
             if (config.debug) add("--debug")

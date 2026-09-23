@@ -1503,6 +1503,8 @@ private fun LazyListScope.openFluxSection(
                                 when (transport) {
                                     OpenFluxConfig.TRANSPORT_MAX -> "MAX (звонок)"
                                     OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы · новый редактор"
+                                    OpenFluxConfig.TRANSPORT_MAILRU -> "Mail.ru Документы"
+                                    OpenFluxConfig.TRANSPORT_CUPS -> "cups.online (комната собеседования)"
                                     else -> "Яндекс Документы · старый редактор"
                                 }
                             )
@@ -1531,11 +1533,31 @@ private fun LazyListScope.openFluxSection(
                 OutlinedTextField(
                     value = config.docUrl,
                     onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
-                    label = { Text("Ссылка на Яндекс Документ") },
-                    placeholder = { Text("https://docs.yandex.ru/…") },
+                    label = {
+                        Text(
+                            when (config.transport) {
+                                OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
+                                OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
+                                else -> "Ссылка на Яндекс Документ"
+                            }
+                        )
+                    },
+                    placeholder = {
+                        Text(
+                            when (config.transport) {
+                                OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
+                                OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
+                                else -> "https://docs.yandex.ru/…"
+                            }
+                        )
+                    },
                     supportingText = {
                         Text(
-                            if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
+                            if (config.transport == OpenFluxConfig.TRANSPORT_MAILRU) {
+                                "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
+                            } else if (config.transport == OpenFluxConfig.TRANSPORT_CUPS) {
+                                "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
+                            } else if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
                                 "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
                             } else {
                                 "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
@@ -2276,6 +2298,11 @@ private fun MasterDnsInstallDialog(
         mutableStateOf(config.domainList().firstOrNull() ?: MasterDnsInstallOptions.DEFAULT_DOMAIN)
     }
     var encryptionMethod by remember { mutableStateOf(config.encryptionMethod) }
+    var regenerateKey by remember { mutableStateOf(false) }
+    var dnsUpstream by remember { mutableStateOf(MasterDnsInstallOptions.DEFAULT_DNS_UPSTREAM) }
+    var allowCompression by remember { mutableStateOf(true) }
+    var freePort by remember { mutableStateOf(false) }
+    var debugLog by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.masterdns.MasterDnsInstallResult>?>(null) }
     val log = remember { mutableStateListOf<String>() }
@@ -2361,6 +2388,24 @@ private fun MasterDnsInstallDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                MasterDnsEncryptionSelector(
+                    selected = encryptionMethod,
+                    enabled = !running,
+                    onSelected = { encryptionMethod = it }
+                )
+                OutlinedTextField(
+                    value = dnsUpstream,
+                    onValueChange = { dnsUpstream = it },
+                    label = { Text("DNS сервера на выходе") },
+                    supportingText = { Text("Куда VPS шлёт DNS-запросы из туннеля") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                VkTurnSwitchRow("Разрешить сжатие (ZSTD/LZ4/ZLIB)", allowCompression, !running) { allowCompression = it }
+                VkTurnSwitchRow("Новый ключ шифрования (старые клиенты отвалятся)", regenerateKey, !running) { regenerateKey = it }
+                VkTurnSwitchRow("Освободить порт, если занят другой службой", freePort, !running) { freePort = it }
+                VkTurnSwitchRow("Подробный журнал сервера (DEBUG)", debugLog, !running) { debugLog = it }
                 InstallLogView(log, logScroll)
                 result?.exceptionOrNull()?.let { err ->
                     Text(
@@ -2401,6 +2446,11 @@ private fun MasterDnsInstallDialog(
                                     udpPort = udpPort,
                                     domain = domain.trim(),
                                     encryptionMethod = encryptionMethod,
+                                    regenerateKey = regenerateKey,
+                                    dnsUpstream = dnsUpstream,
+                                    allowCompression = allowCompression,
+                                    freePort = freePort,
+                                    logLevel = if (debugLog) "DEBUG" else "INFO",
                                 )
                             ) { line -> log.add(line) }
                             // On success, write the key + domain + cipher + resolver into the location

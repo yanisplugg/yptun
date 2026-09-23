@@ -1,11 +1,14 @@
 # OpenFlux in YPtun
 
-Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), `main` at 3249724 (2026-09-11; first vendored
-a8a8937, release 0.0.1), without `.idea/` and the iOS/Android shell scripts. Engine `EngineType.OpenFlux`.
+Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), `main` at d34dc8c (2026-09-23, after release 0.0.3;
+before that 3249724, first vendored a8a8937 = 0.0.1), without `.idea/` and the iOS/Android shell scripts. Engine `EngineType.OpenFlux`.
 
 Re-vendor: `git diff <old> <new>` in an upstream clone, `git apply --directory=openflux --exclude=openflux/main.go`,
 then port the upstream `main.go` hunks by hand (it carries patch 2 below), then `build-openflux-server.ps1`.
-Since 3249724 there is a third carrier, `vyandex` (Yandex Docs in the new Volga editor) — `OpenFluxConfig.TRANSPORTS`.
+Carriers (`OpenFluxConfig.TRANSPORTS`): yandex, vyandex (new Volga editor), mailru, cupsonline, oneme (MAX).
+Since 0.0.3 the module is `openflux` (was `universal-bypass-tool`), flags are `--role=client|exit` +
+`--inbound=socks5`, the default codec is batched+zstd — an old node does NOT talk to a new client, reinstall it.
+The 3-way merge base for the next re-vendor is d34dc8c.
 
 ## How it runs
 

@@ -16,6 +16,7 @@ on:
       - "v*"
     branches:
       - pc-client-beta
+      - Beta
     paths:
       - ".github/workflows/linux-deb.yml"
       - "YPtun/desktopApp/**"
@@ -64,14 +65,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fakeroot dpkg-dev binutils file wget libfuse2
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            sudo wget -O /usr/local/bin/appimagetool.bin https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage || true
-            if [ -f /usr/local/bin/appimagetool.bin ]; then
-              sudo chmod +x /usr/local/bin/appimagetool.bin
-              sudo sh -c 'printf "#!/bin/sh\nexec /usr/local/bin/appimagetool.bin --appimage-extract-and-run \"\$@\"\n" > /usr/local/bin/appimagetool'
-              sudo chmod +x /usr/local/bin/appimagetool
-            fi
-          fi
+          # appimagetool for THIS runner's arch; run extracted so FUSE isn't needed on the runner.
+          tool_arch=$([ "${{ matrix.arch }}" = "arm64" ] && echo aarch64 || echo x86_64)
+          sudo wget -q -O /usr/local/bin/appimagetool.bin "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${tool_arch}.AppImage"
+          sudo chmod +x /usr/local/bin/appimagetool.bin
+          sudo sh -c 'printf "#!/bin/sh\nexec /usr/local/bin/appimagetool.bin --appimage-extract-and-run \"\$@\"\n" > /usr/local/bin/appimagetool'
+          sudo chmod +x /usr/local/bin/appimagetool
 
       # Gradle configures every project including the Android modules, and AGP refuses to configure
       # without a valid SDK location. Nothing is installed - no Android task runs here.
@@ -100,9 +99,8 @@ jobs:
         run: |
           chmod +x ./gradlew
           ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseDeb --stacktrace
-          if [ "${{ matrix.arch }}" = "amd64" ] && [ -x /usr/local/bin/appimagetool ]; then
-            ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseLinuxAppImage || true
-          fi
+          ARCH=$([ "${{ matrix.arch }}" = "arm64" ] && echo aarch64 || echo x86_64) \
+            ./gradlew --no-daemon --max-workers=1 :desktopApp:packageReleaseLinuxAppImage --stacktrace
 
       - name: Verify the package
         run: |
@@ -117,6 +115,10 @@ jobs:
           got=$(dpkg-deb --field "$deb" Architecture)
           [ "$got" = "$expected" ] || { echo "deb Architecture=$got, expected $expected"; exit 1; }
           echo "OK: $expected"
+          appimage=$(find YPtun/desktopApp/build/compose/binaries -name '*.AppImage' | head -1)
+          [ -n "$appimage" ] || { echo "no .AppImage produced"; exit 1; }
+          file "$appimage"
+          echo "OK AppImage: $appimage"
 
       - name: Prepare artifacts for release
         run: |

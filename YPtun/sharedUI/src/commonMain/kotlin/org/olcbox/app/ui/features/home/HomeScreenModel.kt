@@ -14,12 +14,28 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.olcbox.app.data.datasource.createProxyHttpClient
 import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
+import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.LocationMetadata
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import org.olcbox.app.data.model.LocationEntry
+import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.YptunInboundCodec
+import org.olcbox.app.ui.features.home.components.FreeServerItem
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.vpn.ExpiringSubscriptionInfo
 import org.olcbox.app.vpn.PanelAnnouncementInfo
@@ -401,6 +417,210 @@ class HomeScreenViewModel(
         }
     }
 
+    private var freeServersJob: Job? = null
+
+    fun cancelFreeServersLoad() {
+        freeServersJob?.cancel()
+        freeServersJob = null
+        _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+    }
+
+    fun dismissFreeServersSheet() {
+        _state.update { it.copy(availableFreeServers = null, freeServersProgress = null) }
+    }
+
+    fun loadFreeServers(onError: (String) -> Unit = {}) {
+        freeServersJob?.cancel()
+        _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
+        freeServersJob = viewModelScope.launch {
+            try {
+                val url = FREE_SERVERS_URL
+                val rawText = withContext(Dispatchers.IO) {
+                    // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
+                    // without withProxyAuthentication the fetch died with a SOCKS auth error.
+                    val proxy = vpnManager.subscriptionFetchProxy()
+                    val client = createProxyHttpClient(proxy)
+                    try {
+                        org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
+                    } finally {
+                        client.close()
+                    }
+                }
+
+                if (rawText.isBlank()) {
+                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                    onError("Не удалось загрузить список серверов")
+                    return@launch
+                }
+
+                val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }
+                if (allLines.isEmpty()) {
+                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                    onError("В списке не найдено серверов VLESS")
+                    return@launch
+                }
+
+                val parsedItems = allLines.mapNotNull { line ->
+                    val profile = ShareLinkParser.parse(line)
+                    if (profile != null && profile.isComplete()) {
+                        line to profile
+                    } else null
+                }
+
+                if (parsedItems.isEmpty()) {
+                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                    onError("Не удалось распознать конфигурации серверов")
+                    return@launch
+                }
+
+                val total = parsedItems.size
+                _state.update { it.copy(freeServersProgress = FreeServersProgress(checked = 0, total = total, found = 0)) }
+
+                val mutex = Mutex()
+                var checkedCount = 0
+                val workingServers = mutableListOf<FreeServerItem>()
+
+                withContext(Dispatchers.IO) {
+                    // Используем умеренный пул параллельности (6), чтобы исключить конфликты портов
+                    // и исчерпание сетевых сокетов на iOS
+                    val sem = Semaphore(12)
+                    parsedItems.mapIndexed { index, (line, profile) ->
+                        async {
+                            sem.withPermit {
+                                val config = LocationConfig(
+                                    name = profile.displayName(),
+                                    engine = EngineType.Standard,
+                                    proxy = profile
+                                ).normalized()
+                                // Увеличиваем таймаут до 4.0с: серверы успевают ответить через TLS/VLESS
+                                // без случайных отсечек из-за миллисекундных колебаний мобильной сети
+                                val ping = withTimeoutOrNull(4000L) {
+                                    try {
+                                        vpnManager.ping(config)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        null
+                                    }
+                                }
+                                val item = if (ping != null && ping > 0) {
+                                    FreeServerItem(
+                                        id = "free_${profile.server}_${profile.serverPort}_$index",
+                                        line = line,
+                                        profile = profile,
+                                        displayName = profile.displayName(),
+                                        pingMs = ping
+                                    )
+                                } else null
+
+                                val (curChecked, curFound) = mutex.withLock {
+                                    checkedCount++
+                                    if (item != null) workingServers.add(item)
+                                    checkedCount to workingServers.size
+                                }
+                                _state.update {
+                                    it.copy(
+                                        freeServersProgress = FreeServersProgress(
+                                            checked = curChecked,
+                                            total = total,
+                                            found = curFound
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+
+                val sortedWorking = workingServers.sortedBy { it.pingMs }
+                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+
+                if (sortedWorking.isEmpty()) {
+                    onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
+                } else {
+                    _state.update { it.copy(availableFreeServers = sortedWorking) }
+                }
+            } catch (e: CancellationException) {
+                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+            } catch (e: Exception) {
+                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                onError(e.message ?: "Ошибка загрузки бесплатных серверов")
+            }
+        }
+    }
+
+    fun saveSelectedFreeServers(
+        selectedServers: List<FreeServerItem>,
+        onComplete: (Int) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        _state.update { it.copy(availableFreeServers = null) }
+        if (selectedServers.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+                val newEntries = selectedServers.mapIndexed { index, item ->
+                    val profile = item.profile
+                    val location = LocationConfig(
+                        name = item.displayName,
+                        engine = EngineType.Standard,
+                        proxy = profile
+                    ).normalized()
+                    val base = "${profile.server}_${profile.serverPort}"
+                        .lowercase()
+                        .map { if (it.isLetterOrDigit()) it else '_' }
+                        .joinToString("")
+                    val storageId = "free_${base}_${now}_$index"
+                    LocationEntry.from(
+                        storageId = storageId,
+                        location = location,
+                        subscriptionUrl = FREE_SERVERS_URL,
+                        metadata = LocationMetadata(
+                            subscription = SubscriptionMetadata(
+                                name = "Бесплатные серверы",
+                                updateIntervalHours = 0,
+                                autoUpdateEnabled = false,
+                                lastRefreshAtEpochMs = now,
+                                lastAttemptAtEpochMs = now
+                            )
+                        )
+                    )
+                }
+
+                val currentBundle = locationsRepository.getBundle()
+                // Убираем ТОЛЬКО старые бесплатные серверы, никогда не затрагивая остальные локации пользователя
+                val nonFreeLocations = currentBundle.locations.filterNot {
+                    it.subscriptionUrl?.trim() == FREE_SERVERS_URL
+                }
+                val updatedLocations = nonFreeLocations + newEntries
+
+                val oldFreeIds = currentBundle.locations
+                    .filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
+                    .map { it.storageId }
+                    .toSet()
+
+                val updatedActiveId = if (currentBundle.activeLocationId in oldFreeIds) {
+                    newEntries.firstOrNull()?.storageId ?: currentBundle.activeLocationId
+                } else {
+                    currentBundle.activeLocationId
+                }
+
+                locationsRepository.saveBundle(
+                    currentBundle.copy(
+                        locations = updatedLocations,
+                        activeLocationId = updatedActiveId
+                    )
+                )
+
+                loadCurrentConfigNow()
+                onComplete(newEntries.size)
+            } catch (e: Exception) {
+                onError(e.message ?: "Ошибка сохранения серверов")
+            }
+        }
+    }
+
     /**
      * "No valid config" is a lie when the link IS ours but arrived damaged. A `yptun://inbound`
      * payload is base64url, so it can contain runs of underscores, and every Markdown-rendering chat
@@ -678,8 +898,19 @@ data class HomeScreenState(
     /** Wall-clock epoch-ms when the connection started (0 = not connected); drives the on-screen timer. */
     val connectedSinceEpochMs: Long = 0L,
     /** Set after importing a VK-TURN link that still needs a per-client VK Calls link. */
-    val vkTurnLinkPrompt: VkTurnLinkPrompt? = null
+    val vkTurnLinkPrompt: VkTurnLinkPrompt? = null,
+    val isFreeServersLoading: Boolean = false,
+    val freeServersProgress: FreeServersProgress? = null,
+    val availableFreeServers: List<FreeServerItem>? = null
 )
+
+data class FreeServersProgress(
+    val checked: Int = 0,
+    val total: Int = 0,
+    val found: Int = 0
+)
+
+const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
 
 /** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */
 data class VkTurnLinkPrompt(

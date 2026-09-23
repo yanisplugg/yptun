@@ -23,15 +23,18 @@ class OpenFluxInstallScriptTest {
     }
 
     @Test
-    fun rstDropRuleIsTiedToTheService() {
+    fun l4ExitReplacesOldInstallAndDropsRstRule() {
         val script = buildOpenFluxInstallScript(
             OpenFluxInstallOptions(
                 host = "203.0.113.7", sshPassword = "x",
                 transport = OpenFluxConfig.TRANSPORT_MAX, exitMaxToken = "tok",
             )
         )
-        assertTrue(script.lines().any { it.startsWith("ExecStartPre=") && "iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP" in it })
-        assertTrue(script.lines().any { it.startsWith("ExecStopPost=") && "iptables -D OUTPUT -p tcp --tcp-flags RST RST -j DROP" in it })
+        // l4 exit: no host-wide RST drop any more; a leftover rule from an old install is removed.
+        assertFalse(script.lines().any { it.startsWith("ExecStartPre=") })
+        assertTrue("while iptables -D OUTPUT -p tcp --tcp-flags RST RST -j DROP" in script)
+        assertTrue("systemctl disable --now openflux" in script)
+        assertTrue("--mode=l4" in script)
         assertTrue(script.lines().any { it == "OPENFLUX_TRANSPORT=\"oneme\"" })
         assertTrue(script.lines().any { it == "OPENFLUX_MAX_TOKEN=\"tok\"" })
         val execStart = script.lines().single { it.startsWith("ExecStart=") }

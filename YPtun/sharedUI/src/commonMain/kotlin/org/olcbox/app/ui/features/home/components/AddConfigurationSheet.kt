@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.outlined.Input
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.FileOpen
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -50,7 +51,8 @@ fun AddConfigurationSheet(
     onImportFileClick: () -> Unit,
     onUpdateSubscriptionsClick: () -> Unit,
     onAddCustomLocationClick: () -> Unit,
-    onCreateGroupClick: () -> Unit = {}
+    onCreateGroupClick: () -> Unit = {},
+    onFreeServersClick: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -95,6 +97,13 @@ fun AddConfigurationSheet(
                     value = s.importFileSubtitle,
                     icon = Icons.Outlined.FileOpen,
                     onClick = onImportFileClick
+                )
+
+                AddSheetAction(
+                    title = s.freeServers,
+                    value = s.freeServersSubtitle,
+                    icon = Icons.Outlined.Public,
+                    onClick = onFreeServersClick
                 )
 
                 AddSheetAction(
