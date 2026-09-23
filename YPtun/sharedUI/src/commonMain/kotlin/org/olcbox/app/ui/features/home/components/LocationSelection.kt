@@ -198,12 +198,17 @@ fun LazyListScope.locationSelectorContent(
         val isPinned = groupKey in pinnedGroups
         val isPingSorted = groupKey in pingSortedGroups
         val isPingDescending = groupKey in pingSortDescendingGroups
+        // Free-servers list: drawn like a folder — one green-tinted container holding header AND rows.
+        val isFree = group.firstOrNull()?.subscriptionUrl?.trim() == org.olcbox.app.ui.features.home.FREE_SERVERS_URL
+        val orderedGroup = if (isPingSorted) group.sortedWith(pingComparator(pingsState, isPingDescending)) else group
 
         item(key = "group-header-$groupKey") {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer
+                color = if (isFree) {
+                    androidx.compose.ui.graphics.lerp(MaterialTheme.colorScheme.surfaceContainer, androidx.compose.ui.graphics.Color(0xFF43A047), 0.22f)
+                } else MaterialTheme.colorScheme.surfaceContainer
             ) {
                 Column(
                     modifier = Modifier
@@ -273,17 +278,30 @@ fun LazyListScope.locationSelectorContent(
                         Spacer(modifier = Modifier.height(8.dp))
                         TrafficProgressBar(location = group.firstOrNull())
                     }
+                    if (isFree && !isCollapsed) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            LocationCardsColumn(orderedGroup, twoColumns) { location, cellModifier ->
+                                LocationSelectorRow(
+                                    location = location,
+                                    selectedLocationId = selectedLocationId,
+                                    pingsState = pingsState,
+                                    onLocationSelected = onLocationSelected,
+                                    onLocationSettingsClick = onLocationSettingsClick,
+                                    selectionMode = selectionMode,
+                                    isChecked = location.storageId in selectedIds,
+                                    onToggleSelect = onToggleSelect,
+                                    onStartSelection = onStartSelection,
+                                    twoColumns = twoColumns,
+                                    modifier = cellModifier
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        if (!isCollapsed) {
-            val orderedGroup = if (isPingSorted) {
-                group.sortedWith(pingComparator(pingsState, isPingDescending))
-            } else {
-                group
-            }
-
+        if (!isCollapsed && !isFree) {
             locationCards(orderedGroup, twoColumns, keyPrefix = "row") { location, cellModifier ->
                 LocationSelectorRow(
                     location = location,
