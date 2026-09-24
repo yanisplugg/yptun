@@ -32,7 +32,6 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
-	mdnslog "masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/mdnsmobile"
 	"openflux/ofclient"
 	ofutils "openflux/utils"
@@ -73,7 +72,7 @@ func init() {
 	ofutils.SetLogCallback(func(line string) {
 		PushLog("openflux", line)
 	})
-	mdnslog.SetGlobalLogCallback(func(line string) {
+	mdnsmobile.SetGlobalLogCallback(func(line string) {
 		PushLog("masterdns", line)
 	})
 	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {

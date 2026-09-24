@@ -24,9 +24,15 @@ import (
 
 	"masterdnsvpn-go/internal/client"
 	"masterdnsvpn-go/internal/config"
+	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/netutil"
 	"masterdnsvpn-go/internal/version"
 )
+
+// SetGlobalLogCallback installs a global log callback for all MasterDNS logging.
+func SetGlobalLogCallback(cb func(string)) {
+	logger.SetGlobalLogCallback(cb)
+}
 
 // Encryption methods, mirroring DATA_ENCRYPTION_METHOD in the upstream config. They must match the
 // server. XOR is the light one; the AEAD modes cost more but are real encryption.

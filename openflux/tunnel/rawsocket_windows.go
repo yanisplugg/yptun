@@ -12,9 +12,9 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
-	"universal-bypass-tool/network"
-	"universal-bypass-tool/tunnel/windivert"
-	"universal-bypass-tool/utils"
+	"openflux/network"
+	"openflux/tunnel/windivert"
+	"openflux/utils"
 )
 
 type RawSocketEndpoint struct {
