@@ -56,6 +56,10 @@ object IosSharedStore {
 
     fun path(fileName: String): String = "$dir/$fileName"
 
+    fun ensureDirectory(dirPath: String) {
+        NSFileManager.defaultManager.createDirectoryAtPath(dirPath, true, null, null)
+    }
+
     fun readText(fileName: String): String? =
         NSString.stringWithContentsOfFile(path(fileName), NSUTF8StringEncoding, null)
 
