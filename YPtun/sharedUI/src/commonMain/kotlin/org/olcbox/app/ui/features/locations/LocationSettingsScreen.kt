@@ -689,10 +689,7 @@ private fun EngineSelector(
     enabled: Boolean,
     onSelected: (EngineType) -> Unit
 ) {
-    // OpenFlux has no iOS engine. The build platform, not UIDevice.systemName — that one reads
-    // "iPadOS" on an iPad, which a check for "iOS" would miss.
     val options = remember {
-        val ios = org.olcbox.app.update.UpdatePlatform.current().os == "ios"
         listOf(
             EngineType.Stealth,
             EngineType.Standard,
@@ -700,7 +697,7 @@ private fun EngineSelector(
             EngineType.VkTurn,
             EngineType.MasterDns,
             EngineType.OpenFlux
-        ).filterNot { ios && it == EngineType.OpenFlux }
+        )
     }
     Column(
         modifier = Modifier.fillMaxWidth(),
