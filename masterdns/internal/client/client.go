@@ -564,3 +564,25 @@ func (c *Client) HandleErrorDrop(packet VpnProto.Packet) error {
 func (c *Client) HandleMTUResponse(packet VpnProto.Packet) error {
 	return nil
 }
+
+func (c *Client) SetLastError(err string) {
+	if c == nil {
+		return
+	}
+	if err == "" {
+		c.lastError.Store(nil)
+		return
+	}
+	c.lastError.Store(&err)
+}
+
+func (c *Client) LastError() string {
+	if c == nil {
+		return ""
+	}
+	p := c.lastError.Load()
+	if p == nil {
+		return ""
+	}
+	return *p
+}
