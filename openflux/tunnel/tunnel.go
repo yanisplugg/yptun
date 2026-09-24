@@ -25,6 +25,7 @@ type TCPTunnel struct {
 	rawEP       *RawSocketEndpoint
 	startTime   time.Time
 	packetCount atomic.Uint64
+	stopStats   chan struct{}
 }
 
 func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
@@ -32,6 +33,7 @@ func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
 		transport:  trans,
 		isExitNode: isExitNode,
 		startTime:  time.Now(),
+		stopStats:  make(chan struct{}),
 	}
 
 	utils.Debugf("[TUNNEL] Net stack init...")
@@ -40,14 +42,14 @@ func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
 	})
 
-        if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
-            &tcpip.TCPReceiveBufferSizeRangeOption{Min: 65536, Default: 262144, Max: 1048576}); err != nil {
-            utils.Debugf("[TUNNEL] Failed to set recv buffer: %v", err)
-        }
-        if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
-            &tcpip.TCPSendBufferSizeRangeOption{Min: 65536, Default: 262144, Max: 1048576}); err != nil {
-            utils.Debugf("[TUNNEL] Failed to set send buffer: %v", err)
-        }
+	if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
+		&tcpip.TCPReceiveBufferSizeRangeOption{Min: 4096, Default: 65536, Max: 262144}); err != nil {
+		utils.Debugf("[TUNNEL] Failed to set recv buffer: %v", err)
+	}
+	if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
+		&tcpip.TCPSendBufferSizeRangeOption{Min: 4096, Default: 65536, Max: 262144}); err != nil {
+		utils.Debugf("[TUNNEL] Failed to set send buffer: %v", err)
+	}
 
 	tunnelEP := NewTunnelLinkEndpoint()
 	tunnelEP.onOutgoingPacket = func(data []byte) {
@@ -174,16 +176,38 @@ func (t *TCPTunnel) printStats() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		stats := t.gvisorStack.Stats()
-		utils.Debugf("[STATS] uptime=%v packets=%d connected=%d established=%d retrans=%d",
-			time.Since(t.startTime).Round(time.Second),
-			t.packetCount.Load(),
-			stats.TCP.CurrentConnected.Value(),
-			stats.TCP.CurrentEstablished.Value(),
-			stats.TCP.Retransmits.Value(),
-		)
+	for {
+		select {
+		case <-t.stopStats:
+			return
+		case <-ticker.C:
+			stats := t.gvisorStack.Stats()
+			utils.Debugf("[STATS] uptime=%v packets=%d connected=%d established=%d retrans=%d",
+				time.Since(t.startTime).Round(time.Second),
+				t.packetCount.Load(),
+				stats.TCP.CurrentConnected.Value(),
+				stats.TCP.CurrentEstablished.Value(),
+				stats.TCP.Retransmits.Value(),
+			)
+		}
 	}
+}
+
+func (t *TCPTunnel) Close() error {
+	if t.stopStats != nil {
+		select {
+		case <-t.stopStats:
+		default:
+			close(t.stopStats)
+		}
+	}
+	if t.gvisorStack != nil {
+		t.gvisorStack.Close()
+	}
+	if t.transport != nil {
+		_ = t.transport.Stop()
+	}
+	return nil
 }
 
 func getLocalIP() string {

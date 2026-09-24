@@ -77,6 +77,16 @@ func (t *YandexDocsTransport) Start() error {
 	return nil
 }
 
+func (t *YandexDocsTransport) Stop() error {
+	_ = t.BaseTransport.Stop()
+	t.Mu.Lock()
+	if t.session != nil && t.session.Conn != nil {
+		_ = t.session.Conn.Close()
+	}
+	t.Mu.Unlock()
+	return nil
+}
+
 func (t *YandexDocsTransport) Send(data []byte) error {
 	if !t.IsConnected() {
 		return fmt.Errorf("transport not connected")
@@ -107,6 +117,11 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 	utils.Debugf("[YDOCS] connectToDoc attempt ...")
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				utils.Debugf("[YDOCS] panic recovered in connectToDoc: %v", r)
+			}
+		}()
 		t.Mu.Lock()
 		existingSession := t.session
 		t.Mu.Unlock()
@@ -188,6 +203,11 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 }
 
 func (t *YandexDocsTransport) writerLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			utils.Debugf("[YDOCS] panic recovered in writerLoop: %v", r)
+		}
+	}()
 	for t.IsRunning() {
 		t.Mu.Lock()
 		session := t.session
@@ -213,6 +233,11 @@ func (t *YandexDocsTransport) writerLoop() {
 }
 
 func (t *YandexDocsTransport) keepAliveLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			utils.Debugf("[YDOCS] panic recovered in keepAliveLoop: %v", r)
+		}
+	}()
 	ticker := time.NewTicker(t.GetConfig().KeepAliveInterval)
 	defer ticker.Stop()
 	keepAliveMsg := `42["message",{"type":"cursor","cursor":"18;---KA---"}]`

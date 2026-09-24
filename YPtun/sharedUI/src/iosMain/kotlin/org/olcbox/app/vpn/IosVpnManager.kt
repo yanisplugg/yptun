@@ -181,10 +181,6 @@ class IosVpnManager(
                     addLog("Add a valid location before connecting")
                     return@withLock
                 }
-                if (active.engine == EngineType.OpenFlux) {
-                    setStatus(VpnStatus.Error("OpenFlux на iOS пока не поддерживается"))
-                    return@withLock
-                }
                 setStatus(VpnStatus.Connecting)
                 wasConnecting = true
                 val result = runCatching {
@@ -276,6 +272,13 @@ class IosVpnManager(
                 }
             }
             config.engine == EngineType.MasterDns -> {
+                if (status.value == VpnStatus.Connected && isActiveLocation) {
+                    tunnelPing()
+                } else {
+                    null
+                }
+            }
+            config.engine == EngineType.OpenFlux -> {
                 if (status.value == VpnStatus.Connected && isActiveLocation) {
                     tunnelPing()
                 } else {

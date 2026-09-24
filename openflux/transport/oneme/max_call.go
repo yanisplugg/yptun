@@ -29,7 +29,23 @@ func (h *CallHandler) Send(data []byte) {
 	}
 }
 
+func (h *CallHandler) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.conn != nil {
+		_ = h.conn.Close()
+	}
+	if h.pc != nil {
+		_ = h.pc.Close()
+	}
+}
+
 func (h *CallHandler) readLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			logError("[%s] readLoop panic recovered: %v", h.tag, r)
+		}
+	}()
 	logInfo("[%s] Signaling connected", h.tag)
 	for {
 		_, message, err := h.conn.ReadMessage()

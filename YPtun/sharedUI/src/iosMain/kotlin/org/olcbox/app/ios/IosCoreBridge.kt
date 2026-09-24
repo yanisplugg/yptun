@@ -66,6 +66,22 @@ interface IosCoreBridge {
     fun masterDnsRunning(): Boolean
     fun masterDnsLastError(): String
 
+    fun openfluxVersion(): String
+    fun openfluxStart(
+        transport: String,
+        url: String,
+        maxToken: String,
+        maxUid: String,
+        listenAddr: String,
+        dnsServer: String,
+        socksUser: String,
+        socksPass: String,
+        debug: Boolean,
+    ): String
+    fun openfluxStop()
+    fun openfluxRunning(): Boolean
+    fun openfluxLastError(): String
+
     fun rtcVersion(): String
     fun rtcSetTransport(transport: String): String
     fun rtcSetTelemostCookies(cookies: String)

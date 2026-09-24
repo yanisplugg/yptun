@@ -51,19 +51,19 @@ type VolgaConfig struct {
 
 func DefaultVolgaConfig() VolgaConfig {
 	return VolgaConfig{
-		MaxIdleConnsPerHost: 2000,
-		MaxIdleConns:        4000,
+		MaxIdleConnsPerHost: 20,
+		MaxIdleConns:        50,
 		IdleConnTimeout:     90 * time.Second,
 		RelayTimeout:        30 * time.Second,
 
-		WorkerCount: 2000,
-		QueueSize:   1000000,
+		WorkerCount: 8,
+		QueueSize:   2048,
 
 		BatchSize:     20,
 		BatchTimeout:  2 * time.Millisecond,
-		BatchMaxBytes: 4 * 1024 * 1024,
+		BatchMaxBytes: 256 * 1024,
 
-		MaxPayloadBytes: 5_000_000,
+		MaxPayloadBytes: 256 * 1024,
 		MinPayloadBytes: 200,
 
 		ReconnectMinDelay:   500 * time.Millisecond,
@@ -82,7 +82,7 @@ var reClientConfig = regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*
 
 var (
 	b64BufPool = sync.Pool{
-		New: func() interface{} { return make([]byte, 0, 16*1024*1024) },
+		New: func() interface{} { return make([]byte, 0, 64*1024) },
 	}
 	jsonBufPool = sync.Pool{
 		New: func() interface{} { return bytes.NewBuffer(make([]byte, 0, 128*1024)) },
@@ -508,6 +508,11 @@ func (r *relayClient) Send(data []byte) error {
 
 func (r *relayClient) worker(id int) {
 	defer r.wg.Done()
+	defer func() {
+		if rec := recover(); rec != nil {
+			utils.Debugf("[VOLGA] panic recovered in worker %d: %v", id, rec)
+		}
+	}()
 
 	batch := make([][]byte, 0, r.config.BatchSize)
 	totalBytes := 0

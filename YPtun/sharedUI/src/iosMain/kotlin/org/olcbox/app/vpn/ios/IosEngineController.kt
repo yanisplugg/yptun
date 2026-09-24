@@ -48,6 +48,7 @@ internal class IosEngineController(
     private var proxyMode = false
 
     private var masterDnsProxyActive = false
+    private var openfluxProxyActive = false
 
     /** olcRTC's local SOCKS port when chaining; the proxy core dials its outbound through it. */
     private fun chainOlcrtcPort(socksPort: Int) = socksPort + 1
@@ -70,6 +71,7 @@ internal class IosEngineController(
         deviceId: String,
     ) {
         masterDnsProxyActive = false
+        openfluxProxyActive = false
         proxyMode = IosSharedStore.loadConnectionMode() == IosSharedStore.MODE_PROXY
         httpProxyPort = 0
         val config = location.normalized()
@@ -79,8 +81,7 @@ internal class IosEngineController(
             EngineType.Chain -> startSingBoxOrXray(config, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.VkTurn -> startVkTurn(config, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.MasterDns -> startMasterDns(config, listenPort, socksUsername, socksPassword)
-            // OpenFlux runs as a subprocess on Android/desktop (its core panics); iOS has no subprocesses.
-            EngineType.OpenFlux -> throw IllegalStateException("OpenFlux на iOS пока не поддерживается")
+            EngineType.OpenFlux -> startOpenFlux(config, listenPort, socksUsername, socksPassword)
         }
     }
 
@@ -91,8 +92,10 @@ internal class IosEngineController(
         runCatching { core.ftStop() }
         runCatching { core.wdttStop() }
         runCatching { core.masterDnsStop() }
+        runCatching { core.openfluxStop() }
         runCatching { core.rtcStop() }
         masterDnsProxyActive = false
+        openfluxProxyActive = false
     }
 
     fun coreRunning(engine: EngineType): Boolean = when (engine) {
@@ -101,7 +104,7 @@ internal class IosEngineController(
         EngineType.Chain -> core.rtcRunning() && proxyCoreRunning()
         EngineType.VkTurn -> (core.ftRunning() || core.wdttRunning()) && proxyCoreRunning()
         EngineType.MasterDns -> core.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
-        EngineType.OpenFlux -> false
+        EngineType.OpenFlux -> core.openfluxRunning() && (!openfluxProxyActive || proxyCoreRunning())
     }
 
     private fun proxyCoreRunning(): Boolean =
@@ -464,6 +467,62 @@ internal class IosEngineController(
 
         startProxyOverTunnel("MasterDNS", config, proxy, masterDnsPort, listenPort, socksUsername, socksPassword) { p, g ->
             masterDns.resolvedProxyCore(p, g)
+        }
+    }
+
+    private suspend fun startOpenFlux(
+        config: LocationConfig,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+    ) {
+        val openFlux = config.openFlux
+        check(openFlux != null && openFlux.isComplete()) { "OpenFlux not configured" }
+
+        val proxy = openFlux.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link)
+                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?.takeIf { it.isComplete() }
+        }
+        if (openFlux.proxyLink.isNotBlank() && proxy == null) {
+            log("OpenFlux: proxy link present but could not be parsed - exiting via OpenFlux SOCKS directly")
+        }
+        val useProxy = proxy != null
+        openfluxProxyActive = useProxy
+        val openFluxPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
+
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
+        require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        if (useProxy) {
+            IosNet.awaitLocalPortClosed(openFluxPort, 3000)
+            require(!IosNet.isLocalPortOpen(openFluxPort)) { "OpenFlux internal port $openFluxPort is still in use" }
+        }
+
+        val openFluxAddr = "$LISTEN_HOST:$openFluxPort"
+        log("Starting OpenFlux (${openFlux.summary()}) on $openFluxAddr, dns=${openFlux.dnsServer.ifBlank { "device" }}")
+        runCatching { core.openfluxStop() }
+        core.openfluxStart(
+            transport = openFlux.transport,
+            url = openFlux.docUrl,
+            maxToken = openFlux.maxToken,
+            maxUid = openFlux.maxUid,
+            listenAddr = openFluxAddr,
+            dnsServer = openFlux.dnsServer,
+            // The chain detour dials the internal port without credentials, so it must run no-auth.
+            socksUser = if (useProxy) "" else socksUsername,
+            socksPass = if (useProxy) "" else socksPassword,
+            debug = openFlux.debug,
+        ).orThrow("OpenFlux start failed")
+
+        if (!IosNet.awaitLocalPortOpen(openFluxPort, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("OpenFlux SOCKS port $openFluxPort did not open" +
+                core.openfluxLastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty())
+        }
+        log("OpenFlux ready on $openFluxAddr")
+        if (proxy == null) return
+
+        startProxyOverTunnel("OpenFlux", config, proxy, openFluxPort, listenPort, socksUsername, socksPassword) { p, g ->
+            openFlux.resolvedProxyCore(p, g)
         }
     }
 

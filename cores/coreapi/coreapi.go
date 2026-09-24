@@ -33,6 +33,8 @@ import (
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"masterdnsvpn-go/mdnsmobile"
+	"universal-bypass-tool/ofclient"
+	ofutils "universal-bypass-tool/utils"
 	"wg-turn-client/wdttmobile"
 
 	xnet "github.com/xtls/xray-core/common/net"
@@ -67,6 +69,9 @@ func (wdttLogBridge) Write(p []byte) (int, error) {
 
 func init() {
 	log.SetOutput(wdttLogBridge{})
+	ofutils.SetLogCallback(func(line string) {
+		PushLog("openflux", line)
+	})
 	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
 		// Strict memory budget for iOS NetworkExtension (15 MB Jetsam limit)
 		debug.SetMemoryLimit(12 * 1024 * 1024)
@@ -501,6 +506,69 @@ func MasterDnsLastError() string {
 }
 
 func MasterDnsVersion() string { return mdnsmobile.Version() }
+
+// ---------------------------------------------------------------------------
+// OpenFlux
+
+var (
+	ofMu     sync.Mutex
+	ofClient *ofclient.Client
+)
+
+func OpenFluxVersion() string { return "1.0.0" }
+
+func OpenFluxStart(transportType, docUrl, maxToken, maxUid, socksAddr, dnsServer, socksUser, socksPass string, debug bool) error {
+	ofMu.Lock()
+	defer ofMu.Unlock()
+	if ofClient != nil && ofClient.IsRunning() {
+		return errors.New("openflux already running")
+	}
+	c, err := ofclient.NewClient(ofclient.Config{
+		Transport: transportType,
+		DocURL:    docUrl,
+		MaxToken:  maxToken,
+		MaxUID:    maxUid,
+		SocksAddr: socksAddr,
+		DNSServer: dnsServer,
+		SocksUser: socksUser,
+		SocksPass: socksPass,
+		Debug:     debug,
+	})
+	if err != nil {
+		return err
+	}
+	if err := c.Start(); err != nil {
+		return err
+	}
+	ofClient = c
+	PushLog("openflux", "OpenFlux started on "+socksAddr)
+	return nil
+}
+
+func OpenFluxStop() {
+	ofMu.Lock()
+	defer ofMu.Unlock()
+	if ofClient != nil {
+		ofClient.Stop()
+		ofClient = nil
+		PushLog("openflux", "OpenFlux stopped")
+	}
+}
+
+func OpenFluxRunning() bool {
+	ofMu.Lock()
+	defer ofMu.Unlock()
+	return ofClient != nil && ofClient.IsRunning()
+}
+
+func OpenFluxLastError() string {
+	ofMu.Lock()
+	defer ofMu.Unlock()
+	if ofClient == nil {
+		return ""
+	}
+	return ofClient.LastError()
+}
 
 // ---------------------------------------------------------------------------
 // olcRTC (Stealth engine) — one process-wide runtime; Check/Ping inherit whatever the RtcSet*

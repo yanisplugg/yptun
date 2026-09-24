@@ -104,7 +104,7 @@ jobs:
           # Must cover every input of :sharedUI:buildCoresIosXcframework. It used to point at a
           # Kotlin path that does not exist and left `cores/` out entirely, so a change to the Go
           # cores restored a stale framework and shipped without the change in it.
-          key: cores-ios-${{ hashFiles('cores/**', 'sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'awgproxy/**', 'free-turn-proxy/**', 'wdtt/**', 'masterdns/**', 'olcrtc/**', 'YPtun/sharedUI/build.gradle.kts') }}
+          key: cores-ios-${{ hashFiles('cores/**', 'sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'awgproxy/**', 'free-turn-proxy/**', 'wdtt/**', 'masterdns/**', 'olcrtc/**', 'openflux/**', 'YPtun/sharedUI/build.gradle.kts') }}
 
       - name: Go cores → Coreapi.xcframework
         if: steps.cache-cores.outputs.cache-hit != 'true'

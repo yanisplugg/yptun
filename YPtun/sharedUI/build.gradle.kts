@@ -170,6 +170,7 @@ val buildCoresIosXcframework by tasks.registering(Exec::class) {
     inputs.dir(coresRepoDir.resolve("../awgproxy/awg"))
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
     inputs.dir(olcrtcRepoDir.resolve("internal"))
+    inputs.dir(coresRepoDir.resolve("../openflux"))
     inputs.property("tags", coresIosBuildTags)
     inputs.property("singboxVersion", singboxVersion)
     outputs.dir(coresIosXcframework)

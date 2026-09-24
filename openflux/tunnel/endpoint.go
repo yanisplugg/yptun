@@ -30,6 +30,7 @@ func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData(append([]byte{}, data...)),
 	})
+	defer pkt.DecRef()
 	e.dispatcher.DeliverNetworkPacket(ipv4.ProtocolNumber, pkt)
 }
 

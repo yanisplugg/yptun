@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"universal-bypass-tool/utils"
 )
@@ -19,10 +20,18 @@ type SOCKS5Server struct {
 	// YPtun: optional RFC 1929 username/password. The local port is reachable by every app on the
 	// device, so the host protects it with per-session credentials. Empty = no auth (upstream).
 	user, pass string
+	listener   net.Listener
+	closed     atomic.Bool
+	connsMu    sync.Mutex
+	conns      map[net.Conn]struct{}
 }
 
 func NewSOCKS5Server(addr string, dialer Dialer) *SOCKS5Server {
-	return &SOCKS5Server{listenAddr: addr, dialer: dialer}
+	return &SOCKS5Server{
+		listenAddr: addr,
+		dialer:     dialer,
+		conns:      make(map[net.Conn]struct{}),
+	}
 }
 
 // SetAuth requires RFC 1929 username/password authentication (YPtun).
@@ -72,11 +81,41 @@ func (s *SOCKS5Server) authenticate(conn net.Conn, methods []byte) bool {
 	return true
 }
 
+func (s *SOCKS5Server) trackConn(c net.Conn, add bool) {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	if s.conns == nil {
+		s.conns = make(map[net.Conn]struct{})
+	}
+	if add {
+		s.conns[c] = struct{}{}
+	} else {
+		delete(s.conns, c)
+	}
+}
+
+func (s *SOCKS5Server) Close() error {
+	s.closed.Store(true)
+	var err error
+	if s.listener != nil {
+		err = s.listener.Close()
+	}
+	s.connsMu.Lock()
+	for c := range s.conns {
+		_ = c.Close()
+	}
+	s.conns = make(map[net.Conn]struct{})
+	s.connsMu.Unlock()
+	return err
+}
+
 func (s *SOCKS5Server) Start() error {
+	s.closed.Store(false)
 	listener, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		return err
 	}
+	s.listener = listener
 	defer listener.Close()
 
 	utils.Debugf("[SOCKS5] Listening on %s", s.listenAddr)
@@ -84,10 +123,22 @@ func (s *SOCKS5Server) Start() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if s.closed.Load() {
+				return nil
+			}
 			utils.Debugf("[SOCKS5] Accept error: %v", err)
-			continue
+			return err
 		}
-		go s.handleConnection(conn)
+		go func(c net.Conn) {
+			defer func() {
+				if r := recover(); r != nil {
+					utils.Debugf("[SOCKS5] panic recovered in handleConnection: %v", r)
+				}
+			}()
+			s.trackConn(c, true)
+			defer s.trackConn(c, false)
+			s.handleConnection(c)
+		}(conn)
 	}
 }
 
@@ -158,6 +209,8 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 		clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return
 	}
+	s.trackConn(targetConn, true)
+	defer s.trackConn(targetConn, false)
 	defer targetConn.Close()
 
 	clientConn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
@@ -166,12 +219,22 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	wg.Add(2)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				utils.Debugf("[SOCKS5] panic in client->target copy: %v", r)
+			}
+		}()
 		defer wg.Done()
 		defer targetConn.Close()
 		io.Copy(targetConn, clientConn)
 	}()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				utils.Debugf("[SOCKS5] panic in target->client copy: %v", r)
+			}
+		}()
 		defer wg.Done()
 		defer clientConn.Close()
 		io.Copy(clientConn, targetConn)

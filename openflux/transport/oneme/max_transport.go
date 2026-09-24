@@ -61,6 +61,12 @@ func (t *OneMeTransport) Start() error {
 }
 
 func (t *OneMeTransport) Stop() error {
+	if t.ch != nil {
+		t.ch.Close()
+	}
+	if t.oneMeClient != nil {
+		_ = t.oneMeClient.Close()
+	}
 	return t.b.Stop()
 }
 

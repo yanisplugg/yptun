@@ -131,6 +131,37 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
     func masterDnsRunning() -> Bool { CoreapiMasterDnsRunning() }
     func masterDnsLastError() -> String { CoreapiMasterDnsLastError() }
 
+    func openfluxVersion() -> String { CoreapiOpenFluxVersion() }
+    func openfluxStart(
+        transport: String,
+        url: String,
+        maxToken: String,
+        maxUid: String,
+        listenAddr: String,
+        dnsServer: String,
+        socksUser: String,
+        socksPass: String,
+        debug: Bool
+    ) -> String {
+        err {
+            CoreapiOpenFluxStart(
+                transport,
+                url,
+                maxToken,
+                maxUid,
+                listenAddr,
+                dnsServer,
+                socksUser,
+                socksPass,
+                debug,
+                $0
+            )
+        }
+    }
+    func openfluxStop() { CoreapiOpenFluxStop() }
+    func openfluxRunning() -> Bool { CoreapiOpenFluxRunning() }
+    func openfluxLastError() -> String { CoreapiOpenFluxLastError() }
+
     func rtcVersion() -> String { CoreapiRtcVersion() }
     func rtcSetTransport(transport: String) -> String { err { CoreapiRtcSetTransport(transport, $0) } }
     func rtcSetTelemostCookies(cookies: String) { CoreapiRtcSetTelemostCookies(cookies) }
