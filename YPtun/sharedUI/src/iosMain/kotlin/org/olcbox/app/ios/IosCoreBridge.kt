@@ -124,6 +124,8 @@ interface IosCoreBridge {
         vp8Fps: Int,
         vp8Batch: Int,
     ): Long
+
+    fun resolveHostIpv4(host: String): String
 }
 
 /** Throws with [what] + the core's message when a bridge call reported an error. */

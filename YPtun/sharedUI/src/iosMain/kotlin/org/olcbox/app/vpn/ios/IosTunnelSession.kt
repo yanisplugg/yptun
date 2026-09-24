@@ -188,13 +188,60 @@ class IosTunnelSession(
         if (location.engine == EngineType.MasterDns) {
             location.masterDns?.resolverList()?.forEach { endpoint ->
                 val host = endpoint.substringBeforeLast(':').trim().removePrefix("[").removeSuffix("]")
-                if (host.isNotEmpty() && host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))) {
+                if (host.isNotEmpty()) {
+                    if (host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))) {
+                        extraExcludedIps.add(host)
+                        if (remoteAddr == TUN_IPV4_REMOTE) {
+                            remoteAddr = host
+                        }
+                    } else {
+                        val resolved = core.resolveHostIpv4(host)
+                        resolved.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { ip ->
+                            extraExcludedIps.add(ip)
+                            if (remoteAddr == TUN_IPV4_REMOTE) {
+                                remoteAddr = ip
+                            }
+                        }
+                    }
+                }
+            }
+            log("MasterDNS resolver bypass IPs: ${extraExcludedIps.distinct().joinToString()}")
+        }
+
+        // For OpenFlux: carrier hosts (Mail.ru, Cups, Yandex) MUST bypass the tunnel, otherwise the
+        // underlying collaborative WebSocket connection gets trapped in utun and causes an instant deadlock!
+        if (location.engine == EngineType.OpenFlux) {
+            val docUrl = location.openFlux?.docUrl.orEmpty()
+            val candidateHosts = mutableListOf<String>()
+            val hostFromUrl = docUrl.substringAfter("://").substringBefore('/').substringBefore(':').trim()
+            if (hostFromUrl.isNotEmpty()) candidateHosts.add(hostFromUrl)
+            if (docUrl.contains("mail.ru", ignoreCase = true)) {
+                candidateHosts.add("cloud.mail.ru")
+                candidateHosts.add("docs.datacloudmail.ru")
+            } else if (docUrl.contains("cups.online", ignoreCase = true)) {
+                candidateHosts.add("cups.online")
+            } else if (docUrl.contains("yandex", ignoreCase = true)) {
+                candidateHosts.add("docs.yandex.ru")
+                candidateHosts.add("volga.yandex.ru")
+                candidateHosts.add("disk.yandex.ru")
+            }
+            candidateHosts.distinct().forEach { host ->
+                if (host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))) {
                     extraExcludedIps.add(host)
                     if (remoteAddr == TUN_IPV4_REMOTE) {
                         remoteAddr = host
                     }
+                } else {
+                    val resolved = core.resolveHostIpv4(host)
+                    resolved.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { ip ->
+                        extraExcludedIps.add(ip)
+                        if (remoteAddr == TUN_IPV4_REMOTE) {
+                            remoteAddr = ip
+                        }
+                    }
                 }
             }
+            log("OpenFlux carrier bypass IPs: ${extraExcludedIps.distinct().joinToString()}")
         }
 
         val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = remoteAddr)

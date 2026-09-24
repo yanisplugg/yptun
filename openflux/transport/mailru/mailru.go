@@ -197,7 +197,6 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 
 		t.Mu.Lock()
 		t.session = session
-		t.SetConnected(true)
 		t.Mu.Unlock()
 
 		if existingSession == nil {
@@ -302,6 +301,12 @@ func (t *MailruDocsTransport) writerLoop() {
 			pending = packet
 		}
 
+		// Hold outbound cursor writes until the co-authoring session is confirmed open and authenticated.
+		if !t.IsConnected() {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+
 		t.Mu.RLock()
 		session := t.session
 		t.Mu.RUnlock()
@@ -329,6 +334,9 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 
 	for t.IsRunning() {
 		<-ticker.C
+		if !t.IsConnected() {
+			continue
+		}
 		t.Mu.Lock()
 		session := t.session
 		t.Mu.Unlock()
@@ -345,14 +353,10 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	text := string(data)
 
-	if strings.Contains(text, "---KA---") {
-		return
-	}
-
 	// Socket.IO ping - respond with pong
 	if text == "2" {
 		if session != nil && session.Conn != nil {
-			session.safeWrite(websocket.TextMessage, []byte("3"))
+			_ = session.safeWrite(websocket.TextMessage, []byte("3"))
 		}
 		return
 	}
@@ -360,34 +364,34 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 		return
 	}
 
-	if strings.Contains(text, `"type":"auth"`) && strings.Contains(text, `"result":1`) {
-		utils.Debugf("[M-DOCS] Auth OK for user %s", session.UserID)
+	if strings.Contains(text, `"type":"documentOpen"`) ||
+		(strings.Contains(text, `"type":"auth"`) && strings.Contains(text, `"result":1`)) {
+		utils.Debugf("[M-DOCS] Session open/auth confirmed for %s", session.UserID)
+		t.SetConnected(true)
 		return
 	}
 
 	if strings.Contains(text, "cursor") {
-		base64Str := t.extractBase64String(text)
-		if base64Str == "" {
-			return
+		matches := cursorPayloadRe.FindAllStringSubmatch(text, -1)
+		for _, m := range matches {
+			if len(m) < 2 {
+				continue
+			}
+			raw := m[1]
+			if raw == "---KA---" || strings.Contains(raw, "---KA---") {
+				continue
+			}
+			decoded, err := base64.StdEncoding.DecodeString(raw)
+			if err != nil {
+				utils.Debugf("[M-DOCS] Base64 decode error (len %d): %v", len(raw), err)
+				continue
+			}
+			if len(decoded) > 0 {
+				t.RecordReceive(len(decoded))
+				t.CallReceive(decoded)
+			}
 		}
-
-		decoded, err := base64.StdEncoding.DecodeString(base64Str)
-		if err != nil {
-			utils.Debugf("[M-DOCS] Base64 decode error: %v", err)
-			return
-		}
-
-		t.RecordReceive(len(decoded))
-		t.CallReceive(decoded)
 	}
-}
-
-func (t *MailruDocsTransport) extractBase64String(response string) string {
-	matches := cursorPayloadRe.FindStringSubmatch(response)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
 }
 
 func (t *MailruDocsTransport) scheduleReconnect(attempt int) {

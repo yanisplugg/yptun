@@ -105,6 +105,25 @@ func (c *Client) Start() error {
 		return fmt.Errorf("start transport %s: %w", c.cfg.Transport, err)
 	}
 
+	// Wait up to 15 seconds for transport to become connected (e.g. documentOpen / auth result)
+	// so tunnel settings and SOCKS5 are ready when the connection actually works.
+	readyTimeout := time.After(15 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	connected := false
+	for !connected {
+		select {
+		case <-readyTimeout:
+			utils.Debugf("[OFCLIENT] Transport handshake wait reached 15s limit, proceeding")
+			connected = true
+		case <-ticker.C:
+			if inner.IsConnected() {
+				utils.Debugf("[OFCLIENT] Transport connected and verified")
+				connected = true
+			}
+		}
+	}
+
 	tun := tunnel.NewTCPTunnel(trans, false)
 	dialer := NewTunnelResolvingDialer(tun, c.cfg.DNSServer)
 	server := socks5.NewSOCKS5Server(c.cfg.SocksAddr, dialer)

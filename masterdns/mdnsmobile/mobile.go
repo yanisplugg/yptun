@@ -365,12 +365,12 @@ func (c *MasterDnsClient) writeConfigFiles() error {
 		"SAVE_MTU_SERVERS_TO_FILE":        false,
 		"MTU_TEST_RETRIES":                1,
 		"MTU_TEST_TIMEOUT":                1.5,
-		"ARQ_INITIAL_RTO_SECONDS":         1.5,
-		"ARQ_CONTROL_INITIAL_RTO_SECONDS": 1.5,
-		"ARQ_WINDOW_SIZE":                 64,
+		"ARQ_INITIAL_RTO_SECONDS":         1.0,
+		"ARQ_CONTROL_INITIAL_RTO_SECONDS": 0.5,
+		"ARQ_WINDOW_SIZE":                 300,
 		"RX_TX_WORKERS":                   2,
 		"TUNNEL_PROCESS_WORKERS":          2,
-		"LOG_LEVEL":                       "DEBUG",
+		"LOG_LEVEL":                       c.logLevel,
 	}
 	if c.balancingStrategy > 0 {
 		cfg["RESOLVER_BALANCING_STRATEGY"] = c.balancingStrategy

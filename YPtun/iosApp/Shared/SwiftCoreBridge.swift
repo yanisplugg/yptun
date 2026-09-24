@@ -199,6 +199,45 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         CoreapiRtcPing(carrier, transport, roomId, clientId, keyHex, Int(socksPort), Int(timeoutMs), pingUrl, Int(vp8Fps), Int(vp8Batch))
     }
 
+    func resolveHostIpv4(host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        var sin = sockaddr_in()
+        if inet_pton(AF_INET, trimmed, &sin.sin_addr) == 1 {
+            return trimmed
+        }
+        var hints = addrinfo(
+            ai_flags: 0,
+            ai_family: AF_INET,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: IPPROTO_TCP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(trimmed, nil, &hints, &res) == 0, let first = res else { return "" }
+        defer { freeaddrinfo(first) }
+        var ips: [String] = []
+        var ptr: UnsafeMutablePointer<addrinfo>? = first
+        while let cur = ptr {
+            if let addr = cur.pointee.ai_addr {
+                var ipBuf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                let sockIn = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                var sinAddr = sockIn.sin_addr
+                if inet_ntop(AF_INET, &sinAddr, &ipBuf, socklen_t(INET_ADDRSTRLEN)) != nil {
+                    let ipStr = String(cString: ipBuf)
+                    if !ips.contains(ipStr) {
+                        ips.append(ipStr)
+                    }
+                }
+            }
+            ptr = cur.pointee.ai_next
+        }
+        return ips.joined(separator: ",")
+    }
+
     private static func getPhysicalInterfaceIndex() -> UInt32? {
         var ifaddrs: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddrs) == 0, let first = ifaddrs else { return nil }

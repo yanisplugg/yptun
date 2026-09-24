@@ -695,9 +695,9 @@ class IosVpnManager(
         const val TUNNEL_BUNDLE_ID = "org.yptun.app.tunnel"
         /** Read by the WidgetKit extension (YPtunWidget/VpnWidget.swift). */
         const val WIDGET_FILE = "widget.json"
-        const val MAX_LOG_LINES = 500
+        const val MAX_LOG_LINES = 2000
         /** Enough for [MAX_LOG_LINES] of tunnel log; the rest of the file is history we don't show. */
-        const val LOG_TAIL_BYTES = 192L * 1024
+        const val LOG_TAIL_BYTES = 512L * 1024
         const val PING_TIMEOUT_MS = 8_000
         const val HTTP_PING_URL = "https://www.google.com/generate_204"
     }
