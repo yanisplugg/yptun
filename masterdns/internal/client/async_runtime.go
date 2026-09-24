@@ -798,6 +798,8 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 						now,
 						c.tunnelPacketTimeout,
 					)
+				} else {
+					c.log.Errorf("❌ WriteToUDP to %v failed: %v", frame.addr, err)
 				}
 			}
 			if !task.wasPacked && task.selected != nil {

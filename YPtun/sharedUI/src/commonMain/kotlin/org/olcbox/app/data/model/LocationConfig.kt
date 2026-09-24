@@ -463,14 +463,22 @@ data class OpenFluxConfig(
         else -> docUrl.trim().startsWith("http", ignoreCase = true)
     }
 
-    fun normalized(): OpenFluxConfig = copy(
-        transport = transport.takeIf { it in TRANSPORTS } ?: TRANSPORT_YANDEX,
-        docUrl = docUrl.trim(),
-        maxToken = maxToken.trim(),
-        maxUid = maxUid.trim(),
-        dnsServer = dnsServer.trim(),
-        proxyLink = proxyLink.trim(),
-    )
+    fun normalized(): OpenFluxConfig {
+        val trimmedDoc = docUrl.trim()
+        val resolvedTransport = when {
+            trimmedDoc.contains("cloud.mail.ru", ignoreCase = true) -> TRANSPORT_MAILRU
+            trimmedDoc.contains("cups.online", ignoreCase = true) -> TRANSPORT_CUPS
+            else -> transport.takeIf { it in TRANSPORTS } ?: TRANSPORT_YANDEX
+        }
+        return copy(
+            transport = resolvedTransport,
+            docUrl = trimmedDoc,
+            maxToken = maxToken.trim(),
+            maxUid = maxUid.trim(),
+            dnsServer = dnsServer.trim(),
+            proxyLink = proxyLink.trim(),
+        )
+    }
 
     /** One-line summary for the location list. */
     fun summary(): String = when (transport) {

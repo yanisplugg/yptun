@@ -66,8 +66,15 @@ func (c *Client) Start() error {
 		utils.SetVerbose(true)
 	}
 
+	transportType := c.cfg.Transport
+	if strings.Contains(c.cfg.DocURL, "cloud.mail.ru") {
+		transportType = "mailru"
+	} else if strings.Contains(c.cfg.DocURL, "cups.online") {
+		transportType = "cupsonline"
+	}
+
 	var inner transport.Transport
-	switch c.cfg.Transport {
+	switch transportType {
 	case "mailru":
 		cfg := transport.DefaultConfig()
 		inner = mailru.NewMailruDocsTransport(c.cfg.DocURL, cfg)
@@ -88,7 +95,7 @@ func (c *Client) Start() error {
 		cfg := transport.DefaultConfig()
 		inner = oneme.NewOneMeTransport(false, c.cfg.MaxToken, uidint, cfg)
 	default:
-		return fmt.Errorf("unknown transport type: %s", c.cfg.Transport)
+		return fmt.Errorf("unknown transport type: %s", transportType)
 	}
 
 	trans := transport.NewBatchedTransport(inner)

@@ -59,11 +59,11 @@ type TCPTunnel struct {
 	packetCount atomic.Uint64
 }
 
-// TCP buffer size range for gvisor stacks.
+// TCP buffer size range for gvisor stacks (tuned for mobile memory constraints).
 var (
-	TCPBufMin     = 4 * 1024 * 1024
-	TCPBufDefault = 16 * 1024 * 1024
-	TCPBufMax     = 64 * 1024 * 1024
+	TCPBufMin     = 16 * 1024
+	TCPBufDefault = 64 * 1024
+	TCPBufMax     = 256 * 1024
 )
 
 // SetTCPBuffers applies the configured TCP send/receive buffer ranges to s.

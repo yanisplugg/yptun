@@ -108,7 +108,7 @@ class IosTunnelSession(
                 httpProxyPort = engine.httpProxyPort
 
                 val bypassLan = IosSharedStore.loadRouting().bypassLan
-                applyNetworkSettings(traffic.mtu, bypassLan)
+                applyNetworkSettings(traffic.mtu, bypassLan, location)
                 log("Tunnel settings applied (mtu=${traffic.mtu}, bypassLan=$bypassLan)")
                 hevConfig(
                     mtu = traffic.mtu,
@@ -116,6 +116,8 @@ class IosTunnelSession(
                     pass = pass,
                     tcpOnlyUdp = location.engine in TCP_ONLY_ENGINES,
                     dropIpv6 = location.engine == EngineType.VkTurn ||
+                        location.engine == EngineType.MasterDns ||
+                        location.engine == EngineType.OpenFlux ||
                         traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
                     slowTunnel = location.engine in SLOW_ENGINES,
                 )
@@ -177,16 +179,38 @@ class IosTunnelSession(
         else -> ""
     }
 
-    private suspend fun applyNetworkSettings(mtu: Int, bypassLan: Boolean) {
-        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = TUN_IPV4_REMOTE)
+    private suspend fun applyNetworkSettings(mtu: Int, bypassLan: Boolean, location: LocationConfig) {
+        val extraExcludedIps = mutableListOf<String>()
+        var remoteAddr = TUN_IPV4_REMOTE
+
+        // For MasterDNS: resolvers MUST bypass the tunnel, otherwise outgoing DNS queries to the resolver
+        // loop back into utun and cause an instant deadlock!
+        if (location.engine == EngineType.MasterDns) {
+            location.masterDns?.resolverList()?.forEach { endpoint ->
+                val host = endpoint.substringBeforeLast(':').trim().removePrefix("[").removeSuffix("]")
+                if (host.isNotEmpty() && host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))) {
+                    extraExcludedIps.add(host)
+                    if (remoteAddr == TUN_IPV4_REMOTE) {
+                        remoteAddr = host
+                    }
+                }
+            }
+        }
+
+        val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = remoteAddr)
         settings.setMTU(NSNumber(int = mtu))
         settings.setIPv4Settings(
             NEIPv4Settings(addresses = listOf(TUN_IPV4_ADDRESS), subnetMasks = listOf("255.255.255.0")).apply {
                 setIncludedRoutes(listOf(NEIPv4Route.defaultRoute()))
-                // "Обход LAN": private ranges, multicast and broadcast stay on the real network, so local
-                // discovery works — the mapped-DNS pool 100.64/10 is deliberately not among them.
+                val excluded = mutableListOf<NEIPv4Route>()
                 if (bypassLan) {
-                    setExcludedRoutes(LAN_ROUTES.map { (addr, mask) -> NEIPv4Route(destinationAddress = addr, subnetMask = mask) })
+                    excluded.addAll(LAN_ROUTES.map { (addr, mask) -> NEIPv4Route(destinationAddress = addr, subnetMask = mask) })
+                }
+                extraExcludedIps.distinct().forEach { ip ->
+                    excluded.add(NEIPv4Route(destinationAddress = ip, subnetMask = "255.255.255.255"))
+                }
+                if (excluded.isNotEmpty()) {
+                    setExcludedRoutes(excluded)
                 }
             }
         )
