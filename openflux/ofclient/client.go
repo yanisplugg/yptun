@@ -67,7 +67,7 @@ func (c *Client) Start() error {
 	var trans transport.Transport
 	switch c.cfg.Transport {
 	case "vyandex":
-		cfg := yandex.DefaultVolgaConfig()
+		cfg := transport.DefaultConfig()
 		trans = transport.NewCompressedTransport(yandex.NewYandexVolgaTransport(c.cfg.DocURL, cfg))
 	case "yandex":
 		cfg := transport.DefaultConfig()
