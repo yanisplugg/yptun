@@ -3708,11 +3708,13 @@ private fun ApplicationBehaviorContent(
             checked = settings.twoColumnLayout
         ) { onChanged(settings.copy(twoColumnLayout = it)) }
 
-        RoutingToggleRow(
-            title = s.vpsAutoInstallTitle,
-            subtitle = s.vpsAutoInstallSubtitle,
-            checked = settings.allowVpsAutoInstall
-        ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
+        if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
+            RoutingToggleRow(
+                title = s.vpsAutoInstallTitle,
+                subtitle = s.vpsAutoInstallSubtitle,
+                checked = settings.allowVpsAutoInstall
+            ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
+        }
 
         // App-wide engine for VLESS-like transports. Applies only when a server's own core is "Auto";
         // an explicit per-server choice overrides it (xhttp/raw-Xray always force Xray regardless).
