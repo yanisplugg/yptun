@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -29,21 +28,10 @@ func (h *CallHandler) Send(data []byte) {
 	}
 }
 
-func (h *CallHandler) Close() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.conn != nil {
-		_ = h.conn.Close()
-	}
-	if h.pc != nil {
-		_ = h.pc.Close()
-	}
-}
-
 func (h *CallHandler) readLoop() {
 	defer func() {
 		if r := recover(); r != nil {
-			logError("[%s] readLoop panic recovered: %v", h.tag, r)
+			logError("recovered in CallHandler.readLoop: %v", r)
 		}
 	}()
 	logInfo("[%s] Signaling connected", h.tag)
@@ -99,8 +87,14 @@ func (h *CallHandler) signalReconnect() {
 		default:
 		}
 	} else {
-		logError("[%s] Receiver connection died, exiting", h.tag)
-		os.Exit(1)
+		// Never kill the host process (this code runs inside the iOS/Android
+		// app as a library); just signal the reconnect channel and let the
+		// transport's reconnect logic handle it.
+		logError("[%s] Receiver connection died, signaling reconnect", h.tag)
+		select {
+		case h.reconnectCh <- struct{}{}:
+		default:
+		}
 	}
 }
 

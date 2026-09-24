@@ -37,6 +37,7 @@ type Client struct {
 	log      *logger.Logger
 	codec    *security.Codec
 	balancer *Balancer
+	lastError atomic.Pointer[string]
 
 	successMTUChecks  bool
 	udpBufferPool     sync.Pool
@@ -365,6 +366,7 @@ func (c *Client) Run(ctx context.Context) error {
 			if !c.successMTUChecks {
 				if err := c.RunInitialMTUTests(ctx); err != nil {
 					c.log.Errorf("<red>MTU tests failed: %v</red>", err)
+					c.SetLastError(fmt.Sprintf("MTU tests failed: %v", err))
 					c.successMTUChecks = false
 					// Wait a bit before retrying or exiting if critical
 					select {
@@ -380,6 +382,7 @@ func (c *Client) Run(ctx context.Context) error {
 				if c.syncedUploadMTU <= 0 || c.syncedDownloadMTU <= 0 {
 					c.successMTUChecks = false
 					c.log.Errorf("<red>❌ MTU tests failed: Upload MTU: %d, Download MTU: %d</red>", c.syncedUploadMTU, c.syncedDownloadMTU)
+					c.SetLastError(fmt.Sprintf("MTU tests failed: Upload MTU: %d, Download MTU: %d", c.syncedUploadMTU, c.syncedDownloadMTU))
 					select {
 					case <-ctx.Done():
 						c.notifySessionCloseBurst(time.Second)
@@ -407,6 +410,7 @@ func (c *Client) Run(ctx context.Context) error {
 					sessionInitRetryFailures++
 					sessionInitRetryDelay = c.nextSessionInitRetryDelay(sessionInitRetryFailures)
 					c.log.Errorf("<red>❌ Session initialization failed: %v</red>", err)
+					c.SetLastError(fmt.Sprintf("Session initialization failed: %v", err))
 					c.log.Warnf("<yellow>Session init retry backoff: %s</yellow>", sessionInitRetryDelay)
 					select {
 					case <-ctx.Done():
@@ -421,6 +425,7 @@ func (c *Client) Run(ctx context.Context) error {
 
 				sessionInitRetryFailures = 0
 				sessionInitRetryDelay = 0
+				c.SetLastError("")
 				if err := c.StartAsyncRuntime(ctx); err != nil {
 					c.log.Errorf("<red>❌ Async Runtime failed to launch: %v</red>", err)
 					return err

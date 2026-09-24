@@ -315,10 +315,15 @@ func (c *MasterDnsClient) LastError() string {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.runErr == nil {
-		return ""
+	if c.runErr != nil {
+		return c.runErr.Error()
 	}
-	return c.runErr.Error()
+	if c.app != nil {
+		if errStr := c.app.LastError(); errStr != "" {
+			return errStr
+		}
+	}
+	return ""
 }
 
 // writeConfigFiles materialises the resolver list and the JSON config the upstream loader expects.
@@ -352,6 +357,8 @@ func (c *MasterDnsClient) writeConfigFiles() error {
 		"LOCAL_DNS_ENABLED":               false,
 		"LOCAL_DNS_CACHE_PERSIST_TO_FILE": false,
 		"SAVE_MTU_SERVERS_TO_FILE":        false,
+		"MTU_TEST_RETRIES":                1,
+		"MTU_TEST_TIMEOUT":                1.5,
 		"LOG_LEVEL":                       c.logLevel,
 	}
 	if c.balancingStrategy > 0 {

@@ -11,12 +11,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"universal-bypass-tool/socks5"
-	"universal-bypass-tool/transport"
-	"universal-bypass-tool/transport/oneme"
-	"universal-bypass-tool/transport/yandex"
-	"universal-bypass-tool/tunnel"
-	"universal-bypass-tool/utils"
+	"openflux/socks5"
+	"openflux/transport"
+	"openflux/transport/cupsonline"
+	"openflux/transport/mailru"
+	"openflux/transport/oneme"
+	"openflux/transport/yandex"
+	"openflux/tunnel"
+	"openflux/utils"
 )
 
 type Config struct {
@@ -64,24 +66,32 @@ func (c *Client) Start() error {
 		utils.SetVerbose(true)
 	}
 
-	var trans transport.Transport
+	var inner transport.Transport
 	switch c.cfg.Transport {
+	case "mailru":
+		cfg := transport.DefaultConfig()
+		inner = mailru.NewMailruDocsTransport(c.cfg.DocURL, cfg)
+	case "cupsonline":
+		cfg := transport.DefaultConfig()
+		inner = cupsonline.NewCupsonlineTransport(c.cfg.DocURL, cfg, true)
 	case "vyandex":
 		cfg := transport.DefaultConfig()
-		trans = transport.NewCompressedTransport(yandex.NewYandexVolgaTransport(c.cfg.DocURL, cfg))
+		inner = yandex.NewYandexVolgaTransport(c.cfg.DocURL, cfg)
 	case "yandex":
 		cfg := transport.DefaultConfig()
-		trans = transport.NewCompressedTransport(yandex.NewYandexDocsTransport(c.cfg.DocURL, cfg))
+		inner = yandex.NewYandexDocsTransport(c.cfg.DocURL, cfg)
 	case "oneme":
 		uidint, err := strconv.ParseInt(c.cfg.MaxUID, 10, 64)
 		if err != nil {
 			return fmt.Errorf("invalid maxUid: %w", err)
 		}
 		cfg := transport.DefaultConfig()
-		trans = transport.NewCompressedTransport(oneme.NewOneMeTransport(false, c.cfg.MaxToken, uidint, cfg))
+		inner = oneme.NewOneMeTransport(false, c.cfg.MaxToken, uidint, cfg)
 	default:
 		return fmt.Errorf("unknown transport type: %s", c.cfg.Transport)
 	}
+
+	trans := transport.NewBatchedTransport(inner)
 
 	if err := trans.Start(); err != nil {
 		c.setLastError(err.Error())

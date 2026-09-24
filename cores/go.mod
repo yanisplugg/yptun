@@ -10,7 +10,7 @@ require (
 	github.com/samosvalishe/free-turn-proxy v0.0.0
 	github.com/xtls/xray-core v1.260908.0
 	masterdnsvpn-go v0.0.0
-	universal-bypass-tool v0.0.0
+	openflux v0.0.0
 	wg-turn-client v0.0.0
 )
 
@@ -314,4 +314,4 @@ replace wg-turn-client => ../wdtt
 // The wrapper both platforms drive is mdnsmobile/.
 replace masterdnsvpn-go => ../masterdns
 
-replace universal-bypass-tool => ../openflux
+replace openflux => ../openflux

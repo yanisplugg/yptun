@@ -476,6 +476,8 @@ data class OpenFluxConfig(
     fun summary(): String = when (transport) {
         TRANSPORT_MAX -> "MAX · звонок $maxUid"
         TRANSPORT_VYANDEX -> "Яндекс Документы (новый редактор)"
+        TRANSPORT_MAILRU -> "Mail.ru Документы"
+        TRANSPORT_CUPS -> "cups.online"
         else -> "Яндекс Документы"
     }
 
@@ -485,7 +487,11 @@ data class OpenFluxConfig(
         const val TRANSPORT_VYANDEX = "vyandex"
         /** Upstream calls the MAX transport "oneme". */
         const val TRANSPORT_MAX = "oneme"
-        val TRANSPORTS = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAX)
+        /** Mail.ru Cloud documents (public link to a doc/sheet in cloud.mail.ru). */
+        const val TRANSPORT_MAILRU = "mailru"
+        /** cups.online live-coding interview room. */
+        const val TRANSPORT_CUPS = "cupsonline"
+        val TRANSPORTS = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAILRU, TRANSPORT_CUPS, TRANSPORT_MAX)
         const val DEFAULT_DNS = "1.1.1.1:53"
     }
 }

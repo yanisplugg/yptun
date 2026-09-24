@@ -133,6 +133,7 @@ class IosVpnManager(
     private var lastCaptchaUrl = ""
     private val vpnMutex = Mutex()
     private var connectJob: Job? = null
+    private var connectWatchdogJob: Job? = null
 
     init {
         scope.launch {
@@ -218,6 +219,20 @@ class IosVpnManager(
                         }
                     }
                 }
+                result.onSuccess {
+                    connectWatchdogJob?.cancel()
+                    connectWatchdogJob = scope.launch {
+                        delay(35_000)
+                        if (_status.value == VpnStatus.Connecting) {
+                            val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
+                            val msg = failure.ifEmpty { "Таймаут подключения: сервер не отвечает" }
+                            addLog("Watchdog: connection timed out after 35s ($msg)")
+                            stopVpn()
+                            setStatus(VpnStatus.Error(msg))
+                            triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeError)
+                        }
+                    }
+                }
                 result.onFailure {
                     if (it is kotlinx.coroutines.CancellationException || it.message?.contains("cancelled", ignoreCase = true) == true) {
                         return@launch
@@ -234,6 +249,7 @@ class IosVpnManager(
     override fun stopVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
         connectJob?.cancel()
+        connectWatchdogJob?.cancel()
         scope.launch {
             vpnMutex.withLock {
                 setStatus(VpnStatus.Stopping)
@@ -564,6 +580,7 @@ class IosVpnManager(
                 manager?.let { watchCaptcha(it) }
             }
             NEVPNStatusConnected -> {
+                connectWatchdogJob?.cancel()
                 wasConnecting = false
                 _connectedSince.value = conn.connectedDate
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
@@ -585,6 +602,7 @@ class IosVpnManager(
             NEVPNStatusReasserting -> setStatus(VpnStatus.Reconnecting)
             NEVPNStatusDisconnecting -> setStatus(VpnStatus.Stopping)
             else -> {
+                connectWatchdogJob?.cancel()
                 _connectedSince.value = 0L
                 val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
                 if (wasConnecting && failure.isNotEmpty()) {

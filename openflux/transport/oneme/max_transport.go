@@ -3,8 +3,8 @@ package oneme
 import (
 	"fmt"
 
-	"universal-bypass-tool/transport"
-	"universal-bypass-tool/utils"
+	"openflux/transport"
+	"openflux/utils"
 )
 
 type OneMeTransport struct {
@@ -61,12 +61,6 @@ func (t *OneMeTransport) Start() error {
 }
 
 func (t *OneMeTransport) Stop() error {
-	if t.ch != nil {
-		t.ch.Close()
-	}
-	if t.oneMeClient != nil {
-		_ = t.oneMeClient.Close()
-	}
 	return t.b.Stop()
 }
 
@@ -78,3 +72,5 @@ func (t *OneMeTransport) Send(data []byte) error {
 	t.ch.Send(data)
 	return nil
 }
+
+

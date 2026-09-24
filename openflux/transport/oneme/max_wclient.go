@@ -40,24 +40,10 @@ func (c *MaxClient) Connect() error {
 
 func (c *MaxClient) SetEventCallback(cb func(MaxPacket)) { c.onEvent = cb }
 
-func (c *MaxClient) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	select {
-	case <-c.keepaliveStop:
-	default:
-		close(c.keepaliveStop)
-	}
-	if c.conn != nil {
-		return c.conn.Close()
-	}
-	return nil
-}
-
 func (c *MaxClient) readLoop() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("[MAX] readLoop panic recovered: %v\n", r)
+			logError("recovered in MaxClient.readLoop: %v", r)
 		}
 	}()
 	for {
@@ -167,6 +153,11 @@ func (c *MaxClient) getUserMap(resp *MaxPacket) map[int64]UserInfo {
 }
 
 func (c *MaxClient) keepalive() {
+	defer func() {
+		if r := recover(); r != nil {
+			logError("recovered in MaxClient.keepalive: %v", r)
+		}
+	}()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {

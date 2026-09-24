@@ -32,9 +32,10 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
+	mdnslog "masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/mdnsmobile"
-	"universal-bypass-tool/ofclient"
-	ofutils "universal-bypass-tool/utils"
+	"openflux/ofclient"
+	ofutils "openflux/utils"
 	"wg-turn-client/wdttmobile"
 
 	xnet "github.com/xtls/xray-core/common/net"
@@ -71,6 +72,9 @@ func init() {
 	log.SetOutput(wdttLogBridge{})
 	ofutils.SetLogCallback(func(line string) {
 		PushLog("openflux", line)
+	})
+	mdnslog.SetGlobalLogCallback(func(line string) {
+		PushLog("masterdns", line)
 	})
 	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
 		// Strict memory budget for iOS NetworkExtension (15 MB Jetsam limit)

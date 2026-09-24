@@ -17,6 +17,7 @@ import org.olcbox.app.ios.IosCoreBridge
 import org.olcbox.app.ios.orThrow
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.xray.XrayConfig
+import platform.Foundation.NSFileManager
 import kotlin.time.TimeSource
 
 /**
@@ -443,8 +444,10 @@ internal class IosEngineController(
                 "encryption=${MasterDnsConfig.ENCRYPTION_LABELS.getOrElse(masterDns.encryptionMethod) { "?" }})"
         )
         runCatching { core.masterDnsStop() }
+        val workDir = IosSharedStore.path("masterdns")
+        NSFileManager.defaultManager.createDirectoryAtPath(workDir, true, null, null)
         core.masterDnsStart(
-            workDir = IosSharedStore.path("masterdns"),
+            workDir = workDir,
             domains = masterDns.domains,
             key = masterDns.encryptionKey,
             encryptionMethod = masterDns.encryptionMethod,

@@ -27,6 +27,17 @@ type Logger struct {
 	appNameColored string
 }
 
+var (
+	globalLogCallback func(string)
+	globalLogMu       sync.RWMutex
+)
+
+func SetGlobalLogCallback(cb func(string)) {
+	globalLogMu.Lock()
+	defer globalLogMu.Unlock()
+	globalLogCallback = cb
+}
+
 const (
 	levelDebug = iota
 	levelInfo
@@ -123,6 +134,13 @@ func (l *Logger) logf(level int, format string, args ...any) {
 	plainMsg := msg
 	if strings.IndexByte(msg, '<') >= 0 {
 		plainMsg = stripColorTags(msg)
+	}
+
+	globalLogMu.RLock()
+	cb := globalLogCallback
+	globalLogMu.RUnlock()
+	if cb != nil {
+		cb(plainLevelTexts[level] + " " + plainMsg)
 	}
 
 	l.mu.Lock()

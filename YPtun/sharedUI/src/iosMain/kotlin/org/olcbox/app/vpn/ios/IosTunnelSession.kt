@@ -11,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.olcbox.app.data.model.EngineType
@@ -91,7 +92,9 @@ class IosTunnelSession(
 
                 val user = ""
                 val pass = ""
-                engine.start(location, SOCKS_PORT, user, pass, request.deviceId)
+                withTimeout(28_000) {
+                    engine.start(location, SOCKS_PORT, user, pass, request.deviceId)
+                }
                 engineType = location.engine
 
                 val traffic = IosSharedStore.loadTraffic()
@@ -121,7 +124,12 @@ class IosTunnelSession(
                 startWatchdog()
                 completion(it, null)
             }.onFailure {
-                val message = it.message ?: "Не удалось подключиться"
+                val rawMsg = it.message ?: "Не удалось подключиться"
+                val message = if (it is kotlinx.coroutines.TimeoutCancellationException) {
+                    "Таймаут подключения: сервер не ответил за 28 сек"
+                } else {
+                    rawMsg
+                }
                 log("Connect failed: $message")
                 IosSharedStore.writeText(ERROR_FILE, message)
                 engine.stopAll()
