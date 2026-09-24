@@ -180,6 +180,14 @@ val buildCoresIosXcframework by tasks.registering(Exec::class) {
     doFirst {
         delete(outDir)
         outDir.parentFile.mkdirs()
+        project.exec {
+            workingDir = coresRepoDir.resolve("../openflux")
+            commandLine("go", "mod", "tidy")
+        }
+        project.exec {
+            workingDir = coresRepoDir
+            commandLine("go", "mod", "tidy")
+        }
     }
 
     commandLine(

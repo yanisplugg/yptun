@@ -57,6 +57,8 @@ jobs:
       # gomobile/gobind at the x/mobile version pinned in cores/go.mod (bind needs the matching runtime).
       - name: Install gomobile + XcodeGen
         run: |
+          (cd openflux && go mod tidy)
+          (cd cores && go mod tidy)
           cd cores
           go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
@@ -110,6 +112,8 @@ jobs:
         if: steps.cache-cores.outputs.cache-hit != 'true'
         working-directory: YPtun
         run: |
+          (cd ../openflux && go mod tidy)
+          (cd ../cores && go mod tidy)
           gomobile init
           ./gradlew :sharedUI:buildCoresIosXcframework --no-configuration-cache --stacktrace
 
