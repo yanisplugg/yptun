@@ -44,6 +44,7 @@ object ShareLinkParser {
     /** Parse a subscription body across all supported protocols. */
     fun parseSubscription(body: String): List<ProxyProfile> {
         return SubscriptionDecoder.toLinks(body)
+            .filterNot { it.startsWith("yptun://", ignoreCase = true) }
             .mapNotNull { parse(it) }
             .filter { it.isComplete() }
     }

@@ -7,6 +7,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -275,10 +278,16 @@ fun LocationSettingsScreen(
             }
         }
     ) { innerPadding ->
+        val focusManager = LocalFocusManager.current
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = {
+                        focusManager.clearFocus()
+                    })
+                },
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -797,6 +806,7 @@ private fun ProxyField(
     enabled: Boolean,
     onChange: (String) -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -818,7 +828,16 @@ private fun ProxyField(
                 if (text != null) Text(text)
             },
             minLines = 2,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+            trailingIcon = {
+                if (link.isNotEmpty() && enabled) {
+                    IconButton(onClick = { onChange("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
+                }
+            }
         )
     }
 }
@@ -949,6 +968,7 @@ private fun LazyListScope.proxyOverTunnelSection(
                 }
             )
             if (proxyOn) {
+                val focusManager = LocalFocusManager.current
                 OutlinedTextField(
                     value = proxyLink,
                     onValueChange = onLinkChange,
@@ -956,7 +976,16 @@ private fun LazyListScope.proxyOverTunnelSection(
                     placeholder = { Text("vless://… / trojan://… / ss://…") },
                     enabled = enabled,
                     minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    trailingIcon = {
+                        if (proxyLink.isNotEmpty() && enabled) {
+                            IconButton(onClick = { onLinkChange("") }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear")
+                            }
+                        }
+                    }
                 )
                 CoreSelector(
                     selected = proxyCore,
@@ -1343,6 +1372,7 @@ private fun LazyListScope.vkTurnSection(
     // Proxy exit (vless/vmess/trojan/ss) — used when outbound == proxy; dialled THROUGH the
     // freeturn TCP listener (mode=tcp).
     if (draft.outbound == VkTurnConfig.OUTBOUND_PROXY) item {
+        val focusManager = LocalFocusManager.current
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1358,7 +1388,16 @@ private fun LazyListScope.vkTurnSection(
                 placeholder = { Text("vless://… / trojan://… / ss://…") },
                 enabled = enabled,
                 minLines = 2,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                trailingIcon = {
+                    if (draft.outboundProxyLink.isNotEmpty() && enabled) {
+                        IconButton(onClick = { onChange { it.copy(outboundProxyLink = "") } }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear")
+                        }
+                    }
+                }
             )
             CoreSelector(
                 selected = draft.proxyCore,
@@ -1372,6 +1411,7 @@ private fun LazyListScope.vkTurnSection(
     // second hop). A toggle enables or disables it; turning it off clears the link so the composer
     // falls back to the plain tunnel.
     if (draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
+        val focusManager = LocalFocusManager.current
         var proxyEnabled by remember(draft.chainProxyLink.isNotBlank()) {
             mutableStateOf(draft.chainProxyLink.isNotBlank())
         }
@@ -1400,7 +1440,16 @@ private fun LazyListScope.vkTurnSection(
                     placeholder = { Text("vless://… / trojan://… / ss://…") },
                     enabled = enabled,
                     minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    trailingIcon = {
+                        if (draft.chainProxyLink.isNotEmpty() && enabled) {
+                            IconButton(onClick = { onChange { it.copy(chainProxyLink = "") } }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear")
+                            }
+                        }
+                    }
                 )
                 CoreSelector(
                     selected = draft.proxyCore,

@@ -434,6 +434,7 @@ object XrayConfig {
                             detourTagOverride = baseDetour,
                             tag = PROXY_TAG,
                             chainViaDialerProxy = chainViaDialerProxy,
+                            preserveFlow = chainViaDialerProxy,
                         )
                     )
                 }
@@ -1578,7 +1579,14 @@ object XrayConfig {
                             put("port", profile.serverPort)
                             putJsonArray("users") {
                                 addJsonObject {
-                                    put("id", profile.uuid)
+                                    val effectiveUuid = profile.uuid.ifBlank {
+                                        profile.rawOutbound?.let { raw ->
+                                            runCatching {
+                                                kotlinx.serialization.json.Json.parseToJsonElement(raw).jsonObject["uuid"]?.jsonPrimitive?.contentOrNull
+                                            }.getOrNull()
+                                        }.orEmpty()
+                                    }
+                                    put("id", effectiveUuid)
                                     if (profile.type == ProxyProfile.TYPE_VLESS) {
                                         put("encryption", "none")
                                         // XTLS Vision (xtls-rprx-vision) splices the RAW TLS connection to
@@ -1590,7 +1598,8 @@ object XrayConfig {
                                         // direct (un-chained) hop keeps its flow so Vision still works there.
                                         // The cascade SOCKS loopback also keeps it (preserveFlow): the
                                         // 2nd server's vless inbound requires the Vision flow it expects.
-                                        if (profile.flow.isNotBlank() && (detourTag == null || preserveFlow)) put("flow", profile.flow)
+                                        // Over dialerProxy (MasterDNS / OpenFlux SOCKS chain), keep the flow intact.
+                                        if (profile.flow.isNotBlank() && (detourTag == null || preserveFlow || chainViaDialerProxy)) put("flow", profile.flow)
                                     } else {
                                         put("alterId", profile.alterId)
                                         put("security", profile.cipher.ifBlank { "auto" })

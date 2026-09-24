@@ -1931,7 +1931,16 @@ class LocationsRepositoryImpl(
         subscriptionUrl: String? = null,
         subscriptionMetadata: SubscriptionMetadata? = null
     ): LocationBundleV4? {
-        val profiles = ShareLinkParser.parseSubscription(text)
+        val nonCustomLines = text.lineSequence()
+            .map { it.trim() }
+            .filter { line ->
+                !line.startsWith(YptunInboundCodec.PREFIX, ignoreCase = true) &&
+                !line.startsWith(OLCRTC_URI_PREFIX, ignoreCase = true) &&
+                !line.startsWith("freeturn://", ignoreCase = true)
+            }
+            .joinToString("\n")
+        if (nonCustomLines.isBlank()) return null
+        val profiles = ShareLinkParser.parseSubscription(nonCustomLines)
         if (profiles.isEmpty()) return null
 
         val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }

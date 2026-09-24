@@ -822,6 +822,8 @@ class LocationViewModel(
         // When the pasted yptun://inbound is itself a 2-hop cascade, chain through its EXIT (proxy2)
         // so my hop's public IP matches the shared location's exit; fall back to its main proxy.
         YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy2 ?: config.proxy }
+        // If the user pasted a multi-link subscription body or base64 list, pick the first valid proxy
+        ShareLinkParser.parseSubscription(trimmed).firstOrNull()?.let { return it }
         return null
     }
 
@@ -832,11 +834,36 @@ class LocationViewModel(
         val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: return null
         val port = obj["server_port"]?.jsonPrimitive?.intOrNull ?: 0
         val tag = obj["tag"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: server
+        val uuid = obj["uuid"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val password = obj["password"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val flow = obj["flow"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val network = when (obj["network"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
+            "ws" -> ProxyProfile.NETWORK_WS
+            "grpc" -> ProxyProfile.NETWORK_GRPC
+            "http", "h2" -> ProxyProfile.NETWORK_HTTP
+            "httpupgrade" -> ProxyProfile.NETWORK_HTTPUPGRADE
+            "xhttp", "splithttp" -> ProxyProfile.NETWORK_XHTTP
+            else -> ProxyProfile.NETWORK_TCP
+        }
+        val security = when (obj["security"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
+            "tls" -> ProxyProfile.SECURITY_TLS
+            "reality" -> ProxyProfile.SECURITY_REALITY
+            else -> ProxyProfile.SECURITY_NONE
+        }
+        val sni = obj["sni"]?.jsonPrimitive?.contentOrNull
+            ?: obj["server_name"]?.jsonPrimitive?.contentOrNull
+            ?: ""
         return ProxyProfile(
             tag = tag,
             type = type,
             server = server,
             serverPort = port,
+            uuid = uuid,
+            password = password,
+            flow = flow,
+            network = network,
+            security = security,
+            sni = sni,
             rawOutbound = text
         )
     }
