@@ -277,10 +277,10 @@ class IosVpnManager(
             }
             config.engine == EngineType.MasterDns -> {
                 if (status.value == VpnStatus.Connected && isActiveLocation) {
-                    val ms = tunnelPing()
-                    if (ms != null && ms > 0) return@withContext ms
+                    tunnelPing()
+                } else {
+                    null
                 }
-                masterDnsProbePing(config)
             }
             profile == null -> null
             status.value == VpnStatus.Connected && isActiveLocation -> {
@@ -357,14 +357,6 @@ class IosVpnManager(
         null
     }
 
-    private suspend fun masterDnsProbePing(config: LocationConfig): Long? = withContext(Dispatchers.Default) {
-        val md = config.masterDns
-        val resolver = md?.resolverList()?.firstOrNull() ?: return@withContext null
-        val host = resolver.substringBefore(':')
-        val port = resolver.substringAfter(':', "53").toIntOrNull() ?: 53
-        val ms = core.tcpPing(host, port, PING_TIMEOUT_MS)
-        if (ms > 0) ms else null
-    }
 
     private val pingClient: HttpClient by lazy {
         createProxyHttpClient(
