@@ -232,6 +232,8 @@ object XrayConfig {
         // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
         handshakeTimeoutSec: Int? = null,
     ): String {
+        val effectiveProfile = profile.enrichedFromRaw()
+        val effectiveSecondProfile = secondProfile?.enrichedFromRaw()
         // Cascade over an xhttp/splithttp MAIN: Xray's splithttp transport can be NEITHER a
         // sockopt.dialerProxy sub-dialer NOR a proxySettings target, so the 2nd-proxy exit can't reach
         // its server "through" the main (→ "failed to find an available destination > EOF" = the user's
@@ -242,8 +244,8 @@ object XrayConfig {
         val fakeEnabled = traffic.fakeDnsEnabled || fakeDnsSpec != null
         // The spec's dns.hosts blackholes (domain -> 0.0.0.0), reproduced as Xray `regexp:` hosts.
         val fakeBlockRegex = fakeDnsSpec?.blockRegex.orEmpty().filter { it.isNotBlank() }
-        val cascadeMainIsXhttp = profile.network == ProxyProfile.NETWORK_XHTTP
-        val cascadeLoopActive = secondProfile?.isComplete() == true && cascadeMainIsXhttp
+        val cascadeMainIsXhttp = effectiveProfile.network == ProxyProfile.NETWORK_XHTTP
+        val cascadeLoopActive = effectiveSecondProfile?.isComplete() == true && cascadeMainIsXhttp
         // Internal loopback SOCKS port: one above the app's listen port (127.0.0.1 only, not exposed).
         val cascadeLoopPort = listenPort + 1
         val config = buildJsonObject {
@@ -367,7 +369,7 @@ object XrayConfig {
                 else -> null
             }
             val directDialsBase = directViaBase && baseExitTag != null
-            val second = secondProfile?.takeIf { it.isComplete() }
+            val second = effectiveSecondProfile?.takeIf { it.isComplete() }
             putJsonArray("outbounds") {
                 if (second != null) {
                     // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG, emitted FIRST so it is
@@ -393,7 +395,7 @@ object XrayConfig {
                     )
                     add(
                         buildProxyOutbound(
-                            profile,
+                            effectiveProfile,
                             chained = olcrtcChainPort != null,
                             traffic = traffic,
                             detourTagOverride = baseDetour,
@@ -428,7 +430,7 @@ object XrayConfig {
                     // Single hop: the main proxy IS the exit (tag PROXY_TAG), dialing through olcRTC/WG.
                     add(
                         buildProxyOutbound(
-                            profile,
+                            effectiveProfile,
                             chained = olcrtcChainPort != null,
                             traffic = traffic,
                             detourTagOverride = baseDetour,
@@ -1566,28 +1568,31 @@ object XrayConfig {
         // without it the inner hop establishes. xhttp multiplexes at the transport layer anyway.
         suppressMux: Boolean = false,
     ) = buildJsonObject {
+        val p = profile.enrichedFromRaw()
         val detourTag = detourTagOverride ?: if (chained) OLCRTC_TAG else null
         put("tag", tag)
-        put("protocol", profile.type)
+        put("protocol", p.type)
 
         putJsonObject("settings") {
-            when (profile.type) {
+            when (p.type) {
                 ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS -> {
                     putJsonArray("vnext") {
                         addJsonObject {
-                            put("address", profile.server)
-                            put("port", profile.serverPort)
+                            put("address", p.server)
+                            put("port", p.serverPort)
                             putJsonArray("users") {
                                 addJsonObject {
-                                    val effectiveUuid = profile.uuid.ifBlank {
-                                        profile.rawOutbound?.let { raw ->
+                                    val effectiveUuid = p.uuid.ifBlank {
+                                        p.rawOutbound?.let { raw ->
                                             runCatching {
                                                 kotlinx.serialization.json.Json.parseToJsonElement(raw).jsonObject["uuid"]?.jsonPrimitive?.contentOrNull
                                             }.getOrNull()
-                                        }.orEmpty()
-                                    }
+                                        } ?: p.rawXrayConfig?.let { raw ->
+                                            ProxyProfile.parseFromXray(raw)?.uuid
+                                        }
+                                    }.orEmpty()
                                     put("id", effectiveUuid)
-                                    if (profile.type == ProxyProfile.TYPE_VLESS) {
+                                    if (p.type == ProxyProfile.TYPE_VLESS) {
                                         put("encryption", "none")
                                         // XTLS Vision (xtls-rprx-vision) splices the RAW TLS connection to
                                         // ITS OWN server — it can't ride a chain. When this vless dials
@@ -1599,10 +1604,10 @@ object XrayConfig {
                                         // The cascade SOCKS loopback also keeps it (preserveFlow): the
                                         // 2nd server's vless inbound requires the Vision flow it expects.
                                         // Over dialerProxy (MasterDNS / OpenFlux SOCKS chain), keep the flow intact.
-                                        if (profile.flow.isNotBlank() && (detourTag == null || preserveFlow || chainViaDialerProxy)) put("flow", profile.flow)
+                                        if (p.flow.isNotBlank() && (detourTag == null || preserveFlow || chainViaDialerProxy)) put("flow", p.flow)
                                     } else {
-                                        put("alterId", profile.alterId)
-                                        put("security", profile.cipher.ifBlank { "auto" })
+                                        put("alterId", p.alterId)
+                                        put("security", p.cipher.ifBlank { "auto" })
                                     }
                                 }
                             }
@@ -1613,9 +1618,9 @@ object XrayConfig {
                 ProxyProfile.TYPE_TROJAN -> {
                     putJsonArray("servers") {
                         addJsonObject {
-                            put("address", profile.server)
-                            put("port", profile.serverPort)
-                            put("password", profile.password)
+                            put("address", p.server)
+                            put("port", p.serverPort)
+                            put("password", p.password)
                         }
                     }
                 }
@@ -1623,10 +1628,10 @@ object XrayConfig {
                 ProxyProfile.TYPE_SHADOWSOCKS -> {
                     putJsonArray("servers") {
                         addJsonObject {
-                            put("address", profile.server)
-                            put("port", profile.serverPort)
-                            put("method", profile.method)
-                            put("password", profile.password)
+                            put("address", p.server)
+                            put("port", p.serverPort)
+                            put("method", p.method)
+                            put("password", p.password)
                         }
                     }
                 }
@@ -1638,11 +1643,11 @@ object XrayConfig {
                 "socks" -> {
                     putJsonArray("servers") {
                         addJsonObject {
-                            put("address", profile.server)
-                            put("port", profile.serverPort)
-                            if (profile.password.isNotBlank()) {
+                            put("address", p.server)
+                            put("port", p.serverPort)
+                            if (p.password.isNotBlank()) {
                                 putJsonArray("users") {
-                                    addJsonObject { put("user", ""); put("pass", profile.password) }
+                                    addJsonObject { put("user", ""); put("pass", p.password) }
                                 }
                             }
                         }
@@ -1655,7 +1660,7 @@ object XrayConfig {
         // settings, TLS-fragment dialing or mux — those are for real remote proxy servers and would
         // corrupt the loopback SOCKS handshake (e.g. fragment splits the SOCKS bytes → connection
         // reset). Emit it bare, like olcrtcSocksOutbound. Only the detour (proxySettings) still applies.
-        val isLocalSocks = profile.type == "socks"
+        val isLocalSocks = p.type == "socks"
         // Cascade exit chaining: the second/exit proxy reaches its server THROUGH the base proxy
         // ([PROXY_BASE_TAG]). Use transport-level chaining (sockopt.dialerProxy) instead of
         // proxy-level chaining (proxySettings). proxySettings drops the exit's OWN transport, so an
@@ -1669,11 +1674,11 @@ object XrayConfig {
         // dialerProxy whenever the profile carries an xhttp transport over a detour, in addition to the
         // cascade-exit case. Non-xhttp profiles over WG/olcRTC keep proxySettings (unchanged, works).
         val needsDialerProxy = detourTag != null &&
-            (detourTag == PROXY_BASE_TAG || profile.network == ProxyProfile.NETWORK_XHTTP || chainViaDialerProxy)
+            (detourTag == PROXY_BASE_TAG || p.network == ProxyProfile.NETWORK_XHTTP || chainViaDialerProxy)
         val dialerProxyTag = if (needsDialerProxy) detourTag else null
         if (!isLocalSocks) {
             put("streamSettings", buildStreamSettings(
-                profile,
+                p,
                 fragmentDialer = traffic.fragmentEnabled && detourTag == null,
                 dialerProxyTag = dialerProxyTag,
                 xhttpHighConcurrency = xhttpHighConcurrency,

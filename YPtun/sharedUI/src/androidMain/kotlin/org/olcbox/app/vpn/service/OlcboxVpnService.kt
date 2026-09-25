@@ -996,19 +996,20 @@ class OlcboxVpnService : VpnService() {
         tunnelPort: Int,
         resolveCore: (ProxyProfile, ProxyCore) -> ProxyCore,
     ) {
+        val effectiveProxy = proxy.enrichedFromRaw()
         val traffic = loadTrafficSettings()
         val profilesState = loadRoutingProfilesState()
         val routingProfile = resolveProfileExpandingAsn(profilesState, config.routingProfileId)
         val globalCore = loadAppBehavior().globalProxyCore
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
-            proxy.type in XRAY_SUPPORTED_TYPES
-        val useXray = resolveCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
-        addLog("$label chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+            effectiveProxy.type in XRAY_SUPPORTED_TYPES
+        val useXray = resolveCore(effectiveProxy, globalCore) == ProxyCore.Xray || profileWantsXray
+        addLog("$label chaining proxy ${effectiveProxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
         if (useXray) {
             val assetPath = ensureGeoAssetPath(routingProfile)
             val xrayJson = XrayConfig.build(
-                profile = proxy,
+                profile = effectiveProxy,
                 listenPort = socksListenPort,
                 listenHost = socksListenHost,
                 socksUsername = socksUsername,
@@ -1041,7 +1042,7 @@ class OlcboxVpnService : VpnService() {
             xrayEngine().start(xrayJson, assetPath)
         } else {
             val json = SingBoxConfig.build(
-                profile = proxy,
+                profile = effectiveProxy,
                 listenPort = socksListenPort,
                 listenHost = socksListenHost,
                 socksUsername = socksUsername,
@@ -1108,7 +1109,10 @@ class OlcboxVpnService : VpnService() {
         // Optional proxy over the tunnel (same as MasterDNS): OpenFlux moves to the internal chain port,
         // no auth there (the core dials it without credentials), and a proxy core fronts the bridge.
         val proxy = openFlux.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
-            (ShareLinkParser.parse(link) ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+            (ShareLinkParser.parse(link)
+                ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
+                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
+                ?.enrichedFromRaw()
                 ?.takeIf { it.isComplete() }
         }
         if (openFlux.hasProxy() && proxy == null) {
@@ -1357,7 +1361,9 @@ class OlcboxVpnService : VpnService() {
         // Standard "additional proxy" field works here too.
         val proxy = masterDns.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
             (ShareLinkParser.parse(link)
-                ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
+                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
+                ?.enrichedFromRaw()
                 ?.takeIf { it.isComplete() }
         }
         if (masterDns.proxyLink.isNotBlank() && proxy == null) {

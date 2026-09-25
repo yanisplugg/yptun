@@ -30,15 +30,32 @@ object ShareLinkParser {
             // tt://<base64> — AdGuard Trust Tunnel deep-link (decoded natively at connect time).
             TrustTunnelParser.looksLikeTrustTunnel(trimmed) -> TrustTunnelParser.parse(trimmed)
             trimmed.startsWith("yptun://inbound", true) -> {
-                org.olcbox.app.data.share.YptunInboundCodec.parse(trimmed)?.let { it.proxy2 ?: it.proxy }
+                org.olcbox.app.data.share.YptunInboundCodec.parse(trimmed)?.let { it.proxy2 ?: it.proxy }?.enrichedFromRaw()
             }
             trimmed.startsWith("yptun://import/", true) -> {
                 val raw = trimmed.substring("yptun://import/".length).trim()
                 val decoded = runCatching { UriCodec.percentDecode(raw) }.getOrNull() ?: raw
                 parse(decoded)
             }
-            else -> null
+            trimmed.startsWith("{") || trimmed.startsWith("[") -> parseJson(trimmed)
+            else -> {
+                val fromSub = parseSubscription(trimmed).firstOrNull()
+                fromSub?.enrichedFromRaw()
+            }
         }
+    }
+
+    /** Parses a pasted raw JSON config (Xray full config, Xray outbound or sing-box outbound). */
+    private fun parseJson(text: String): ProxyProfile? {
+        val fromXray = ProxyProfile.parseFromXray(text)
+        if (fromXray != null && (fromXray.server.isNotBlank() || !fromXray.rawXrayConfig.isNullOrBlank())) {
+            return fromXray.enrichedFromRaw()
+        }
+        val fromSb = ProxyProfile.parseFromSingBox(text)
+        if (fromSb != null && fromSb.server.isNotBlank()) {
+            return fromSb.enrichedFromRaw()
+        }
+        return null
     }
 
     /** Parse a subscription body across all supported protocols. */

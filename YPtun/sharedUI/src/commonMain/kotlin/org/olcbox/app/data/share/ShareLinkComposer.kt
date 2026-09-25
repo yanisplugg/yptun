@@ -28,18 +28,21 @@ object ShareLinkComposer {
         if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
             return profile.ttConfig.takeIf { it.isNotBlank() }
         }
-        // A full raw Xray config or a verbatim sing-box outbound: share the JSON as-is.
-        profile.rawXrayConfig?.takeIf { it.isNotBlank() }?.let { return it }
-
-        return when (profile.type) {
-            ProxyProfile.TYPE_VLESS -> composeVless(profile)
-            ProxyProfile.TYPE_TROJAN -> composeTrojan(profile)
-            ProxyProfile.TYPE_SHADOWSOCKS -> composeShadowsocks(profile)
-            ProxyProfile.TYPE_VMESS -> composeVmess(profile)
-            ProxyProfile.TYPE_HYSTERIA2 -> composeHysteria2(profile)
-            ProxyProfile.TYPE_NAIVE -> composeNaive(profile)
-            else -> profile.rawOutbound?.takeIf { it.isNotBlank() }
+        val p = profile.enrichedFromRaw()
+        val standardLink = when (p.type) {
+            ProxyProfile.TYPE_VLESS -> if (p.uuid.isNotBlank() && p.server.isNotBlank()) composeVless(p) else null
+            ProxyProfile.TYPE_TROJAN -> if (p.password.isNotBlank() && p.server.isNotBlank()) composeTrojan(p) else null
+            ProxyProfile.TYPE_SHADOWSOCKS -> if (p.password.isNotBlank() && p.server.isNotBlank()) composeShadowsocks(p) else null
+            ProxyProfile.TYPE_VMESS -> if (p.uuid.isNotBlank() && p.server.isNotBlank()) composeVmess(p) else null
+            ProxyProfile.TYPE_HYSTERIA2 -> composeHysteria2(p)
+            ProxyProfile.TYPE_NAIVE -> composeNaive(p)
+            else -> null
         }
+        if (standardLink != null) return standardLink
+
+        // Fall back to verbatim raw Xray config or sing-box outbound when cannot be composed as link.
+        return p.rawXrayConfig?.takeIf { it.isNotBlank() }
+            ?: p.rawOutbound?.takeIf { it.isNotBlank() }
     }
 
     private fun composeNaive(p: ProxyProfile): String = buildString {

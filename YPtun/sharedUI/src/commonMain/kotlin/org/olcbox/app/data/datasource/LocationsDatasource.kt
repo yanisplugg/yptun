@@ -2222,12 +2222,12 @@ class LocationsRepositoryImpl(
         // and NEITHER survives the typed translation (a typed location gets the APP's routing profile
         // instead). So whenever the JSON brings its own, keep the template verbatim on Xray —
         // XrayConfig.prepareRaw then honors it and skips overlaying the app profile.
-        val typed = if (bringsOwnRouting(root)) {
-            null
-        } else {
-            typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
-        }
-        val location = if (typed != null) {
+        val typed = typedProfileFromXrayOutbound(proxyOutbound, protocol, server, port, name)
+        val ownRouting = bringsOwnRouting(root)
+        val isXhttp = typed?.network == ProxyProfile.NETWORK_XHTTP
+        val mustBeVerbatimXray = ownRouting || isXhttp || typed == null
+
+        val location = if (!mustBeVerbatimXray && typed != null) {
             LocationConfig(
                 name = name,
                 description = description,
@@ -2238,20 +2238,21 @@ class LocationsRepositoryImpl(
             ).normalized()
         } else {
             // Untranslatable (xhttp / unknown transport) OR carrying its own routing/DNS → run the whole
-            // template verbatim on Xray.
+            // template verbatim on Xray, BUT preserve the extracted credentials (uuid, security, flow, etc.)
+            // so features like proxy-over-tunnel, chaining, and sharing have complete proxy settings.
+            val baseProxy = typed ?: ProxyProfile(
+                tag = name,
+                type = protocol,
+                server = server,
+                serverPort = port,
+            )
             LocationConfig(
                 name = name,
                 description = description,
                 engine = EngineType.Standard,
-                proxy = ProxyProfile(
-                    tag = name,
-                    type = protocol,
-                    server = server,
-                    serverPort = port,
-                    // Keep THIS config (the array element), not the whole array, as the verbatim payload.
-                    rawXrayConfig = root.toString()
-                ),
-                core = ProxyCore.Xray
+                proxy = baseProxy.copy(rawXrayConfig = root.toString()),
+                core = ProxyCore.Xray,
+                fakeDns = fakeDnsSpecFromXray(root),
             ).normalized()
         }
 
@@ -2300,7 +2301,7 @@ class LocationsRepositoryImpl(
         val settings = outbound["settings"]?.jsonObjectOrNull()
         val stream = outbound["streamSettings"]?.jsonObjectOrNull()
 
-        // Xray network → ProxyProfile network. xhttp/splithttp are Xray-only → bail (verbatim Xray).
+        // Xray network → ProxyProfile network.
         val xrayNet = stream?.string("network")?.lowercase() ?: "tcp"
         val network = when (xrayNet) {
             "tcp", "raw" -> ProxyProfile.NETWORK_TCP
@@ -2308,7 +2309,7 @@ class LocationsRepositoryImpl(
             "grpc", "gun" -> ProxyProfile.NETWORK_GRPC
             "h2", "http" -> ProxyProfile.NETWORK_HTTP
             "httpupgrade" -> ProxyProfile.NETWORK_HTTPUPGRADE
-            "xhttp", "splithttp" -> return null
+            "xhttp", "splithttp" -> ProxyProfile.NETWORK_XHTTP
             else -> return null
         }
 
@@ -2341,13 +2342,19 @@ class LocationsRepositoryImpl(
         val wsLike = stream?.get("wsSettings")?.jsonObjectOrNull()
             ?: stream?.get("httpupgradeSettings")?.jsonObjectOrNull()
         val grpc = stream?.get("grpcSettings")?.jsonObjectOrNull()
+        val xhttp = stream?.get("xhttpSettings")?.jsonObjectOrNull()
+            ?: stream?.get("splithttpSettings")?.jsonObjectOrNull()
         val path = when (network) {
             ProxyProfile.NETWORK_GRPC -> grpc?.string("serviceName") ?: ""
+            ProxyProfile.NETWORK_XHTTP -> xhttp?.string("path") ?: ""
             else -> wsLike?.string("path") ?: ""
         }
-        val host = wsLike?.string("host")
-            ?: (wsLike?.get("headers")?.jsonObjectOrNull()?.string("Host"))
-            ?: ""
+        val host = when (network) {
+            ProxyProfile.NETWORK_XHTTP -> xhttp?.string("host") ?: ""
+            else -> wsLike?.string("host")
+                ?: (wsLike?.get("headers")?.jsonObjectOrNull()?.string("Host"))
+                ?: ""
+        }
 
         return when (protocol) {
             "vless", "vmess" -> {

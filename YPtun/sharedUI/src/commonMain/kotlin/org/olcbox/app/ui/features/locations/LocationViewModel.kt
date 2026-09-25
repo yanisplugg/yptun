@@ -760,7 +760,7 @@ class LocationViewModel(
             proxyError = null
             return
         }
-        val profile = ShareLinkParser.parse(trimmed) ?: rawOutboundProfile(trimmed)
+        val profile = (ShareLinkParser.parse(trimmed) ?: rawOutboundProfile(trimmed))?.enrichedFromRaw()
         if (profile != null && profile.isComplete()) {
             editingConfig = editingConfig.copy(proxy = profile)
             proxyError = null
@@ -817,13 +817,13 @@ class LocationViewModel(
      * (or second proxy) is used as the cascade hop.
      */
     private fun proxyFromAnyLink(trimmed: String): ProxyProfile? {
-        ShareLinkParser.parse(trimmed)?.let { return it }
-        rawOutboundProfile(trimmed)?.let { return it }
+        ShareLinkParser.parse(trimmed)?.enrichedFromRaw()?.let { return it }
+        rawOutboundProfile(trimmed)?.enrichedFromRaw()?.let { return it }
         // When the pasted yptun://inbound is itself a 2-hop cascade, chain through its EXIT (proxy2)
         // so my hop's public IP matches the shared location's exit; fall back to its main proxy.
-        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy2 ?: config.proxy }
+        YptunInboundCodec.parse(trimmed)?.let { config -> return (config.proxy2 ?: config.proxy)?.enrichedFromRaw() }
         // If the user pasted a multi-link subscription body or base64 list, pick the first valid proxy
-        ShareLinkParser.parseSubscription(trimmed).firstOrNull()?.let { return it }
+        ShareLinkParser.parseSubscription(trimmed).firstOrNull()?.enrichedFromRaw()?.let { return it }
         return null
     }
 

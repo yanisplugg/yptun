@@ -423,7 +423,9 @@ internal class IosEngineController(
 
         val proxy = masterDns.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
             (ShareLinkParser.parse(link)
-                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
+                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
+                ?.enrichedFromRaw()
                 ?.takeIf { it.isComplete() }
         }
         if (masterDns.proxyLink.isNotBlank() && proxy == null) {
@@ -483,7 +485,9 @@ internal class IosEngineController(
 
         val proxy = openFlux.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
             (ShareLinkParser.parse(link)
-                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
+                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
+                ?.enrichedFromRaw()
                 ?.takeIf { it.isComplete() }
         }
         if (openFlux.proxyLink.isNotBlank() && proxy == null) {
@@ -543,6 +547,7 @@ internal class IosEngineController(
         socksPassword: String,
         resolveCore: (ProxyProfile, ProxyCore) -> ProxyCore,
     ) {
+        val effectiveProxy = proxy.enrichedFromRaw()
         val traffic = IosSharedStore.loadTraffic()
         val routing = IosSharedStore.loadRouting()
         val profilesState = IosSharedStore.loadRoutingProfiles()
@@ -550,14 +555,35 @@ internal class IosEngineController(
         val globalCore = IosSharedStore.loadAppBehavior().globalProxyCore
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
-            proxy.type in XRAY_SUPPORTED_TYPES
-        val useXray = resolveCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
-        log("$label chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+            effectiveProxy.type in XRAY_SUPPORTED_TYPES
+        val useXray = resolveCore(effectiveProxy, globalCore) == ProxyCore.Xray || profileWantsXray
+        log("$label chaining proxy ${effectiveProxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
 
         if (useXray) {
             val assetPath = ensureGeoAssetPath(routingProfile, profilesState)
             val xrayJson = XrayConfig.build(
-                profile = proxy,
+                profile = effectiveProxy,
+                listenPort = listenPort,
+                listenHost = LISTEN_HOST,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                olcrtcChainPort = tunnelPort,
+                routing = routing,
+                traffic = traffic,
+                routingProfile = xrayRoutingProfile(routingProfile, assetPath),
+                hasGeoAssets = assetPath.isNotEmpty(),
+                blockQuic = true,
+                forceFamilyResolve = false,
+                chainViaDialerProxy = true,
+                handshakeTimeoutSec = 30,
+                directViaBase = true,
+            )
+            activeProxyCore = ProxyCore.Xray
+            if (assetPath.isNotEmpty()) core.xraySetAssetPath(assetPath)
+            startXray(xrayJson, listenPort)
+        } else {
+            val json = SingBoxConfig.build(
+                profile = effectiveProxy,
                 listenPort = listenPort,
                 listenHost = LISTEN_HOST,
                 socksUsername = socksUsername,

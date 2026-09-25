@@ -690,7 +690,10 @@ internal class DesktopEngineController(
         // Optional proxy over the tunnel (as for MasterDNS): OpenFlux on the internal chain port with no
         // auth (the core dials it without credentials); the proxy core then owns listenPort / the TUN.
         val proxy = of.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
-            (ShareLinkParser.parse(link) ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+            (ShareLinkParser.parse(link)
+                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
+                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
+                ?.enrichedFromRaw()
                 ?.takeIf { it.isComplete() }
         }
         if (of.hasProxy() && proxy == null) {
@@ -756,7 +759,9 @@ internal class DesktopEngineController(
 
         val proxy = masterDns.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
             (ShareLinkParser.parse(link)
-                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
+                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
+                ?.enrichedFromRaw()
                 ?.takeIf { it.isComplete() }
         }
         if (masterDns.proxyLink.isNotBlank() && proxy == null) {
@@ -820,6 +825,7 @@ internal class DesktopEngineController(
         socksPassword: String,
         resolveCore: (ProxyProfile, ProxyCore) -> ProxyCore,
     ) {
+        val effectiveProxy = proxy.enrichedFromRaw()
         val traffic = JvmVpnSettings.loadTraffic()
         val routing = loadRoutingExpandingAsn()
         val profilesState = JvmVpnSettings.loadRoutingProfiles()
@@ -827,9 +833,9 @@ internal class DesktopEngineController(
         val globalCore = JvmVpnSettings.loadAppBehavior().globalProxyCore
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
-            proxy.type in XRAY_SUPPORTED_TYPES
-        val useXray = resolveCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
-        log("$label chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+            effectiveProxy.type in XRAY_SUPPORTED_TYPES
+        val useXray = resolveCore(effectiveProxy, globalCore) == ProxyCore.Xray || profileWantsXray
+        log("$label chaining proxy ${effectiveProxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
 
         if (useXray) {
             // xray owns no TUN — a sing-box front does, so the external tun2socks bridge (and its
@@ -839,7 +845,7 @@ internal class DesktopEngineController(
             val xrayHost = if (frontXray) "127.0.0.1" else listenHost
             val assetPath = ensureGeoAssetPath(routingProfile)
             val xrayJson = XrayConfig.build(
-                profile = proxy,
+                profile = effectiveProxy,
                 listenPort = xrayPort,
                 listenHost = xrayHost,
                 socksUsername = socksUsername,
@@ -877,7 +883,7 @@ internal class DesktopEngineController(
             }
         } else {
             val json = SingBoxConfig.build(
-                profile = proxy,
+                profile = effectiveProxy,
                 listenPort = listenPort,
                 listenHost = listenHost,
                 socksUsername = socksUsername,

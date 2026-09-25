@@ -230,6 +230,54 @@ data class ProxyProfile(
         return false
     }
 
+    /**
+     * If this profile carries a raw Xray config or raw sing-box outbound (e.g. imported from a rich
+     * JSON subscription or shared/pasted from JSON) but has missing credentials (blank UUID, default
+     * security/network, etc.), this restores the concrete proxy parameters (uuid, flow, network,
+     * security, sni, alpn, fingerprint, reality keys, path, host, password, method).
+     */
+    fun enrichedFromRaw(): ProxyProfile {
+        var p = this
+        val rawX = p.rawXrayConfig
+        if (!rawX.isNullOrBlank()) {
+            val fromXray = runCatching { parseFromXray(rawX) }.getOrNull()
+            if (fromXray != null) {
+                p = p.mergeFrom(fromXray)
+            }
+        }
+        val rawOut = p.rawOutbound
+        if (!rawOut.isNullOrBlank()) {
+            val fromSb = runCatching { parseFromSingBox(rawOut) }.getOrNull()
+            if (fromSb != null) {
+                p = p.mergeFrom(fromSb)
+            }
+        }
+        return p
+    }
+
+    private fun mergeFrom(other: ProxyProfile): ProxyProfile = copy(
+        type = if (type.isNotBlank() && type != TYPE_VLESS) type else other.type,
+        server = server.ifBlank { other.server },
+        serverPort = if (serverPort in 1..65535) serverPort else other.serverPort,
+        uuid = uuid.ifBlank { other.uuid },
+        password = password.ifBlank { other.password },
+        username = username.ifBlank { other.username },
+        method = method.ifBlank { other.method },
+        alterId = if (alterId != 0) alterId else other.alterId,
+        cipher = if (cipher.isNotBlank() && cipher != "auto") cipher else other.cipher,
+        flow = flow.ifBlank { other.flow },
+        network = if (network != NETWORK_TCP) network else other.network,
+        security = if (security != SECURITY_NONE) security else other.security,
+        sni = sni.ifBlank { other.sni },
+        alpn = alpn.ifEmpty { other.alpn },
+        fingerprint = fingerprint.ifBlank { other.fingerprint },
+        allowInsecure = allowInsecure || other.allowInsecure,
+        realityPublicKey = realityPublicKey.ifBlank { other.realityPublicKey },
+        realityShortId = realityShortId.ifBlank { other.realityShortId },
+        path = path.ifBlank { other.path },
+        host = host.ifBlank { other.host },
+    )
+
     companion object {
         const val TYPE_VLESS = "vless"
         const val TYPE_VMESS = "vmess"
@@ -253,5 +301,161 @@ data class ProxyProfile(
         const val SECURITY_NONE = "none"
         const val SECURITY_TLS = "tls"
         const val SECURITY_REALITY = "reality"
+
+        fun parseFromXray(jsonText: String): ProxyProfile? {
+            val elem = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(jsonText.trim())
+            }.getOrNull() ?: return null
+            val root = when (elem) {
+                is kotlinx.serialization.json.JsonArray -> elem.firstOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+                is kotlinx.serialization.json.JsonObject -> elem
+                else -> return null
+            }
+            val outbounds = (root["outbounds"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }
+            val proxyOutbound = outbounds?.firstOrNull {
+                val proto = (it["protocol"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.lowercase()
+                proto in setOf("vless", "vmess", "trojan", "shadowsocks") ||
+                    (it["tag"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "proxy"
+            } ?: outbounds?.firstOrNull() ?: root
+
+            val protocol = (proxyOutbound["protocol"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.lowercase() ?: TYPE_VLESS
+            val settings = proxyOutbound["settings"] as? kotlinx.serialization.json.JsonObject
+            val stream = proxyOutbound["streamSettings"] as? kotlinx.serialization.json.JsonObject
+
+            val xrayNet = (stream?.get("network") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.lowercase() ?: "tcp"
+            val network = when (xrayNet) {
+                "ws", "websocket" -> NETWORK_WS
+                "grpc", "gun" -> NETWORK_GRPC
+                "h2", "http" -> NETWORK_HTTP
+                "httpupgrade" -> NETWORK_HTTPUPGRADE
+                "xhttp", "splithttp" -> NETWORK_XHTTP
+                else -> NETWORK_TCP
+            }
+
+            val security = when ((stream?.get("security") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.lowercase()) {
+                "reality" -> SECURITY_REALITY
+                "tls", "xtls" -> SECURITY_TLS
+                else -> SECURITY_NONE
+            }
+
+            val vnextUser = (settings?.get("vnext") as? kotlinx.serialization.json.JsonArray)?.firstOrNull()?.let { it as? kotlinx.serialization.json.JsonObject }
+                ?.get("users")?.let { it as? kotlinx.serialization.json.JsonArray }?.firstOrNull()?.let { it as? kotlinx.serialization.json.JsonObject }
+            val vnextServer = (settings?.get("vnext") as? kotlinx.serialization.json.JsonArray)?.firstOrNull()?.let { it as? kotlinx.serialization.json.JsonObject }
+            val ssServer = (settings?.get("servers") as? kotlinx.serialization.json.JsonArray)?.firstOrNull()?.let { it as? kotlinx.serialization.json.JsonObject }
+
+            val server = (vnextServer?.get("address") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                ?: (ssServer?.get("address") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                ?: ""
+            val port = (vnextServer?.get("port") as? kotlinx.serialization.json.JsonPrimitive)?.let { runCatching { it.content.toInt() }.getOrNull() }
+                ?: (ssServer?.get("port") as? kotlinx.serialization.json.JsonPrimitive)?.let { runCatching { it.content.toInt() }.getOrNull() }
+                ?: 0
+
+            val tls = stream?.get("realitySettings") as? kotlinx.serialization.json.JsonObject
+                ?: stream?.get("tlsSettings") as? kotlinx.serialization.json.JsonObject
+            val sni = (tls?.get("serverName") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+            val fingerprint = (tls?.get("fingerprint") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+            val alpn = (tls?.get("alpn") as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: emptyList()
+            val allowInsecure = (tls?.get("allowInsecure") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "true"
+            val realityPbk = (tls?.get("publicKey") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+            val realityShortId = (tls?.get("shortId") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+
+            val wsLike = stream?.get("wsSettings") as? kotlinx.serialization.json.JsonObject
+                ?: stream?.get("httpupgradeSettings") as? kotlinx.serialization.json.JsonObject
+            val grpc = stream?.get("grpcSettings") as? kotlinx.serialization.json.JsonObject
+            val xhttp = stream?.get("xhttpSettings") as? kotlinx.serialization.json.JsonObject
+                ?: stream?.get("splithttpSettings") as? kotlinx.serialization.json.JsonObject
+
+            val path = when (network) {
+                NETWORK_GRPC -> (grpc?.get("serviceName") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+                NETWORK_XHTTP -> (xhttp?.get("path") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+                else -> (wsLike?.get("path") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+            }
+            val host = when (network) {
+                NETWORK_XHTTP -> (xhttp?.get("host") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+                else -> (wsLike?.get("host") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    ?: (wsLike?.get("headers") as? kotlinx.serialization.json.JsonObject)?.get("Host")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                    ?: ""
+            }
+
+            val uuid = (vnextUser?.get("id") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                ?: (vnextUser?.get("uuid") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                ?: ""
+            val flow = (vnextUser?.get("flow") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+            val alterId = (vnextUser?.get("alterId") as? kotlinx.serialization.json.JsonPrimitive)?.let { runCatching { it.content.toInt() }.getOrNull() } ?: 0
+            val cipher = (vnextUser?.get("security") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: "auto"
+            val pass = (ssServer?.get("password") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+            val method = (ssServer?.get("method") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+
+            return ProxyProfile(
+                tag = (proxyOutbound["tag"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: "",
+                type = protocol,
+                server = server,
+                serverPort = port,
+                uuid = uuid,
+                password = pass,
+                method = method,
+                alterId = alterId,
+                cipher = cipher,
+                flow = flow,
+                network = network,
+                security = security,
+                sni = sni,
+                alpn = alpn,
+                fingerprint = fingerprint,
+                allowInsecure = allowInsecure,
+                realityPublicKey = realityPbk,
+                realityShortId = realityShortId,
+                path = path,
+                host = host,
+                rawXrayConfig = if (root.containsKey("outbounds")) jsonText else null
+            )
+        }
+
+        fun parseFromSingBox(jsonText: String): ProxyProfile? {
+            val root = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(jsonText.trim()) as? kotlinx.serialization.json.JsonObject }.getOrNull() ?: return null
+            val server = (root["server"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: return null
+            val port = (root["server_port"] as? kotlinx.serialization.json.JsonPrimitive)?.let { runCatching { it.content.toInt() }.getOrNull() } ?: return null
+            val type = (root["type"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: TYPE_VLESS
+            val uuid = (root["uuid"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+            val password = (root["password"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+            val flow = (root["flow"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+            val network = when ((root["network"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.lowercase()) {
+                "ws" -> NETWORK_WS
+                "grpc" -> NETWORK_GRPC
+                "http", "h2" -> NETWORK_HTTP
+                "httpupgrade" -> NETWORK_HTTPUPGRADE
+                "xhttp", "splithttp" -> NETWORK_XHTTP
+                else -> NETWORK_TCP
+            }
+            val tls = root["tls"] as? kotlinx.serialization.json.JsonObject
+            val security = when {
+                tls?.get("reality") != null -> SECURITY_REALITY
+                (tls?.get("enabled") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "true" ||
+                    (root["security"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.lowercase() == "tls" -> SECURITY_TLS
+                else -> SECURITY_NONE
+            }
+            val reality = tls?.get("reality") as? kotlinx.serialization.json.JsonObject
+            val sni = (tls?.get("server_name") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                ?: (root["sni"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                ?: ""
+            val realityPbk = (reality?.get("public_key") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+            val realityShortId = (reality?.get("short_id") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+
+            return ProxyProfile(
+                tag = (root["tag"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: server,
+                type = type,
+                server = server,
+                serverPort = port,
+                uuid = uuid,
+                password = password,
+                flow = flow,
+                network = network,
+                security = security,
+                sni = sni,
+                realityPublicKey = realityPbk,
+                realityShortId = realityShortId,
+                rawOutbound = jsonText
+            )
+        }
     }
 }
