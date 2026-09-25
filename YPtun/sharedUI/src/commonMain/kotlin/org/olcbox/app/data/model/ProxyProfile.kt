@@ -2,6 +2,7 @@ package org.olcbox.app.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * Engine that backs the local SOCKS5 listener consumed by the TUN bridge.

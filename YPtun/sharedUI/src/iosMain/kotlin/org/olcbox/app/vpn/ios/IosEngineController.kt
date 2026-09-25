@@ -591,27 +591,6 @@ internal class IosEngineController(
                 olcrtcChainPort = tunnelPort,
                 routing = routing,
                 traffic = traffic,
-                routingProfile = xrayRoutingProfile(routingProfile, assetPath),
-                hasGeoAssets = assetPath.isNotEmpty(),
-                blockQuic = true,
-                forceFamilyResolve = false,
-                chainViaDialerProxy = true,
-                handshakeTimeoutSec = 30,
-                directViaBase = true,
-            )
-            activeProxyCore = ProxyCore.Xray
-            if (assetPath.isNotEmpty()) core.xraySetAssetPath(assetPath)
-            startXray(xrayJson, listenPort)
-        } else {
-            val json = SingBoxConfig.build(
-                profile = proxy,
-                listenPort = listenPort,
-                listenHost = LISTEN_HOST,
-                socksUsername = socksUsername,
-                socksPassword = socksPassword,
-                olcrtcChainPort = tunnelPort,
-                routing = routing,
-                traffic = traffic,
                 routingProfile = routingProfile,
                 singboxGeositeBase = profilesState.singboxGeositeBase,
                 singboxGeoipBase = profilesState.singboxGeoipBase,
