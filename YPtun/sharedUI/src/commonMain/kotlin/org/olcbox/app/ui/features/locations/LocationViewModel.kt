@@ -760,7 +760,10 @@ class LocationViewModel(
             proxyError = null
             return
         }
-        val profile = (ShareLinkParser.parse(trimmed) ?: rawOutboundProfile(trimmed))?.enrichedFromRaw()
+        val profile = (ShareLinkParser.parse(trimmed)
+            ?: rawOutboundProfile(trimmed)
+            ?: ShareLinkParser.parseSubscription(trimmed).firstOrNull())
+            ?.enrichedFromRaw()
         if (profile != null && profile.isComplete()) {
             editingConfig = editingConfig.copy(proxy = profile)
             proxyError = null

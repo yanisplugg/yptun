@@ -35,23 +35,29 @@ object ShareLinkParser {
             trimmed.startsWith("yptun://import/", true) -> {
                 val raw = trimmed.substring("yptun://import/".length).trim()
                 val decoded = runCatching { UriCodec.percentDecode(raw) }.getOrNull() ?: raw
-                parse(decoded)
+                if (decoded != uri && !decoded.startsWith("yptun://import/", true)) parse(decoded) else null
             }
             trimmed.startsWith("{") || trimmed.startsWith("[") -> parseJson(trimmed)
-            else -> {
-                val fromSub = parseSubscription(trimmed).firstOrNull()
-                fromSub?.enrichedFromRaw()
-            }
+            else -> null
         }
     }
 
     /** Parses a pasted raw JSON config (Xray full config, Xray outbound or sing-box outbound). */
-    private fun parseJson(text: String): ProxyProfile? {
-        val fromXray = ProxyProfile.parseFromXray(text)
+    fun parseJson(text: String): ProxyProfile? {
+        val trimmed = text.trim()
+        val elem = runCatching { Json.parseToJsonElement(trimmed) }.getOrNull() ?: return null
+        if (elem is kotlinx.serialization.json.JsonArray) {
+            for (item in elem) {
+                val p = parseJson(item.toString())
+                if (p != null && p.isComplete()) return p
+            }
+            return null
+        }
+        val fromXray = ProxyProfile.parseFromXray(trimmed)
         if (fromXray != null && (fromXray.server.isNotBlank() || !fromXray.rawXrayConfig.isNullOrBlank())) {
             return fromXray.enrichedFromRaw()
         }
-        val fromSb = ProxyProfile.parseFromSingBox(text)
+        val fromSb = ProxyProfile.parseFromSingBox(trimmed)
         if (fromSb != null && fromSb.server.isNotBlank()) {
             return fromSb.enrichedFromRaw()
         }
@@ -60,8 +66,25 @@ object ShareLinkParser {
 
     /** Parse a subscription body across all supported protocols. */
     fun parseSubscription(body: String): List<ProxyProfile> {
-        return SubscriptionDecoder.toLinks(body)
-            .filterNot { it.startsWith("yptun://", ignoreCase = true) }
+        val trimmed = body.trim()
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            val list = mutableListOf<ProxyProfile>()
+            val elem = runCatching { Json.parseToJsonElement(trimmed) }.getOrNull()
+            if (elem is kotlinx.serialization.json.JsonArray) {
+                elem.forEach { item ->
+                    parseJson(item.toString())?.let { list.add(it) }
+                }
+            } else if (elem is JsonObject) {
+                parseJson(trimmed)?.let { list.add(it) }
+            }
+            if (list.isNotEmpty()) return list
+        }
+        val decodedBody = SubscriptionDecoder.maybeBase64Decode(trimmed) ?: trimmed
+        if (decodedBody != trimmed && (decodedBody.trim().startsWith("{") || decodedBody.trim().startsWith("["))) {
+            return parseSubscription(decodedBody)
+        }
+        return SubscriptionDecoder.toLinks(decodedBody)
+            .filterNot { it.startsWith("yptun://", ignoreCase = true) || it.equals(trimmed, ignoreCase = true) }
             .mapNotNull { parse(it) }
             .filter { it.isComplete() }
     }

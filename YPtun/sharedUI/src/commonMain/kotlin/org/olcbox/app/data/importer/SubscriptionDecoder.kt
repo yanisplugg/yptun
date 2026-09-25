@@ -54,7 +54,7 @@ internal object SubscriptionDecoder {
         if (compact.length < 8) return null
         for (codec in listOf(Base64.Default, Base64.UrlSafe, Base64.Mime)) {
             val text = runCatching { codec.decode(pad(compact)).decodeToString() }.getOrNull()
-            if (text != null && text.contains("://")) return text
+            if (text != null && (text.contains("://") || text.trim().startsWith("{") || text.trim().startsWith("["))) return text
         }
         return null
     }
