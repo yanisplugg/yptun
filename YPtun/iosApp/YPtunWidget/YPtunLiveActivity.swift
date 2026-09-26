@@ -15,25 +15,26 @@ struct VpnLiveActivityWidget: Widget {
                     HStack(spacing: 8) {
                         Text(context.state.flag)
                             .font(.title2)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(context.state.serverName)
-                                .font(.system(size: 15, weight: .bold))
-                                .lineLimit(1)
-                            Text(context.state.isConnected ? "Защищено" : "Отключено")
-                                .font(.system(size: 12))
-                                .foregroundColor(context.state.isConnected ? .green : .secondary)
-                        }
+                        Text(context.state.serverName)
+                            .font(.system(size: 16, weight: .bold))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     .padding(.leading, 8)
                 }
 
                 DynamicIslandExpandedRegion(.trailing) {
                     if let start = context.state.connectedDate, context.state.isConnected {
-                        Text(start, style: .timer)
-                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                            .monospacedDigit()
-                            .foregroundColor(.green)
-                            .padding(.trailing, 8)
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 6, height: 6)
+                            Text(start, style: .timer)
+                                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                                .monospacedDigit()
+                                .foregroundColor(.green)
+                        }
+                        .padding(.trailing, 8)
                     }
                 }
 
@@ -44,7 +45,7 @@ struct VpnLiveActivityWidget: Widget {
                                 .renderingMode(.template)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: 14, height: 14)
+                                .frame(width: 15, height: 15)
                                 .foregroundColor(context.state.isConnected ? .green : .secondary)
                             Text(context.state.isConnected ? "VPN активен" : "Отключен")
                                 .font(.system(size: 13, weight: .medium))
@@ -56,9 +57,9 @@ struct VpnLiveActivityWidget: Widget {
                         if #available(iOS 17.0, *) {
                             Button(intent: ToggleVpnIntent()) {
                                 Text(context.state.isConnected ? "Отключить" : "Подключить")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 6)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 7)
                                     .background(context.state.isConnected ? Color.red.opacity(0.85) : Color.green.opacity(0.85))
                                     .foregroundColor(.white)
                                     .clipShape(Capsule())
@@ -67,6 +68,7 @@ struct VpnLiveActivityWidget: Widget {
                         }
                     }
                     .padding(.horizontal, 10)
+                    .padding(.top, 4)
                     .padding(.bottom, 6)
                 }
             } compactLeading: {
