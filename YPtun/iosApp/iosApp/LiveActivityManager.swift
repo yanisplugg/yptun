@@ -2,7 +2,7 @@ import ActivityKit
 import Foundation
 import NetworkExtension
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 enum LiveActivityManager {
     private static let appGroup = "group.org.yptun.app"
 

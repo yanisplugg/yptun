@@ -204,8 +204,6 @@ fun AppSettingsSheet(
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
     onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit,
-    onDemandEnabled: Boolean = false,
-    onDemandChanged: (Boolean) -> Unit = {},
     liveActivityEnabled: Boolean = true,
     onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
@@ -338,8 +336,6 @@ fun AppSettingsSheet(
                     onBack = { route = AppSettingsRoute.Hub },
                     onChanged = onAppBehaviorChanged,
                     onLanguageChanged = onLanguageChanged,
-                    onDemandEnabled = onDemandEnabled,
-                    onDemandChanged = onDemandChanged,
                     liveActivityEnabled = liveActivityEnabled,
                     onLiveActivityChanged = onLiveActivityChanged
                 )
@@ -3648,8 +3644,6 @@ private fun ApplicationBehaviorContent(
     onBack: () -> Unit,
     onChanged: (AppBehaviorSettings) -> Unit,
     onLanguageChanged: (AppLanguage) -> Unit,
-    onDemandEnabled: Boolean = false,
-    onDemandChanged: (Boolean) -> Unit = {},
     liveActivityEnabled: Boolean = true,
     onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
@@ -3674,24 +3668,18 @@ private fun ApplicationBehaviorContent(
             )
         }
 
-        if (org.olcbox.app.update.UpdatePlatform.current().os == "ios") {
-            RoutingToggleRow(
-                title = s.onDemandTitle,
-                subtitle = s.onDemandSubtitle,
-                checked = onDemandEnabled
-            ) { onDemandChanged(it) }
+        RoutingToggleRow(
+            title = s.autoConnectTitle,
+            subtitle = s.autoConnectSubtitle,
+            checked = settings.autoConnectOnLaunch
+        ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
 
+        if (org.olcbox.app.update.UpdatePlatform.current().os == "ios") {
             RoutingToggleRow(
                 title = s.liveActivityTitle,
                 subtitle = s.liveActivitySubtitle,
                 checked = liveActivityEnabled
             ) { onLiveActivityChanged(it) }
-        } else {
-            RoutingToggleRow(
-                title = s.autoConnectTitle,
-                subtitle = s.autoConnectSubtitle,
-                checked = settings.autoConnectOnLaunch
-            ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
         }
 
         RoutingToggleRow(

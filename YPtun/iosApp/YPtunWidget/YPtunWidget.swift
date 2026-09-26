@@ -686,7 +686,7 @@ struct VpnControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "org.yptun.app.vpn-control", provider: VpnControlProvider()) { isOn in
             ControlWidgetToggle("YPtun", isOn: isOn, action: SetVpnIntent()) { on in
-                Label(on ? L.secured : L.disconnected, systemImage: on ? "lock.shield.fill" : "shield.slash")
+                Label(on ? L.secured : L.disconnected, image: "CatTile")
             }
         }
         .displayName("YPtun VPN")
@@ -699,7 +699,7 @@ struct VpnControl: ControlWidget {
 struct YPtunWidgets: WidgetBundle {
     var body: some Widget {
         VpnWidget()
-        if #available(iOS 16.1, *) {
+        if #available(iOS 16.2, *) {
             VpnLiveActivityWidget()
         }
         if #available(iOS 18.0, *) {

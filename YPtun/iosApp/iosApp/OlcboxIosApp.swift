@@ -66,7 +66,7 @@ struct OlcboxIosApp: App {
             if #available(iOS 18.0, *) {
                 ControlCenter.shared.reloadAllControls()
             }
-            if #available(iOS 16.1, *) {
+            if #available(iOS 16.2, *) {
                 Task {
                     let status = await VpnControlBridge.status()
                     LiveActivityManager.update(connected: status.connected, connectedDate: status.connectedDate)

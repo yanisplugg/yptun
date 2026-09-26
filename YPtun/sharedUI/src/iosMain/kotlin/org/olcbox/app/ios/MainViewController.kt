@@ -222,7 +222,6 @@ private fun IosApp(
         val geoUpdateStatus by dependencies.settings.geoUpdateStatus.collectAsState()
         val language by dependencies.settings.language.collectAsState()
         val lightTheme by dependencies.settings.lightTheme.collectAsState()
-        val onDemandEnabled by dependencies.vpnManager.onDemandEnabled.collectAsState()
         val liveActivityEnabled by dependencies.settings.liveActivity.collectAsState()
         // Shown in settings as the device id the panel sees; reading it touches storage, so it is
         // resolved once off the composition.
@@ -632,8 +631,6 @@ private fun IosApp(
                     onSplitTunnelModeSelected = {},
                     onSplitTunnelAppToggled = { _, _ -> },
                     onSplitTunnelAppsSelected = { _, _ -> },
-                    onDemandEnabled = onDemandEnabled,
-                    onDemandChanged = dependencies.vpnManager::setOnDemandEnabled,
                     liveActivityEnabled = liveActivityEnabled,
                     onLiveActivityChanged = dependencies.settings::setLiveActivity
                 )

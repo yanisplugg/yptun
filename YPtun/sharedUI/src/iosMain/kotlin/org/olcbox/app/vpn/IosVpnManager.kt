@@ -59,7 +59,6 @@ import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.create
 import platform.Foundation.dataUsingEncoding
 import platform.Foundation.timeIntervalSince1970
-import platform.NetworkExtension.NEOnDemandRuleConnect
 import platform.NetworkExtension.NETunnelProviderManager
 import platform.NetworkExtension.NETunnelProviderProtocol
 import platform.NetworkExtension.NETunnelProviderSession
@@ -106,9 +105,6 @@ class IosVpnManager(
     // exposed to other apps, so these only survive as preferences for now.
     private val _socksProxySettings = MutableStateFlow(ApplicationSocksProxySettings())
     val socksProxySettings: StateFlow<ApplicationSocksProxySettings> = _socksProxySettings.asStateFlow()
-
-    private val _onDemandEnabled = MutableStateFlow(IosSharedStore.loadOnDemand())
-    val onDemandEnabled: StateFlow<Boolean> = _onDemandEnabled.asStateFlow()
 
     /**
      * Set once by the app's dependency container, after both objects exist (the controller is not a
@@ -306,21 +302,32 @@ class IosVpnManager(
                 }
             }
             profile == null -> null
+            profile.type == ProxyProfile.TYPE_AMNEZIAWG -> {
+                val awgConfig = profile.awgConfig.orEmpty()
+                if (awgConfig.isBlank()) null
+                else if (status.value == VpnStatus.Connected && isActiveLocation) {
+                    tunnelPing() ?: run {
+                        val url = behavior.effectivePingUrl()
+                        val ms = core.awgMeasureDelay(awgConfig, url, method, PING_TIMEOUT_MS)
+                        if (ms > 0) ms else {
+                            val probeMs = core.awgProbe(awgConfig)
+                            if (probeMs > 0) probeMs else null
+                        }
+                    }
+                } else {
+                    val url = behavior.effectivePingUrl()
+                    val ms = core.awgMeasureDelay(awgConfig, url, method, PING_TIMEOUT_MS)
+                    if (ms > 0) ms else {
+                        val probeMs = core.awgProbe(awgConfig)
+                        if (probeMs > 0) probeMs else null
+                    }
+                }
+            }
             status.value == VpnStatus.Connected && isActiveLocation -> {
                 tunnelPing() ?: if (isLoopbackHost(profile.server)) null else core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
             }
             behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
                 if (isLoopbackHost(profile.server)) null
-                else {
-                    val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
-                    if (ms > 0) ms else null
-                }
-            }
-            profile.type == ProxyProfile.TYPE_AMNEZIAWG -> {
-                val awgConfig = profile.awgConfig.orEmpty()
-                val probeMs = if (awgConfig.isNotBlank()) core.awgProbe(awgConfig) else -1L
-                if (probeMs > 0) probeMs
-                else if (isLoopbackHost(profile.server)) null
                 else {
                     val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
                     if (ms > 0) ms else null
@@ -535,12 +542,11 @@ class IosVpnManager(
             }
         }
         val m = existing ?: if (createIfMissing) NETunnelProviderManager() else return null
-        val onDemand = IosSharedStore.loadOnDemand()
-        m.setOnDemandEnabled(onDemand)
-        if (onDemand) {
-            m.setOnDemandRules(listOf(NEOnDemandRuleConnect()))
-        } else {
+        var needsSave = false
+        if (m.onDemandEnabled || (m.onDemandRules?.isNotEmpty() == true)) {
+            m.setOnDemandEnabled(false)
             m.setOnDemandRules(emptyList<Any?>())
+            needsSave = true
         }
         if (existing == null || !m.enabled) {
             val tunnelId = platform.Foundation.NSBundle.mainBundle.bundleIdentifier
@@ -562,7 +568,7 @@ class IosVpnManager(
             suspendCancellableCoroutine<Unit> { cont ->
                 m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
             }
-        } else if (m.onDemandEnabled != onDemand) {
+        } else if (needsSave) {
             suspendCancellableCoroutine<Unit> { cont ->
                 m.saveToPreferencesWithCompletionHandler { cont.resume(Unit) }
             }
@@ -570,27 +576,6 @@ class IosVpnManager(
         manager = m
         observeStatus(m)
         return m
-    }
-
-    fun setOnDemandEnabled(enabled: Boolean) {
-        _onDemandEnabled.value = enabled
-        IosSharedStore.saveOnDemand(enabled)
-        scope.launch {
-            vpnMutex.withLock {
-                val m = manager ?: loadManager(createIfMissing = true) ?: return@launch
-                m.setOnDemandEnabled(enabled)
-                if (enabled) {
-                    m.setOnDemandRules(listOf(NEOnDemandRuleConnect()))
-                } else {
-                    m.setOnDemandRules(emptyList<Any?>())
-                }
-                suspendCancellableCoroutine<Unit> { cont ->
-                    m.saveToPreferencesWithCompletionHandler {
-                        cont.resume(Unit)
-                    }
-                }
-            }
-        }
     }
 
     private fun observeStatus(m: NETunnelProviderManager) {

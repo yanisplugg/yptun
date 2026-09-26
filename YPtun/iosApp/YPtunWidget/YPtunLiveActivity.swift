@@ -2,7 +2,7 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 struct VpnLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: VpnActivityAttributes.self) { context in
@@ -38,10 +38,17 @@ struct VpnLiveActivityWidget: Widget {
 
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack {
-                        Label(context.state.isConnected ? "VPN активен" : "Отключен",
-                              systemImage: context.state.isConnected ? "lock.shield.fill" : "shield.slash")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(context.state.isConnected ? .green : .secondary)
+                        HStack(spacing: 6) {
+                            Image("CatTile")
+                                .renderingMode(.template)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 14, height: 14)
+                                .foregroundColor(context.state.isConnected ? .green : .secondary)
+                            Text(context.state.isConnected ? "VPN активен" : "Отключен")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(context.state.isConnected ? .green : .secondary)
+                        }
 
                         Spacer()
 
@@ -63,9 +70,12 @@ struct VpnLiveActivityWidget: Widget {
                 }
             } compactLeading: {
                 HStack(spacing: 4) {
-                    Image(systemName: context.state.isConnected ? "shield.fill" : "shield")
+                    Image("CatTile")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 14, height: 14)
                         .foregroundColor(context.state.isConnected ? .green : .gray)
-                        .imageScale(.small)
                     Text(context.state.flag)
                         .font(.system(size: 12))
                 }
@@ -81,9 +91,12 @@ struct VpnLiveActivityWidget: Widget {
                         .frame(width: 8, height: 8)
                 }
             } minimal: {
-                Image(systemName: context.state.isConnected ? "shield.fill" : "shield")
+                Image("CatTile")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 14, height: 14)
                     .foregroundColor(context.state.isConnected ? .green : .gray)
-                    .imageScale(.small)
             }
         }
     }
@@ -91,7 +104,7 @@ struct VpnLiveActivityWidget: Widget {
 
 // MARK: - Lock Screen Banner View
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 struct LockScreenLiveActivityView: View {
     let context: ActivityViewContext<VpnActivityAttributes>
 
