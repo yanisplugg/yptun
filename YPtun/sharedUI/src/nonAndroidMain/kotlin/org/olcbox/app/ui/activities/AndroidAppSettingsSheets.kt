@@ -3716,13 +3716,13 @@ private fun ApplicationBehaviorContent(
             checked = settings.hideEndpointWhenDescription
         ) { onChanged(settings.copy(hideEndpointWhenDescription = it)) }
 
-        RoutingToggleRow(
-            title = s.twoColumnLayoutTitle,
-            subtitle = s.twoColumnLayoutSubtitle,
-            checked = settings.twoColumnLayout
-        ) { onChanged(settings.copy(twoColumnLayout = it)) }
-
         if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
+            RoutingToggleRow(
+                title = s.twoColumnLayoutTitle,
+                subtitle = s.twoColumnLayoutSubtitle,
+                checked = settings.twoColumnLayout
+            ) { onChanged(settings.copy(twoColumnLayout = it)) }
+
             RoutingToggleRow(
                 title = s.vpsAutoInstallTitle,
                 subtitle = s.vpsAutoInstallSubtitle,
