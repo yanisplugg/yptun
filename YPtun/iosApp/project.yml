@@ -58,6 +58,7 @@ targets:
     sources:
       - path: iosApp
       - path: Shared
+      - path: AppShared
     settings:
       base:
         PRODUCT_NAME: YPtun
@@ -123,6 +124,7 @@ targets:
     platform: iOS
     sources:
       - path: YPtunWidget
+      - path: AppShared
     settings:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"

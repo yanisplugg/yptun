@@ -242,18 +242,6 @@ private enum L {
 
 // MARK: - App Intents
 
-@available(iOS 16.0, *)
-struct ToggleVpnIntent: AppIntent {
-    static var title: LocalizedStringResource = "YPtun VPN"
-    static var description = IntentDescription("Включает или выключает VPN YPtun.")
-
-    func perform() async throws -> some IntentResult {
-        let isConnected = await Vpn.status().connected
-        try await Vpn.set(!isConnected)
-        WidgetCenter.shared.reloadAllTimelines()
-        return .result()
-    }
-}
 
 @available(iOS 16.0, *)
 struct ToggleBypassRussiaIntent: AppIntent {
@@ -711,6 +699,9 @@ struct VpnControl: ControlWidget {
 struct YPtunWidgets: WidgetBundle {
     var body: some Widget {
         VpnWidget()
+        if #available(iOS 16.1, *) {
+            VpnLiveActivityWidget()
+        }
         if #available(iOS 18.0, *) {
             VpnControl()
         }

@@ -203,7 +203,11 @@ fun AppSettingsSheet(
     onSecuredProxyChanged: (Boolean) -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
-    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
+    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit,
+    onDemandEnabled: Boolean = false,
+    onDemandChanged: (Boolean) -> Unit = {},
+    liveActivityEnabled: Boolean = true,
+    onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -333,7 +337,11 @@ fun AppSettingsSheet(
                     language = language,
                     onBack = { route = AppSettingsRoute.Hub },
                     onChanged = onAppBehaviorChanged,
-                    onLanguageChanged = onLanguageChanged
+                    onLanguageChanged = onLanguageChanged,
+                    onDemandEnabled = onDemandEnabled,
+                    onDemandChanged = onDemandChanged,
+                    liveActivityEnabled = liveActivityEnabled,
+                    onLiveActivityChanged = onLiveActivityChanged
                 )
 
                 AppSettingsRoute.Ping -> PingSettingsContent(
@@ -3639,7 +3647,11 @@ private fun ApplicationBehaviorContent(
     language: AppLanguage,
     onBack: () -> Unit,
     onChanged: (AppBehaviorSettings) -> Unit,
-    onLanguageChanged: (AppLanguage) -> Unit
+    onLanguageChanged: (AppLanguage) -> Unit,
+    onDemandEnabled: Boolean = false,
+    onDemandChanged: (Boolean) -> Unit = {},
+    liveActivityEnabled: Boolean = true,
+    onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
     val s = LocalStrings.current
     Column(
@@ -3662,11 +3674,25 @@ private fun ApplicationBehaviorContent(
             )
         }
 
-        RoutingToggleRow(
-            title = s.autoConnectTitle,
-            subtitle = s.autoConnectSubtitle,
-            checked = settings.autoConnectOnLaunch
-        ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
+        if (org.olcbox.app.update.UpdatePlatform.current().os == "ios") {
+            RoutingToggleRow(
+                title = s.onDemandTitle,
+                subtitle = s.onDemandSubtitle,
+                checked = onDemandEnabled
+            ) { onDemandChanged(it) }
+
+            RoutingToggleRow(
+                title = s.liveActivityTitle,
+                subtitle = s.liveActivitySubtitle,
+                checked = liveActivityEnabled
+            ) { onLiveActivityChanged(it) }
+        } else {
+            RoutingToggleRow(
+                title = s.autoConnectTitle,
+                subtitle = s.autoConnectSubtitle,
+                checked = settings.autoConnectOnLaunch
+            ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
+        }
 
         RoutingToggleRow(
             title = s.showAutoButtonTitle,

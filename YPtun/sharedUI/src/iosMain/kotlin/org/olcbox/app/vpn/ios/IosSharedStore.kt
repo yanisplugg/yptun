@@ -138,6 +138,12 @@ object IosSharedStore {
     const val MODE_TUN = "tun"
     const val MODE_PROXY = "proxy"
     private const val CONNECTION_MODE_FILE = "connection_mode.txt"
+
+    fun loadOnDemand(): Boolean = readText("on_demand.txt")?.trim() == "true"
+    fun saveOnDemand(value: Boolean) = writeText("on_demand.txt", value.toString())
+
+    fun loadLiveActivity(): Boolean = readText("live_activity.txt")?.trim() != "false"
+    fun saveLiveActivity(value: Boolean) = writeText("live_activity.txt", value.toString())
 }
 
 /**

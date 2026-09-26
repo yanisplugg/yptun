@@ -20,6 +20,7 @@ import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.theme.ThemeState
 import org.olcbox.app.vpn.GeoUpdateStatus
 import platform.Foundation.NSLocale
+import platform.NetworkExtension.NEVPNStatusDidChangeNotification
 // Class properties that Objective-C declares in a category (here NSLocale's NSLocaleGeneralInfo)
 // become companion EXTENSIONS in Kotlin/Native, so they need their own import — unlike
 // NSFileManager.defaultManager, which lives in the main @interface and resolves from the class alone.
@@ -60,6 +61,9 @@ class IosSettingsController {
 
     private val _lightTheme = MutableStateFlow(false)
     val lightTheme: StateFlow<Boolean> = _lightTheme.asStateFlow()
+
+    private val _liveActivity = MutableStateFlow(IosSharedStore.loadLiveActivity())
+    val liveActivity: StateFlow<Boolean> = _liveActivity.asStateFlow()
 
     init {
         // What «Системный» resolves to on this device. Without it the iOS build kept the
@@ -245,5 +249,14 @@ class IosSettingsController {
     fun setBackgroundColor(color: Color?) {
         ThemeState.background = color
         saveUi { it.copy(backgroundArgb = color?.toArgb()) }
+    }
+
+    fun setLiveActivity(enabled: Boolean) {
+        _liveActivity.value = enabled
+        IosSharedStore.saveLiveActivity(enabled)
+        platform.Foundation.NSNotificationCenter.defaultCenter.postNotificationName(
+            NEVPNStatusDidChangeNotification,
+            null
+        )
     }
 }

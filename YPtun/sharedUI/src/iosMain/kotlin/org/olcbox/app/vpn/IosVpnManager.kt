@@ -59,6 +59,7 @@ import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.create
 import platform.Foundation.dataUsingEncoding
 import platform.Foundation.timeIntervalSince1970
+import platform.NetworkExtension.NEOnDemandRuleConnect
 import platform.NetworkExtension.NETunnelProviderManager
 import platform.NetworkExtension.NETunnelProviderProtocol
 import platform.NetworkExtension.NETunnelProviderSession
@@ -105,6 +106,9 @@ class IosVpnManager(
     // exposed to other apps, so these only survive as preferences for now.
     private val _socksProxySettings = MutableStateFlow(ApplicationSocksProxySettings())
     val socksProxySettings: StateFlow<ApplicationSocksProxySettings> = _socksProxySettings.asStateFlow()
+
+    private val _onDemandEnabled = MutableStateFlow(IosSharedStore.loadOnDemand())
+    val onDemandEnabled: StateFlow<Boolean> = _onDemandEnabled.asStateFlow()
 
     /**
      * Set once by the app's dependency container, after both objects exist (the controller is not a
@@ -531,6 +535,13 @@ class IosVpnManager(
             }
         }
         val m = existing ?: if (createIfMissing) NETunnelProviderManager() else return null
+        val onDemand = IosSharedStore.loadOnDemand()
+        m.setOnDemandEnabled(onDemand)
+        if (onDemand) {
+            m.setOnDemandRules(listOf(NEOnDemandRuleConnect()))
+        } else {
+            m.setOnDemandRules(emptyList<Any?>())
+        }
         if (existing == null || !m.enabled) {
             val tunnelId = platform.Foundation.NSBundle.mainBundle.bundleIdentifier
                 ?.takeIf { it.isNotBlank() }
@@ -551,10 +562,35 @@ class IosVpnManager(
             suspendCancellableCoroutine<Unit> { cont ->
                 m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
             }
+        } else if (m.onDemandEnabled != onDemand) {
+            suspendCancellableCoroutine<Unit> { cont ->
+                m.saveToPreferencesWithCompletionHandler { cont.resume(Unit) }
+            }
         }
         manager = m
         observeStatus(m)
         return m
+    }
+
+    fun setOnDemandEnabled(enabled: Boolean) {
+        _onDemandEnabled.value = enabled
+        IosSharedStore.saveOnDemand(enabled)
+        scope.launch {
+            vpnMutex.withLock {
+                val m = manager ?: loadManager(createIfMissing = true) ?: return@launch
+                m.setOnDemandEnabled(enabled)
+                if (enabled) {
+                    m.setOnDemandRules(listOf(NEOnDemandRuleConnect()))
+                } else {
+                    m.setOnDemandRules(emptyList<Any?>())
+                }
+                suspendCancellableCoroutine<Unit> { cont ->
+                    m.saveToPreferencesWithCompletionHandler {
+                        cont.resume(Unit)
+                    }
+                }
+            }
+        }
     }
 
     private fun observeStatus(m: NETunnelProviderManager) {

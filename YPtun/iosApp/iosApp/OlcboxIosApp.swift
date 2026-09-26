@@ -61,11 +61,16 @@ struct OlcboxIosApp: App {
     private let appSession: IosAppSession
 
     init() {
-        // The widget and the Control Center toggle show the VPN state: refresh them on every change.
         NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { _ in
             WidgetCenter.shared.reloadAllTimelines()
             if #available(iOS 18.0, *) {
                 ControlCenter.shared.reloadAllControls()
+            }
+            if #available(iOS 16.1, *) {
+                Task {
+                    let status = await VpnControlBridge.status()
+                    LiveActivityManager.update(connected: status.connected, connectedDate: status.connectedDate)
+                }
             }
         }
         let platformBridge = SwiftPlatformBridge()

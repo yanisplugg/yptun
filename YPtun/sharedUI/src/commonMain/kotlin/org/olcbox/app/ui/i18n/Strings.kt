@@ -183,6 +183,10 @@ interface Strings {
     // Application behavior
     val autoConnectTitle: String
     val autoConnectSubtitle: String
+    val onDemandTitle: String
+    val onDemandSubtitle: String
+    val liveActivityTitle: String
+    val liveActivitySubtitle: String
     val showAutoButtonTitle: String
     val showAutoButtonSubtitle: String
     val energySaverTitle: String
@@ -869,6 +873,10 @@ object RuStrings : Strings {
     override val donateAddressCopied = "Адрес кошелька скопирован"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
+    override val onDemandTitle = "Автоподключение (On-Demand)"
+    override val onDemandSubtitle = "Система автоматически поддерживает VPN активным при наличии сети"
+    override val liveActivityTitle = "Dynamic Island и Live Activity"
+    override val liveActivitySubtitle = "Отображать статус подключения на экране блокировки и в Dynamic Island"
     override val showAutoButtonTitle = "Кнопка «Авто» на главном"
     override val showAutoButtonSubtitle = "Круглая кнопка рядом с кнопкой подключения — пингует все серверы и подключает к самому быстрому"
     override val energySaverTitle = "Режим энергоэффективности"
@@ -1505,6 +1513,10 @@ object EnStrings : Strings {
     override val donateAddressCopied = "Wallet address copied"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
+    override val onDemandTitle = "On-Demand Auto-Connect"
+    override val onDemandSubtitle = "iOS automatically keeps VPN connected when network is active"
+    override val liveActivityTitle = "Dynamic Island & Live Activity"
+    override val liveActivitySubtitle = "Show connection status on Lock Screen and Dynamic Island"
     override val showAutoButtonTitle = "\"Auto\" button on Home"
     override val showAutoButtonSubtitle = "Round button next to Connect — pings all servers and connects to the fastest"
     override val energySaverTitle = "Energy-saver mode"
@@ -2141,6 +2153,10 @@ object FaStrings : Strings {
     override val donateAddressCopied = "آدرس کیف پول کپی شد"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
+    override val onDemandTitle = "اتصال خودکار هنگام نیاز (On-Demand)"
+    override val onDemandSubtitle = "اتصال خودکار VPN توسط سیستم در صورت وجود شبکه"
+    override val liveActivityTitle = "داینامیک آیلند و فعالیت زنده"
+    override val liveActivitySubtitle = "نمایش وضعیت اتصال در صفحه قفل و داینامیک آیلند"
     override val showAutoButtonTitle = "دکمه «خودکار» در خانه"
     override val showAutoButtonSubtitle = "دکمه گرد کنار دکمه اتصال — همه سرورها را پینگ می‌کند و به سریع‌ترین وصل می‌شود"
     override val energySaverTitle = "حالت صرفه‌جویی در انرژی"
@@ -2777,6 +2793,10 @@ object ZhStrings : Strings {
     override val donateAddressCopied = "钱包地址已复制"
     override val autoConnectTitle = "启动时自动连接"
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
+    override val onDemandTitle = "按需自动连接 (On-Demand)"
+    override val onDemandSubtitle = "有网络活动时系统自动保持 VPN 连接"
+    override val liveActivityTitle = "灵动岛与实时活动"
+    override val liveActivitySubtitle = "在锁屏和灵动岛上显示连接状态"
     override val showAutoButtonTitle = "主屏“自动”按钮"
     override val showAutoButtonSubtitle = "连接按钮旁的圆形按钮 — ping 所有服务器并连接到最快的"
     override val energySaverTitle = "省电模式"
