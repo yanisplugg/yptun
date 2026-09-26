@@ -618,7 +618,7 @@ struct VpnControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "org.yptun.app.vpn-control", provider: VpnControlProvider()) { isOn in
             ControlWidgetToggle(isOn: isOn, action: SetVpnIntent()) {
-                Label("YPtun", image: "CatTile")
+                Label("YPtun", systemImage: isOn ? "pawprint.fill" : "pawprint")
             } valueLabel: { on in
                 Text(on ? L.secured : L.disconnected)
             }
