@@ -5,6 +5,8 @@ import WidgetKit
 
 @available(iOS 16.0, *)
 public enum VpnControlBridge {
+    private static let appGroup = "group.org.yptun.app"
+
     public static func manager() async -> NETunnelProviderManager? {
         try? await NETunnelProviderManager.loadAllFromPreferences().first
     }
@@ -30,15 +32,65 @@ public enum VpnControlBridge {
         }
     }
 
-    public static func autoSelect() async throws {
-        // Trigger auto-select signal
-        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.org.yptun.app") else {
+    public static func restartOrConnect() async throws {
+        guard let manager = await manager() else { return }
+        let s = manager.connection.status
+        if s == .connected || s == .connecting || s == .reasserting {
+            manager.connection.stopVPNTunnel()
+            for _ in 0..<25 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                try? await manager.loadFromPreferences()
+                let status = manager.connection.status
+                if status == .disconnected || status == .invalid {
+                    break
+                }
+            }
+        }
+        if !manager.isEnabled {
+            manager.isEnabled = true
+            try await manager.saveToPreferences()
+            try await manager.loadFromPreferences()
+        }
+        try manager.connection.startVPNTunnel()
+    }
+
+    public static func switchToNextLocation() async throws {
+        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) else { return }
+        let widgetUrl = base.appendingPathComponent("yptun/widget.json")
+        let tunnelReqUrl = base.appendingPathComponent("yptun/tunnel_request.json")
+        let legacyReqUrl = base.appendingPathComponent("yptun/request.json")
+
+        guard
+            let data = try? Data(contentsOf: widgetUrl),
+            var widgetObj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let rawLocations = widgetObj["locations"] as? [[String: Any]],
+            !rawLocations.isEmpty
+        else {
             try await set(true)
             return
         }
-        let signalUrl = base.appendingPathComponent("yptun/widget_auto_signal.txt")
-        try? "request".data(using: .utf8)?.write(to: signalUrl)
-        try await set(true)
+
+        let currentName = widgetObj["name"] as? String ?? ""
+        let currentIndex = rawLocations.firstIndex(where: { ($0["name"] as? String) == currentName }) ?? 0
+        let nextIndex = (currentIndex + 1) % rawLocations.count
+        let nextLoc = rawLocations[nextIndex]
+
+        if let nextReq = nextLoc["requestJson"] as? String,
+           let reqData = nextReq.data(using: .utf8) {
+            try? reqData.write(to: tunnelReqUrl)
+            try? reqData.write(to: legacyReqUrl)
+        }
+
+        widgetObj["name"] = nextLoc["name"]
+        widgetObj["id"] = nextLoc["id"]
+        if let p = nextLoc["ping"] as? NSNumber {
+            widgetObj["ping"] = p.intValue
+        }
+        if let outData = try? JSONSerialization.data(withJSONObject: widgetObj, options: [.prettyPrinted]) {
+            try? outData.write(to: widgetUrl)
+        }
+
+        try await restartOrConnect()
     }
 }
 
@@ -88,14 +140,14 @@ public struct DisconnectVpnIntent: AppIntent {
 }
 
 @available(iOS 16.0, *)
-public struct AutoSelectVpnIntent: AppIntent {
-    public static var title: LocalizedStringResource = "Быстрый выбор сервера"
-    public static var description = IntentDescription("Находит самый быстрый сервер и подключается к нему.")
+public struct NextLocationIntent: AppIntent {
+    public static var title: LocalizedStringResource = "Следующий сервер"
+    public static var description = IntentDescription("Переключает на следующий доступный сервер и подключается к нему.")
 
     public init() {}
 
     public func perform() async throws -> some IntentResult {
-        try await VpnControlBridge.autoSelect()
+        try await VpnControlBridge.switchToNextLocation()
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
@@ -150,14 +202,14 @@ public struct YPtunShortcuts: AppShortcutsProvider {
             systemImageName: "stop.fill"
         )
         AppShortcut(
-            intent: AutoSelectVpnIntent(),
+            intent: NextLocationIntent(),
             phrases: [
-                "Быстрый сервер в \(.applicationName)",
-                "Автовыбор в \(.applicationName)",
-                "Fastest server in \(.applicationName)"
+                "Следующий сервер в \(.applicationName)",
+                "Сменить сервер в \(.applicationName)",
+                "Next server in \(.applicationName)"
             ],
-            shortTitle: "Автовыбор сервера",
-            systemImageName: "bolt.fill"
+            shortTitle: "Следующий сервер",
+            systemImageName: "forward.fill"
         )
     }
 }

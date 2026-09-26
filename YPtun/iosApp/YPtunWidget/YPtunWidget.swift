@@ -122,37 +122,9 @@ private enum Vpn {
     }
 
     static func switchToNextLocation() async throws {
-        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) else { return }
-        let widgetUrl = base.appendingPathComponent("yptun/widget.json")
-        let requestUrl = base.appendingPathComponent("yptun/request.json")
-
-        guard
-            let data = try? Data(contentsOf: widgetUrl),
-            var widgetObj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let rawLocations = widgetObj["locations"] as? [[String: Any]],
-            !rawLocations.isEmpty
-        else { return }
-
-        let currentName = widgetObj["name"] as? String ?? ""
-        let currentIndex = rawLocations.firstIndex(where: { ($0["name"] as? String) == currentName }) ?? 0
-        let nextIndex = (currentIndex + 1) % rawLocations.count
-        let nextLoc = rawLocations[nextIndex]
-
-        if let nextReq = nextLoc["requestJson"] as? String,
-           let reqData = nextReq.data(using: .utf8) {
-            try? reqData.write(to: requestUrl)
+        if #available(iOS 16.0, *) {
+            try await VpnControlBridge.switchToNextLocation()
         }
-
-        widgetObj["name"] = nextLoc["name"]
-        widgetObj["id"] = nextLoc["id"]
-        if let p = nextLoc["ping"] as? NSNumber {
-            widgetObj["ping"] = p.intValue
-        }
-        if let outData = try? JSONSerialization.data(withJSONObject: widgetObj) {
-            try? outData.write(to: widgetUrl)
-        }
-
-        try await restartIfConnected()
     }
 }
 
@@ -177,23 +149,12 @@ private enum L {
 
 @available(iOS 16.0, *)
 struct ToggleBypassRussiaIntent: AppIntent {
+    static var isDiscoverable: Bool = false
     static var title: LocalizedStringResource = "Обход РФ"
     static var description = IntentDescription("Переключает режим обхода РФ.")
 
     func perform() async throws -> some IntentResult {
         try await Vpn.toggleBypassRussia()
-        WidgetCenter.shared.reloadAllTimelines()
-        return .result()
-    }
-}
-
-@available(iOS 16.0, *)
-struct NextLocationIntent: AppIntent {
-    static var title: LocalizedStringResource = "Следующий сервер"
-    static var description = IntentDescription("Переключает на следующий доступный сервер.")
-
-    func perform() async throws -> some IntentResult {
-        try await Vpn.switchToNextLocation()
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
