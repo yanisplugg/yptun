@@ -121,11 +121,7 @@ private enum Vpn {
         try await restartIfConnected()
     }
 
-    static func switchToNextLocation() async throws {
-        if #available(iOS 16.0, *) {
-            try await VpnControlBridge.switchToNextLocation()
-        }
-    }
+
 }
 
 // MARK: - Flag & Name Helpers
@@ -140,7 +136,6 @@ private enum L {
     static var connect: String { ru ? "Подключить" : "Connect" }
     static var disconnect: String { ru ? "Отключить" : "Disconnect" }
     static var bypassRu: String { ru ? "Обход РФ" : "Bypass RU" }
-    static var nextServer: String { ru ? "След. сервер" : "Next server" }
     static var noLocation: String { ru ? "Выберите сервер" : "Select server" }
 }
 
@@ -380,53 +375,30 @@ struct MediumWidgetView: View {
 
                 Spacer(minLength: 0)
 
-                // Bottom row: Quick action buttons (Обход РФ & След. сервер)
+                // Bottom row: Quick action button (Обход РФ)
                 if #available(iOS 17.0, *) {
-                    HStack(spacing: 8) {
-                        // Quick toggle: Обход РФ
-                        Button(intent: ToggleBypassRussiaIntent()) {
-                            HStack(spacing: 5) {
-                                Image(systemName: entry.bypassRussia ? "checkmark.shield.fill" : "shield")
-                                    .font(.system(size: 11, weight: .semibold))
-                                Text(L.bypassRu)
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 32)
-                            .background(
-                                entry.bypassRussia
-                                    ? AnyShapeStyle(Color.blue.opacity(0.22))
-                                    : AnyShapeStyle(Color.secondary.opacity(0.12))
-                            )
-                            .foregroundColor(entry.bypassRussia ? .blue : .primary)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(entry.bypassRussia ? Color.blue.opacity(0.4) : Color.secondary.opacity(0.2), lineWidth: 1)
-                            )
+                    Button(intent: ToggleBypassRussiaIntent()) {
+                        HStack(spacing: 5) {
+                            Image(systemName: entry.bypassRussia ? "checkmark.shield.fill" : "shield")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(L.bypassRu)
+                                .font(.system(size: 11, weight: .semibold))
                         }
-                        .buttonStyle(.plain)
-
-                        // Button: Следующий сервер
-                        Button(intent: NextLocationIntent()) {
-                            HStack(spacing: 5) {
-                                Image(systemName: "forward.fill")
-                                    .font(.system(size: 10, weight: .bold))
-                                Text(L.nextServer)
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 32)
-                            .background(Color.secondary.opacity(0.12))
-                            .foregroundColor(.primary)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(
+                            entry.bypassRussia
+                                ? AnyShapeStyle(Color.blue.opacity(0.22))
+                                : AnyShapeStyle(Color.secondary.opacity(0.12))
+                        )
+                        .foregroundColor(entry.bypassRussia ? .blue : .primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(entry.bypassRussia ? Color.blue.opacity(0.4) : Color.secondary.opacity(0.2), lineWidth: 1)
+                        )
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
