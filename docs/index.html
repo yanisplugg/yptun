@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YPtun - Fast, Private & Secure Networking</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --border-color: #30363d;
+            --text-primary: #f0f6fc;
+            --text-secondary: #8b949e;
+            --accent-color: #58a6ff;
+            --accent-hover: #1f6feb;
+            --green: #3fb950;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            background-color: rgba(22, 27, 34, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo span {
+            color: var(--accent-color);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: var(--accent-color);
+        }
+
+        .hero {
+            max-width: 900px;
+            margin: 80px auto 60px;
+            padding: 0 24px;
+            text-align: center;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(88, 166, 255, 0.12);
+            color: var(--accent-color);
+            border: 1px solid rgba(88, 166, 255, 0.25);
+            border-radius: 20px;
+            padding: 6px 16px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 24px;
+        }
+
+        .hero h1 {
+            font-size: 3.2rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            line-height: 1.15;
+            margin-bottom: 20px;
+            background: linear-gradient(180deg, #ffffff 0%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            max-width: 680px;
+            margin: 0 auto 36px;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn-primary {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background-color: #f0f6fc;
+            color: #0d1117;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1.05rem;
+            padding: 14px 32px;
+            border-radius: 30px;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+
+        .btn-primary:hover {
+            background-color: #ffffff;
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background-color: var(--card-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1.05rem;
+            padding: 14px 28px;
+            border-radius: 30px;
+            transition: border-color 0.2s, transform 0.1s;
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--text-secondary);
+            transform: translateY(-2px);
+        }
+
+        .features-section {
+            max-width: 1000px;
+            margin: 60px auto 100px;
+            padding: 0 24px;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+
+        .feature-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 28px;
+            transition: border-color 0.2s;
+        }
+
+        .feature-card:hover {
+            border-color: #58a6ff66;
+        }
+
+        .feature-icon {
+            font-size: 2rem;
+            margin-bottom: 16px;
+            display: inline-block;
+        }
+
+        .feature-card h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: var(--text-primary);
+        }
+
+        .feature-card p {
+            color: var(--text-secondary);
+            font-size: 1rem;
+            line-height: 1.5;
+        }
+
+        .trust-banner {
+            max-width: 900px;
+            margin: 0 auto 100px;
+            padding: 40px 24px;
+            background: linear-gradient(180deg, #161b22 0%, #0e131b 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            text-align: center;
+        }
+
+        .trust-banner h2 {
+            font-size: 1.8rem;
+            margin-bottom: 12px;
+        }
+
+        .trust-banner p {
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto 24px;
+            font-size: 1.05rem;
+        }
+
+        footer {
+            border-top: 1px solid var(--border-color);
+            padding: 40px 24px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        footer a {
+            color: var(--accent-color);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 600px) {
+            .hero h1 {
+                font-size: 2.2rem;
+            }
+            .hero p {
+                font-size: 1.1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="nav-container">
+        <a href="index.html" class="logo">
+            YPtun <span>Client</span>
+        </a>
+        <nav class="nav-links">
+            <a href="index.html" class="active">Home</a>
+            <a href="privacy.html">Privacy Policy</a>
+            <a href="support.html">Support</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+    <section class="hero">
+        <div class="hero-badge">
+            &star; Modern Network Security Client
+        </div>
+        <h1>Fast, Private & Reliable Networking</h1>
+        <p>YPtun is a modern, high-performance tunneling and network utility built for iOS, Android, and Desktop. Engineered for privacy, speed, and reliability.</p>
+        <div class="btn-group">
+            <a href="support.html" class="btn-primary">
+                Get Support
+            </a>
+            <a href="privacy.html" class="btn-secondary">
+                Read Privacy Policy
+            </a>
+        </div>
+    </section>
+
+    <section class="features-section">
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">&#128274;</div>
+                <h3>Strict Zero-Logs Policy</h3>
+                <p>We do not collect, monitor, or store any traffic data, DNS requests, or browsing history. Your network activity remains entirely private to you.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">&#9889;</div>
+                <h3>Advanced Protocol Engines</h3>
+                <p>Support for industry-standard WireGuard, SOCKS5, and high-performance modern tunneling protocols with custom routing capabilities.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">&#128241;</div>
+                <h3>Native iOS Integration</h3>
+                <p>Full support for iOS 18 Control Center widgets, Lock Screen toggles, and real-time Live Activity in Dynamic Island.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">&#128200;</div>
+                <h3>Precise Diagnostics</h3>
+                <p>Built-in millisecond latency testing (ping) and packet transfer analytics to guarantee you are always connected to the optimal route.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">&#128100;</div>
+                <h3>No Account Required</h3>
+                <p>Start using immediately without creating an account, providing an email, or exposing personal identification data.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">&#128295;</div>
+                <h3>Local & Secure Storage</h3>
+                <p>All imported profiles, server details, and credentials remain encrypted locally on your device in the iOS Keychain.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="trust-banner">
+        <h2>Your Privacy is Our Standard</h2>
+        <p>Designed from the ground up to keep your personal data strictly on your device. Have questions or need assistance?</p>
+        <a href="mailto:yptunn@gmail.com" class="btn-secondary">
+            Contact Support: yptunn@gmail.com
+        </a>
+    </section>
+</main>
+
+<footer>
+    <p>&copy; 2026 YPtun. All rights reserved. &bull; <a href="index.html">Home</a> &bull; <a href="privacy.html">Privacy Policy</a> &bull; <a href="support.html">Support</a></p>
+</footer>
+
+</body>
+</html>
