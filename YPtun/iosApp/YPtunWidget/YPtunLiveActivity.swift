@@ -12,13 +12,15 @@ struct VpnLiveActivityWidget: Widget {
             DynamicIsland {
                 // Expanded UI (when long-pressed)
                 DynamicIslandExpandedRegion(.leading) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image("CatTile")
+                            .renderingMode(.template)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 18, height: 18)
+                            .foregroundColor(context.state.isConnected ? .green : .secondary)
                         Text(context.state.flag)
-                            .font(.title2)
-                        Text(context.state.serverName)
-                            .font(.system(size: 16, weight: .bold))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                            .font(.title3)
                     }
                     .padding(.leading, 8)
                 }
@@ -30,25 +32,30 @@ struct VpnLiveActivityWidget: Widget {
                                 .fill(Color.green)
                                 .frame(width: 6, height: 6)
                             Text(start, style: .timer)
-                                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
                                 .monospacedDigit()
                                 .foregroundColor(.green)
                         }
                         .padding(.trailing, 8)
+                    } else {
+                        Text("Отключено")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .padding(.trailing, 8)
                     }
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack {
-                        HStack(spacing: 6) {
-                            Image("CatTile")
-                                .renderingMode(.template)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 15, height: 15)
-                                .foregroundColor(context.state.isConnected ? .green : .secondary)
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(context.state.serverName)
+                                .font(.system(size: 16, weight: .bold))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .foregroundColor(.primary)
+
                             Text(context.state.isConnected ? "VPN активен" : "Отключен")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.system(size: 12, weight: .medium))
                                 .foregroundColor(context.state.isConnected ? .green : .secondary)
                         }
 

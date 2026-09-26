@@ -617,8 +617,10 @@ struct VpnControlProvider: ControlValueProvider {
 struct VpnControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "org.yptun.app.vpn-control", provider: VpnControlProvider()) { isOn in
-            ControlWidgetToggle("YPtun", isOn: isOn, action: SetVpnIntent()) { on in
-                Label(on ? L.secured : L.disconnected, systemImage: on ? "cat.fill" : "cat")
+            ControlWidgetToggle(isOn: isOn, action: SetVpnIntent()) {
+                Label("YPtun", image: "CatTile")
+            } valueLabel: { on in
+                Text(on ? L.secured : L.disconnected)
             }
         }
         .displayName("YPtun VPN")
