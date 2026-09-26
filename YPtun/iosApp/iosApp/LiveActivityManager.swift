@@ -84,6 +84,7 @@ enum LiveActivityManager {
             return ("🌐", "YPtun")
         }
 
-        return extractFlagAndName(from: rawName)
+        let res = extractFlagAndName(from: rawName)
+        return (flag: res.flag, name: res.name)
     }
 }

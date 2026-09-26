@@ -26,7 +26,7 @@ public struct VpnActivityAttributes: ActivityAttributes {
 
 // MARK: - Country Flag & Name Parsing (Shared across app & widgets)
 
-public func extractFlagAndName(from rawName: String) -> (flag: String, cleanName: String) {
+public func extractFlagAndName(from rawName: String) -> (flag: String, name: String) {
     let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
         return ("🌐", "YPtun")
