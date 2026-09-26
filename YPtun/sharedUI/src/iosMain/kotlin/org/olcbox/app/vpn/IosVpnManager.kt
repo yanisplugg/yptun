@@ -69,6 +69,10 @@ import platform.NetworkExtension.NEVPNStatusDidChangeNotification
 import platform.NetworkExtension.NEVPNStatusDisconnecting
 import platform.NetworkExtension.NEVPNStatusReasserting
 import platform.UIKit.UIApplication
+import platform.UIKit.UIImpactFeedbackGenerator
+import platform.UIKit.UIImpactFeedbackStyle
+import platform.UIKit.UINotificationFeedbackGenerator
+import platform.UIKit.UINotificationFeedbackType
 import kotlin.coroutines.resume
 
 /**
@@ -149,9 +153,26 @@ class IosVpnManager(
         }
     }
 
+    private fun triggerImpactHaptic(style: UIImpactFeedbackStyle) {
+        runCatching {
+            val generator = UIImpactFeedbackGenerator(style)
+            generator.prepare()
+            generator.impactOccurred()
+        }
+    }
+
+    private fun triggerNotificationHaptic(type: UINotificationFeedbackType) {
+        runCatching {
+            val generator = UINotificationFeedbackGenerator()
+            generator.prepare()
+            generator.notificationOccurred(type)
+        }
+    }
+
     override fun needsPermission(): Boolean = false
 
     override fun startVpn() {
+        triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
         connectJob?.cancel()
         connectJob = scope.launch {
             vpnMutex.withLock {
@@ -229,6 +250,7 @@ class IosVpnManager(
     }
 
     override fun stopVpn() {
+        triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
         connectJob?.cancel()
         connectWatchdogJob?.cancel()
         scope.launch {
@@ -240,7 +262,7 @@ class IosVpnManager(
                     m.connection.status != platform.NetworkExtension.NEVPNStatusInvalid
                 ) {
                     m.connection.stopVPNTunnel()
-                    awaitDisconnected(m.connection)
+                    awaitDisconnected(m)
                 }
                 setStatus(VpnStatus.Disconnected)
                 wasConnecting = false
@@ -586,7 +608,12 @@ class IosVpnManager(
                 wasConnecting = false
                 _connectedSince.value = conn.connectedDate
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
+                val wasNotConnected = _status.value != VpnStatus.Connected
                 setStatus(VpnStatus.Connected)
+                if (wasNotConnected) {
+                    triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
+                    NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.vpn.connected", null)
+                }
                 // Now that traffic goes through the tunnel, retry the geo databases if they are still
                 // missing: without them a verbatim Xray config loses every geosite:/geoip: rule, and the
                 // one moment they are needed (the connect path, inside the extension) is the one moment
@@ -604,12 +631,16 @@ class IosVpnManager(
             NEVPNStatusDisconnecting -> setStatus(VpnStatus.Stopping)
             else -> {
                 connectWatchdogJob?.cancel()
+                val wasConnected = _status.value == VpnStatus.Connected
                 _connectedSince.value = 0L
                 val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
                 if (wasConnecting && failure.isNotEmpty()) {
                     setStatus(VpnStatus.Error(failure))
                 } else {
                     setStatus(VpnStatus.Disconnected)
+                }
+                if (wasConnected) {
+                    NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.vpn.disconnected", null)
                 }
                 wasConnecting = false
             }

@@ -222,6 +222,7 @@ private fun IosApp(
         val geoUpdateStatus by dependencies.settings.geoUpdateStatus.collectAsState()
         val language by dependencies.settings.language.collectAsState()
         val lightTheme by dependencies.settings.lightTheme.collectAsState()
+        val liveActivityEnabled by dependencies.settings.liveActivity.collectAsState()
         // Shown in settings as the device id the panel sees; reading it touches storage, so it is
         // resolved once off the composition.
         var hwid by remember { mutableStateOf("") }
@@ -629,7 +630,9 @@ private fun IosApp(
                     // Split tunneling is hidden on iOS (see above) — nothing can reach these.
                     onSplitTunnelModeSelected = {},
                     onSplitTunnelAppToggled = { _, _ -> },
-                    onSplitTunnelAppsSelected = { _, _ -> }
+                    onSplitTunnelAppsSelected = { _, _ -> },
+                    liveActivityEnabled = liveActivityEnabled,
+                    onLiveActivityChanged = dependencies.settings::setLiveActivity
                 )
             }
         }

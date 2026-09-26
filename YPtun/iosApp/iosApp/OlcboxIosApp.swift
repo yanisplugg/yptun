@@ -61,6 +61,14 @@ struct OlcboxIosApp: App {
     private let appSession: IosAppSession
 
     init() {
+        if #available(iOS 16.2, *) {
+            NotificationCenter.default.addObserver(forName: NSNotification.Name("org.yptun.vpn.connected"), object: nil, queue: .main) { _ in
+                LiveActivityManager.onConnected()
+            }
+            NotificationCenter.default.addObserver(forName: NSNotification.Name("org.yptun.vpn.disconnected"), object: nil, queue: .main) { _ in
+                LiveActivityManager.onDisconnected()
+            }
+        }
         let platformBridge = SwiftPlatformBridge()
         let coreBridge = SwiftCoreBridge()
         let session = IosAppFactory().createSession(

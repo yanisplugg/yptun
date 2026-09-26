@@ -203,7 +203,9 @@ fun AppSettingsSheet(
     onSecuredProxyChanged: (Boolean) -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
-    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
+    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit,
+    liveActivityEnabled: Boolean = true,
+    onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -333,7 +335,9 @@ fun AppSettingsSheet(
                     language = language,
                     onBack = { route = AppSettingsRoute.Hub },
                     onChanged = onAppBehaviorChanged,
-                    onLanguageChanged = onLanguageChanged
+                    onLanguageChanged = onLanguageChanged,
+                    liveActivityEnabled = liveActivityEnabled,
+                    onLiveActivityChanged = onLiveActivityChanged
                 )
 
                 AppSettingsRoute.Ping -> PingSettingsContent(
@@ -3639,7 +3643,9 @@ private fun ApplicationBehaviorContent(
     language: AppLanguage,
     onBack: () -> Unit,
     onChanged: (AppBehaviorSettings) -> Unit,
-    onLanguageChanged: (AppLanguage) -> Unit
+    onLanguageChanged: (AppLanguage) -> Unit,
+    liveActivityEnabled: Boolean = true,
+    onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
     val s = LocalStrings.current
     Column(
@@ -3667,6 +3673,14 @@ private fun ApplicationBehaviorContent(
             subtitle = s.autoConnectSubtitle,
             checked = settings.autoConnectOnLaunch
         ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
+
+        if (org.olcbox.app.update.UpdatePlatform.current().os == "ios") {
+            RoutingToggleRow(
+                title = s.liveActivityTitle,
+                subtitle = s.liveActivitySubtitle,
+                checked = liveActivityEnabled
+            ) { onLiveActivityChanged(it) }
+        }
 
         RoutingToggleRow(
             title = s.showAutoButtonTitle,

@@ -61,6 +61,9 @@ class IosSettingsController {
     private val _lightTheme = MutableStateFlow(false)
     val lightTheme: StateFlow<Boolean> = _lightTheme.asStateFlow()
 
+    private val _liveActivity = MutableStateFlow(IosSharedStore.loadLiveActivity())
+    val liveActivity: StateFlow<Boolean> = _liveActivity.asStateFlow()
+
     init {
         // What «Системный» resolves to on this device. Without it the iOS build kept the
         // LocalizationState default (Russian) forever — nothing on this platform ever set it, so an
@@ -245,5 +248,21 @@ class IosSettingsController {
     fun setBackgroundColor(color: Color?) {
         ThemeState.background = color
         saveUi { it.copy(backgroundArgb = color?.toArgb()) }
+    }
+
+    fun setLiveActivity(enabled: Boolean) {
+        _liveActivity.value = enabled
+        IosSharedStore.saveLiveActivity(enabled)
+        if (!enabled) {
+            platform.Foundation.NSNotificationCenter.defaultCenter.postNotificationName(
+                "org.yptun.vpn.disconnected",
+                null
+            )
+        } else {
+            platform.Foundation.NSNotificationCenter.defaultCenter.postNotificationName(
+                "org.yptun.vpn.connected",
+                null
+            )
+        }
     }
 }
