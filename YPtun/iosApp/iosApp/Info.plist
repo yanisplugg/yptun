@@ -60,8 +60,6 @@
 			<string>bolt.slash.fill</string>
 		</dict>
 	</array>
-	<key>NSSupportsLiveActivities</key>
-	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

@@ -61,18 +61,6 @@ struct OlcboxIosApp: App {
     private let appSession: IosAppSession
 
     init() {
-        NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { _ in
-            WidgetCenter.shared.reloadAllTimelines()
-            if #available(iOS 18.0, *) {
-                ControlCenter.shared.reloadAllControls()
-            }
-            if #available(iOS 16.2, *) {
-                Task {
-                    let status = await VpnControlBridge.status()
-                    LiveActivityManager.update(connected: status.connected, connectedDate: status.connectedDate)
-                }
-            }
-        }
         let platformBridge = SwiftPlatformBridge()
         let coreBridge = SwiftCoreBridge()
         let session = IosAppFactory().createSession(

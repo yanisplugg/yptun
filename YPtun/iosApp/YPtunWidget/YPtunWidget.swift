@@ -699,9 +699,6 @@ struct VpnControl: ControlWidget {
 struct YPtunWidgets: WidgetBundle {
     var body: some Widget {
         VpnWidget()
-        if #available(iOS 16.2, *) {
-            VpnLiveActivityWidget()
-        }
         if #available(iOS 18.0, *) {
             VpnControl()
         }

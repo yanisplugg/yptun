@@ -69,10 +69,6 @@ import platform.NetworkExtension.NEVPNStatusDidChangeNotification
 import platform.NetworkExtension.NEVPNStatusDisconnecting
 import platform.NetworkExtension.NEVPNStatusReasserting
 import platform.UIKit.UIApplication
-import platform.UIKit.UIImpactFeedbackGenerator
-import platform.UIKit.UIImpactFeedbackStyle
-import platform.UIKit.UINotificationFeedbackGenerator
-import platform.UIKit.UINotificationFeedbackType
 import kotlin.coroutines.resume
 
 /**
@@ -153,26 +149,9 @@ class IosVpnManager(
         }
     }
 
-    private fun triggerImpactHaptic(style: UIImpactFeedbackStyle) {
-        runCatching {
-            val generator = UIImpactFeedbackGenerator(style)
-            generator.prepare()
-            generator.impactOccurred()
-        }
-    }
-
-    private fun triggerNotificationHaptic(type: UINotificationFeedbackType) {
-        runCatching {
-            val generator = UINotificationFeedbackGenerator()
-            generator.prepare()
-            generator.notificationOccurred(type)
-        }
-    }
-
     override fun needsPermission(): Boolean = false
 
     override fun startVpn() {
-        triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
         connectJob?.cancel()
         connectJob = scope.launch {
             vpnMutex.withLock {
@@ -191,32 +170,36 @@ class IosVpnManager(
                     // iOS invalidates the cached NETunnelProviderManager when the app is backgrounded,
                     // causing NEVPNErrorDomain error 2 on the next connect attempt.
                     manager = null
-                    var m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
+                    val m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
                     var connection = m.connection
                     // A running tunnel keeps its old location; restart it on the new request.
                     if (connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
                         connection.status != platform.NetworkExtension.NEVPNStatusInvalid
                     ) {
                         connection.stopVPNTunnel()
-                        awaitDisconnected(connection)
-                        // Reload manager from system preferences so the connection state is clean after stop.
-                        suspendCancellableCoroutine<Unit> { cont ->
-                            m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
-                        }
+                        awaitDisconnected(m)
                         connection = m.connection
                     }
-                    memScoped {
-                        val err = alloc<ObjCObjectVar<NSError?>>()
-                        if (!connection.startVPNTunnelAndReturnError(err.ptr)) {
-                            // Brief retry if connection was still transitioning in background
-                            delay(500)
-                            suspendCancellableCoroutine<Unit> { cont ->
-                                m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
-                            }
-                            if (!m.connection.startVPNTunnelAndReturnError(err.ptr)) {
-                                error(err.value?.localizedDescription ?: "VPN start failed")
+                    var started = false
+                    for (attempt in 0..2) {
+                        memScoped {
+                            val err = alloc<ObjCObjectVar<NSError?>>()
+                            if (m.connection.startVPNTunnelAndReturnError(err.ptr)) {
+                                started = true
+                            } else {
+                                if (attempt < 2) {
+                                    delay(250L * (attempt + 1))
+                                    runCatching {
+                                        suspendCancellableCoroutine<Unit> { cont ->
+                                            m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
+                                        }
+                                    }
+                                } else {
+                                    error(err.value?.localizedDescription ?: "VPN start failed")
+                                }
                             }
                         }
+                        if (started) break
                     }
                 }
                 result.onSuccess {
@@ -229,7 +212,6 @@ class IosVpnManager(
                             addLog("Watchdog: connection timed out after 35s ($msg)")
                             stopVpn()
                             setStatus(VpnStatus.Error(msg))
-                            triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeError)
                         }
                     }
                 }
@@ -247,7 +229,6 @@ class IosVpnManager(
     }
 
     override fun stopVpn() {
-        triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
         connectJob?.cancel()
         connectWatchdogJob?.cancel()
         scope.launch {
@@ -606,7 +587,6 @@ class IosVpnManager(
                 _connectedSince.value = conn.connectedDate
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
                 setStatus(VpnStatus.Connected)
-                triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
                 // Now that traffic goes through the tunnel, retry the geo databases if they are still
                 // missing: without them a verbatim Xray config loses every geosite:/geoip: rule, and the
                 // one moment they are needed (the connect path, inside the extension) is the one moment
@@ -628,7 +608,6 @@ class IosVpnManager(
                 val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
                 if (wasConnecting && failure.isNotEmpty()) {
                     setStatus(VpnStatus.Error(failure))
-                    triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeError)
                 } else {
                     setStatus(VpnStatus.Disconnected)
                 }
@@ -637,11 +616,16 @@ class IosVpnManager(
         }
     }
 
-    private suspend fun awaitDisconnected(connection: platform.NetworkExtension.NEVPNConnection) {
-        repeat(60) {
-            val s = connection.status
+    private suspend fun awaitDisconnected(m: NETunnelProviderManager) {
+        repeat(20) {
+            val s = m.connection.status
             if (s == platform.NetworkExtension.NEVPNStatusDisconnected || s == platform.NetworkExtension.NEVPNStatusInvalid) return
             delay(100)
+            runCatching {
+                suspendCancellableCoroutine<Unit> { cont ->
+                    m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
+                }
+            }
         }
     }
 
