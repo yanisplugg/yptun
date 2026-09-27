@@ -1004,13 +1004,17 @@ class DesktopVpnManager private constructor(
         addLog("Proxy mode: SOCKS5 ${socksSettings.host}:${socksSettings.port} · HTTP ${socksSettings.host}:$bridgePort")
 
         // PAC is only used by macOS; Windows gets the fixed HTTP proxy, which WinINET honours
-        // reliably (PAC + SOCKS5 is flaky there).
-        pacServer.start(
-            socksHost = socksSettings.host,
-            socksPort = socksSettings.port,
-            socksUsername = socksSettings.username,
-            socksPassword = socksSettings.password
-        )
+        // reliably (PAC + SOCKS5 is flaky there). Started ONLY there: it binds the fixed port 10809 —
+        // v2rayN's/Happ's HTTP port — so elsewhere it did nothing but fail the whole connect with
+        // "Address already in use: bind" whenever one of those was running.
+        if (DesktopPaths.os == DesktopOs.MacOS) {
+            pacServer.start(
+                socksHost = socksSettings.host,
+                socksPort = socksSettings.port,
+                socksUsername = socksSettings.username,
+                socksPassword = socksSettings.password
+            )
+        }
         proxyController.enable(
             httpProxyHostPort = "${socksSettings.host}:$bridgePort",
             pacUrl = pacServer.url
