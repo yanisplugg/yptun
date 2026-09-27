@@ -96,7 +96,7 @@
 
 ### iOS (Apple TestFlight)
 
-Бета-версия для iPhone и iPad доступна в **Apple TestFlight**.
+Бета-версия для iPhone и iPad доступна в **Apple TestFlight**. Ссылка на подключение опубликована в Telegram-канале [**@YPtun**](https://t.me/YPtun) в топике **Download** (прямой инвайт: [testflight.apple.com/join/XqRGaz8p](https://testflight.apple.com/join/XqRGaz8p)).
 
 - **Минимальная версия:** iOS 16.0+ / iPadOS 16.0+
 - **Возможности:** туннелирование всех приложений через NetworkExtension, Dynamic Island и Live Activity, виджет Пункта управления (iOS 18+), автоматизация через Команды (Siri Shortcuts).
