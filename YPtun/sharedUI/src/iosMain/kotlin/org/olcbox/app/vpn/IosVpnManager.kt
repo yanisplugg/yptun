@@ -702,18 +702,21 @@ class IosVpnManager(
     private fun startLogTail() {
         logJob?.cancel()
         logJob = scope.launch {
+            var lastSize = -1L
             var last = ""
             while (isActive) {
-                // Tail only: the extension keeps the log across sessions now, so re-reading the whole
-                // file once a second would cost more the longer the tunnel had been up.
-                val text = withContext(Dispatchers.Default) {
-                    IosSharedStore.readTextTail(IosTunnelSession.LOG_FILE, LOG_TAIL_BYTES)
-                }.orEmpty()
-                if (text != last) {
-                    last = text
-                    _logs.value = text.lineSequence().filter { it.isNotBlank() }.toList().takeLast(MAX_LOG_LINES)
+                val currentSize = IosSharedStore.fileSize(IosTunnelSession.LOG_FILE)
+                if (currentSize != lastSize) {
+                    lastSize = currentSize
+                    val text = withContext(Dispatchers.Default) {
+                        IosSharedStore.readTextTail(IosTunnelSession.LOG_FILE, LOG_TAIL_BYTES)
+                    }.orEmpty()
+                    if (text != last) {
+                        last = text
+                        _logs.value = text.lineSequence().filter { it.isNotBlank() }.toList().takeLast(MAX_LOG_LINES)
+                    }
                 }
-                delay(1_000)
+                delay(if (_isConnected.value) 4_000L else 1_500L)
             }
         }
     }

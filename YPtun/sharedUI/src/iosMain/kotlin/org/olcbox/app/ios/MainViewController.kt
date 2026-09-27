@@ -198,7 +198,6 @@ private fun IosApp(
     }
 
     AppTheme {
-        val logs by dependencies.homeViewModel.logs.collectAsState()
         val homeState by dependencies.homeViewModel.state.collectAsState()
         val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
 
@@ -491,6 +490,7 @@ private fun IosApp(
             }
 
             if (isAppSettingsOpen) {
+                val logs by dependencies.homeViewModel.logs.collectAsState()
                 AppSettingsSheet(
                     selectedMode = connectionMode,
                     proxySettings = AndroidSocksProxySettings(

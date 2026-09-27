@@ -302,7 +302,7 @@ class IosTunnelSession(
           port: 53
           network: 100.64.0.0
           netmask: 255.192.0.0
-          cache-size: 10000
+          cache-size: 2048
 
         misc:
           task-stack-size: 16384
@@ -348,7 +348,11 @@ class IosTunnelSession(
 
     fun log(line: String) {
         val path = IosSharedStore.path(LOG_FILE)
-        if (!NSFileManager.defaultManager.fileExistsAtPath(path)) IosSharedStore.writeText(LOG_FILE, "")
+        if (!NSFileManager.defaultManager.fileExistsAtPath(path)) {
+            IosSharedStore.writeText(LOG_FILE, "")
+        } else if (IosSharedStore.fileSize(LOG_FILE) > MAX_LOG_BYTES) {
+            IosSharedStore.writeText(LOG_FILE, "[log rotated]\n")
+        }
         val data: NSData = NSString.create(string = "$line\n").dataUsingEncoding(NSUTF8StringEncoding) ?: return
         NSFileHandle.fileHandleForWritingAtPath(path)?.let { handle ->
             handle.seekToEndOfFile()
