@@ -33,7 +33,7 @@ data class CustomGroup(
  */
 object SubscriptionUserAgentHolder {
     @kotlin.concurrent.Volatile
-    var mode: String = AppBehaviorSettings.SUB_UA_YPTUN
+    var mode: String = AppBehaviorSettings.SUB_UA_HAPP
 }
 
 /** General application behavior toggles (the "Настройки приложения" screen). */

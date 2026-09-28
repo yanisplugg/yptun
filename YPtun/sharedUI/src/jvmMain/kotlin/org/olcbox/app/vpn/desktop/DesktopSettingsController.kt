@@ -16,6 +16,7 @@ import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
+import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.desktop.DesktopElevation
 import org.olcbox.app.desktop.DesktopPaths
@@ -114,6 +115,7 @@ class DesktopSettingsController {
         ThemeState.accent = ui.accentArgb?.let { Color(it) }
         ThemeState.textColor = ui.textArgb?.let { Color(it) }
         ThemeState.background = ui.backgroundArgb?.let { Color(it) }
+        SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
     }
 
     // --- per-process split tunneling (desktop analog of Android's per-app VPN) --------------
@@ -299,6 +301,7 @@ class DesktopSettingsController {
 
     fun setAppBehavior(value: AppBehaviorSettings) {
         _appBehavior.value = value
+        SubscriptionUserAgentHolder.mode = value.subscriptionUserAgent
         JvmVpnSettings.saveAppBehavior(value)
     }
 

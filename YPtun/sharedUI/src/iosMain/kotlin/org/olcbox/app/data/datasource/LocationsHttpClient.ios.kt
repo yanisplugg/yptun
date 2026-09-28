@@ -1,8 +1,14 @@
 package org.olcbox.app.data.datasource
 
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.darwin.Darwin
 import io.ktor.client.plugins.HttpTimeout
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
+import platform.Foundation.NSURLAuthenticationMethodServerTrust
+import platform.Foundation.NSURLCredential
+import platform.Foundation.NSURLSessionAuthChallengePerformDefaultHandling
+import platform.Foundation.NSURLSessionAuthChallengeUseCredential
+import platform.Foundation.credentialForTrust
 
 internal actual fun createProxyHttpClient(
     subscriptionProxy: SubscriptionFetchProxy?,
@@ -10,8 +16,25 @@ internal actual fun createProxyHttpClient(
     requestTimeoutMs: Long,
     socketTimeoutMs: Long
 ): HttpClient {
-    return HttpClient {
+    return HttpClient(Darwin) {
         expectSuccess = false
+
+        engine {
+            configureSession {
+                setAllowsCellularAccess(true)
+            }
+            handleChallenge { _, _, challenge, completionHandler ->
+                val serverTrust = challenge.protectionSpace.serverTrust
+                if (challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust && serverTrust != null) {
+                    completionHandler(
+                        NSURLSessionAuthChallengeUseCredential,
+                        NSURLCredential.credentialForTrust(serverTrust)
+                    )
+                } else {
+                    completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, null)
+                }
+            }
+        }
 
         install(HttpTimeout) {
             connectTimeoutMillis = connectTimeoutMs
@@ -25,3 +48,4 @@ internal actual suspend fun <T> withProxyAuthentication(
     subscriptionProxy: SubscriptionFetchProxy?,
     block: suspend () -> T
 ): T = block()
+

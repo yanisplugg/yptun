@@ -14,6 +14,7 @@ import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
+import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalizationState
@@ -81,6 +82,7 @@ class IosSettingsController {
         ThemeState.accent = ui.accentArgb?.let { Color(it) }
         ThemeState.textColor = ui.textArgb?.let { Color(it) }
         ThemeState.background = ui.backgroundArgb?.let { Color(it) }
+        SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
         ensureGeoAssets()
     }
 
@@ -219,6 +221,7 @@ class IosSettingsController {
 
     fun setAppBehavior(value: AppBehaviorSettings) {
         _appBehavior.value = value
+        SubscriptionUserAgentHolder.mode = value.subscriptionUserAgent
         IosSharedStore.saveAppBehavior(value)
     }
 
