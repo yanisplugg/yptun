@@ -132,6 +132,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -204,7 +209,7 @@ fun AppSettingsSheet(
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
     onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit,
-    liveActivityEnabled: Boolean = true,
+    liveActivityEnabled: Boolean = false,
     onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -218,6 +223,41 @@ fun AppSettingsSheet(
             sheetState.hide()
             onDismiss()
             afterClose()
+        }
+    }
+
+    val dismissNestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            var accumulatedDown = 0f
+
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y < 0 && accumulatedDown > 0f) {
+                    accumulatedDown = (accumulatedDown + available.y).coerceAtLeast(0f)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0) {
+                    accumulatedDown += available.y
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                val shouldDismiss = accumulatedDown > 100f || available.y > 200f
+                accumulatedDown = 0f
+                if (shouldDismiss) {
+                    closeSheet()
+                    return available
+                }
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                accumulatedDown = 0f
+                return Velocity.Zero
+            }
         }
     }
 
@@ -240,9 +280,27 @@ fun AppSettingsSheet(
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
         sheetState = sheetState,
-        dragHandle = { BottomSheetDefaults.DragHandle() }
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { closeSheet() }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                BottomSheetDefaults.DragHandle()
+            }
+        }
     ) {
-        AnimatedContent(
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .nestedScroll(dismissNestedScrollConnection)
+        ) {
+            AnimatedContent(
             targetState = route,
             transitionSpec = {
                 fadeIn(
@@ -431,6 +489,7 @@ fun AppSettingsSheet(
                     onCheckUpdatesClick = onCheckUpdatesClick
                 )
             }
+        }
         }
     }
 }
@@ -3644,7 +3703,7 @@ private fun ApplicationBehaviorContent(
     onBack: () -> Unit,
     onChanged: (AppBehaviorSettings) -> Unit,
     onLanguageChanged: (AppLanguage) -> Unit,
-    liveActivityEnabled: Boolean = true,
+    liveActivityEnabled: Boolean = false,
     onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
     val s = LocalStrings.current

@@ -143,7 +143,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -233,6 +237,41 @@ internal fun AppSettingsSheet(
         }
     }
 
+    val dismissNestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            var accumulatedDown = 0f
+
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y < 0 && accumulatedDown > 0f) {
+                    accumulatedDown = (accumulatedDown + available.y).coerceAtLeast(0f)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0) {
+                    accumulatedDown += available.y
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                val shouldDismiss = accumulatedDown > 100f || available.y > 200f
+                accumulatedDown = 0f
+                if (shouldDismiss) {
+                    closeSheet()
+                    return available
+                }
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                accumulatedDown = 0f
+                return Velocity.Zero
+            }
+        }
+    }
+
     BackHandler {
         route = when (route) {
             AppSettingsRoute.Hub -> {
@@ -252,9 +291,27 @@ internal fun AppSettingsSheet(
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
         sheetState = sheetState,
-        dragHandle = { BottomSheetDefaults.DragHandle() }
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { closeSheet() }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                BottomSheetDefaults.DragHandle()
+            }
+        }
     ) {
-        AnimatedContent(
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .nestedScroll(dismissNestedScrollConnection)
+        ) {
+            AnimatedContent(
             targetState = route,
             transitionSpec = {
                 fadeIn(
@@ -439,6 +496,7 @@ internal fun AppSettingsSheet(
                     onCheckUpdatesClick = onCheckUpdatesClick
                 )
             }
+        }
         }
     }
 }

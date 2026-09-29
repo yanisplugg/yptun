@@ -11,9 +11,9 @@ enum LiveActivityManager {
         guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
             .appendingPathComponent("yptun/live_activity.txt"),
               let text = try? String(contentsOf: url, encoding: .utf8) else {
-            return true // Enabled by default
+            return false // Disabled by default
         }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines) != "false"
+        return text.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
     }
 
     static func onConnected(date: Date? = nil) {
