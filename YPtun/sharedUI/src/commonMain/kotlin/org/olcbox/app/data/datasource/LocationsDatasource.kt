@@ -2591,6 +2591,7 @@ class LocationsRepositoryImpl(
             normalized.vkturn?.let { "${it.outbound}@${it.uri.substringBefore('$').ifBlank { it.outboundProxyLink }}" }.orEmpty(),
             normalized.masterDns?.let { "${it.domains}@${it.resolvers}" }.orEmpty(),
             normalized.openFlux?.let { "${it.transport}@${if (it.usesMax()) it.maxUid else it.docUrl}" }.orEmpty(),
+            normalized.snolc?.let { "snolc@${it.host}:${it.port}" }.orEmpty(),
         ).joinToString("|")
     }
 

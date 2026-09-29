@@ -79,6 +79,7 @@ import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.share.YptunInboundCodec
+import org.olcbox.app.vpn.snolc.SnolcFiles
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
 import org.olcbox.app.vpn.xray.XrayConfig
@@ -207,6 +208,12 @@ class OlcboxVpnService : VpnService() {
 
     /** True when a proxy core fronts the OpenFlux tunnel (proxy-over-OpenFlux). */
     private var openFluxProxyActive: Boolean = false
+
+    /** snolc client subprocess for [EngineType.Snolc]; null when another engine is running. */
+    private var snolcProcess: Process? = null
+
+    /** True when a proxy core fronts the snolc tunnel (proxy-over-snolc). */
+    private var snolcProxyActive: Boolean = false
     /** Active Trust Tunnel client (SOCKS-only) for a [ProxyProfile.TYPE_TRUSTTUNNEL] proxy; null otherwise. */
     private var trustTunnelClient: TrustTunnelVpnClient? = null
     private var tun2socksThread: Thread? = null
@@ -977,6 +984,7 @@ class OlcboxVpnService : VpnService() {
             EngineType.VkTurn -> startVkTurnCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.MasterDns -> startMasterDnsCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.OpenFlux -> startOpenFluxCore(location, requestedGeneration, setErrorOnFailure)
+            EngineType.Snolc -> startSnolcCore(location, requestedGeneration, setErrorOnFailure)
         }
     }
 
@@ -1079,6 +1087,108 @@ class OlcboxVpnService : VpnService() {
         }
         if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("$label proxy SOCKS port $socksListenPort did not open")
+        }
+    }
+
+    /**
+     * snolc: the client serves a real SOCKS5 with the session login (our RFC 1929 patch of its adapter)
+     * and real UDP ASSOCIATE on [socksListenPort]; the TUN bridge consumes it directly. One static
+     * executable with every module linked in (lib/<abi>/libsnolc.so), run as a SUBPROCESS from
+     * nativeLibraryDir like OpenFlux — same UID, so the app's own exclusion from the VPN keeps its
+     * sockets off the TUN. It exits on stdin EOF, i.e. when we die.
+     */
+    private suspend fun startSnolcCore(
+        location: LocationConfig,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean
+    ): Boolean {
+        val snolc = location.normalized().snolc
+        if (snolc == null || !snolc.isComplete()) {
+            if (setErrorOnFailure) {
+                setStatus(VpnStatus.Error("snolc not configured"))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            return false
+        }
+        val proxy = snolc.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link) ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?.takeIf { it.isComplete() }
+        }
+        if (snolc.hasProxy() && proxy == null) {
+            addLog("snolc: proxy link present but could not be parsed — exiting via the exit node directly (no proxy)")
+        }
+        snolcProxyActive = proxy != null
+        val snolcPort = if (proxy != null) chainOlcrtcPort else socksListenPort
+        return try {
+            waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+            if (isLocalSocksPortOpen(socksListenPort)) {
+                throw IllegalStateException("SOCKS port $socksListenPort is still in use")
+            }
+            if (proxy != null) {
+                waitForSocksPortReleased(snolcPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+                if (isLocalSocksPortOpen(snolcPort)) {
+                    throw IllegalStateException("snolc internal port $snolcPort is still in use")
+                }
+            }
+            val exe = java.io.File(applicationInfo.nativeLibraryDir, "libsnolc.so")
+            if (!exe.canExecute()) throw IllegalStateException("snolc core is missing from this build")
+            val dir = java.io.File(filesDir, "snolc")
+            java.io.File(dir, "state").mkdirs()
+            java.io.File(dir, "modules").mkdirs()
+            SnolcFiles.client(
+                socksListenHost, snolcPort, snolc.host, snolc.port, snolc.debug,
+                username = if (proxy != null) "" else socksUsername,
+                password = if (proxy != null) "" else socksPassword,
+            ).forEach { (name, body) -> java.io.File(dir, name).writeText(body) }
+            java.io.File(dir, "pub.hex").writeText(snolc.publicKey)
+            addLog("Starting snolc (${snolc.summary()}) on $socksListenHost:$snolcPort")
+            val process = ProcessBuilder(exe.absolutePath, "run", java.io.File(dir, "snolc.toml").absolutePath)
+                .directory(dir).redirectErrorStream(true).apply {
+                    environment()["SNOLC_EXIT_ON_STDIN_EOF"] = "1"
+                }.start()
+            snolcProcess = process
+            kotlin.concurrent.thread(name = "snolc-log", isDaemon = true) {
+                runCatching { process.inputStream.bufferedReader().forEachLine { addLog("snolc: $it") } }
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("snolc start superseded")
+                return false
+            }
+            if (!awaitSocksPortOpen(snolcPort, MOBILE_READY_TIMEOUT_MS)) {
+                val exit = if (process.isAlive) "still starting" else "exited with ${process.exitValue()}"
+                throw IllegalStateException("snolc SOCKS port $snolcPort did not open ($exit)")
+            }
+            addLog("snolc ready on $socksListenHost:$snolcPort")
+            if (proxy != null) {
+                startProxyOverTunnel("snolc", location.normalized(), proxy, snolcPort) { p, g ->
+                    snolc.resolvedProxyCore(p, g)
+                }
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) {
+                    addLog("snolc proxy start superseded")
+                    return false
+                }
+                addLog("snolc proxy ready on $socksListenHost:$socksListenPort")
+            }
+            publishActiveSocks()
+            true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                addLog("snolc start canceled")
+                stopMobileAndWait()
+            }
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Transport failed"
+            addLog(if (staleRequest) "snolc start canceled: $message" else "snolc start failed: $message")
+            stopMobileAndWait()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            false
         }
     }
 
@@ -2473,6 +2583,7 @@ class OlcboxVpnService : VpnService() {
         // MasterDNS raises its own local SOCKS listener; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> masterDnsClient?.isRunning == true && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> openFluxProcess?.isAlive == true && (!openFluxProxyActive || proxyCoreRunning())
+        EngineType.Snolc -> snolcProcess?.isAlive == true && (!snolcProxyActive || proxyCoreRunning())
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -3213,6 +3324,14 @@ class OlcboxVpnService : VpnService() {
         }
         openFluxProcess = null
         openFluxProxyActive = false
+        snolcProcess?.let { p ->
+            runCatching { p.destroy() }
+            if (runCatching { !p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(true)) {
+                runCatching { p.destroyForcibly() }
+            }
+        }
+        snolcProcess = null
+        snolcProxyActive = false
         runCatching { Awg.stop() }
         runCatching { trustTunnelClient?.stop() }
         runCatching { trustTunnelClient?.close() }

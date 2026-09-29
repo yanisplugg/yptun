@@ -48,6 +48,7 @@ internal class DesktopEngineController(
 
     private val trustTunnel = DesktopTrustTunnel(log)
     private val openFlux = DesktopOpenFlux(log)
+    private val snolc = DesktopSnolc(log)
 
     val isSupported: Boolean get() = YpTunCore.isAvailable
 
@@ -106,6 +107,7 @@ internal class DesktopEngineController(
         tunHandledInCore = false
         masterDnsProxyActive = false
         openFluxProxyActive = false
+        snolcProxyActive = false
         singBoxFrontActive = false
         val config = location.normalized()
         when (config.engine) {
@@ -116,6 +118,7 @@ internal class DesktopEngineController(
                 startVkTurn(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.MasterDns -> startMasterDns(config, listenHost, listenPort, socksUsername, socksPassword)
             EngineType.OpenFlux -> startOpenFlux(config, listenHost, listenPort, socksUsername, socksPassword)
+            EngineType.Snolc -> startSnolc(config, listenHost, listenPort, socksUsername, socksPassword)
         }
         if (requestedTun && !tunHandledInCore) {
             log("Per-process split tunneling unavailable (core is ${activeProxyCore}); falling back to tun2socks for all apps")
@@ -151,6 +154,7 @@ internal class DesktopEngineController(
     fun stopAll() {
         trustTunnel.stop()
         openFlux.stop()
+        snolc.stop()
         YpTunCore.stopAll()
         // [start] is the only other place these are reset, and the olcRTC (Stealth) path never calls
         // it — it runs the olcrtc subprocess instead. So a stale tunHandledInCore=true, left by the
@@ -159,6 +163,7 @@ internal class DesktopEngineController(
         tunHandledInCore = false
         masterDnsProxyActive = false
         openFluxProxyActive = false
+        snolcProxyActive = false
         singBoxFrontActive = false
     }
 
@@ -172,6 +177,8 @@ internal class DesktopEngineController(
         // OpenFlux is a subprocess; in TUN mode a sing-box front owns the adapter in front of it.
         EngineType.OpenFlux -> openFlux.isRunning() &&
             if (openFluxProxyActive) proxyCoreRunning() else (!singBoxFrontActive || YpTunCore.sbRunning())
+        // snolc: subprocess serving the session-login SOCKS itself (RFC 1929 patch, real UDP ASSOCIATE).
+        EngineType.Snolc -> snolc.isRunning() && (!snolcProxyActive || proxyCoreRunning())
     }
 
     /** True when the active MasterDNS engine also fronts a proxy core (proxy-over-MasterDNS). */
@@ -179,6 +186,9 @@ internal class DesktopEngineController(
 
     /** True when a proxy core fronts the OpenFlux tunnel (proxy-over-OpenFlux). */
     private var openFluxProxyActive: Boolean = false
+
+    /** True when a proxy core fronts the snolc tunnel (proxy-over-snolc). */
+    private var snolcProxyActive: Boolean = false
 
     /** True while a sing-box front owns the TUN in front of the Xray core (see [startSingBoxFront]). */
     private var singBoxFrontActive: Boolean = false
@@ -730,6 +740,47 @@ internal class DesktopEngineController(
                 // TCP-only tunnel: QUIC would only time out before apps fall back to TCP.
                 blockQuic = true,
             )
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // snolc (the adapter takes the session login itself and relays UDP, so no front is needed)
+
+    private suspend fun startSnolc(
+        config: LocationConfig,
+        listenHost: String,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+    ) {
+        val sc = config.snolc
+        check(sc != null && sc.isComplete()) { "snolc not configured" }
+        // Optional proxy over the tunnel: snolc moves to the internal chain port without a login (the
+        // proxy core dials it without credentials) and the proxy core owns listenPort.
+        val proxy = sc.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link) ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?.takeIf { it.isComplete() }
+        }
+        if (sc.hasProxy() && proxy == null) {
+            log("snolc: proxy link present but could not be parsed — exiting via the exit node directly (no proxy)")
+        }
+        snolcProxyActive = proxy != null
+        val port = if (proxy != null) chainOlcrtcPort(listenPort) else listenPort
+        val host = if (proxy != null) "127.0.0.1" else listenHost
+        require(!isLocalSocksPortOpen(port)) { "snolc port $port is still in use" }
+        snolc.start(
+            sc, host, port,
+            socksUsername = if (proxy != null) "" else socksUsername,
+            socksPassword = if (proxy != null) "" else socksPassword,
+        )
+        if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("snolc SOCKS port $port did not open (${snolc.exitDescription()})")
+        }
+        log("snolc ready on $host:$port")
+        if (proxy != null) {
+            startProxyOverTunnel("snolc", config, proxy, port, listenHost, listenPort, socksUsername, socksPassword) { p, g ->
+                sc.resolvedProxyCore(p, g)
+            }
         }
     }
 

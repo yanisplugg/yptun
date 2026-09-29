@@ -444,7 +444,22 @@ val buildOpenFluxHost = tasks.register<Exec>("buildOpenFluxHost") {
     doFirst { outputFile.get().asFile.parentFile.mkdirs() }
 }
 
+// snolc client: the vendored Rust engine with every module linked in (../snolc, prebuilt by
+// snolc/build-all.sh — Rust 1.98.1 isn't a CI requirement). Copied only where a build exists for the host.
+val snolcPrebuiltDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("snolc/prebuilt")
+val snolcHostName: String? = run {
+    val suffix = if (currentBuildOs.isWindows) ".exe" else ""
+    val osName = if (currentBuildOs.isWindows) "windows" else if (currentBuildOs.isMacOsX) null else "linux"
+    osName?.let { "snolc-$it-$hostDesktopArch$suffix" }?.takeIf { snolcPrebuiltDir.resolve(it).isFile }
+}
+val copySnolcHost = tasks.register<Copy>("copySnolcHost") {
+    onlyIf { snolcHostName != null }
+    from(snolcPrebuiltDir) { include(snolcHostName ?: "none") }
+    into(generatedNativeResources.map { it.dir("native") })
+}
+
 val desktopNativeAssetTasks = mutableListOf<Any>(
+    copySnolcHost,
     buildOpenFluxHost,
     buildOlcRtcDarwinArm64,
     buildOlcRtcDarwinAmd64,
@@ -462,6 +477,7 @@ val desktopNativeAssetTasks = mutableListOf<Any>(
 )
 val hostDesktopNativeAssetTasks = mutableListOf<Any>(
     copyOlcRtcDataAssets,
+    copySnolcHost,
     buildOpenFluxHost
 )
 
@@ -774,9 +790,11 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/trusttunnel-client-windows-$hostDesktopArch.exe")
             add("native/trusttunnel-wizard-windows-$hostDesktopArch.exe")
             add("native/openflux-windows-$hostDesktopArch.exe")
+            snolcHostName?.let { add("native/$it") }
         }
         currentBuildOs.isLinux -> {
             add("native/openflux-linux-$hostDesktopArch")
+            snolcHostName?.let { add("native/$it") }
             add("native/olcrtc-linux-$hostDesktopArch")
             add("native/libolcrtc-linux-$hostDesktopArch.so")
             add("native/hev-socks5-tunnel-linux-$hostDesktopArch")
