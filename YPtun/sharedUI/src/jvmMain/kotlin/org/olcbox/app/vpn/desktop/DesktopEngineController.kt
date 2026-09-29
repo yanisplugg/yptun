@@ -212,7 +212,7 @@ internal class DesktopEngineController(
         socksPassword: String,
         deviceId: String,
     ) {
-        require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
         YpTunCore.rtcSetSocksListenHost(listenHost)
         applyTelemostCookies(config)
         YpTunCore.rtcApplyTransportOptions(config)
@@ -332,7 +332,7 @@ internal class DesktopEngineController(
             }
         }
 
-        require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
 
         if (chained) {
             applyTelemostCookies(config)
@@ -714,7 +714,7 @@ internal class DesktopEngineController(
             else -> listenPort
         }
         val host = if (proxy != null || front) "127.0.0.1" else listenHost
-        require(!isLocalSocksPortOpen(port)) { "OpenFlux port $port is still in use" }
+        requirePortFree(port) { "OpenFlux port $port is still in use" }
         openFlux.start(
             of, host, port,
             socksUsername = if (proxy != null) "" else socksUsername,
@@ -767,7 +767,7 @@ internal class DesktopEngineController(
         snolcProxyActive = proxy != null
         val port = if (proxy != null) chainOlcrtcPort(listenPort) else listenPort
         val host = if (proxy != null) "127.0.0.1" else listenHost
-        require(!isLocalSocksPortOpen(port)) { "snolc port $port is still in use" }
+        requirePortFree(port) { "snolc port $port is still in use" }
         snolc.start(
             sc, host, port,
             socksUsername = if (proxy != null) "" else socksUsername,
@@ -817,9 +817,9 @@ internal class DesktopEngineController(
         masterDnsProxyActive = useProxy
         val masterDnsPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
 
-        require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
         if (useProxy) {
-            require(!isLocalSocksPortOpen(masterDnsPort)) { "MasterDNS internal port $masterDnsPort is still in use" }
+            requirePortFree(masterDnsPort) { "MasterDNS internal port $masterDnsPort is still in use" }
         }
 
         val masterDnsAddr = "$listenHost:$masterDnsPort"
@@ -999,7 +999,7 @@ internal class DesktopEngineController(
         }
         check(vk != null && vk.isComplete() && outboundConfigured) { "VK-TURN not configured" }
 
-        require(!isLocalSocksPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
 
         val listenAddr = "127.0.0.1:${vk.listenPort}"
         if (usesWdtt) {
@@ -1544,6 +1544,20 @@ internal class DesktopEngineController(
         Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 250) }
     }.isSuccess
 
+    /**
+     * The previous session's core may still be tearing down (or the OS still holding its listener) for a
+     * moment after stop. Switching servers is stop + start, and failing right there with "port is still
+     * in use" left the portable unable to change the server until the app was restarted (iOS got the same
+     * fix in a19402ee, Android waits in waitForSocksPortReleased). Only a port that STAYS busy is an error.
+     */
+    private suspend fun requirePortFree(port: Int, message: () -> String) {
+        val deadline = System.currentTimeMillis() + PORT_RELEASE_TIMEOUT_MS
+        while (isLocalSocksPortOpen(port)) {
+            if (System.currentTimeMillis() >= deadline) throw IllegalArgumentException(message())
+            delay(PORT_POLL_INTERVAL_MS * 5)
+        }
+    }
+
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Int): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
@@ -1561,6 +1575,9 @@ internal class DesktopEngineController(
 
         /** How often [awaitSocksPortOpen] probes the core's local port. */
         const val PORT_POLL_INTERVAL_MS = 30L
+
+        /** How long a start waits for the previous session's local port to be released. */
+        const val PORT_RELEASE_TIMEOUT_MS = 5_000L
 
         /** Size past which singbox.log is dropped at start instead of appended to (see singBoxLogPath). */
         const val MAX_SINGBOX_LOG_BYTES = 32L * 1024 * 1024
