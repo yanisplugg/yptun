@@ -429,7 +429,10 @@ class HomeScreenViewModel(
         _state.update { it.copy(availableFreeServers = null, freeServersProgress = null) }
     }
 
-    fun loadFreeServers(onError: (String) -> Unit = {}) {
+    fun loadFreeServers(
+        parallelism: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
+        onError: (String) -> Unit = {},
+    ) {
         freeServersJob?.cancel()
         _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
         freeServersJob = viewModelScope.launch {
@@ -481,9 +484,13 @@ class HomeScreenViewModel(
                 val workingServers = mutableListOf<FreeServerItem>()
 
                 withContext(Dispatchers.IO) {
-                    // Используем умеренный пул параллельности (6), чтобы исключить конфликты портов
-                    // и исчерпание сетевых сокетов на iOS
-                    val sem = Semaphore(12)
+                    // Тот же ползунок «Потоки пинга» из настроек, что и у обычного пинга.
+                    val sem = Semaphore(
+                        parallelism.coerceIn(
+                            org.olcbox.app.data.model.AppBehaviorSettings.MIN_PING_PARALLELISM,
+                            org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM,
+                        )
+                    )
                     parsedItems.mapIndexed { index, (line, profile) ->
                         async {
                             sem.withPermit {
