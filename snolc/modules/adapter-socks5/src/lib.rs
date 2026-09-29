@@ -161,6 +161,17 @@ struct Options {
     max_udp_associations: usize,
     max_request_bytes: usize,
     reject_fragments: bool,
+    /// YPtun: RFC 1929 login. Both empty (the default) keeps upstream's no-auth behaviour.
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    password: String,
+}
+
+impl Options {
+    fn credentials(&self) -> Option<(&[u8], &[u8])> {
+        (!self.username.is_empty()).then(|| (self.username.as_bytes(), self.password.as_bytes()))
+    }
 }
 
 fn validate_config(config: &[u8], _base: &[u8]) -> Result<(), String> {
@@ -175,6 +186,9 @@ fn parse_options(config: &[u8]) -> Result<Options, String> {
         || options.max_udp_associations == 0
         || options.max_request_bytes < 262
         || !options.reject_fragments
+        || options.username.len() > 255
+        || options.password.len() > 255
+        || (options.username.is_empty() != options.password.is_empty())
     {
         return Err("SOCKS5 options are inconsistent".into());
     }
@@ -183,6 +197,7 @@ fn parse_options(config: &[u8]) -> Result<Options, String> {
 
 enum ClientPhase {
     Greeting,
+    Auth,
     Request,
     Ready(Request),
     Failed,
@@ -209,7 +224,7 @@ impl ClientConnection {
         })
     }
 
-    fn poll(&mut self, limit: usize) -> io::Result<()> {
+    fn poll(&mut self, limit: usize, credentials: Option<(&[u8], &[u8])>) -> io::Result<()> {
         let mut buffer = [0; 1024];
         loop {
             match self.stream.read(&mut buffer) {
@@ -228,11 +243,11 @@ impl ClientConnection {
                 Err(error) => return Err(error),
             }
         }
-        self.parse();
+        self.parse(credentials);
         self.write_pending()
     }
 
-    fn parse(&mut self) {
+    fn parse(&mut self, credentials: Option<(&[u8], &[u8])>) {
         if matches!(self.phase, ClientPhase::Greeting) {
             if self.input.len() < 2 {
                 return;
@@ -242,14 +257,41 @@ impl ClientConnection {
             if self.input.len() < total {
                 return;
             }
-            if self.input[0] != 5 || !self.input[2..total].contains(&0) {
+            let wanted = if credentials.is_some() { 2 } else { 0 };
+            if self.input[0] != 5 || !self.input[2..total].contains(&wanted) {
                 self.queue(&[5, 0xff]);
                 self.phase = ClientPhase::Failed;
                 return;
             }
             self.input.drain(..total);
-            self.queue(&[5, 0]);
-            self.phase = ClientPhase::Request;
+            self.queue(&[5, wanted]);
+            self.phase = if credentials.is_some() { ClientPhase::Auth } else { ClientPhase::Request };
+        }
+        if matches!(self.phase, ClientPhase::Auth) {
+            // RFC 1929: VER=1, ULEN, UNAME, PLEN, PASSWD.
+            let Some(&ulen) = self.input.get(1) else { return };
+            let Some(&plen) = self.input.get(2 + ulen as usize) else { return };
+            let total = 3 + ulen as usize + plen as usize;
+            if self.input.len() < total {
+                return;
+            }
+            let user = &self.input[2..2 + ulen as usize];
+            let pass = &self.input[3 + ulen as usize..total];
+            let ok = self.input[0] == 1
+                && credentials.is_some_and(|(u, p)| {
+                    // loopback listener; still compare without early exit.
+                    let a = user.iter().zip(u).fold(user.len() ^ u.len(), |d, (x, y)| d | (x ^ y) as usize);
+                    let b = pass.iter().zip(p).fold(pass.len() ^ p.len(), |d, (x, y)| d | (x ^ y) as usize);
+                    a | b == 0
+                });
+            self.input.drain(..total);
+            if ok {
+                self.queue(&[1, 0]);
+                self.phase = ClientPhase::Request;
+            } else {
+                self.queue(&[1, 1]);
+                self.phase = ClientPhase::Failed;
+            }
         }
         if matches!(self.phase, ClientPhase::Request) {
             let Some(length) = request_length(&self.input) else {
@@ -909,7 +951,7 @@ fn poll_state(instance: u64, state: &mut State) {
     accept_clients(instance, state);
     let mut promote = Vec::new();
     for (index, client) in state.clients.iter_mut().enumerate() {
-        if client.poll(state.options.max_request_bytes).is_err() {
+        if client.poll(state.options.max_request_bytes, state.options.credentials()).is_err() {
             client.phase = ClientPhase::Failed;
         }
         if client.ready() {

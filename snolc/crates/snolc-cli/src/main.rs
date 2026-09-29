@@ -48,7 +48,18 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
             println!("valid");
             Ok(())
         }
-        [command, path] if command == "run" => run_engine(Path::new(path)),
+        [command, path] if command == "run" => {
+            // YPtun: with SNOLC_EXIT_ON_STDIN_EOF set, exit when the parent app closes our stdin
+            // (it died or stopped us) so no orphan keeps the port and the tunnel.
+            if env::var_os("SNOLC_EXIT_ON_STDIN_EOF").is_some() {
+                thread::spawn(|| {
+                    let mut sink = [0u8; 256];
+                    while std::io::Read::read(&mut std::io::stdin(), &mut sink).is_ok_and(|n| n > 0) {}
+                    std::process::exit(0);
+                });
+            }
+            run_engine(Path::new(path))
+        }
         [command, socket, instance, request] if command == "control" => {
             let request = fs::read(request).map_err(|error| error.to_string())?;
             if request.len() > 65_536 {
