@@ -16,7 +16,7 @@ env:
   GOLANGCI_VERSION: v2.12.2
   GOVULN_VERSION: v1.6.0
   GORELEASER_VERSION: v2.17.1
-  GOMOBILE_VERSION: latest
+  GOMOBILE_VERSION: v0.0.0-20260821190718-4776eadac327
   TASK_VERSION: 3.52.0
 
 jobs:
@@ -81,6 +81,18 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULN_VERSION }}
 
       - run: govulncheck ./...
+
+  install-sh:
+    name: install.sh (bats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install bats
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bats
+
+      - name: Run tests
+        run: bats scripts/tests
 
   build-snapshot:
     name: Snapshot build (all targets)

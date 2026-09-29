@@ -8,17 +8,18 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/pion/dtls/v3"
 	"github.com/samosvalishe/free-turn-proxy/internal/clientsdb"
 	"github.com/samosvalishe/free-turn-proxy/internal/config"
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
+	"github.com/samosvalishe/free-turn-proxy/internal/proxy/bond"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/tcpserver"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/udpserver"
+	"github.com/samosvalishe/free-turn-proxy/internal/safego"
+	"github.com/samosvalishe/free-turn-proxy/internal/shutdown"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
 	"github.com/samosvalishe/free-turn-proxy/internal/wire"
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
@@ -53,22 +54,8 @@ func main() {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-signalChan
-		logger.Infof("Terminating...")
-		cancel()
-		select {
-		case <-signalChan:
-		case <-time.After(5 * time.Second):
-		}
-		logger.Warnf("Forced exit after shutdown timeout")
-		cancel()
-		os.Exit(1)
-	}()
+	ctx, stop := shutdown.Watch(context.Background(), logger)
+	defer stop()
 
 	addr, err := net.ResolveUDPAddr("udp", cfg.Proxy.Listen)
 	if err != nil {
@@ -81,32 +68,9 @@ func main() {
 		logger.Warnf("running with -obf-profile=none: any client reaching %s can relay to %s (no shared-key auth)", cfg.Proxy.Listen, cfg.Proxy.Connect)
 	}
 
-	certificate, genErr := dtlsdial.GenerateSelfSignedCert()
-	if genErr != nil {
-		logger.Errorf("self-signed cert: %v", genErr)
-		os.Exit(1)
-	}
-
-	dtlsOpts := []dtls.ServerOption{
-		dtls.WithCertificates(certificate),
-		dtls.WithExtendedMasterSecret(dtls.RequireExtendedMasterSecret),
-		dtls.WithCipherSuites(dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256),
-		dtls.WithConnectionIDGenerator(dtls.RandomCIDGenerator(8)),
-	}
-	var listener net.Listener
-	if cfg.Obf.Enabled() {
-		logger.Infof("OBF profile=%s: listener only accepts clients with matching -obf-profile and -obf-key", cfg.Obf.Profile)
-		obfListener, oerr := wire.Listen(string(cfg.Obf.Profile), addr, cfg.Obf.Key, cfg.Obf.Timing)
-		if oerr != nil {
-			logger.Errorf("obf listen: %v", oerr)
-			os.Exit(1)
-		}
-		listener, err = dtls.NewListenerWithOptions(obfListener, dtlsOpts...)
-	} else {
-		listener, err = dtls.ListenWithOptions("udp", addr, dtlsOpts...)
-	}
+	listener, err := listen(cfg, addr, logger)
 	if err != nil {
-		logger.Errorf("dtls listen: %v", err)
+		logger.Errorf("%v", err)
 		os.Exit(1)
 	}
 	context.AfterFunc(ctx, func() {
@@ -124,11 +88,44 @@ func main() {
 			logger.Errorf("Failed to open clients-file: %v", err)
 			os.Exit(1)
 		}
-		d.StartHotReload(10 * time.Second)
+		d.StartHotReload(ctx, 10*time.Second)
 		db = d
 		logger.Infof("Client ID authorization enabled via %s", cfg.ClientsFile)
 	}
 
+	serve(ctx, logger, listener, db, cfg)
+}
+
+func listen(cfg *config.Server, addr *net.UDPAddr, logger logx.Logger) (net.Listener, error) {
+	certificate, err := dtlsdial.GenerateSelfSignedCert()
+	if err != nil {
+		return nil, fmt.Errorf("self-signed cert: %w", err)
+	}
+	dtlsOpts := []dtls.ServerOption{
+		dtls.WithCertificates(certificate),
+		dtls.WithExtendedMasterSecret(dtls.RequireExtendedMasterSecret),
+		dtls.WithCipherSuites(dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256),
+		dtls.WithConnectionIDGenerator(dtls.RandomCIDGenerator(8)),
+	}
+	var listener net.Listener
+	if cfg.Obf.Enabled() {
+		logger.Infof("OBF profile=%s: listener only accepts clients with matching -obf-profile and -obf-key", cfg.Obf.Profile)
+		obfListener, oerr := wire.Listen(string(cfg.Obf.Profile), addr, cfg.Obf.Key, cfg.Obf.Timing)
+		if oerr != nil {
+			return nil, fmt.Errorf("obf listen: %w", oerr)
+		}
+		listener, err = dtls.NewListenerWithOptions(obfListener, dtlsOpts...)
+	} else {
+		listener, err = dtls.ListenWithOptions("udp", addr, dtlsOpts...)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("dtls listen: %w", err)
+	}
+	return listener, nil
+}
+
+func serve(ctx context.Context, logger logx.Logger, listener net.Listener, db *clientsdb.DB, cfg *config.Server) {
+	bonds := &bond.Server{}
 	var wg sync.WaitGroup
 	var backoff time.Duration
 	for {
@@ -157,7 +154,7 @@ func main() {
 		}
 		backoff = 0
 		wg.Go(func() {
-			handleAccepted(ctx, logger, db, conn, cfg)
+			_ = safego.Run(logger, func() { handleAccepted(ctx, logger, db, conn, cfg, bonds) })
 		})
 	}
 }
@@ -185,13 +182,16 @@ func wireMode(m config.ProxyMode) byte {
 }
 
 func modeName(b byte) string {
+	if b == clientsdb.ModeTCPBond {
+		return "tcp-bond"
+	}
 	if b == clientsdb.ModeTCP {
 		return string(config.ProxyModeTCP)
 	}
 	return string(config.ProxyModeUDP)
 }
 
-func handleAccepted(ctx context.Context, logger logx.Logger, db *clientsdb.DB, conn net.Conn, cfg *config.Server) {
+func handleAccepted(ctx context.Context, logger logx.Logger, db *clientsdb.DB, conn net.Conn, cfg *config.Server, bonds *bond.Server) {
 	defer func() {
 		if closeErr := conn.Close(); closeErr != nil {
 			logger.Warnf("failed to close incoming connection: %s", closeErr)
@@ -216,38 +216,44 @@ func handleAccepted(ctx context.Context, logger logx.Logger, db *clientsdb.DB, c
 	}
 	logger.Debugf("Handshake done")
 
-	// Wire-контракт: клиент всегда передаёт Client ID первой app-record.
-	clientID, clientMode, err := clientsdb.ReadClientID(dtlsConn)
+	var clientMode byte
+	clientID, data, err := clientsdb.AcceptClientID(dtlsConn, func(id string, mode byte) error {
+		clientMode = mode
+		return admitClient(cfg, db, id, mode)
+	})
 	if err != nil {
-		logger.Warnf("Read Client ID failed: %v", err)
+		logger.Warnf("Client ID from %s rejected: %v", conn.RemoteAddr(), err)
 		return
-	}
-	if want := wireMode(cfg.Proxy.Mode); clientMode != clientsdb.ModeUnset && clientMode != want {
-		logger.Warnf("Mode mismatch from %s: клиент %s, сервер %s - трафик не пойдёт, приведите -mode к одному значению",
-			conn.RemoteAddr(), modeName(clientMode), cfg.Proxy.Mode)
-		return
-	}
-	if clientMode == clientsdb.ModeUnset && cfg.Proxy.Mode == config.ProxyModeTCP {
-		logger.Warnf("Mode mismatch from %s: клиент без тега режима (udp), сервер tcp", conn.RemoteAddr())
-		return
-	}
-	if db != nil {
-		if !db.IsAuthorized(clientID) {
-			logger.Warnf("Unauthorized Client ID: %s. Dropping connection.", clientID)
-			return
-		}
-		logger.Debugf("Client %s authorized", clientID)
-	} else {
-		logger.Debugf("Client ID received (no allowlist): %s", clientID)
 	}
 
 	logger.Infof("Session up: client=%s from=%s", clientID, conn.RemoteAddr())
-	if cfg.Proxy.Mode == config.ProxyModeTCP {
-		tcpserver.Handle(ctx, logger, dtlsConn, cfg.Proxy.Connect, cfg.KCP.Profile)
-	} else {
-		udpserver.Handle(ctx, logger, conn, cfg.Proxy.Connect)
+	switch {
+	case clientMode == clientsdb.ModeTCPBond:
+		tcpserver.HandleBond(ctx, logger, data, cfg.Proxy.Connect, cfg.KCP.Profile, bonds, clientID)
+	case cfg.Proxy.Mode == config.ProxyModeTCP:
+		tcpserver.Handle(ctx, logger, data, cfg.Proxy.Connect, cfg.KCP.Profile)
+	default:
+		udpserver.Handle(ctx, logger, data, cfg.Proxy.Connect)
 	}
 	logger.Infof("Session down: client=%s from=%s", clientID, conn.RemoteAddr())
+}
+
+// admitClient: режим клиента обязан совпасть с сервером, ID - быть в allowlist (если он есть).
+func admitClient(cfg *config.Server, db *clientsdb.DB, id string, mode byte) error {
+	if mode == clientsdb.ModeTCPBond {
+		mode = clientsdb.ModeTCP
+	}
+	if want := wireMode(cfg.Proxy.Mode); mode != clientsdb.ModeUnset && mode != want {
+		return fmt.Errorf("mode mismatch: клиент %s, сервер %s - приведите -mode к одному значению",
+			modeName(mode), cfg.Proxy.Mode)
+	}
+	if mode == clientsdb.ModeUnset && cfg.Proxy.Mode == config.ProxyModeTCP {
+		return errors.New("mode mismatch: клиент без тега режима (udp), сервер tcp")
+	}
+	if db != nil && !db.IsAuthorized(id) {
+		return fmt.Errorf("unauthorized client ID %s", id)
+	}
+	return nil
 }
 
 func handleClientsCommand(args []string) {

@@ -36,6 +36,7 @@ func ValidateConfig(configJSON string) string       // Валидация JSON
 func ConfigToArgs(configJSON string) (string, error) // Вывод эквивалентной CLI-команды
 func DumpLogs() string
 func ClearLogs()
+func SetLogBuffer(enabled bool)
 func Version() string
 ```
 
@@ -51,7 +52,7 @@ func Version() string
   "provider": "vk",
   "turn":  {"n": 12, "transport": "tcp", "host": "", "port": ""},
   "proxy": {"mode": "udp", "listen": "127.0.0.1:9000"},
-  "vk":    {"links": ["https://vk.ru/call/join/..."], "streamsPerCred": 12,
+  "vk":    {"links": ["<call-link>"], "streamsPerCred": 12,
             "manualCaptcha": false, "platform": "mobile"},
   "obf":   {"profile": "rtpopus3", "key": "<64 hex>", "timingMs": 0},
   "dns":   {"mode": "auto", "servers": ["8.8.8.8"]},
@@ -62,10 +63,13 @@ func Version() string
 ```
 
 *   `clientId` - обязателен. Ядро на мобиле не пишет файлы, ID должен храниться в приложении.
+*   `provider`: `vk` или `direct` (без реле, прямо на `peer`; блок `vk` игнорируется). `turn.n` = 0 - дефолт провайдера (12 / 1).
 
 ### Режим туннеля
 
 `proxy.mode`: `udp` (по умолчанию, UDP-релей для WireGuard) или `tcp` (TCP-форвардер для Xray/sing-box).
+
+`proxy.bond: true` включает объединение сессий для каждого TCP-соединения; допускается только с `proxy.mode: "tcp"`, по умолчанию выключено. Нужны обновлённые сервер и AAR. При отказе одной участвующей сессии соединение закрывается; новое использует оставшиеся сессии. Публичные методы gomobile не меняются.
 
 В `tcp` ядро слушает `proxy.listen` как TCP-порт, и VLESS-клиент ходит туда своим outbound. Своего tun при этом нет:
 

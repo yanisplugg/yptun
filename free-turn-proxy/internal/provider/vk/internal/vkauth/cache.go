@@ -2,9 +2,9 @@ package vkauth
 
 import (
 	"errors"
-	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/stun/v3"
 )
@@ -12,8 +12,24 @@ import (
 type StreamCredentialsCache struct {
 	creds         TurnCredentials
 	mutex         sync.RWMutex
+	fetchMu       sync.Mutex
 	errorCount    atomic.Int32
 	lastErrorTime atomic.Int64
+}
+
+func (c *StreamCredentialsCache) lookup(link string, streamID int) (TurnCredentials, []string, bool) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	if c.creds.Link != link || !time.Now().Before(c.creds.ExpiresAt) || len(c.creds.ServerAddrs) == 0 {
+		return TurnCredentials{}, nil, false
+	}
+	return c.creds, orderAddrs(c.creds.ServerAddrs, streamID), true
+}
+
+func (c *StreamCredentialsCache) store(creds TurnCredentials) {
+	c.mutex.Lock()
+	c.creds = creds
+	c.mutex.Unlock()
 }
 
 type Store struct {
@@ -80,20 +96,14 @@ func IsAuthError(err error) bool {
 	}
 	// Ответ TURN-сервера приходит типизированным - код берём из него, а не из текста.
 	if turnErr, ok := errors.AsType[*stun.TurnError](err); ok {
+		// 486 означает занятую квоту, а не невалидные реквизиты.
 		switch turnErr.ErrorCodeAttr.Code {
-		// 486 - квота аллокаций: креды живы, но новую сессию по ним не поднять.
-		case stun.CodeUnauthorized, stun.CodeWrongCredentials,
-			stun.CodeStaleNonce, stun.CodeAllocQuotaReached:
+		case stun.CodeUnauthorized, stun.CodeWrongCredentials, stun.CodeStaleNonce:
 			return true
 		default:
 			return false
 		}
 	}
-	// Ошибки не от TURN-сервера (получение кредов у провайдера) типа не несут.
-	s := err.Error()
-	return strings.Contains(s, "401") ||
-		strings.Contains(s, "Unauthorized") ||
-		strings.Contains(s, "authentication") ||
-		strings.Contains(s, "invalid credential") ||
-		strings.Contains(s, "stale nonce")
+
+	return errors.Is(err, ErrVKAuthFailed)
 }

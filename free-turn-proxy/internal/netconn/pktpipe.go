@@ -35,15 +35,15 @@ func PacketPipe(mtu, queue int) (net.PacketConn, net.PacketConn) {
 	toA := make(chan *[]byte, queue)
 	toB := make(chan *[]byte, queue)
 
-	a := &packetPipe{local: "pipe:a", remote: "pipe:b", rx: toA, tx: toB, mtu: mtu, pool: pool, done: make(chan struct{})}
-	b := &packetPipe{local: "pipe:b", remote: "pipe:a", rx: toB, tx: toA, mtu: mtu, pool: pool, done: make(chan struct{})}
+	a := &packetPipe{local: pipeAddr("pipe:a"), remote: pipeAddr("pipe:b"), rx: toA, tx: toB, mtu: mtu, pool: pool, done: make(chan struct{})}
+	b := &packetPipe{local: pipeAddr("pipe:b"), remote: pipeAddr("pipe:a"), rx: toB, tx: toA, mtu: mtu, pool: pool, done: make(chan struct{})}
 	a.peer, b.peer = b, a
 	return a, b
 }
 
 type packetPipe struct {
-	local  pipeAddr
-	remote pipeAddr
+	local  net.Addr
+	remote net.Addr
 	rx     <-chan *[]byte
 	tx     chan<- *[]byte
 	peer   *packetPipe
@@ -85,6 +85,11 @@ func (p *packetPipe) ReadFrom(b []byte) (int, net.Addr, error) {
 		select {
 		case <-p.done:
 			return 0, nil, net.ErrClosed
+		case <-p.peer.done:
+			if n, ok := p.drain(b); ok {
+				return n, p.remote, nil
+			}
+			return 0, nil, net.ErrClosed
 		case <-changed:
 			continue
 		case <-timeout:
@@ -97,6 +102,20 @@ func (p *packetPipe) ReadFrom(b []byte) (int, net.Addr, error) {
 			p.pool.Put(buf)
 			return n, p.remote, nil
 		}
+	}
+}
+
+func (p *packetPipe) drain(b []byte) (int, bool) {
+	select {
+	case buf, ok := <-p.rx:
+		if !ok {
+			return 0, false
+		}
+		n := copy(b, *buf)
+		p.pool.Put(buf)
+		return n, true
+	default:
+		return 0, false
 	}
 }
 
