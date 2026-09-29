@@ -931,7 +931,7 @@ const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/v
 val FREE_SERVERS_SOURCES = listOf(
     FREE_SERVERS_URL to 0,
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt" to 0,
-    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt" to 1500,
+    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt" to 750,
 )
 
 /** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */
