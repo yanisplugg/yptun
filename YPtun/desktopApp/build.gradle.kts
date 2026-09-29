@@ -453,7 +453,7 @@ val snolcHostName: String? = run {
     osName?.let { "snolc-$it-$hostDesktopArch$suffix" }?.takeIf { snolcPrebuiltDir.resolve(it).isFile }
 }
 val copySnolcHost = tasks.register<Copy>("copySnolcHost") {
-    onlyIf { snolcHostName != null }
+    enabled = snolcHostName != null // not onlyIf{}: a lambda over script state breaks the configuration cache
     from(snolcPrebuiltDir) { include(snolcHostName ?: "none") }
     into(generatedNativeResources.map { it.dir("native") })
 }
