@@ -143,11 +143,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -237,41 +234,6 @@ internal fun AppSettingsSheet(
         }
     }
 
-    val dismissNestedScrollConnection = remember {
-        object : NestedScrollConnection {
-            var accumulatedDown = 0f
-
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (available.y < 0 && accumulatedDown > 0f) {
-                    accumulatedDown = (accumulatedDown + available.y).coerceAtLeast(0f)
-                }
-                return Offset.Zero
-            }
-
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (available.y > 0) {
-                    accumulatedDown += available.y
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                val shouldDismiss = accumulatedDown > 100f || available.y > 200f
-                accumulatedDown = 0f
-                if (shouldDismiss) {
-                    closeSheet()
-                    return available
-                }
-                return Velocity.Zero
-            }
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                accumulatedDown = 0f
-                return Velocity.Zero
-            }
-        }
-    }
-
     BackHandler {
         route = when (route) {
             AppSettingsRoute.Hub -> {
@@ -291,27 +253,9 @@ internal fun AppSettingsSheet(
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
         sheetState = sheetState,
-        dragHandle = {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { closeSheet() }
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                BottomSheetDefaults.DragHandle()
-            }
-        }
+        dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .nestedScroll(dismissNestedScrollConnection)
-        ) {
-            AnimatedContent(
+        AnimatedContent(
             targetState = route,
             transitionSpec = {
                 fadeIn(
@@ -366,7 +310,8 @@ internal fun AppSettingsSheet(
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
                     onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
                     experimentalUnlocked = appBehavior.experimentalUnlocked,
-                    onExperimentalClick = { route = AppSettingsRoute.Experimental }
+                    onExperimentalClick = { route = AppSettingsRoute.Experimental },
+                    onClose = { closeSheet() }
                 )
 
                 AppSettingsRoute.Experimental -> ExperimentalContent(
@@ -496,7 +441,6 @@ internal fun AppSettingsSheet(
                     onCheckUpdatesClick = onCheckUpdatesClick
                 )
             }
-        }
         }
     }
 }
@@ -751,7 +695,8 @@ private fun AppSettingsHubContent(
     onUpdatesClick: () -> Unit,
     onApplicationLogsClick: () -> Unit,
     experimentalUnlocked: Boolean = false,
-    onExperimentalClick: () -> Unit = {}
+    onExperimentalClick: () -> Unit = {},
+    onClose: () -> Unit = {}
 ) {
     val s = LocalStrings.current
     Column(
@@ -765,7 +710,8 @@ private fun AppSettingsHubContent(
         SettingsSheetHeader(
             icon = Icons.Outlined.Settings,
             title = s.settings,
-            subtitle = selectedMode.shortLabel()
+            subtitle = selectedMode.shortLabel(),
+            onClose = onClose
         )
 
         Spacer(Modifier.height(8.dp))
@@ -2218,14 +2164,18 @@ private fun SettingsSwitchRow(
 private fun SettingsSheetHeader(
     icon: ImageVector,
     title: String,
-    subtitle: String
+    subtitle: String,
+    onClose: (() -> Unit)? = null
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         HeaderIcon(icon = icon)
 
         Spacer(Modifier.width(14.dp))
 
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.headlineSmall,
@@ -2236,6 +2186,16 @@ private fun SettingsSheetHeader(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+
+        if (onClose != null) {
+            IconButton(onClick = onClose) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Close",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

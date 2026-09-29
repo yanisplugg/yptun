@@ -33,7 +33,7 @@ data class CustomGroup(
  */
 object SubscriptionUserAgentHolder {
     @kotlin.concurrent.Volatile
-    var mode: String = AppBehaviorSettings.SUB_UA_HAPP
+    var mode: String = AppBehaviorSettings.SUB_UA_YPTUN
 }
 
 /** General application behavior toggles (the "Настройки приложения" screen). */
@@ -172,7 +172,7 @@ data class AppBehaviorSettings(
      * only variant that carries the server's fakeip pool + dns.hosts). Default [SUB_UA_YPTUN] = clean
      * names + FakeDNS from Happ. One of [SUBSCRIPTION_UA_MODES].
      */
-    val subscriptionUserAgent: String = SUB_UA_HAPP,
+    val subscriptionUserAgent: String = SUB_UA_YPTUN,
     /**
      * App-wide default engine for VLESS-like proxy transports (Standard/Chain exit, VK-TURN
      * exit/chain). Applied ONLY when the per-location core is [ProxyCore.Auto]; an explicit

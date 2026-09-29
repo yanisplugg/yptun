@@ -81,7 +81,11 @@ class IosSettingsController {
         ThemeState.dynamicEnabled = false
         ThemeState.accent = ui.accentArgb?.let { Color(it) }
         ThemeState.textColor = ui.textArgb?.let { Color(it) }
-        ThemeState.background = ui.backgroundArgb?.let { Color(it) }
+        if (_appBehavior.value.subscriptionUserAgent == AppBehaviorSettings.SUB_UA_HAPP) {
+            val fixed = _appBehavior.value.copy(subscriptionUserAgent = AppBehaviorSettings.SUB_UA_YPTUN)
+            _appBehavior.value = fixed
+            IosSharedStore.saveAppBehavior(fixed)
+        }
         SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
         ensureGeoAssets()
     }
