@@ -241,9 +241,10 @@ fun AppSettingsSheet(
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
         sheetState = sheetState,
-        dragHandle = { BottomSheetDefaults.DragHandle() }
+        dragHandle = null
     ) {
-        AnimatedContent(
+        Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+            AnimatedContent(
             targetState = route,
             transitionSpec = {
                 fadeIn(
@@ -435,6 +436,7 @@ fun AppSettingsSheet(
             }
         }
     }
+}
 }
 
 enum class AppSettingsInitialRoute {
