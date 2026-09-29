@@ -444,7 +444,22 @@ val buildOpenFluxHost = tasks.register<Exec>("buildOpenFluxHost") {
     doFirst { outputFile.get().asFile.parentFile.mkdirs() }
 }
 
+// snolc client: the vendored Rust engine with every module linked in (../snolc, prebuilt by
+// snolc/build-all.sh — Rust 1.98.1 isn't a CI requirement). Copied only where a build exists for the host.
+val snolcPrebuiltDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("snolc/prebuilt")
+val snolcHostName: String? = run {
+    val suffix = if (currentBuildOs.isWindows) ".exe" else ""
+    val osName = if (currentBuildOs.isWindows) "windows" else if (currentBuildOs.isMacOsX) null else "linux"
+    osName?.let { "snolc-$it-$hostDesktopArch$suffix" }?.takeIf { snolcPrebuiltDir.resolve(it).isFile }
+}
+val copySnolcHost = tasks.register<Copy>("copySnolcHost") {
+    enabled = snolcHostName != null // not onlyIf{}: a lambda over script state breaks the configuration cache
+    from(snolcPrebuiltDir) { include(snolcHostName ?: "none") }
+    into(generatedNativeResources.map { it.dir("native") })
+}
+
 val desktopNativeAssetTasks = mutableListOf<Any>(
+    copySnolcHost,
     buildOpenFluxHost,
     buildOlcRtcDarwinArm64,
     buildOlcRtcDarwinAmd64,
@@ -462,6 +477,7 @@ val desktopNativeAssetTasks = mutableListOf<Any>(
 )
 val hostDesktopNativeAssetTasks = mutableListOf<Any>(
     copyOlcRtcDataAssets,
+    copySnolcHost,
     buildOpenFluxHost
 )
 
@@ -774,9 +790,11 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/trusttunnel-client-windows-$hostDesktopArch.exe")
             add("native/trusttunnel-wizard-windows-$hostDesktopArch.exe")
             add("native/openflux-windows-$hostDesktopArch.exe")
+            snolcHostName?.let { add("native/$it") }
         }
         currentBuildOs.isLinux -> {
             add("native/openflux-linux-$hostDesktopArch")
+            snolcHostName?.let { add("native/$it") }
             add("native/olcrtc-linux-$hostDesktopArch")
             add("native/libolcrtc-linux-$hostDesktopArch.so")
             add("native/hev-socks5-tunnel-linux-$hostDesktopArch")
@@ -859,6 +877,27 @@ tasks.named("processResources") {
     dependsOn(verifyDesktopNativeResources)
 }
 
+// jlink ships the app runtime WITHOUT the JDK's base CDS archive (bin/server/classes.jsa), so every
+// launch loaded all JDK classes from scratch and -XX:+AutoCreateSharedArchive could not work at all.
+// The runtime has no java.exe, so borrow the build JDK's (same build jpackage made the runtime from)
+// just long enough to dump the archive into it.
+if (currentBuildOs.isWindows) {
+    tasks.matching { it.name == "createDistributable" || it.name == "createReleaseDistributable" }.configureEach {
+        doLast {
+            val runtimeBin = outputs.files.asFileTree.matching { include("**/runtime/bin/server/jvm.dll") }
+                .files.firstOrNull()?.parentFile?.parentFile ?: return@doLast
+            val java = runtimeBin.resolve("java.exe")
+            File(System.getProperty("java.home"), "bin/java.exe").copyTo(java, overwrite = true)
+            try {
+                val code = ProcessBuilder(java.absolutePath, "-Xshare:dump").inheritIO().start().waitFor()
+                if (code != 0) logger.warn("CDS base archive dump failed ($code) — app still works, starts slower")
+            } finally {
+                java.delete()
+            }
+        }
+    }
+}
+
 listOf(
     "run",
     "createReleaseDistributable",
@@ -895,6 +934,13 @@ compose.desktop {
             "-XX:G1PeriodicGCInterval=30000",
             "-XX:MinHeapFreeRatio=10",
             "-XX:MaxHeapFreeRatio=25",
+            // Class-data sharing for the app's own classes: the first normal exit dumps them into
+            // yptun.jsa beside the jars, and every later start maps them instead of re-parsing ~100
+            // jars (window 3.8 s -> 2.2 s, measured). Needs the runtime's base archive, which
+            // jlink leaves out — see dumpRuntimeCdsArchive. An unwritable $APPDIR (installed under
+            // Program Files) just skips the dump.
+            "-XX:+AutoCreateSharedArchive",
+            "-XX:SharedArchiveFile=\$APPDIR/yptun.jsa",
         )
 
         buildTypes.release.proguard {

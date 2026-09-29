@@ -1,0 +1,21 @@
+[package]
+name = "snolc-adapter-direct"
+description = "direct destination adapter for snolc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+snolc-sdk.workspace = true
+toml.workspace = true
+
+[features]
+static-link = []

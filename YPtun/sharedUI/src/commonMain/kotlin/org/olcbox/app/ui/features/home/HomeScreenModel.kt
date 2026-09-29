@@ -429,19 +429,30 @@ class HomeScreenViewModel(
         _state.update { it.copy(availableFreeServers = null, freeServersProgress = null) }
     }
 
-    fun loadFreeServers(onError: (String) -> Unit = {}) {
+    fun loadFreeServers(
+        parallelism: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
+        onError: (String) -> Unit = {},
+    ) {
         freeServersJob?.cancel()
         _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
         freeServersJob = viewModelScope.launch {
             try {
-                val url = FREE_SERVERS_URL
                 val rawText = withContext(Dispatchers.IO) {
                     // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
                     // without withProxyAuthentication the fetch died with a SOCKS auth error.
                     val proxy = vpnManager.subscriptionFetchProxy()
                     val client = createProxyHttpClient(proxy)
                     try {
-                        org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
+                        // Все источники сразу; недоступный не мешает остальным.
+                        FREE_SERVERS_SOURCES.map { (url, maxLines) ->
+                            async {
+                                runCatching {
+                                    val text = org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
+                                    // Огромный список (десятки тысяч) не проверить за разумное время — берём случайную выборку.
+                                    if (maxLines > 0) text.lines().shuffled().take(maxLines).joinToString("\n") else text
+                                }.getOrDefault("")
+                            }
+                        }.awaitAll().joinToString("\n")
                     } finally {
                         client.close()
                     }
@@ -453,7 +464,7 @@ class HomeScreenViewModel(
                     return@launch
                 }
 
-                val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }
+                val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }.distinct()
                 if (allLines.isEmpty()) {
                     _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                     onError("В списке не найдено серверов VLESS")
@@ -481,9 +492,13 @@ class HomeScreenViewModel(
                 val workingServers = mutableListOf<FreeServerItem>()
 
                 withContext(Dispatchers.IO) {
-                    // Используем умеренный пул параллельности (6), чтобы исключить конфликты портов
-                    // и исчерпание сетевых сокетов на iOS
-                    val sem = Semaphore(12)
+                    // Тот же ползунок «Потоки пинга» из настроек, что и у обычного пинга.
+                    val sem = Semaphore(
+                        parallelism.coerceIn(
+                            org.olcbox.app.data.model.AppBehaviorSettings.MIN_PING_PARALLELISM,
+                            org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM,
+                        )
+                    )
                     parsedItems.mapIndexed { index, (line, profile) ->
                         async {
                             sem.withPermit {
@@ -911,6 +926,15 @@ data class FreeServersProgress(
 )
 
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+/** Проверяем всего ~250 серверов: поровну (250 / 3 источника) из каждого, случайной выборкой. */
+const val FREE_SERVERS_PER_SOURCE = 250 / 3
+
+/** Источники бесплатных серверов (url, максимум строк; 0 = все); [FREE_SERVERS_URL] — идентификатор группы. */
+val FREE_SERVERS_SOURCES = listOf(
+    FREE_SERVERS_URL to FREE_SERVERS_PER_SOURCE,
+    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt" to FREE_SERVERS_PER_SOURCE,
+    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt" to FREE_SERVERS_PER_SOURCE,
+)
 
 /** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */
 data class VkTurnLinkPrompt(

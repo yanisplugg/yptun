@@ -7,9 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"github.com/samosvalishe/free-turn-proxy/internal/clientid"
 	"github.com/samosvalishe/free-turn-proxy/internal/config"
@@ -17,7 +14,9 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/udprelay"
 	"github.com/samosvalishe/free-turn-proxy/internal/session"
+	"github.com/samosvalishe/free-turn-proxy/internal/shutdown"
 	"github.com/samosvalishe/free-turn-proxy/internal/sub"
+	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 	"github.com/samosvalishe/free-turn-proxy/internal/wire/rtpopus"
 )
 
@@ -29,6 +28,7 @@ func main() {
 
 	// Резолв подписки до парсинга даёт обязательный peer для валидации.
 	if subURL := config.PeekSubURL(args); subURL != "" {
+		sub.SetLogger(logx.New(false))
 		s, ferr := sub.Fetch(context.Background(), subURL)
 		if ferr != nil {
 			log.Fatalf("failed to fetch subscription: %v", ferr)
@@ -71,23 +71,13 @@ func main() {
 	cfg.ClientID = id
 	logger.Infof("Client ID: %s", cfg.ClientID)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	if cfg.Tunnel.Enabled() {
+		logger.Warnf("ссылка содержит конфиг %s: CLI встроенный туннель не поднимает, запустите WireGuard/AmneziaWG отдельно", cfg.Tunnel.Mode)
+		cfg.Tunnel.Mode = tunnel.ModeNone
+	}
 
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-signalChan
-		logger.Infof("Terminating...")
-		cancel()
-		select {
-		case <-signalChan:
-		case <-time.After(5 * time.Second):
-		}
-		logger.Errorf("Exit...")
-		cancel()
-		os.Exit(1)
-	}()
+	ctx, stop := shutdown.Watch(context.Background(), logger)
+	defer stop()
 
 	sess, err := session.New(cfg, session.Deps{
 		Logger: logger,

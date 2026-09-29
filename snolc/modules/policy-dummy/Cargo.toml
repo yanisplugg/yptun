@@ -1,0 +1,20 @@
+[package]
+name = "snolc-policy-dummy"
+description = "unrestricted policy module for snolc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde.workspace = true
+snolc-sdk.workspace = true
+toml.workspace = true
+
+[features]
+static-link = []

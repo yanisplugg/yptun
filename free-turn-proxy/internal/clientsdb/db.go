@@ -1,12 +1,18 @@
 package clientsdb
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,12 +46,17 @@ func New(path string) (*DB, error) {
 	return db, nil
 }
 
-func (db *DB) StartHotReload(interval time.Duration) {
+func (db *DB) StartHotReload(ctx context.Context, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			db.loadIfModified()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				db.loadIfModified()
+			}
 		}
 	}()
 }
@@ -61,16 +72,18 @@ func (db *DB) Add(clientID, comment string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	db.data.Clients[clientID] = ClientInfo{Comment: comment}
-	return db.save()
+	next := Data{Clients: maps.Clone(db.data.Clients)}
+	next.Clients[clientID] = ClientInfo{Comment: comment}
+	return db.save(next)
 }
 
 func (db *DB) Remove(clientID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	delete(db.data.Clients, clientID)
-	return db.save()
+	next := Data{Clients: maps.Clone(db.data.Clients)}
+	delete(next.Clients, clientID)
+	return db.save(next)
 }
 
 func (db *DB) List() map[string]ClientInfo {
@@ -126,18 +139,23 @@ func (db *DB) loadIfModified() {
 	}
 }
 
-func (db *DB) save() error {
-	b, err := json.MarshalIndent(db.data, "", "  ")
+func (db *DB) save(next Data) error {
+	b, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
 	}
 
 	tmpFile := db.path + ".tmp"
-	err = os.WriteFile(tmpFile, b, 0o600) // 0o600: файл содержит Client ID токены авторизации
+	err = writeSync(tmpFile, b)
 	if err == nil {
 		err = os.Rename(tmpFile, db.path)
 	}
 	if err == nil {
+		syncDir(filepath.Dir(db.path))
+	}
+	if err == nil {
+		// Авторизация меняется только после успешной замены файла.
+		db.data = next
 		stat, _ := os.Stat(db.path)
 		if stat != nil {
 			db.lastModified = stat.ModTime()
@@ -146,50 +164,168 @@ func (db *DB) save() error {
 	return err
 }
 
-// Тег режима едет хвостом той же записи: клиент до этого поля его не писал, а читатель
-// брал ровно 1+len байт - лишний байт старый сервер молча пропускает.
+func writeSync(path string, b []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // 0o600: файл содержит Client ID токены авторизации
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(b); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return err
+}
+
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
+}
+
 const (
-	ModeUnset byte = 0
-	ModeUDP   byte = 1
-	ModeTCP   byte = 2
+	ModeUnset   byte = 0
+	ModeUDP     byte = 1
+	ModeTCP     byte = 2
+	ModeTCPBond byte = 3
+
+	// idVersionAck - клиент ждёт подтверждения ID.
+	idVersionAck byte = 2
+	idAck        byte = 0x06
+
+	idReadTimeout = 5 * time.Second
 )
 
-// WriteClientID отправляет Client ID (1 байт длины + строка + 1 байт режима).
-func WriteClientID(conn net.Conn, clientID string, mode byte) error {
+// ErrNoIDAck - сервер не подтвердил Client ID: он старше протокола подтверждения или
+// канал теряет всё подряд.
+var ErrNoIDAck = errors.New("clientsdb: server did not acknowledge client ID (server outdated?)")
+
+// idRetransmit - таймеры повтора ID (RFC 6347 §4.2.4: старт 1 с, удвоение).
+var idRetransmit = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
+func idRecord(clientID string, mode byte) []byte {
 	b := []byte(clientID)
 	if len(b) > 255 {
 		b = b[:255]
 	}
-	buf := make([]byte, 1+len(b)+1)
-	buf[0] = byte(len(b)) //nolint:gosec // len(b) усечён до ≤255 выше
-	copy(buf[1:], b)
-	buf[1+len(b)] = mode
-	_, err := conn.Write(buf)
-	return err
+	buf := make([]byte, 0, len(b)+3)
+	buf = append(buf, byte(len(b))) //nolint:gosec // len(b) усечён до ≤255 выше
+	buf = append(buf, b...)
+	return append(buf, mode, idVersionAck)
 }
 
-// ReadClientID читает Client ID из первой DTLS-записи. Режим ModeUnset - клиент старше
-// тега, режим у него всегда udp.
-func ReadClientID(conn net.Conn) (string, byte, error) {
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+// legacyServer - ЛОКАЛЬНЫЙ ПАТЧ YPtun. С 4.0.0 клиент обязан дождаться ack от сервера, а серверы
+// 3.4.0 и старше (все уже установленные автоустановщиком/панелью) его не шлют: клиент 7 секунд
+// повторял ID и падал с ErrNoIDAck, то есть новое ядро не работало со старыми нодами. Здесь нет
+// ack после всех повторов - считаем сервер старым (как до 4.0.0) и дальше пишем ID один раз без
+// ожидания. Флаг на процесс; сервер 4.x подтверждает как обычно и флаг не взводит.
+// Не терять при ре-вендоре.
+var legacyServer atomic.Bool //nolint:gochecknoglobals // состояние на процесс, см. выше
+
+func WriteClientID(ctx context.Context, conn net.Conn, clientID string, mode byte) error {
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+	rec := idRecord(clientID, mode)
+	if legacyServer.Load() {
+		if _, err := conn.Write(rec); err != nil {
+			return fmt.Errorf("send client ID: %w", err)
+		}
+		return nil
+	}
+	var buf [16]byte
+	for _, wait := range idRetransmit {
+		if _, err := conn.Write(rec); err != nil {
+			return fmt.Errorf("send client ID: %w", err)
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(wait)); err != nil {
+			return fmt.Errorf("client ID deadline: %w", err)
+		}
+		for {
+			n, err := conn.Read(buf[:])
+			if err == nil && n == 1 && buf[0] == idAck {
+				return nil
+			}
+			if err != nil {
+				var ne net.Error
+				if !errors.As(err, &ne) || !ne.Timeout() {
+					return fmt.Errorf("await client ID ack: %w", err)
+				}
+				break
+			}
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	legacyServer.Store(true)
+	return nil
+}
+
+func readClientID(conn net.Conn) (string, byte, byte, error) {
+	_ = conn.SetReadDeadline(time.Now().Add(idReadTimeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 
-	buf := make([]byte, 257)
+	buf := make([]byte, 258)
 	n, err := conn.Read(buf)
 	if err != nil {
-		return "", ModeUnset, err
+		return "", ModeUnset, 0, err
 	}
 	if n == 0 {
-		return "", ModeUnset, nil
+		return "", ModeUnset, 0, io.ErrUnexpectedEOF
 	}
-
 	l := int(buf[0])
 	if n < 1+l {
-		return "", ModeUnset, io.ErrUnexpectedEOF
+		return "", ModeUnset, 0, io.ErrUnexpectedEOF
 	}
-	mode := ModeUnset
+	var mode, ver byte
 	if n > 1+l {
 		mode = buf[1+l]
 	}
-	return string(buf[1 : 1+l]), mode, nil
+	if n > 2+l {
+		ver = buf[2+l]
+	}
+	return string(buf[1 : 1+l]), mode, ver, nil
+}
+
+func AcceptClientID(conn net.Conn, authorize func(id string, mode byte) error) (string, net.Conn, error) {
+	id, mode, ver, err := readClientID(conn)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := authorize(id, mode); err != nil {
+		return id, nil, err
+	}
+	if ver < idVersionAck {
+		return id, conn, nil
+	}
+	if _, err := conn.Write([]byte{idAck}); err != nil {
+		return id, nil, fmt.Errorf("ack client ID: %w", err)
+	}
+	return id, &ackedConn{Conn: conn, rec: idRecord(id, mode)}, nil
+}
+
+type ackedConn struct {
+	net.Conn
+	rec []byte
+}
+
+func (c *ackedConn) Read(b []byte) (int, error) {
+	for {
+		n, err := c.Conn.Read(b)
+		if err != nil || !bytes.Equal(b[:n], c.rec) {
+			return n, err
+		}
+		if _, err := c.Write([]byte{idAck}); err != nil {
+			return 0, err
+		}
+	}
 }

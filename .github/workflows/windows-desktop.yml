@@ -39,6 +39,7 @@ on:
       - "cores/**"
       - "olcrtc/**"
       - "openflux/**"
+      - "snolc/**"
 
 permissions:
   contents: read

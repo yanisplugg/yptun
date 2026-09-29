@@ -42,6 +42,7 @@ const (
 )
 
 type ProxyOpts struct {
+	Bond    bool
 	Mode    ProxyMode
 	Listen  string
 	Connect string
@@ -67,7 +68,8 @@ type ProviderOpts struct {
 }
 
 const (
-	ProviderVK = "vk"
+	ProviderVK     = "vk"
+	ProviderDirect = "direct"
 )
 
 type DNSOpts struct {

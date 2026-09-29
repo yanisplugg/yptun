@@ -65,6 +65,7 @@ internal class IosEngineController(
             EngineType.MasterDns -> startMasterDns(config, listenPort, socksUsername, socksPassword)
             // OpenFlux runs as a subprocess on Android/desktop (its core panics); iOS has no subprocesses.
             EngineType.OpenFlux -> throw IllegalStateException("OpenFlux на iOS пока не поддерживается")
+            EngineType.Snolc -> throw IllegalStateException("snolc на iOS не поддерживается")
         }
     }
 
@@ -85,7 +86,7 @@ internal class IosEngineController(
         EngineType.Chain -> core.rtcRunning() && proxyCoreRunning()
         EngineType.VkTurn -> (core.ftRunning() || core.wdttRunning()) && proxyCoreRunning()
         EngineType.MasterDns -> core.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
-        EngineType.OpenFlux -> false
+        EngineType.OpenFlux, EngineType.Snolc -> false
     }
 
     private fun proxyCoreRunning(): Boolean =

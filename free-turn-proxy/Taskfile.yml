@@ -7,6 +7,7 @@ vars:
   LDFLAGS: -s -w -checklinkname=0 -X main.version={{.VERSION}}
   GOLANGCI_VERSION: v2.12.2
   GOVULN_VERSION: v1.6.0
+  GOIMPORTS_VERSION: v0.49.0
   GORELEASER_VERSION: v2.17.1
   TASK_VERSION: v3.52.0
 
@@ -28,7 +29,7 @@ tasks:
       # checksum.extra_files глобит mobile-dist, а снапшот идёт без mobile-таргетов
       - cmd: mkdir -p mobile-dist && touch mobile-dist/freeturn.aar mobile-dist/freeturn-sources.jar mobile-dist/Mobile.xcframework.zip
         platforms: [linux, darwin]
-      - cmd: powershell -Command "New-Item -ItemType Directory -Force mobile-dist > $null; @('freeturn.aar','freeturn-sources.jar','Mobile.xcframework.zip') | ForEach-Object { if (-not (Test-Path \"mobile-dist/$_\")) { New-Item -ItemType File \"mobile-dist/$_\" > $null } }"
+      - cmd: powershell -NoProfile -Command 'New-Item -ItemType Directory -Force mobile-dist | Out-Null; "freeturn.aar","freeturn-sources.jar","Mobile.xcframework.zip" | ForEach-Object { $p = "mobile-dist/$_"; if (-not (Test-Path $p)) { New-Item -ItemType File $p | Out-Null } }'
         platforms: [windows]
       - goreleaser release --snapshot --clean --skip=publish,sign
 
@@ -60,15 +61,15 @@ tasks:
           powershell -NoProfile -Command '$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"; $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"; gomobile bind {{.GOMOBILE_FLAGS}} -o dist/freeturn.aar ./mobile'
         platforms: [windows]
 
-  docker:awg:
-    desc: Build the AWG service image locally (docker/awg)
-    cmds:
-      - docker build -f docker/awg/Dockerfile -t freeturn-awg:dev .
-
   test:
     desc: Run unit tests with race detector
     cmds:
       - go test -race -count=1 ./...
+
+  test:sh:
+    desc: Run install.sh tests (bats)
+    cmds:
+      - bats scripts/tests
 
   test:cover:
     desc: Run tests with coverage report (cover.html)
@@ -125,7 +126,7 @@ tasks:
   tools:install:
     desc: Install dev tools (golangci-lint, govulncheck, goreleaser, goimports)
     cmds:
-      - go install golang.org/x/tools/cmd/goimports@latest
+      - go install golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_VERSION}}
       - go install golang.org/x/vuln/cmd/govulncheck@{{.GOVULN_VERSION}}
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_VERSION}}
       - go install github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}}

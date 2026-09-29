@@ -56,7 +56,8 @@ fun PingButton(
     val engine = configGetter()?.engine
     val isVkTurn = engine == org.olcbox.app.data.model.EngineType.VkTurn ||
         engine == org.olcbox.app.data.model.EngineType.MasterDns ||
-        engine == org.olcbox.app.data.model.EngineType.OpenFlux
+        engine == org.olcbox.app.data.model.EngineType.OpenFlux ||
+        engine == org.olcbox.app.data.model.EngineType.Snolc
 
     val descriptionText = when {
         pingState is PingState.Success -> "${s.notifConnected} ${(pingState as PingState.Success).latency}ms"

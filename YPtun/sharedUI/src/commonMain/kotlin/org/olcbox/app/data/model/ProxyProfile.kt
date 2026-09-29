@@ -36,7 +36,10 @@ enum class EngineType {
     MasterDns,
 
     @SerialName("openflux")
-    OpenFlux;
+    OpenFlux,
+
+    @SerialName("snolc")
+    Snolc;
 
     companion object {
         fun fromValue(value: String?): EngineType = when (value?.trim()?.lowercase()) {
@@ -45,6 +48,7 @@ enum class EngineType {
             "vkturn", "vk-turn", "freeturn" -> VkTurn
             "masterdns", "master-dns", "masterdnsvpn", "dnstt", "dns-tt", "dnstunnel" -> MasterDns
             "openflux", "open-flux" -> OpenFlux
+            "snolc" -> Snolc
             else -> Stealth
         }
     }

@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -113,16 +115,37 @@ func ensureUnpacked() (string, error) {
 		return "", err
 	}
 
+	// One file after another left the first launch bound by a single inflate stream (~230 MB of
+	// jars + JRE); the entries are independent, so unpack them on every core.
 	progress := showProgress(len(reader.File))
-	for i, entry := range reader.File {
-		if err := extract(entry, staging); err != nil {
-			_ = os.RemoveAll(staging)
-			progress.close()
-			return "", err
-		}
-		progress.set(i + 1)
+	jobs := make(chan *zip.File)
+	var done atomic.Int64
+	var firstErr error
+	var errOnce sync.Once
+	var wg sync.WaitGroup
+	for w := 0; w < runtime.NumCPU(); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for entry := range jobs {
+				if err := extract(entry, staging); err != nil {
+					errOnce.Do(func() { firstErr = err })
+					continue
+				}
+				progress.set(int(done.Add(1)))
+			}
+		}()
 	}
+	for _, entry := range reader.File {
+		jobs <- entry
+	}
+	close(jobs)
+	wg.Wait()
 	progress.close()
+	if firstErr != nil {
+		_ = os.RemoveAll(staging)
+		return "", firstErr
+	}
 
 	if err := os.WriteFile(filepath.Join(staging, portableMarker), nil, 0o644); err != nil {
 		return "", err
