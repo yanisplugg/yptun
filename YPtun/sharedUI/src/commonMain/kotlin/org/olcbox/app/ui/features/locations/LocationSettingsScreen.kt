@@ -92,6 +92,8 @@ import org.olcbox.app.vpn.masterdns.MasterDnsInstallOptions
 import org.olcbox.app.vpn.masterdns.rememberMasterDnsServerInstaller
 import org.olcbox.app.vpn.openflux.OpenFluxInstallOptions
 import org.olcbox.app.vpn.openflux.rememberOpenFluxServerInstaller
+import org.olcbox.app.vpn.snolc.SnolcInstallOptions
+import org.olcbox.app.vpn.snolc.rememberSnolcServerInstaller
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -111,6 +113,7 @@ import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.OpenFluxConfig
+import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
@@ -227,6 +230,15 @@ fun LocationSettingsScreen(
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text(s.cancel) }
             }
+        )
+    }
+
+    var showSnolcInstall by remember { mutableStateOf(false) }
+    if (showSnolcInstall) {
+        SnolcInstallDialog(
+            config = viewModel.editingSnolc,
+            onApplyConfig = { update -> viewModel.updateSnolc(update) },
+            onDismiss = { showSnolcInstall = false }
         )
     }
 
@@ -413,6 +425,16 @@ fun LocationSettingsScreen(
                     showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateOpenFlux,
                     onAutoInstall = { showOpenFluxInstall = true }
+                )
+            }
+
+            if (config.engine == EngineType.Snolc) {
+                snolcSection(
+                    config = viewModel.editingSnolc,
+                    enabled = !isSaving,
+                    showAutoInstall = allowVpsAutoInstall,
+                    onChange = viewModel::updateSnolc,
+                    onAutoInstall = { showSnolcInstall = true }
                 )
             }
 
@@ -699,14 +721,16 @@ private fun EngineSelector(
     onSelected: (EngineType) -> Unit
 ) {
     val options = remember {
+        val ios = org.olcbox.app.update.UpdatePlatform.current().os == "ios"
         listOf(
             EngineType.Stealth,
             EngineType.Standard,
             EngineType.Chain,
             EngineType.VkTurn,
             EngineType.MasterDns,
-            EngineType.OpenFlux
-        )
+            EngineType.OpenFlux,
+            EngineType.Snolc
+        ).filterNot { ios && it == EngineType.Snolc }
     }
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -1506,6 +1530,92 @@ internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
     }
 }
 
+private fun LazyListScope.snolcSection(
+    config: SnolcConfig,
+    enabled: Boolean,
+    showAutoInstall: Boolean,
+    onChange: ((SnolcConfig) -> SnolcConfig) -> Unit,
+    onAutoInstall: () -> Unit
+) {
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "snolc — туннель до своей ноды",
+                subtitle = "Noise NK поверх TCP: вставь ссылку snolc:// от автоустановки или заполни поля вручную"
+            )
+            VkTurnField(
+                value = "",
+                onValueChange = { v ->
+                    SnolcConfig.parseUri(v)?.let { (c, _) ->
+                        onChange { it.copy(host = c.host, port = c.port, publicKey = c.publicKey) }
+                    }
+                },
+                label = "Ссылка snolc://",
+                placeholder = "snolc://host:443?key=…  (вставь — поля ниже заполнятся)",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+            VkTurnField(
+                value = config.host,
+                onValueChange = { v -> onChange { it.copy(host = v.trim()) } },
+                label = "Хост ноды",
+                placeholder = "IP или домен VPS",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+            VkTurnField(
+                value = config.port.toString(),
+                onValueChange = { v -> onChange { it.copy(port = v.filter(Char::isDigit).toIntOrNull() ?: 0) } },
+                label = "Порт",
+                placeholder = "443",
+                enabled = enabled,
+                keyboardType = KeyboardType.Number
+            )
+            VkTurnField(
+                value = config.publicKey,
+                onValueChange = { v -> onChange { it.copy(publicKey = v.trim()) } },
+                label = "Публичный ключ ноды (hex, 64 символа)",
+                placeholder = "печатает автоустановка",
+                enabled = enabled,
+                isError = config.publicKey.isNotBlank() && !SnolcConfig(host = "x", publicKey = config.publicKey).isComplete()
+            )
+            VkTurnSwitchRow("Подробный журнал ядра", config.debug, enabled) { v ->
+                onChange { it.copy(debug = v) }
+            }
+            Text(
+                "Трафик между приложением и нодой шифруется Noise; ключ ноды — секрет ссылки. " +
+                    "Через ноду идёт TCP, QUIC блокируется.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (showAutoInstall) {
+                OutlinedButton(
+                    onClick = onAutoInstall,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Автоустановка ноды snolc на VPS")
+                }
+            }
+        }
+    }
+
+    proxyOverTunnelSection(
+        tunnel = "snolc",
+        exitName = "нода snolc",
+        proxyLink = config.proxyLink,
+        proxyCore = config.proxyCore,
+        enabled = enabled,
+        onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
+        onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
+    )
+}
+
 /**
  * OpenFlux editor: the carrier (Yandex Docs or a MAX call) with its coordinates, the DNS server reached
  * through the tunnel, and the exit-node auto-install. The client serves a local SOCKS5 the TUN bridge
@@ -1656,6 +1766,165 @@ private fun LazyListScope.openFluxSection(
         enabled = enabled,
         onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
         onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
+    )
+}
+
+/**
+ * One-tap snolc exit-node installer ([rememberSnolcServerInstaller]). On success the node's `snolc://`
+ * link (with its public key) is written straight back into the location.
+ */
+@Composable
+private fun SnolcInstallDialog(
+    config: SnolcConfig,
+    onApplyConfig: (((SnolcConfig) -> SnolcConfig)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberSnolcServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf(config.host) }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    var listenPort by remember { mutableStateOf(config.port.takeIf { it in 1..65535 }?.toString() ?: "443") }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<String>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+    val succeeded = result?.isSuccess == true
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Автоустановка ноды snolc") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH, загружу snolc, создам ключи Noise и запущу ноду службой systemd. " +
+                        "Если стоит ufw, открою порт. Повторная установка сохраняет ключ — старые ссылки продолжают работать.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96dp)
+                    )
+                }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                OutlinedTextField(
+                    value = listenPort,
+                    onValueChange = { v -> listenPort = v.filter(Char::isDigit) },
+                    label = { Text("Порт ноды snolc (TCP)") },
+                    supportingText = { Text("443 меньше всего привлекает внимание") },
+                    singleLine = true,
+                    enabled = !running,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        "Нода запущена; ссылка записана в локацию:\n" + result?.getOrNull().orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() && listenPort.toIntOrNull() in 1..65535 &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        scope.launch {
+                            val res = installer.install(
+                                SnolcInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    listenPort = listenPort.toInt(),
+                                )
+                            ) { line -> log.add(line) }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            res.getOrNull()?.let { uri ->
+                                SnolcConfig.parseUri(uri)?.let { (c, _) ->
+                                    onApplyConfig { it.copy(host = c.host, port = c.port, publicKey = c.publicKey) }
+                                }
+                            }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
     )
 }
 
@@ -2979,6 +3248,7 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.VkTurn -> "VK-TURN"
     EngineType.MasterDns -> "MasterDNS (Beta)"
     EngineType.OpenFlux -> "OpenFlux"
+    EngineType.Snolc -> "snolc"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {
@@ -2988,6 +3258,7 @@ private fun engineSubtitle(engine: EngineType): String = when (engine) {
     EngineType.VkTurn -> "WireGuard over a VK TURN tunnel (free-turn-proxy)"
     EngineType.MasterDns -> "Туннель через DNS (MasterDnsVPN: несколько резолверов + ARQ)"
     EngineType.OpenFlux -> "TCP-туннель через Яндекс Документы (старый или новый редактор) или звонок MAX до своей выходной ноды"
+    EngineType.Snolc -> "Rust-туннель Noise по TCP до своей ноды (github.com/owenewans/snolc), автоустановка на VPS"
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {

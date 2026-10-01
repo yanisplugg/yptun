@@ -82,6 +82,7 @@ internal class IosEngineController(
             EngineType.VkTurn -> startVkTurn(config, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.MasterDns -> startMasterDns(config, listenPort, socksUsername, socksPassword)
             EngineType.OpenFlux -> startOpenFlux(config, listenPort, socksUsername, socksPassword)
+            EngineType.Snolc -> throw IllegalStateException("snolc на iOS не поддерживается")
         }
     }
 
@@ -105,6 +106,7 @@ internal class IosEngineController(
         EngineType.VkTurn -> (core.ftRunning() || core.wdttRunning()) && proxyCoreRunning()
         EngineType.MasterDns -> core.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> core.openfluxRunning() && (!openfluxProxyActive || proxyCoreRunning())
+        EngineType.Snolc -> false
     }
 
     private fun proxyCoreRunning(): Boolean =

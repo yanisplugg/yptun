@@ -140,6 +140,16 @@ internal object DesktopNativeAssets {
         return resolveBinary(fileName = fileName, resourceName = "native/$fileName", candidates = emptyList())
     }
 
+    /** snolc client (olcvpn-client/snolc/prebuilt, copied in by desktopApp's copySnolcHost). */
+    fun resolveSnolcBinary(): Path {
+        val fileName = when (DesktopPaths.os) {
+            DesktopOs.Linux -> "snolc-linux-${desktopArch()}"
+            DesktopOs.Windows -> "snolc-windows-${desktopArch()}.exe"
+            else -> error("snolc is not bundled for ${DesktopPaths.os}")
+        }
+        return resolveBinary(fileName = fileName, resourceName = "native/$fileName", candidates = emptyList())
+    }
+
     private fun trustTunnelFileName(kind: String): String {
         return when (DesktopPaths.os) {
             DesktopOs.Linux -> "trusttunnel-$kind-linux-${desktopArch()}"

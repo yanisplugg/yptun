@@ -504,6 +504,72 @@ data class OpenFluxConfig(
     }
 }
 
+/**
+ * snolc (github.com/owenewans/snolc) for [EngineType.Snolc]: a Rust userspace tunnel (Noise NK over a TCP
+ * carrier) to the user's own exit node. The client runs the one static `snolc` executable (all modules
+ * linked in) and serves a local no-auth SOCKS5 that a sing-box front then fences with the session login.
+ * [publicKey] is the node's Noise static public key (64 hex chars) — the shared secret of the link.
+ */
+@Serializable
+data class SnolcConfig(
+    @SerialName("host")
+    val host: String = "",
+    @SerialName("port")
+    val port: Int = DEFAULT_PORT,
+    @SerialName("key")
+    val publicKey: String = "",
+    @SerialName("debug")
+    val debug: Boolean = false,
+    /** Optional proxy share link chained ON TOP of the tunnel (like [OpenFluxConfig.proxyLink]). */
+    @SerialName("proxy_link")
+    val proxyLink: String = "",
+    @SerialName("proxy_core")
+    val proxyCore: ProxyCore = ProxyCore.Auto,
+) {
+    fun hasProxy(): Boolean = proxyLink.isNotBlank()
+
+    fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore =
+        overTunnelProxyCore(proxyCore, profile, globalCore)
+
+    fun isComplete(): Boolean =
+        host.isNotBlank() && port in 1..65535 && HEX_KEY.matches(publicKey)
+
+    fun normalized(): SnolcConfig = copy(host = host.trim(), publicKey = publicKey.trim().lowercase(), proxyLink = proxyLink.trim())
+
+    fun summary(): String = "snolc · $host:$port"
+
+    /** `snolc://host:port?key=<hex>#name` — the share link the installer prints and the client imports. */
+    fun toUri(name: String = ""): String {
+        val h = if (host.contains(':')) "[$host]" else host
+        return "snolc://$h:$port?key=$publicKey" + if (name.isNotBlank()) "#" + name.replace(" ", "%20") else ""
+    }
+
+    companion object {
+        const val DEFAULT_PORT = 443
+        private val HEX_KEY = Regex("[0-9a-fA-F]{64}")
+
+        fun parseUri(text: String): Pair<SnolcConfig, String>? {
+            val t = text.trim()
+            if (!t.startsWith("snolc://", ignoreCase = true)) return null
+            val rest = t.substring(8)
+            val name = rest.substringAfter('#', "").replace("%20", " ")
+            val main = rest.substringBefore('#')
+            val hostPort = main.substringBefore('?').trimEnd('/')
+            val key = main.substringAfter('?', "").split('&').firstOrNull { it.startsWith("key=") }?.substring(4).orEmpty()
+            val host: String
+            val port: Int
+            if (hostPort.startsWith("[")) {
+                host = hostPort.substringAfter('[').substringBefore(']')
+                port = hostPort.substringAfter("]:", "").toIntOrNull() ?: DEFAULT_PORT
+            } else {
+                host = hostPort.substringBeforeLast(':')
+                port = hostPort.substringAfterLast(':', "").toIntOrNull() ?: DEFAULT_PORT
+            }
+            return SnolcConfig(host = host, port = port, publicKey = key).normalized().takeIf { it.isComplete() }?.let { it to name }
+        }
+    }
+}
+
 /** One additional olcRTC room for the multi-room (aggregation) feature. */
 @Serializable
 data class ExtraRoom(
@@ -572,6 +638,9 @@ data class LocationConfig(
     /** OpenFlux transport for the [EngineType.OpenFlux] engine. Null for other engines. */
     @SerialName("openflux")
     val openFlux: OpenFluxConfig? = null,
+    /** snolc tunnel for the [EngineType.Snolc] engine. Null for other engines. */
+    @SerialName("snolc")
+    val snolc: SnolcConfig? = null,
     /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
     val advanced: AdvancedCoreConfig? = null,
     /**
@@ -646,6 +715,7 @@ data class LocationConfig(
             vkturn = vkturn,
             masterDns = masterDns?.normalized(),
             openFlux = openFlux?.normalized(),
+            snolc = snolc?.normalized(),
             routingProfileId = routingProfileId.trim(),
             fakeDns = fakeDns,
         )
@@ -717,6 +787,7 @@ data class LocationConfig(
         EngineType.MasterDns -> masterDns?.isComplete() == true
         // OpenFlux needs the carrier's coordinates: the Yandex Docs URL, or the MAX token + callee id.
         EngineType.OpenFlux -> openFlux?.isComplete() == true
+        EngineType.Snolc -> snolc?.isComplete() == true
     }
 
     /**
@@ -1213,6 +1284,8 @@ data class LocationEntry(
     val masterDns: MasterDnsConfig? = null,
     @SerialName("openflux")
     val openFlux: OpenFluxConfig? = null,
+    @SerialName("snolc")
+    val snolc: SnolcConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
@@ -1298,6 +1371,7 @@ data class LocationEntry(
                 vkturn = vkturn,
                 masterDns = masterDns,
                 openFlux = openFlux,
+                snolc = snolc,
                 advanced = advanced,
                 fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
@@ -1330,6 +1404,7 @@ data class LocationEntry(
             vkturn = config.vkturn,
             masterDns = config.masterDns,
             openFlux = config.openFlux,
+            snolc = config.snolc,
             advanced = config.advanced,
             fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
@@ -1370,6 +1445,7 @@ data class LocationEntry(
                 vkturn = config.vkturn,
                 masterDns = config.masterDns,
                 openFlux = config.openFlux,
+                snolc = config.snolc,
                 advanced = config.advanced,
                 fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },

@@ -1,0 +1,21 @@
+[package]
+name = "snolc-adapter-socks5"
+description = "SOCKS5 adapter for snolc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde.workspace = true
+socket2.workspace = true
+snolc-sdk.workspace = true
+toml.workspace = true
+
+[features]
+static-link = []

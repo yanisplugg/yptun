@@ -25,9 +25,11 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback"
 )
 
-var Log logx.Logger = logx.Nop()
+var logHolder logx.Holder
 
-func SetLogger(l logx.Logger) { Log = logx.OrNop(l) }
+func SetLogger(l logx.Logger) { logHolder.Set(l) }
+
+func Log() logx.Logger { return logHolder.Get() }
 
 const (
 	dohQueryTimeout = 6 * time.Second
@@ -161,7 +163,7 @@ func (r *DohResolver) forwardRaw(ctx context.Context, query []byte) ([]byte, err
 		body, err := r.postWire(epCtx, ep, query)
 		cancel()
 		if err != nil {
-			Log.Warnf("[DoH] %s: %v", ep.Hostname, err)
+			Log().Warnf("[DoH] %s: %v", ep.Hostname, err)
 			lastErr = err
 			continue
 		}
@@ -205,16 +207,21 @@ var (
 	dohForwarderOnce sync.Once
 	dohForwarderInst *dohForwarder
 	dohForwarderErr  error
+	// Резолвер подменяется на лету: ядро перезапускается в том же процессе (mobile), а Once держит листенеры.
+	dohForwarderRes atomic.Pointer[DohResolver]
 )
 
 func sharedDohForwarder(r *DohResolver) (*dohForwarder, error) {
+	dohForwarderRes.Store(r)
 	dohForwarderOnce.Do(func() {
-		dohForwarderInst, dohForwarderErr = startDohForwarder(r)
+		dohForwarderInst, dohForwarderErr = startDohForwarder()
 	})
 	return dohForwarderInst, dohForwarderErr
 }
 
-func startDohForwarder(r *DohResolver) (_ *dohForwarder, err error) {
+func currentDohResolver() *DohResolver { return dohForwarderRes.Load() }
+
+func startDohForwarder() (_ *dohForwarder, err error) {
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
 		return nil, fmt.Errorf("doh forwarder: listen UDP: %w", err)
@@ -238,51 +245,51 @@ func startDohForwarder(r *DohResolver) (_ *dohForwarder, err error) {
 		udpAddr: udpConn.LocalAddr().String(),
 		tcpAddr: tcpLn.Addr().String(),
 	}
-	Log.Infof("[DoH] forwarder listening udp=%s tcp=%s", fwd.udpAddr, fwd.tcpAddr)
+	Log().Infof("[DoH] forwarder listening udp=%s tcp=%s", fwd.udpAddr, fwd.tcpAddr)
 
-	go fwd.serveUDP(udpConn, r)
-	go fwd.serveTCP(tcpLn, r)
+	go fwd.serveUDP(udpConn)
+	go fwd.serveTCP(tcpLn)
 	return fwd, nil
 }
 
-func (*dohForwarder) serveUDP(conn *net.UDPConn, r *DohResolver) {
+func (*dohForwarder) serveUDP(conn *net.UDPConn) {
 	defer func() { _ = conn.Close() }()
 	buf := make([]byte, forwarderUDPBufSize)
 	for {
 		n, client, err := conn.ReadFromUDP(buf)
 		if err != nil {
-			Log.Errorf("[DoH] udp read: %v", err)
+			Log().Errorf("[DoH] udp read: %v", err)
 			return
 		}
 		query := append([]byte(nil), buf[:n]...)
 		go func(q []byte, c *net.UDPAddr) {
 			ctx, cancel := context.WithTimeout(context.Background(), dohForwardBudget)
 			defer cancel()
-			resp, err := r.forwardRaw(ctx, q)
+			resp, err := currentDohResolver().forwardRaw(ctx, q)
 			if err != nil {
-				Log.Warnf("[DoH] udp forward failed: %v", err)
+				Log().Warnf("[DoH] udp forward failed: %v", err)
 				return
 			}
 			if _, err := conn.WriteToUDP(resp, c); err != nil {
-				Log.Warnf("[DoH] udp write: %v", err)
+				Log().Warnf("[DoH] udp write: %v", err)
 			}
 		}(query, client)
 	}
 }
 
-func (*dohForwarder) serveTCP(ln *net.TCPListener, r *DohResolver) {
+func (*dohForwarder) serveTCP(ln *net.TCPListener) {
 	defer func() { _ = ln.Close() }()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			Log.Errorf("[DoH] tcp accept: %v", err)
+			Log().Errorf("[DoH] tcp accept: %v", err)
 			return
 		}
-		go handleDohForwarderTCP(conn, r)
+		go handleDohForwarderTCP(conn)
 	}
 }
 
-func handleDohForwarderTCP(conn net.Conn, r *DohResolver) {
+func handleDohForwarderTCP(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(forwarderTCPReadDL)) //nolint:errcheck
@@ -299,15 +306,15 @@ func handleDohForwarderTCP(conn net.Conn, r *DohResolver) {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), dohQueryTimeout)
-		resp, err := r.forwardRaw(ctx, query)
+		ctx, cancel := context.WithTimeout(context.Background(), dohForwardBudget)
+		resp, err := currentDohResolver().forwardRaw(ctx, query)
 		cancel()
 		if err != nil {
-			Log.Warnf("[DoH] tcp forward failed: %v", err)
+			Log().Warnf("[DoH] tcp forward failed: %v", err)
 			return
 		}
 		if len(resp) > 0xFFFF {
-			Log.Warnf("[DoH] response too large for TCP framing: %d", len(resp))
+			Log().Warnf("[DoH] response too large for TCP framing: %d", len(resp))
 			return
 		}
 		out := make([]byte, 2+len(resp))
@@ -345,7 +352,9 @@ const (
 
 var udpDNSServersPtr atomic.Pointer[[]string]
 
-func init() {
+func init() { ResetUDPDNSServers() }
+
+func ResetUDPDNSServers() {
 	def := []string{
 		"77.88.8.8:53", "77.88.8.1:53",
 		"8.8.8.8:53", "8.8.4.4:53",
@@ -420,23 +429,27 @@ func udpDNSDial(ctx context.Context, _ string, _ string) (net.Conn, error) {
 	return nil, lastErr
 }
 
-// autoDial выполняет DNS probe по UDP/53 и при недоступности переключается на DoH.
 func autoDial(r *DohResolver) dialFunc {
 	var (
-		probed sync.Once
-		useDoH atomic.Bool
+		mu     sync.Mutex
+		probed *[]string
+		useDoH bool
 		doh    = dohForwarderDial(r)
 	)
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		probed.Do(func() {
-			if udpProbe(autoUDPBudget) {
-				Log.Infof("[DNS] UDP/53 probe OK, using UDP")
+		mu.Lock()
+		if servers := udpDNSServersPtr.Load(); servers != probed {
+			probed = servers
+			useDoH = !udpProbe(autoUDPBudget)
+			if useDoH {
+				Log().Warnf("[DNS] UDP/53 unreachable; switching to DoH until network change")
 			} else {
-				Log.Warnf("[DNS] UDP/53 unreachable; sticky-switching to DoH")
-				useDoH.Store(true)
+				Log().Infof("[DNS] UDP/53 probe OK, using UDP")
 			}
-		})
-		if useDoH.Load() {
+		}
+		viaDoH := useDoH
+		mu.Unlock()
+		if viaDoH {
 			return doh(ctx, network, addr)
 		}
 		return udpDNSDial(ctx, network, addr)
@@ -457,24 +470,31 @@ func udpProbe(timeout time.Duration) bool {
 	buf := make([]byte, 512)
 	servers := udpDNSServers()
 	limit := min(len(servers), 2)
-	for _, server := range servers[:limit] {
+	for i, server := range servers[:limit] {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
+		// Остаток бюджета делится поровну: молчащий сервер не съедает попытку следующего.
+		attempt := remaining / time.Duration(limit-i)
 		// netctl.Apply обязателен для исключения сокета пробы из VPN-туннеля.
-		d := net.Dialer{Timeout: remaining, Control: netctl.Apply}
+		d := net.Dialer{Timeout: attempt, Control: netctl.Apply}
 		conn, err := d.Dial("udp", server) //nolint:noctx
 		if err != nil {
 			continue
 		}
-		_ = conn.SetDeadline(deadline) //nolint:errcheck
+		_ = conn.SetDeadline(time.Now().Add(attempt)) //nolint:errcheck
 		_, _ = conn.Write(wire)
 		n, err := conn.Read(buf)
 		_ = conn.Close()
-		if err == nil && n > 12 {
+		if err == nil && isReply(m, buf[:n]) {
 			return true
 		}
 	}
 	return false
+}
+
+func isReply(query *dns.Msg, raw []byte) bool {
+	var resp dns.Msg
+	return resp.Unpack(raw) == nil && resp.Response && resp.Id == query.Id
 }

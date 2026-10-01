@@ -79,6 +79,7 @@ import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.share.YptunInboundCodec
+import org.olcbox.app.vpn.snolc.SnolcFiles
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
 import org.olcbox.app.vpn.xray.XrayConfig
@@ -113,7 +114,6 @@ import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.SingBoxRule
 import org.olcbox.app.vpn.geo.AsnResolver
 import org.olcbox.app.vpn.geo.GeoAssetManager
-import org.olcbox.app.vpn.wdtt.WdttRawTun
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.data.model.VkTurnConfig
@@ -198,7 +198,6 @@ class OlcboxVpnService : VpnService() {
      * Set while a VK-TURN qWDTT location runs «Raw напрямую»: the TUN is built from the server's RAWCONF
      * and handed to the core instead of tun2socks. Null = every other path, exactly as before.
      */
-    private var wdttRawTun: WdttRawTun? = null
     /** Active MasterDNS (DNS tunnel) client for [EngineType.MasterDns]; null when another engine is running. */
     private var masterDnsClient: MasterDnsClient? = null
     /** True when the active MasterDNS engine also fronts a proxy core (proxy-over-MasterDNS). */
@@ -209,6 +208,12 @@ class OlcboxVpnService : VpnService() {
 
     /** True when a proxy core fronts the OpenFlux tunnel (proxy-over-OpenFlux). */
     private var openFluxProxyActive: Boolean = false
+
+    /** snolc client subprocess for [EngineType.Snolc]; null when another engine is running. */
+    private var snolcProcess: Process? = null
+
+    /** True when a proxy core fronts the snolc tunnel (proxy-over-snolc). */
+    private var snolcProxyActive: Boolean = false
     /** Active Trust Tunnel client (SOCKS-only) for a [ProxyProfile.TYPE_TRUSTTUNNEL] proxy; null otherwise. */
     private var trustTunnelClient: TrustTunnelVpnClient? = null
     private var tun2socksThread: Thread? = null
@@ -930,7 +935,7 @@ class OlcboxVpnService : VpnService() {
         // Publish protect() so the independent Telegram-over-WARP proxy can keep its WARP UDP socket
         // out of this tun while it's up (see VpnSocketProtectBridge). Cleared on teardown.
         VpnSocketProtectBridge.protect = { fd -> protect(fd) }
-        if (if (wdttRawTun != null) !attachWdttRawTun(pfd) else !startTun2socks(pfd)) {
+        if (!startTun2socks(pfd)) {
             stopTransportProcesses(closeTun = true)
             return
         }
@@ -979,6 +984,7 @@ class OlcboxVpnService : VpnService() {
             EngineType.VkTurn -> startVkTurnCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.MasterDns -> startMasterDnsCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.OpenFlux -> startOpenFluxCore(location, requestedGeneration, setErrorOnFailure)
+            EngineType.Snolc -> startSnolcCore(location, requestedGeneration, setErrorOnFailure)
         }
     }
 
@@ -996,20 +1002,19 @@ class OlcboxVpnService : VpnService() {
         tunnelPort: Int,
         resolveCore: (ProxyProfile, ProxyCore) -> ProxyCore,
     ) {
-        val effectiveProxy = proxy.enrichedFromRaw()
         val traffic = loadTrafficSettings()
         val profilesState = loadRoutingProfilesState()
         val routingProfile = resolveProfileExpandingAsn(profilesState, config.routingProfileId)
         val globalCore = loadAppBehavior().globalProxyCore
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
-            effectiveProxy.type in XRAY_SUPPORTED_TYPES
-        val useXray = resolveCore(effectiveProxy, globalCore) == ProxyCore.Xray || profileWantsXray
-        addLog("$label chaining proxy ${effectiveProxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
+            proxy.type in XRAY_SUPPORTED_TYPES
+        val useXray = resolveCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
+        addLog("$label chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
         if (useXray) {
             val assetPath = ensureGeoAssetPath(routingProfile)
             val xrayJson = XrayConfig.build(
-                profile = effectiveProxy,
+                profile = proxy,
                 listenPort = socksListenPort,
                 listenHost = socksListenHost,
                 socksUsername = socksUsername,
@@ -1042,7 +1047,7 @@ class OlcboxVpnService : VpnService() {
             xrayEngine().start(xrayJson, assetPath)
         } else {
             val json = SingBoxConfig.build(
-                profile = effectiveProxy,
+                profile = proxy,
                 listenPort = socksListenPort,
                 listenHost = socksListenHost,
                 socksUsername = socksUsername,
@@ -1086,6 +1091,108 @@ class OlcboxVpnService : VpnService() {
     }
 
     /**
+     * snolc: the client serves a real SOCKS5 with the session login (our RFC 1929 patch of its adapter)
+     * and real UDP ASSOCIATE on [socksListenPort]; the TUN bridge consumes it directly. One static
+     * executable with every module linked in (lib/<abi>/libsnolc.so), run as a SUBPROCESS from
+     * nativeLibraryDir like OpenFlux — same UID, so the app's own exclusion from the VPN keeps its
+     * sockets off the TUN. It exits on stdin EOF, i.e. when we die.
+     */
+    private suspend fun startSnolcCore(
+        location: LocationConfig,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean
+    ): Boolean {
+        val snolc = location.normalized().snolc
+        if (snolc == null || !snolc.isComplete()) {
+            if (setErrorOnFailure) {
+                setStatus(VpnStatus.Error("snolc not configured"))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            return false
+        }
+        val proxy = snolc.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link) ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
+                ?.takeIf { it.isComplete() }
+        }
+        if (snolc.hasProxy() && proxy == null) {
+            addLog("snolc: proxy link present but could not be parsed — exiting via the exit node directly (no proxy)")
+        }
+        snolcProxyActive = proxy != null
+        val snolcPort = if (proxy != null) chainOlcrtcPort else socksListenPort
+        return try {
+            waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+            if (isLocalSocksPortOpen(socksListenPort)) {
+                throw IllegalStateException("SOCKS port $socksListenPort is still in use")
+            }
+            if (proxy != null) {
+                waitForSocksPortReleased(snolcPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+                if (isLocalSocksPortOpen(snolcPort)) {
+                    throw IllegalStateException("snolc internal port $snolcPort is still in use")
+                }
+            }
+            val exe = java.io.File(applicationInfo.nativeLibraryDir, "libsnolc.so")
+            if (!exe.canExecute()) throw IllegalStateException("snolc core is missing from this build")
+            val dir = java.io.File(filesDir, "snolc")
+            java.io.File(dir, "state").mkdirs()
+            java.io.File(dir, "modules").mkdirs()
+            SnolcFiles.client(
+                socksListenHost, snolcPort, snolc.host, snolc.port, snolc.debug,
+                username = if (proxy != null) "" else socksUsername,
+                password = if (proxy != null) "" else socksPassword,
+            ).forEach { (name, body) -> java.io.File(dir, name).writeText(body) }
+            java.io.File(dir, "pub.hex").writeText(snolc.publicKey)
+            addLog("Starting snolc (${snolc.summary()}) on $socksListenHost:$snolcPort")
+            val process = ProcessBuilder(exe.absolutePath, "run", java.io.File(dir, "snolc.toml").absolutePath)
+                .directory(dir).redirectErrorStream(true).apply {
+                    environment()["SNOLC_EXIT_ON_STDIN_EOF"] = "1"
+                }.start()
+            snolcProcess = process
+            kotlin.concurrent.thread(name = "snolc-log", isDaemon = true) {
+                runCatching { process.inputStream.bufferedReader().forEachLine { addLog("snolc: $it") } }
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("snolc start superseded")
+                return false
+            }
+            if (!awaitSocksPortOpen(snolcPort, MOBILE_READY_TIMEOUT_MS)) {
+                val exit = if (process.isAlive) "still starting" else "exited with ${process.exitValue()}"
+                throw IllegalStateException("snolc SOCKS port $snolcPort did not open ($exit)")
+            }
+            addLog("snolc ready on $socksListenHost:$snolcPort")
+            if (proxy != null) {
+                startProxyOverTunnel("snolc", location.normalized(), proxy, snolcPort) { p, g ->
+                    snolc.resolvedProxyCore(p, g)
+                }
+                coroutineContext.ensureActive()
+                if (requestedGeneration != generation) {
+                    addLog("snolc proxy start superseded")
+                    return false
+                }
+                addLog("snolc proxy ready on $socksListenHost:$socksListenPort")
+            }
+            publishActiveSocks()
+            true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                addLog("snolc start canceled")
+                stopMobileAndWait()
+            }
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Transport failed"
+            addLog(if (staleRequest) "snolc start canceled: $message" else "snolc start failed: $message")
+            stopMobileAndWait()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            false
+        }
+    }
+
+    /**
      * OpenFlux: the client serves a real SOCKS5 (with the session credentials) on [socksListenPort] and
      * carries its TCP through Yandex Docs / a MAX call to the user's exit node — the TUN bridge consumes
      * the port directly. It runs as a SUBPROCESS (lib/<abi>/libopenflux.so): its young transports panic
@@ -1109,10 +1216,7 @@ class OlcboxVpnService : VpnService() {
         // Optional proxy over the tunnel (same as MasterDNS): OpenFlux moves to the internal chain port,
         // no auth there (the core dials it without credentials), and a proxy core fronts the bridge.
         val proxy = openFlux.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
-            (ShareLinkParser.parse(link)
-                ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
-                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
-                ?.enrichedFromRaw()
+            (ShareLinkParser.parse(link) ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
                 ?.takeIf { it.isComplete() }
         }
         if (openFlux.hasProxy() && proxy == null) {
@@ -1135,7 +1239,7 @@ class OlcboxVpnService : VpnService() {
             if (!exe.canExecute()) throw IllegalStateException("OpenFlux core is missing from this build")
             val listen = "$socksListenHost:$openFluxPort"
             val cmd = buildList {
-                addAll(listOf(exe.absolutePath, "--client", "--transport", openFlux.transport, "--socks5", listen))
+                addAll(listOf(exe.absolutePath, "--role=client", "--inbound=socks5", "--transport", openFlux.transport, "--socks5", listen))
                 if (openFlux.usesMax()) addAll(listOf("--maxUid", openFlux.maxUid)) else addAll(listOf("--url", openFlux.docUrl))
                 if (openFlux.dnsServer.isNotBlank()) addAll(listOf("--dns", openFlux.dnsServer))
                 if (openFlux.debug) add("--debug")
@@ -1361,9 +1465,7 @@ class OlcboxVpnService : VpnService() {
         // Standard "additional proxy" field works here too.
         val proxy = masterDns.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
             (ShareLinkParser.parse(link)
-                ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
-                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
-                ?.enrichedFromRaw()
+                ?: YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 })
                 ?.takeIf { it.isComplete() }
         }
         if (masterDns.proxyLink.isNotBlank() && proxy == null) {
@@ -1610,7 +1712,7 @@ class OlcboxVpnService : VpnService() {
             if (activeProxyCore == ProxyCore.Xray &&
                 routingProfile?.needsGeoFiles() == true &&
                 effectiveProfile.rawXrayConfig.isNullOrBlank() &&
-                effectiveProfile.network != ProxyProfile.NETWORK_XHTTP &&
+                !effectiveProfile.requiresXray() &&
                 effectiveProfile.rawOutbound.isNullOrBlank() &&
                 ensureGeoAssetPath(routingProfile).isEmpty()
             ) {
@@ -1619,7 +1721,7 @@ class OlcboxVpnService : VpnService() {
             }
             // The cascade runs both hops in one core. An xhttp second proxy can only run on Xray, so
             // force it (overriding the geo fallback above) — sing-box can't carry xhttp.
-            if (secondProfile?.network == ProxyProfile.NETWORK_XHTTP && activeProxyCore != ProxyCore.Xray) {
+            if (secondProfile?.requiresXray() == true && activeProxyCore != ProxyCore.Xray) {
                 activeProxyCore = ProxyCore.Xray
                 addLog("Second (cascade) proxy uses xhttp → forcing Xray core")
             }
@@ -1835,8 +1937,6 @@ class OlcboxVpnService : VpnService() {
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true
         val wdttRaw = usesWdtt && vk?.wdttPlus?.rawMode == true
-        // «Raw напрямую» needs a TUN to hand over — Proxy/Tproxy modes fall back to the SOCKS form.
-        val wdttRawDirect = wdttRaw && vk?.wdttPlus?.rawDirect == true && connectionMode == AndroidConnectionMode.Tun
         // WDTT exits via WireGuard (server-provided); the freeturn outbound choice is irrelevant. Its Raw
         // mode is a local SOCKS5 served by the core — the very shape of the AmneziaWG exit (awgproxy's
         // SOCKS on [awgLocalPort]), so it rides that branch: chain proxy, routing and DNS included.
@@ -1902,7 +2002,7 @@ class OlcboxVpnService : VpnService() {
                 // Raw serves its tunnel as a SOCKS5 where the AmneziaWG exit would.
                 val coreListen = if (wdttRaw) "127.0.0.1:$awgLocalPort" else listenAddr
                 addLog(
-                    "Starting VK-TURN qWDTT core on $coreListen (mode=${if (wdttRawDirect) "raw-direct" else if (wdttRaw) "raw" else "wg"}, peer=$peerAddr, " +
+                    "Starting VK-TURN qWDTT core on $coreListen (mode=${if (wdttRaw) "raw" else "wg"}, peer=$peerAddr, " +
                         "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
                         "turn-tcp=${vk.wdttPlus.rtNetworkMode}, obfs=${if (vk.wdttPlus.obfsVideo) "video" else "audio"})"
                 )
@@ -1910,7 +2010,6 @@ class OlcboxVpnService : VpnService() {
                     vk.wdttCoreOptionsJson(
                         listen = coreListen,
                         deviceId = deviceIdentityProvider.hwid(),
-                        rawTun = wdttRawDirect,
                     ),
                     object : WdttConfigSink {
                         override fun onConfig(wgConf: String) {
@@ -2030,15 +2129,6 @@ class OlcboxVpnService : VpnService() {
             if (wdttSignal != null) {
                 val wgConf = withTimeoutOrNull(VKTURN_RELAY_READY_TIMEOUT_MS) { wdttSignal.await() }
                 when {
-                    wdttRawDirect && wgConf?.startsWith("RAWCONF:") == true -> {
-                        val raw = WdttRawTun.parse(wgConf)
-                            ?: throw IllegalStateException("WDTT Raw: unusable server config $wgConf")
-                        wdttRawTun = raw
-                        addLog("VK-TURN WDTT Raw direct up (ip=${raw.ip}, dns=${raw.dns.joinToString()}, mtu=${raw.mtu}); the TUN goes straight to the core")
-                        if (vk.chainProxyLink.isNotBlank() || !config.routingProfileId.isNullOrBlank()) {
-                            addLog("VK-TURN WDTT Raw direct: the chained proxy and routing profile are not applied in this mode")
-                        }
-                    }
                     wdttRaw && wgConf?.startsWith("RAWCONF:") == true -> {
                         profile = localSocksProfile("qWDTT Raw", awgLocalPort)
                         addLog("VK-TURN WDTT Raw up (${wgConf.removePrefix("RAWCONF:")}); SOCKS on $awgLocalPort")
@@ -2066,10 +2156,6 @@ class OlcboxVpnService : VpnService() {
             }
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) return false
-            // «Raw напрямую»: no local SOCKS and no proxy core — startFullTunnel builds the TUN from
-            // [wdttRawTun] and hands it to the core.
-            if (wdttRawTun != null) return true
-
             // 2. The exit outbound that dials the local freeturn listener and rides the VK tunnel:
             //    - WireGuard / AmneziaWG: a UDP tunnel whose Endpoint is the freeturn UDP listener
             //      (mode=udp). AmneziaWG is raised by the awgproxy module (local SOCKS) and routed
@@ -2493,11 +2579,11 @@ class OlcboxVpnService : VpnService() {
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
         // VK-TURN runs either the freeturn OR the WDTT transport core (mutually exclusive per location).
-        EngineType.VkTurn -> if (wdttRawTun != null) Wdttmobile.isRunning()
-            else (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
+        EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
         // MasterDNS raises its own local SOCKS listener; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> masterDnsClient?.isRunning == true && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> openFluxProcess?.isAlive == true && (!openFluxProxyActive || proxyCoreRunning())
+        EngineType.Snolc -> snolcProcess?.isAlive == true && (!snolcProxyActive || proxyCoreRunning())
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -2739,25 +2825,12 @@ class OlcboxVpnService : VpnService() {
 
     private fun establishSystemVpnTunnel(): ParcelFileDescriptor? {
         return try {
-            val raw = wdttRawTun
             val builder = Builder()
                 .setSession("YPtun")
                 .setBlocking(true)
-            if (raw == null) {
-                builder.setMtu(activeMtu)
-                    .addAddress(TUN_IPV4_ADDRESS, IPV4_PREFIX_LENGTH)
-                    .addDnsServer(MAPDNS_ADDRESS)
-            } else {
-                // qWDTT «Raw напрямую»: the server routes replies to ITS address for this device, so the
-                // TUN must carry exactly that address, with the server's DNS and MTU (as qWDTT does).
-                builder.setMtu(raw.mtu).addAddress(raw.ip, 32)
-                raw.dns.forEach {
-                    builder.addDnsServer(it)
-                    // "Обход LAN" leaves private ranges off the TUN; a server DNS inside one must still
-                    // go through the tunnel, or name resolution dies.
-                    if (activeBypassLan) builder.addRoute(it, 32)
-                }
-            }
+                .setMtu(activeMtu)
+                .addAddress(TUN_IPV4_ADDRESS, IPV4_PREFIX_LENGTH)
+                .addDnsServer(MAPDNS_ADDRESS)
             // IPv4 capture. With "Обход LAN" on, route everything EXCEPT the private/LAN ranges into
             // the tunnel (so local-network traffic exits on the real interface — works for every engine,
             // including the ones whose core can't route "direct": olcRTC/VK-TURN/MasterDNS). The mapped-DNS
@@ -3050,7 +3123,7 @@ class OlcboxVpnService : VpnService() {
                         return@launch
                     }
 
-                    mode == AndroidConnectionMode.Tun && wdttRawTun == null && tun2socksThread?.isAlive != true -> {
+                    mode == AndroidConnectionMode.Tun && tun2socksThread?.isAlive != true -> {
                         addLog("Watchdog: tun2socks stopped")
                         requestTransportRecovery("tun2socks stopped", fullRestart = true)
                         return@launch
@@ -3089,8 +3162,7 @@ class OlcboxVpnService : VpnService() {
                     return@launch
                 }
 
-                // tun2socks counters — «Raw напрямую» has no tun2socks to read them from.
-                if (mode == AndroidConnectionMode.Tun && wdttRawTun == null && isTunTrafficStalled()) {
+                if (mode == AndroidConnectionMode.Tun && isTunTrafficStalled()) {
                     addLog("Watchdog: TUN traffic has no upstream response")
                     requestTransportRecovery("TUN traffic stalled", fullRestart = false)
                     return@launch
@@ -3241,7 +3313,6 @@ class OlcboxVpnService : VpnService() {
         OlcboxVpnState.setVkCaptchaUrl(null)
         cancelVkCaptchaNotification()
         runCatching { Wdttmobile.stop() }
-        wdttRawTun = null
         runCatching { masterDnsClient?.stop() }
         masterDnsClient = null
         masterDnsProxyActive = false
@@ -3253,6 +3324,14 @@ class OlcboxVpnService : VpnService() {
         }
         openFluxProcess = null
         openFluxProxyActive = false
+        snolcProcess?.let { p ->
+            runCatching { p.destroy() }
+            if (runCatching { !p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(true)) {
+                runCatching { p.destroyForcibly() }
+            }
+        }
+        snolcProcess = null
+        snolcProxyActive = false
         runCatching { Awg.stop() }
         runCatching { trustTunnelClient?.stop() }
         runCatching { trustTunnelClient?.close() }
@@ -3311,20 +3390,6 @@ class OlcboxVpnService : VpnService() {
             throw IllegalStateException("AmneziaWG SOCKS port $awgLocalPort did not open")
         }
         return localSocksProfile(profile.tag.ifBlank { "AmneziaWG" }, awgLocalPort)
-    }
-
-    /**
-     * «Raw напрямую»: hands the core a dup of the TUN fd (it owns and closes the dup when it stops; our
-     * [vpnInterface] keeps the original and is closed as always), so the interface goes down only once
-     * both are gone.
-     */
-    private fun attachWdttRawTun(pfd: ParcelFileDescriptor): Boolean = runCatching {
-        Wdttmobile.attachTunFd(pfd.dup().detachFd().toLong())
-        addLog("VK-TURN WDTT Raw direct: TUN handed to the core")
-        true
-    }.getOrElse {
-        addLog("VK-TURN WDTT Raw direct: could not hand the TUN over: ${it.message}")
-        false
     }
 
     /** A SOCKS5 outbound to a loopback listener one of our cores serves (AmneziaWG, qWDTT Raw). */

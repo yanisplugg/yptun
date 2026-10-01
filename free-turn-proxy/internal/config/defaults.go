@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/samosvalishe/free-turn-proxy/internal/client/dnsdial"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/kcpmux"
 	"github.com/samosvalishe/free-turn-proxy/internal/tunnel"
 )
@@ -14,14 +15,15 @@ const (
 )
 
 const (
-	DNSModePlain = "plain"
-	DNSModeDoH   = "doh"
-	DNSModeAuto  = "auto"
+	DNSModePlain = dnsdial.DNSModePlain
+	DNSModeDoH   = dnsdial.DNSModeDoH
+	DNSModeAuto  = dnsdial.DNSModeAuto
 )
 
 const (
 	DefaultListen         = "127.0.0.1:9000"
 	DefaultStreams        = 12
+	DefaultDirectStreams  = 1
 	DefaultStreamsPerCred = 12
 	DefaultTransport      = TransportTCP
 	DefaultMode           = ModeUDP
@@ -37,7 +39,6 @@ func defaultRaw() raw {
 	return raw{
 		Listen:         DefaultListen,
 		Provider:       DefaultProvider,
-		N:              DefaultStreams,
 		StreamsPerCred: DefaultStreamsPerCred,
 		Transport:      DefaultTransport,
 		Mode:           DefaultMode,

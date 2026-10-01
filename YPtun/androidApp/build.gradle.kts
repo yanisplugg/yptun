@@ -183,6 +183,27 @@ android.sourceSets.getByName("main").jniLibs.srcDir(openfluxJniLibsDir.get().asF
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
     .configureEach { dependsOn(buildOpenFluxAndroid) }
 
+// --- snolc client executable (../snolc, static, all modules linked in), packaged as lib/<abi>/libsnolc.so ---
+// Prebuilt by snolc/build-all.sh (Rust 1.98.1 + the NDK) and committed; run as a SUBPROCESS from
+// nativeLibraryDir like OpenFlux. ABIs without a build (x86, x86_64) simply ship without the engine.
+val snolcPrebuiltDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("snolc/prebuilt")
+val snolcJniLibsDir = layout.buildDirectory.dir("generated/snolc/jniLibs")
+val copySnolcAndroid = tasks.register<Copy>("copySnolcAndroid") {
+    val abis = mapOf("arm64-v8a" to "snolc-android-arm64", "armeabi-v7a" to "snolc-android-armv7")
+    abis.forEach { (abi, name) ->
+        from(snolcPrebuiltDir) {
+            include(name)
+            rename { "libsnolc.so" }
+            eachFile { relativePath = RelativePath(true, abi, "libsnolc.so") }
+        }
+    }
+    includeEmptyDirs = false
+    into(snolcJniLibsDir)
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(snolcJniLibsDir.get().asFile)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(copySnolcAndroid) }
+
 // In AGP 9.0+ Kotlin settings for Android are configured like this:
 kotlin {
     compilerOptions {

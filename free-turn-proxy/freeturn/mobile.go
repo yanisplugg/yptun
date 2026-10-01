@@ -33,9 +33,11 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider/vk"
+	"github.com/samosvalishe/free-turn-proxy/internal/proxy/allocpace"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/tcprelay"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/udprelay"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
+	"github.com/samosvalishe/free-turn-proxy/internal/transport/turndial"
 )
 
 const dtlsHandshakeConcurrency = 3
@@ -93,7 +95,7 @@ func SetLogWriter(w LogWriter) {
 
 // freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
 // Bump it whenever the vendored core is updated; surfaced in the app's settings.
-const freeturnVersion = "3.4.0"
+const freeturnVersion = "4.0.1"
 
 // Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
 func Version() string { return freeturnVersion }
@@ -312,6 +314,17 @@ func run(ctx context.Context, cfg *config.Client, links []string, connected *ato
 		return c.User, c.Pass, c.ServerAddrs, nil
 	}
 
+	// 4.0.0: the relays no longer take Host/Port/GetCreds — they get a Dial func that allocates one TURN
+	// stream (session.link upstream). Same pacing between allocations as upstream.
+	pacer := allocpace.New(allocpace.DefaultInterval)
+	turn := cfg.TURN
+	dial := func(ctx context.Context, streamID int) (*turndial.Stream, error) {
+		if !pacer.Wait(ctx) {
+			return nil, ctx.Err()
+		}
+		return udprelay.DialTURN(ctx, turn.Host, turn.Port, turn.TransportUDP, peer, streamID, getCreds, logger)
+	}
+
 	if cfg.Proxy.Mode != config.ProxyModeUDP {
 		tcpDtlsDialer := &dtlsdial.Dialer{
 			HandshakeTimeout: 30 * time.Second,
@@ -330,15 +343,12 @@ func run(ctx context.Context, cfg *config.Client, links []string, connected *ato
 			ConnectedStreams: connectedStreams,
 		}
 		tcpParams := &tcprelay.Params{
-			Host:         cfg.TURN.Host,
-			Port:         cfg.TURN.Port,
-			TransportUDP: cfg.TURN.TransportUDP,
-			Profile:      string(cfg.Obf.Profile),
-			ObfKey:       cfg.Obf.Key,
-			ObfTiming:    cfg.Obf.Timing,
-			GetCreds:     tcprelay.GetCredsFunc(getCreds),
-			KCPProfile:   cfg.KCP.Profile,
-			ClientID:     cfg.ClientID,
+			Dial:       dial,
+			Profile:    string(cfg.Obf.Profile),
+			ObfKey:     cfg.Obf.Key,
+			ObfTiming:  cfg.Obf.Timing,
+			KCPProfile: cfg.KCP.Profile,
+			ClientID:   cfg.ClientID,
 		}
 		return tcprelay.Run(ctx, tcpDeps, tcpParams, peer, cfg.Proxy.Listen, cfg.TURN.N)
 	}
@@ -348,14 +358,12 @@ func run(ctx context.Context, cfg *config.Client, links []string, connected *ato
 		HandshakeSem:     make(chan struct{}, dtlsHandshakeConcurrency),
 	}
 	udpParams := &udprelay.Params{
-		Host:         cfg.TURN.Host,
-		Port:         cfg.TURN.Port,
-		TransportUDP: cfg.TURN.TransportUDP,
+		Dial: dial,
 		// 1.3.0 obf Codec profile (none | rtpopus | rtpopus2); threaded with the key.
-		Profile:      string(cfg.Obf.Profile),
-		ObfKey:       cfg.Obf.Key,
-		GetCreds:     udprelay.GetCredsFunc(getCreds),
-		ClientID:     cfg.ClientID,
+		Profile:   string(cfg.Obf.Profile),
+		ObfKey:    cfg.Obf.Key,
+		ObfTiming: cfg.Obf.Timing,
+		ClientID:  cfg.ClientID,
 	}
 	// 2.1.0: Run no longer binds cfg.Proxy.Listen itself — the caller owns the local-peer conn (so a
 	// host can hand it an in-process pipe instead of a loopback socket) and Run closes it on ctx done.
@@ -399,6 +407,8 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 				// normalize the same way config.ParseClient does (else the URL gets doubled →
 				// VK error 9008 "Join link is not valid").
 				Link:            normalizeVKLink(link),
+				Platform:        string(cfg.VK.Platform),
+				FingerprintSeed: cfg.ClientID,
 				Dialer:          dialer,
 				ManualOnly:      cfg.VK.ManualCaptcha,
 				StreamsPerCache: cfg.VK.StreamsPerCred,

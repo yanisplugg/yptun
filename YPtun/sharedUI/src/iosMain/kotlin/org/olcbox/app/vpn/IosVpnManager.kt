@@ -183,6 +183,10 @@ class IosVpnManager(
                     addLog("Add a valid location before connecting")
                     return@withLock
                 }
+                if (active.engine == EngineType.Snolc) {
+                    setStatus(VpnStatus.Error("snolc на iOS пока не поддерживается"))
+                    return@withLock
+                }
 
                 // If tunnel is already running, attempt hot reload without tearing down the iOS VPN tunnel
                 val currentManager = manager ?: loadManager(createIfMissing = false)

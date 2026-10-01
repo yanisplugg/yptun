@@ -1219,6 +1219,9 @@ class LocationsRepositoryImpl(
         // VK-TURN qWDTT share links and configs (qwdtt://, wdtt://, or JSON profile/array/subscription):
         parseQwdttText(linkText, text, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
+        // snolc share links (snolc://):
+        parseSnolcText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
             // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
@@ -2007,6 +2010,49 @@ class LocationsRepositoryImpl(
         )
     }
 
+    private fun parseSnolcText(
+        text: String,
+        subscriptionUrl: String?,
+        subscriptionMetadata: SubscriptionMetadata?
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("snolc://", ignoreCase = true) }
+            .mapNotNull { SnolcConfig.parseUri(it) }
+            .map { (cfg, name) -> snolcEntry(cfg, name, subscriptionUrl, usedStorageIds, locationMetadata) }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(
+            activeLocationId = entries.first().storageId,
+            locations = entries
+        )
+    }
+
+    private fun snolcEntry(
+        cfg: SnolcConfig,
+        name: String,
+        subscriptionUrl: String?,
+        usedStorageIds: MutableSet<String>,
+        metadata: LocationMetadata? = null
+    ): LocationEntry {
+        val finalName = name.ifBlank { "snolc ${cfg.host}:${cfg.port}" }
+        val location = LocationConfig(
+            name = finalName,
+            engine = EngineType.Snolc,
+            snolc = cfg
+        )
+        val base = "${cfg.host}_${cfg.port}".storageSlug()
+        val storageId = uniqueStorageId("imported_snolc_$base", usedStorageIds)
+        return LocationEntry.from(
+            storageId = storageId,
+            location = location,
+            subscriptionUrl = subscriptionUrl,
+            metadata = metadata
+        )
+    }
+
     /** Parses a whole AmneziaWG wg-quick .conf into a [EngineType.Standard] location. */
     private fun parseAmneziaWgText(
         text: String,
@@ -2764,6 +2810,7 @@ class LocationsRepositoryImpl(
             normalized.vkturn?.let { "${it.outbound}@${it.uri.substringBefore('$').ifBlank { it.outboundProxyLink }}" }.orEmpty(),
             normalized.masterDns?.let { "${it.domains}@${it.resolvers}" }.orEmpty(),
             normalized.openFlux?.let { "${it.transport}@${if (it.usesMax()) it.maxUid else it.docUrl}" }.orEmpty(),
+            normalized.snolc?.let { "snolc@${it.host}:${it.port}" }.orEmpty(),
         ).joinToString("|")
     }
 

@@ -14,21 +14,33 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
 	"github.com/samosvalishe/free-turn-proxy/internal/safego"
 	"github.com/samosvalishe/free-turn-proxy/internal/transport/dtlsdial"
+	"github.com/samosvalishe/free-turn-proxy/internal/transport/turndial"
 )
-
-type stubAuth struct{}
-
-func (stubAuth) IsAuthError(error) bool   { return false }
-func (stubAuth) HandleAuthError(int) bool { return false }
-func (stubAuth) ResetErrors(int)          {}
-func (stubAuth) DropCredentials(int)      {}
-func (stubAuth) BackoffUntilUnix() int64  { return 0 }
 
 type deadlineRecorder struct {
 	net.PacketConn
 	mu   sync.Mutex
 	last time.Time
 	set  bool
+}
+
+func TestRunStopsOnLocalReadFailure(t *testing.T) {
+	dialer, params, peer, local := runFatalDeps(t)
+	params.Dial = func(ctx context.Context, _ int) (*turndial.Stream, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	_ = local.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	var connected atomic.Int32
+	err := Run(ctx, dialer, NopAuth{}, logx.Nop(), &connected, nil, params, peer, local, 1)
+	if !errors.Is(err, ErrLocalRead) || !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Run = %v, want local read failure wrapping closed connection", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("Run waited for outer cancellation")
+	}
 }
 
 func (d *deadlineRecorder) SetReadDeadline(t time.Time) error {
@@ -51,8 +63,8 @@ func runFatalDeps(t *testing.T) (*dtlsdial.Dialer, *Params, *net.UDPAddr, *deadl
 	t.Cleanup(func() { _ = pipe.Close(); _ = peerSide.Close() })
 
 	params := &Params{
-		GetCreds: func(context.Context, int) (string, string, []string, error) {
-			return "", "", nil, provider.ErrFatalNoStreams
+		Dial: func(context.Context, int) (*turndial.Stream, error) {
+			return nil, provider.ErrFatalNoStreams
 		},
 	}
 	return &dtlsdial.Dialer{HandshakeTimeout: 100 * time.Millisecond},
@@ -70,7 +82,7 @@ func TestRunReturnsOnFatalProviderError(t *testing.T) {
 	var connected atomic.Int32
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(context.Background(), dialer, stubAuth{}, logx.Nop(), &connected, nil, params, peer, local, 1)
+		done <- Run(context.Background(), dialer, NopAuth{}, logx.Nop(), &connected, nil, params, peer, local, 1)
 	}()
 
 	select {
@@ -97,14 +109,14 @@ func TestRunReturnsOnFatalProviderError(t *testing.T) {
 func TestRunReturnsOnStreamPanic(t *testing.T) {
 	t.Parallel()
 	dialer, params, peer, local := runFatalDeps(t)
-	params.GetCreds = func(context.Context, int) (string, string, []string, error) {
+	params.Dial = func(context.Context, int) (*turndial.Stream, error) {
 		panic("boom")
 	}
 
 	var connected atomic.Int32
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(context.Background(), dialer, stubAuth{}, logx.Nop(), &connected, nil, params, peer, local, 1)
+		done <- Run(context.Background(), dialer, NopAuth{}, logx.Nop(), &connected, nil, params, peer, local, 1)
 	}()
 
 	select {
@@ -128,7 +140,7 @@ func TestRunFatalDoesNotWaitWarmupBarrier(t *testing.T) {
 	done := make(chan error, 1)
 	start := time.Now()
 	go func() {
-		done <- Run(context.Background(), dialer, stubAuth{}, logx.Nop(), &connected, nil, params, peer, local, 4)
+		done <- Run(context.Background(), dialer, NopAuth{}, logx.Nop(), &connected, nil, params, peer, local, 4)
 	}()
 
 	select {
