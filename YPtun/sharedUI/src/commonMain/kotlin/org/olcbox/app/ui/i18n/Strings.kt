@@ -679,6 +679,7 @@ interface Strings {
     val pingResultLabel: String
     val pingResultTime: String
     val pingResultIcon: String
+    val pingResultBoth: String
 
     // QR scanner
     val scanQrTitle: String
@@ -1329,6 +1330,7 @@ object RuStrings : Strings {
     override val pingResultLabel = "Результат пинга"
     override val pingResultTime = "Время"
     override val pingResultIcon = "Значок"
+    override val pingResultBoth = "Значок и значение"
     override val scanQrTitle = "Сканирование QR"
     override val readyToScan = "Готово к сканированию"
     override val subscriptionOrLocationUri = "Подписка или URI локации"
@@ -1968,6 +1970,7 @@ object EnStrings : Strings {
     override val pingResultLabel = "Ping result"
     override val pingResultTime = "Time"
     override val pingResultIcon = "Icon"
+    override val pingResultBoth = "Icon + value"
     override val scanQrTitle = "Scan QR"
     override val readyToScan = "Ready to scan"
     override val subscriptionOrLocationUri = "Subscription or location URI"
@@ -2607,6 +2610,7 @@ object FaStrings : Strings {
     override val pingResultLabel = "نتیجهٔ پینگ"
     override val pingResultTime = "زمان"
     override val pingResultIcon = "نشان"
+    override val pingResultBoth = "نشان و مقدار"
     override val scanQrTitle = "پویش QR"
     override val readyToScan = "آمادهٔ پویش"
     override val subscriptionOrLocationUri = "اشتراک یا URI موقعیت"
@@ -3246,6 +3250,7 @@ object ZhStrings : Strings {
     override val pingResultLabel = "测试结果"
     override val pingResultTime = "时间"
     override val pingResultIcon = "图标"
+    override val pingResultBoth = "图标和数值"
     override val scanQrTitle = "扫描二维码"
     override val readyToScan = "准备扫描"
     override val subscriptionOrLocationUri = "订阅或节点 URI"

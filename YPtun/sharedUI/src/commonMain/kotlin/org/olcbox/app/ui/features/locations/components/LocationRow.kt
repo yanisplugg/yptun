@@ -268,7 +268,7 @@ fun LocationRow(
             location.config?.engine == org.olcbox.app.data.model.EngineType.OpenFlux ||
             location.config?.engine == org.olcbox.app.data.model.EngineType.Snolc
         // "Значок" mode shows a check/cross instead of the raw latency (per user setting).
-        val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
+        val iconResult = LocalPingResultDisplay.current != AppBehaviorSettings.PING_RESULT_TIME
 
         when {
             isLoading -> {
@@ -277,11 +277,13 @@ fun LocationRow(
 
             pingMs != null -> {
                 if (iconResult) {
-                    Icon(
+                    PingGlyph(
                         imageVector = Icons.Rounded.CheckCircle,
                         contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOnline,
                         tint = PingOkGreen,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(20.dp),
+                        text = "$pingMs ms",
+                        fontSize = 14.sp,
                     )
                 } else {
                     Text(
@@ -304,11 +306,13 @@ fun LocationRow(
 
             isError -> {
                 if (iconResult) {
-                    Icon(
+                    PingGlyph(
                         imageVector = Icons.Rounded.Cancel,
                         contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
                         tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(20.dp),
+                        text = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
+                        fontSize = 14.sp,
                     )
                 } else {
                     Text(
@@ -629,16 +633,18 @@ private fun CompactPingIndicator(
     val isMasterDns = location.config?.engine == EngineType.MasterDns ||
         location.config?.engine == EngineType.OpenFlux ||
         location.config?.engine == EngineType.Snolc
-    val iconResult = LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_ICON
+    val iconResult = LocalPingResultDisplay.current != AppBehaviorSettings.PING_RESULT_TIME
     when {
         isLoading -> ShimmeringPingSkeleton()
 
         pingMs != null -> if (iconResult) {
-            Icon(
+            PingGlyph(
                 imageVector = Icons.Rounded.CheckCircle,
                 contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOnline,
                 tint = PingOkGreen,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(18.dp),
+                text = "$pingMs ms",
+                fontSize = 12.sp,
             )
         } else {
             Text(
@@ -657,11 +663,13 @@ private fun CompactPingIndicator(
         )
 
         isError -> if (iconResult) {
-            Icon(
+            PingGlyph(
                 imageVector = Icons.Rounded.Cancel,
                 contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
                 tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(18.dp),
+                text = org.olcbox.app.ui.i18n.LocalStrings.current.pingOffline,
+                fontSize = 12.sp,
             )
         } else {
             Text(
@@ -673,6 +681,25 @@ private fun CompactPingIndicator(
         }
 
         else -> Spacer(modifier = Modifier.size(1.dp))
+    }
+}
+
+/** Ping result glyph; in "both" mode the value/label is shown next to it. */
+@Composable
+private fun PingGlyph(
+    imageVector: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    tint: androidx.compose.ui.graphics.Color,
+    modifier: Modifier,
+    text: String,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+) {
+    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        Icon(imageVector = imageVector, contentDescription = contentDescription, tint = tint, modifier = modifier)
+        if (LocalPingResultDisplay.current == AppBehaviorSettings.PING_RESULT_BOTH) {
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(text = text, fontSize = fontSize, fontWeight = FontWeight.Medium, color = tint)
+        }
     }
 }
 

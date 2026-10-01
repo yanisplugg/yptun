@@ -4000,6 +4000,7 @@ private fun PingSettingsContent(
             val resultOptions = listOf(
                 AppBehaviorSettings.PING_RESULT_TIME to s.pingResultTime,
                 AppBehaviorSettings.PING_RESULT_ICON to s.pingResultIcon,
+                AppBehaviorSettings.PING_RESULT_BOTH to s.pingResultBoth,
             )
             resultOptions.forEach { (mode, title) ->
                 FilterChip(
