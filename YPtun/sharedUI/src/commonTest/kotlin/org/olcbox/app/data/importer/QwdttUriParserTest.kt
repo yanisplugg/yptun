@@ -48,6 +48,14 @@ class QwdttUriParserTest {
     }
 
     @Test
+    fun parsesQwdttUriWithMultipleHashes() {
+        val uri = "qwdtt://config?peer=203.0.113.10&hashes=hash1,hash2,hash3,hash4&pass=p123"
+        val parsed = QwdttUriParser.parseLine(uri)
+        assertNotNull(parsed)
+        assertEquals("hash1\nhash2\nhash3\nhash4", parsed.hashes)
+    }
+
+    @Test
     fun parsesQwdttUriWithHostPortAndDtlsPort() {
         val uri = "qwdtt://config?peer=vpn.example.com:56005&dtls_port=56005&pass=p123"
         val parsed = QwdttUriParser.parseLine(uri)

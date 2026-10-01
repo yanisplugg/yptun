@@ -784,6 +784,7 @@ class LocationsRepositoryImpl(
         } ?: return null
 
         var parsed = parseImportSource(source, fallbackSubscriptionInterval)
+            .takeUnless { source.isUnsupportedClientStub() }
         if (parsed == null && input.isHttpUrl() && source.requestMode != SubscriptionRequestMode.Compatibility) {
             val fallbackSource = resolveImportSource(
                 text = input,
@@ -793,10 +794,34 @@ class LocationsRepositoryImpl(
             if (fallbackSource != null) {
                 source = fallbackSource
                 parsed = parseImportSource(fallbackSource, fallbackSubscriptionInterval)
+                    .takeUnless { fallbackSource.isUnsupportedClientStub() }
+            }
+        }
+
+        // Panels answer an unknown UA ("YPtun/x") with a stub / 4xx ("client not supported"), so as the last
+        // resort re-fetch pretending to be a full Happ client (Happ UA + HWID/device headers).
+        if (parsed == null && input.isHttpUrl() && subscriptionUserAgent() != AppBehaviorSettings.HAPP_USER_AGENT) {
+            val happSource = resolveImportSource(
+                text = input,
+                requestMode = SubscriptionRequestMode.Identity,
+                subscriptionProxy = subscriptionProxy,
+                forceHapp = true
+            )
+            if (happSource != null) {
+                parseImportSource(happSource, fallbackSubscriptionInterval)?.takeUnless { happSource.isUnsupportedClientStub() }?.let { source = happSource; parsed = it }
             }
         }
 
         return parsed?.let { ResolvedImport(source, it) }
+    }
+
+    /** The panel's "this subscription is not supported for this client" stub (arrives as a normal 200 body). */
+    private fun ImportSource.isUnsupportedClientStub(): Boolean {
+        val probe = listOfNotNull(content.take(4096), SubscriptionDecoder.decodeBase64Chunk(content.take(4096).trim()), profileTitle, announce)
+        return probe.any {
+            it.contains("не поддерживается для этого клиента", ignoreCase = true) ||
+                it.contains("not supported for this client", ignoreCase = true)
+        }
     }
 
     private fun parseImportSource(
@@ -970,7 +995,8 @@ class LocationsRepositoryImpl(
     private suspend fun resolveImportSource(
         text: String,
         requestMode: SubscriptionRequestMode,
-        subscriptionProxy: SubscriptionFetchProxy?
+        subscriptionProxy: SubscriptionFetchProxy?,
+        forceHapp: Boolean = false
     ): ImportSource? {
         if (text.isBlank()) return null
 
@@ -981,7 +1007,8 @@ class LocationsRepositoryImpl(
         val downloaded = downloadTextFromUrl(
             url = text,
             requestMode = requestMode,
-            subscriptionProxy = subscriptionProxy
+            subscriptionProxy = subscriptionProxy,
+            forceHapp = forceHapp
         ) ?: return null
         return downloaded.content
             .normalizedImportText()
@@ -1015,8 +1042,10 @@ class LocationsRepositoryImpl(
     private suspend fun downloadTextFromUrl(
         url: String,
         requestMode: SubscriptionRequestMode,
-        subscriptionProxy: SubscriptionFetchProxy?
+        subscriptionProxy: SubscriptionFetchProxy?,
+        forceHapp: Boolean = false
     ): DownloadedSubscription? {
+        val userAgent = if (forceHapp) AppBehaviorSettings.HAPP_USER_AGENT else subscriptionUserAgent()
         val hwid = if (requestMode == SubscriptionRequestMode.Identity) {
             deviceIdentityProvider.hwid()
         } else {
@@ -1050,7 +1079,7 @@ class LocationsRepositoryImpl(
                             // RICH per-server Xray JSON (with dns.hosts / routing / FAKEDNS). We support
                             // that JSON (parseRawXray), and it's the only way to receive the server's
                             // FakeDNS config — so always present as Happ, the de-facto "full config" UA.
-                            append(HttpHeaders.UserAgent, subscriptionUserAgent())
+                            append(HttpHeaders.UserAgent, userAgent)
                             if (requestMode == SubscriptionRequestMode.Identity) {
                                 append("x-hwid", hwid.orEmpty())
                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
@@ -1079,7 +1108,7 @@ class LocationsRepositoryImpl(
                     val infoResponse = client.get(url.trim().trimEnd('/') + "/info") {
                         headers {
                             append(HttpHeaders.Accept, "application/json")
-                            append(HttpHeaders.UserAgent, subscriptionUserAgent())
+                            append(HttpHeaders.UserAgent, userAgent)
                             if (requestMode == SubscriptionRequestMode.Identity) {
                                 append("x-hwid", hwid.orEmpty())
                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
@@ -1094,7 +1123,7 @@ class LocationsRepositoryImpl(
                 // (default YPtun → clean names/links), so do a SEPARATE Happ-UA fetch here purely to
                 // recover the FakeDNS config and attach it later. Skipped (reuse main) when the main UA
                 // already is Happ. Best-effort: any failure just means no FakeDNS.
-                val fakednsJson = if (subscriptionUserAgent() == AppBehaviorSettings.HAPP_USER_AGENT) {
+                val fakednsJson = if (userAgent == AppBehaviorSettings.HAPP_USER_AGENT) {
                     content
                 } else {
                     runCatching {

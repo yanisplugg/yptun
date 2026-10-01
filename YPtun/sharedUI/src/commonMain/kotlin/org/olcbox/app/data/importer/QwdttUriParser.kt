@@ -79,7 +79,8 @@ object QwdttUriParser {
             peerRaw to (dtlsPortParam?.toIntOrNull() ?: 56000)
         }
 
-        val hashes = params["hashes"] ?: params["vk_hashes"] ?: params["vkhashes"] ?: params["hash"] ?: ""
+        val hashesRaw = params["hashes"] ?: params["vk_hashes"] ?: params["vkhashes"] ?: params["hash"] ?: ""
+        val hashes = splitHashes(hashesRaw).joinToString("\n")
         val name = params["name"]?.takeIf { it.isNotBlank() } ?: "qWDTT $peerHost"
         val workers = params["workers"]?.toIntOrNull()
             ?: params["workers_per_hash"]?.toIntOrNull()
@@ -117,12 +118,13 @@ object QwdttUriParser {
         val localPort = parts[3].trim().toIntOrNull() ?: 9000
         val pass = parts[4].trim()
         val hash = parts.drop(5).joinToString(":").trim()
+        val hashes = splitHashes(hash).joinToString("\n")
 
         return QwdttProfile(
             name = "WDTT $ip",
             peer = ip,
             dtlsPort = dtlsPort,
-            hashes = hash,
+            hashes = hashes,
             workers = 9,
             listenPort = localPort,
             password = pass,
@@ -180,11 +182,12 @@ object QwdttUriParser {
             ?: fallbackName
             ?: "qWDTT $peerHost"
 
-        val hashes = obj["hashes"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
+        val hashesRaw = obj["hashes"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
             ?: obj["vkHashes"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
             ?: obj["vk_hashes"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
             ?: obj["hash"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
             ?: ""
+        val hashes = splitHashes(hashesRaw).joinToString("\n")
 
         val pass = obj["password"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
             ?: obj["pass"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
@@ -220,4 +223,12 @@ object QwdttUriParser {
             rawMode = rawMode,
         )
     }
+
+    /**
+     * Splits a hash list the way the qWDTT core does (`wdtt/group.go` `ParseHashes`): commas,
+     * semicolons or any whitespace, blanks dropped. Lets the server's comma-separated `hashes=` and
+     * our newline-separated `VkTurnConfig.vkLink` round-trip through the same parser.
+     */
+    fun splitHashes(raw: String): List<String> =
+        raw.split(',', ';', '\n', '\r', '\t', ' ').map { it.trim() }.filter { it.isNotEmpty() }
 }
