@@ -29,6 +29,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
+import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
 import org.olcbox.app.data.importer.UriCodec
@@ -36,6 +37,7 @@ import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.FakeDnsSpec
@@ -1185,6 +1187,9 @@ class LocationsRepositoryImpl(
         // VK-TURN share links (freeturn://): WireGuard-over-VK locations.
         parseFreeturnText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
+        // VK-TURN qWDTT share links and configs (qwdtt://, wdtt://, or JSON profile/array/subscription):
+        parseQwdttText(linkText, text, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
             // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
@@ -1888,6 +1893,83 @@ class LocationsRepositoryImpl(
             .map { if (it.isLetterOrDigit()) it else '_' }
             .joinToString("")
         val storageId = uniqueStorageId("imported_vkturn_$base", usedStorageIds)
+        return LocationEntry.from(
+            storageId = storageId,
+            location = location,
+            subscriptionUrl = subscriptionUrl,
+            metadata = metadata,
+        )
+    }
+
+    private fun parseQwdttText(
+        linkText: String,
+        rawText: String,
+        subscriptionUrl: String? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+
+        // 1. Try URI lines (qwdtt://, wdtt://) from linkText
+        val lineProfiles = linkText.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .mapNotNull { QwdttUriParser.parseLine(it) }
+            .toList()
+
+        val profiles = if (lineProfiles.isNotEmpty()) {
+            lineProfiles
+        } else {
+            // 2. Try JSON from linkText (which could be base64-decoded), or rawText
+            val fromLink = QwdttUriParser.parseJson(linkText)
+            if (fromLink.isNotEmpty()) fromLink else QwdttUriParser.parseJson(rawText)
+        }
+
+        if (profiles.isEmpty()) return null
+
+        val entries = profiles.map { profile ->
+            qwdttEntry(profile, subscriptionUrl, usedStorageIds, locationMetadata)
+        }
+
+        return LocationBundleV4(
+            activeLocationId = entries.first().storageId,
+            locations = entries
+        )
+    }
+
+    private fun qwdttEntry(
+        profile: QwdttUriParser.QwdttProfile,
+        subscriptionUrl: String?,
+        usedStorageIds: MutableSet<String>,
+        metadata: LocationMetadata? = null
+    ): LocationEntry {
+        val name = profile.name.ifBlank { "qWDTT ${profile.peer}" }
+        val location = LocationConfig(
+            name = name,
+            engine = EngineType.VkTurn,
+            proxy = ProxyProfile(
+                tag = name,
+                type = "wireguard",
+                server = profile.peer,
+                serverPort = profile.dtlsPort,
+            ),
+            vkturn = VkTurnConfig(
+                core = VkTurnConfig.CORE_WDTT,
+                wdttPeer = profile.peer,
+                wdttPort = profile.dtlsPort,
+                wdttPassword = profile.password,
+                vkLink = profile.hashes,
+                wdttWorkers = profile.workers,
+                listenPort = profile.listenPort,
+                wdttPlus = if (profile.rawMode) WdttPlusOptions(rawMode = true) else WdttPlusOptions(),
+            ),
+        ).normalized()
+
+        val base = "${profile.peer}_${profile.dtlsPort}"
+            .lowercase()
+            .map { if (it.isLetterOrDigit()) it else '_' }
+            .joinToString("")
+        val storageId = uniqueStorageId("imported_qwdtt_$base", usedStorageIds)
         return LocationEntry.from(
             storageId = storageId,
             location = location,

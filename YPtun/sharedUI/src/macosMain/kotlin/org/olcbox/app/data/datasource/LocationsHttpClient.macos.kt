@@ -21,6 +21,7 @@ internal actual fun createProxyHttpClient(
 ): HttpClient {
     return HttpClient(Darwin) {
         expectSuccess = false
+        followRedirects = true
 
         engine {
             configureSession {

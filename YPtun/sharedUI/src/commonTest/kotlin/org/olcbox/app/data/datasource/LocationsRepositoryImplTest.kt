@@ -1076,6 +1076,26 @@ class LocationsRepositoryImplTest {
         assertTrue("bittorrent" in raw && "198.18.0.0/15" in raw, raw)
     }
 
+    @Test
+    fun importsQwdttUriDirectly() = runTest {
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source)
+        val link = "qwdtt://config?name=Finland%20qWDTT&peer=185.174.40.127&hashes=xqHRj13--vSen_gJFj2dZ6Gbn60BVH2R0edBRXH13q8&workers=27&port=9000&pass=Elite1337%21"
+        val ok = repo.importText(link)
+        assertTrue(ok)
+        val stored = source.stored
+        assertNotNull(stored)
+        val entry = stored.locations.single()
+        assertEquals("Finland qWDTT", entry.name)
+        assertEquals(EngineType.VkTurn, entry.location.engine)
+        assertEquals(VkTurnConfig.CORE_WDTT, entry.location.vkturn?.core)
+        assertEquals("185.174.40.127", entry.location.vkturn?.wdttPeer)
+        assertEquals("Elite1337!", entry.location.vkturn?.wdttPassword)
+        assertEquals("xqHRj13--vSen_gJFj2dZ6Gbn60BVH2R0edBRXH13q8", entry.location.vkturn?.vkLink)
+        assertEquals(27, entry.location.vkturn?.wdttWorkers)
+        assertEquals(9000, entry.location.vkturn?.listenPort)
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),
