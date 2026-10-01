@@ -151,9 +151,9 @@ val coresAndroidAarDependency = files(coresAndroidAarFile).builtBy(buildCoresAnd
 
 // iOS: every core through the flat kazcores/coreapi package (the same one the desktop DLL wraps), in
 // ONE gomobile framework linked by both the app (pings) and the packet-tunnel extension. macOS + Xcode
-// only. No with_gvisor (sing-box owns no TUN on iOS — hev does) and no with_naive_outbound (cronet
-// has no iOS build here yet).
-val coresIosBuildTags = "with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic"
+// only. with_gvisor is required for WireGuard outbounds (used by VK-TURN / qWDTT), no with_naive_outbound
+// (cronet has no iOS build here yet).
+val coresIosBuildTags = "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic"
 val coresIosXcframework = layout.buildDirectory.dir("generated/cores/ios/Coreapi.xcframework")
 
 val buildCoresIosXcframework by tasks.registering(Exec::class) {
