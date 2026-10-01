@@ -148,6 +148,55 @@ class IosTunnelSession(
     }
 
     /**
+     * Hot-reloads the tunnel session with a newly requested location without tearing down the
+     * system NEPacketTunnelProvider adapter.
+     */
+    fun reload(completion: (error: String?) -> Unit) {
+        log("Reloading tunnel session for new location...")
+        scope.launch {
+            val result = runCatching {
+                watchdog?.cancel()
+                engine.stopAll()
+
+                val request = IosSharedStore.readText(REQUEST_FILE)
+                    ?.let { json.decodeFromString(IosTunnelRequest.serializer(), it) }
+                    ?: error("Нет активной локации — выберите её в приложении")
+                val location = request.location.normalized()
+                check(location.isComplete()) { "Локация настроена не полностью" }
+                log("Switching to ${location.displayName()} (engine=${location.engine})")
+
+                val user = ""
+                val pass = ""
+                withTimeout(28_000) {
+                    engine.start(location, SOCKS_PORT, user, pass, request.deviceId)
+                }
+                engineType = location.engine
+
+                val traffic = IosSharedStore.loadTraffic()
+                httpProxyPort = engine.httpProxyPort
+
+                val bypassLan = IosSharedStore.loadRouting().bypassLan
+                applyNetworkSettings(traffic.mtu, bypassLan, location)
+                log("Tunnel settings applied for ${location.displayName()}")
+            }
+            result.onSuccess {
+                startWatchdog()
+                completion(null)
+            }.onFailure {
+                val rawMsg = it.message ?: "Не удалось переключить сервер"
+                val message = if (it is kotlinx.coroutines.TimeoutCancellationException) {
+                    "Таймаут подключения: сервер не ответил за 28 сек"
+                } else {
+                    rawMsg
+                }
+                log("Reload failed: $message")
+                IosSharedStore.writeText(ERROR_FILE, message)
+                completion(message)
+            }
+        }
+    }
+
+    /**
      * Opens the log for one tunnel session.
      *
      * It used to be wiped on every connect, which erased the one piece of evidence that matters when

@@ -113,6 +113,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         let message = String(data: messageData, encoding: .utf8) ?? ""
+        if message == "reload" {
+            guard let session = self.session else {
+                completionHandler?("no-session".data(using: .utf8))
+                return
+            }
+            session.reload { [weak self] error in
+                if let error = error {
+                    completionHandler?("error:\(error)".data(using: .utf8))
+                } else {
+                    if session.httpProxyPort > 0 {
+                        self?.applyProxySettings(port: Int(session.httpProxyPort), session: session) { _ in
+                            completionHandler?("ok".data(using: .utf8))
+                        }
+                    } else {
+                        completionHandler?("ok".data(using: .utf8))
+                    }
+                    PacketTunnelProvider.refreshWidgets()
+                }
+            }
+            return
+        }
         let reply = session?.handleAppMessage(message: message) ?? ""
         completionHandler?(reply.data(using: .utf8))
     }

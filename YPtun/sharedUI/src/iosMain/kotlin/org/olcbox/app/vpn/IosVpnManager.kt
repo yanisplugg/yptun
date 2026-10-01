@@ -182,6 +182,32 @@ class IosVpnManager(
                     addLog("Add a valid location before connecting")
                     return@withLock
                 }
+
+                // If tunnel is already running, attempt hot reload without tearing down the iOS VPN tunnel
+                val currentManager = manager ?: loadManager(createIfMissing = false)
+                val currentSession = currentManager?.connection as? NETunnelProviderSession
+                if (currentSession != null && currentManager.connection.status == NEVPNStatusConnected) {
+                    setStatus(VpnStatus.Reconnecting)
+                    publishRequest(active)
+                    IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
+                    addLog("Fast switching to ${active.displayName()}...")
+                    val reply = withTimeoutOrNull(30_000) {
+                        askExtension(currentSession, "reload")
+                    }
+                    if (reply == "ok") {
+                        addLog("Connected to ${active.displayName()}")
+                        setStatus(VpnStatus.Connected)
+                        triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
+                        return@withLock
+                    } else if (reply != null && reply.startsWith("error:")) {
+                        val errMsg = reply.removePrefix("error:")
+                        addLog("Fast switch failed: $errMsg")
+                        setStatus(VpnStatus.Error(errMsg))
+                        return@withLock
+                    }
+                    addLog("Fast switch unavailable, restarting tunnel...")
+                }
+
                 setStatus(VpnStatus.Connecting)
                 wasConnecting = true
                 val result = runCatching {
@@ -202,14 +228,19 @@ class IosVpnManager(
                         connection = m.connection
                     }
                     var started = false
-                    for (attempt in 0..2) {
+                    for (attempt in 0..3) {
+                        var waitCount = 0
+                        while (m.connection.status == platform.NetworkExtension.NEVPNStatusDisconnecting && waitCount < 25) {
+                            delay(200)
+                            waitCount++
+                        }
                         memScoped {
                             val err = alloc<ObjCObjectVar<NSError?>>()
                             if (m.connection.startVPNTunnelAndReturnError(err.ptr)) {
                                 started = true
                             } else {
-                                if (attempt < 2) {
-                                    delay(250L * (attempt + 1))
+                                if (attempt < 3) {
+                                    delay(400L * (attempt + 1))
                                     runCatching {
                                         suspendCancellableCoroutine<Unit> { cont ->
                                             m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
@@ -648,15 +679,10 @@ class IosVpnManager(
     }
 
     private suspend fun awaitDisconnected(m: NETunnelProviderManager) {
-        repeat(20) {
+        repeat(50) {
             val s = m.connection.status
             if (s == platform.NetworkExtension.NEVPNStatusDisconnected || s == platform.NetworkExtension.NEVPNStatusInvalid) return
             delay(100)
-            runCatching {
-                suspendCancellableCoroutine<Unit> { cont ->
-                    m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
-                }
-            }
         }
     }
 

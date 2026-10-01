@@ -280,8 +280,9 @@ fun HomeScreen(
     }
 
     fun afterDeletion(message: String) {
-        viewModel.loadCurrentConfig()
-        viewModel.restartVpnIfRunning()
+        viewModel.loadCurrentConfig {
+            viewModel.restartVpnIfRunning()
+        }
         scope.launch { snackbarHostState.showSnackbar(message) }
     }
 
@@ -497,8 +498,9 @@ fun HomeScreen(
                 pingsState = pingsState,
                 onLocationSelected = { id ->
                     locationViewModel.selectLocation(id) {
-                        viewModel.loadCurrentConfig()
-                        viewModel.restartVpnIfRunning()
+                        viewModel.loadCurrentConfig {
+                            viewModel.restartVpnIfRunning()
+                        }
                     }
                 },
                 onLocationSettingsClick = { id ->
