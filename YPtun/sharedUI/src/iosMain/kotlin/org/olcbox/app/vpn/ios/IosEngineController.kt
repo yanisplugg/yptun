@@ -652,15 +652,20 @@ internal class IosEngineController(
         val listenAddr = "127.0.0.1:${vk.listenPort}"
         if (usesWdtt) {
             val coreListen = if (wdttRaw) "127.0.0.1:${awgLocalPort(listenPort)}" else listenAddr
+            // На iOS лимит памяти PacketTunnelProvider — 15 МБ (Jetsam).
+            // 27 воркеров с DTLS и UDP-сокетами весят ~45 МБ и моментально выбиваются системой при открытии игр.
+            // Ограничиваем до 1 группы (9 воркеров максимум).
+            val iosWorkers = if (vk.wdttWorkers <= 0) 9 else vk.wdttWorkers.coerceIn(1, 9)
             log(
                 "Starting VK-TURN qWDTT core on $coreListen (mode=${if (wdttRaw) "raw" else "wg"}, peer=${vk.wdttDialAddr()}, " +
-                    "workers=${vk.wdttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
+                    "workers=$iosWorkers (capped for iOS Jetsam 15MB), " +
                     "turn-tcp=${vk.wdttPlus.rtNetworkMode}, obfs=${if (vk.wdttPlus.obfsVideo) "video" else "audio"})"
             )
             core.wdttStart(
                 vk.wdttCoreOptionsJson(
                     listen = coreListen,
                     deviceId = deviceId,
+                    workersOverride = iosWorkers,
                 )
             ).orThrow("WDTT start failed")
         } else {

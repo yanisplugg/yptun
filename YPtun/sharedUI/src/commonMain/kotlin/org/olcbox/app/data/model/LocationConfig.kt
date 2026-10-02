@@ -179,17 +179,17 @@ data class VkTurnConfig(
      * Android gomobile binding and the desktop/iOS core. [listen] is the local UDP address WireGuard dials
      * — or, in Raw mode, the local SOCKS5 (TCP) the core serves the tunnel on.
      */
-    fun wdttCoreOptionsJson(listen: String, deviceId: String, rawTun: Boolean = false): String {
+    fun wdttCoreOptionsJson(listen: String, deviceId: String, rawTun: Boolean = false, workersOverride: Int? = null): String {
         val p = wdttPlus
         return buildJsonObject {
             put("peer", wdttDialAddr())
             put("raw", p.rawMode)
-            // The host hands its TUN fd to the core (Android «Raw напрямую») instead of taking a SOCKS.
+            // The host hands its TUN fd to the core (Android «Raw напрямую») вместо SOCKS.
             put("raw_tun", p.rawMode && rawTun)
             put("vk_hashes", vkLink)
             put("password", wdttPassword)
             put("listen", listen)
-            put("workers", wdttWorkers)
+            put("workers", workersOverride ?: wdttWorkers)
             put("device_id", deviceId)
             put("captcha_mode", "auto")
             put("turn_host", p.turnHost.trim())

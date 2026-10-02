@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,10 +23,8 @@ import (
 )
 
 const (
-	workerSendBuf      = 128
 	sessionReadTimeout = 30 * time.Minute // Increased from 60s to 30min
 	readBufSize        = 1600
-	socketBufSize      = 625 * 1024
 	keepaliveByte      = 0xFF // keepalive marker (DTLS-level или прямой obfs-кадр)
 	// keepaliveInterval: 1с (как у референсного клиента) — агрессивнее держит
 	// TURN permission/NAT-маппинг "тёплым" на каждом из 18-108 relay-сокетов
@@ -38,6 +37,24 @@ const (
 	keepaliveMinSize = 25
 	keepaliveMaxSize = 20 // диапазон добавки к keepaliveMinSize (rand.Intn(20))
 )
+
+// socketBufSize — размер SO_RCVBUF/SO_SNDBUF на сокетах TURN.
+// На iOS/Darwin лимит памяти сетевого расширения PacketTunnelProvider составляет 15 МБ (Jetsam).
+// При 625 КБ на сокет 27 воркеров съедают 33+ МБ только в буферах ядра, из-за чего iOS
+// гарантированно убивает туннель через 5 минут или сразу при запуске игры.
+func getSocketBufSize() int {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+		return 64 * 1024
+	}
+	return 625 * 1024
+}
+
+func getWorkerSendBuf() int {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+		return 32
+	}
+	return 128
+}
 
 // obfsDirectConn — net.Conn поверх TURN relay БЕЗ DTLS.
 //
@@ -142,8 +159,8 @@ func dialTURNConn(turnAddr string, tcp bool) (net.PacketConn, io.Closer, error) 
 		if err != nil {
 			return nil, nil, fmt.Errorf("подключение TURN UDP: %w", err)
 		}
-		_ = c.SetReadBuffer(socketBufSize)
-		_ = c.SetWriteBuffer(socketBufSize)
+		_ = c.SetReadBuffer(getSocketBufSize())
+		_ = c.SetWriteBuffer(getSocketBufSize())
 		return &connectedUDPConn{c}, c, nil
 	}
 
@@ -513,7 +530,7 @@ func RunSession(
 	// Регистрация в диспетчере
 	slot := &WorkerSlot{
 		ID:     sessionID,
-		SendCh: make(chan []byte, workerSendBuf),
+		SendCh: make(chan []byte, getWorkerSendBuf()),
 		PrioCh: make(chan []byte, prioBuf),
 	}
 	d.Register(slot)

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -319,10 +320,20 @@ func Run(parent context.Context, cfg Config) error {
 			numW = accountMaxWorkers
 		}
 	} else {
-		if numW < workersPerGroup {
-			numW = workersPerGroup
+		if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+			// На iOS/Darwin лимит памяти сетевого расширения PacketTunnelProvider составляет всего 15 МБ (Jetsam).
+			// 27 воркеров (3 группы) со своими сессиями DTLS и сокетами съедают 40-50 МБ и моментально
+			// выбиваются системой при открытии игр. Ограничиваем до 1 группы (9 воркеров) на iOS.
+			if numW > workersPerGroup {
+				log.Printf("[КЛИЕНТ] iOS Jetsam 15MB: ограничение воркеров %d -> %d", numW, workersPerGroup)
+				numW = workersPerGroup
+			}
+		} else {
+			if numW < workersPerGroup {
+				numW = workersPerGroup
+			}
+			numW = (numW / workersPerGroup) * workersPerGroup
 		}
-		numW = (numW / workersPerGroup) * workersPerGroup
 	}
 
 	tp := &TurnParams{
@@ -349,8 +360,8 @@ func Run(parent context.Context, cfg Config) error {
 			return fmt.Errorf("wdtt: listen %s: %w", listen, err)
 		}
 		if uc, ok := localConn.(*net.UDPConn); ok {
-			_ = uc.SetReadBuffer(socketBufSize)
-			_ = uc.SetWriteBuffer(socketBufSize)
+			_ = uc.SetReadBuffer(getSocketBufSize())
+			_ = uc.SetWriteBuffer(getSocketBufSize())
 		}
 		stopLocalConn := context.AfterFunc(ctx, func() { _ = localConn.Close() })
 		defer stopLocalConn()
