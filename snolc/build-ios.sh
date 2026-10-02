@@ -13,9 +13,7 @@ rm -rf "$OUT_DIR/SnolcCore.xcframework"
 
 # Prepare headers and modulemap for Swift import
 HEADER_DIR="crates/snolc-ffi/include"
-mkdir -p "$HEADER_DIR/SnolcCore"
-cp "$HEADER_DIR/snolc_ffi.h" "$HEADER_DIR/SnolcCore/snolc_ffi.h"
-cat << 'EOF' > "$HEADER_DIR/SnolcCore/module.modulemap"
+cat << 'EOF' > "$HEADER_DIR/module.modulemap"
 module SnolcCore [system] {
     header "snolc_ffi.h"
     export *
