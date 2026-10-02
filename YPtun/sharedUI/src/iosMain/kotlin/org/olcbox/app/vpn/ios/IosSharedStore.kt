@@ -67,6 +67,10 @@ object IosSharedStore {
         NSString.create(string = text).writeToFile(path(fileName), true, NSUTF8StringEncoding, null)
     }
 
+    fun writeTextToPath(filePath: String, text: String) {
+        NSString.create(string = text).writeToFile(filePath, true, NSUTF8StringEncoding, null)
+    }
+
     /** Size in bytes, 0 when the file does not exist. */
     fun fileSize(fileName: String): Long =
         (NSFileManager.defaultManager.attributesOfItemAtPath(path(fileName), null)?.get(NSFileSize) as? NSNumber)

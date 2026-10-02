@@ -584,11 +584,9 @@ internal class IosEngineController(
             lowMemory = true,
         )
         files.forEach { (name, body) ->
-            platform.Foundation.NSString.create(string = body)
-                .writeToFile("$snolcDir/$name", true, platform.Foundation.NSUTF8StringEncoding, null)
+            IosSharedStore.writeTextToPath("$snolcDir/$name", body)
         }
-        platform.Foundation.NSString.create(string = snolc.publicKey)
-            .writeToFile("$snolcDir/pub.hex", true, platform.Foundation.NSUTF8StringEncoding, null)
+        IosSharedStore.writeTextToPath("$snolcDir/pub.hex", snolc.publicKey)
 
         val tomlPath = "$snolcDir/snolc.toml"
         log("Starting snolc in-process (${snolc.summary()}) on $LISTEN_HOST:$snolcPort")
