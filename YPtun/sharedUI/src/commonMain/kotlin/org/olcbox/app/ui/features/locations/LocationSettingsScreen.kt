@@ -721,16 +721,14 @@ private fun EngineSelector(
     onSelected: (EngineType) -> Unit
 ) {
     val options = remember {
-        val ios = org.olcbox.app.update.UpdatePlatform.current().os == "ios"
         listOf(
             EngineType.Stealth,
             EngineType.Standard,
             EngineType.Chain,
             EngineType.VkTurn,
             EngineType.MasterDns,
-            EngineType.OpenFlux,
-            EngineType.Snolc
-        ).filterNot { ios && it == EngineType.Snolc }
+            EngineType.OpenFlux
+        )
     }
     Column(
         modifier = Modifier.fillMaxWidth(),

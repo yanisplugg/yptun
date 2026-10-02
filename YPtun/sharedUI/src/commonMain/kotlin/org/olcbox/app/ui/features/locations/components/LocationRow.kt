@@ -384,15 +384,7 @@ private fun locationSubtitle(location: LocationItem): String {
 
         EngineType.OpenFlux -> listOfNotNull("OpenFlux", config.openFlux?.summary())
 
-        EngineType.Snolc -> {
-            val isIos = org.olcbox.app.data.identity.DeviceInfo.os.contains("iOS", ignoreCase = true) ||
-                org.olcbox.app.data.identity.DeviceInfo.os.contains("iPadOS", ignoreCase = true)
-            if (isIos) {
-                listOfNotNull("snolc", "не поддерживается на iOS", config.snolc?.summary())
-            } else {
-                listOfNotNull("snolc", config.snolc?.summary())
-            }
-        }
+        EngineType.Snolc -> listOfNotNull("snolc", "отключен", config.snolc?.summary())
 
         else -> listOf(
             config?.providerName()

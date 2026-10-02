@@ -132,12 +132,11 @@ class HomeScreenViewModel(
             metadata = active.metadata
         )
 
-        val isSnolcOnIos = (DeviceInfo.os.contains("iOS", ignoreCase = true) || DeviceInfo.os.contains("iPadOS", ignoreCase = true)) &&
-            normalized.engine == EngineType.Snolc
-        val canStart = normalized.isComplete() && !isSnolcOnIos
+        val isSnolc = normalized.engine == EngineType.Snolc
+        val canStart = normalized.isComplete() && !isSnolc
         val blockedReason = when {
             !normalized.isComplete() -> "Complete active location first"
-            isSnolcOnIos -> "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)"
+            isSnolc -> "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)"
             else -> null
         }
 
@@ -197,15 +196,14 @@ class HomeScreenViewModel(
                         }
                         return@launch
                     }
-                    val isSnolcOnIos = (DeviceInfo.os.contains("iOS", ignoreCase = true) || DeviceInfo.os.contains("iPadOS", ignoreCase = true)) &&
-                        active.location.normalized().engine == EngineType.Snolc
-                    if (isSnolcOnIos) {
+                    val isSnolc = active.location.normalized().engine == EngineType.Snolc
+                    if (isSnolc) {
                         _state.update {
                             it.copy(
                                 isVpnLoading = false,
                                 canStartVpn = false,
-                                connectError = "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)",
-                                startBlockedReason = "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)"
+                                connectError = "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)",
+                                startBlockedReason = "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)"
                             )
                         }
                         return@launch
@@ -280,9 +278,8 @@ class HomeScreenViewModel(
     }
 
     fun restartVpnIfRunning() {
-        val isSnolcOnIos = (DeviceInfo.os.contains("iOS", ignoreCase = true) || DeviceInfo.os.contains("iPadOS", ignoreCase = true)) &&
-            _state.value.configData.engine == EngineType.Snolc
-        if (isSnolcOnIos) {
+        val isSnolc = _state.value.configData.engine == EngineType.Snolc
+        if (isSnolc) {
             viewModelScope.launch {
                 vpnManager.stopVpn()
                 _state.update {
@@ -290,8 +287,8 @@ class HomeScreenViewModel(
                         isVpnConnected = false,
                         isVpnLoading = false,
                         canStartVpn = false,
-                        connectError = "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)",
-                        startBlockedReason = "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)"
+                        connectError = "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)",
+                        startBlockedReason = "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)"
                     )
                 }
             }

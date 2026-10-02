@@ -193,8 +193,8 @@ class IosVpnManager(
                     }
                     wasConnecting = false
                     connectWatchdogJob?.cancel()
-                    setStatus(VpnStatus.Error("Протокол snolc не поддерживается на iOS (доступен на Android и ПК)"))
-                    addLog("snolc не поддерживается на iOS: Apple запрещает субпроцессы (ProcessBuilder/fork)")
+                    setStatus(VpnStatus.Error("Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)"))
+                    addLog("snolc отключен в v3.6.1")
                     return@withLock
                 }
 
