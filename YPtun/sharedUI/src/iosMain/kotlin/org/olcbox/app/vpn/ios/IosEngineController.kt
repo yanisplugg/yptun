@@ -581,7 +581,6 @@ internal class IosEngineController(
             debug = snolc.debug,
             username = if (useProxy) "" else socksUsername,
             password = if (useProxy) "" else socksPassword,
-            lowMemory = true,
         )
         files.forEach { (name, body) ->
             IosSharedStore.writeTextToPath("$snolcDir/$name", body)

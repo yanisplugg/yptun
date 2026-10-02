@@ -31,7 +31,7 @@ object SnolcFiles {
         max_flows = ${if (lowMemory) 32 else 256}
         max_pending_sessions = ${if (lowMemory) 2 else 4}
         max_pending_opens = ${if (lowMemory) 16 else 64}
-        max_managed_bytes = ${if (lowMemory) 8388608 else 268435456}
+        max_managed_bytes = ${if (lowMemory) 33554432 else 268435456}
         max_commands = ${if (lowMemory) 16 else 64}
         max_events = ${if (lowMemory) 64 else 256}
         max_io_chunk = 16384
@@ -56,7 +56,7 @@ object SnolcFiles {
 
         [yamux]
         max_streams_per_session = ${if (lowMemory) 16 else 65}
-        receive_window_bytes = ${if (lowMemory) 1048576 else 17039360}
+        receive_window_bytes = ${if (lowMemory) 4194304 else 17039360}
         split_send_size = 16384
         read_after_close = true
 
