@@ -125,6 +125,11 @@ interface IosCoreBridge {
         vp8Batch: Int,
     ): Long
 
+    fun snolcVersion(): String
+    fun snolcStart(configTomlPath: String): String
+    fun snolcStop()
+    fun snolcRunning(): Boolean
+
     fun resolveHostIpv4(host: String): String
 }
 

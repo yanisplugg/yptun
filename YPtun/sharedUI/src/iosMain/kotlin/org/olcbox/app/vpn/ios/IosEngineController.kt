@@ -49,6 +49,7 @@ internal class IosEngineController(
 
     private var masterDnsProxyActive = false
     private var openfluxProxyActive = false
+    private var snolcProxyActive = false
 
     /** olcRTC's local SOCKS port when chaining; the proxy core dials its outbound through it. */
     private fun chainOlcrtcPort(socksPort: Int) = socksPort + 1
@@ -72,6 +73,7 @@ internal class IosEngineController(
     ) {
         masterDnsProxyActive = false
         openfluxProxyActive = false
+        snolcProxyActive = false
         proxyMode = IosSharedStore.loadConnectionMode() == IosSharedStore.MODE_PROXY
         httpProxyPort = 0
         val config = location.normalized()
@@ -82,7 +84,7 @@ internal class IosEngineController(
             EngineType.VkTurn -> startVkTurn(config, listenPort, socksUsername, socksPassword, deviceId)
             EngineType.MasterDns -> startMasterDns(config, listenPort, socksUsername, socksPassword)
             EngineType.OpenFlux -> startOpenFlux(config, listenPort, socksUsername, socksPassword)
-            EngineType.Snolc -> throw IllegalStateException("snolc на iOS не поддерживается")
+            EngineType.Snolc -> startSnolc(config, listenPort, socksUsername, socksPassword)
         }
     }
 
@@ -95,8 +97,10 @@ internal class IosEngineController(
         runCatching { core.masterDnsStop() }
         runCatching { core.openfluxStop() }
         runCatching { core.rtcStop() }
+        runCatching { core.snolcStop() }
         masterDnsProxyActive = false
         openfluxProxyActive = false
+        snolcProxyActive = false
     }
 
     fun coreRunning(engine: EngineType): Boolean = when (engine) {
@@ -106,7 +110,7 @@ internal class IosEngineController(
         EngineType.VkTurn -> (core.ftRunning() || core.wdttRunning()) && proxyCoreRunning()
         EngineType.MasterDns -> core.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> core.openfluxRunning() && (!openfluxProxyActive || proxyCoreRunning())
-        EngineType.Snolc -> false
+        EngineType.Snolc -> core.snolcRunning() && (!snolcProxyActive || proxyCoreRunning())
     }
 
     private fun proxyCoreRunning(): Boolean =
@@ -531,6 +535,75 @@ internal class IosEngineController(
 
         startProxyOverTunnel("OpenFlux", config, proxy, openFluxPort, listenPort, socksUsername, socksPassword) { p, g ->
             openFlux.resolvedProxyCore(p, g)
+        }
+    }
+
+    private suspend fun startSnolc(
+        config: LocationConfig,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+    ) {
+        val snolc = config.snolc
+        check(snolc != null && snolc.isComplete()) { "snolc configuration is incomplete" }
+
+        val proxy = snolc.proxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link)
+                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
+                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
+                ?.enrichedFromRaw()
+                ?.takeIf { it.isComplete() }
+        }
+        if (snolc.proxyLink.isNotBlank() && proxy == null) {
+            log("snolc: proxy link present but could not be parsed - exiting via snolc SOCKS directly")
+        }
+        val useProxy = proxy != null
+        snolcProxyActive = useProxy
+        val snolcPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
+
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
+        require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        if (useProxy) {
+            IosNet.awaitLocalPortClosed(snolcPort, 3000)
+            require(!IosNet.isLocalPortOpen(snolcPort)) { "snolc internal port $snolcPort is still in use" }
+        }
+
+        val snolcDir = "${IosSharedStore.dir}/snolc"
+        IosSharedStore.ensureDirectory(snolcDir)
+        IosSharedStore.ensureDirectory("$snolcDir/state")
+        IosSharedStore.ensureDirectory("$snolcDir/modules")
+
+        val files = org.olcbox.app.vpn.snolc.SnolcFiles.client(
+            listenHost = LISTEN_HOST,
+            socksPort = snolcPort,
+            host = snolc.host,
+            port = snolc.port,
+            debug = snolc.debug,
+            username = if (useProxy) "" else socksUsername,
+            password = if (useProxy) "" else socksPassword,
+            lowMemory = true,
+        )
+        files.forEach { (name, body) ->
+            platform.Foundation.NSString.create(string = body)
+                .writeToFile("$snolcDir/$name", true, platform.Foundation.NSUTF8StringEncoding, null)
+        }
+        platform.Foundation.NSString.create(string = snolc.publicKey)
+            .writeToFile("$snolcDir/pub.hex", true, platform.Foundation.NSUTF8StringEncoding, null)
+
+        val tomlPath = "$snolcDir/snolc.toml"
+        log("Starting snolc in-process (${snolc.summary()}) on $LISTEN_HOST:$snolcPort")
+        runCatching { core.snolcStop() }
+        core.snolcStart(tomlPath).orThrow("snolc start failed")
+
+        if (!IosNet.awaitLocalPortOpen(snolcPort, MOBILE_READY_TIMEOUT_MS)) {
+            core.snolcStop()
+            throw IllegalStateException("snolc SOCKS port $snolcPort did not open")
+        }
+        log("snolc ready on $LISTEN_HOST:$snolcPort")
+        if (proxy == null) return
+
+        startProxyOverTunnel("snolc", config, proxy, snolcPort, listenPort, socksUsername, socksPassword) { p, g ->
+            snolc.resolvedProxyCore(p, g)
         }
     }
 

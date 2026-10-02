@@ -5,6 +5,7 @@ members = [
   "crates/snolc-sdk",
   "crates/snolc",
   "crates/snolc-cli",
+  "crates/snolc-ffi",
   "modules/adapter-socks5",
   "modules/adapter-direct",
   "modules/protection-noise",

@@ -132,20 +132,12 @@ class HomeScreenViewModel(
             metadata = active.metadata
         )
 
-        val isSnolc = normalized.engine == EngineType.Snolc
-        val canStart = normalized.isComplete() && !isSnolc
-        val blockedReason = when {
-            !normalized.isComplete() -> "Complete active location first"
-            isSnolc -> "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)"
-            else -> null
-        }
-
         _state.update {
             it.copy(
                 configData = normalized,
                 selectedLocation = locationItem,
-                canStartVpn = canStart,
-                startBlockedReason = blockedReason
+                canStartVpn = normalized.isComplete(),
+                startBlockedReason = if (normalized.isComplete()) null else "Complete active location first"
             )
         }
     }
@@ -192,18 +184,6 @@ class HomeScreenViewModel(
                                 isVpnLoading = false,
                                 canStartVpn = false,
                                 startBlockedReason = "Add a valid location first"
-                            )
-                        }
-                        return@launch
-                    }
-                    val isSnolc = active.location.normalized().engine == EngineType.Snolc
-                    if (isSnolc) {
-                        _state.update {
-                            it.copy(
-                                isVpnLoading = false,
-                                canStartVpn = false,
-                                connectError = "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)",
-                                startBlockedReason = "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)"
                             )
                         }
                         return@launch
@@ -278,23 +258,6 @@ class HomeScreenViewModel(
     }
 
     fun restartVpnIfRunning() {
-        val isSnolc = _state.value.configData.engine == EngineType.Snolc
-        if (isSnolc) {
-            viewModelScope.launch {
-                vpnManager.stopVpn()
-                _state.update {
-                    it.copy(
-                        isVpnConnected = false,
-                        isVpnLoading = false,
-                        canStartVpn = false,
-                        connectError = "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)",
-                        startBlockedReason = "Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)"
-                    )
-                }
-            }
-            return
-        }
-
         when (vpnManager.status.value) {
             VpnStatus.Connected,
             VpnStatus.Connecting,

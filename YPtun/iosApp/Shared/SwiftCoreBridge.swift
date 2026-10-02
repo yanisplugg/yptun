@@ -2,6 +2,9 @@ import Coreapi
 import Darwin
 import Foundation
 import SharedUI
+#if canImport(SnolcCore)
+import SnolcCore
+#endif
 
 /// Kotlin's `IosCoreBridge`, forwarded 1:1 to the gomobile framework of `kazcores/coreapi`.
 /// Compiled into both the app (server pings) and the packet-tunnel extension (the tunnel itself).
@@ -260,6 +263,40 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
             ptr = cur.pointee.ifa_next
         }
         return nil
+    }
+
+    func snolcVersion() -> String {
+        #if canImport(SnolcCore)
+        guard let v = snolc_ffi_version() else { return "" }
+        return String(cString: v)
+        #else
+        return ""
+        #endif
+    }
+
+    func snolcStart(configTomlPath: String) -> String {
+        #if canImport(SnolcCore)
+        guard let err = snolc_ffi_start(configTomlPath) else { return "" }
+        let msg = String(cString: err)
+        snolc_ffi_free_string(err)
+        return msg
+        #else
+        return "SnolcCore framework not linked"
+        #endif
+    }
+
+    func snolcStop() {
+        #if canImport(SnolcCore)
+        snolc_ffi_stop()
+        #endif
+    }
+
+    func snolcRunning() -> Bool {
+        #if canImport(SnolcCore)
+        return snolc_ffi_is_running()
+        #else
+        return false
+        #endif
     }
 }
 

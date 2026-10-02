@@ -1,0 +1,23 @@
+[package]
+name = "snolc-ffi"
+description = "C FFI library for snolc in-process integration on iOS and mobile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "snolc_ffi"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+libc.workspace = true
+snow.workspace = true
+snolc = { version = "=0.0.4", path = "../snolc" }
+snolc-adapter-socks5 = { path = "../../modules/adapter-socks5", features = ["static-link"] }
+snolc-adapter-direct = { path = "../../modules/adapter-direct", features = ["static-link"] }
+snolc-protection-noise = { path = "../../modules/protection-noise", features = ["static-link"] }
+snolc-carrier-tcp = { path = "../../modules/carrier-tcp", features = ["static-link"] }
+snolc-policy-dummy = { path = "../../modules/policy-dummy", features = ["static-link"] }

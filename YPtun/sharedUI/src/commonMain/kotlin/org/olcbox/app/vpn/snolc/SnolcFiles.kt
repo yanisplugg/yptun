@@ -13,7 +13,13 @@ object SnolcFiles {
 
     private fun String.toml() = replace("\\", "\\\\").replace("\"", "\\\"")
 
-    private fun engine(role: String, adapter: String, stateDir: String, debug: Boolean) = """
+    private fun engine(
+        role: String,
+        adapter: String,
+        stateDir: String,
+        debug: Boolean,
+        lowMemory: Boolean = false,
+    ) = """
         wire_version = 1
 
         [paths]
@@ -21,13 +27,13 @@ object SnolcFiles {
         state = "$stateDir"
 
         [engine]
-        max_sessions = 4
-        max_flows = 256
-        max_pending_sessions = 4
-        max_pending_opens = 64
-        max_managed_bytes = 268435456
-        max_commands = 64
-        max_events = 256
+        max_sessions = ${if (lowMemory) 2 else 4}
+        max_flows = ${if (lowMemory) 32 else 256}
+        max_pending_sessions = ${if (lowMemory) 2 else 4}
+        max_pending_opens = ${if (lowMemory) 16 else 64}
+        max_managed_bytes = ${if (lowMemory) 8388608 else 268435456}
+        max_commands = ${if (lowMemory) 16 else 64}
+        max_events = ${if (lowMemory) 64 else 256}
         max_io_chunk = 16384
         max_ingress_packets_per_tick = 32
         connect_timeout_ms = 15000
@@ -38,19 +44,19 @@ object SnolcFiles {
         ipv4 = true
         ipv6 = true
         mtu = 1280
-        tcp_socket_rx_bytes = 65536
-        tcp_socket_tx_bytes = 65536
-        udp_socket_rx_bytes = 131072
-        udp_socket_tx_bytes = 131072
+        tcp_socket_rx_bytes = ${if (lowMemory) 32768 else 65536}
+        tcp_socket_tx_bytes = ${if (lowMemory) 32768 else 65536}
+        udp_socket_rx_bytes = ${if (lowMemory) 65536 else 131072}
+        udp_socket_tx_bytes = ${if (lowMemory) 65536 else 131072}
         udp_metadata_slots = 8
-        packet_queue_bytes = 262144
+        packet_queue_bytes = ${if (lowMemory) 65536 else 262144}
         max_udp_payload_bytes = 65507
         reassembly_slots = 4
         reassembly_timeout_ms = 15000
 
         [yamux]
-        max_streams_per_session = 65
-        receive_window_bytes = 17039360
+        max_streams_per_session = ${if (lowMemory) 16 else 65}
+        receive_window_bytes = ${if (lowMemory) 1048576 else 17039360}
         split_send_size = 16384
         read_after_close = true
 
@@ -116,10 +122,11 @@ object SnolcFiles {
         debug: Boolean,
         username: String = "",
         password: String = "",
+        lowMemory: Boolean = false,
     ): Map<String, String> {
         val endpoint = if (host.contains(':')) "[$host]:$port" else "$host:$port"
         return mapOf(
-            "snolc.toml" to engine("client", "socks5", "state", debug),
+            "snolc.toml" to engine("client", "socks5", "state", debug, lowMemory),
             "modules/socks5.toml" to module(
                 "socks5-main", "adapter-socks5", "client",
                 """

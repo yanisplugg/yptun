@@ -727,7 +727,8 @@ private fun EngineSelector(
             EngineType.Chain,
             EngineType.VkTurn,
             EngineType.MasterDns,
-            EngineType.OpenFlux
+            EngineType.OpenFlux,
+            EngineType.Snolc
         )
     }
     Column(

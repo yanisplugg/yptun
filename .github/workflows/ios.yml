@@ -125,6 +125,17 @@ jobs:
         working-directory: YPtun/iosApp
         run: bash generate_icons.sh
 
+      - name: Cache Snolc core (SnolcCore.xcframework)
+        id: cache-snolc
+        uses: actions/cache@v4
+        with:
+          path: YPtun/sharedUI/build/generated/cores/ios/SnolcCore.xcframework
+          key: snolc-ios-${{ hashFiles('snolc/**') }}
+
+      - name: Rust core (snolc) → SnolcCore.xcframework
+        if: steps.cache-snolc.outputs.cache-hit != 'true'
+        run: bash snolc/build-ios.sh
+
       - name: Generate the Xcode project
         working-directory: YPtun/iosApp
         run: xcodegen generate

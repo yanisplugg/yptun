@@ -183,20 +183,6 @@ class IosVpnManager(
                     addLog("Add a valid location before connecting")
                     return@withLock
                 }
-                if (active.engine == EngineType.Snolc) {
-                    val m = manager ?: loadManager(createIfMissing = false)
-                    if (m != null &&
-                        m.connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
-                        m.connection.status != platform.NetworkExtension.NEVPNStatusInvalid
-                    ) {
-                        m.connection.stopVPNTunnel()
-                    }
-                    wasConnecting = false
-                    connectWatchdogJob?.cancel()
-                    setStatus(VpnStatus.Error("Протокол snolc отключен в v3.6.1 (будет доступен в v3.6.2)"))
-                    addLog("snolc отключен в v3.6.1")
-                    return@withLock
-                }
 
                 // If tunnel is already running, attempt hot reload without tearing down the iOS VPN tunnel
                 val currentManager = manager ?: loadManager(createIfMissing = false)

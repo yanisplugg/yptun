@@ -1219,8 +1219,8 @@ class LocationsRepositoryImpl(
         // VK-TURN qWDTT share links and configs (qwdtt://, wdtt://, or JSON profile/array/subscription):
         parseQwdttText(linkText, text, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
-        // snolc отключен в v3.6.1 (билд 427) до полноценной интеграции в v3.6.2 (билд 428)
-        // parseSnolcText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+        // snolc share links (snolc://):
+        parseSnolcText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
@@ -2017,8 +2017,19 @@ class LocationsRepositoryImpl(
         subscriptionUrl: String?,
         subscriptionMetadata: SubscriptionMetadata?
     ): LocationBundleV4? {
-        // snolc отключен в v3.6.1 (билд 427) до полноценной интеграции в v3.6.2 (билд 428)
-        return null
+        val usedStorageIds = mutableSetOf<String>()
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("snolc://", ignoreCase = true) }
+            .mapNotNull { SnolcConfig.parseUri(it) }
+            .map { (cfg, name) -> snolcEntry(cfg, name, subscriptionUrl, usedStorageIds, locationMetadata) }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(
+            activeLocationId = entries.first().storageId,
+            locations = entries
+        )
     }
 
     private fun snolcEntry(
