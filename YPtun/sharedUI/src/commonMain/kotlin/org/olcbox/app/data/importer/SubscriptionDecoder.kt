@@ -108,7 +108,7 @@ internal object SubscriptionDecoder {
             var anyDecoded = false
             for (line in nonCommentLines) {
                 val chunk = decodeBase64Chunk(line)
-                if (chunk != null) {
+                if (chunk != null && (chunk.contains("://") || chunk.trim().startsWith("{") || chunk.trim().startsWith("["))) {
                     decodedLines.add(chunk)
                     anyDecoded = true
                 } else if (line.contains("://")) {
@@ -131,12 +131,38 @@ internal object SubscriptionDecoder {
         val compact = value.filterNot { it.isWhitespace() }
         if (compact.length < 4) return null
         for (codec in listOf(Base64.Default, Base64.UrlSafe, Base64.Mime)) {
-            val decoded = runCatching { codec.decode(pad(compact)).decodeToString() }.getOrNull()
-            if (decoded != null && (decoded.contains("://") || decoded.trim().startsWith("{") || decoded.trim().startsWith("["))) {
+            val decoded = runCatching {
+                val bytes = codec.decode(pad(compact))
+                bytes.decodeToString(throwOnInvalidSequence = true)
+            }.getOrNull()
+            if (!decoded.isNullOrBlank() && decoded.none { it == '\uFFFD' }) {
                 return decoded
             }
         }
         return null
+    }
+
+    /**
+     * If [text] is encoded in base64 (either `base64:<payload>` or raw base64 chars),
+     * decodes it into a UTF-8 string; otherwise returns [text] untouched.
+     */
+    fun decodeIfBase64(text: String): String {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return trimmed
+        val payload = if (trimmed.startsWith("base64:", ignoreCase = true)) {
+            trimmed.substring(7).trim()
+        } else {
+            trimmed
+        }
+        val isB64Candidate = trimmed.startsWith("base64:", ignoreCase = true) ||
+            (payload.length >= 8 && payload.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '/' || it == '=' || it == '-' || it == '_' || it.isWhitespace() })
+        if (isB64Candidate) {
+            val decoded = decodeBase64Chunk(payload)
+            if (decoded != null && decoded.isNotBlank() && decoded.all { it.code >= 32 || it == '\n' || it == '\r' || it == '\t' }) {
+                return decoded.trim()
+            }
+        }
+        return trimmed
     }
 
     private fun pad(value: String): String {

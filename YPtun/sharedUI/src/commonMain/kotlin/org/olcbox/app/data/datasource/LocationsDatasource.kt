@@ -1795,19 +1795,19 @@ class LocationsRepositoryImpl(
     private fun decodeMaybeBase64Header(raw: String): String? {
         val value = raw.trim().removeSurrounding("\"")
         if (value.isEmpty()) return null
-        val decoded = if (value.startsWith("base64:", ignoreCase = true)) {
-            val payload = value.substring(7).trim()
-            SubscriptionDecoder.decodeBase64Chunk(payload) ?: payload
+        val payload = if (value.startsWith("base64:", ignoreCase = true)) {
+            value.substring(7).trim()
         } else {
-            val urlDecoded = if ('%' in value) runCatching { UriCodec.percentDecode(value) }.getOrDefault(value) else value
-            val b64 = if (urlDecoded.length >= 8 && urlDecoded.length % 4 == 0 && !urlDecoded.contains(' ') && !urlDecoded.contains('\n')) {
-                SubscriptionDecoder.decodeBase64Chunk(urlDecoded)
-            } else null
-            if (b64 != null && b64.all { it.code >= 32 || it == '\n' || it == '\r' || it == '\t' }) {
-                b64
-            } else {
-                repairLatin1Utf8(urlDecoded)
-            }
+            value
+        }
+        val urlDecoded = if ('%' in payload) runCatching { UriCodec.percentDecode(payload) }.getOrDefault(payload) else payload
+        val b64 = SubscriptionDecoder.decodeIfBase64(urlDecoded)
+        val decoded = if (b64 != urlDecoded) {
+            b64
+        } else if (value.startsWith("base64:", ignoreCase = true)) {
+            payload
+        } else {
+            repairLatin1Utf8(urlDecoded)
         }
         return decoded.trim().takeIf { it.isNotBlank() }
     }

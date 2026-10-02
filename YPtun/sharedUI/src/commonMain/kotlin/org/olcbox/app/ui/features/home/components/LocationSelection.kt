@@ -797,6 +797,7 @@ private fun TrafficProgressBar(location: LocationItem?) {
     val used = subscription.used?.takeIf { it.isNotBlank() }
     val available = subscription.available?.takeIf { it.isNotBlank() }
     val announce = subscription.announce?.trim()?.takeIf { it.isNotBlank() }
+        ?.let { org.olcbox.app.data.importer.SubscriptionDecoder.decodeIfBase64(it) }
     if (used == null && available == null && announce == null) return
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -1562,10 +1563,13 @@ internal fun LocationItem.folderMemberKey(): String =
 private fun LocationItem.subscriptionTitle(): String {
     val subscription = metadata?.subscription
 
+    val rawName = subscription?.name?.takeIf { it.isNotBlank() }
+    val decodedName = rawName?.let { org.olcbox.app.data.importer.SubscriptionDecoder.decodeIfBase64(it) } ?: rawName
+        ?: org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).subscriptionsSection
+
     return listOfNotNull(
         subscription?.icon?.takeIf { it.isNotBlank() },
-        subscription?.name?.takeIf { it.isNotBlank() }
-            ?: org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).subscriptionsSection
+        decodedName
     ).joinToString(" ")
 }
 

@@ -1174,7 +1174,7 @@ data class SubscriptionMetadata(
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
-            name = name.cleanMetadataValue(),
+            name = name.cleanMetadataValue()?.let { org.olcbox.app.data.importer.SubscriptionDecoder.decodeIfBase64(it) },
             update = update.cleanMetadataValue(),
             refresh = refresh.cleanMetadataValue(),
             color = color.cleanMetadataValue(),
@@ -1187,7 +1187,7 @@ data class SubscriptionMetadata(
             lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 },
             supportUrl = supportUrl.cleanMetadataValue(),
             webPageUrl = webPageUrl.cleanMetadataValue(),
-            announce = announce.cleanMetadataValue(),
+            announce = announce.cleanMetadataValue()?.let { org.olcbox.app.data.importer.SubscriptionDecoder.decodeIfBase64(it) },
             providerId = providerId.cleanMetadataValue()
         )
     }

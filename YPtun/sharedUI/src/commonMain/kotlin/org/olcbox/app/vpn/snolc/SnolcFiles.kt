@@ -49,7 +49,7 @@ object SnolcFiles {
         udp_socket_rx_bytes = ${if (lowMemory) 65536 else 131072}
         udp_socket_tx_bytes = ${if (lowMemory) 65536 else 131072}
         udp_metadata_slots = 8
-        packet_queue_bytes = ${if (lowMemory) 65536 else 262144}
+        packet_queue_bytes = 262144
         max_udp_payload_bytes = 65507
         reassembly_slots = 4
         reassembly_timeout_ms = 15000
