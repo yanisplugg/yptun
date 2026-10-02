@@ -1836,7 +1836,7 @@ private fun SnolcInstallDialog(
                         singleLine = true,
                         enabled = !running,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.width(96dp)
+                        modifier = Modifier.width(96.dp)
                     )
                 }
                 SshAuthFields(
@@ -2949,6 +2949,7 @@ private fun WdttPlusAdvanced(
                     "поставленный раньше, переустановите.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         VkTurnSwitchRow("Расширенные настройки qWDTT", expanded, enabled) { expanded = it }
         if (!expanded) return@Column

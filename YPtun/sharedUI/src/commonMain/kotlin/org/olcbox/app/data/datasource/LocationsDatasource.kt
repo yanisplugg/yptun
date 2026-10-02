@@ -48,6 +48,7 @@ import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
