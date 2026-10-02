@@ -35,13 +35,13 @@ struct SnolcState {
 
 static STATE: Mutex<Option<SnolcState>> = Mutex::new(None);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn snolc_ffi_version() -> *const c_char {
     static VERSION: &[u8] = b"0.0.4\0";
     VERSION.as_ptr() as *const c_char
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn snolc_ffi_start(config_path_ptr: *const c_char) -> *mut c_char {
     if config_path_ptr.is_null() {
         return to_c_string("snolc_ffi_start: config path is null");
@@ -83,7 +83,7 @@ pub extern "C" fn snolc_ffi_start(config_path_ptr: *const c_char) -> *mut c_char
         Err(e) => return to_c_string(&format!("failed to validate engine: {e}")),
     };
 
-    let (mut engine, handle) = match Engine::build(validated, FfiHost) {
+    let (engine, handle) = match Engine::build(validated, FfiHost) {
         Ok(b) => b,
         Err(e) => return to_c_string(&format!("failed to build engine: {e}")),
     };
@@ -110,7 +110,7 @@ pub extern "C" fn snolc_ffi_start(config_path_ptr: *const c_char) -> *mut c_char
     std::ptr::null_mut()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn snolc_ffi_stop() {
     let mut state_guard = match STATE.lock() {
         Ok(guard) => guard,
@@ -128,7 +128,7 @@ pub extern "C" fn snolc_ffi_stop() {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn snolc_ffi_is_running() -> bool {
     let state_guard = match STATE.lock() {
         Ok(guard) => guard,
@@ -142,7 +142,7 @@ pub extern "C" fn snolc_ffi_is_running() -> bool {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn snolc_ffi_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         unsafe {
