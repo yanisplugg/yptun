@@ -768,52 +768,52 @@ class LocationsRepositoryImpl(
         val input = text.normalizedImportText()
         if (input.isBlank()) return null
 
-        var source = resolveImportSource(
-            text = input,
-            requestMode = SubscriptionRequestMode.Identity,
-            subscriptionProxy = subscriptionProxy
-        ) ?: run {
-            if (input.isHttpUrl()) {
-                resolveImportSource(
-                    text = input,
-                    requestMode = SubscriptionRequestMode.Compatibility,
-                    subscriptionProxy = subscriptionProxy
-                )
-            } else {
-                null
-            }
-        } ?: return null
-
-        var parsed = parseImportSource(source, fallbackSubscriptionInterval)
-            .takeUnless { source.isUnsupportedClientStub() }
-        if (parsed == null && input.isHttpUrl() && source.requestMode != SubscriptionRequestMode.Compatibility) {
-            val fallbackSource = resolveImportSource(
-                text = input,
-                requestMode = SubscriptionRequestMode.Compatibility,
-                subscriptionProxy = subscriptionProxy
-            )
-            if (fallbackSource != null) {
-                source = fallbackSource
-                parsed = parseImportSource(fallbackSource, fallbackSubscriptionInterval)
-                    .takeUnless { fallbackSource.isUnsupportedClientStub() }
-            }
+        if (!input.isHttpUrl()) {
+            val source = ImportSource(content = input)
+            val parsed = parseImportSource(source, fallbackSubscriptionInterval)
+            return parsed?.let { ResolvedImport(source, it) }
         }
 
-        // Panels answer an unknown UA ("YPtun/x") with a stub / 4xx ("client not supported"), so as the last
-        // resort re-fetch pretending to be a full Happ client (Happ UA + HWID/device headers).
-        if (parsed == null && input.isHttpUrl() && subscriptionUserAgent() != AppBehaviorSettings.HAPP_USER_AGENT) {
-            val happSource = resolveImportSource(
+        // For HTTP/HTTPS URLs: try candidate configurations in order until one yields a valid ParsedImport
+        data class FetchAttempt(
+            val requestMode: SubscriptionRequestMode,
+            val forceHapp: Boolean = false,
+            val userAgentOverride: String? = null
+        )
+
+        val attempts = buildList {
+            // 1. User's chosen UA in Identity mode (with HWID, device model, app ID)
+            add(FetchAttempt(SubscriptionRequestMode.Identity, forceHapp = false))
+            // 2. User's chosen UA in Compatibility mode (standard */* Accept, no extra headers)
+            add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = false))
+            // 3. Happ UA in Identity mode (for Remnawave/Happ panels requiring Happ headers)
+            add(FetchAttempt(SubscriptionRequestMode.Identity, forceHapp = true))
+            // 4. Happ UA in Compatibility mode (generic Happ client)
+            add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = true))
+            // 5. v2rayN UA in Compatibility mode (widely whitelisted across all V2Ray/Marzban/3x-ui panels)
+            add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = false, userAgentOverride = "v2rayN/6.23"))
+            // 6. Clash UA in Compatibility mode
+            add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = false, userAgentOverride = "ClashforWindows/0.20.39"))
+        }
+
+        for (attempt in attempts) {
+            val source = resolveImportSource(
                 text = input,
-                requestMode = SubscriptionRequestMode.Identity,
+                requestMode = attempt.requestMode,
                 subscriptionProxy = subscriptionProxy,
-                forceHapp = true
-            )
-            if (happSource != null) {
-                parseImportSource(happSource, fallbackSubscriptionInterval)?.takeUnless { happSource.isUnsupportedClientStub() }?.let { source = happSource; parsed = it }
+                forceHapp = attempt.forceHapp,
+                userAgentOverride = attempt.userAgentOverride
+            ) ?: continue
+
+            if (source.isUnsupportedClientStub()) continue
+
+            val parsed = parseImportSource(source, fallbackSubscriptionInterval)
+            if (parsed != null) {
+                return ResolvedImport(source, parsed)
             }
         }
 
-        return parsed?.let { ResolvedImport(source, it) }
+        return null
     }
 
     /** The panel's "this subscription is not supported for this client" stub (arrives as a normal 200 body). */
@@ -997,7 +997,8 @@ class LocationsRepositoryImpl(
         text: String,
         requestMode: SubscriptionRequestMode,
         subscriptionProxy: SubscriptionFetchProxy?,
-        forceHapp: Boolean = false
+        forceHapp: Boolean = false,
+        userAgentOverride: String? = null
     ): ImportSource? {
         if (text.isBlank()) return null
 
@@ -1009,7 +1010,8 @@ class LocationsRepositoryImpl(
             url = text,
             requestMode = requestMode,
             subscriptionProxy = subscriptionProxy,
-            forceHapp = forceHapp
+            forceHapp = forceHapp,
+            userAgentOverride = userAgentOverride
         ) ?: return null
         return downloaded.content
             .normalizedImportText()
@@ -1044,9 +1046,10 @@ class LocationsRepositoryImpl(
         url: String,
         requestMode: SubscriptionRequestMode,
         subscriptionProxy: SubscriptionFetchProxy?,
-        forceHapp: Boolean = false
+        forceHapp: Boolean = false,
+        userAgentOverride: String? = null
     ): DownloadedSubscription? {
-        val userAgent = if (forceHapp) AppBehaviorSettings.HAPP_USER_AGENT else subscriptionUserAgent()
+        val userAgent = userAgentOverride ?: if (forceHapp) AppBehaviorSettings.HAPP_USER_AGENT else subscriptionUserAgent()
         val hwid = if (requestMode == SubscriptionRequestMode.Identity) {
             deviceIdentityProvider.hwid()
         } else {
@@ -1063,23 +1066,19 @@ class LocationsRepositoryImpl(
             createProxyHttpClient(subscriptionProxy)
         }
 
+        val targetUrl = url.trim()
+        val acceptHeader = if (requestMode == SubscriptionRequestMode.Identity) {
+            "application/json, text/plain, text/markdown, application/octet-stream, */*"
+        } else {
+            "*/*"
+        }
+
         return try {
             withProxyAuthentication(subscriptionProxy) {
                 val response = runCatching {
-                    client.get(url) {
+                    client.get(targetUrl) {
                         headers {
-                            append(
-                                HttpHeaders.Accept,
-                                // Prefer JSON so Remnawave panels return the rich body (user{} with
-                                // expiresAt + traffic) instead of bare base64 links; our parser handles
-                                // both the JSON `links[]` and base64/plain bodies.
-                                "application/json, text/plain, text/markdown, application/octet-stream, */*"
-                            )
-                            // Panels do User-Agent content-negotiation: our own "YPtun/x" (and a browser
-                            // UA) get only bare base64 vless links, while a recognised client UA gets the
-                            // RICH per-server Xray JSON (with dns.hosts / routing / FAKEDNS). We support
-                            // that JSON (parseRawXray), and it's the only way to receive the server's
-                            // FakeDNS config — so always present as Happ, the de-facto "full config" UA.
+                            append(HttpHeaders.Accept, acceptHeader)
                             append(HttpHeaders.UserAgent, userAgent)
                             if (requestMode == SubscriptionRequestMode.Identity) {
                                 append("x-hwid", hwid.orEmpty())
@@ -1235,7 +1234,8 @@ class LocationsRepositoryImpl(
             // ship one complete Xray config per server, each with its own dns.hosts / routing / fakedns).
             // MUST run before the proxy/sing-box parsers, otherwise the config is downgraded to a bare
             // sing-box vless and its fakedns / RU-direct DNS hosts are lost.
-            parseRawXray(text, subscriptionUrl, subscriptionMetadata)?.let {
+            (parseRawXray(text, subscriptionUrl, subscriptionMetadata)
+                ?: parseRawXray(linkText, subscriptionUrl, subscriptionMetadata))?.let {
                 return ParsedImport(it, ImportMode.Additive)
             }
         }
@@ -1250,7 +1250,8 @@ class LocationsRepositoryImpl(
 
         // Raw sing-box config (full config with "outbounds", a single outbound object, or an
         // array of outbounds) → Standard locations carrying the outbound JSON verbatim.
-        parseRawSingBox(text, subscriptionUrl, subscriptionMetadata)?.let {
+        (parseRawSingBox(text, subscriptionUrl, subscriptionMetadata)
+            ?: parseRawSingBox(linkText, subscriptionUrl, subscriptionMetadata))?.let {
             return ParsedImport(it, ImportMode.Additive)
         }
 

@@ -25,14 +25,47 @@ internal object SubscriptionDecoder {
     fun toLinkText(body: String): String {
         val trimmed = body.trim()
         extractJsonLinks(trimmed)?.let { return it.joinToString(separator = "\n") }
-        return maybeBase64Decode(trimmed) ?: body
+        val decoded = maybeBase64Decode(trimmed)
+        if (decoded != null) return decoded
+        val links = toLinks(trimmed)
+        if (links.isNotEmpty() && (links.size > 1 || links.first() != trimmed)) {
+            return links.joinToString(separator = "\n")
+        }
+        return body
     }
 
     fun toLinks(body: String): List<String> {
         val trimmed = body.trim()
-        val raw = extractJsonLinks(trimmed)
-            ?: (maybeBase64Decode(trimmed) ?: trimmed).split('\n', '\r')
-        return raw.map { it.trim() }.filter { it.isNotEmpty() }
+        extractJsonLinks(trimmed)?.let { return it }
+
+        val decodedBody = maybeBase64Decode(trimmed)
+        val sourceText = decodedBody ?: trimmed
+
+        val rawLines = sourceText.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toList()
+
+        val result = mutableListOf<String>()
+        for (line in rawLines) {
+            if (line.startsWith("#") || line.startsWith("//")) continue
+            if (line.contains("://")) {
+                result.add(line)
+            } else {
+                val decodedChunk = decodeBase64Chunk(line)
+                if (decodedChunk != null && decodedChunk.contains("://")) {
+                    decodedChunk.lineSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("//") }
+                        .forEach { result.add(it) }
+                } else if (decodedChunk != null && (decodedChunk.trim().startsWith("{") || decodedChunk.trim().startsWith("["))) {
+                    result.add(decodedChunk.trim())
+                } else {
+                    result.add(line)
+                }
+            }
+        }
+        return if (result.isNotEmpty()) result else rawLines
     }
 
     private fun extractJsonLinks(body: String): List<String>? {
@@ -49,12 +82,45 @@ internal object SubscriptionDecoder {
 
     @OptIn(ExperimentalEncodingApi::class)
     fun maybeBase64Decode(value: String): String? {
-        if (value.contains("://")) return null
-        val compact = value.filterNot { it == '\n' || it == '\r' || it == ' ' }
-        if (compact.length < 8) return null
-        for (codec in listOf(Base64.Default, Base64.UrlSafe, Base64.Mime)) {
-            val text = runCatching { codec.decode(pad(compact)).decodeToString() }.getOrNull()
-            if (text != null && (text.contains("://") || text.trim().startsWith("{") || text.trim().startsWith("["))) return text
+        val trimmed = value.trim()
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) return null
+
+        val nonCommentLines = trimmed.lines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("//") }
+
+        if (nonCommentLines.isEmpty()) return null
+
+        // If every line is already a known scheme link, no need to decode
+        if (nonCommentLines.all { it.contains("://") }) return null
+
+        val compact = nonCommentLines.joinToString("").filterNot { it.isWhitespace() }
+        if (compact.length >= 8) {
+            for (codec in listOf(Base64.Default, Base64.UrlSafe, Base64.Mime)) {
+                val text = runCatching { codec.decode(pad(compact)).decodeToString() }.getOrNull()
+                if (text != null && (text.contains("://") || text.trim().startsWith("{") || text.trim().startsWith("["))) {
+                    return text
+                }
+            }
+
+            // In case concatenating introduced inner '=' padding from per-line base64 encoding:
+            val decodedLines = mutableListOf<String>()
+            var anyDecoded = false
+            for (line in nonCommentLines) {
+                val chunk = decodeBase64Chunk(line)
+                if (chunk != null) {
+                    decodedLines.add(chunk)
+                    anyDecoded = true
+                } else if (line.contains("://")) {
+                    decodedLines.add(line)
+                }
+            }
+            if (anyDecoded && decodedLines.isNotEmpty()) {
+                val joined = decodedLines.joinToString("\n")
+                if (joined.contains("://") || joined.trim().startsWith("{") || joined.trim().startsWith("[")) {
+                    return joined
+                }
+            }
         }
         return null
     }
@@ -62,10 +128,13 @@ internal object SubscriptionDecoder {
     /** Decode a (possibly unpadded, possibly url-safe) base64 chunk to a string, or null. */
     @OptIn(ExperimentalEncodingApi::class)
     fun decodeBase64Chunk(value: String): String? {
-        val compact = value.trim().filterNot { it == '\n' || it == '\r' || it == ' ' }
-        if (compact.isEmpty()) return null
-        for (codec in listOf(Base64.UrlSafe, Base64.Default, Base64.Mime)) {
-            runCatching { codec.decode(pad(compact)).decodeToString() }.getOrNull()?.let { return it }
+        val compact = value.filterNot { it.isWhitespace() }
+        if (compact.length < 4) return null
+        for (codec in listOf(Base64.Default, Base64.UrlSafe, Base64.Mime)) {
+            val decoded = runCatching { codec.decode(pad(compact)).decodeToString() }.getOrNull()
+            if (decoded != null && (decoded.contains("://") || decoded.trim().startsWith("{") || decoded.trim().startsWith("["))) {
+                return decoded
+            }
         }
         return null
     }

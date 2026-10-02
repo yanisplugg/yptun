@@ -40,6 +40,7 @@ import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.vpn.ExpiringSubscriptionInfo
 import org.olcbox.app.vpn.PanelAnnouncementInfo
 import org.olcbox.app.vpn.VpnManager
+import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.vpn.VpnStatus
 
 class HomeScreenViewModel(
@@ -131,12 +132,21 @@ class HomeScreenViewModel(
             metadata = active.metadata
         )
 
+        val isSnolcOnIos = (DeviceInfo.os.contains("iOS", ignoreCase = true) || DeviceInfo.os.contains("iPadOS", ignoreCase = true)) &&
+            normalized.engine == EngineType.Snolc
+        val canStart = normalized.isComplete() && !isSnolcOnIos
+        val blockedReason = when {
+            !normalized.isComplete() -> "Complete active location first"
+            isSnolcOnIos -> "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)"
+            else -> null
+        }
+
         _state.update {
             it.copy(
                 configData = normalized,
                 selectedLocation = locationItem,
-                canStartVpn = normalized.isComplete(),
-                startBlockedReason = if (normalized.isComplete()) null else "Complete active location first"
+                canStartVpn = canStart,
+                startBlockedReason = blockedReason
             )
         }
     }
@@ -183,6 +193,19 @@ class HomeScreenViewModel(
                                 isVpnLoading = false,
                                 canStartVpn = false,
                                 startBlockedReason = "Add a valid location first"
+                            )
+                        }
+                        return@launch
+                    }
+                    val isSnolcOnIos = (DeviceInfo.os.contains("iOS", ignoreCase = true) || DeviceInfo.os.contains("iPadOS", ignoreCase = true)) &&
+                        active.location.normalized().engine == EngineType.Snolc
+                    if (isSnolcOnIos) {
+                        _state.update {
+                            it.copy(
+                                isVpnLoading = false,
+                                canStartVpn = false,
+                                connectError = "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)",
+                                startBlockedReason = "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)"
                             )
                         }
                         return@launch
@@ -257,6 +280,24 @@ class HomeScreenViewModel(
     }
 
     fun restartVpnIfRunning() {
+        val isSnolcOnIos = (DeviceInfo.os.contains("iOS", ignoreCase = true) || DeviceInfo.os.contains("iPadOS", ignoreCase = true)) &&
+            _state.value.configData.engine == EngineType.Snolc
+        if (isSnolcOnIos) {
+            viewModelScope.launch {
+                vpnManager.stopVpn()
+                _state.update {
+                    it.copy(
+                        isVpnConnected = false,
+                        isVpnLoading = false,
+                        canStartVpn = false,
+                        connectError = "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)",
+                        startBlockedReason = "Протокол snolc не поддерживается на iOS (доступен на Android и ПК)"
+                    )
+                }
+            }
+            return
+        }
+
         when (vpnManager.status.value) {
             VpnStatus.Connected,
             VpnStatus.Connecting,

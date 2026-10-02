@@ -184,7 +184,17 @@ class IosVpnManager(
                     return@withLock
                 }
                 if (active.engine == EngineType.Snolc) {
-                    setStatus(VpnStatus.Error("snolc на iOS пока не поддерживается"))
+                    val m = manager ?: loadManager(createIfMissing = false)
+                    if (m != null &&
+                        m.connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
+                        m.connection.status != platform.NetworkExtension.NEVPNStatusInvalid
+                    ) {
+                        m.connection.stopVPNTunnel()
+                    }
+                    wasConnecting = false
+                    connectWatchdogJob?.cancel()
+                    setStatus(VpnStatus.Error("Протокол snolc не поддерживается на iOS (доступен на Android и ПК)"))
+                    addLog("snolc не поддерживается на iOS: Apple запрещает субпроцессы (ProcessBuilder/fork)")
                     return@withLock
                 }
 
