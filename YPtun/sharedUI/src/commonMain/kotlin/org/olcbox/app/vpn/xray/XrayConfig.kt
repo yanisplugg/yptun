@@ -1107,10 +1107,6 @@ object XrayConfig {
      * Lifts `xhttpSettings.extra.host`/`.path` to the TOP-LEVEL `xhttpSettings.host`/`.path` when the
      * top level is empty. xray-core merges `extra` then OVERRIDES extra.Host/Path with the top-level
      * values (infra/conf transport_internet: `extra.Host = c.Host`), so a domain-fronted config that
-    /**
-     * Lifts `xhttpSettings.extra.host`/`.path` to the TOP-LEVEL `xhttpSettings.host`/`.path` when the
-     * top level is empty. xray-core merges `extra` then OVERRIDES extra.Host/Path with the top-level
-     * values (infra/conf transport_internet: `extra.Host = c.Host`), so a domain-fronted config that
      * only carries the real host in `extra.host` (top-level host="") sends an EMPTY host → xray falls
      * back to the reality SNI as the Host header → the fronted backend returns HTTP 400. Copying the
      * value up makes the override a no-op and the correct Host header is sent. No-op for configs that
