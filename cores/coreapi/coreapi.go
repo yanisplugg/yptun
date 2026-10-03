@@ -77,7 +77,7 @@ func init() {
 	})
 	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
 		// Strict memory budget for iOS NetworkExtension (15 MB Jetsam limit)
-		debug.SetMemoryLimit(12 * 1024 * 1024)
+		debug.SetMemoryLimit(10 * 1024 * 1024)
 		debug.SetGCPercent(20)
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)

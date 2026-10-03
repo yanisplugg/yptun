@@ -1894,26 +1894,29 @@ object XrayConfig {
                 if (profile.host.isNotBlank()) put("host", profile.host)
                 // The server may pin a mode (e.g. packet-up) and then refuses the one "auto" picks.
                 put("mode", profile.xhttpMode.ifBlank { "auto" })
-                // Cascade base: spread the loopback's per-app-flow tunnels across a SMALL POOL of reused
-                // H2 connections (4-8). Funnelling everything onto 1 connection (high maxConcurrency)
-                // chokes on H2 head-of-line blocking; opening one-per-flow (no xmux) overran the server
-                // past ~14 (the 18-connection broken-pipe). A 4-8 pool is under that cap yet parallel.
+                // Happ-style balanced xmux: spread tunnels across a small pool of reused H2 connections.
+                // Funnelling everything onto 1 connection (default without xmux) chokes on H2 head-of-line
+                // blocking and causes Jetsam OOM / timeouts during multi-stream speed tests.
                 val xmux = if (xhttpHighConcurrency) buildJsonObject {
                     put("maxConnections", "4-8")
                     put("cMaxReuseTimes", "64-128")
-                    // Xray only applies its own xmux defaults when the WHOLE block is absent, so an
-                    // override silently zeroed these two and every H2 connection was then reused
-                    // forever (`cMaxLifetimeMs`, which used to sit here, is not even a field of
-                    // XmuxConfig — it was dropped on parse). Restate Xray's defaults explicitly.
                     put("hMaxRequestTimes", "600-900")
                     put("hMaxReusableSecs", "1800-3000")
-                } else null
+                } else buildJsonObject {
+                    put("maxConnections", "2-4")
+                    put("maxConcurrency", "8-16")
+                    put("cMaxReuseTimes", "64-128")
+                    put("hMaxRequestTimes", "600-900")
+                    put("hMaxReusableSecs", "1800-3000")
+                }
                 // The link's `extra` (padding/obfs/session…) must match the server. Xray REPLACES the
                 // settings with `extra` (keeping only host/path/mode), so our xmux has to go inside it.
                 val extra = jsonObjectOrNull(profile.xhttpExtra)?.let { sanitizeXhttpExtra(it) }
                 if (extra != null) {
-                    put("extra", if (xmux != null && "xmux" !in extra) JsonObject(extra + ("xmux" to xmux)) else extra)
-                } else if (xmux != null) {
+                    put("extra", if ("xmux" !in extra) JsonObject(extra + ("xmux" to xmux)) else extra)
+                } else {
+                    put("scMaxEachPostBytes", "300000-600000")
+                    put("scMaxBufferedPosts", 6)
                     put("xmux", xmux)
                 }
             }

@@ -135,6 +135,8 @@ object ShareLinkParser {
             fingerprint = str("fp"),
             path = pathOrService,
             host = str("host"),
+            xhttpMode = str("mode"),
+            xhttpExtra = str("extra"),
         )
     }
 
@@ -187,6 +189,8 @@ object ShareLinkParser {
             realityShortId = params["sid"].orEmpty(),
             path = path,
             host = params["host"].orEmpty(),
+            xhttpMode = params["mode"].orEmpty(),
+            xhttpExtra = params["extra"]?.let { if (it.contains('%')) UriCodec.percentDecode(it) else it }.orEmpty(),
         )
     }
 

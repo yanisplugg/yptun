@@ -63,6 +63,9 @@ object VlessUriParser {
             else -> params["path"].orEmpty()
         }
 
+        val mode = params["mode"].orEmpty()
+        val extra = params["extra"]?.let { if (it.contains('%')) UriCodec.percentDecode(it) else it }.orEmpty()
+
         return ProxyProfile(
             tag = remark,
             type = ProxyProfile.TYPE_VLESS,
@@ -83,6 +86,8 @@ object VlessUriParser {
             realityShortId = params["sid"].orEmpty(),
             path = path,
             host = (params["host"]).orEmpty(),
+            xhttpMode = mode,
+            xhttpExtra = extra,
         )
     }
 

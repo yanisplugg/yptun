@@ -423,6 +423,11 @@ data class ProxyProfile(
             val pass = (ssServer?.get("password") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
             val method = (ssServer?.get("method") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
 
+            val xhttpMode = (xhttp?.get("mode") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
+            val xhttpExtra = (xhttp?.get("extra") as? kotlinx.serialization.json.JsonObject)?.toString()
+                ?: (xhttp?.get("extra") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                ?: ""
+
             return ProxyProfile(
                 tag = (proxyOutbound["tag"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: "",
                 type = protocol,
@@ -444,6 +449,8 @@ data class ProxyProfile(
                 realityShortId = realityShortId,
                 path = path,
                 host = host,
+                xhttpMode = xhttpMode,
+                xhttpExtra = xhttpExtra,
                 rawXrayConfig = if (root.containsKey("outbounds")) jsonText else null
             )
         }
