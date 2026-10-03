@@ -89,7 +89,32 @@ class AppUpdateServiceTest {
 
         val selected = AppUpdateService.selectAsset(assets, UpdatePlatform("windows", "amd64"))
 
+        // An installed copy must get the installer; the portable .exe is for a running portable.
+        assertEquals("YPtun-3.3.2-x64-installer.exe", selected?.name)
+    }
+
+    @Test
+    fun portableCopyGetsThePortableExe() {
+        val assets = listOf(
+            GithubReleaseAsset("YPtun-3.3.2-x64-installer.exe", "https://example/installer"),
+            GithubReleaseAsset("YPtun-3.3.2-x64-portable.exe", "https://example/portable"),
+            GithubReleaseAsset("YPtun-3.3.2-arm64-portable.exe", "https://example/arm64-portable")
+        )
+
+        val selected = AppUpdateService.selectAsset(
+            assets, UpdatePlatform("windows", "amd64"), preferPortable = true
+        )
+
         assertEquals("YPtun-3.3.2-x64-portable.exe", selected?.name)
+    }
+
+    @Test
+    fun releaseAssetCarriesGithubSha256() {
+        val hex = "ab".repeat(32)
+
+        assertEquals(hex, GithubReleaseAsset("a.exe", "u", digest = "sha256:$hex").toUpdateAsset().sha256)
+        assertEquals(null, GithubReleaseAsset("a.exe", "u", digest = "sha1:abc").toUpdateAsset().sha256)
+        assertEquals(null, GithubReleaseAsset("a.exe", "u").toUpdateAsset().sha256)
     }
 
     @Test

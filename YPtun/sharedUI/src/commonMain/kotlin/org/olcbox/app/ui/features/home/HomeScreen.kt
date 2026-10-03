@@ -133,7 +133,9 @@ fun HomeScreen(
     // controls (timer/start button) stay on the right, like Happ/Hiddify desktop.
     wideLayout: Boolean = false,
     // Extra content under the start button (e.g. the desktop proxy/tunnel mode switch).
-    extraConnectContent: (@Composable () -> Unit)? = null
+    extraConnectContent: (@Composable () -> Unit)? = null,
+    // Desktop only: shows an exit button in the top bar.
+    onExitClick: (() -> Unit)? = null
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
@@ -332,7 +334,8 @@ fun HomeScreen(
                 onDeleteUnreachable = { requestDelete(PendingDelete.Unreachable) },
                 onDeleteDuplicates = { requestDelete(PendingDelete.Duplicates) },
                 onDeleteAllSubscriptions = { requestDelete(PendingDelete.AllSubscriptions) },
-                onDeleteAllConfigs = { requestDelete(PendingDelete.AllConfigs) }
+                onDeleteAllConfigs = { requestDelete(PendingDelete.AllConfigs) },
+                onExitClick = onExitClick
             )
         },
         bottomBar = {
@@ -516,6 +519,7 @@ fun HomeScreen(
                 onDeleteSubscription = { ids ->
                     requestDelete(PendingDelete.Subscription(ids))
                 },
+                onRenameSubscription = { url, name -> locationViewModel.renameSubscription(url, name) },
                 onSetSubscriptionAutoUpdate = { url, enabled ->
                     locationViewModel.setSubscriptionAutoUpdate(url, enabled)
                 },

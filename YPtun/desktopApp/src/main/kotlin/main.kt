@@ -157,7 +157,9 @@ private class DesktopAppDependencies {
     val updateService = AppUpdateService(
         deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource),
         // Picks the delta bundle generated against THIS installed image (see installedDesktopFingerprint).
-        installedFingerprint = { installedDesktopFingerprint() }
+        installedFingerprint = { installedDesktopFingerprint() },
+        // A portable updates by replacing its own .exe, so it must be offered the portable asset.
+        preferPortableAsset = org.olcbox.app.desktop.DesktopRuntimeMode.isPortable
     )
     val updateSettingsStore = JvmUpdateSettingsStore()
     val updateInstaller = JvmUpdateInstaller()
@@ -288,6 +290,22 @@ private fun requestWindowToFront(link: String?) {
  * (dependencies.close() stops the tunnel and puts the system proxy back), and the shutdown hooks
  * registered by the proxy controller still run inside exitProcess.
  */
+/**
+ * True where the custom tray menu window cannot be relied on: Windows 10 (build < 22000), or a Windows
+ * whose build can't be read. Windows 11 keeps the custom menu.
+ */
+private fun useNativeTrayMenu(): Boolean {
+    if (!System.getProperty("os.name").orEmpty().startsWith("Windows")) return false
+    val build = runCatching {
+        com.sun.jna.platform.win32.Advapi32Util.registryGetStringValue(
+            com.sun.jna.platform.win32.WinReg.HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+            "CurrentBuildNumber",
+        ).trim().toInt()
+    }.getOrNull()
+    return build == null || build < 22000
+}
+
 private fun quitApplication(dependencies: DesktopAppDependencies) {
     runCatching { dependencies.close() }
     runCatching { DesktopSingleInstance.release() }
@@ -582,6 +600,9 @@ private fun runApp(args: Array<String>) = application {
     val trayAnchor = remember { java.awt.Point(0, 0) }
     val awtTrayIcon = remember { mutableStateOf<java.awt.TrayIcon?>(null) }
     val trayBaseImage = remember { loadTrayBaseImage() }
+    // Windows 10 cannot show the custom menu window below (undecorated + transparent Compose window:
+    // the click only produced a blank taskbar button), so there the tray icon gets the OS's own menu.
+    val useNativeTrayMenu = remember { !useSniTray && useNativeTrayMenu() }
     DisposableEffect(useSniTray) {
         if (useSniTray) return@DisposableEffect onDispose {}
         val systemTray = runCatching { java.awt.SystemTray.getSystemTray() }.getOrNull()
@@ -597,7 +618,7 @@ private fun runApp(args: Array<String>) = application {
                     isImageAutoSize = true
                     addMouseListener(object : java.awt.event.MouseAdapter() {
                         override fun mouseReleased(e: java.awt.event.MouseEvent) {
-                            if (e.isPopupTrigger || e.button == java.awt.event.MouseEvent.BUTTON3) {
+                            if (!useNativeTrayMenu && (e.isPopupTrigger || e.button == java.awt.event.MouseEvent.BUTTON3)) {
                                 trayAnchor.setLocation(e.x, e.y)
                                 trayMenuVisible = true
                             } else if (e.button == java.awt.event.MouseEvent.BUTTON1) {
@@ -613,6 +634,45 @@ private fun runApp(args: Array<String>) = application {
         onDispose {
             icon?.let { ic -> runCatching { systemTray?.remove(ic) } }
             awtTrayIcon.value = null
+        }
+    }
+    // The native menu (Windows 10): same entries as the custom one, rebuilt whenever a label changes.
+    LaunchedEffect(
+        awtTrayIcon.value, useNativeTrayMenu, trayStatusText, trayRussian, trayConnected, trayLoading,
+        trayHomeState.canStartVpn,
+    ) {
+        if (!useNativeTrayMenu) return@LaunchedEffect
+        val ic = awtTrayIcon.value ?: return@LaunchedEffect
+        fun item(label: String, enabled: Boolean = true, action: () -> Unit) =
+            java.awt.MenuItem(label).apply {
+                isEnabled = enabled
+                addActionListener { action() }
+            }
+        ic.popupMenu = java.awt.PopupMenu().apply {
+            add(item(trayStatusText, enabled = false) {})
+            addSeparator()
+            add(item(if (trayRussian) "Открыть" else "Open") { isWindowVisible = true })
+            add(
+                item(
+                    when {
+                        trayConnected || trayLoading -> if (trayRussian) "Отключиться" else "Disconnect"
+                        else -> if (trayRussian) "Подключиться" else "Connect"
+                    },
+                    enabled = trayConnected || trayLoading || trayHomeState.canStartVpn,
+                ) { dependencies.homeViewModel.ToggleVpn() }
+            )
+            add(item(if (trayRussian) "Мой IP" else "My IP") { showMyIpDialog = true })
+            add(item(if (trayRussian) "Бесплатные серверы" else "Free servers") {
+                isWindowVisible = true
+                dependencies.homeViewModel.loadFreeServers()
+            })
+            add(item(if (trayRussian) "Горячая клавиша" else "Global hotkey") { hotkeyDialogVisible = true })
+            add(item(if (trayRussian) "Настройки" else "Settings") {
+                isWindowVisible = true
+                showDesktopSettings = true
+            })
+            addSeparator()
+            add(item(if (trayRussian) "Выход" else "Quit") { quitApplication(dependencies) })
         }
     }
     // Keep the tray tooltip + status-dot color in sync with the connection state.
@@ -917,6 +977,7 @@ private fun runApp(args: Array<String>) = application {
             ) {
                 OlcboxAppContent(
                     homeViewModel = dependencies.homeViewModel,
+                    onExitClick = { quitApplication(dependencies) },
                     locationViewModel = dependencies.locationViewModel,
                     currentScreen = currentScreen,
                     onNavigate = { screen ->

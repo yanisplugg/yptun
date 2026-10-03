@@ -52,6 +52,8 @@ interface LocationsRepository {
     suspend fun setSubscriptionUpdateInterval(subscriptionUrl: String, hours: Int)
     /** Enables/disables automatic refresh for a single subscription (manual refresh still works). */
     suspend fun setSubscriptionAutoUpdate(subscriptionUrl: String, enabled: Boolean)
+    /** Sets the user's own name for a subscription; blank restores the panel's name. */
+    suspend fun setSubscriptionCustomName(subscriptionUrl: String, name: String)
     suspend fun saveLocation(storageId: String, location: LocationConfig)
     suspend fun loadLocation(storageId: String): LocationConfig?
     suspend fun deleteLocation(storageId: String)

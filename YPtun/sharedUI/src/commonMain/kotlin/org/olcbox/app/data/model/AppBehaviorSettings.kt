@@ -230,9 +230,10 @@ data class AppBehaviorSettings(
 
         const val PING_RESULT_TIME = "time"
         const val PING_RESULT_ICON = "icon"
+        const val PING_RESULT_BOTH = "both"
 
         /** Selectable ping-result display modes (single-choice in the UI). */
-        val PING_RESULT_MODES = listOf(PING_RESULT_TIME, PING_RESULT_ICON)
+        val PING_RESULT_MODES = listOf(PING_RESULT_TIME, PING_RESULT_ICON, PING_RESULT_BOTH)
 
         /**
          * Default probe target. A `generate_204` endpoint: a tiny TCP HTTP request that returns an

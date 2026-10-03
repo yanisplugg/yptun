@@ -405,6 +405,7 @@ class LocationsRepositoryImpl(
             val attemptTimestamp = nowEpochMs()
             val previousInterval = previousEntries.subscriptionUpdateIntervalHours()
             val previousAutoUpdate = previousEntries.subscriptionAutoUpdateEnabled()
+            val previousCustomName = previousEntries.firstNotNullOfOrNull { it.metadata?.subscription?.customName }
             val resolved = resolveParsedImport(
                 text = url,
                 fallbackSubscriptionInterval = previousInterval,
@@ -468,7 +469,8 @@ class LocationsRepositoryImpl(
                         updateIntervalHours = updateInterval,
                         lastRefreshAtEpochMs = attemptTimestamp,
                         lastAttemptAtEpochMs = attemptTimestamp,
-                        autoUpdateEnabled = previousAutoUpdate
+                        autoUpdateEnabled = previousAutoUpdate,
+                        customName = previousCustomName
                     )
                 ).normalized()
             }
@@ -661,6 +663,26 @@ class LocationsRepositoryImpl(
                 } else {
                     entry.copy(
                         metadata = entry.metadata.withSubscriptionAutoUpdate(enabled)
+                    ).normalized()
+                }
+            }
+
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
+    override suspend fun setSubscriptionCustomName(subscriptionUrl: String, name: String) {
+        val normalizedUrl = subscriptionUrl.trim()
+        if (normalizedUrl.isBlank()) return
+
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            val updated = bundle.locations.map { entry ->
+                if (entry.subscriptionUrl?.trim() != normalizedUrl) {
+                    entry
+                } else {
+                    entry.copy(
+                        metadata = entry.metadata.withSubscriptionCustomName(name)
                     ).normalized()
                 }
             }
@@ -2715,11 +2737,20 @@ class LocationsRepositoryImpl(
         ).normalized()
     }
 
+    /** Stores the user's own subscription name (blank clears it), keeping the rest of the metadata intact. */
+    private fun LocationMetadata?.withSubscriptionCustomName(name: String): LocationMetadata {
+        val subscription = this?.subscription ?: SubscriptionMetadata()
+        return (this ?: LocationMetadata()).copy(
+            subscription = subscription.copy(customName = name)
+        ).normalized()
+    }
+
     private fun LocationMetadata?.withSubscriptionRefreshState(
         updateIntervalHours: Int,
         lastRefreshAtEpochMs: Long?,
         lastAttemptAtEpochMs: Long? = lastRefreshAtEpochMs,
-        autoUpdateEnabled: Boolean = this?.subscription?.autoUpdateEnabled ?: true
+        autoUpdateEnabled: Boolean = this?.subscription?.autoUpdateEnabled ?: true,
+        customName: String? = this?.subscription?.customName
     ): LocationMetadata {
         val subscription = this?.subscription ?: SubscriptionMetadata()
         return (this ?: LocationMetadata()).copy(
@@ -2727,7 +2758,8 @@ class LocationsRepositoryImpl(
                 updateIntervalHours = updateIntervalHours,
                 lastRefreshAtEpochMs = lastRefreshAtEpochMs,
                 lastAttemptAtEpochMs = lastAttemptAtEpochMs,
-                autoUpdateEnabled = autoUpdateEnabled
+                autoUpdateEnabled = autoUpdateEnabled,
+                customName = customName
             )
         ).normalized()
     }

@@ -30,6 +30,17 @@ class FreeturnUriParserTest {
         return "freeturn://vk?tcp<mode=udp&obf-profile=rtpopus&wg=$wg>@203.0.113.7:56000#deadbeef\$Demo VK-TURN"
     }
 
+    @OptIn(ExperimentalEncodingApi::class)
+    @Test
+    fun parsesWireFormatWithCid() {
+        val esc = wgConf.replace("\n", "\\n")
+        val json = """{"v":1,"provider":"vk","peer":"203.0.113.7:56000","cid":"abc123","name":"W","wg":"$esc"}"""
+        val parsed = FreeturnUriParser.parse("freeturn://" + Base64.UrlSafe.encode(json.encodeToByteArray()).trimEnd('='))!!
+        assertEquals("203.0.113.7", parsed.serverIp)
+        assertEquals(9000, parsed.listenPort)
+        assertEquals("W", parsed.comment)
+    }
+
     @Test
     fun parsesPeerAndEmbeddedWireGuard() {
         val parsed = FreeturnUriParser.parse(link())!!

@@ -42,7 +42,13 @@ data class AppUpdateAsset(
     val name: String,
     val downloadUrl: String,
     val sizeBytes: Long?,
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    /**
+     * Lowercase hex SHA-256 of the asset as GitHub computed it on upload (the release API's `digest`).
+     * The desktop installer checks every download against it before running or applying anything.
+     * Null when the release API did not report one.
+     */
+    val sha256: String? = null
 )
 
 data class AppUpdateInfo(
@@ -77,14 +83,20 @@ class AppUpdateService(
      * generated against the other one can never apply. Without it the app downloaded a patch that
      * was guaranteed to fail and then downloaded the whole APK anyway.
      */
-    private val installedFingerprint: suspend () -> String? = { null }
+    private val installedFingerprint: suspend () -> String? = { null },
+    /**
+     * Desktop portable build: the asset to download is the single-file portable .exe (it replaces the
+     * file the user started), not the installer, and no delta bundle applies — a portable has no
+     * installed app image to patch.
+     */
+    private val preferPortableAsset: Boolean = false
 ) {
     suspend fun check(
         channel: ReleaseChannel,
         proxy: SubscriptionFetchProxy? = null
     ): Result<AppUpdateInfo> = runCatching {
         val release = fetchRelease(channel, proxy)
-        val asset = selectAsset(release.assets, platform)
+        val asset = selectAsset(release.assets, platform, preferPortableAsset)
             ?: error(
                 "No ${platform.assetToken.joinToString(" + ")} update asset in ${release.tagName}. " +
                         "Expected asset name containing ${platform.assetToken.joinToString(", ")}" +
@@ -106,7 +118,7 @@ class AppUpdateService(
             publishedAt = release.publishedAt,
             asset = asset,
             isUpdateAvailable = available,
-            deltaAsset = if (available) {
+            deltaAsset = if (available && !preferPortableAsset) {
                 selectDeltaAsset(
                     assets = release.assets,
                     platform = platform,
@@ -173,20 +185,17 @@ class AppUpdateService(
     }
 
     companion object {
-        fun selectAsset(assets: List<GithubReleaseAsset>, platform: UpdatePlatform): AppUpdateAsset? {
+        fun selectAsset(
+            assets: List<GithubReleaseAsset>,
+            platform: UpdatePlatform,
+            preferPortable: Boolean = false
+        ): AppUpdateAsset? {
             val asset = when (platform.os) {
                 "android" -> selectAndroidAsset(assets, platform)
-                else -> selectDesktopAsset(assets, platform)
+                else -> selectDesktopAsset(assets, platform, preferPortable)
             }
 
-            return asset?.let {
-                AppUpdateAsset(
-                    name = it.name,
-                    downloadUrl = it.browserDownloadUrl,
-                    sizeBytes = it.size,
-                    updatedAt = it.updatedAt
-                )
-            }
+            return asset?.toUpdateAsset()
         }
 
         /**
@@ -247,14 +256,7 @@ class AppUpdateService(
                 ?: targets.firstNotNullOfOrNull { target ->
                     eligible.firstOrNull { target in it.name.lowercase() }
                 } ?: eligible.singleOrNull()
-            return chosen?.let {
-                AppUpdateAsset(
-                    name = it.name,
-                    downloadUrl = it.browserDownloadUrl,
-                    sizeBytes = it.size,
-                    updatedAt = it.updatedAt
-                )
-            }
+            return chosen?.toUpdateAsset()
         }
 
         /**
@@ -305,7 +307,8 @@ class AppUpdateService(
          */
         private fun selectDesktopAsset(
             assets: List<GithubReleaseAsset>,
-            platform: UpdatePlatform
+            platform: UpdatePlatform,
+            preferPortable: Boolean = false
         ): GithubReleaseAsset? {
             val foreignOsTokens = knownDesktopOsTokens - platform.os
             val candidates = assets.filter { asset ->
@@ -314,9 +317,20 @@ class AppUpdateService(
                     platform.archTokens.any { it in name } &&
                     foreignOsTokens.none { it in name }
             }
-            val named = candidates.filter { platform.os in it.name.lowercase() }
+            // A release carries both the installer and the single-file portable .exe, and both end in
+            // ".exe". Whichever came first in the list used to win, so an installed copy was handed the
+            // portable (which just unpacked itself, found the old copy still running and exited: "it
+            // downloads and nothing happens"). The installer is the default; the portable .exe only
+            // when asked for, i.e. when the running copy IS a portable.
+            val (portable, regular) = candidates.partition { "portable" in it.name.lowercase() }
+            val pool = if (preferPortable) {
+                portable.filter { it.name.lowercase().endsWith(".exe") }.ifEmpty { regular.ifEmpty { portable } }
+            } else {
+                regular.ifEmpty { portable }
+            }
+            val named = pool.filter { platform.os in it.name.lowercase() }
 
-            return selectPreferredAsset(named.ifEmpty { candidates }, platform.preferredExtensions)
+            return selectPreferredAsset(named.ifEmpty { pool }, platform.preferredExtensions)
         }
 
         private val knownDesktopOsTokens = listOf("windows", "linux", "macos")
@@ -466,8 +480,19 @@ data class GithubReleaseAsset(
     val browserDownloadUrl: String,
     val size: Long? = null,
     @SerialName("updated_at")
-    val updatedAt: String? = null
-)
+    val updatedAt: String? = null,
+    /** `sha256:<hex>` — GitHub's own checksum of the uploaded asset. */
+    val digest: String? = null
+) {
+    fun toUpdateAsset() = AppUpdateAsset(
+        name = name,
+        downloadUrl = browserDownloadUrl,
+        sizeBytes = size,
+        updatedAt = updatedAt,
+        sha256 = digest?.removePrefix("sha256:")?.trim()?.lowercase()
+            ?.takeIf { hex -> hex.length == 64 && hex.all { it in '0'..'9' || it in 'a'..'f' } }
+    )
+}
 
 private val json = Json {
     ignoreUnknownKeys = true

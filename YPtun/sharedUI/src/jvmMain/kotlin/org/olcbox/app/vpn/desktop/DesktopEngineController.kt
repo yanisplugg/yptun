@@ -1033,7 +1033,14 @@ internal class DesktopEngineController(
         // WG / freeturn TCP is IPv4-only → force A-only DNS so dual-stack sites don't dead-end.
         val traffic = JvmVpnSettings.loadTraffic().copy(domainStrategy = "ipv4_only")
         val profilesState = JvmVpnSettings.loadRoutingProfiles()
-        val routingProfile: RoutingProfile? = null
+        // The location's routing profile (was hard-coded null: the profile chosen in the UI was ignored
+        // on every VK-TURN exit, so "direct" sites went through the tunnel).
+        val routingProfile: RoutingProfile? = resolveProfileExpandingAsn(profilesState, config.routingProfileId)
+        if (routingProfile == null) {
+            log("Routing: NO profile applied — all traffic via the VK-TURN tunnel")
+        } else {
+            log("Routing: applying '${routingProfile.displayName()}'")
+        }
 
         // ---- Relay-ready gate: bring the tunnel up only behind a live TURN stream ----
         if (usesWdtt) {
@@ -1089,10 +1096,17 @@ internal class DesktopEngineController(
         // AmneziaWG no longer blocks Xray: it used to, which silently killed every second proxy only
         // Xray can serve (xhttp/splithttp, a raw Xray config, an explicit "Xray" core choice) — the
         // chain was force-built on sing-box, which cannot speak those transports.
+        // A geo-based profile forces Xray (sing-box has no native geo selectors for it here) when the
+        // exit/chain proxy is one Xray can serve; plain WireGuard/AWG without a proxy stays on sing-box.
+        val profileWantsXray = routingProfile != null &&
+            (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
+            proxyForCore != null && proxyForCore.type in XRAY_SUPPORTED_TYPES
         val useXray = proxyForCore != null &&
-            vk.resolvedProxyCore(proxyForCore) == ProxyCore.Xray
+            (vk.resolvedProxyCore(proxyForCore) == ProxyCore.Xray || profileWantsXray)
 
         if (useXray) {
+            val assetPath = ensureGeoAssetPath(routingProfile)
+            val xrayProfile = xrayRoutingProfile(routingProfile, assetPath)
             // Same as the Standard/Chain path: xray owns no TUN, so a sing-box front does (and the
             // external tun2socks bridge — with its stalling SOCKS-UDP DNS — is skipped entirely).
             val frontXray = requestedTun
@@ -1108,7 +1122,7 @@ internal class DesktopEngineController(
                     socksPassword = socksPassword,
                     logLevel = "debug",
                     traffic = traffic,
-                    routingProfile = null,
+                    routingProfile = xrayProfile,
                     blockQuic = false,
                 )
             } else if (outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG) {
@@ -1124,7 +1138,7 @@ internal class DesktopEngineController(
                     socksPassword = socksPassword,
                     logLevel = "debug",
                     traffic = traffic,
-                    routingProfile = null,
+                    routingProfile = xrayProfile,
                     blockQuic = false,
                     // Socket-level chaining keeps a vless reality/xtls-vision exit's own transport intact;
                     // proxySettings would re-wrap it and the server resets the malformed handshake.
@@ -1143,12 +1157,13 @@ internal class DesktopEngineController(
                     socksPassword = socksPassword,
                     logLevel = "debug",
                     traffic = traffic,
-                    routingProfile = null,
+                    routingProfile = xrayProfile,
                     blockQuic = false,
                 )
             }
             activeProxyCore = ProxyCore.Xray
             log("Starting Xray (VK-TURN, $outboundType) via $listenAddr")
+            if (assetPath.isNotEmpty()) YpTunCore.xraySetAssetPath(assetPath)
             YpTunCore.xrayStart(xrayJson)
             if (frontXray) {
                 startSingBoxFront(

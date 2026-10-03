@@ -37,7 +37,7 @@ import kotlin.io.path.exists
  */
 internal object DesktopDeltaPatch {
 
-    const val FORMAT = 2
+    const val FORMAT = 3
 
     @Serializable
     data class Manifest(
@@ -72,17 +72,17 @@ internal object DesktopDeltaPatch {
         val deletions: List<Path>,
         val stagingDir: Path,
         /** The installation being updated — what decides whether the swapper needs elevation. */
-        val appDir: Path,
+        val rootDir: Path,
     )
 
     private val json = Json { ignoreUnknownKeys = true }
 
     /**
-     * Rebuilds every changed file of [appDir] into a staging directory and returns the [Plan] to
+     * Rebuilds every changed file of [rootDir] (the image root: launcher, `app/`, `runtime/`) into a staging directory and returns the [Plan] to
      * commit it. Throws when the bundle doesn't fit this installation — the caller then falls back
      * to the full installer.
      */
-    fun stage(appDir: Path, bundle: Path, stagingDir: Path, tempDir: Path): Plan {
+    fun stage(rootDir: Path, bundle: Path, stagingDir: Path, tempDir: Path): Plan {
         Files.createDirectories(tempDir)
         if (Files.exists(stagingDir)) stagingDir.toFile().deleteRecursively()
         Files.createDirectories(stagingDir)
@@ -105,13 +105,14 @@ internal object DesktopDeltaPatch {
             for (op in manifest.ops.sortedBy { it.op == Op.DELETE || it.to.endsWith(".cfg") }) {
                 when (op.op) {
                     Op.PATCH -> {
-                        val base = appDir.resolve(op.from).requireSafe(appDir)
+                        val base = rootDir.resolve(op.from).requireSafe(rootDir)
                         check(base.exists()) { "installed file missing: ${op.from}" }
                         val baseSha = DesktopAppImage.sha256(base)
                         check(baseSha.equals(op.fromSha, ignoreCase = true)) {
                             "installed ${op.from} is not this patch's base"
                         }
                         val staged = stagingDir.resolve(op.to).requireSafe(stagingDir)
+                        Files.createDirectories(staged.parent)
                         val entry = zip.getEntry(op.payload) ?: error("missing payload ${op.payload}")
                         Files.newOutputStream(staged).use { output ->
                             GZIPInputStream(BufferedInputStream(zip.getInputStream(entry))).use { patch ->
@@ -120,7 +121,7 @@ internal object DesktopDeltaPatch {
                             }
                         }
                         verify(staged, op.toSha, op.to)
-                        moves += staged to appDir.resolve(op.to).requireSafe(appDir)
+                        moves += staged to rootDir.resolve(op.to).requireSafe(rootDir)
                         if (op.from != op.to) deletions.add(base)
                     }
 
@@ -132,10 +133,10 @@ internal object DesktopDeltaPatch {
                             Files.copy(input, staged, StandardCopyOption.REPLACE_EXISTING)
                         }
                         verify(staged, op.toSha, op.to)
-                        moves += staged to appDir.resolve(op.to).requireSafe(appDir)
+                        moves += staged to rootDir.resolve(op.to).requireSafe(rootDir)
                     }
 
-                    Op.DELETE -> deletions.add(appDir.resolve(op.from).requireSafe(appDir))
+                    Op.DELETE -> deletions.add(rootDir.resolve(op.from).requireSafe(rootDir))
 
                     else -> error("unknown delta operation '${op.op}'")
                 }
@@ -144,7 +145,7 @@ internal object DesktopDeltaPatch {
                 moves = moves,
                 deletions = deletions,
                 stagingDir = stagingDir,
-                appDir = appDir
+                rootDir = rootDir
             )
         }
     }
@@ -159,7 +160,7 @@ internal object DesktopDeltaPatch {
     /** Guards against a manifest path escaping the directory it is meant to write into. */
     private fun Path.requireSafe(root: Path): Path {
         val normalized = normalize()
-        check(normalized.startsWith(root.normalize())) { "delta bundle path escapes the app directory" }
+        check(normalized.startsWith(root.normalize())) { "delta bundle path escapes the installation" }
         return normalized
     }
 

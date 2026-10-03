@@ -57,3 +57,22 @@ func TestDataEndOfUnsignedPe(t *testing.T) {
 		t.Fatalf("dataEnd = %d, want file size %d", got, info.Size())
 	}
 }
+
+func TestWithoutJavaOptions(t *testing.T) {
+	in := []string{"PATH=x", "java_tool_options=-XX:+UseConcMarkSweepGC", "_JAVA_OPTIONS=-Xmx1g", "JDK_JAVA_OPTIONS=-Xss1m", "JAVA_HOME=jdk8"}
+	got := withoutJavaOptions(in)
+	if len(got) != 2 || got[0] != in[0] || got[1] != in[4] {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLaunchEnvCarriesLauncherPath(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Skip(err)
+	}
+	got := launchEnv([]string{"PATH=x", "JAVA_TOOL_OPTIONS=-Xmx1g"})
+	if len(got) != 2 || got[0] != "PATH=x" || got[1] != portableExeEnv+"="+self {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -24,6 +24,19 @@ object DesktopRuntimeMode {
 
     const val MARKER_FILE_NAME = ".portable"
 
+    /** Set by the portable launcher to the path of the .exe the user started (see portable-launcher). */
+    const val PORTABLE_EXE_ENV = "YPTUN_PORTABLE_EXE"
+
+    /**
+     * The portable .exe the user double-clicked - the file a self-update has to replace, since the
+     * app itself runs from the copy the launcher unpacked. Null when unknown (a launcher older than
+     * this variable, or the portable was unpacked by hand).
+     */
+    fun portableExecutable(): Path? = System.getenv(PORTABLE_EXE_ENV)
+        ?.takeIf { it.isNotBlank() }
+        ?.let { runCatching { Path(it) }.getOrNull() }
+        ?.takeIf { Files.isRegularFile(it) }
+
     private val isWindows: Boolean =
         System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT).contains("win")
 

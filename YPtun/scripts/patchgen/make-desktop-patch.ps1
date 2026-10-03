@@ -8,13 +8,13 @@
   A desktop app image is ~160 MB, but only a handful of files change between releases: jpackage
   flattens every dependency into <install>/app/ as its own jar, our two jars (desktopApp-*.jar with
   the native cores, sharedUI-jvm-*.jar) are the ones that move, and YPtun.cfg changes with them
-  because it names the classpath by exact filename. runtime/ (the bundled JRE) and the launcher do
-  not change - if they DO, this script refuses to produce a bundle and the release simply ships the
-  full installer.
+  because it names the classpath by exact filename. The launcher (YPtun.exe) changes on EVERY version
+  as well - jpackage bakes the app version into its resources - so the bundle covers the whole image
+  (paths relative to the image root: app/x.jar, YPtun.exe, runtime/...). A changed jar becomes a
+  File-by-File patch, everything else that changed is carried whole, removed files are deleted.
 
-  Output: YPtun-delta-<FromVer>-<ToVer>-<Target>.patch - a ZIP holding manifest.json plus one
-  payload per operation (a gzip File-by-File v1 patch for a changed jar, the raw file for a new
-  one). Every operation carries the SHA-256 of what it expects and what it produces, so the app
+  Output: YPtun-delta-<FromVer>-<ToVer>-<Target>-<base hash>.patch - a ZIP holding manifest.json plus
+  one payload per operation (a gzip File-by-File v1 patch for a changed jar, the raw file otherwise). Every operation carries the SHA-256 of what it expects and what it produces, so the app
   refuses to apply it to anything but the exact build it was generated against, and refuses any
   rebuilt file that isn't byte-identical to the published one.
 
@@ -53,10 +53,8 @@ if (-not (Test-Path (Join-Path $out "patchgen\PatchGen.class"))) {
   if ($LASTEXITCODE -ne 0) { throw "javac failed" }
 }
 
-$oldApp = Join-Path $OldImage "app"
-$newApp = Join-Path $NewImage "app"
-if (-not (Test-Path $oldApp)) { throw "no app/ directory in $OldImage" }
-if (-not (Test-Path $newApp)) { throw "no app/ directory in $NewImage" }
+if (-not (Test-Path (Join-Path $OldImage "app"))) { throw "no app/ directory in $OldImage" }
+if (-not (Test-Path (Join-Path $NewImage "app"))) { throw "no app/ directory in $NewImage" }
 
 function Get-Sha([string]$path) { (Get-FileHash $path -Algorithm SHA256).Hash.ToLower() }
 
@@ -69,105 +67,90 @@ function Get-Stem([string]$name) {
   return ($base -replace '-[0-9a-f]{20,}$', '')
 }
 
-# Everything outside app/ must be identical - a JRE or launcher change needs the full installer.
-function Get-OutsideApp([string]$image) {
+# Every file of the image, keyed by its path relative to the image root with forward slashes - that is
+# the form the bundle (and the applier on the user's machine) uses.
+function Get-ImageFiles([string]$image) {
   # Get-Item, not Resolve-Path: it returns paths in the same form Get-ChildItem gives its children
   # (8.3 names like STANIS~1 expanded), so the prefix arithmetic below lines up.
   $imageFull = (Get-Item $image).FullName.TrimEnd('\')
-  $appFull = Join-Path $imageFull "app"
   $result = @{}
   Get-ChildItem $imageFull -Recurse -File | ForEach-Object {
-    if (-not $_.FullName.StartsWith($appFull, [StringComparison]::OrdinalIgnoreCase)) {
-      $result[$_.FullName.Substring($imageFull.Length).TrimStart('\')] = $_.FullName
-    }
+    $rel = $_.FullName.Substring($imageFull.Length).TrimStart('\').Replace('\', '/')
+    $result[$rel] = $_
   }
   return $result
 }
-$oldOutside = Get-OutsideApp $OldImage
-$newOutside = Get-OutsideApp $NewImage
-foreach ($rel in $newOutside.Keys) {
-  if (-not $oldOutside.ContainsKey($rel)) { throw "$rel is new outside app/ - ship the full installer" }
-  if ((Get-Sha $oldOutside[$rel]) -ne (Get-Sha $newOutside[$rel])) {
-    throw "$rel differs (runtime or launcher changed) - ship the full installer"
-  }
-}
-foreach ($rel in $oldOutside.Keys) {
-  if (-not $newOutside.ContainsKey($rel)) { throw "$rel was removed outside app/ - ship the full installer" }
-}
-
-# Only the top level of app/ is diffed (that is where jpackage puts every jar and YPtun.cfg).
-# jpackage also creates an empty app/resources; refuse rather than silently skip if it ever fills up.
-foreach ($dir in @($oldApp, $newApp)) {
-  $nested = Get-ChildItem $dir -Recurse -File | Where-Object { $_.DirectoryName -ne (Get-Item $dir).FullName }
-  if ($nested) { throw "app/ has files in subdirectories ($($nested[0].FullName)) - ship the full installer" }
-}
-
-$oldFiles = @{}
-Get-ChildItem $oldApp -File | ForEach-Object { $oldFiles[$_.Name] = $_ }
+$oldFiles = Get-ImageFiles $OldImage
+$newFiles = Get-ImageFiles $NewImage
 
 # app/YPtun.cfg names every jar by exact filename and those names carry a content hash, so it is the
 # cheap identity of a build. The bundle name carries the first 16 hex of its SHA-256; the app hashes
 # its own YPtun.cfg and skips a bundle generated against a different image instead of downloading it
 # to find out. Keep in sync with AppUpdateService.BASE_HASH_LENGTH / installedDesktopFingerprint().
-$oldCfg = @($oldFiles.Values | Where-Object { $_.Name -like "*.cfg" })
-if ($oldCfg.Count -ne 1) { throw "expected exactly one .cfg in $oldApp, found $($oldCfg.Count)" }
-$baseSha = Get-Sha $oldCfg[0].FullName
+$oldCfg = @($oldFiles.Keys | Where-Object { $_ -like "app/*.cfg" -and $_.IndexOf('/', 4) -lt 0 })
+if ($oldCfg.Count -ne 1) { throw "expected exactly one app/*.cfg in $OldImage, found $($oldCfg.Count)" }
+$baseSha = Get-Sha $oldFiles[$oldCfg[0]].FullName
 $baseTag = $baseSha.Substring(0, 16)
-$newFiles = @{}
-Get-ChildItem $newApp -File | ForEach-Object { $newFiles[$_.Name] = $_ }
+
+# Old top-level app/ jars by stem, for pairing desktopApp-<oldhash>.jar with desktopApp-<newhash>.jar.
+$oldJarByStem = @{}
+foreach ($rel in $oldFiles.Keys) {
+  if ($rel -like "app/*.jar" -and $rel.IndexOf('/', 4) -lt 0) {
+    $oldJarByStem[(Get-Stem $oldFiles[$rel].Name)] = $rel
+  }
+}
 
 $work = Join-Path $env:TEMP ("yptun-delta-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $work | Out-Null
 $ops = @()
 $index = 0
+$patchedOld = @{}
 
-foreach ($name in $newFiles.Keys) {
-  $new = $newFiles[$name]
+foreach ($rel in ($newFiles.Keys | Sort-Object)) {
+  $new = $newFiles[$rel]
   $newSha = Get-Sha $new.FullName
-  if ($oldFiles.ContainsKey($name) -and (Get-Sha $oldFiles[$name].FullName) -eq $newSha) { continue }
+  if ($oldFiles.ContainsKey($rel) -and (Get-Sha $oldFiles[$rel].FullName) -eq $newSha) { continue }
 
-  $stem = Get-Stem $name
-  $match = $null
-  foreach ($oldName in $oldFiles.Keys) {
-    if ((Get-Stem $oldName) -eq $stem) { $match = $oldFiles[$oldName]; break }
+  $matchRel = $null
+  if ($rel -like "app/*.jar" -and $rel.IndexOf('/', 4) -lt 0) {
+    $stem = Get-Stem $new.Name
+    if ($oldJarByStem.ContainsKey($stem)) { $matchRel = $oldJarByStem[$stem] }
   }
 
-  if ($null -ne $match -and $name -like "*.jar") {
+  if ($null -ne $matchRel) {
+    $match = $oldFiles[$matchRel]
     $payload = "p$index"; $index++
     $gz = Join-Path $work $payload
     & $java -Xmx2g -cp $out patchgen.PatchGen $match.FullName $new.FullName $gz | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "patch generation failed for $name" }
+    if ($LASTEXITCODE -ne 0) { throw "patch generation failed for $rel" }
     # Round-trip every patch before it can reach a user.
     $recon = Join-Path $work "recon.tmp"
     & $java -Xmx2g -cp $out patchgen.PatchApply $match.FullName $gz $recon | Out-Null
-    if ((Get-Sha $recon) -ne $newSha) { throw "ROUND-TRIP MISMATCH for $name - do NOT upload" }
+    if ((Get-Sha $recon) -ne $newSha) { throw "ROUND-TRIP MISMATCH for $rel - do NOT upload" }
     Remove-Item $recon -Force
+    $patchedOld[$matchRel] = $true
     $ops += [ordered]@{
-      op = "patch"; from = $match.Name; to = $name
+      op = "patch"; from = $matchRel; to = $rel
       fromSha = (Get-Sha $match.FullName); toSha = $newSha; payload = $payload
     }
-    Write-Host ("  patch  {0} -> {1} ({2} KB)" -f $match.Name, $name, [math]::Round((Get-Item $gz).Length / 1KB))
+    Write-Host ("  patch  {0} -> {1} ({2} KB)" -f $matchRel, $rel, [math]::Round((Get-Item $gz).Length / 1KB))
   } else {
     $payload = "p$index"; $index++
     Copy-Item $new.FullName (Join-Path $work $payload)
-    $ops += [ordered]@{ op = "add"; to = $name; toSha = $newSha; payload = $payload }
-    Write-Host ("  add    {0} ({1} KB)" -f $name, [math]::Round($new.Length / 1KB))
+    $ops += [ordered]@{ op = "add"; to = $rel; toSha = $newSha; payload = $payload }
+    Write-Host ("  add    {0} ({1} KB)" -f $rel, [math]::Round($new.Length / 1KB))
   }
 }
 
-foreach ($name in $oldFiles.Keys) {
-  if ($newFiles.ContainsKey($name)) { continue }
-  $stem = Get-Stem $name
-  $replaced = $false
-  foreach ($op in $ops) { if ($op.op -eq "patch" -and $op.from -eq $name) { $replaced = $true; break } }
-  if ($replaced) { continue }
-  $ops += [ordered]@{ op = "delete"; from = $name }
-  Write-Host ("  delete {0}" -f $name)
+foreach ($rel in ($oldFiles.Keys | Sort-Object)) {
+  if ($newFiles.ContainsKey($rel) -or $patchedOld.ContainsKey($rel)) { continue }
+  $ops += [ordered]@{ op = "delete"; from = $rel }
+  Write-Host ("  delete {0}" -f $rel)
 }
 
 if ($ops.Count -eq 0) { throw "the two app images are identical - nothing to publish" }
 
-$manifest = [ordered]@{ format = 2; from = $FromVer; to = $ToVer; target = $Target; ops = $ops }
+$manifest = [ordered]@{ format = 3; from = $FromVer; to = $ToVer; target = $Target; ops = $ops }
 $manifestPath = Join-Path $work "manifest.json"
 # WriteAllText with a BOM-less encoder: PowerShell 5.1's -Encoding utf8 emits a BOM, which a strict
 # JSON parser rejects.
@@ -188,4 +171,4 @@ Remove-Item $work -Recurse -Force
 Write-Host ""
 Write-Host "OK  $bundle"
 Write-Host ("    base image YPtun.cfg sha256 $baseSha")
-Write-Host ("    app image $imageMb MB -> bundle $bundleMb MB  ({0} operation(s), every patch round-trip verified)" -f $ops.Count)
+Write-Host ("    image $imageMb MB -> bundle $bundleMb MB  ({0} operation(s), every patch round-trip verified)" -f $ops.Count)

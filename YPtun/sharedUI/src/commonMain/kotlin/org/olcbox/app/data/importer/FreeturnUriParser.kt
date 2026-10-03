@@ -1,7 +1,12 @@
 package org.olcbox.app.data.importer
 
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.Json
+
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
@@ -46,6 +51,9 @@ object FreeturnUriParser {
         if (!trimmed.startsWith(SCHEME, ignoreCase = true)) return null
 
         var s = trimmed.substring(SCHEME.length)
+
+        // 0. new wire format freeturn://<base64url(json)> (carries cid, spc, kcp, wg, ...).
+        parseWire(trimmed, s)?.let { return it }
 
         // 1. comment after the last '$'
         var comment = ""
@@ -93,6 +101,25 @@ object FreeturnUriParser {
             uri = trimmed, serverIp = serverIp, serverPort = serverPort,
             listenPort = wg.endpointPort, mode = "udp",
             wgOutboundJson = wg.outboundJson, exitProxyLink = "", comment = cm,
+        )
+    }
+
+    /** New wire format: base64url(JSON). The link is passed verbatim to the Go client, which owns `cid` etc. */
+    private fun parseWire(uri: String, payload: String): FreeturnLink? {
+        val obj = runCatching {
+            Json.parseToJsonElement(SubscriptionDecoder.decodeBase64Chunk(payload) ?: return null).jsonObject
+        }.getOrNull() ?: return null
+        fun str(k: String) = obj[k]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        val peer = str("peer")
+        if (peer.isBlank() || str("provider").isBlank()) return null
+        val (serverIp, serverPort) = UriCodec.splitHostPort(peer) ?: return null
+        val wgRaw = str("wg")
+        val wgConf = if (wgRaw.contains('[')) wgRaw else SubscriptionDecoder.decodeBase64Chunk(wgRaw).orEmpty()
+        val wg = parseWgConf(wgConf) ?: return null
+        return FreeturnLink(
+            uri = uri, serverIp = serverIp, serverPort = serverPort,
+            listenPort = wg.endpointPort, mode = "udp",
+            wgOutboundJson = wg.outboundJson, exitProxyLink = "", comment = str("name"),
         )
     }
 

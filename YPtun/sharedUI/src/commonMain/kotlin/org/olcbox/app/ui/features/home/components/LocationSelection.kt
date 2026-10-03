@@ -42,8 +42,11 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +69,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.olcbox.app.data.model.CustomGroup
+import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
@@ -97,6 +101,8 @@ fun LazyListScope.locationSelectorContent(
     onSetSubscriptionAutoUpdate: (subscriptionUrl: String, enabled: Boolean) -> Unit = { _, _ -> },
     // Re-download a single subscription now (keyed by its URL), triggered from its overflow menu.
     onRefreshSubscription: (subscriptionUrl: String) -> Unit = {},
+    // Give a subscription (keyed by its URL) the user's own name; blank restores the panel's.
+    onRenameSubscription: (subscriptionUrl: String, name: String) -> Unit = { _, _ -> },
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -268,6 +274,8 @@ fun LazyListScope.locationSelectorContent(
                                 groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
                             },
                             onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                            currentName = group.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
+                            onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) },
                             subscriptionPageUrl = groupWebPageUrl
@@ -430,6 +438,8 @@ fun LazyListScope.locationSelectorContent(
                                                     mSubUrl?.let { onSetSubscriptionAutoUpdate(it, !mAutoUpdate) }
                                                 },
                                                 onRefreshSubscription = mSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                                                currentName = mGroup.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
+                                                onRename = mSubUrl?.let { url -> { name -> onRenameSubscription(url, name) } },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) },
                                                 subscriptionPageUrl = mWebPageUrl
@@ -809,13 +819,39 @@ private fun SubscriptionGroupMenu(
     onToggleAutoUpdate: () -> Unit,
     // Non-null only when this group is backed by a subscription URL we can re-download.
     onRefreshSubscription: (() -> Unit)? = null,
+    // Current visible name (prefills the dialog) and the rename action; null hides the menu entry.
+    currentName: String = "",
+    onRename: ((String) -> Unit)? = null,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit,
     subscriptionPageUrl: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+
+    if (renaming && onRename != null) {
+        var draft by remember { mutableStateOf(currentName) }
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            title = { Text(s.renameSubscription) },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    singleLine = true,
+                    supportingText = { Text(s.renameSubscriptionHint) }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onRename(draft); renaming = false }) { Text(s.save) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renaming = false }) { Text(s.cancel) }
+            }
+        )
+    }
 
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -838,6 +874,16 @@ private fun SubscriptionGroupMenu(
                     onClick = {
                         runCatching { uriHandler.openUri(subscriptionPageUrl) }
                         expanded = false
+                    }
+                )
+            }
+            if (onRename != null) {
+                DropdownMenuItem(
+                    text = { Text(s.renameSubscription) },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        renaming = true
                     }
                 )
             }
@@ -1490,12 +1536,16 @@ internal fun LocationItem.folderMemberKey(): String =
         CustomGroup.locMember(storageId)
     }
 
+/** What the user sees as the subscription's name: their own rename, else the panel's. */
+private fun SubscriptionMetadata.displayName(): String? =
+    customName?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() }
+
 private fun LocationItem.subscriptionTitle(): String {
     val subscription = metadata?.subscription
 
     return listOfNotNull(
         subscription?.icon?.takeIf { it.isNotBlank() },
-        subscription?.name?.takeIf { it.isNotBlank() }
+        subscription?.displayName()
             ?: org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).subscriptionsSection
     ).joinToString(" ")
 }

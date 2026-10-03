@@ -54,6 +54,9 @@ const (
 	// (org.olcbox.app.desktop.DesktopRuntimeMode).
 	portableMarker = ".portable"
 	readyMarker    = ".ready"
+	// Tells the app which file the user actually double-clicked, so a self-update can replace THAT
+	// file (the app itself runs from the unpacked copy under %LOCALAPPDATA%, not from this .exe).
+	portableExeEnv = "YPTUN_PORTABLE_EXE"
 )
 
 func main() {
@@ -266,12 +269,39 @@ func extract(entry *zip.File, root string) error {
 	return err
 }
 
+// withoutJavaOptions drops the env vars every JVM silently prepends its options from. The app
+// ships its own JRE 21, but a machine with an old Java 8 stack often still has something like
+// JAVA_TOOL_OPTIONS=-XX:+UseConcMarkSweepGC set - removed in JDK 14, so the bundled JVM refuses to
+// start and jpackage reports a bare "Failed to launch JVM".
+func withoutJavaOptions(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		switch strings.ToUpper(name) {
+		case "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// launchEnv is the environment the app starts with: no JVM option variables, plus the path of this
+// launcher so the app can replace it on update.
+func launchEnv(env []string) []string {
+	env = withoutJavaOptions(env)
+	if self, err := os.Executable(); err == nil {
+		env = append(env, portableExeEnv+"="+self)
+	}
+	return env
+}
+
 // launch starts the app detached and returns immediately: the launcher must not linger as a parent
 // process (it would keep a console-less stub alive for the whole session and show up in the tree).
 func launch(exe string) error {
 	attr := &os.ProcAttr{
 		Dir:   filepath.Dir(exe),
-		Env:   os.Environ(),
+		Env:   launchEnv(os.Environ()),
 		Files: []*os.File{nil, nil, nil},
 		Sys:   &syscall.SysProcAttr{HideWindow: true},
 	}

@@ -74,6 +74,9 @@ interface Strings {
     val groupSortByPing: String
     val groupAutoUpdate: String
     val refreshThisSubscription: String
+    val renameSubscription: String
+    val renameSubscriptionHint: String
+    val exitApp: String
     val visitSubscriptionPage: String
     // VPS installer SSH auth (password vs key).
     val sshAuthUseKey: String
@@ -679,6 +682,7 @@ interface Strings {
     val pingResultLabel: String
     val pingResultTime: String
     val pingResultIcon: String
+    val pingResultBoth: String
 
     // QR scanner
     val scanQrTitle: String
@@ -761,6 +765,9 @@ object RuStrings : Strings {
     override val groupSortByPing = "Сортировать по пингу"
     override val groupAutoUpdate = "Автообновление"
     override val refreshThisSubscription = "Обновить подписку"
+    override val renameSubscription = "Переименовать"
+    override val renameSubscriptionHint = "Пустое название вернёт исходное"
+    override val exitApp = "Выход"
     override val visitSubscriptionPage = "Посетить страницу подписки"
     override val sshAuthUseKey = "Вход по SSH-ключу"
     override val sshPasswordLabel = "Пароль SSH"
@@ -1329,6 +1336,7 @@ object RuStrings : Strings {
     override val pingResultLabel = "Результат пинга"
     override val pingResultTime = "Время"
     override val pingResultIcon = "Значок"
+    override val pingResultBoth = "Значок и значение"
     override val scanQrTitle = "Сканирование QR"
     override val readyToScan = "Готово к сканированию"
     override val subscriptionOrLocationUri = "Подписка или URI локации"
@@ -1400,6 +1408,9 @@ object EnStrings : Strings {
     override val groupSortByPing = "Sort by ping"
     override val groupAutoUpdate = "Auto-update"
     override val refreshThisSubscription = "Update subscription"
+    override val renameSubscription = "Rename"
+    override val renameSubscriptionHint = "An empty name restores the original"
+    override val exitApp = "Quit"
     override val visitSubscriptionPage = "Visit subscription page"
     override val sshAuthUseKey = "Sign in with SSH key"
     override val sshPasswordLabel = "SSH password"
@@ -1968,6 +1979,7 @@ object EnStrings : Strings {
     override val pingResultLabel = "Ping result"
     override val pingResultTime = "Time"
     override val pingResultIcon = "Icon"
+    override val pingResultBoth = "Icon + value"
     override val scanQrTitle = "Scan QR"
     override val readyToScan = "Ready to scan"
     override val subscriptionOrLocationUri = "Subscription or location URI"
@@ -2039,6 +2051,9 @@ object FaStrings : Strings {
     override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
     override val groupAutoUpdate = "به‌روزرسانی خودکار"
     override val refreshThisSubscription = "به‌روزرسانی اشتراک"
+    override val renameSubscription = "تغییر نام"
+    override val renameSubscriptionHint = "نام خالی، نام اصلی را بازمی‌گرداند"
+    override val exitApp = "خروج"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
     override val sshAuthUseKey = "ورود با کلید SSH"
     override val sshPasswordLabel = "رمز SSH"
@@ -2607,6 +2622,7 @@ object FaStrings : Strings {
     override val pingResultLabel = "نتیجهٔ پینگ"
     override val pingResultTime = "زمان"
     override val pingResultIcon = "نشان"
+    override val pingResultBoth = "نشان و مقدار"
     override val scanQrTitle = "پویش QR"
     override val readyToScan = "آمادهٔ پویش"
     override val subscriptionOrLocationUri = "اشتراک یا URI موقعیت"
@@ -2678,6 +2694,9 @@ object ZhStrings : Strings {
     override val groupSortByPing = "按延迟排序"
     override val groupAutoUpdate = "自动更新"
     override val refreshThisSubscription = "更新订阅"
+    override val renameSubscription = "重命名"
+    override val renameSubscriptionHint = "留空则恢复原名称"
+    override val exitApp = "退出"
     override val visitSubscriptionPage = "打开订阅页面"
     override val sshAuthUseKey = "使用 SSH 密钥登录"
     override val sshPasswordLabel = "SSH 密码"
@@ -3246,6 +3265,7 @@ object ZhStrings : Strings {
     override val pingResultLabel = "测试结果"
     override val pingResultTime = "时间"
     override val pingResultIcon = "图标"
+    override val pingResultBoth = "图标和数值"
     override val scanQrTitle = "扫描二维码"
     override val readyToScan = "准备扫描"
     override val subscriptionOrLocationUri = "订阅或节点 URI"
