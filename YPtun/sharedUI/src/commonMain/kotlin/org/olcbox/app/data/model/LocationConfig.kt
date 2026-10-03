@@ -1153,7 +1153,14 @@ data class SubscriptionMetadata(
      * same behaviour as Happ. Null when the panel doesn't set it.
      */
     @SerialName("provider_id")
-    val providerId: String? = null
+    val providerId: String? = null,
+    /**
+     * Name the USER gave this subscription. Shown instead of the panel's [name] but kept apart from
+     * it: [name] feeds the group key (folders, pinning) and is overwritten by every refresh, so
+     * renaming it in place would both break grouping and be undone by the next update.
+     */
+    @SerialName("custom_name")
+    val customName: String? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -1171,7 +1178,8 @@ data class SubscriptionMetadata(
             supportUrl = supportUrl.cleanMetadataValue(),
             webPageUrl = webPageUrl.cleanMetadataValue(),
             announce = announce.cleanMetadataValue(),
-            providerId = providerId.cleanMetadataValue()
+            providerId = providerId.cleanMetadataValue(),
+            customName = customName.cleanMetadataValue()
         )
     }
 

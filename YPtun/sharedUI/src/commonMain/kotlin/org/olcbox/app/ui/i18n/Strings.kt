@@ -74,6 +74,9 @@ interface Strings {
     val groupSortByPing: String
     val groupAutoUpdate: String
     val refreshThisSubscription: String
+    val renameSubscription: String
+    val renameSubscriptionHint: String
+    val exitApp: String
     val visitSubscriptionPage: String
     // VPS installer SSH auth (password vs key).
     val sshAuthUseKey: String
@@ -762,6 +765,9 @@ object RuStrings : Strings {
     override val groupSortByPing = "Сортировать по пингу"
     override val groupAutoUpdate = "Автообновление"
     override val refreshThisSubscription = "Обновить подписку"
+    override val renameSubscription = "Переименовать"
+    override val renameSubscriptionHint = "Пустое название вернёт исходное"
+    override val exitApp = "Выход"
     override val visitSubscriptionPage = "Посетить страницу подписки"
     override val sshAuthUseKey = "Вход по SSH-ключу"
     override val sshPasswordLabel = "Пароль SSH"
@@ -1402,6 +1408,9 @@ object EnStrings : Strings {
     override val groupSortByPing = "Sort by ping"
     override val groupAutoUpdate = "Auto-update"
     override val refreshThisSubscription = "Update subscription"
+    override val renameSubscription = "Rename"
+    override val renameSubscriptionHint = "An empty name restores the original"
+    override val exitApp = "Quit"
     override val visitSubscriptionPage = "Visit subscription page"
     override val sshAuthUseKey = "Sign in with SSH key"
     override val sshPasswordLabel = "SSH password"
@@ -2042,6 +2051,9 @@ object FaStrings : Strings {
     override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
     override val groupAutoUpdate = "به‌روزرسانی خودکار"
     override val refreshThisSubscription = "به‌روزرسانی اشتراک"
+    override val renameSubscription = "تغییر نام"
+    override val renameSubscriptionHint = "نام خالی، نام اصلی را بازمی‌گرداند"
+    override val exitApp = "خروج"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
     override val sshAuthUseKey = "ورود با کلید SSH"
     override val sshPasswordLabel = "رمز SSH"
@@ -2682,6 +2694,9 @@ object ZhStrings : Strings {
     override val groupSortByPing = "按延迟排序"
     override val groupAutoUpdate = "自动更新"
     override val refreshThisSubscription = "更新订阅"
+    override val renameSubscription = "重命名"
+    override val renameSubscriptionHint = "留空则恢复原名称"
+    override val exitApp = "退出"
     override val visitSubscriptionPage = "打开订阅页面"
     override val sshAuthUseKey = "使用 SSH 密钥登录"
     override val sshPasswordLabel = "SSH 密码"

@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.rounded.MoreVert
@@ -36,7 +37,9 @@ fun HomeScreenAppBar(
     onDeleteUnreachable: () -> Unit = {},
     onDeleteDuplicates: () -> Unit = {},
     onDeleteAllSubscriptions: () -> Unit = {},
-    onDeleteAllConfigs: () -> Unit = {}
+    onDeleteAllConfigs: () -> Unit = {},
+    // Desktop only: a way out of the app from the main window (the tray menu can be unavailable).
+    onExitClick: (() -> Unit)? = null
 ) {
     var overflowExpanded by remember { mutableStateOf(false) }
     CenterAlignedTopAppBar(
@@ -82,6 +85,15 @@ fun HomeScreenAppBar(
                     contentDescription = "Add configuration",
                     tint = MaterialTheme.colorScheme.onSurface
                 )
+            }
+            if (onExitClick != null) {
+                IconButton(onClick = onExitClick) {
+                    Icon(
+                        imageVector = Icons.Outlined.PowerSettingsNew,
+                        contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.exitApp,
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
             if (showOverflowMenu) {
                 IconButton(onClick = { overflowExpanded = true }) {

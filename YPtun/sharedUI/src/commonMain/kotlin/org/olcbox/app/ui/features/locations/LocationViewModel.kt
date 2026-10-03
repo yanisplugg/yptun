@@ -1004,6 +1004,14 @@ class LocationViewModel(
         }
     }
 
+    /** Gives a subscription (by URL) the user's own name — blank restores the panel's — then reloads. */
+    fun renameSubscription(subscriptionUrl: String, name: String) {
+        viewModelScope.launch {
+            locationsRepository.setSubscriptionCustomName(subscriptionUrl, name)
+            loadLocations()
+        }
+    }
+
     /** Deletes several locations at once (e.g. all configs of one subscription) in a single rewrite. */
     fun deleteLocations(ids: List<String>, onComplete: () -> Unit = {}) {
         viewModelScope.launch {

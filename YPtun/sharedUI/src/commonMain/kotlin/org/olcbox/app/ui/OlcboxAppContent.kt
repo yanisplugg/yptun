@@ -67,7 +67,9 @@ fun OlcboxAppContent(
     onToggleFolderCollapsed: (String) -> Unit = {},
     // Desktop wide-window layout (locations list in a left pane) + the desktop mode switch slot.
     wideLayout: Boolean = false,
-    extraConnectContent: (@Composable () -> Unit)? = null
+    extraConnectContent: (@Composable () -> Unit)? = null,
+    // Desktop only: shows an exit button in the home screen's top bar.
+    onExitClick: (() -> Unit)? = null
 ) {
     val homeScrollState = rememberLazyListState()
 
@@ -159,7 +161,8 @@ fun OlcboxAppContent(
                     onToggleFolderPinned = onToggleFolderPinned,
                     onToggleFolderCollapsed = onToggleFolderCollapsed,
                     wideLayout = wideLayout,
-                    extraConnectContent = extraConnectContent
+                    extraConnectContent = extraConnectContent,
+                    onExitClick = onExitClick
                 )
             }
 
