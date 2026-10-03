@@ -115,7 +115,7 @@ class JvmUpdateInstaller(
         delta: AppUpdateAsset,
         onProgress: (Float) -> Unit
     ): DesktopUpdateOutcome.RestartRequired? = withContext(Dispatchers.IO) {
-        val appDir = DesktopAppImage.appDir()
+        val rootDir = DesktopAppImage.installDir()
             ?: error("not running from an installed app image (portable or development run)")
         val bundle = download(delta, onProgress)
         // Staged INSIDE the app directory when we may write there, so every commit is a rename on
@@ -125,14 +125,14 @@ class JvmUpdateInstaller(
         // directory instead and let the elevated swapper move the files in; a cross-volume `mv` is
         // a copy, but the commit order already tolerates a half-finished swap: new jars carry new
         // names, the classpath file moves last, and old files are removed only after that.
-        val stagingDir = if (Files.isWritable(appDir)) {
-            appDir.resolve(".yptun-update")
+        val stagingDir = if (Files.isWritable(rootDir)) {
+            rootDir.resolve(".yptun-update")
         } else {
             directory.resolve("staging")
         }
         val plan = try {
             DesktopDeltaPatch.stage(
-                appDir = appDir,
+                rootDir = rootDir,
                 bundle = bundle,
                 stagingDir = stagingDir,
                 tempDir = directory.resolve("patch-tmp")

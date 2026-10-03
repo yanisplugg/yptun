@@ -36,7 +36,7 @@ internal object DesktopSelfUpdate {
         // The app directory is what the swapper writes into. Reading it off the staging directory
         // was only correct while staging lived inside the installation - which is exactly what a
         // root-owned /opt (deb) or Program Files install does not allow.
-        start(script, needsElevation = !Files.isWritable(plan.appDir))
+        start(script, needsElevation = !Files.isWritable(plan.rootDir))
     }
 
     /**
@@ -128,7 +128,8 @@ internal object DesktopSelfUpdate {
     ): Path {
         val script = scriptDir().resolve("yptun-apply-update.cmd")
         val moves = plan.moves.joinToString("\r\n") { (from, to) ->
-            "move /y \"${from.toAbsolutePath()}\" \"${to.toAbsolutePath()}\" >nul"
+            "if not exist \"${to.toAbsolutePath().parent}\" mkdir \"${to.toAbsolutePath().parent}\"\r\n" +
+                "move /y \"${from.toAbsolutePath()}\" \"${to.toAbsolutePath()}\" >nul"
         }
         val deletes = plan.deletions.joinToString("\r\n") { path ->
             "del /f /q \"${path.toAbsolutePath()}\" >nul 2>&1"
@@ -161,7 +162,7 @@ internal object DesktopSelfUpdate {
     ): Path {
         val script = scriptDir().resolve("yptun-apply-update.sh")
         val moves = plan.moves.joinToString("\n") { (from, to) ->
-            "mv -f \"${from.toAbsolutePath()}\" \"${to.toAbsolutePath()}\" || exit 1"
+            "mkdir -p \"${to.toAbsolutePath().parent}\" && mv -f \"${from.toAbsolutePath()}\" \"${to.toAbsolutePath()}\" || exit 1"
         }
         val deletes = plan.deletions.joinToString("\n") { path ->
             "rm -f \"${path.toAbsolutePath()}\""
