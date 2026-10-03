@@ -1904,7 +1904,6 @@ object XrayConfig {
                     put("hMaxReusableSecs", "1800-3000")
                 } else buildJsonObject {
                     put("maxConnections", "2-4")
-                    put("maxConcurrency", "8-16")
                     put("cMaxReuseTimes", "64-128")
                     put("hMaxRequestTimes", "600-900")
                     put("hMaxReusableSecs", "1800-3000")
