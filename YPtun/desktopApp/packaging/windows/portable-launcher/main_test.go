@@ -65,3 +65,14 @@ func TestWithoutJavaOptions(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestLaunchEnvCarriesLauncherPath(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Skip(err)
+	}
+	got := launchEnv([]string{"PATH=x", "JAVA_TOOL_OPTIONS=-Xmx1g"})
+	if len(got) != 2 || got[0] != "PATH=x" || got[1] != portableExeEnv+"="+self {
+		t.Fatalf("got %q", got)
+	}
+}

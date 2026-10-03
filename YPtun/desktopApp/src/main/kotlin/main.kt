@@ -157,7 +157,9 @@ private class DesktopAppDependencies {
     val updateService = AppUpdateService(
         deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource),
         // Picks the delta bundle generated against THIS installed image (see installedDesktopFingerprint).
-        installedFingerprint = { installedDesktopFingerprint() }
+        installedFingerprint = { installedDesktopFingerprint() },
+        // A portable updates by replacing its own .exe, so it must be offered the portable asset.
+        preferPortableAsset = org.olcbox.app.desktop.DesktopRuntimeMode.isPortable
     )
     val updateSettingsStore = JvmUpdateSettingsStore()
     val updateInstaller = JvmUpdateInstaller()
