@@ -208,6 +208,12 @@ data class AppBehaviorSettings(
      * whole AppBehaviorSettings to defaults on first load). Do not re-introduce a UI for it.
      */
     val hideTelegramProxyNotification: Boolean = false,
+    /**
+     * Desktop Proxy mode only: point the OS system proxy (WinINET / GNOME / KDE / macOS) at our local
+     * proxy. ON (default) = the long-standing behaviour. OFF = only the local SOCKS5/HTTP listener is
+     * started and the system settings are never touched, so just the apps configured by hand use it.
+     */
+    val setSystemProxy: Boolean = true,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"

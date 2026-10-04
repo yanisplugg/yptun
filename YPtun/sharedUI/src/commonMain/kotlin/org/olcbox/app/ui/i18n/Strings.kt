@@ -380,6 +380,9 @@ interface Strings {
     val securedSocksProxy: String
     val securedSocksProxySubtitle: String
     val securedSocksProxyOff: String
+    val setSystemProxyTitle: String
+    val setSystemProxyOn: String
+    val setSystemProxyOff: String
     val splitTunneling: String
     val routingBehavior: String
     val appsUsingYptun: String
@@ -1061,6 +1064,9 @@ object RuStrings : Strings {
     override val securedSocksProxy = "Защищённый SOCKS-прокси"
     override val securedSocksProxySubtitle = "Логин и пароль на своём порту"
     override val securedSocksProxyOff = "Выключен · 127.0.0.1:8080 без авторизации"
+    override val setSystemProxyTitle = "Системный прокси"
+    override val setSystemProxyOn = "Прокси прописывается в систему — браузеры и приложения идут через него сами"
+    override val setSystemProxyOff = "Система не затрагивается — укажите адрес прокси только в нужных приложениях"
     override val splitTunneling = "Раздельное туннелирование"
     override val routingBehavior = "Поведение маршрутизации"
     override val appsUsingYptun = "Приложения через YPtun"
@@ -1704,6 +1710,9 @@ object EnStrings : Strings {
     override val securedSocksProxy = "Secured SOCKS proxy"
     override val securedSocksProxySubtitle = "Username and password on a port of your choosing"
     override val securedSocksProxyOff = "Off · 127.0.0.1:8080, no authentication"
+    override val setSystemProxyTitle = "System proxy"
+    override val setSystemProxyOn = "The proxy is set system-wide — browsers and apps use it automatically"
+    override val setSystemProxyOff = "System settings are left alone — point only the apps you want at the proxy address"
     override val splitTunneling = "Split Tunneling"
     override val routingBehavior = "Routing Behavior"
     override val appsUsingYptun = "Apps Using YPtun"
@@ -2347,6 +2356,9 @@ object FaStrings : Strings {
     override val securedSocksProxy = "پراکسی SOCKS محافظت‌شده"
     override val securedSocksProxySubtitle = "نام کاربری و رمز عبور روی پورت دلخواه"
     override val securedSocksProxyOff = "خاموش · 127.0.0.1:8080 بدون احراز هویت"
+    override val setSystemProxyTitle = "پروکسی سیستمی"
+    override val setSystemProxyOn = "پروکسی در کل سیستم تنظیم می‌شود — مرورگرها و برنامه‌ها خودکار از آن استفاده می‌کنند"
+    override val setSystemProxyOff = "تنظیمات سیستم دست‌نخورده می‌ماند — آدرس پروکسی را فقط در برنامه‌های دلخواه وارد کنید"
     override val splitTunneling = "تونل‌سازی تفکیکی"
     override val routingBehavior = "رفتار مسیریابی"
     override val appsUsingYptun = "برنامه‌های استفاده‌کننده از YPtun"
@@ -2990,6 +3002,9 @@ object ZhStrings : Strings {
     override val securedSocksProxy = "受保护的 SOCKS 代理"
     override val securedSocksProxySubtitle = "在自选端口上使用用户名和密码"
     override val securedSocksProxyOff = "已关闭 · 127.0.0.1:8080，无需认证"
+    override val setSystemProxyTitle = "系统代理"
+    override val setSystemProxyOn = "代理写入系统设置——浏览器和应用自动使用"
+    override val setSystemProxyOff = "不改动系统设置——仅在需要的应用中填写代理地址"
     override val splitTunneling = "分应用代理"
     override val routingBehavior = "分流行为"
     override val appsUsingYptun = "使用 YPtun 的应用"

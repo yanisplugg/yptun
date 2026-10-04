@@ -363,6 +363,8 @@ fun AppSettingsSheet(
                     enabled = enabled,
                     socksHost = proxySettings.host,
                     socksPort = proxySettings.port,
+                    setSystemProxy = appBehavior.setSystemProxy,
+                    onSetSystemProxyChanged = { onAppBehaviorChanged(appBehavior.copy(setSystemProxy = it)) },
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onModeSelected = onModeSelected
                 )
@@ -1135,6 +1137,8 @@ private fun ConnectionModeSettingsContent(
     enabled: Boolean,
     socksHost: String,
     socksPort: Int,
+    setSystemProxy: Boolean,
+    onSetSystemProxyChanged: (Boolean) -> Unit,
     onBack: () -> Unit,
     onModeSelected: (AndroidConnectionMode) -> Unit
 ) {
@@ -1164,6 +1168,18 @@ private fun ConnectionModeSettingsContent(
                     onClick = { onModeSelected(mode) }
                 )
             }
+        }
+
+        if (selectedMode == AndroidConnectionMode.Proxy) {
+            Spacer(Modifier.height(16.dp))
+            SettingsSwitchRow(
+                title = s.setSystemProxyTitle,
+                value = if (setSystemProxy) s.setSystemProxyOn else s.setSystemProxyOff,
+                icon = Icons.Rounded.Public,
+                checked = setSystemProxy,
+                enabled = enabled,
+                onCheckedChange = onSetSystemProxyChanged
+            )
         }
 
         Spacer(Modifier.height(16.dp))

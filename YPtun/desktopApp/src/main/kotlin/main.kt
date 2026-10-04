@@ -169,6 +169,7 @@ private class DesktopAppDependencies {
 
     val vpnManager = DesktopVpnManager(locationsRepository).also { manager ->
         manager.connectionModeProvider = { settings.connectionMode.value }
+        manager.setSystemProxyProvider = { settings.appBehavior.value.setSystemProxy }
         // Gate the 2s tunnel-counter sampling on the "speed on home" setting, so the default-off
         // toggle costs nothing and flipping it mid-session takes effect on the next tick.
         manager.speedSamplingProvider = { settings.appBehavior.value.showSpeedOnHome }
