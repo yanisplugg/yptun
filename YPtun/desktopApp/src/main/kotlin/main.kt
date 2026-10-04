@@ -377,7 +377,12 @@ private fun runApp(args: Array<String>) = application {
 
     fun checkUpdate(manual: Boolean) {
         scope.launch {
-            val previousSettings = updateSettings
+            // Desktop applies an update the moment it is fetched (delta swap / installer), so "downloaded"
+            // never means "installed": a download that opened nothing (old portable bug, cancelled UAC,
+            // closed installer) left the flag set and every later check said "latest already downloaded"
+            // while the app was still behind. Only the version comparison decides here; the stale flag is
+            // dropped (and persisted away below).
+            val previousSettings = updateSettings.copy(lastDownloadedUpdateVersion = null)
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             if (!manual && updateCheckedThisLaunch && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
@@ -436,10 +441,7 @@ private fun runApp(args: Array<String>) = application {
             )
             if (result.isSuccess) {
                 saveUpdateSettings(
-                    updateSettings.copy(
-                        lastSeenUpdateVersion = info.identity(),
-                        lastDownloadedUpdateVersion = info.identity()
-                    )
+                    updateSettings.copy(lastSeenUpdateVersion = info.identity(), lastDownloadedUpdateVersion = null)
                 )
                 updateOffer = null
                 updateAvailable = null
