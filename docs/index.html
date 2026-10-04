@@ -57,7 +57,16 @@ function pick(assets, {os, arm}) {
 
 (async () => {
   try {
-    const r = await (await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)).json();
+    // API первым (всегда свежий); под VPN он часто режется/упирается в лимит — тогда берём latest.json
+    // с того же домена (обновляется YPtun/scripts/update-download-page.ps1 после релиза).
+    let r;
+    try {
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
+      if (!res.ok) throw new Error(res.status);
+      r = await res.json();
+    } catch (e) {
+      r = await (await fetch("latest.json", {cache: "no-cache"})).json();
+    }
     // delta-патчи — служебные файлы автообновления, пользователю не нужны
     const assets = r.assets.filter((a) => !/\.patch(\.gz)?$/i.test(a.name) && !/delta/i.test(a.name));
     document.getElementById("ver").textContent = r.name || r.tag_name;
