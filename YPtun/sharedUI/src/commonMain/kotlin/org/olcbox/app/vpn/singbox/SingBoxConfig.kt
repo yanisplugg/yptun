@@ -733,6 +733,11 @@ object SingBoxConfig {
                 // rule_set definitions, merged from the profile + the toggles, de-duplicated by tag
                 // (a profile `geoip:ru` and the bypassRussia toggle both want a `geoip-ru` set, and a
                 // duplicate tag is a hard config error in sing-box).
+                // sing-box fetches remote rule-sets BEFORE its endpoints start, so a `proxy` that is (or dials
+                // through) a WireGuard endpoint fails with "WireGuard is not ready yet" and aborts the whole
+                // core (VK-TURN, #56). Those tunnels fetch over `direct`; the cache_file keeps the sets for later starts.
+                val ruleSetDetour =
+                    if (wireguardBase != null || mainIsWireguard) "direct" else SingBoxRouting.RULE_SET_DOWNLOAD_TAG
                 val mergedRuleSets = buildList {
                     // Rule-sets the embedded routing references (remote .srs) must be declared too.
                     embeddedRoute?.get("rule_set")
@@ -742,13 +747,13 @@ object SingBoxConfig {
                     // their rule-sets would be dead weight, and a same-tag set (geosite-ru!) would
                     // override the one the config actually asked for.
                     if (routingProfile != null && !hasEmbeddedRoute) {
-                        SingBoxRouting.ruleSets(routingProfile, singboxGeositeBase, singboxGeoipBase)
+                        SingBoxRouting.ruleSets(routingProfile, singboxGeositeBase, singboxGeoipBase, ruleSetDetour)
                             .forEach { (it as? JsonObject)?.let(::add) }
                     }
                     if (!hasEmbeddedRoute) {
                     parseJsonArray(routing.customRuleSetsJson).forEach { (it as? JsonObject)?.let(::add) }
                     // Geo rule-sets referenced by the structured v2rayNG rules.
-                    SingBoxRouting.manualRuleSets(routing.rules, singboxGeositeBase, singboxGeoipBase)
+                    SingBoxRouting.manualRuleSets(routing.rules, singboxGeositeBase, singboxGeoipBase, ruleSetDetour)
                         .forEach { (it as? JsonObject)?.let(::add) }
                     if (routing.blockAds) {
                         add(buildJsonObject {
@@ -756,7 +761,7 @@ object SingBoxConfig {
                             put("tag", "geosite-ads")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs")
-                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
+                            put("download_detour", ruleSetDetour)
                         })
                     }
                     if (routing.bypassRussia) {
@@ -765,14 +770,14 @@ object SingBoxConfig {
                             put("tag", "geoip-ru")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs")
-                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
+                            put("download_detour", ruleSetDetour)
                         })
                         add(buildJsonObject {
                             put("type", "remote")
                             put("tag", "geosite-ru")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs")
-                            put("download_detour", SingBoxRouting.RULE_SET_DOWNLOAD_TAG)
+                            put("download_detour", ruleSetDetour)
                         })
                     }
                     }

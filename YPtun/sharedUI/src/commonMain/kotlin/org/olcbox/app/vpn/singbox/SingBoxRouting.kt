@@ -108,6 +108,7 @@ object SingBoxRouting {
         profile: RoutingProfile,
         geositeBase: String = DEFAULT_GEOSITE_BASE,
         geoipBase: String = DEFAULT_GEOIP_BASE,
+        downloadDetour: String = RULE_SET_DOWNLOAD_TAG,
     ): JsonArray {
         val site = parse(profile.blockSites) + parse(profile.directSites) + parse(profile.proxySites)
         val ip = parseIp(profile.blockIp) + parseIp(profile.directIp) + parseIp(profile.proxyIp)
@@ -123,7 +124,7 @@ object SingBoxRouting {
                     put("tag", "geosite-$tag")
                     put("format", "binary")
                     put("url", "${siteBase}geosite-$tag.srs")
-                    put("download_detour", RULE_SET_DOWNLOAD_TAG)
+                    put("download_detour", downloadDetour)
                 }
             }
             geoipTags.forEach { tag ->
@@ -132,7 +133,7 @@ object SingBoxRouting {
                     put("tag", "geoip-$tag")
                     put("format", "binary")
                     put("url", "${ipBase}geoip-$tag.srs")
-                    put("download_detour", RULE_SET_DOWNLOAD_TAG)
+                    put("download_detour", downloadDetour)
                 }
             }
         }
@@ -215,6 +216,7 @@ object SingBoxRouting {
         rules: List<SingBoxRule>,
         geositeBase: String = DEFAULT_GEOSITE_BASE,
         geoipBase: String = DEFAULT_GEOIP_BASE,
+        downloadDetour: String = RULE_SET_DOWNLOAD_TAG,
     ): JsonArray {
         val enabled = rules.filter { it.enabled && it.hasMatcher() }
         val geositeTags = enabled.flatMap { parse(it.domains).flatMap(Selectors::geositeTags) }.distinct()
@@ -226,13 +228,13 @@ object SingBoxRouting {
             geositeTags.forEach { tag ->
                 addJsonObject {
                     put("type", "remote"); put("tag", "geosite-$tag"); put("format", "binary")
-                    put("url", "${siteBase}geosite-$tag.srs"); put("download_detour", RULE_SET_DOWNLOAD_TAG)
+                    put("url", "${siteBase}geosite-$tag.srs"); put("download_detour", downloadDetour)
                 }
             }
             geoipTags.forEach { tag ->
                 addJsonObject {
                     put("type", "remote"); put("tag", "geoip-$tag"); put("format", "binary")
-                    put("url", "${ipBase}geoip-$tag.srs"); put("download_detour", RULE_SET_DOWNLOAD_TAG)
+                    put("url", "${ipBase}geoip-$tag.srs"); put("download_detour", downloadDetour)
                 }
             }
         }
