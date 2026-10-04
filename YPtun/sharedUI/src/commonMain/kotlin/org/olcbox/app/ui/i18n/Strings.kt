@@ -174,6 +174,7 @@ interface Strings {
     fun wdttVersion(v: String): String
     fun awgVersion(v: String): String
     fun olcrtcVersion(v: String): String
+    fun coreVersion(name: String, v: String): String = "$name: $v"
     /** Localized label for a TrafficSettings domain strategy (prefer_ipv4/prefer_ipv6/ipv4_only/ipv6_only). */
     fun domainStrategyName(v: String): String
     fun hwid(v: String): String

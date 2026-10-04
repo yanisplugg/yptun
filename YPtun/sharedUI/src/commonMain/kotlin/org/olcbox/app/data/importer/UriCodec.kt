@@ -61,7 +61,8 @@ internal object UriCodec {
     /** Parse an `a=b&c=d` query string into a map (values are percent-decoded). */
     fun parseQuery(query: String): Map<String, String> {
         if (query.isBlank()) return emptyMap()
-        return query.split('&')
+        // Some public lists HTML-escape the link (`&amp;`): without this every param after the first is lost.
+        return query.replace("&amp;", "&").split('&')
             .mapNotNull { pair ->
                 if (pair.isBlank()) return@mapNotNull null
                 val eq = pair.indexOf('=')

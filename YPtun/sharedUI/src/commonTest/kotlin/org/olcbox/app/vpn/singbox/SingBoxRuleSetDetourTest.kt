@@ -67,4 +67,25 @@ class SingBoxRuleSetDetourTest {
         assertTrue(detours.isNotEmpty(), "the bypass-RU / block-ads toggles must emit rule-sets")
         detours.forEach { assertEquals(SingBoxRouting.PROXY_TAG, it) }
     }
+
+    // #56: sing-box fetches rule-sets before its endpoints start, so a WireGuard-backed proxy
+    // (VK-TURN) answers "WireGuard is not ready yet" and the whole core refuses to start.
+    @Test
+    fun wireguardBackedTunnelFetchesRuleSetsDirect() {
+        val wgBase = ProxyProfile(
+            type = "wireguard", server = "10.0.0.1", serverPort = 51820,
+            rawOutbound = """{"type":"wireguard","server":"10.0.0.1","server_port":51820,
+                "local_address":["10.7.0.2/32"],
+                "private_key":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+                "peer_public_key":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="}""",
+        )
+        val json = SingBoxConfig.build(
+            profile = profile, wireguardBase = wgBase, listenPort = 10808, listenHost = "127.0.0.1",
+            socksUsername = "", socksPassword = "", routing = RoutingRules(),
+            routingProfile = RoutingProfile(id = "tg", proxySites = listOf("geosite:telegram"), proxyIp = listOf("geoip:telegram")),
+        )
+        val sets = Json.parseToJsonElement(json).jsonObject["route"]!!.jsonObject["rule_set"]!!.jsonArray
+        assertEquals(2, sets.size)
+        sets.forEach { assertEquals("direct", it.jsonObject["download_detour"]!!.jsonPrimitive.content) }
+    }
 }

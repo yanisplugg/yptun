@@ -1,6 +1,6 @@
 package tunnel
 
-import "openflux/transport"
+import "github.com/p1neappleXpress/OpenFlux/transport"
 
 type proxyExit struct {
 	trans transport.Transport
@@ -18,4 +18,9 @@ func (p *proxyExit) Start() error {
 	return nil
 }
 
-func (p *proxyExit) Stop() error { return nil }
+func (p *proxyExit) Stop() error {
+	if p.tun != nil {
+		p.tun.Close()
+	}
+	return nil
+}

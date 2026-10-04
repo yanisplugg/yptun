@@ -889,6 +889,27 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
+                title = s.coreVersion("OpenFlux", org.olcbox.app.vpn.CoreVersions.OPENFLUX),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.coreVersion("Trust Tunnel", org.olcbox.app.vpn.CoreVersions.TRUSTTUNNEL_ANDROID),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.coreVersion("snolc", org.olcbox.app.vpn.CoreVersions.SNOLC),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
                 title = s.hwid(hwid.ifBlank { "—" }),
                 icon = Icons.Rounded.Key,
                 enabled = hwid.isNotBlank(),

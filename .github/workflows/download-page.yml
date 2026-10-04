@@ -1,0 +1,36 @@
+# Держит docs/latest.json (запасной источник страницы загрузки под VPN) равным последнему релизу.
+# Запускается при публикации/правке/удалении релиза. Файл берётся из тега релиза — для релизов,
+# созданных до добавления этого workflow, обновляйте вручную: YPtun/scripts/update-download-page.ps1.
+name: Download page
+on:
+  release:
+    types: [published, edited, deleted]
+  workflow_dispatch:
+  push:   # самопроверка при правке этого файла (ручной запуск доступен, только когда файл есть в main)
+    branches: [Beta]
+    paths: [.github/workflows/download-page.yml]
+permissions:
+  contents: write
+  pages: write
+concurrency: download-page
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: Beta   # ветка, из которой публикуется GitHub Pages (/docs)
+      - name: Refresh docs/latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/releases/latest \
+            --jq '{name, tag_name, html_url, assets: [.assets[] | {name, browser_download_url}]}' > docs/latest.json
+          git add docs/latest.json
+          if git diff --cached --quiet; then echo "latest.json is current"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: latest.json -> $(jq -r .tag_name docs/latest.json)"
+          git push origin HEAD:Beta
+          # Пуш от GITHUB_TOKEN сам Pages не пересобирает — просим явно.
+          gh api -X POST repos/${{ github.repository }}/pages/builds

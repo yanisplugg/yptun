@@ -926,14 +926,13 @@ data class FreeServersProgress(
 )
 
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
-/** Проверяем всего ~250 серверов: поровну (250 / 3 источника) из каждого, случайной выборкой. */
-const val FREE_SERVERS_PER_SOURCE = 250 / 3
+/** Список zieng2 небольшой (~120) и живой на ~40% — проверяем целиком; ebrasha огромный (~20k, живо ~7%) — случайная выборка. */
+const val FREE_SERVERS_PER_SOURCE = 250
 
 /** Источники бесплатных серверов (url, максимум строк; 0 = все); [FREE_SERVERS_URL] — идентификатор группы. */
 val FREE_SERVERS_SOURCES = listOf(
-    FREE_SERVERS_URL to FREE_SERVERS_PER_SOURCE,
-    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt" to FREE_SERVERS_PER_SOURCE,
-    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt" to FREE_SERVERS_PER_SOURCE,
+    FREE_SERVERS_URL to 0,
+    "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to FREE_SERVERS_PER_SOURCE,
 )
 
 /** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */

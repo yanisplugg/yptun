@@ -1,14 +1,21 @@
 # OpenFlux in YPtun
 
-Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), `main` at d34dc8c (2026-09-23, after release 0.0.3;
-before that 3249724, first vendored a8a8937 = 0.0.1), without `.idea/` and the iOS/Android shell scripts. Engine `EngineType.OpenFlux`.
+Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), tag v0.3.0 = d245db7 (2026-10-04; before that d34dc8c = 0.0.3,
+3249724, first a8a8937 = 0.0.1), without `.idea/`, `.github/`, `ios-app/`, docker files and the iOS/Android shell scripts.
+Engine `EngineType.OpenFlux`.
 
-Re-vendor: `git diff <old> <new>` in an upstream clone, `git apply --directory=openflux --exclude=openflux/main.go`,
-then port the upstream `main.go` hunks by hand (it carries patch 2 below), then `build-openflux-server.ps1`.
+Re-vendor: export the new tag, `git merge-file` our 2 patched upstream files (`main.go`, `transport/oneme/max_transport.go`)
+against the old base, copy the YPtun-only files (`yptun_client*.go`, this file, `build-openflux-server.ps1`) over, then
+`go build`/`go test`, the smoke below, `build-openflux-server.ps1`, and bump `CoreVersions.OPENFLUX`.
 Carriers (`OpenFluxConfig.TRANSPORTS`): yandex, vyandex (new Volga editor), mailru, cupsonline, oneme (MAX).
-Since 0.0.3 the module is `openflux` (was `universal-bypass-tool`), flags are `--role=client|exit` +
-`--inbound=socks5`, the default codec is batched+zstd — an old node does NOT talk to a new client, reinstall it.
-The 3-way merge base for the next re-vendor is d34dc8c.
+Since 0.0.3 the module is `openflux`; since 0.3.0 its path is `github.com/p1neappleXpress/OpenFlux` (upstream's — our files import that).
+Flags are `--role=client|exit` + `--inbound=socks5`, the default codec is batched+zstd — an old node does NOT talk to a new
+client, reinstall it. The 3-way merge base for the next re-vendor is v0.3.0 (d245db7).
+
+Smoke (no real carrier): `--role=exit --mode=l4 --transport direct --direct-listen 127.0.0.1:P --encryption-key-file k` + client
+`--transport direct --direct-dial 127.0.0.1:P --encryption-key-file k --socks5 127.0.0.1:Q --dns 1.1.1.1` with
+`OPENFLUX_SOCKS_USER/PASS` set and stdin held open (a closed stdin kills the client via `--exit-on-stdin-eof`!);
+curl via `socks5h://u:p@127.0.0.1:Q` must return 204 for cp.cloudflare.com, and an unauthenticated client must be refused.
 
 ## How it runs
 
@@ -28,11 +35,10 @@ bound library kills the whole app.
 1. `yptun_client.go` (new file): DNS through the tunnel (`--dns`, DNS-over-TCP via the exit node, 5 min
    cache), secrets from the environment (`OPENFLUX_MAX_TOKEN`, `OPENFLUX_SOCKS_USER/PASS`), and
    `--exit-on-stdin-eof` so the client dies with the app.
-2. `main.go`: the two flags above, `maxToken = envOr(...)`, and the client's SOCKS server built by
+2. `main.go` (patch hooks: the two flags, `envOr`, `yptunClientSetup` instead of `socks5.NewSOCKS5Server`; the `socks5` import is gone): the two flags above, `maxToken = envOr(...)`, and the client's SOCKS server built by
    `yptunClientSetup` instead of `socks5.NewSOCKS5Server`.
-3. `socks5/socks5.go`: RFC 1929 username/password (`SetAuth`); upstream always answered "no auth".
-   Also (PR #41) the request is read with `io.ReadFull` and errors are answered per RFC 1928 —
-   upstream indexed a `[256]byte` buffer, so a ≥250-byte domain panicked the core.
-   Tests: `socks5/socks5_auth_test.go`.
+3. (upstream since 0.3.0, no local patch) `socks5/socks5.go`: RFC 1929 `SetAuth` and `io.ReadFull` request parsing — both were our
+   PR #41 / patch before. Note upstream now also does UDP ASSOCIATE for dialers that implement `DialUDP`;
+   `tunnelResolvingDialer` deliberately does NOT, so UDP associate stays refused as before (add `DialUDP` to enable).
 4. `transport/oneme/max_transport.go` (PR #41): `MaxClient` kept as a pointer (upstream copied the struct
    by value while its goroutines ran on the original) and `Connect`/`LoginByToken` errors are returned.

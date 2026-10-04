@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YPtun — скачать</title>
+<style>
+:root{--bg:#fff;--fg:#14171f;--mut:#667085;--card:#f4f6fa;--acc:#2f6bff;--accfg:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1218;--fg:#e8ebf2;--mut:#98a2b3;--card:#1a1f2b}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box}
+main{width:100%;max-width:520px;text-align:center}
+h1{margin:0 0 4px}
+.mut{color:var(--mut);font-size:14px}
+.big{display:block;margin:24px 0 8px;padding:16px;border-radius:12px;background:var(--acc);color:var(--accfg);font-size:18px;font-weight:600;text-decoration:none}
+.big small{display:block;font-weight:400;opacity:.85;font-size:13px}
+details{margin-top:24px;text-align:left;background:var(--card);border-radius:12px;padding:8px 16px}
+summary{cursor:pointer;padding:8px 0}
+li{margin:6px 0;word-break:break-all}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<main>
+  <h1>YPtun</h1>
+  <div class="mut" id="ver">…</div>
+  <div id="main"></div>
+  <details id="all" hidden><summary id="allT"></summary><ul id="list"></ul></details>
+  <p class="mut"><a id="gh" href="https://github.com/yanisplugg/olcvpn-client/releases/latest">GitHub Releases</a></p>
+</main>
+<script>
+const REPO = "yanisplugg/olcvpn-client";
+const ru = !/^en/i.test(navigator.language);
+const T = ru
+  ? {dl: "Скачать для", other: "Все файлы релиза", none: "Не удалось определить систему — выберите файл ниже.", err: "Не удалось загрузить релиз. Откройте GitHub Releases ниже."}
+  : {dl: "Download for", other: "All release files", none: "Could not detect your system — pick a file below.", err: "Could not load the release. Use GitHub Releases below."};
+
+// Определение ОС и архитектуры. ponytail: macOS/iOS сборок нет — покажем общий список.
+async function detect() {
+  const ua = navigator.userAgent;
+  let os = /Android/i.test(ua) ? "android" : /Windows/i.test(ua) ? "windows" : /Linux|X11/i.test(ua) ? "linux" : null;
+  let arm = /arm64|aarch64/i.test(ua);
+  try {
+    const h = await navigator.userAgentData?.getHighEntropyValues(["architecture"]);
+    if (h) arm = /arm/i.test(h.architecture);
+  } catch (e) {}
+  return {os, arm};
+}
+
+// Подбор файла по подстроке имени (в именах есть версия, поэтому точное имя не годится).
+function pick(assets, {os, arm}) {
+  const has = (re) => assets.find((a) => re.test(a.name));
+  const a = arm ? "arm64" : "(x64|amd64)";
+  if (os === "windows") return has(new RegExp(`${arm ? "arm64" : "x64"}.*installer\\.exe$`, "i")) || has(/\.exe$/i);
+  if (os === "linux") return has(new RegExp(`${a}.*\\.AppImage$`, "i")) || has(new RegExp(`${a}.*\\.deb$`, "i"));
+  if (os === "android") return has(/universal.*\.apk$/i) || has(/\.apk$/i);
+}
+
+(async () => {
+  try {
+    // API первым (всегда свежий); под VPN он часто режется/упирается в лимит — тогда берём latest.json
+    // с того же домена (обновляется YPtun/scripts/update-download-page.ps1 после релиза).
+    let r;
+    try {
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
+      if (!res.ok) throw new Error(res.status);
+      r = await res.json();
+    } catch (e) {
+      r = await (await fetch("latest.json", {cache: "no-cache"})).json();
+    }
+    // delta-патчи — служебные файлы автообновления, пользователю не нужны
+    const assets = r.assets.filter((a) => !/\.patch(\.gz)?$/i.test(a.name) && !/delta/i.test(a.name));
+    document.getElementById("ver").textContent = r.name || r.tag_name;
+    const d = await detect();
+    const best = pick(assets, d);
+    const label = {windows: "Windows", linux: "Linux", android: "Android"}[d.os];
+    const main = document.getElementById("main");
+    // ?auto — сразу начать скачивание подобранного файла (ссылка для README/чатов)
+    if (best && new URLSearchParams(location.search).has("auto")) location.href = best.browser_download_url;
+    if (best) {
+      main.innerHTML = `<a class="big" href="${best.browser_download_url}">${T.dl} ${label}${d.os !== "android" ? (d.arm ? " ARM64" : " x64") : ""}<small>${best.name}</small></a>`;
+    } else {
+      main.innerHTML = `<p class="mut">${T.none}</p>`;
+    }
+    document.getElementById("allT").textContent = T.other;
+    document.getElementById("list").innerHTML = assets
+      .map((a) => `<li><a href="${a.browser_download_url}">${a.name}</a></li>`).join("");
+    const all = document.getElementById("all");
+    all.hidden = false;
+    all.open = !best;
+    document.getElementById("gh").href = r.html_url;
+  } catch (e) {
+    document.getElementById("main").innerHTML = `<p class="mut">${T.err}</p>`;
+  }
+})();
+</script>
+</body>
+</html>
