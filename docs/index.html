@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>YPtun — скачать</title>
+<title>YPtun</title>
 <style>
 :root{--bg:#fff;--fg:#14171f;--mut:#667085;--card:#f4f6fa;--acc:#2f6bff;--accfg:#fff}
 @media(prefers-color-scheme:dark){:root{--bg:#0f1218;--fg:#e8ebf2;--mut:#98a2b3;--card:#1a1f2b}}
@@ -17,10 +17,15 @@ details{margin-top:24px;text-align:left;background:var(--card);border-radius:12p
 summary{cursor:pointer;padding:8px 0}
 li{margin:6px 0;word-break:break-all}
 a{color:var(--acc)}
+.lang{display:flex;gap:6px;justify-content:center;margin-bottom:16px}
+.lang button{border:0;border-radius:8px;padding:6px 12px;background:var(--card);color:var(--fg);font:inherit;font-size:14px;cursor:pointer}
+.lang button[aria-pressed=true]{background:var(--acc);color:var(--accfg)}
+.big small,li{direction:ltr}
 </style>
 </head>
 <body>
 <main>
+  <div class="lang" id="lang"></div>
   <h1>YPtun</h1>
   <div class="mut" id="ver">…</div>
   <div id="main"></div>
@@ -29,10 +34,24 @@ a{color:var(--acc)}
 </main>
 <script>
 const REPO = "yanisplugg/olcvpn-client";
-const ru = !/^en/i.test(navigator.language);
-const T = ru
-  ? {dl: "Скачать для", other: "Все файлы релиза", none: "Не удалось определить систему — выберите файл ниже.", err: "Не удалось загрузить релиз. Откройте GitHub Releases ниже."}
-  : {dl: "Download for", other: "All release files", none: "Could not detect your system — pick a file below.", err: "Could not load the release. Use GitHub Releases below."};
+const L = {
+  ru: {name: "Русский", title: "YPtun — скачать", dl: "Скачать для", other: "Все файлы релиза", none: "Не удалось определить систему — выберите файл ниже.", err: "Не удалось загрузить релиз. Откройте GitHub Releases ниже."},
+  en: {name: "English", title: "YPtun — download", dl: "Download for", other: "All release files", none: "Could not detect your system — pick a file below.", err: "Could not load the release. Use GitHub Releases below."},
+  fa: {name: "فارسی", title: "YPtun — دانلود", dl: "دانلود برای", other: "همه فایل‌های نسخه", none: "سیستم شما شناسایی نشد — یکی از فایل‌های زیر را انتخاب کنید.", err: "بارگذاری نسخه ناموفق بود. از GitHub Releases در پایین استفاده کنید."},
+  zh: {name: "中文", title: "YPtun — 下载", dl: "下载适用于", other: "所有发布文件", none: "无法识别您的系统 — 请在下方选择文件。", err: "无法加载发布版本，请使用下方的 GitHub Releases。"}
+};
+// Язык: ?lang= → выбор пользователя (localStorage) → язык браузера (navigator.languages) → en.
+const store = {get: () => { try { return localStorage.lang; } catch (e) {} }, set: (v) => { try { localStorage.lang = v; } catch (e) {} }};
+function autoLang() {
+  for (const l of navigator.languages || [navigator.language]) {
+    const c = String(l).slice(0, 2).toLowerCase();
+    if (L[c]) return c;
+  }
+  return "en";
+}
+let lang = [new URLSearchParams(location.search).get("lang"), store.get()].find((c) => L[c]) || autoLang();
+let T = L[lang];
+let rendered = null; // null = грузится, false = ошибка; иначе последний {r, assets, d, best} — для перерисовки при смене языка
 
 // Определение ОС и архитектуры. ponytail: macOS/iOS сборок нет — покажем общий список.
 async function detect() {
@@ -55,6 +74,33 @@ function pick(assets, {os, arm}) {
   if (os === "android") return has(/universal.*\.apk$/i) || has(/\.apk$/i);
 }
 
+function render() {
+  document.documentElement.lang = lang;
+  document.documentElement.dir = lang === "fa" ? "rtl" : "ltr";
+  document.title = T.title;
+  document.getElementById("lang").innerHTML = Object.keys(L)
+    .map((c) => `<button data-l="${c}" aria-pressed="${c === lang}">${L[c].name}</button>`).join("");
+  if (!rendered) { document.getElementById("main").innerHTML = rendered === false ? `<p class="mut">${T.err}</p>` : ""; return; }
+  const {r, assets, d, best} = rendered;
+  const label = {windows: "Windows", linux: "Linux", android: "Android"}[d.os];
+  document.getElementById("main").innerHTML = best
+    ? `<a class="big" href="${best.browser_download_url}">${T.dl} ${label}${d.os !== "android" ? (d.arm ? " ARM64" : " x64") : ""}<small>${best.name}</small></a>`
+    : `<p class="mut">${T.none}</p>`;
+  document.getElementById("allT").textContent = T.other;
+  document.getElementById("list").innerHTML = assets
+    .map((a) => `<li><a href="${a.browser_download_url}">${a.name}</a></li>`).join("");
+  const all = document.getElementById("all");
+  all.hidden = false;
+  all.open = !best;
+  document.getElementById("gh").href = r.html_url;
+}
+document.getElementById("lang").onclick = (e) => {
+  const c = e.target.dataset?.l;
+  if (!L[c]) return;
+  lang = c; T = L[c]; store.set(c); render();
+};
+render();
+
 (async () => {
   try {
     // API первым (всегда свежий); под VPN он часто режется/упирается в лимит — тогда берём latest.json
@@ -72,24 +118,13 @@ function pick(assets, {os, arm}) {
     document.getElementById("ver").textContent = r.name || r.tag_name;
     const d = await detect();
     const best = pick(assets, d);
-    const label = {windows: "Windows", linux: "Linux", android: "Android"}[d.os];
-    const main = document.getElementById("main");
     // ?auto — сразу начать скачивание подобранного файла (ссылка для README/чатов)
     if (best && new URLSearchParams(location.search).has("auto")) location.href = best.browser_download_url;
-    if (best) {
-      main.innerHTML = `<a class="big" href="${best.browser_download_url}">${T.dl} ${label}${d.os !== "android" ? (d.arm ? " ARM64" : " x64") : ""}<small>${best.name}</small></a>`;
-    } else {
-      main.innerHTML = `<p class="mut">${T.none}</p>`;
-    }
-    document.getElementById("allT").textContent = T.other;
-    document.getElementById("list").innerHTML = assets
-      .map((a) => `<li><a href="${a.browser_download_url}">${a.name}</a></li>`).join("");
-    const all = document.getElementById("all");
-    all.hidden = false;
-    all.open = !best;
-    document.getElementById("gh").href = r.html_url;
+    rendered = {r, assets, d, best};
+    render();
   } catch (e) {
-    document.getElementById("main").innerHTML = `<p class="mut">${T.err}</p>`;
+    rendered = false;
+    render();
   }
 })();
 </script>
