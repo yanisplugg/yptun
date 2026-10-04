@@ -65,6 +65,8 @@ function pick(assets, {os, arm}) {
     const best = pick(assets, d);
     const label = {windows: "Windows", linux: "Linux", android: "Android"}[d.os];
     const main = document.getElementById("main");
+    // ?auto — сразу начать скачивание подобранного файла (ссылка для README/чатов)
+    if (best && new URLSearchParams(location.search).has("auto")) location.href = best.browser_download_url;
     if (best) {
       main.innerHTML = `<a class="big" href="${best.browser_download_url}">${T.dl} ${label}${d.os !== "android" ? (d.arm ? " ARM64" : " x64") : ""}<small>${best.name}</small></a>`;
     } else {
