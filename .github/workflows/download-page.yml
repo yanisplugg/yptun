@@ -6,6 +6,9 @@ on:
   release:
     types: [published, edited, deleted]
   workflow_dispatch:
+  push:   # самопроверка при правке этого файла (ручной запуск доступен, только когда файл есть в main)
+    branches: [Beta]
+    paths: [.github/workflows/download-page.yml]
 permissions:
   contents: write
   pages: write
