@@ -23,6 +23,13 @@ import kotlin.io.path.name
 internal object DesktopSelfUpdate {
 
     /**
+     * Last line of every .cmd: deleting a running batch file otherwise makes cmd look for its next
+     * line in a file that is gone and print "Не удается найти пакетный файл". `(goto)` with a missing
+     * label aborts the script, so cmd never reads past this line.
+     */
+    private const val SELF_DELETE = "(goto) 2>nul & del \"%~f0\""
+
+    /**
      * Starts the waiting swapper for [plan]. Safe to call before the app begins its own shutdown:
      * the script polls for the process to disappear first.
      */
@@ -53,7 +60,8 @@ internal object DesktopSelfUpdate {
         val swap = if (target == null) {
             "start \"\" \"$fresh\""
         } else {
-            val dest = target.toAbsolutePath()
+            val dest = renamedForVersion(target.toAbsolutePath(), fresh.name)
+            val dropOld = if (dest != target.toAbsolutePath()) "del /f /q \"${target.toAbsolutePath()}\" >nul 2>&1" else ""
             """
             set n=0
             :swap
@@ -64,6 +72,7 @@ internal object DesktopSelfUpdate {
             ping -n 2 127.0.0.1 >nul
             goto swap
             :moved
+            $dropOld
             start "" "$dest"
             goto done
             :fallback
@@ -74,7 +83,7 @@ internal object DesktopSelfUpdate {
         val script = scriptDir().resolve("yptun-apply-update.cmd")
         Files.writeString(
             script,
-            (windowsWaitForExit(pid) + "\n" + swap + "\ndel \"%~f0\"").replace("\n", "\r\n")
+            (windowsWaitForExit(pid) + "\n" + swap + "\n" + SELF_DELETE).replace("\n", "\r\n")
         )
         start(script, needsElevation = target != null && !Files.isWritable(target.toAbsolutePath().parent))
     }
@@ -102,10 +111,19 @@ internal object DesktopSelfUpdate {
             "start \"\" /wait $run",
             "del /f /q \"$file\" >nul 2>&1",
             relaunch,
-            "del \"%~f0\""
+            SELF_DELETE
         )
         Files.writeString(script, lines.joinToString("\n").replace("\n", "\r\n"))
         start(script, needsElevation = !DesktopElevation.isElevated())
+    }
+
+    /** YPtun-3.6.2-portable.exe + update to ...3.6.3... -> YPtun-3.6.3-portable.exe; custom names stay. */
+    private fun renamedForVersion(target: Path, freshName: String): Path {
+        val ver = Regex("""\d+\.\d+\.\d+""")
+        val newVer = ver.find(freshName)?.value ?: return target
+        val name = target.name
+        if (!ver.containsMatchIn(name)) return target
+        return target.resolveSibling(ver.replaceFirst(name, newVer))
     }
 
     private fun windowsWaitForExit(pid: Long): String = """
@@ -149,7 +167,7 @@ internal object DesktopSelfUpdate {
             $deletes
             rmdir /s /q "${plan.stagingDir.toAbsolutePath()}" >nul 2>&1
             $relaunch
-            del "%~f0"
+            $SELF_DELETE
             """.trimIndent().replace("\n", "\r\n")
         )
         return script
