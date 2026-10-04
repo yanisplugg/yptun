@@ -14,6 +14,8 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,8 +24,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"openflux/transport"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/netbind"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 const mailruUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
@@ -53,8 +56,14 @@ type DocSession struct {
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	// A write into a half-open connection (NAT dropped it, the network
+	// changed) would otherwise block until the kernel gives up, minutes.
+	_ = s.Conn.SetWriteDeadline(time.Now().Add(docWriteTimeout))
 	return s.Conn.WriteMessage(messageType, data)
 }
+
+// docWriteTimeout bounds one WebSocket write to the document.
+const docWriteTimeout = 20 * time.Second
 
 type MailruDocsTransport struct {
 	*transport.BaseTransport
@@ -64,6 +73,9 @@ type MailruDocsTransport struct {
 
 	userCounter atomic.Int32
 	baseUserID  string
+
+	cookieJar *cookiejar.Jar
+	jarMu     sync.RWMutex
 }
 
 // NewMailruDocsTransport accepts either a bare weblink ("AbCdEfGh1/IjKlMnOp2")
@@ -75,6 +87,8 @@ func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *M
 		weblink:       normalizeWeblink(weblink),
 	}
 	t.baseUserID = randUserID()
+	jar, _ := cookiejar.New(nil)
+	t.cookieJar = jar
 	return t
 }
 
@@ -155,13 +169,16 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		info, err := t.fetchDocInfo(t.weblink)
 		if err != nil {
 			utils.Debugf("[M-DOCS] fetchDocInfo failed: %v", err)
+			if utils.Throttled("m-docs.fetch", time.Minute) {
+				utils.Infof("[M-DOCS] cannot open the document: %v; retrying", err)
+			}
 			t.scheduleReconnect(attempt)
 			return
 		}
 
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 15 * time.Second,
-			NetDialContext: (&net.Dialer{
+			NetDialContext: netbind.Wrap(&net.Dialer{
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
@@ -259,6 +276,9 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				utils.Debugf("[M-DOCS] Read error: %v", err)
+				if utils.Throttled("m-docs.drop", time.Minute) {
+					utils.Infof("[M-DOCS] connection to the document dropped: %v; reconnecting", err)
+				}
 				t.SetConnected(false)
 				conn.Close()
 
@@ -335,8 +355,11 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 
 		if session != nil && session.Conn != nil {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
-				utils.Debugf("[M-DOCS] Keep-alive failed: %v", err)
+				utils.Debugf("[M-DOCS] Keep-alive failed, closing the connection to reconnect: %v", err)
 				t.SetConnected(false)
+				// Close it so the reader, which may sit in ReadMessage on
+				// a half-open socket forever, errors out and reconnects.
+				_ = session.Conn.Close()
 			}
 		}
 	}
@@ -344,10 +367,6 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 
 func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	text := string(data)
-
-	if strings.Contains(text, "---KA---") {
-		return
-	}
 
 	// Socket.IO ping - respond with pong
 	if text == "2" {
@@ -366,28 +385,32 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	}
 
 	if strings.Contains(text, "cursor") {
-		base64Str := t.extractBase64String(text)
-		if base64Str == "" {
-			return
+		// One server message may carry several cursor entries (the server batches them
+		// under load), a peer's keep-alive among them: deliver every payload, in order.
+		for _, base64Str := range cursorPayloads(text) {
+			decoded, err := base64.StdEncoding.DecodeString(base64Str)
+			if err != nil {
+				utils.Debugf("[M-DOCS] Base64 decode error: %v", err)
+				continue
+			}
+			t.RecordReceive(len(decoded))
+			t.CallReceive(decoded)
 		}
-
-		decoded, err := base64.StdEncoding.DecodeString(base64Str)
-		if err != nil {
-			utils.Debugf("[M-DOCS] Base64 decode error: %v", err)
-			return
-		}
-
-		t.RecordReceive(len(decoded))
-		t.CallReceive(decoded)
 	}
 }
 
-func (t *MailruDocsTransport) extractBase64String(response string) string {
-	matches := cursorPayloadRe.FindStringSubmatch(response)
-	if len(matches) > 1 {
-		return matches[1]
+// cursorPayloads returns the base64 payload of every cursor entry in a server
+// message, in order, without the keep-alive entries. Taking only the first
+// entry (as before) lost data whenever the server batched entries, and
+// dropped a whole batch when a peer's keep-alive came first.
+func cursorPayloads(text string) []string {
+	var out []string
+	for _, m := range cursorPayloadRe.FindAllStringSubmatch(text, -1) {
+		if len(m) > 1 && m[1] != "---KA---" {
+			out = append(out, m[1])
+		}
 	}
-	return ""
+	return out
 }
 
 func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
@@ -428,7 +451,17 @@ func reconnectBackoff(n int) time.Duration {
 // fetchDocInfo POSTs to Mail.ru's public-document editor API and parses the
 // response into the fields needed to open the collaborative WebSocket.
 func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	t.jarMu.RLock()
+	jar := t.cookieJar
+	t.jarMu.RUnlock()
+	if jar == nil {
+		var err error
+		jar, err = cookiejar.New(nil)
+		if err != nil {
+			return MailruDocsInfo{}, err
+		}
+	}
+	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
 
 	reqBody := map[string]string{
 		"x-email":  "anonym",
@@ -514,4 +547,60 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 
 func randUserID() string {
 	return fmt.Sprintf("%010d", rand.New(rand.NewSource(time.Now().UnixNano())).Intn(1000000000))
+}
+
+// ---- CookieExchanger ----
+
+// FetchCookies returns a snapshot of the transport's current cookie jar as
+// name -> value. Used by the exit node to answer a SubtypeCookiesRequest.
+func (t *MailruDocsTransport) FetchCookies() (map[string]string, error) {
+	t.jarMu.RLock()
+	jar := t.cookieJar
+	t.jarMu.RUnlock()
+	if jar == nil {
+		return nil, fmt.Errorf("mailru: cookie jar is nil")
+	}
+	u, err := url.Parse("https://cloud.mail.ru/")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string)
+	for _, c := range jar.Cookies(u) {
+		out[c.Name] = c.Value
+	}
+	return out, nil
+}
+
+// ApplyCookies replaces the transport's cookie jar with the provided values
+// and forces the current session to reconnect.
+func (t *MailruDocsTransport) ApplyCookies(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	u, _ := url.Parse("https://cloud.mail.ru/")
+	jar, _ := cookiejar.New(nil)
+	cookies := make([]*http.Cookie, 0, len(values))
+	for k, v := range values {
+		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/"})
+	}
+	jar.SetCookies(u, cookies)
+
+	t.jarMu.Lock()
+	t.cookieJar = jar
+	t.jarMu.Unlock()
+
+	utils.Debugf("[M-DOCS] applied %d cookies, forcing reconnect", len(cookies))
+
+	t.Mu.Lock()
+	session := t.session
+	t.session = nil
+	t.SetConnected(false)
+	t.Mu.Unlock()
+	if session != nil && session.Conn != nil {
+		_ = session.Conn.Close()
+	}
+	if t.IsRunning() {
+		t.scheduleReconnect(0)
+	}
+	return nil
 }

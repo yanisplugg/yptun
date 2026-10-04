@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package main
 
@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"openflux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 var errTUNUnsupported = errors.New("utun client is only supported on macOS")

@@ -3,11 +3,14 @@ package yandex
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,9 +19,20 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"openflux/transport"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/netbind"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
+
+// ErrCaptchaRequired signals that the transport hit a SmartCaptcha challenge
+// (showcaptcha?cc=1) which cannot be solved by the internal PoW solver.
+// The caller is expected to obtain fresh cookies out of band (e.g. WebView
+// on the client) and hand them over via CookieExchanger.ApplyCookies.
+var ErrCaptchaRequired = errors.New("yandex docs: captcha required")
+
+// ErrLoginRequired signals a redirect to the passport login page. The
+// document is not public from this IP / account.
+var ErrLoginRequired = errors.New("yandex docs: login required")
 
 // Precompiled once. cursorPayloadRe in particular runs on every inbound
 // message, so compiling it per call (as before) was pure overhead on the hot
@@ -52,28 +66,48 @@ type DocSession struct {
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	// A write into a half-open connection (NAT dropped it, the network
+	// changed) would otherwise block until the kernel gives up, minutes.
+	_ = s.Conn.SetWriteDeadline(time.Now().Add(docWriteTimeout))
 	return s.Conn.WriteMessage(messageType, data)
 }
+
+// docWriteTimeout bounds one WebSocket write to the document.
+const docWriteTimeout = 20 * time.Second
 
 type YandexDocsTransport struct {
 	*transport.BaseTransport
 
-	url      string
-	session  *DocSession
+	url     string
+	session *DocSession
 
 	userCounter atomic.Int32
 	baseUserID  string
+
+	// cookieJar holds the shared cookie jar for all fetchDocInfo / WebSocket
+	// dials. It is preserved across reconnects and can be replaced by
+	// ApplyCookies (see CookieExchanger).
+	cookieJar *cookiejar.Jar
+	jarMu     sync.RWMutex
+
+	errNotifier func(err error, transportName, url, reason string)
+
+	// cookiesApplied wakes a scheduleReconnectNoCaptcha wait early. Unbuffered
+	// on purpose: a send only succeeds while such a wait is in progress.
+	cookiesApplied chan struct{}
 }
 
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
 	t := &YandexDocsTransport{
-		BaseTransport: transport.NewBaseTransport(config),
-		url:           url,
+		BaseTransport:  transport.NewBaseTransport(config),
+		url:            url,
+		cookiesApplied: make(chan struct{}),
 	}
 	t.baseUserID = randUserID()
+	jar, _ := cookiejar.New(nil)
+	t.cookieJar = jar
 	return t
 }
-
 
 func (t *YandexDocsTransport) Start() error {
 	if err := t.BaseTransport.Start(); err != nil {
@@ -85,6 +119,21 @@ func (t *YandexDocsTransport) Start() error {
 	t.connectToDoc(0)
 
 	return nil
+}
+
+// Stop also closes the document connection. Otherwise the reader sits in
+// ReadMessage until the server's next message and then leaves the socket
+// open, keeping a participant attached to the document after the transport
+// is gone.
+func (t *YandexDocsTransport) Stop() error {
+	err := t.BaseTransport.Stop()
+	t.Mu.RLock()
+	session := t.session
+	t.Mu.RUnlock()
+	if session != nil && session.Conn != nil {
+		_ = session.Conn.Close()
+	}
+	return err
 }
 
 func (t *YandexDocsTransport) Send(data []byte) error {
@@ -136,7 +185,22 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 
 		info, err := t.fetchDocInfo(t.url, userID)
 		if err != nil {
+			if errors.Is(err, ErrCaptchaRequired) || errors.Is(err, ErrLoginRequired) {
+				utils.Debugf("[YDOCS] fetchDocInfo needs external help: %v", err)
+				reason := "smartcaptcha"
+				if errors.Is(err, ErrLoginRequired) {
+					reason = "login"
+				}
+				if t.errNotifier != nil {
+					t.errNotifier(err, "yandex", t.url, reason)
+				}
+				t.scheduleReconnectNoCaptcha(attempt)
+				return
+			}
 			utils.Debugf("[YDOCS] fetchDocInfo failed: %v", err)
+			if utils.Throttled("ydocs.fetch", time.Minute) {
+				utils.Infof("[YDOCS] cannot open the document: %v; retrying", err)
+			}
 			t.scheduleReconnect(attempt)
 			return
 		}
@@ -146,7 +210,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		// insufficient on iOS).
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 15 * time.Second,
-			NetDialContext: (&net.Dialer{
+			NetDialContext: netbind.Wrap(&net.Dialer{
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
@@ -209,6 +273,9 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				utils.Debugf("[YDOCS] Read error: %v", err)
+				if utils.Throttled("ydocs.drop", time.Minute) {
+					utils.Infof("[YDOCS] connection to the document dropped: %v; reconnecting", err)
+				}
 				t.SetConnected(false)
 				conn.Close()
 				// If the session was healthy for a while, treat the next
@@ -249,11 +316,15 @@ func (t *YandexDocsTransport) writerLoop() {
 	var pending []byte
 	for t.IsRunning() {
 		if pending == nil {
-			packet, ok := <-queue
-			if !ok {
+			select {
+			case packet, ok := <-queue:
+				if !ok {
+					return
+				}
+				pending = packet
+			case <-t.Done():
 				return
 			}
-			pending = packet
 		}
 
 		t.Mu.RLock()
@@ -289,8 +360,11 @@ func (t *YandexDocsTransport) keepAliveLoop() {
 
 		if session != nil && session.Conn != nil {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
-				utils.Debugf("[YDOCS] Keep-alive failed: %v", err)
+				utils.Debugf("[YDOCS] Keep-alive failed, closing the connection to reconnect: %v", err)
 				t.SetConnected(false)
+				// Close it so the reader, which may sit in ReadMessage on
+				// a half-open socket forever, errors out and reconnects.
+				_ = session.Conn.Close()
 			}
 		}
 	}
@@ -362,13 +436,46 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	// turn into a tight connect/close loop (previously reconnect was instant).
 	d := reconnectBackoff(next)
 	utils.Debugf("[YDOCS] reconnecting in %v (attempt %d)", d, next)
-	time.Sleep(d)
+	select {
+	case <-time.After(d):
+	case <-t.Done():
+		return
+	}
 	if !t.IsRunning() {
 		return
 	}
 
 	t.RecordReconnect()
 	t.connectToDoc(next)
+}
+
+// SetErrorNotifier installs a callback for out-of-band errors such as
+// ErrCaptchaRequired or ErrLoginRequired. Called once by the manager.
+func (t *YandexDocsTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
+	t.errNotifier = fn
+}
+
+// scheduleReconnectNoCaptcha is called when fetchDocInfo returned a sentinel
+// error (ErrCaptchaRequired / ErrLoginRequired). Retrying with a backoff would
+// just hit the same captcha again, so we slow down to a fixed long delay and
+// rely on external cookie injection to break the cycle.
+func (t *YandexDocsTransport) scheduleReconnectNoCaptcha(attempt int) {
+	if !t.IsRunning() {
+		return
+	}
+	const longDelay = 30 * time.Second
+	utils.Debugf("[YDOCS] external solver needed; waiting %v before next attempt", longDelay)
+	select {
+	case <-time.After(longDelay):
+	case <-t.cookiesApplied:
+	case <-t.Done():
+		return
+	}
+	if !t.IsRunning() {
+		return
+	}
+	t.RecordReconnect()
+	t.connectToDoc(attempt + 1)
 }
 
 // reconnectBackoff returns an exponential backoff with jitter, capped at 30s.
@@ -397,45 +504,190 @@ func reconnectBackoff(n int) time.Duration {
 	return d
 }
 
+// ---- CookieExchanger ----
+
+// FetchCookies returns a snapshot of the transport's current cookie jar as
+// name -> value. Used by the exit node to answer a SubtypeCookiesRequest.
+func (t *YandexDocsTransport) FetchCookies() (map[string]string, error) {
+	t.jarMu.RLock()
+	jar := t.cookieJar
+	t.jarMu.RUnlock()
+	if jar == nil {
+		return nil, fmt.Errorf("ydocs: cookie jar is nil")
+	}
+	// cookiejar.Cookies(u) needs a URL; use the document URL because every
+	// cookie we care about was set on that host.
+	u := mustParseURL(t.url)
+	out := make(map[string]string)
+	for _, c := range jar.Cookies(u) {
+		out[c.Name] = c.Value
+	}
+	return out, nil
+}
+
+// ApplyCookies replaces the transport's cookie jar with the provided values
+// and forces the current session to reconnect so the next fetchDocInfo uses
+// the new cookies. It is idempotent.
+func (t *YandexDocsTransport) ApplyCookies(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	u := mustParseURL(t.url)
+	jar, _ := cookiejar.New(nil)
+	cookies := siteCookies(u, values)
+	jar.SetCookies(u, cookies)
+
+	t.jarMu.Lock()
+	t.cookieJar = jar
+	t.jarMu.Unlock()
+
+	utils.Debugf("[YDOCS] applied %d cookies, forcing reconnect", len(cookies))
+
+	// Drop the current session so the next connectToDoc re-runs fetchDocInfo
+	// with the new jar.
+	t.Mu.Lock()
+	session := t.session
+	t.session = nil
+	t.SetConnected(false)
+	t.Mu.Unlock()
+	if session != nil && session.Conn != nil {
+		_ = session.Conn.Close()
+	}
+	if t.IsRunning() {
+		select {
+		case t.cookiesApplied <- struct{}{}:
+			// The captcha wait reconnects now; a second reconnect here would
+			// open a duplicate session to the document.
+		default:
+			t.scheduleReconnect(0)
+		}
+	}
+	return nil
+}
+
+// ---- fetchDocInfo ----
+
 func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, error) {
+	t.jarMu.RLock()
+	jar := t.cookieJar
+	t.jarMu.RUnlock()
+	if jar == nil {
+		var err error
+		jar, err = cookiejar.New(nil)
+		if err != nil {
+			return YandexDocsInfo{}, err
+		}
+	}
+
 	client := &http.Client{
-		// Cap redirects so an auth/login redirect loop fails fast instead of
-		// hanging until the timeout (a private doc redirects to passport).
+		Jar: jar,
+		// НЕ следуем редиректам автоматически — обрабатываем вручную.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("stopped after 10 redirects (login required? doc not public?)")
-			}
-			return nil
+			return http.ErrUseLastResponse
 		},
 		Timeout: 15 * time.Second,
 	}
 
-	utils.Debugf("[YDOCS] fetchDocInfo GET %s", url)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	resp, err := client.Do(req)
-	if err != nil {
-		return YandexDocsInfo{}, err
+	ua := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
+
+	// Явно следуем по редиректам: до 10 хопов.
+	currentURL := url
+	var resp *http.Response
+	var err error
+
+	for hop := 0; hop < 10; hop++ {
+		utils.Debugf("[YDOCS] hop %d: GET %s", hop, shortStr(currentURL, 120))
+
+		req, _ := http.NewRequest("GET", currentURL, nil)
+		req.Header.Set("User-Agent", ua)
+		resp, err = client.Do(req)
+		if err != nil {
+			return YandexDocsInfo{}, fmt.Errorf("GET %s: %w", currentURL, err)
+		}
+
+		utils.Debugf("[YDOCS]   status=%d location=%s",
+			resp.StatusCode, shortStr(resp.Header.Get("Location"), 120))
+
+		// 200 — дошли до документа
+		if resp.StatusCode == 200 {
+			break
+		}
+
+		// 3xx — редирект
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			loc := resp.Header.Get("Location")
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+
+			if loc == "" {
+				return YandexDocsInfo{}, fmt.Errorf("redirect without Location from %s", currentURL)
+			}
+
+			// Second-tier captcha (SmartCaptcha, showcaptcha?cc=1). The PoW
+			// solver cannot handle it; signal the caller to fetch fresh
+			// cookies out of band.
+			if strings.Contains(loc, "showcaptcha") && !strings.Contains(loc, "showcaptchafast") {
+				utils.Debugf("[YDOCS] SmartCaptcha detected, external solver required")
+				return YandexDocsInfo{}, ErrCaptchaRequired
+			}
+
+			// First-tier captcha (PoW, showcaptchafast). Solve and retry
+			// the original url.
+			if strings.Contains(loc, "showcaptchafast") {
+				utils.Debugf("[YDOCS] captcha detected, solving...")
+				if _, cerr := solveCaptcha(currentURL, jar, ua); cerr != nil {
+					return YandexDocsInfo{}, fmt.Errorf("captcha solve: %w", cerr)
+				}
+				utils.Debugf("[YDOCS] captcha solved, retrying original url")
+				currentURL = url
+				continue
+			}
+
+			// Login page: not a captcha, not recoverable in-band.
+			if strings.Contains(loc, "passport.yandex") {
+				return YandexDocsInfo{}, ErrLoginRequired
+			}
+
+			// Обычный редирект — идём по нему.
+			currentURL = loc
+			continue
+		}
+
+		// Другой статус — ошибка
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return YandexDocsInfo{}, fmt.Errorf("unexpected status %d at %s", resp.StatusCode, currentURL)
+	}
+
+	if resp == nil {
+		return YandexDocsInfo{}, fmt.Errorf("no response after redirects")
+	}
+	if resp.StatusCode != 200 {
+		return YandexDocsInfo{}, fmt.Errorf("final status %d", resp.StatusCode)
 	}
 	defer resp.Body.Close()
 
 	htmlBytes, _ := io.ReadAll(resp.Body)
 	html := string(htmlBytes)
-	utils.Debugf("[YDOCS] response status=%d finalURL=%s body=%dB", resp.StatusCode, resp.Request.URL.String(), len(html))
+	utils.Debugf("[YDOCS] response status=%d finalURL=%s body=%dB",
+		resp.StatusCode, resp.Request.URL.String(), len(html))
 
 	var cookies []string
 	for _, c := range resp.Cookies() {
 		cookies = append(cookies, fmt.Sprintf("%s=%s", c.Name, c.Value))
 	}
+	for _, c := range jar.Cookies(resp.Request.URL) {
+		cookies = append(cookies, fmt.Sprintf("%s=%s", c.Name, c.Value))
+	}
 
 	matches := clientConfigRe.FindStringSubmatch(html)
 	if len(matches) < 2 {
-		// Help diagnose: is this a login page, a new-editor page, etc.?
 		hint := "no client-config script"
 		if strings.Contains(html, "passport") || strings.Contains(strings.ToLower(html), "login") {
 			hint = "looks like a login page (doc not public?)"
 		}
-		return YandexDocsInfo{}, fmt.Errorf("config not found: %s (status %d, final %s)", hint, resp.StatusCode, resp.Request.URL.String())
+		return YandexDocsInfo{}, fmt.Errorf("config not found: %s (status %d, final %s)",
+			hint, resp.StatusCode, resp.Request.URL.String())
 	}
 
 	var config map[string]interface{}
@@ -501,4 +753,33 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 
 func randUserID() string {
 	return fmt.Sprintf("%010d", rand.New(rand.NewSource(time.Now().UnixNano())).Intn(1000000000))
+}
+
+// mustParseURL parses a URL and panics on error. Used only where the input is
+// a known-valid document URL.
+// siteCookies scopes externally supplied cookies to the document's parent
+// domain (disk.yandex.ru -> yandex.ru) instead of host-only: the document
+// fetch is redirected across Yandex hosts, and an out-of-band solve (e.g.
+// SmartCaptcha's spravka) is issued for .yandex.ru, so a host-only copy
+// would never reach the host that actually asked for it.
+func siteCookies(u *url.URL, values map[string]string) []*http.Cookie {
+	domain := ""
+	if u != nil {
+		if labels := strings.Split(u.Hostname(), "."); len(labels) >= 3 {
+			domain = strings.Join(labels[1:], ".")
+		}
+	}
+	cookies := make([]*http.Cookie, 0, len(values))
+	for k, v := range values {
+		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/", Domain: domain})
+	}
+	return cookies
+}
+
+func mustParseURL(rawURL string) *url.URL {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		panic(err)
+	}
+	return u
 }

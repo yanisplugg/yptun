@@ -6,7 +6,7 @@ package org.olcbox.app.vpn
  */
 object CoreVersions {
     /** openflux/YPTUN.md — upstream tag + vendored commit. */
-    const val OPENFLUX = "0.0.3 (d34dc8c)"
+    const val OPENFLUX = "0.3.0 (d245db7)"
     /** snolc/Cargo.toml. */
     const val SNOLC = "0.0.4"
     /** Android: sharedUI/libs/trusttunnel-client-android-*.aar. */
