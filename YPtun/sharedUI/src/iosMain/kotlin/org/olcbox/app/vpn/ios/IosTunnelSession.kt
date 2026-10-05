@@ -257,22 +257,30 @@ class IosTunnelSession(
             log("MasterDNS resolver bypass IPs: ${extraExcludedIps.distinct().joinToString()}")
         }
 
-        // For OpenFlux: carrier hosts (Mail.ru, Cups, Yandex) MUST bypass the tunnel, otherwise the
+        // For OpenFlux: carrier hosts (Mail.ru, Cups, Yandex, OneMe) MUST bypass the tunnel, otherwise the
         // underlying collaborative WebSocket connection gets trapped in utun and causes an instant deadlock!
         if (location.engine == EngineType.OpenFlux) {
             val docUrl = location.openFlux?.docUrl.orEmpty()
+            val transport = location.openFlux?.transport.orEmpty().lowercase()
             val candidateHosts = mutableListOf<String>()
             val hostFromUrl = docUrl.substringAfter("://").substringBefore('/').substringBefore(':').trim()
             if (hostFromUrl.isNotEmpty()) candidateHosts.add(hostFromUrl)
-            if (docUrl.contains("mail.ru", ignoreCase = true)) {
+            if (docUrl.contains("mail.ru", ignoreCase = true) || transport == "mailru") {
                 candidateHosts.add("cloud.mail.ru")
                 candidateHosts.add("docs.datacloudmail.ru")
-            } else if (docUrl.contains("cups.online", ignoreCase = true)) {
+                candidateHosts.add("datacloudmail.ru")
+            } else if (docUrl.contains("cups.online", ignoreCase = true) || transport == "cupsonline") {
                 candidateHosts.add("cups.online")
-            } else if (docUrl.contains("yandex", ignoreCase = true)) {
+            } else if (docUrl.contains("oneme", ignoreCase = true) || transport == "oneme") {
+                candidateHosts.add("ws-api.oneme.ru")
+                candidateHosts.add("web.max.ru")
+                candidateHosts.add("oneme.ru")
+            } else if (docUrl.contains("yandex", ignoreCase = true) || transport == "yandex" || transport == "vyandex") {
                 candidateHosts.add("docs.yandex.ru")
                 candidateHosts.add("volga.yandex.ru")
                 candidateHosts.add("disk.yandex.ru")
+                candidateHosts.add("push.yandex.ru")
+                candidateHosts.add("doc.yandex.net")
             }
             candidateHosts.distinct().forEach { host ->
                 if (host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))) {
@@ -372,8 +380,9 @@ class IosTunnelSession(
                 val type = engineType ?: continue
                 if (!engine.coreRunning(type)) {
                     failCount++
-                    log("Core check failed ($failCount/3)")
-                    if (failCount >= 3) {
+                    val maxFails = if (type in SLOW_ENGINES) 6 else 3
+                    log("Core check failed ($failCount/$maxFails)")
+                    if (failCount >= maxFails) {
                         log("Core stopped unexpectedly — closing the tunnel")
                         engine.stopAll()
                         provider.cancelTunnelWithError(null)

@@ -1370,9 +1370,9 @@ private fun SubscriptionAnnounceText(
 
     val annotatedString = remember(announce, primaryColor) {
         buildAnnotatedString {
-            val urlRegex = Regex("""(https?://[^\s]+|t\.me/[^\s]+|@[A-Za-z0-9_]{3,32})""")
+            val linkRegex = Regex("""(https?://[^\s]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|t\.me/[^\s]+|tg://[^\s]+|(?<![a-zA-Z0-9._%+-])@[A-Za-z0-9_]{3,32}(?!\.[a-zA-Z])|\b(?:[a-zA-Z0-9-]+\.)+(?:com|online|org|net|ru|io|me|dev|app|site|space|top|xyz|pro|su|info|biz)(?:/[^\s]*)?\b)""")
             var lastIndex = 0
-            val matches = urlRegex.findAll(announce)
+            val matches = linkRegex.findAll(announce)
             for (match in matches) {
                 val start = match.range.first
                 val end = match.range.last + 1
@@ -1389,9 +1389,11 @@ private fun SubscriptionAnnounceText(
                 }
                 val targetUrl = when {
                     rawLink.startsWith("http://") || rawLink.startsWith("https://") -> rawLink
+                    rawLink.contains("@") && !rawLink.startsWith("@") -> "mailto:$rawLink"
                     rawLink.startsWith("t.me/") -> "https://$rawLink"
+                    rawLink.startsWith("tg://") -> rawLink
                     rawLink.startsWith("@") -> "https://t.me/${rawLink.removePrefix("@")}"
-                    else -> rawLink
+                    else -> "https://$rawLink"
                 }
                 pushStringAnnotation(tag = "URL", annotation = targetUrl)
                 pushStyle(
