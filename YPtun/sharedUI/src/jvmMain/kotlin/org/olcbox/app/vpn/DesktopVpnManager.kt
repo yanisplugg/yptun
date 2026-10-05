@@ -108,6 +108,14 @@ class DesktopVpnManager private constructor(
     private var tunProcess: Process? = null
     private var olcRtcConfigPath: Path? = null
     private var generation = 0L
+
+    /**
+     * True while a reconnect started by the watchdog (not by the user) is in flight: a failed attempt
+     * then retries with backoff instead of ending in Error, so a server that is briefly down (reboot,
+     * network blip) is picked up again without a manual restart. A user start/stop clears it.
+     */
+    @Volatile private var autoReconnect = false
+    private var autoReconnectAttempt = 0
     private val linuxTunController = LinuxTunController(::addLog)
     private val windowsTunController = WindowsTunController(::addLog)
 
@@ -163,7 +171,11 @@ class DesktopVpnManager private constructor(
 
     override fun needsPermission(): Boolean = false
 
-    override fun startVpn() {
+    override fun startVpn() = beginStart(auto = false)
+
+    private fun beginStart(auto: Boolean) {
+        autoReconnect = auto
+        if (!auto) autoReconnectAttempt = 0
         val requestGeneration = ++generation
         operationJob = scope.launch {
             mutex.withLock {
@@ -189,6 +201,7 @@ class DesktopVpnManager private constructor(
     }
 
     override fun stopVpn() {
+        autoReconnect = false
         generation++
         operationJob = scope.launch {
             mutex.withLock {
@@ -807,6 +820,8 @@ class DesktopVpnManager private constructor(
             }
 
             setStatus(VpnStatus.Connected)
+            autoReconnect = false
+            autoReconnectAttempt = 0
             startWatchdog(requestGeneration)
             addLog(
                 when (desktopMode) {
@@ -857,8 +872,26 @@ class DesktopVpnManager private constructor(
             deleteOlcRtcConfig()
 
             if (e !is CancellationException && requestGeneration == generation) {
-                setStatus(VpnStatus.Error(e.message ?: "Desktop start failed"))
+                if (autoReconnect) {
+                    scheduleAutoReconnect(requestGeneration, e.message)
+                } else {
+                    setStatus(VpnStatus.Error(e.message ?: "Desktop start failed"))
+                }
             }
+        }
+    }
+
+    /** Retry a failed watchdog reconnect after 2s, 4s, 8s… capped at 30s, until it works or the user stops. */
+    private fun scheduleAutoReconnect(gen: Long, reason: String?) {
+        val delayMs = (AUTO_RECONNECT_BASE_MS shl autoReconnectAttempt.coerceAtMost(4))
+            .coerceAtMost(AUTO_RECONNECT_MAX_MS)
+        autoReconnectAttempt++
+        setStatus(VpnStatus.Reconnecting)
+        addLog("Reconnect failed (${reason ?: "unknown"}); retrying in ${delayMs / 1_000}s")
+        scope.launch {
+            delay(delayMs)
+            // A manual stop/start bumps [generation] and wins.
+            if (gen == generation && autoReconnect) beginStart(auto = true)
         }
     }
 
@@ -1604,6 +1637,9 @@ class DesktopVpnManager private constructor(
         watchdogJob?.cancel()
         watchdogJob = scope.launch {
             delay(WATCHDOG_GRACE_MS)
+            var netBase = org.olcbox.app.vpn.desktop.PhysicalInterface.fingerprint()
+            var netDown = false
+            var netPending: String? = null
             while (isActive && generationAtConnect == generation) {
                 delay(WATCHDOG_INTERVAL_MS)
                 if (generationAtConnect != generation) break
@@ -1611,8 +1647,23 @@ class DesktopVpnManager private constructor(
                 val alive = runCatching { isActiveEngineAlive() }.getOrDefault(true)
                 if (!alive) {
                     addLog("Watchdog: tunnel stopped unexpectedly — reconnecting…")
-                    startVpn() // bumps generation → ends this watchdog; reconnect starts a fresh one
+                    beginStart(auto = true) // bumps generation → ends this watchdog; reconnect starts a fresh one
                     break
+                }
+                // Network switch (Wi-Fi ↔ Ethernet, new IP): the cores' sockets and the pinned
+                // interface belong to the old uplink. Offline is only noted; the reconnect fires once
+                // the (new or returned) network has been the same for two polls.
+                val net = org.olcbox.app.vpn.desktop.PhysicalInterface.fingerprint()
+                when {
+                    net.isEmpty() -> { netDown = true; netPending = null }
+                    net == netBase && !netDown -> netPending = null
+                    net != netPending -> netPending = net
+                    else -> {
+                        addLog("Watchdog: network changed — reconnecting…")
+                        netBase = net
+                        beginStart(auto = true)
+                        break
+                    }
                 }
             }
         }
@@ -1693,6 +1744,8 @@ class DesktopVpnManager private constructor(
         val ZERO_SPEED = SpeedSample(0L, 0L)
         const val WATCHDOG_GRACE_MS = 8_000L
         const val WATCHDOG_INTERVAL_MS = 5_000L
+        const val AUTO_RECONNECT_BASE_MS = 2_000L
+        const val AUTO_RECONNECT_MAX_MS = 30_000L
         const val OLC_READY_TIMEOUT_MS = 25_000L
         const val OLC_STARTUP_STABILITY_MS = 1_500L
         const val READY_POLL_INTERVAL_MS = 200L
