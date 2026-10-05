@@ -113,15 +113,21 @@ if ($iconsJar) {
     }
 }
 
-# 1. The payload: the app image as a plain zip (Deflate, so the launcher needs nothing but the Go
-#    standard library to read it back).
-$archive = Join-Path $work "app.zip"
+# 1. The payload: the app image as a tar stream compressed with zstd (see portable-launcher/cmd/pack;
+#    jars are stored uncompressed first so zstd can squeeze their contents). ~25% smaller than the
+#    Deflate zip it replaces and it unpacks faster. The launcher embeds the same zstd decoder.
+$archive = Join-Path $work "app.zst"
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
 Write-Host "Compressing app image ($Arch)..."
-[System.IO.Compression.ZipFile]::CreateFromDirectory(
-    $stage, $archive, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+Push-Location (Join-Path $here "portable-launcher")
+try {
+    # No GOOS/GOARCH here: this tool runs on the build machine, whatever the target arch is.
+    & $go run ./cmd/pack $stage $archive
+    if ($LASTEXITCODE -ne 0) { throw "pack failed with exit code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}
 Remove-Item $stage -Recurse -Force
-
 # 2. Fingerprint of that payload. The launcher unpacks into a directory named after it, so two
 #    builds of the SAME version never collide - and that is the normal case here, because fixes are
 #    asked for without changing the version. Keyed on the version alone, a newly built portable

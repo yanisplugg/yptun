@@ -19,7 +19,7 @@
 package main
 
 import (
-	"archive/zip"
+	"archive/tar"
 	"debug/pe"
 	"encoding/binary"
 	"io"
@@ -31,6 +31,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"unsafe"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Set at build time: -ldflags "-X main.version=3.2.1 -X main.buildID=<hash>".
@@ -104,10 +106,6 @@ func ensureUnpacked() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	reader, err := zip.NewReader(io.NewSectionReader(f, offset, size), size)
-	if err != nil {
-		return "", err
-	}
 
 	// Unpack beside the final directory and rename, so an interrupted first run cannot leave a
 	// half-written app image that later launches would happily start.
@@ -117,29 +115,65 @@ func ensureUnpacked() (string, error) {
 		return "", err
 	}
 
-	// One file after another left the first launch bound by a single inflate stream (~230 MB of
-	// jars + JRE); the entries are independent, so unpack them on every core.
-	progress := showProgress(len(reader.File))
-	jobs := make(chan *zip.File)
-	var done atomic.Int64
+	// The payload is one zstd stream holding a tar of the app image (see cmd/pack). Decoding is
+	// sequential but fast (the whole image in about a second); the disk writes are what take time,
+	// so those fan out over every core.
+	counter := &countingReader{r: io.NewSectionReader(f, offset, size)}
+	dec, err := zstd.NewReader(counter, zstd.WithDecoderMaxWindow(1<<28))
+	if err != nil {
+		return "", err
+	}
+	defer dec.Close()
+	tr := tar.NewReader(dec)
+
+	const progressSteps = 1000
+	progress := showProgress(progressSteps)
+	type job struct {
+		name string
+		data []byte
+	}
+	jobs := make(chan job, 4)
 	var firstErr error
 	var errOnce sync.Once
+	var failed atomic.Bool
+	fail := func(err error) {
+		errOnce.Do(func() { firstErr = err })
+		failed.Store(true)
+	}
 	var wg sync.WaitGroup
 	for w := 0; w < runtime.NumCPU(); w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for entry := range jobs {
-				if err := extract(entry, staging); err != nil {
-					errOnce.Do(func() { firstErr = err })
-					continue
+			for j := range jobs {
+				if err := writeEntry(staging, j.name, j.data); err != nil {
+					fail(err)
 				}
-				progress.set(int(done.Add(1)))
 			}
 		}()
 	}
-	for _, entry := range reader.File {
-		jobs <- entry
+	for !failed.Load() {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fail(err)
+			break
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			if err := writeEntry(staging, hdr.Name, nil); err != nil {
+				fail(err)
+			}
+			continue
+		}
+		data := make([]byte, hdr.Size)
+		if _, err := io.ReadFull(tr, data); err != nil {
+			fail(err)
+			break
+		}
+		jobs <- job{hdr.Name, data}
+		progress.set(int(int64(progressSteps) * counter.n.Load() / size))
 	}
 	close(jobs)
 	wg.Wait()
@@ -241,31 +275,34 @@ func findPayload(r io.ReaderAt, end int64) (size int64, offset int64, err error)
 	return 0, 0, errString("this launcher carries no app image (rebuild it with build-portable.ps1)")
 }
 
-func extract(entry *zip.File, root string) error {
+// writeEntry stores one tar entry under root; a nil data on a directory name just creates it.
+func writeEntry(root, name string, data []byte) error {
 	// Reject anything that would escape the target directory (zip-slip).
-	clean := filepath.Clean(strings.ReplaceAll(entry.Name, "/", string(os.PathSeparator)))
+	clean := filepath.Clean(strings.ReplaceAll(name, "/", string(os.PathSeparator)))
 	if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
-		return errString("refusing to unpack " + entry.Name)
+		return errString("refusing to unpack " + name)
 	}
 	path := filepath.Join(root, clean)
-	if entry.FileInfo().IsDir() {
+	if strings.HasSuffix(name, "/") {
 		return os.MkdirAll(path, 0o755)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	src, err := entry.Open()
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, entry.Mode()|0o200)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-	_, err = io.Copy(dst, src)
-	return err
+	return os.WriteFile(path, data, 0o644)
+}
+
+// countingReader tracks how much of the compressed payload has been consumed, which is what the
+// progress bar shows.
+type countingReader struct {
+	r io.Reader
+	n atomic.Int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // withoutJavaOptions drops the env vars every JVM silently prepends its options from. The app

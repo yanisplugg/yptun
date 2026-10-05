@@ -76,3 +76,13 @@ func TestLaunchEnvCarriesLauncherPath(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestWriteEntryRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	if err := writeEntry(root, "../evil.txt", []byte("x")); err == nil {
+		t.Fatal("expected a path escaping the target to be refused")
+	}
+	if err := writeEntry(root, "app/ok.txt", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -27,3 +27,6 @@ Thumbs.db
 
 # iOS: generated from YPtun/iosApp/project.yml by XcodeGen
 YPtun/iosApp/*.xcodeproj/
+
+# portable launcher: vendored zstd decoder (so the build needs no network)
+!YPtun/desktopApp/packaging/windows/portable-launcher/vendor/
