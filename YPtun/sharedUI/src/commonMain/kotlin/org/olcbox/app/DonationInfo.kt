@@ -20,4 +20,7 @@ object DonationInfo {
 
     /** Repository page — a star is a free way to support the project. */
     const val GITHUB_URL = "https://github.com/yanisplugg/yptun/tree/main"
+
+    /** Developer's VPN shop bot — buying a subscription supports the project. */
+    const val VPN_BOT_URL = "https://t.me/quofortpostbot"
 }

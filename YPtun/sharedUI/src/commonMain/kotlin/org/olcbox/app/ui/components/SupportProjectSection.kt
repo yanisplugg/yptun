@@ -21,6 +21,7 @@ import androidx.compose.material.icons.rounded.CurrencyBitcoin
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -38,6 +39,7 @@ import org.olcbox.app.DonationInfo
 import org.olcbox.app.ui.i18n.LocalStrings
 
 private val DonationAlertsOrange = Color(0xFFF57D07)
+private val VpnBlue = Color(0xFF2AABEE)
 private val GithubStarGold = Color(0xFFE3B341)
 
 /**
@@ -101,6 +103,15 @@ fun SupportProjectSection(
                 subtitle = s.supportDonationAlertsHint,
                 trailing = Icons.AutoMirrored.Rounded.OpenInNew,
                 onClick = { onOpenUrl(DonationInfo.DONATIONALERTS_URL) }
+            )
+
+            SupportOption(
+                icon = Icons.Rounded.VpnKey,
+                accent = VpnBlue,
+                title = s.supportVpnSub,
+                subtitle = s.supportVpnSubHint,
+                trailing = Icons.AutoMirrored.Rounded.OpenInNew,
+                onClick = { onOpenUrl(DonationInfo.VPN_BOT_URL) }
             )
 
             SupportOption(

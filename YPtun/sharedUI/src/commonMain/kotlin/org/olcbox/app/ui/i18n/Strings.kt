@@ -186,6 +186,8 @@ interface Strings {
     val supportProjectThanks: String
     val supportCrypto: String
     val supportDonationAlertsHint: String
+    val supportVpnSub: String
+    val supportVpnSubHint: String
     val supportGithubStar: String
     val supportGithubStarHint: String
 
@@ -891,6 +893,8 @@ object RuStrings : Strings {
     override val supportProjectThanks = "Проект живёт на вашей поддержке — спасибо!"
     override val supportCrypto = "Криптовалюта"
     override val supportDonationAlertsHint = "Карты РФ, СБП · для России"
+    override val supportVpnSub = "VPN-подписка от разработчика"
+    override val supportVpnSubHint = "Купите VPN у автора и поддержите проект · Telegram @quofortpostbot"
     override val supportGithubStar = "Поставить звезду на GitHub"
     override val supportGithubStarHint = "Бесплатный способ помочь проекту"
     override val autoConnectTitle = "Автоподключение при запуске"
@@ -1544,6 +1548,8 @@ object EnStrings : Strings {
     override val supportProjectThanks = "The project lives on your support — thank you!"
     override val supportCrypto = "Crypto"
     override val supportDonationAlertsHint = "Cards, SBP · for Russia"
+    override val supportVpnSub = "VPN subscription from the developer"
+    override val supportVpnSubHint = "Buy VPN from the author and support the project · Telegram @quofortpostbot"
     override val supportGithubStar = "Star the project on GitHub"
     override val supportGithubStarHint = "A free way to help the project"
     override val autoConnectTitle = "Auto-connect on launch"
@@ -2197,6 +2203,8 @@ object FaStrings : Strings {
     override val supportProjectThanks = "این پروژه با حمایت شما زنده است — سپاس!"
     override val supportCrypto = "ارز دیجیتال"
     override val supportDonationAlertsHint = "کارت و SBP · برای روسیه"
+    override val supportVpnSub = "اشتراک VPN از توسعه‌دهنده"
+    override val supportVpnSubHint = "VPN را از سازنده بخرید و از پروژه حمایت کنید · تلگرام @quofortpostbot"
     override val supportGithubStar = "ستاره‌ی GitHub بدهید"
     override val supportGithubStarHint = "راهی رایگان برای کمک به پروژه"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
@@ -2850,6 +2858,8 @@ object ZhStrings : Strings {
     override val supportProjectThanks = "项目依靠您的支持 — 谢谢！"
     override val supportCrypto = "加密货币"
     override val supportDonationAlertsHint = "俄罗斯银行卡、SBP · 适用于俄罗斯"
+    override val supportVpnSub = "开发者的 VPN 订阅"
+    override val supportVpnSubHint = "向作者购买 VPN 以支持项目 · Telegram @quofortpostbot"
     override val supportGithubStar = "在 GitHub 上点个星标"
     override val supportGithubStarHint = "免费支持项目的方式"
     override val autoConnectTitle = "启动时自动连接"
