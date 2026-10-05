@@ -274,7 +274,7 @@ fun AndroidMainScreen(
             }
 
             updateDownloadProgress = 0f
-            updateStatusText = s.downloadingAsset(info.asset.name)
+            updateStatusText = s.downloadingAsset(info.downloadAsset.name)
             // Prefer a binary delta (small patch applied to the installed APK) when one is published;
             // transparently falls back to a full download, and signature-verifies either way.
             val result = updateInstaller.resolveUpdateApk(info) { progress ->

@@ -55,8 +55,15 @@ object DesktopRuntimeMode {
         if (!isWindows) return@lazy false
         val dir = launcherDir() ?: return@lazy false
         if (Files.exists(dir.resolve(MARKER_FILE_NAME))) return@lazy true
+        // The Inno installer drops unins000.exe next to the launcher wherever the user pointed it —
+        // an install in D:\Apps used to look "not installed" and got the portable update.
+        if (hasUninstaller(dir)) return@lazy false
         !isUnderInstallRoot(dir)
     }
+
+    private fun hasUninstaller(dir: Path): Boolean = runCatching {
+        Files.newDirectoryStream(dir, "unins*.exe").use { it.iterator().hasNext() }
+    }.getOrDefault(false)
 
     private fun isUnderInstallRoot(dir: Path): Boolean {
         val path = dir.toAbsolutePath().toString().lowercase(Locale.ROOT)
