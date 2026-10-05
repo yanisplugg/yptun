@@ -186,6 +186,8 @@ interface Strings {
     val supportProjectThanks: String
     val supportCrypto: String
     val supportDonationAlertsHint: String
+    val supportGithubStar: String
+    val supportGithubStarHint: String
 
     // Application behavior
     val autoConnectTitle: String
@@ -889,6 +891,8 @@ object RuStrings : Strings {
     override val supportProjectThanks = "Проект живёт на вашей поддержке — спасибо!"
     override val supportCrypto = "Криптовалюта"
     override val supportDonationAlertsHint = "Карты РФ, СБП · для России"
+    override val supportGithubStar = "Поставить звезду на GitHub"
+    override val supportGithubStarHint = "Бесплатный способ помочь проекту"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
     override val showAutoButtonTitle = "Кнопка «Авто» на главном"
@@ -1540,6 +1544,8 @@ object EnStrings : Strings {
     override val supportProjectThanks = "The project lives on your support — thank you!"
     override val supportCrypto = "Crypto"
     override val supportDonationAlertsHint = "Cards, SBP · for Russia"
+    override val supportGithubStar = "Star the project on GitHub"
+    override val supportGithubStarHint = "A free way to help the project"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
     override val showAutoButtonTitle = "\"Auto\" button on Home"
@@ -2191,6 +2197,8 @@ object FaStrings : Strings {
     override val supportProjectThanks = "این پروژه با حمایت شما زنده است — سپاس!"
     override val supportCrypto = "ارز دیجیتال"
     override val supportDonationAlertsHint = "کارت و SBP · برای روسیه"
+    override val supportGithubStar = "ستاره‌ی GitHub بدهید"
+    override val supportGithubStarHint = "راهی رایگان برای کمک به پروژه"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
     override val showAutoButtonTitle = "دکمه «خودکار» در خانه"
@@ -2842,6 +2850,8 @@ object ZhStrings : Strings {
     override val supportProjectThanks = "项目依靠您的支持 — 谢谢！"
     override val supportCrypto = "加密货币"
     override val supportDonationAlertsHint = "俄罗斯银行卡、SBP · 适用于俄罗斯"
+    override val supportGithubStar = "在 GitHub 上点个星标"
+    override val supportGithubStarHint = "免费支持项目的方式"
     override val autoConnectTitle = "启动时自动连接"
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
     override val showAutoButtonTitle = "主屏“自动”按钮"

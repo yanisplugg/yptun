@@ -17,4 +17,7 @@ object DonationInfo {
 
     /** DonationAlerts page for donors in Russia (cards, SBP). */
     const val DONATIONALERTS_URL = "https://www.donationalerts.com/r/yanisplugg"
+
+    /** Repository page — a star is a free way to support the project. */
+    const val GITHUB_URL = "https://github.com/yanisplugg/yptun/tree/main"
 }

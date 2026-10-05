@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.rounded.CurrencyBitcoin
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Payments
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,6 +38,7 @@ import org.olcbox.app.DonationInfo
 import org.olcbox.app.ui.i18n.LocalStrings
 
 private val DonationAlertsOrange = Color(0xFFF57D07)
+private val GithubStarGold = Color(0xFFE3B341)
 
 /**
  * "Support the project" block for the settings screen: a crypto wallet (tap = copy) and a
@@ -99,6 +101,15 @@ fun SupportProjectSection(
                 subtitle = s.supportDonationAlertsHint,
                 trailing = Icons.AutoMirrored.Rounded.OpenInNew,
                 onClick = { onOpenUrl(DonationInfo.DONATIONALERTS_URL) }
+            )
+
+            SupportOption(
+                icon = Icons.Rounded.Star,
+                accent = GithubStarGold,
+                title = s.supportGithubStar,
+                subtitle = s.supportGithubStarHint,
+                trailing = Icons.AutoMirrored.Rounded.OpenInNew,
+                onClick = { onOpenUrl(DonationInfo.GITHUB_URL) }
             )
         }
     }
