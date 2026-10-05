@@ -81,7 +81,7 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.LightMode
-import org.olcbox.app.DonationInfo
+import org.olcbox.app.ui.components.SupportProjectSection
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
@@ -925,30 +925,12 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = { SettingsPlatform.openUri("https://t.me/YPtun") }
             )
-            SettingsGroupDivider()
-            // One TON wallet takes USDT, TON and GRAM alike. Clicking copies it — the address is far
-            // too long to retype from a screen, and it is shown in full so it can be checked.
-            SettingsGroupRow(
-                title = s.donate,
-                subtitle = s.donateSubtitle,
-                icon = Icons.Rounded.Favorite,
-                enabled = true,
-                onClick = {
-                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    SettingsPlatform.toast(s.donateAddressCopied)
-                }
-            )
-            SettingsGroupRow(
-                title = DonationInfo.TON_ADDRESS,
-                icon = Icons.Outlined.ContentCopy,
-                enabled = true,
-                showChevron = false,
-                onClick = {
-                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    SettingsPlatform.toast(s.donateAddressCopied)
-                }
-            )
         }
+
+        SupportProjectSection(
+            onCopyAddress = { it -> hwidClipboard.setText(AnnotatedString(it)); SettingsPlatform.toast(s.donateAddressCopied) },
+            onOpenUrl = { it -> SettingsPlatform.openUri(it) }
+        )
 
         Spacer(Modifier.height(4.dp))
     }
@@ -1009,6 +991,12 @@ private fun ConnectionSettingsContent(
                     onClick = onSplitTunnelingClick
                 )
             }
+
+            RoutingToggleRow(
+                title = s.setSystemProxyTitle,
+                subtitle = if (appBehavior.setSystemProxy) s.setSystemProxyOn else s.setSystemProxyOff,
+                checked = appBehavior.setSystemProxy
+            ) { onAppBehaviorChanged(appBehavior.copy(setSystemProxy = it)) }
 
             RoutingToggleRow(
                 title = s.telegramProxyTitle,
@@ -3704,6 +3692,12 @@ private fun ApplicationBehaviorContent(
             subtitle = s.showSubscriptionDescriptionSubtitle,
             checked = settings.showSubscriptionDescription
         ) { onChanged(settings.copy(showSubscriptionDescription = it)) }
+
+        RoutingToggleRow(
+            title = s.showSubscriptionIconsTitle,
+            subtitle = s.showSubscriptionIconsSubtitle,
+            checked = settings.showSubscriptionIcons
+        ) { onChanged(settings.copy(showSubscriptionIcons = it)) }
 
         RoutingToggleRow(
             title = s.hideEndpointWhenDescriptionTitle,

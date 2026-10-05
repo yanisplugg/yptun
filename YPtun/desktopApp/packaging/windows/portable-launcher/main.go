@@ -19,7 +19,7 @@
 package main
 
 import (
-	"archive/zip"
+	"archive/tar"
 	"debug/pe"
 	"encoding/binary"
 	"io"
@@ -30,8 +30,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Set at build time: -ldflags "-X main.version=3.2.1 -X main.buildID=<hash>".
@@ -105,10 +106,6 @@ func ensureUnpacked() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	reader, err := zip.NewReader(io.NewSectionReader(f, offset, size), size)
-	if err != nil {
-		return "", err
-	}
 
 	// Unpack beside the final directory and rename, so an interrupted first run cannot leave a
 	// half-written app image that later launches would happily start.
@@ -118,29 +115,65 @@ func ensureUnpacked() (string, error) {
 		return "", err
 	}
 
-	// One file after another left the first launch bound by a single inflate stream (~230 MB of
-	// jars + JRE); the entries are independent, so unpack them on every core.
-	progress := showProgress(len(reader.File))
-	jobs := make(chan *zip.File)
-	var done atomic.Int64
+	// The payload is one zstd stream holding a tar of the app image (see cmd/pack). Decoding is
+	// sequential but fast (the whole image in about a second); the disk writes are what take time,
+	// so those fan out over every core.
+	counter := &countingReader{r: io.NewSectionReader(f, offset, size)}
+	dec, err := zstd.NewReader(counter, zstd.WithDecoderMaxWindow(1<<28))
+	if err != nil {
+		return "", err
+	}
+	defer dec.Close()
+	tr := tar.NewReader(dec)
+
+	const progressSteps = 1000
+	progress := showProgress(progressSteps)
+	type job struct {
+		name string
+		data []byte
+	}
+	jobs := make(chan job, 4)
 	var firstErr error
 	var errOnce sync.Once
+	var failed atomic.Bool
+	fail := func(err error) {
+		errOnce.Do(func() { firstErr = err })
+		failed.Store(true)
+	}
 	var wg sync.WaitGroup
 	for w := 0; w < runtime.NumCPU(); w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for entry := range jobs {
-				if err := extract(entry, staging); err != nil {
-					errOnce.Do(func() { firstErr = err })
-					continue
+			for j := range jobs {
+				if err := writeEntry(staging, j.name, j.data); err != nil {
+					fail(err)
 				}
-				progress.set(int(done.Add(1)))
 			}
 		}()
 	}
-	for _, entry := range reader.File {
-		jobs <- entry
+	for !failed.Load() {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fail(err)
+			break
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			if err := writeEntry(staging, hdr.Name, nil); err != nil {
+				fail(err)
+			}
+			continue
+		}
+		data := make([]byte, hdr.Size)
+		if _, err := io.ReadFull(tr, data); err != nil {
+			fail(err)
+			break
+		}
+		jobs <- job{hdr.Name, data}
+		progress.set(int(int64(progressSteps) * counter.n.Load() / size))
 	}
 	close(jobs)
 	wg.Wait()
@@ -242,31 +275,34 @@ func findPayload(r io.ReaderAt, end int64) (size int64, offset int64, err error)
 	return 0, 0, errString("this launcher carries no app image (rebuild it with build-portable.ps1)")
 }
 
-func extract(entry *zip.File, root string) error {
+// writeEntry stores one tar entry under root; a nil data on a directory name just creates it.
+func writeEntry(root, name string, data []byte) error {
 	// Reject anything that would escape the target directory (zip-slip).
-	clean := filepath.Clean(strings.ReplaceAll(entry.Name, "/", string(os.PathSeparator)))
+	clean := filepath.Clean(strings.ReplaceAll(name, "/", string(os.PathSeparator)))
 	if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
-		return errString("refusing to unpack " + entry.Name)
+		return errString("refusing to unpack " + name)
 	}
 	path := filepath.Join(root, clean)
-	if entry.FileInfo().IsDir() {
+	if strings.HasSuffix(name, "/") {
 		return os.MkdirAll(path, 0o755)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	src, err := entry.Open()
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, entry.Mode()|0o200)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-	_, err = io.Copy(dst, src)
-	return err
+	return os.WriteFile(path, data, 0o644)
+}
+
+// countingReader tracks how much of the compressed payload has been consumed, which is what the
+// progress bar shows.
+type countingReader struct {
+	r io.Reader
+	n atomic.Int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // withoutJavaOptions drops the env vars every JVM silently prepends its options from. The app
@@ -296,12 +332,46 @@ func launchEnv(env []string) []string {
 	return env
 }
 
-// launch starts the app detached and returns immediately: the launcher must not linger as a parent
-// process (it would keep a console-less stub alive for the whole session and show up in the tree).
+// cleanPath removes PATH entries that hold another Java (java.exe / jvm.dll) and puts the app's own
+// runtimein first. The bundled JRE never needs any of them, and an old Java 8 install on PATH is the
+// classic companion of "Failed to launch JVM".
+func cleanPath(env []string, runtimeBin string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, value, _ := strings.Cut(kv, "=")
+		if !strings.EqualFold(name, "PATH") {
+			out = append(out, kv)
+			continue
+		}
+		kept := []string{runtimeBin}
+		for _, dir := range filepath.SplitList(value) {
+			if dir == "" || holdsJava(dir) {
+				continue
+			}
+			kept = append(kept, dir)
+		}
+		out = append(out, name+"="+strings.Join(kept, string(os.PathListSeparator)))
+	}
+	return out
+}
+
+func holdsJava(dir string) bool {
+	for _, f := range []string{"java.exe", "javaw.exe", "jvm.dll"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// launch starts the app and watches its first seconds (see watchStartup): the launcher leaves as
+// soon as the app shows a window, so it does not linger as a parent for the whole session, but a
+// failed start gets an explanation instead of a bare "Failed to launch JVM".
 func launch(exe string) error {
+	dir := filepath.Dir(exe)
 	attr := &os.ProcAttr{
-		Dir:   filepath.Dir(exe),
-		Env:   launchEnv(os.Environ()),
+		Dir:   dir,
+		Env:   cleanPath(launchEnv(os.Environ()), filepath.Join(dir, "runtime", "bin")),
 		Files: []*os.File{nil, nil, nil},
 		Sys:   &syscall.SysProcAttr{HideWindow: true},
 	}
@@ -309,7 +379,12 @@ func launch(exe string) error {
 	if err != nil {
 		return err
 	}
-	return proc.Release()
+	pid := proc.Pid
+	if err := proc.Release(); err != nil {
+		return err
+	}
+	watchStartup(pid, dir)
+	return nil
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -339,6 +414,7 @@ const (
 	wsBorder    = 0x00800000
 	wsExTopmost = 0x00000008
 	wsExToolWin = 0x00000080
+	wsExLayered = 0x00080000
 
 	pbmSetRange32 = 0x0406
 	pbmSetPos     = 0x0402
@@ -371,130 +447,6 @@ func claimSingleInstance() bool {
 		return false
 	}
 	return true
-}
-
-// progressBar is driven by a channel, never by cross-thread window calls.
-//
-// A window belongs to the thread that created it, and SendMessage from any OTHER thread blocks
-// until that thread pumps its message queue. Go moves goroutines between OS threads freely, so the
-// first version — create the window here, SendMessage from the extraction loop — deadlocked on the
-// very first file and the portable just hung with no window at all. Everything Win32 now happens on
-// one locked OS thread that runs a real message pump; the extraction loop only sends numbers.
-type progressBar struct {
-	updates chan int
-	done    chan struct{}
-}
-
-func showProgress(total int) *progressBar {
-	p := &progressBar{}
-	if total <= 0 {
-		return p
-	}
-	p.updates = make(chan int, 64)
-	p.done = make(chan struct{})
-	ready := make(chan struct{})
-	go p.run(total, ready)
-	<-ready
-	return p
-}
-
-func (p *progressBar) run(total int, ready chan struct{}) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	defer close(p.done)
-
-	hwnd := createProgressWindow()
-	close(ready)
-	if hwnd != 0 {
-		sendMessageW.Call(hwnd, pbmSetRange32, 0, uintptr(total))
-	}
-	defer func() {
-		if hwnd != 0 {
-			destroyWindow.Call(hwnd)
-		}
-	}()
-
-	var msg [48]byte // MSG is 48 bytes on amd64/arm64; we never read its fields
-	for {
-		select {
-		case done, ok := <-p.updates:
-			if !ok {
-				return
-			}
-			if hwnd != 0 {
-				sendMessageW.Call(hwnd, pbmSetPos, uintptr(done), 0)
-			}
-		default:
-		}
-		// Keep the bar painting without ever blocking on the queue.
-		for {
-			got, _, _ := peekMessageW.Call(uintptr(unsafe.Pointer(&msg[0])), 0, 0, 0, pmRemove)
-			if got == 0 {
-				break
-			}
-			translateMessage.Call(uintptr(unsafe.Pointer(&msg[0])))
-			dispatchMessageW.Call(uintptr(unsafe.Pointer(&msg[0])))
-		}
-		select {
-		case done, ok := <-p.updates:
-			if !ok {
-				return
-			}
-			if hwnd != 0 {
-				sendMessageW.Call(hwnd, pbmSetPos, uintptr(done), 0)
-			}
-		case <-time.After(30 * time.Millisecond):
-		}
-	}
-}
-
-// createProgressWindow uses a predefined control class as a top-level window, so there is no window
-// class to register and no WndProc callback. Returns 0 if anything fails — unpacking then simply
-// proceeds without a bar.
-func createProgressWindow() uintptr {
-	var icc struct {
-		size, flags uint32
-	}
-	icc.size = uint32(unsafe.Sizeof(icc))
-	icc.flags = 0x20 // ICC_PROGRESS_CLASS
-	initCommonControl.Call(uintptr(unsafe.Pointer(&icc)))
-
-	class, err := syscall.UTF16PtrFromString("msctls_progress32")
-	if err != nil {
-		return 0
-	}
-	empty, _ := syscall.UTF16PtrFromString("")
-	const w, h = 360, 24
-	screenW, _, _ := getSystemMetrics.Call(smCxScreen)
-	screenH, _, _ := getSystemMetrics.Call(smCyScreen)
-	hwnd, _, _ := createWindowExW.Call(
-		wsExTopmost|wsExToolWin,
-		uintptr(unsafe.Pointer(class)),
-		uintptr(unsafe.Pointer(empty)),
-		wsPopup|wsVisible|wsBorder,
-		(screenW-w)/2, (screenH-h)/2, w, h,
-		0, 0, 0, 0,
-	)
-	return hwnd
-}
-
-func (p *progressBar) set(done int) {
-	if p.updates == nil {
-		return
-	}
-	select {
-	case p.updates <- done:
-	default: // the bar is behind; dropping a tick is better than slowing the unpack
-	}
-}
-
-func (p *progressBar) close() {
-	if p.updates == nil {
-		return
-	}
-	close(p.updates)
-	<-p.done
-	p.updates = nil
 }
 
 func fatal(message string) {

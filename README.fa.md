@@ -8,9 +8,9 @@
 
 <br>
 
-[![آخرین نسخه](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-[![دانلودها](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/olcvpn-client/releases)
-[![ستاره‌ها](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
+[![آخرین نسخه](https://img.shields.io/github/v/release/yanisplugg/yptun?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/yptun/releases/latest)
+[![دانلودها](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/yptun/releases)
+[![ستاره‌ها](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
 
 💎 **حمایت از پروژه** — TON یا USDT (شبکه TON):
 
@@ -86,7 +86,7 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 
 ## دانلود
 
-آخرین APK امضاشده را از **[صفحه‌ی انتشارها](https://github.com/yanisplugg/olcvpn-client/releases/latest)** بگیرید.
+آخرین APK امضاشده را از **[صفحه‌ی انتشارها](https://github.com/yanisplugg/yptun/releases/latest)** بگیرید.
 
 | نسخه | برای |
 |------|------|

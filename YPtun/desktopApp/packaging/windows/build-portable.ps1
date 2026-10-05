@@ -59,15 +59,75 @@ $work = Join-Path $desktopApp "build\tmp\portable-$Arch"
 New-Item -ItemType Directory -Force $work | Out-Null
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
-# 1. The payload: the app image as a plain zip (Deflate, so the launcher needs nothing but the Go
-#    standard library to read it back).
-$archive = Join-Path $work "app.zip"
+# 0. Slim material-icons-extended. The jar ships ~11000 icon classes (37 MB) and the app uses a few
+#    dozen. Icons are plain static references (androidx/compose/material/icons/<style>/<Name>Kt in a
+#    class constant pool), so every class that no jar of the app image mentions can go. Done on a
+#    staged copy: the shared app image (used by the installer too) is left untouched. If anything
+#    looks off the full jar is kept - a bigger file is better than a missing icon.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression
+$stage = Join-Path $work "stage"
+Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "Staging app image ($Arch)..."
+Copy-Item $AppDir $stage -Recurse
+$iconsJar = Get-ChildItem (Join-Path $stage "app") -Filter "material-icons-extended-*.jar" | Select-Object -First 1
+if ($iconsJar) {
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $rx = [regex]'androidx/compose/material/icons/(?:automirrored/)?(?:filled|outlined|rounded|sharp|twotone)/[A-Za-z0-9_]+Kt'
+    $used = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($jar in Get-ChildItem (Join-Path $stage "app") -Filter "*.jar") {
+        if ($jar.FullName -eq $iconsJar.FullName) { continue }
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($jar.FullName)
+        try {
+            foreach ($entry in $zip.Entries) {
+                if (-not $entry.FullName.EndsWith(".class")) { continue }
+                $ms = New-Object IO.MemoryStream
+                $in = $entry.Open(); $in.CopyTo($ms); $in.Dispose()
+                foreach ($m in $rx.Matches($latin1.GetString($ms.ToArray()))) { [void]$used.Add($m.Value) }
+            }
+        } finally { $zip.Dispose() }
+    }
+    Write-Host "Icon classes referenced by the app: $($used.Count)"
+    if ($used.Count -ge 5) {
+        $slim = Join-Path $work "icons-slim.jar"
+        Remove-Item $slim -Force -ErrorAction SilentlyContinue
+        $src = [System.IO.Compression.ZipFile]::OpenRead($iconsJar.FullName)
+        $dst = [System.IO.Compression.ZipFile]::Open($slim, [System.IO.Compression.ZipArchiveMode]::Create)
+        $kept = 0; $dropped = 0
+        try {
+            foreach ($entry in $src.Entries) {
+                $name = $entry.FullName
+                if ($name -match '^(androidx/compose/material/icons/(?:automirrored/)?(?:filled|outlined|rounded|sharp|twotone)/[A-Za-z0-9_]+Kt)(\$.*)?\.class$') {
+                    if (-not $used.Contains($Matches[1])) { $dropped++; continue }
+                }
+                $kept++
+                $out = $dst.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal).Open()
+                $in = $entry.Open(); $in.CopyTo($out); $in.Dispose(); $out.Dispose()
+            }
+        } finally { $src.Dispose(); $dst.Dispose() }
+        Write-Host "material-icons-extended: kept $kept entries, dropped $dropped"
+        Copy-Item $slim $iconsJar.FullName -Force
+        Remove-Item $slim -Force
+    } else {
+        Write-Host "Too few icon references found - keeping material-icons-extended as is"
+    }
+}
+
+# 1. The payload: the app image as a tar stream compressed with zstd (see portable-launcher/cmd/pack;
+#    jars are stored uncompressed first so zstd can squeeze their contents). ~25% smaller than the
+#    Deflate zip it replaces and it unpacks faster. The launcher embeds the same zstd decoder.
+$archive = Join-Path $work "app.zst"
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
 Write-Host "Compressing app image ($Arch)..."
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::CreateFromDirectory(
-    $AppDir, $archive, [System.IO.Compression.CompressionLevel]::Optimal, $false)
-
+Push-Location (Join-Path $here "portable-launcher")
+try {
+    # No GOOS/GOARCH here: this tool runs on the build machine, whatever the target arch is.
+    & $go run ./cmd/pack $stage $archive
+    if ($LASTEXITCODE -ne 0) { throw "pack failed with exit code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}
+Remove-Item $stage -Recurse -Force
 # 2. Fingerprint of that payload. The launcher unpacks into a directory named after it, so two
 #    builds of the SAME version never collide - and that is the normal case here, because fixes are
 #    asked for without changing the version. Keyed on the version alone, a newly built portable

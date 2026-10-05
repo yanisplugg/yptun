@@ -83,6 +83,9 @@ val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
  */
 val LocalShowSubscriptionDescription = staticCompositionLocalOf { false }
 
+/** Whether the subscription group header shows the panel-provided icon left of the title. On by default. */
+val LocalShowSubscriptionIcons = staticCompositionLocalOf { true }
+
 /**
  * When true, a location row that HAS a description hides its protocol/IP "endpoint" subtitle (showing
  * the description in its place). Rows without a description always show the endpoint. On by default.

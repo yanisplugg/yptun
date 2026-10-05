@@ -8,9 +8,9 @@
 
 <br>
 
-[![最新版本](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=%E4%B8%8B%E8%BD%BD)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-[![下载量](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043&label=%E4%B8%8B%E8%BD%BD%E9%87%8F)](https://github.com/yanisplugg/olcvpn-client/releases)
-[![星标](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
+[![最新版本](https://img.shields.io/github/v/release/yanisplugg/yptun?style=for-the-badge&color=4c8eff&label=%E4%B8%8B%E8%BD%BD)](https://github.com/yanisplugg/yptun/releases/latest)
+[![下载量](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=%E4%B8%8B%E8%BD%BD%E9%87%8F)](https://github.com/yanisplugg/yptun/releases)
+[![星标](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
 
 💎 **支持项目** — TON 或 USDT（TON 网络）：
 
@@ -82,7 +82,7 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 
 ## 下载
 
-从 **[发布页](https://github.com/yanisplugg/olcvpn-client/releases/latest)** 获取最新的已签名 APK。
+从 **[发布页](https://github.com/yanisplugg/yptun/releases/latest)** 获取最新的已签名 APK。
 
 | 版本 | 适用 |
 |------|------|

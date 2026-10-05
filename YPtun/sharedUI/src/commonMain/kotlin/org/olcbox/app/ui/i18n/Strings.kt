@@ -183,6 +183,13 @@ interface Strings {
     val donate: String
     val donateSubtitle: String
     val donateAddressCopied: String
+    val supportProjectThanks: String
+    val supportCrypto: String
+    val supportDonationAlertsHint: String
+    val supportVpnSub: String
+    val supportVpnSubHint: String
+    val supportGithubStar: String
+    val supportGithubStarHint: String
 
     // Application behavior
     val autoConnectTitle: String
@@ -380,6 +387,9 @@ interface Strings {
     val securedSocksProxy: String
     val securedSocksProxySubtitle: String
     val securedSocksProxyOff: String
+    val setSystemProxyTitle: String
+    val setSystemProxyOn: String
+    val setSystemProxyOff: String
     val splitTunneling: String
     val routingBehavior: String
     val appsUsingYptun: String
@@ -511,6 +521,8 @@ interface Strings {
     val showSubscriptionExpirySubtitle: String
     val showSubscriptionDescriptionTitle: String
     val showSubscriptionDescriptionSubtitle: String
+    val showSubscriptionIconsTitle: String
+    val showSubscriptionIconsSubtitle: String
     val subscriptionUserAgentLabel: String
     val subscriptionUserAgentSubtitle: String
     val globalEngineLabel: String
@@ -878,6 +890,13 @@ object RuStrings : Strings {
     override val donate = "Поддержать проект"
     override val donateSubtitle = "USDT · TON · GRAM — нажмите, чтобы скопировать адрес"
     override val donateAddressCopied = "Адрес кошелька скопирован"
+    override val supportProjectThanks = "Проект живёт на вашей поддержке — спасибо!"
+    override val supportCrypto = "Криптовалюта"
+    override val supportDonationAlertsHint = "Карты РФ, СБП · для России"
+    override val supportVpnSub = "VPN-подписка от разработчика"
+    override val supportVpnSubHint = "Купите VPN у автора и поддержите проект · Telegram @quofortpostbot"
+    override val supportGithubStar = "Поставить звезду на GitHub"
+    override val supportGithubStarHint = "Бесплатный способ помочь проекту"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
     override val showAutoButtonTitle = "Кнопка «Авто» на главном"
@@ -1061,6 +1080,9 @@ object RuStrings : Strings {
     override val securedSocksProxy = "Защищённый SOCKS-прокси"
     override val securedSocksProxySubtitle = "Логин и пароль на своём порту"
     override val securedSocksProxyOff = "Выключен · 127.0.0.1:8080 без авторизации"
+    override val setSystemProxyTitle = "Системный прокси (режим Proxy)"
+    override val setSystemProxyOn = "Прокси прописывается в систему — браузеры и приложения идут через него сами"
+    override val setSystemProxyOff = "Система не затрагивается — укажите адрес прокси только в нужных приложениях"
     override val splitTunneling = "Раздельное туннелирование"
     override val routingBehavior = "Поведение маршрутизации"
     override val appsUsingYptun = "Приложения через YPtun"
@@ -1171,6 +1193,8 @@ object RuStrings : Strings {
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
     override val showSubscriptionDescriptionTitle = "Показывать описание подписки"
     override val showSubscriptionDescriptionSubtitle = "Текст от панели (announce) под названием подписки"
+    override val showSubscriptionIconsTitle = "Показывать иконки подписок"
+    override val showSubscriptionIconsSubtitle = "Иконка от панели слева от названия подписки"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 запрашивает полный конфиг (FakeDNS, dns.hosts); YPtun — обычно только ссылки"
     override val globalEngineLabel = "Движок для VLESS (глобально)"
@@ -1521,6 +1545,13 @@ object EnStrings : Strings {
     override val donate = "Support the project"
     override val donateSubtitle = "USDT · TON · GRAM — tap to copy the address"
     override val donateAddressCopied = "Wallet address copied"
+    override val supportProjectThanks = "The project lives on your support — thank you!"
+    override val supportCrypto = "Crypto"
+    override val supportDonationAlertsHint = "Cards, SBP · for Russia"
+    override val supportVpnSub = "VPN subscription from the developer"
+    override val supportVpnSubHint = "Buy VPN from the author and support the project · Telegram @quofortpostbot"
+    override val supportGithubStar = "Star the project on GitHub"
+    override val supportGithubStarHint = "A free way to help the project"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
     override val showAutoButtonTitle = "\"Auto\" button on Home"
@@ -1704,6 +1735,9 @@ object EnStrings : Strings {
     override val securedSocksProxy = "Secured SOCKS proxy"
     override val securedSocksProxySubtitle = "Username and password on a port of your choosing"
     override val securedSocksProxyOff = "Off · 127.0.0.1:8080, no authentication"
+    override val setSystemProxyTitle = "System proxy (Proxy mode)"
+    override val setSystemProxyOn = "The proxy is set system-wide — browsers and apps use it automatically"
+    override val setSystemProxyOff = "System settings are left alone — point only the apps you want at the proxy address"
     override val splitTunneling = "Split Tunneling"
     override val routingBehavior = "Routing Behavior"
     override val appsUsingYptun = "Apps Using YPtun"
@@ -1814,6 +1848,8 @@ object EnStrings : Strings {
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val showSubscriptionDescriptionTitle = "Show subscription description"
     override val showSubscriptionDescriptionSubtitle = "Show the panel's text (announce) under the subscription name"
+    override val showSubscriptionIconsTitle = "Show subscription icons"
+    override val showSubscriptionIconsSubtitle = "The panel's icon to the left of the subscription name"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 fetches the full config (FakeDNS, dns.hosts); YPtun usually returns only links"
     override val globalEngineLabel = "VLESS engine (global)"
@@ -2164,6 +2200,13 @@ object FaStrings : Strings {
     override val donate = "حمایت از پروژه"
     override val donateSubtitle = "USDT · TON · GRAM — برای کپی آدرس ضربه بزنید"
     override val donateAddressCopied = "آدرس کیف پول کپی شد"
+    override val supportProjectThanks = "این پروژه با حمایت شما زنده است — سپاس!"
+    override val supportCrypto = "ارز دیجیتال"
+    override val supportDonationAlertsHint = "کارت و SBP · برای روسیه"
+    override val supportVpnSub = "اشتراک VPN از توسعه‌دهنده"
+    override val supportVpnSubHint = "VPN را از سازنده بخرید و از پروژه حمایت کنید · تلگرام @quofortpostbot"
+    override val supportGithubStar = "ستاره‌ی GitHub بدهید"
+    override val supportGithubStarHint = "راهی رایگان برای کمک به پروژه"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
     override val showAutoButtonTitle = "دکمه «خودکار» در خانه"
@@ -2347,6 +2390,9 @@ object FaStrings : Strings {
     override val securedSocksProxy = "پراکسی SOCKS محافظت‌شده"
     override val securedSocksProxySubtitle = "نام کاربری و رمز عبور روی پورت دلخواه"
     override val securedSocksProxyOff = "خاموش · 127.0.0.1:8080 بدون احراز هویت"
+    override val setSystemProxyTitle = "پروکسی سیستمی (حالت Proxy)"
+    override val setSystemProxyOn = "پروکسی در کل سیستم تنظیم می‌شود — مرورگرها و برنامه‌ها خودکار از آن استفاده می‌کنند"
+    override val setSystemProxyOff = "تنظیمات سیستم دست‌نخورده می‌ماند — آدرس پروکسی را فقط در برنامه‌های دلخواه وارد کنید"
     override val splitTunneling = "تونل‌سازی تفکیکی"
     override val routingBehavior = "رفتار مسیریابی"
     override val appsUsingYptun = "برنامه‌های استفاده‌کننده از YPtun"
@@ -2473,6 +2519,8 @@ object FaStrings : Strings {
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
     override val showSubscriptionDescriptionTitle = "نمایش توضیحات اشتراک"
     override val showSubscriptionDescriptionSubtitle = "نمایش متن پنل (announce) زیر نام اشتراک"
+    override val showSubscriptionIconsTitle = "نمایش آیکون اشتراک‌ها"
+    override val showSubscriptionIconsSubtitle = "آیکون پنل در سمت چپ نام اشتراک"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 پیکربندی کامل (FakeDNS، dns.hosts) را می‌گیرد؛ YPtun معمولاً فقط لینک‌ها"
     override val globalEngineLabel = "موتور VLESS (سراسری)"
@@ -2807,6 +2855,13 @@ object ZhStrings : Strings {
     override val donate = "支持项目"
     override val donateSubtitle = "USDT · TON · GRAM — 点按复制地址"
     override val donateAddressCopied = "钱包地址已复制"
+    override val supportProjectThanks = "项目依靠您的支持 — 谢谢！"
+    override val supportCrypto = "加密货币"
+    override val supportDonationAlertsHint = "俄罗斯银行卡、SBP · 适用于俄罗斯"
+    override val supportVpnSub = "开发者的 VPN 订阅"
+    override val supportVpnSubHint = "向作者购买 VPN 以支持项目 · Telegram @quofortpostbot"
+    override val supportGithubStar = "在 GitHub 上点个星标"
+    override val supportGithubStarHint = "免费支持项目的方式"
     override val autoConnectTitle = "启动时自动连接"
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
     override val showAutoButtonTitle = "主屏“自动”按钮"
@@ -2990,6 +3045,9 @@ object ZhStrings : Strings {
     override val securedSocksProxy = "受保护的 SOCKS 代理"
     override val securedSocksProxySubtitle = "在自选端口上使用用户名和密码"
     override val securedSocksProxyOff = "已关闭 · 127.0.0.1:8080，无需认证"
+    override val setSystemProxyTitle = "系统代理（Proxy 模式）"
+    override val setSystemProxyOn = "代理写入系统设置——浏览器和应用自动使用"
+    override val setSystemProxyOff = "不改动系统设置——仅在需要的应用中填写代理地址"
     override val splitTunneling = "分应用代理"
     override val routingBehavior = "分流行为"
     override val appsUsingYptun = "使用 YPtun 的应用"
@@ -3100,6 +3158,8 @@ object ZhStrings : Strings {
     override val showSubscriptionExpirySubtitle = "在刷新日期下方显示“至 dd.mm.yyyy”"
     override val showSubscriptionDescriptionTitle = "显示订阅说明"
     override val showSubscriptionDescriptionSubtitle = "在订阅名称下方显示面板文本（announce）"
+    override val showSubscriptionIconsTitle = "显示订阅图标"
+    override val showSubscriptionIconsSubtitle = "在订阅名称左侧显示面板图标"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 会获取完整配置（FakeDNS、dns.hosts）；YPtun 通常只返回链接"
     override val globalEngineLabel = "VLESS 内核（全局）"

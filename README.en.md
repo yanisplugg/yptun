@@ -8,9 +8,9 @@
 
 <br>
 
-[![Latest release](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/olcvpn-client/releases)
-[![Stars](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
+[![Latest release](https://img.shields.io/github/v/release/yanisplugg/yptun?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/yptun/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/yptun/releases)
+[![Stars](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
 
 💎 **Support the project** — TON or USDT (TON network):
 
@@ -82,7 +82,7 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 
 ## Download
 
-Grab the latest signed APK from the **[releases page](https://github.com/yanisplugg/olcvpn-client/releases/latest)**.
+Grab the latest signed APK from the **[releases page](https://github.com/yanisplugg/yptun/releases/latest)**.
 
 | Build | For |
 |-------|-----|
@@ -273,7 +273,7 @@ Standing on the shoulders of giants:
 Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 Signed are the Windows installer and portable built by [GitHub Actions](.github/workflows/windows-desktop.yml) from this repository.
 
-- Committers and reviewers: [repository contributors](https://github.com/yanisplugg/olcvpn-client/graphs/contributors)
+- Committers and reviewers: [repository contributors](https://github.com/yanisplugg/yptun/graphs/contributors)
 - Approvers: [repository owner](https://github.com/yanisplugg)
 
 Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user (their servers, subscriptions and the circumvention services they choose), apart from checking GitHub for updates. Details are in [Permissions and why they are needed](#permissions-and-why-they-are-needed).

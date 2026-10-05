@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"bytes"
 	"encoding/binary"
 	"os"
@@ -74,5 +75,29 @@ func TestLaunchEnvCarriesLauncherPath(t *testing.T) {
 	got := launchEnv([]string{"PATH=x", "JAVA_TOOL_OPTIONS=-Xmx1g"})
 	if len(got) != 2 || got[0] != "PATH=x" || got[1] != portableExeEnv+"="+self {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestWriteEntryRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	if err := writeEntry(root, "../evil.txt", []byte("x")); err == nil {
+		t.Fatal("expected a path escaping the target to be refused")
+	}
+	if err := writeEntry(root, "app/ok.txt", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanPathDropsOtherJavaAndPutsRuntimeFirst(t *testing.T) {
+	javaDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(javaDir, "java.exe"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plain := t.TempDir()
+	runtimeBin := t.TempDir()
+	env := cleanPath([]string{"A=1", "Path=" + javaDir + ";" + plain}, runtimeBin)
+	want := "Path=" + runtimeBin + ";" + plain
+	if len(env) != 2 || env[0] != "A=1" || env[1] != want {
+		t.Fatalf("got %v, want path %q", env, want)
 	}
 }

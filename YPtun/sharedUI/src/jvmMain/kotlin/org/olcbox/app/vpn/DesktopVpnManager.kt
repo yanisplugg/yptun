@@ -122,6 +122,9 @@ class DesktopVpnManager private constructor(
      */
     var connectionModeProvider: () -> AndroidConnectionMode = { AndroidConnectionMode.Tun }
 
+    /** Proxy mode: whether to also set the OS system proxy. Defaults to yes, the historical behavior. */
+    var setSystemProxyProvider: () -> Boolean = { true }
+
     /** The mode actually used by the current/last connection — drives the matching cleanup. */
     private var activeDesktopMode: DesktopMode? = null
 
@@ -1007,18 +1010,23 @@ class DesktopVpnManager private constructor(
         // reliably (PAC + SOCKS5 is flaky there). Started ONLY there: it binds the fixed port 10809 —
         // v2rayN's/Happ's HTTP port — so elsewhere it did nothing but fail the whole connect with
         // "Address already in use: bind" whenever one of those was running.
-        if (DesktopPaths.os == DesktopOs.MacOS) {
-            pacServer.start(
-                socksHost = socksSettings.host,
-                socksPort = socksSettings.port,
-                socksUsername = socksSettings.username,
-                socksPassword = socksSettings.password
+        if (!setSystemProxyProvider()) {
+            // «Не перехватывать системный прокси»: listeners only, OS settings stay untouched.
+            addLog("Proxy mode: system proxy left untouched — point apps at the addresses above by hand")
+        } else {
+            if (DesktopPaths.os == DesktopOs.MacOS) {
+                pacServer.start(
+                    socksHost = socksSettings.host,
+                    socksPort = socksSettings.port,
+                    socksUsername = socksSettings.username,
+                    socksPassword = socksSettings.password
+                )
+            }
+            proxyController.enable(
+                httpProxyHostPort = "${socksSettings.host}:$bridgePort",
+                pacUrl = pacServer.url
             )
         }
-        proxyController.enable(
-            httpProxyHostPort = "${socksSettings.host}:$bridgePort",
-            pacUrl = pacServer.url
-        )
 
         if (requestGeneration != generation) {
             throw CancellationException("Desktop start superseded")

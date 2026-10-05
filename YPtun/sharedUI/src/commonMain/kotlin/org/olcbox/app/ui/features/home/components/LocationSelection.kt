@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sort
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.SyncDisabled
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -53,8 +54,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsBytes
+import io.ktor.http.contentType
+import io.ktor.http.isSuccess
+import org.jetbrains.compose.resources.decodeToImageBitmap
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -754,35 +762,146 @@ private fun TrafficProgressBar(location: LocationItem?) {
         else -> available!!
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp)
-            .height(24.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center
+    // Remnawave/Happ `support-url` header: icon button right of the bar, hidden when the panel gives none.
+    val supportUrl = subscription.supportUrl?.takeIf { it.isNotBlank() }
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Filled portion: exact fraction when total is known, otherwise full pill.
         Box(
             modifier = Modifier
-                .fillMaxWidth(fraction ?: 1f)
-                .fillMaxHeight()
+                .weight(1f)
+                .height(24.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.primary)
-                .align(Alignment.CenterStart)
-        )
-        Text(
-            text = text,
-            color = if (fraction == null || fraction > 0.5f) {
-                MaterialTheme.colorScheme.onPrimary
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            // Filled portion: exact fraction when total is known, otherwise full pill.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction ?: 1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+                    .align(Alignment.CenterStart)
+            )
+            Text(
+                text = text,
+                color = if (fraction == null || fraction > 0.5f) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        if (supportUrl != null) {
+            IconButton(
+                onClick = { runCatching { uriHandler.openUri(supportUrl) } },
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = if (isTelegramLink(supportUrl)) TelegramIcon else Icons.Outlined.Public,
+                    contentDescription = s.subscriptionSupport,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+// Decoded icons by URL + disk stamp, so a refreshed subscription (new file) re-decodes while a plain
+// recomposition never re-reads the disk copy.
+private val subscriptionIconCache = mutableMapOf<String, androidx.compose.ui.graphics.painter.Painter?>()
+
+@Composable
+private fun SubscriptionIcon(url: String) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val stamp = org.olcbox.app.data.datasource.SubscriptionIconDisk.stamp(url)
+    val targetPx = (20 * density.density).toInt().coerceAtLeast(1)
+    val key = "$url#$stamp#$targetPx"
+    val painter by androidx.compose.runtime.produceState(subscriptionIconCache[key], key) {
+        if (!subscriptionIconCache.containsKey(key)) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                runCatching {
+                    // Disk copy (written on subscription refresh); download only if it is missing.
+                    val bytes = org.olcbox.app.data.datasource.SubscriptionIconDisk.read(url) ?: run {
+                        val client = org.olcbox.app.data.datasource.createProxyHttpClient()
+                        try {
+                            org.olcbox.app.data.datasource.downloadSubscriptionIcon(client, url)
+                        } finally {
+                            client.close()
+                        }
+                    }?.also { org.olcbox.app.data.datasource.SubscriptionIconDisk.write(url, it) }
+                    if (bytes == null || bytes.isEmpty()) return@runCatching null
+                    if (bytes.decodeToString(endIndex = minOf(bytes.size, 512)).contains("<svg")) {
+                        org.olcbox.app.data.datasource.decodeSvgPainter(bytes, density) // vector: sharp at any size
+                    } else {
+                        // Shrunk once to the on-screen size: drawing a 4000px source every frame froze the UI.
+                        androidx.compose.ui.graphics.painter.BitmapPainter(
+                            bytes.decodeToImageBitmap().downscaledTo(targetPx),
+                            filterQuality = androidx.compose.ui.graphics.FilterQuality.High
+                        )
+                    }
+                }.getOrNull()
+            }
+            subscriptionIconCache[key] = value
+        }
+    }
+    painter?.let {
+        androidx.compose.foundation.Image(
+            painter = it,
+            contentDescription = null,
+            modifier = Modifier
+                .padding(end = 6.dp)
+                .size(20.dp)
+                .clip(RoundedCornerShape(5.dp))
         )
     }
+}
+
+// Halving steps (each <= 2x, High quality) keep a huge source sharp instead of aliasing a one-shot shrink.
+private fun androidx.compose.ui.graphics.ImageBitmap.downscaledTo(targetPx: Int): androidx.compose.ui.graphics.ImageBitmap {
+    var cur = this
+    while (maxOf(cur.width, cur.height) > targetPx) {
+        val k = maxOf(0.5f, targetPx.toFloat() / maxOf(cur.width, cur.height))
+        val w = (cur.width * k).toInt().coerceAtLeast(1)
+        val h = (cur.height * k).toInt().coerceAtLeast(1)
+        val out = androidx.compose.ui.graphics.ImageBitmap(w, h)
+        androidx.compose.ui.graphics.Canvas(out).drawImageRect(
+            image = cur,
+            srcSize = androidx.compose.ui.unit.IntSize(cur.width, cur.height),
+            dstSize = androidx.compose.ui.unit.IntSize(w, h),
+            paint = androidx.compose.ui.graphics.Paint().apply {
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.High
+            }
+        )
+        cur = out
+    }
+    return cur
+}
+
+private fun isTelegramLink(url: String): Boolean {
+    val u = url.trim().lowercase()
+    val host = u.substringAfter("://", "").substringBefore('/').substringBefore('?').removePrefix("www.")
+    return u.startsWith("tg:") || host == "t.me" || host == "telegram.me"
+}
+
+// Telegram logo (Simple Icons, 24x24), drawn here because Material has no brand icons.
+private val TelegramIcon: androidx.compose.ui.graphics.vector.ImageVector by lazy {
+    androidx.compose.ui.graphics.vector.ImageVector.Builder(
+        defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f
+    ).addPath(
+        pathData = androidx.compose.ui.graphics.vector.PathParser().parsePathString(
+            "M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"
+        ).toNodes(),
+        fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Black)
+    ).build()
 }
 
 /**
@@ -1175,6 +1294,14 @@ private fun SubscriptionGroupHeader(
                     tint = MaterialTheme.colorScheme.error
                 )
             }
+            // Panel-provided icon: the `profile-icon` header, else `<subscription page origin>/logo.png`
+            // (where Remnawave pages usually keep it). Drawn only when enabled AND the image loads.
+            if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionIcons.current) {
+                val sub = first?.metadata?.subscription
+                val iconSrc = sub?.iconUrl?.takeIf { it.isNotBlank() }
+                    ?: sub?.webPageUrl?.let { Regex("^https?://[^/?#]+").find(it.trim())?.value }?.plus("/logo.png")
+                iconSrc?.let { SubscriptionIcon(it) }
+            }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
@@ -1278,6 +1405,18 @@ private fun SubscriptionGroupHeader(
 private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     var showDetail by remember { mutableStateOf(false) }
+    // Desktop: the popup follows the mouse pointer (hover in / out); touch: tap shows it for a few seconds.
+    // It is a NON-focusable Popup: a focusable DropdownMenu grabs the pointer, the badge loses hover,
+    // the menu closes, hover returns - visible flicker.
+    val hoverSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val hovered by hoverSource.collectIsHoveredAsState()
+    androidx.compose.runtime.LaunchedEffect(hovered) { showDetail = hovered }
+    androidx.compose.runtime.LaunchedEffect(showDetail) {
+        if (showDetail && !hovered) {
+            kotlinx.coroutines.delay(3_000)
+            showDetail = false
+        }
+    }
 
     Box {
         Icon(
@@ -1287,18 +1426,41 @@ private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
             modifier = Modifier
                 .size(20.dp)
                 .clip(CircleShape)
-                .clickable { showDetail = true }
+                .hoverable(hoverSource)
+                .clickable { showDetail = !showDetail }
         )
-        DropdownMenu(
-            expanded = showDetail,
-            onDismissRequest = { showDetail = false }
-        ) {
-            Text(
-                text = s.subscriptionExpiryFull(dateTime, daysLeft),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-            )
+        if (showDetail) {
+            val gapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.roundToPx() }
+            androidx.compose.ui.window.Popup(
+                // Fully BELOW the badge with a gap: any overlap makes the popup steal the hover -> flicker.
+                popupPositionProvider = remember(gapPx) {
+                    object : androidx.compose.ui.window.PopupPositionProvider {
+                        override fun calculatePosition(
+                            anchorBounds: androidx.compose.ui.unit.IntRect,
+                            windowSize: androidx.compose.ui.unit.IntSize,
+                            layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+                            popupContentSize: androidx.compose.ui.unit.IntSize
+                        ) = androidx.compose.ui.unit.IntOffset(
+                            anchorBounds.left.coerceAtMost(windowSize.width - popupContentSize.width).coerceAtLeast(0),
+                            anchorBounds.bottom + gapPx
+                        )
+                    }
+                },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = false)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shadowElevation = 4.dp
+                ) {
+                    Text(
+                        text = s.subscriptionExpiryFull(dateTime, daysLeft),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
         }
     }
 }

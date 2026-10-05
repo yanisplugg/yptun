@@ -37,7 +37,7 @@ param(
   [ValidateSet("amd64","arm64")][string]$Arch = "amd64",
   [string]$OutDir = ".",
   [string]$OldPortable = "",
-  [string]$Repo = "yanisplugg/olcvpn-client"
+  [string]$Repo = "yanisplugg/yptun"
 )
 
 $ErrorActionPreference = "Stop"
