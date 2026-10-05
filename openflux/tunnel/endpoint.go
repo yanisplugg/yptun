@@ -8,9 +8,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
-
-	"openflux/network"
-	"openflux/utils"
 )
 
 type TunnelLinkEndpoint struct {
@@ -26,7 +23,6 @@ func NewTunnelLinkEndpoint() *TunnelLinkEndpoint {
 
 func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
 	e.packetIn.Add(1)
-	utils.Debugf("<- %d bytes - %s\n", len(data), network.ParsePacketInfo(data))
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData(append([]byte{}, data...)),
 	})
@@ -38,7 +34,6 @@ func (e *TunnelLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcp
 	for _, pkt := range pkts.AsSlice() {
 		data := pkt.ToView().ToSlice()
 		e.packetOut.Add(1)
-		utils.Debugf("-> %d bytes - %s\n", len(data), network.ParsePacketInfo(data))
 		if e.onOutgoingPacket != nil {
 			e.onOutgoingPacket(data)
 		}

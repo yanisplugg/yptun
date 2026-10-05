@@ -5,11 +5,12 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 var (
 	debugLog    *log.Logger
-	verbose     bool
+	verbose     atomic.Bool
 	logMu       sync.RWMutex
 	logCallback func(string)
 )
@@ -21,7 +22,9 @@ func SetLogCallback(cb func(string)) {
 }
 
 func SetVerbose(v bool) {
-	verbose = v
+	verbose.Store(v)
+	logMu.Lock()
+	defer logMu.Unlock()
 	if v && debugLog == nil {
 		debugLog = log.New(os.Stderr, "", log.LstdFlags|log.Lmicroseconds)
 	}
@@ -33,20 +36,24 @@ func EnableDebug() {
 }
 
 func Debugf(format string, args ...interface{}) {
+	if !verbose.Load() {
+		return
+	}
 	msg := fmt.Sprintf(format, args...)
 	logMu.RLock()
 	cb := logCallback
+	dl := debugLog
 	logMu.RUnlock()
 	if cb != nil {
 		cb(msg)
 	}
-	if verbose && debugLog != nil {
-		debugLog.Output(2, msg)
+	if dl != nil {
+		dl.Output(2, msg)
 	}
 }
 
 func IsVerbose() bool {
-	return verbose
+	return verbose.Load()
 }
 
 // SetDebug toggles verbose logging at runtime (off = Debugf becomes a no-op).
@@ -55,7 +62,7 @@ func SetDebug(on bool) {
 		EnableDebug()
 		return
 	}
-	verbose = false
+	verbose.Store(false)
 }
 
 // SafeGo runs fn in a new goroutine, recovering from any panic so a crash in

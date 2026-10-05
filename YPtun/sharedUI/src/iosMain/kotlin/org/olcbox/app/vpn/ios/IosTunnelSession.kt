@@ -2,6 +2,7 @@ package org.olcbox.app.vpn.ios
 
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.autoreleasepool
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -399,23 +400,29 @@ class IosTunnelSession(
         scope.launch {
             while (isActive) {
                 val line = core.pollLog(1_000)
-                if (line.isNotEmpty()) log(line)
+                if (line.isNotEmpty()) {
+                    if (!line.startsWith("openflux: <-") && !line.startsWith("openflux: ->")) {
+                        log(line)
+                    }
+                }
             }
         }
     }
 
     fun log(line: String) {
-        val path = IosSharedStore.path(LOG_FILE)
-        if (!NSFileManager.defaultManager.fileExistsAtPath(path)) {
-            IosSharedStore.writeText(LOG_FILE, "")
-        } else if (IosSharedStore.fileSize(LOG_FILE) > MAX_LOG_BYTES) {
-            IosSharedStore.writeText(LOG_FILE, "[log rotated]\n")
-        }
-        val data: NSData = NSString.create(string = "$line\n").dataUsingEncoding(NSUTF8StringEncoding) ?: return
-        NSFileHandle.fileHandleForWritingAtPath(path)?.let { handle ->
-            handle.seekToEndOfFile()
-            handle.writeData(data)
-            handle.closeFile()
+        autoreleasepool {
+            val path = IosSharedStore.path(LOG_FILE)
+            if (!NSFileManager.defaultManager.fileExistsAtPath(path)) {
+                IosSharedStore.writeText(LOG_FILE, "")
+            } else if (IosSharedStore.fileSize(LOG_FILE) > MAX_LOG_BYTES) {
+                IosSharedStore.writeText(LOG_FILE, "[log rotated]\n")
+            }
+            val data: NSData = NSString.create(string = "$line\n").dataUsingEncoding(NSUTF8StringEncoding) ?: return@autoreleasepool
+            NSFileHandle.fileHandleForWritingAtPath(path)?.let { handle ->
+                handle.seekToEndOfFile()
+                handle.writeData(data)
+                handle.closeFile()
+            }
         }
     }
 

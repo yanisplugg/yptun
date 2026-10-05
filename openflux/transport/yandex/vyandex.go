@@ -51,19 +51,19 @@ type VolgaConfig struct {
 
 func DefaultVolgaConfig() VolgaConfig {
 	return VolgaConfig{
-		MaxIdleConnsPerHost: 2000,
-		MaxIdleConns:        4000,
+		MaxIdleConnsPerHost: 16,
+		MaxIdleConns:        32,
 		IdleConnTimeout:     90 * time.Second,
 		RelayTimeout:        30 * time.Second,
 
-		WorkerCount: 2000,
-		QueueSize:   1000000,
+		WorkerCount: 4,
+		QueueSize:   2048,
 
 		BatchSize:     20,
 		BatchTimeout:  2 * time.Millisecond,
-		BatchMaxBytes: 4 * 1024 * 1024,
+		BatchMaxBytes: 64 * 1024,
 
-		MaxPayloadBytes: 5_000_000,
+		MaxPayloadBytes: 128 * 1024,
 		MinPayloadBytes: 200,
 
 		ReconnectMinDelay:   500 * time.Millisecond,
@@ -82,10 +82,10 @@ var reClientConfig = regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*
 
 var (
 	b64BufPool = sync.Pool{
-		New: func() interface{} { return make([]byte, 0, 16*1024*1024) },
+		New: func() interface{} { return make([]byte, 0, 128*1024) },
 	}
 	jsonBufPool = sync.Pool{
-		New: func() interface{} { return bytes.NewBuffer(make([]byte, 0, 128*1024)) },
+		New: func() interface{} { return bytes.NewBuffer(make([]byte, 0, 64*1024)) },
 	}
 	blobBufPool = sync.Pool{
 		New: func() interface{} { return bytes.NewBuffer(make([]byte, 0, 64*1024)) },
@@ -775,8 +775,8 @@ func (w *wsListener) connect() error {
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: w.config.WSHandshakeTimeout,
-		ReadBufferSize:   4 << 20,
-		WriteBufferSize:  4 << 20,
+		ReadBufferSize:   64 * 1024,
+		WriteBufferSize:  64 * 1024,
 	}
 
 	conn, _, err := dialer.Dial(wsURL, header)
@@ -1004,7 +1004,11 @@ func (t *YandexVolgaTransport) Send(data []byte) error {
 	if t.relay == nil {
 		return fmt.Errorf("transport not started")
 	}
-	return t.relay.Send(data)
+	err := t.relay.Send(data)
+	if err == nil {
+		t.RecordSend(len(data))
+	}
+	return err
 }
 
 func (t *YandexVolgaTransport) Receive(callback func([]byte)) {
@@ -1039,8 +1043,12 @@ func (t *YandexVolgaTransport) keepAliveLoop() {
 		case <-t.keepAliveStop:
 			return
 		case <-ticker.C:
-			if !t.IsRunning() {
-				return
+			if !t.IsRunning() || !t.IsConnected() {
+				continue
+			}
+			// If real packets were sent within the keepalive interval, skip dummy keepalive
+			if time.Since(t.LastSendTime()) < t.config.KeepAliveInterval {
+				continue
 			}
 			_ = t.relay.Send([]byte{0x00})
 		}

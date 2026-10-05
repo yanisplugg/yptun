@@ -283,6 +283,12 @@ func (t *YandexDocsTransport) keepAliveLoop() {
 
 	for t.IsRunning() {
 		<-ticker.C
+		if !t.IsConnected() {
+			continue
+		}
+		if time.Since(t.LastSendTime()) < t.GetConfig().KeepAliveInterval {
+			continue
+		}
 		t.Mu.Lock()
 		session := t.session
 		t.Mu.Unlock()
@@ -291,6 +297,7 @@ func (t *YandexDocsTransport) keepAliveLoop() {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
 				utils.Debugf("[YDOCS] Keep-alive failed: %v", err)
 				t.SetConnected(false)
+				_ = session.Conn.Close()
 			}
 		}
 	}

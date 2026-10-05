@@ -49,6 +49,7 @@ type BaseTransport struct {
 	connected atomic.Int32
 	stats     TransportStats
 	startTime time.Time
+	lastSend  atomic.Int64
 
 	receiveCallback func([]byte)
 	Mu              sync.RWMutex
@@ -127,6 +128,15 @@ func (b *BaseTransport) Stats() TransportStats {
 func (b *BaseTransport) RecordSend(bytes int) {
 	atomic.AddUint64(&b.stats.BytesSent, uint64(bytes))
 	atomic.AddUint64(&b.stats.PacketsSent, 1)
+	b.lastSend.Store(time.Now().UnixNano())
+}
+
+func (b *BaseTransport) LastSendTime() time.Time {
+	ns := b.lastSend.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 func (b *BaseTransport) RecordReceive(bytes int) {

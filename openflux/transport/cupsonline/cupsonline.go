@@ -72,10 +72,10 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		BatchMaxBytes:   32 * 1024,
 		BatchTimeout:    2 * time.Millisecond,
 
-		SendQueueSize: 65536,
+		SendQueueSize: 2048,
 
-		ReadBufferSize:  32 << 20,
-		WriteBufferSize: 32 << 20,
+		ReadBufferSize:  64 * 1024,
+		WriteBufferSize: 64 * 1024,
 
 		MaxPayloadBytes: 16_000_000,
 
