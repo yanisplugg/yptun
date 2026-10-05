@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terms of Service - YPtun</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --surface: #f5f5f7;
+            --surface-border: #e5e5ea;
+            --text-main: #1d1d1f;
+            --text-secondary: #6e6e73;
+            --text-muted: #86868b;
+            --accent: #0071e3;
+            --accent-hover: #0077ed;
+            --nav-bg: rgba(255, 255, 255, 0.8);
+            --card-bg: #ffffff;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #000000;
+                --surface: #1c1c1e;
+                --surface-border: #2c2c2e;
+                --text-main: #f5f5f7;
+                --text-secondary: #86868b;
+                --text-muted: #6e6e73;
+                --accent: #2997ff;
+                --accent-hover: #0077ed;
+                --nav-bg: rgba(0, 0, 0, 0.8);
+                --card-bg: #1c1c1e;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        header {
+            background-color: var(--nav-bg);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            border-bottom: 1px solid var(--surface-border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--text-main);
+            text-decoration: none;
+            letter-spacing: -0.01em;
+        }
+
+        .logo span {
+            color: var(--accent);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.92rem;
+            font-weight: 400;
+            transition: color 0.15s ease;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: var(--text-main);
+        }
+
+        main {
+            max-width: 760px;
+            margin: 56px auto 96px;
+            padding: 0 24px;
+        }
+
+        .doc-header {
+            margin-bottom: 40px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--surface-border);
+        }
+
+        .doc-header h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            margin-bottom: 8px;
+        }
+
+        .doc-meta {
+            color: var(--text-secondary);
+            font-size: 0.92rem;
+        }
+
+        section {
+            margin-bottom: 36px;
+        }
+
+        h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: -0.015em;
+            margin-top: 32px;
+            margin-bottom: 12px;
+            color: var(--text-main);
+        }
+
+        p {
+            font-size: 1rem;
+            color: var(--text-main);
+            margin-bottom: 14px;
+            font-weight: 400;
+        }
+
+        ul {
+            margin: 12px 0 18px 20px;
+        }
+
+        li {
+            font-size: 1rem;
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        strong {
+            font-weight: 600;
+        }
+
+        .callout {
+            background-color: var(--surface);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin: 20px 0;
+            font-size: 0.95rem;
+        }
+
+        .callout p:last-child {
+            margin-bottom: 0;
+        }
+
+        footer {
+            border-top: 1px solid var(--surface-border);
+            padding: 40px 24px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        footer a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            margin: 0 8px;
+        }
+
+        footer a:hover {
+            color: var(--text-main);
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="nav-container">
+        <a href="index.html" class="logo">
+            YPtun
+        </a>
+        <nav class="nav-links">
+            <a href="index.html">Home</a>
+            <a href="terms.html" class="active">Terms</a>
+            <a href="privacy.html">Privacy</a>
+            <a href="support.html">Support</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+    <div class="doc-header">
+        <h1>Terms of Service</h1>
+        <div class="doc-meta">Last Updated: October 5, 2026 &bull; Version 1.0</div>
+    </div>
+
+    <section>
+        <p>Please review these Terms of Service ("Terms") carefully before using the <strong>YPtun</strong> application (the "Application" or "Software") developed for iOS, Android, and Desktop platforms. By downloading, accessing, or using the Application, you agree to be bound by these Terms.</p>
+        <p>If you do not agree to all terms and conditions stated herein, do not install or use the Application.</p>
+    </section>
+
+    <section>
+        <h2>1. Nature of the Application</h2>
+        <p>YPtun is a client-side network utility and routing client designed to manage network tunnels, VPN connections, and protocol configurations (including WireGuard, VLESS, SOCKS5, and compatible protocols).</p>
+        <div class="callout">
+            <p><strong>Decentralized Client Architecture:</strong> The Application does not operate or provide proprietary VPN server clusters as part of its core software distribution. You, the user, supply, import, or choose the network servers and configuration profiles that the Application connects through.</p>
+        </div>
+    </section>
+
+    <section>
+        <h2>2. Grant of License</h2>
+        <p>Subject to these Terms and the applicable platform terms (including Apple Media Services Terms and Conditions), you are granted a limited, personal, non-exclusive, non-transferable, and revocable license to install and use the Software on devices that you own or control.</p>
+        <p>You agree not to:</p>
+        <ul>
+            <li>Decompile, reverse-engineer, or attempt to derive the source code of non-open-source components of the Application, except where permitted by applicable law;</li>
+            <li>Rent, lease, lend, sell, sublicense, or distribute the Application to third parties;</li>
+            <li>Use the Software in any manner that violates applicable local, national, or international laws or regulations.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>3. Acceptable Use Policy</h2>
+        <p>You agree to use YPtun solely for lawful purposes. You must not use the Application to:</p>
+        <ul>
+            <li>Engage in unauthorized access to computer systems, networks, or data (hacking);</li>
+            <li>Transmit malware, viruses, ransomware, or other harmful code;</li>
+            <li>Launch or participate in distributed denial-of-service (DDoS) attacks;</li>
+            <li>Violate intellectual property rights, copyrights, or trade secrets;</li>
+            <li>Transmit or access unlawful, abusive, threatening, or fraudulent content.</li>
+        </ul>
+        <p>Any violation of this Acceptable Use Policy may result in immediate revocation of your license to use the Software.</p>
+    </section>
+
+    <section>
+        <h2>4. User Responsibilities & Third-Party Endpoints</h2>
+        <p>When using the Application, you may import subscription links or connection credentials for third-party servers. You acknowledge and agree that:</p>
+        <ul>
+            <li>You are solely responsible for ensuring you have lawful authorization to access and route traffic through any server configuration you import into YPtun;</li>
+            <li>We do not monitor, endorse, control, or operate third-party proxy or VPN endpoints imported by users;</li>
+            <li>Network performance, stability, availability, and encryption standards depend directly on the external server nodes configured by the user.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>5. Disclaimer of Warranties</h2>
+        <p>The Application is provided on an <strong>"AS IS"</strong> and <strong>"AS AVAILABLE"</strong> basis, without warranties of any kind, whether express, implied, or statutory. To the maximum extent permitted by law, we disclaim all warranties, including but not limited to implied warranties of merchantability, fitness for a particular purpose, uninterrupted operation, and non-infringement.</p>
+        <p>We do not warrant that the Software will meet your specific requirements, that network tunnels will be uninterrupted or error-free, or that security vulnerabilities in third-party endpoints will be prevented.</p>
+    </section>
+
+    <section>
+        <h2>6. Limitation of Liability</h2>
+        <p>To the fullest extent permitted by applicable law, in no event shall the developers or distributors of YPtun be liable for any indirect, incidental, special, consequential, or punitive damages, including loss of data, loss of business, loss of profits, or network interruption arising out of or in connection with your use or inability to use the Software.</p>
+    </section>
+
+    <section>
+        <h2>7. Apple Minimum Terms (App Store)</h2>
+        <p>If you downloaded the Application from the Apple App Store, the following terms apply:</p>
+        <ul>
+            <li><strong>Acknowledgment:</strong> These Terms are concluded between you and the developers of YPtun, not Apple Inc. Apple is not responsible for the Application or its content.</li>
+            <li><strong>Maintenance and Support:</strong> The developers are solely responsible for providing maintenance and support services for the Application. Apple has no obligation whatsoever to furnish any maintenance and support services.</li>
+            <li><strong>Product Claims:</strong> The developers, not Apple, are responsible for addressing any claims relating to the Application, including product liability claims, consumer protection claims, and legal compliance.</li>
+            <li><strong>Third-Party Beneficiary:</strong> Apple and Apple's subsidiaries are third-party beneficiaries of these Terms. Upon your acceptance of these Terms, Apple will have the right to enforce these Terms against you as a third-party beneficiary.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>8. Changes to These Terms</h2>
+        <p>We reserve the right to modify or replace these Terms at any time. When modifications are made, the "Last Updated" date at the top of this document will be updated. Your continued use of the Application after changes become effective constitutes your acceptance of the revised Terms.</p>
+    </section>
+
+    <section>
+        <h2>9. Contact Information</h2>
+        <p>For questions, support inquiries, or notices regarding these Terms of Service, please contact:</p>
+        <p><strong>Email:</strong> <a href="mailto:yptunn@gmail.com" style="color: var(--accent); text-decoration: none;">yptunn@gmail.com</a></p>
+    </section>
+</main>
+
+<footer>
+    <p>&copy; 2026 YPtun. All rights reserved. &bull; <a href="index.html">Home</a> &bull; <a href="terms.html">Terms of Service</a> &bull; <a href="privacy.html">Privacy Policy</a> &bull; <a href="support.html">Support</a></p>
+</footer>
+
+</body>
+</html>

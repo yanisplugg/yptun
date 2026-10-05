@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Support & Help Center - YPtun</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --surface: #f5f5f7;
+            --surface-border: #e5e5ea;
+            --text-main: #1d1d1f;
+            --text-secondary: #6e6e73;
+            --text-muted: #86868b;
+            --accent: #0071e3;
+            --accent-hover: #0077ed;
+            --nav-bg: rgba(255, 255, 255, 0.8);
+            --card-bg: #ffffff;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #000000;
+                --surface: #1c1c1e;
+                --surface-border: #2c2c2e;
+                --text-main: #f5f5f7;
+                --text-secondary: #86868b;
+                --text-muted: #6e6e73;
+                --accent: #2997ff;
+                --accent-hover: #0077ed;
+                --nav-bg: rgba(0, 0, 0, 0.8);
+                --card-bg: #1c1c1e;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        header {
+            background-color: var(--nav-bg);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            border-bottom: 1px solid var(--surface-border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--text-main);
+            text-decoration: none;
+            letter-spacing: -0.01em;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.92rem;
+            font-weight: 400;
+            transition: color 0.15s ease;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: var(--text-main);
+        }
+
+        main {
+            max-width: 760px;
+            margin: 56px auto 96px;
+            padding: 0 24px;
+        }
+
+        .support-header {
+            margin-bottom: 40px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--surface-border);
+        }
+
+        .support-header h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            margin-bottom: 8px;
+        }
+
+        .support-header p {
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+        }
+
+        .contact-card {
+            background-color: var(--surface);
+            border-radius: 14px;
+            padding: 32px 28px;
+            margin-bottom: 48px;
+            text-align: center;
+        }
+
+        .contact-card h2 {
+            font-size: 1.35rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            letter-spacing: -0.015em;
+        }
+
+        .contact-card p {
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            font-size: 0.98rem;
+        }
+
+        .btn-primary {
+            display: inline-block;
+            background-color: var(--accent);
+            color: #ffffff;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.95rem;
+            padding: 11px 24px;
+            border-radius: 20px;
+            transition: background-color 0.15s ease;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        h2.section-title {
+            font-size: 1.35rem;
+            font-weight: 600;
+            margin-bottom: 24px;
+            letter-spacing: -0.015em;
+        }
+
+        .faq-item {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--surface-border);
+        }
+
+        .faq-item:first-of-type {
+            border-top: 1px solid var(--surface-border);
+        }
+
+        .faq-item h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        .faq-item p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        footer {
+            border-top: 1px solid var(--surface-border);
+            padding: 40px 24px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        footer a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            margin: 0 8px;
+        }
+
+        footer a:hover {
+            color: var(--text-main);
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="nav-container">
+        <a href="index.html" class="logo">
+            YPtun
+        </a>
+        <nav class="nav-links">
+            <a href="index.html">Home</a>
+            <a href="terms.html">Terms</a>
+            <a href="privacy.html">Privacy</a>
+            <a href="support.html" class="active">Support</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+    <div class="support-header">
+        <h1>Help & Support</h1>
+        <p>Get assistance with configuration, troubleshooting, or general questions about YPtun.</p>
+    </div>
+
+    <div class="contact-card">
+        <h2>Direct Developer Support</h2>
+        <p>Have an issue, bug report, or questions about the app? Reach out directly via email.</p>
+        <a href="mailto:yptunn@gmail.com" class="btn-primary">
+            Contact Support &bull; yptunn@gmail.com
+        </a>
+    </div>
+
+    <h2 class="section-title">Frequently Asked Questions</h2>
+
+    <div class="faq-item">
+        <h3>How do I import a configuration or subscription?</h3>
+        <p>Tap the "+" button in the top app bar on the main screen. You can scan a QR code from your camera or paste a subscription URL / share link (supporting standard formats including VLESS, WireGuard, and compatible configs).</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>Why does the app request VPN permissions?</h3>
+        <p>YPtun utilizes Apple's official NetworkExtension framework to configure a local packet tunnel on your device. This allows your network traffic to be routed through the server profiles you configure.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>Does YPtun collect my browsing history or personal data?</h3>
+        <p>No. YPtun is designed strictly under a zero-logs policy. All configurations, keys, and settings are stored locally on your device in secure storage (iOS Keychain). We do not operate tracking servers or log user activity.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>Does the app support iOS 18 Control Center and Widgets?</h3>
+        <p>Yes. YPtun includes native Control Center toggles, Lock Screen widgets, and Live Activity status indicators in Dynamic Island for real-time connection status.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>What should I do if a server fails to connect?</h3>
+        <p>Verify that the server endpoint credentials are active and have not expired. You can use the built-in ping diagnostic button next to any server to test connectivity and response latency before connecting.</p>
+    </div>
+</main>
+
+<footer>
+    <p>&copy; 2026 YPtun. All rights reserved. &bull; <a href="index.html">Home</a> &bull; <a href="terms.html">Terms of Service</a> &bull; <a href="privacy.html">Privacy Policy</a> &bull; <a href="support.html">Support</a></p>
+</footer>
+
+</body>
+</html>
