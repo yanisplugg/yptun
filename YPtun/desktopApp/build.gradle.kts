@@ -913,6 +913,9 @@ compose.desktop {
             "-XX:G1PeriodicGCInterval=30000",
             "-XX:MinHeapFreeRatio=10",
             "-XX:MaxHeapFreeRatio=25",
+            // C1 only: the window shows up ~25% sooner (about 3.7 s -> 2.8 s measured). The heavy
+            // lifting (xray / sing-box / tunnels) is native Go, so the JVM never needs C2's peak speed.
+            "-XX:TieredStopAtLevel=1",
         )
 
         buildTypes.release.proguard {
