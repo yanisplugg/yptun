@@ -1169,6 +1169,14 @@ class LocationsRepositoryImpl(
                     }.getOrNull()?.takeIf { it.trimStart().startsWith("[") || it.trimStart().startsWith("{") }
                 }
 
+                // No `profile-icon` header: Remnawave keeps the logo in the page's branding config.
+                val iconUrl = (response.headers["profile-icon"] ?: response.headers["profile-logo"])
+                    ?.let { decodeMaybeBase64Header(it) }
+                    ?: fetchPageBrandingLogo(
+                        client,
+                        response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) } ?: url
+                    )
+
                 DownloadedSubscription(
                     content = content,
                     updateIntervalHours = response.profileUpdateIntervalHours(),
@@ -1180,8 +1188,7 @@ class LocationsRepositoryImpl(
                     // announcement via headers (the last is often base64-wrapped like profile-title).
                     supportUrl = response.headers["support-url"]?.let { decodeMaybeBase64Header(it) },
                     webPageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) },
-                    iconUrl = (response.headers["profile-icon"] ?: response.headers["profile-logo"])
-                        ?.let { decodeMaybeBase64Header(it) },
+                    iconUrl = iconUrl,
                     announce = response.headers["announce"]?.let { decodeMaybeBase64Header(it) },
                     // Happ/Remnawave provider tracking id (lowercase `providerid`; lookup is
                     // case-insensitive). Plain string — not base64.
@@ -1194,6 +1201,39 @@ class LocationsRepositoryImpl(
             }
         }
     }
+
+    /**
+     * Remnawave subscription page: the logo is `brandingSettings.logoUrl` in `<origin>/assets/.app-config-v2.json`,
+     * served only with the session cookie the page itself sets (and only for a browser User-Agent).
+     * Best-effort: any failure → null.
+     */
+    private suspend fun fetchPageBrandingLogo(client: HttpClient, pageUrl: String): String? = runCatching {
+        val origin = Regex("^https?://[^/?#]+").find(pageUrl.trim())?.value ?: return@runCatching null
+        val browserUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/130.0.0.0 Safari/537.36"
+        val page = client.get(pageUrl.trim()) {
+            headers {
+                append(HttpHeaders.UserAgent, browserUa)
+                append(HttpHeaders.Accept, "text/html")
+            }
+        }
+        val cookie = page.headers.getAll(HttpHeaders.SetCookie).orEmpty()
+            .joinToString("; ") { it.substringBefore(';') }
+        val cfg = client.get("$origin/assets/.app-config-v2.json") {
+            headers {
+                append(HttpHeaders.UserAgent, browserUa)
+                append(HttpHeaders.Accept, "*/*")
+                if (cookie.isNotEmpty()) append(HttpHeaders.Cookie, cookie)
+            }
+        }
+        if (cfg.status.value !in 200..299) return@runCatching null
+        val logo = ((Json.parseToJsonElement(cfg.bodyAsText()) as? JsonObject)
+            ?.get("brandingSettings") as? JsonObject)?.get("logoUrl")
+            .let { (it as? JsonPrimitive)?.content }
+            ?.trim()
+        // docs.rw = Remnawave's stock placeholder, not the owner's logo.
+        logo?.takeIf { it.isHttpUrl() && !it.contains("docs.rw") }
+    }.getOrNull()
 
     private fun String.isHttpUrl(): Boolean {
         val value = trim().lowercase()
