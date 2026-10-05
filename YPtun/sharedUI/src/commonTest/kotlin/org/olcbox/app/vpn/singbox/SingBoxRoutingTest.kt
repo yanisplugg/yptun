@@ -86,6 +86,15 @@ class SingBoxRoutingTest {
     }
 
     @Test
+    fun nonCountryGeoipComesFromMetaRulesNotSagerNet() {
+        // sing-geoip has no geoip-telegram.srs (404 → core refuses to start, issue #56).
+        val p = RoutingProfile(proxyIp = listOf("geoip:telegram", "geoip:ru"))
+        val urls = SingBoxRouting.ruleSets(p).map { it.jsonObject["url"]!!.jsonPrimitive.content }
+        assertTrue(urls.any { it.endsWith("MetaCubeX/meta-rules-dat/sing/geo/geoip/telegram.srs") })
+        assertTrue(urls.any { it.endsWith("sing-geoip/rule-set/geoip-ru.srs") })
+    }
+
+    @Test
     fun customRuleSetBaseIsHonoured() {
         val p = RoutingProfile(directSites = listOf("geosite:ru"))
         val set = SingBoxRouting.ruleSets(p, geositeBase = "https://example.com/rs").first().jsonObject

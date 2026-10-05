@@ -43,6 +43,15 @@ object SingBoxRouting {
 
     const val DEFAULT_GEOSITE_BASE = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/"
     const val DEFAULT_GEOIP_BASE = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/"
+    private const val META_GEOIP_BASE = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/"
+
+    /**
+     * SagerNet/sing-geoip only ships two-letter country sets; non-country categories (telegram,
+     * cloudflare, private…) 404 there — and a 404 on the initial fetch stops the whole core. With the
+     * default base those come from MetaCubeX/meta-rules-dat instead (a custom base is used as given).
+     */
+    private fun geoipUrl(ipBase: String, customBase: String, tag: String): String =
+        if ((customBase.isBlank() || customBase == DEFAULT_GEOIP_BASE) && tag.length != 2) "${META_GEOIP_BASE}$tag.srs" else "${ipBase}geoip-$tag.srs"
 
     /** Parsed split of a bucket's selectors into sing-box matcher dimensions. */
     private data class Selectors(
@@ -132,7 +141,7 @@ object SingBoxRouting {
                     put("type", "remote")
                     put("tag", "geoip-$tag")
                     put("format", "binary")
-                    put("url", "${ipBase}geoip-$tag.srs")
+                    put("url", geoipUrl(ipBase, geoipBase, tag))
                     put("download_detour", downloadDetour)
                 }
             }
@@ -234,7 +243,7 @@ object SingBoxRouting {
             geoipTags.forEach { tag ->
                 addJsonObject {
                     put("type", "remote"); put("tag", "geoip-$tag"); put("format", "binary")
-                    put("url", "${ipBase}geoip-$tag.srs"); put("download_detour", downloadDetour)
+                    put("url", geoipUrl(ipBase, geoipBase, tag)); put("download_detour", downloadDetour)
                 }
             }
         }
