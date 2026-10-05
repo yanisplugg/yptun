@@ -40,7 +40,6 @@ import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.vpn.ExpiringSubscriptionInfo
 import org.olcbox.app.vpn.PanelAnnouncementInfo
 import org.olcbox.app.vpn.VpnManager
-import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.vpn.VpnStatus
 
 class HomeScreenViewModel(
@@ -261,14 +260,17 @@ class HomeScreenViewModel(
         when (vpnManager.status.value) {
             VpnStatus.Connected,
             VpnStatus.Connecting,
-            VpnStatus.Reconnecting,
-            VpnStatus.Stopping,
-            is VpnStatus.Error -> viewModelScope.launch {
+            VpnStatus.Reconnecting -> viewModelScope.launch {
                 _state.update { it.copy(isVpnLoading = true, connectError = null) }
                 vpnManager.startVpn()
             }
 
-            VpnStatus.Disconnected -> Unit
+            // Stopping = the user pressed Stop: a settings change must not bring the VPN back.
+            VpnStatus.Disconnected,
+            VpnStatus.Stopping -> Unit
+            is VpnStatus.Error -> {
+                _state.update { it.copy(isVpnLoading = false) }
+            }
         }
     }
     private fun updateLocationConfig(block: (LocationConfig) -> LocationConfig) {
@@ -427,16 +429,30 @@ class HomeScreenViewModel(
         _state.update { it.copy(availableFreeServers = null, freeServersProgress = null) }
     }
 
-    fun loadFreeServers(onError: (String) -> Unit = {}) {
+    fun loadFreeServers(
+        parallelism: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
+        onError: (String) -> Unit = {},
+    ) {
         freeServersJob?.cancel()
         _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
         freeServersJob = viewModelScope.launch {
             try {
-                val url = FREE_SERVERS_URL
                 val rawText = withContext(Dispatchers.IO) {
-                    val client = createProxyHttpClient(vpnManager.subscriptionFetchProxy())
+                    // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
+                    // without withProxyAuthentication the fetch died with a SOCKS auth error.
+                    val proxy = vpnManager.subscriptionFetchProxy()
+                    val client = createProxyHttpClient(proxy)
                     try {
-                        client.get(url).bodyAsText()
+                        // Все источники сразу; недоступный не мешает остальным.
+                        FREE_SERVERS_SOURCES.map { (url, maxLines) ->
+                            async {
+                                runCatching {
+                                    val text = org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
+                                    // Огромный список (десятки тысяч) не проверить за разумное время — берём случайную выборку.
+                                    if (maxLines > 0) text.lines().shuffled().take(maxLines).joinToString("\n") else text
+                                }.getOrDefault("")
+                            }
+                        }.awaitAll().joinToString("\n")
                     } finally {
                         client.close()
                     }
@@ -448,7 +464,7 @@ class HomeScreenViewModel(
                     return@launch
                 }
 
-                val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }
+                val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }.distinct()
                 if (allLines.isEmpty()) {
                     _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                     onError("В списке не найдено серверов VLESS")
@@ -476,9 +492,13 @@ class HomeScreenViewModel(
                 val workingServers = mutableListOf<FreeServerItem>()
 
                 withContext(Dispatchers.IO) {
-                    // Используем умеренный пул параллельности (6), чтобы исключить конфликты портов
-                    // и исчерпание сетевых сокетов на iOS
-                    val sem = Semaphore(6)
+                    // Тот же ползунок «Потоки пинга» из настроек, что и у обычного пинга.
+                    val sem = Semaphore(
+                        parallelism.coerceIn(
+                            org.olcbox.app.data.model.AppBehaviorSettings.MIN_PING_PARALLELISM,
+                            org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM,
+                        )
+                    )
                     parsedItems.mapIndexed { index, (line, profile) ->
                         async {
                             sem.withPermit {
@@ -743,6 +763,7 @@ class HomeScreenViewModel(
             // Initial delay so cold startup renders cached locations and subscriptions instantly without
             // locking the mutation mutex behind slow/blocked subscription network calls.
             delay(15_000L)
+            backfillMissingSubscriptionExpiry()
             // Once per launch: retry overdue subscriptions even if they failed last time (keyed off the
             // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.
             refreshDueSubscriptionsIfNeeded(retryFailed = true)
@@ -905,6 +926,14 @@ data class FreeServersProgress(
 )
 
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+/** Список zieng2 небольшой (~120) и живой на ~40% — проверяем целиком; ebrasha огромный (~20k, живо ~7%) — случайная выборка. */
+const val FREE_SERVERS_PER_SOURCE = 250
+
+/** Источники бесплатных серверов (url, максимум строк; 0 = все); [FREE_SERVERS_URL] — идентификатор группы. */
+val FREE_SERVERS_SOURCES = listOf(
+    FREE_SERVERS_URL to 0,
+    "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to FREE_SERVERS_PER_SOURCE,
+)
 
 /** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */
 data class VkTurnLinkPrompt(
