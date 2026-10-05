@@ -34,7 +34,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.LightMode
-import org.olcbox.app.DonationInfo
+import org.olcbox.app.ui.components.SupportProjectSection
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
@@ -937,30 +937,12 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = { communityUriHandler.openUri("https://t.me/YPtun") }
             )
-            SettingsGroupDivider()
-            // One TON wallet takes USDT, TON and GRAM alike. Tapping copies it — the address is far
-            // too long to retype from a screen, and it is shown in full so it can be checked.
-            SettingsGroupRow(
-                title = s.donate,
-                subtitle = s.donateSubtitle,
-                icon = Icons.Rounded.Favorite,
-                enabled = true,
-                onClick = {
-                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show()
-                }
-            )
-            SettingsGroupRow(
-                title = DonationInfo.TON_ADDRESS,
-                icon = Icons.Outlined.ContentCopy,
-                enabled = true,
-                showChevron = false,
-                onClick = {
-                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show()
-                }
-            )
         }
+
+        SupportProjectSection(
+            onCopyAddress = { it -> hwidClipboard.setText(AnnotatedString(it)); Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show() },
+            onOpenUrl = { it -> communityUriHandler.openUri(it) }
+        )
 
         Spacer(Modifier.height(4.dp))
     }

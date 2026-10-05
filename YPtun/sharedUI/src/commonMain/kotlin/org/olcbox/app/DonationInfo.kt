@@ -14,4 +14,7 @@ object DonationInfo {
 
     /** What the address accepts, shown under the row. */
     const val ASSETS = "USDT · TON · GRAM"
+
+    /** DonationAlerts page for donors in Russia (cards, SBP). */
+    const val DONATIONALERTS_URL = "https://www.donationalerts.com/r/yanisplugg"
 }

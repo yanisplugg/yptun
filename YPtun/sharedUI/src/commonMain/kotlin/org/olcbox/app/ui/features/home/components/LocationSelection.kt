@@ -63,7 +63,6 @@ import io.ktor.client.statement.bodyAsBytes
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import org.jetbrains.compose.resources.decodeToImageBitmap
-import org.jetbrains.compose.resources.decodeToSvgPainter
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -841,7 +840,7 @@ private fun SubscriptionIcon(url: String) {
                     }?.also { org.olcbox.app.data.datasource.SubscriptionIconDisk.write(url, it) }
                     if (bytes == null || bytes.isEmpty()) return@runCatching null
                     if (bytes.decodeToString(endIndex = minOf(bytes.size, 512)).contains("<svg")) {
-                        bytes.decodeToSvgPainter(density) // vector: sharp at any size
+                        org.olcbox.app.data.datasource.decodeSvgPainter(bytes, density) // vector: sharp at any size
                     } else {
                         // Shrunk once to the on-screen size: drawing a 4000px source every frame froze the UI.
                         androidx.compose.ui.graphics.painter.BitmapPainter(

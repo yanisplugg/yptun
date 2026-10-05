@@ -25,3 +25,6 @@ internal suspend fun downloadSubscriptionIcon(client: HttpClient, url: String): 
     if (!response.status.isSuccess() || response.contentType()?.contentType != "image") return@runCatching null
     response.bodyAsBytes().takeIf { it.isNotEmpty() && it.size <= 4_000_000 }
 }.getOrNull()
+
+/** SVG -> painter, or null where the platform has no decoder (Android's resources lib lacks one). */
+internal expect fun decodeSvgPainter(bytes: ByteArray, density: androidx.compose.ui.unit.Density): androidx.compose.ui.graphics.painter.Painter?
