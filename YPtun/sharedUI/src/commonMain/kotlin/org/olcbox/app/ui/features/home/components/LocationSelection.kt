@@ -822,7 +822,8 @@ private val subscriptionIconCache = mutableMapOf<String, androidx.compose.ui.gra
 private fun SubscriptionIcon(url: String) {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val stamp = org.olcbox.app.data.datasource.SubscriptionIconDisk.stamp(url)
-    val key = "$url#$stamp"
+    val targetPx = (20 * density.density).toInt().coerceAtLeast(1)
+    val key = "$url#$stamp#$targetPx"
     val painter by androidx.compose.runtime.produceState(subscriptionIconCache[key], key) {
         if (!subscriptionIconCache.containsKey(key)) {
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
@@ -840,8 +841,9 @@ private fun SubscriptionIcon(url: String) {
                     if (bytes.decodeToString(endIndex = minOf(bytes.size, 512)).contains("<svg")) {
                         bytes.decodeToSvgPainter(density) // vector: sharp at any size
                     } else {
+                        // Shrunk once to the on-screen size: drawing a 4000px source every frame froze the UI.
                         androidx.compose.ui.graphics.painter.BitmapPainter(
-                            bytes.decodeToImageBitmap(),
+                            bytes.decodeToImageBitmap().downscaledTo(targetPx),
                             filterQuality = androidx.compose.ui.graphics.FilterQuality.High
                         )
                     }
@@ -860,6 +862,27 @@ private fun SubscriptionIcon(url: String) {
                 .clip(RoundedCornerShape(5.dp))
         )
     }
+}
+
+// Halving steps (each <= 2x, High quality) keep a huge source sharp instead of aliasing a one-shot shrink.
+private fun androidx.compose.ui.graphics.ImageBitmap.downscaledTo(targetPx: Int): androidx.compose.ui.graphics.ImageBitmap {
+    var cur = this
+    while (maxOf(cur.width, cur.height) > targetPx) {
+        val k = maxOf(0.5f, targetPx.toFloat() / maxOf(cur.width, cur.height))
+        val w = (cur.width * k).toInt().coerceAtLeast(1)
+        val h = (cur.height * k).toInt().coerceAtLeast(1)
+        val out = androidx.compose.ui.graphics.ImageBitmap(w, h)
+        androidx.compose.ui.graphics.Canvas(out).drawImageRect(
+            image = cur,
+            srcSize = androidx.compose.ui.unit.IntSize(cur.width, cur.height),
+            dstSize = androidx.compose.ui.unit.IntSize(w, h),
+            paint = androidx.compose.ui.graphics.Paint().apply {
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.High
+            }
+        )
+        cur = out
+    }
+    return cur
 }
 
 private fun isTelegramLink(url: String): Boolean {
