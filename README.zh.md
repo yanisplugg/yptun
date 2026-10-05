@@ -15,6 +15,9 @@
 💎 **支持项目** — TON 或 USDT（TON 网络）：<br>
 `UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-`
 
+🇷🇺 **俄罗斯用户支持** — 通过 DonationAlerts：<br>
+[![DonationAlerts](https://img.shields.io/badge/DonationAlerts-donate-F57D07?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://www.donationalerts.com/r/yanisplugg)
+
 ![平台](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![平台](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
 ![平台](https://img.shields.io/badge/platform-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)

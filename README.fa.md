@@ -15,6 +15,9 @@
 💎 **حمایت از پروژه** — TON یا USDT (شبکه TON):<br>
 `UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-`
 
+🇷🇺 **Support from Russia** — DonationAlerts:<br>
+[![DonationAlerts](https://img.shields.io/badge/DonationAlerts-donate-F57D07?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://www.donationalerts.com/r/yanisplugg)
+
 ![پلتفرم](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![پلتفرم](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
 ![پلتفرم](https://img.shields.io/badge/platform-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)
