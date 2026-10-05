@@ -8,9 +8,15 @@
 
 <br>
 
-[![Latest release](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/olcvpn-client/releases)
-[![Stars](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
+[![Latest release](https://img.shields.io/github/v/release/yanisplugg/yptun?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/yptun/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/yptun/releases)
+[![Stars](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
+
+💎 **Support the project** — TON or USDT (TON network):
+
+```
+UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
+```
 
 ![Platform](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
@@ -39,17 +45,17 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 
 ---
 
-## What's new in 3.5.0
+## What's new in 3.6.0
 
 | | |
 |---|---|
-| **WDTT Plus replaces WDTT** | Client and server on Android and desktop: an "RT network" mode (TURN/TLS and TCP, UDP as fallback), a Cloudflare WARP fallback, backup VK hashes, your own VK IDs and keys, a manual TURN address. ⚠️ An old WDTT server does not work with the new client — reinstall it with the "Auto-install" button in the location settings. freeturn locations are not affected. |
-| **New OpenFlux engine** | A TCP tunnel to your own exit node through Yandex Docs or a MAX call — for when everything else is blocked. The node installs on a VPS in one tap, DNS goes through the tunnel itself, and "Proxy over OpenFlux" adds end-to-end encryption. Experimental and not fast. |
-| **QR scanner rewritten** | zxing-cpp recognition reads blurry, tilted, dense and inverted codes; tap to focus, pinch to zoom, torch, automatic zoom on flagships with large sensors. It also accepts the QR codes the app itself draws (`yptun://`, `hysteria2://`, `naive+https://`, `tt://`, `happ://`). |
-| **VK-TURN** | The second proxy on top of AmneziaWG can go through Xray (xhttp and raw config), the exit MTU is capped at 1200, freeturn connects faster. An AmneziaWG exit without a second proxy no longer loses DNS. |
-| **Routing from JSON subscriptions** | Every server of a subscription now gets the full config with its rules, not only xhttp ones. Russian sites that a subscription routes through `dns.hosts` open directly again in "IPv4 only" mode. |
-| **Subscriptions keep their servers** | When a subscription grows, the last server no longer disappears and the selected one no longer jumps to its neighbour. Thanks @Zamotashka (#41). |
-| **Smaller fixes** | Half of the screen went black after pasting in the location editor (#40); on Windows the VK captcha opens in the browser instead of an Explorer window. |
+| ⚠️ **olcRTC is now a legacy core** | Still works as before, but is no longer developed and will be removed in a future version. Plan a replacement: VK-TURN, OpenFlux, MasterDNS or Xray/sing-box. |
+| **Free servers catalog** | Android and desktop: one-tap download, automatic reachability check that drops dead servers, check progress; on Windows and Linux right from the tray. Thanks @Zamotashka (#49, #50). |
+| **Two-column desktop UI** | Connect button, timer and status on the left, subscriptions and servers on the right; the window is wide by default. |
+| **OpenFlux 0.0.3** | New Mail.ru and cups.online transports, compression by default. ⚠️ Reinstall old nodes from the app. |
+| **Server auto-install** | MasterDNS checks for a busy port and that the server really runs, opens the firewall port, gains new options; OpenFlux works on ufw nodes and reports the Yandex captcha. |
+| **Fixes** | AmneziaWG with `RandomTrailers = on` (#51); free servers while VPN is on; "updated" with no internet; "My IP" on desktop without 2ip. |
+| **Linux AppImage** | Next to the `.deb` — AppImage for x64 and arm64, runs on any distro without installing. |
 
 ---
 
@@ -76,7 +82,7 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 
 ## Download
 
-Grab the latest signed APK from the **[releases page](https://github.com/yanisplugg/olcvpn-client/releases/latest)**.
+Grab the latest signed APK from the **[releases page](https://github.com/yanisplugg/yptun/releases/latest)**.
 
 | Build | For |
 |-------|-----|
@@ -168,7 +174,7 @@ Everything needed is already vendored (`cores`, `olcrtc`, `sing-box`, `awgproxy`
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.5.0 -Polcbox.versionCode=352
+  -Polcbox.version=3.6.0 -Polcbox.versionCode=381
 ```
 
 APKs land in `YPtun/androidApp/build/outputs/apk/release/`.
@@ -267,7 +273,7 @@ Standing on the shoulders of giants:
 Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 Signed are the Windows installer and portable built by [GitHub Actions](.github/workflows/windows-desktop.yml) from this repository.
 
-- Committers and reviewers: [repository contributors](https://github.com/yanisplugg/olcvpn-client/graphs/contributors)
+- Committers and reviewers: [repository contributors](https://github.com/yanisplugg/yptun/graphs/contributors)
 - Approvers: [repository owner](https://github.com/yanisplugg)
 
 Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user (their servers, subscriptions and the circumvention services they choose), apart from checking GitHub for updates. Details are in [Permissions and why they are needed](#permissions-and-why-they-are-needed).

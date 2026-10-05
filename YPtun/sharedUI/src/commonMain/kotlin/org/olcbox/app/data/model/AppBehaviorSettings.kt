@@ -151,6 +151,16 @@ data class AppBehaviorSettings(
      */
     val showSubscriptionAliveCount: Boolean = false,
     /**
+     * Show the panel's own subscription description (Remnawave/Happ `announce` header) under the
+     * subscription group title in the location list, like Happ. Off by default.
+     */
+    val showSubscriptionDescription: Boolean = false,
+    /**
+     * Show the subscription's icon (panel `profile-icon` header) left of its name in the location
+     * list. Nothing is drawn for a subscription without one. On by default.
+     */
+    val showSubscriptionIcons: Boolean = true,
+    /**
      * Hide the protocol + server IP (the "endpoint" line) on a location row WHEN that location has a
      * description — so a subscription's human description is shown instead of the technical endpoint.
      * Rows without a description always show the endpoint. On by default.
@@ -203,6 +213,12 @@ data class AppBehaviorSettings(
      * whole AppBehaviorSettings to defaults on first load). Do not re-introduce a UI for it.
      */
     val hideTelegramProxyNotification: Boolean = false,
+    /**
+     * Desktop Proxy mode only: point the OS system proxy (WinINET / GNOME / KDE / macOS) at our local
+     * proxy. ON (default) = the long-standing behaviour. OFF = only the local SOCKS5/HTTP listener is
+     * started and the system settings are never touched, so just the apps configured by hand use it.
+     */
+    val setSystemProxy: Boolean = true,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"
@@ -225,9 +241,10 @@ data class AppBehaviorSettings(
 
         const val PING_RESULT_TIME = "time"
         const val PING_RESULT_ICON = "icon"
+        const val PING_RESULT_BOTH = "both"
 
         /** Selectable ping-result display modes (single-choice in the UI). */
-        val PING_RESULT_MODES = listOf(PING_RESULT_TIME, PING_RESULT_ICON)
+        val PING_RESULT_MODES = listOf(PING_RESULT_TIME, PING_RESULT_ICON, PING_RESULT_BOTH)
 
         /**
          * Default probe target. A `generate_204` endpoint: a tiny TCP HTTP request that returns an

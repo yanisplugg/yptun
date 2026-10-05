@@ -8,9 +8,15 @@
 
 <br>
 
-[![آخرین نسخه](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-[![دانلودها](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/olcvpn-client/releases)
-[![ستاره‌ها](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
+[![آخرین نسخه](https://img.shields.io/github/v/release/yanisplugg/yptun?style=for-the-badge&color=4c8eff&label=download)](https://github.com/yanisplugg/yptun/releases/latest)
+[![دانلودها](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/yptun/releases)
+[![ستاره‌ها](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
+
+💎 **حمایت از پروژه** — TON یا USDT (شبکه TON):
+
+```
+UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
+```
 
 ![پلتفرم](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![پلتفرم](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
@@ -41,17 +47,17 @@
 
 ---
 
-## تازه‌ها در نسخه ۳٫۵٫۰
+## تازه‌ها در نسخه ۳٫۶٫۰
 
 | | |
 |---|---|
-| **WDTT Plus به‌جای WDTT** | کلاینت و سرور روی اندروید و دسکتاپ: حالت «شبکه‌ی RT» (TURN/TLS و TCP، با UDP به‌عنوان پشتیبان)، پشتیبان از طریق Cloudflare WARP، هش‌های پشتیبان VK، شناسه‌ها و کلیدهای VK خودتان، آدرس دستی TURN. ⚠️ سرور قدیمی WDTT با کلاینت جدید کار نمی‌کند — آن را با دکمه‌ی «نصب خودکار» در تنظیمات لوکیشن دوباره نصب کنید. لوکیشن‌های freeturn تغییری نمی‌کنند. |
-| **موتور جدید OpenFlux** | تونل TCP تا گره‌ی خروجی خودتان از طریق Yandex Docs یا تماس MAX — برای وقتی که همه‌چیز دیگر مسدود است. گره با یک ضربه روی VPS نصب می‌شود، DNS از خود تونل عبور می‌کند و «پروکسی روی OpenFlux» رمزنگاری سرتاسری اضافه می‌کند. آزمایشی و کند است. |
-| **اسکنر QR از نو نوشته شد** | تشخیص با zxing-cpp کدهای تار، کج، فشرده و وارونه را می‌خواند؛ فوکوس با لمس، زوم با دو انگشت، چراغ‌قوه و بزرگ‌نمایی خودکار در گوشی‌های پرچم‌دار با حسگر بزرگ. QRهایی را هم که خود اپ می‌سازد می‌پذیرد (`yptun://`، `hysteria2://`، `naive+https://`، `tt://`، `happ://`). |
-| **VK-TURN** | پروکسی دوم روی AmneziaWG می‌تواند از Xray عبور کند (xhttp و کانفیگ خام)، MTU خروجی به ۱۲۰۰ محدود شد و freeturn سریع‌تر وصل می‌شود. خروجی AmneziaWG بدون پروکسی دوم دیگر DNS را از دست نمی‌دهد. |
-| **مسیریابی از اشتراک‌های JSON** | اکنون هر سرور اشتراک کانفیگ کامل با قواعدش را می‌گیرد، نه فقط سرورهای xhttp. سایت‌های روسی که اشتراک از طریق `dns.hosts` مسیردهی می‌کند، در حالت «فقط IPv4» دوباره مستقیم باز می‌شوند. |
-| **اشتراک‌ها سرورها را گم نمی‌کنند** | وقتی تعداد سرورهای اشتراک بیشتر می‌شود، آخرین سرور دیگر ناپدید نمی‌شود و سرور انتخاب‌شده به سرور کناری نمی‌پرد. سپاس از @Zamotashka (#41). |
-| **اصلاحات کوچک** | سیاه‌شدن نیمی از صفحه پس از چسباندن متن در ویرایشگر لوکیشن (#40)؛ در ویندوز کپچای VK به‌جای پنجره‌ی Explorer در مرورگر باز می‌شود. |
+| ⚠️ **olcRTC هسته‌ی قدیمی (legacy) می‌شود** | فعلاً مثل قبل کار می‌کند، اما دیگر توسعه نمی‌یابد و در نسخه‌های آینده حذف خواهد شد. از الان جایگزین انتخاب کنید: VK-TURN، OpenFlux، MasterDNS یا Xray/sing-box. |
+| **فهرست سرورهای رایگان** | اندروید و دسکتاپ: دریافت با یک دکمه، بررسی خودکار در دسترس بودن و حذف سرورهای از کار افتاده؛ در ویندوز و لینوکس مستقیم از سینی سیستم. با تشکر از @Zamotashka (#49، #50). |
+| **رابط دوستونه‌ی دسکتاپ** | دکمه، زمان‌سنج و وضعیت در چپ، اشتراک‌ها و سرورها در راست؛ پنجره به‌طور پیش‌فرض عریض است. |
+| **OpenFlux 0.0.3** | ترنسپورت‌های جدید Mail.ru و cups.online، فشرده‌سازی پیش‌فرض. ⚠️ نود قدیمی را از داخل برنامه دوباره نصب کنید. |
+| **نصب خودکار سرور** | MasterDNS پورت اشغال‌شده و اجرای واقعی سرور را بررسی می‌کند، پورت را در فایروال باز می‌کند و تنظیمات تازه دارد؛ OpenFlux روی نودهای دارای ufw کار می‌کند و کپچای یاندکس را گزارش می‌دهد. |
+| **رفع اشکال‌ها** | AmneziaWG با `RandomTrailers = on` (#51)؛ سرورهای رایگان هنگام روشن بودن VPN؛ پیام «به‌روز شد» بدون اینترنت؛ «IP من» در دسکتاپ بدون 2ip. |
+| **AppImage لینوکس** | کنار `.deb`، AppImage برای x64 و arm64 — بدون نصب روی هر توزیعی اجرا می‌شود. |
 
 ---
 
@@ -80,7 +86,7 @@
 
 ## دانلود
 
-آخرین APK امضاشده را از **[صفحه‌ی انتشارها](https://github.com/yanisplugg/olcvpn-client/releases/latest)** بگیرید.
+آخرین APK امضاشده را از **[صفحه‌ی انتشارها](https://github.com/yanisplugg/yptun/releases/latest)** بگیرید.
 
 | نسخه | برای |
 |------|------|
@@ -180,7 +186,7 @@ YPtun فقط چیزی را درخواست می‌کند که یک قابلیت �
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.5.0 -Polcbox.versionCode=352
+  -Polcbox.version=3.6.0 -Polcbox.versionCode=381
 ```
 
 <div dir="rtl">

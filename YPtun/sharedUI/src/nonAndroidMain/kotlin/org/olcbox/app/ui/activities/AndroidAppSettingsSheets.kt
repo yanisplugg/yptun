@@ -42,6 +42,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.ContentCopy
+import org.olcbox.app.ui.components.SupportProjectSection
 import org.olcbox.app.vpn.telegram.TelegramProxyState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -924,30 +925,12 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = { SettingsPlatform.openUri("https://t.me/YPtun") }
             )
-            SettingsGroupDivider()
-            // One TON wallet takes USDT, TON and GRAM alike. Clicking copies it — the address is far
-            // too long to retype from a screen, and it is shown in full so it can be checked.
-            SettingsGroupRow(
-                title = s.donate,
-                subtitle = s.donateSubtitle,
-                icon = Icons.Rounded.Favorite,
-                enabled = true,
-                onClick = {
-                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    SettingsPlatform.toast(s.donateAddressCopied)
-                }
-            )
-            SettingsGroupRow(
-                title = DonationInfo.TON_ADDRESS,
-                icon = Icons.Outlined.ContentCopy,
-                enabled = true,
-                showChevron = false,
-                onClick = {
-                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    SettingsPlatform.toast(s.donateAddressCopied)
-                }
-            )
         }
+
+        SupportProjectSection(
+            onCopyAddress = { hwidClipboard.setText(AnnotatedString(it)); SettingsPlatform.toast(s.donateAddressCopied) },
+            onOpenUrl = { SettingsPlatform.openUri(it) }
+        )
 
         Spacer(Modifier.height(4.dp))
     }
@@ -1016,6 +999,12 @@ private fun ConnectionSettingsContent(
             // implementation and SettingsPlatform.telegramProxyEndpoint is empty there, so the whole
             // section would be a dead toggle. Hide it rather than show something that does nothing.
             if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
+                RoutingToggleRow(
+                    title = s.setSystemProxyTitle,
+                    subtitle = if (appBehavior.setSystemProxy) s.setSystemProxyOn else s.setSystemProxyOff,
+                    checked = appBehavior.setSystemProxy
+                ) { onAppBehaviorChanged(appBehavior.copy(setSystemProxy = it)) }
+
                 RoutingToggleRow(
                     title = s.telegramProxyTitle,
                     subtitle = s.telegramProxySubtitle,
@@ -3731,6 +3720,18 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
 
         RoutingToggleRow(
+            title = s.showSubscriptionDescriptionTitle,
+            subtitle = s.showSubscriptionDescriptionSubtitle,
+            checked = settings.showSubscriptionDescription
+        ) { onChanged(settings.copy(showSubscriptionDescription = it)) }
+
+        RoutingToggleRow(
+            title = s.showSubscriptionIconsTitle,
+            subtitle = s.showSubscriptionIconsSubtitle,
+            checked = settings.showSubscriptionIcons
+        ) { onChanged(settings.copy(showSubscriptionIcons = it)) }
+
+        RoutingToggleRow(
             title = s.hideEndpointWhenDescriptionTitle,
             subtitle = s.hideEndpointWhenDescriptionSubtitle,
             checked = settings.hideEndpointWhenDescription
@@ -3896,6 +3897,7 @@ private fun PingSettingsContent(
             val resultOptions = listOf(
                 AppBehaviorSettings.PING_RESULT_TIME to s.pingResultTime,
                 AppBehaviorSettings.PING_RESULT_ICON to s.pingResultIcon,
+                AppBehaviorSettings.PING_RESULT_BOTH to s.pingResultBoth,
             )
             resultOptions.forEach { (mode, title) ->
                 FilterChip(

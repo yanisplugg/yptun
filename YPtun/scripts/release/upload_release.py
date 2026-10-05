@@ -14,7 +14,7 @@ Ends when every local file is on the release with the same size.
 """
 import http.client, json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
-REPO = "yanisplugg/olcvpn-client"
+REPO = "yanisplugg/yptun"
 RID = sys.argv[1]
 DIR = sys.argv[2]
 STALL_SEC = 120
@@ -35,7 +35,13 @@ def wait_online():
     announced = False
     while True:
         try:
-            urllib.request.urlopen("https://api.github.com/zen", timeout=15).read()
+            # With the token: this runs before EVERY api call, and the anonymous 60/h limit ran out
+            # mid-release (403 read as "offline" → waited for the limit reset). Any HTTP answer = online.
+            try:
+                req = urllib.request.Request("https://api.github.com/zen", headers=AUTH)
+                urllib.request.urlopen(req, timeout=15).read()
+            except urllib.error.HTTPError:
+                pass
             if announced:
                 log("связь вернулась")
             return
@@ -99,7 +105,7 @@ def upload(name):
 
 
 local = {f: os.path.getsize(os.path.join(DIR, f)) for f in os.listdir(DIR)
-         if f.endswith((".apk", ".exe", ".patch.gz", ".deb"))}
+         if f.endswith((".apk", ".exe", ".patch.gz", ".deb", ".AppImage"))}
 log(f"файлов: {len(local)}, всего {sum(local.values()) / 1e9:.2f} ГБ")
 while True:
     have = assets()

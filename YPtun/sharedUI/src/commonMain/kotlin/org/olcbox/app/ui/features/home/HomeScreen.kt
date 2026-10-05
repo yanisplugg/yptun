@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -131,7 +133,9 @@ fun HomeScreen(
     // controls (timer/start button) stay on the right, like Happ/Hiddify desktop.
     wideLayout: Boolean = false,
     // Extra content under the start button (e.g. the desktop proxy/tunnel mode switch).
-    extraConnectContent: (@Composable () -> Unit)? = null
+    extraConnectContent: (@Composable () -> Unit)? = null,
+    // Desktop only: shows an exit button in the top bar.
+    onExitClick: (() -> Unit)? = null
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
@@ -191,7 +195,7 @@ fun HomeScreen(
                 val message = if (updatedCount > 0) {
                     s.subscriptionsUpdatedCount(updatedCount)
                 } else {
-                    s.subscriptionsUpdated
+                    s.subscriptionsUpdateFailed
                 }
 
                 scope.launch {
@@ -202,13 +206,17 @@ fun HomeScreen(
     }
 
     fun refreshOneSubscription(url: String) {
+        if (url.trim() == FREE_SERVERS_URL) {
+            viewModel.loadFreeServers(parallelism = pingParallelism, onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } })
+            return
+        }
         viewModel.refreshSubscription(url) { updatedCount ->
             locationViewModel.loadLocations {
                 viewModel.restartVpnIfRunning()
                 val message = if (updatedCount > 0) {
                     s.subscriptionsUpdatedCount(updatedCount)
                 } else {
-                    s.subscriptionsUpdated
+                    s.subscriptionsUpdateFailed
                 }
                 scope.launch {
                     snackbarHostState.showSnackbar(message)
@@ -280,9 +288,8 @@ fun HomeScreen(
     }
 
     fun afterDeletion(message: String) {
-        viewModel.loadCurrentConfig {
-            viewModel.restartVpnIfRunning()
-        }
+        viewModel.loadCurrentConfig()
+        viewModel.restartVpnIfRunning()
         scope.launch { snackbarHostState.showSnackbar(message) }
     }
 
@@ -327,7 +334,8 @@ fun HomeScreen(
                 onDeleteUnreachable = { requestDelete(PendingDelete.Unreachable) },
                 onDeleteDuplicates = { requestDelete(PendingDelete.Duplicates) },
                 onDeleteAllSubscriptions = { requestDelete(PendingDelete.AllSubscriptions) },
-                onDeleteAllConfigs = { requestDelete(PendingDelete.AllConfigs) }
+                onDeleteAllConfigs = { requestDelete(PendingDelete.AllConfigs) },
+                onExitClick = onExitClick
             )
         },
         bottomBar = {
@@ -498,9 +506,8 @@ fun HomeScreen(
                 pingsState = pingsState,
                 onLocationSelected = { id ->
                     locationViewModel.selectLocation(id) {
-                        viewModel.loadCurrentConfig {
-                            viewModel.restartVpnIfRunning()
-                        }
+                        viewModel.loadCurrentConfig()
+                        viewModel.restartVpnIfRunning()
                     }
                 },
                 onLocationSettingsClick = { id ->
@@ -512,6 +519,7 @@ fun HomeScreen(
                 onDeleteSubscription = { ids ->
                     requestDelete(PendingDelete.Subscription(ids))
                 },
+                onRenameSubscription = { url, name -> locationViewModel.renameSubscription(url, name) },
                 onSetSubscriptionAutoUpdate = { url, enabled ->
                     locationViewModel.setSubscriptionAutoUpdate(url, enabled)
                 },
@@ -544,28 +552,49 @@ fun HomeScreen(
         }
 
         if (wideLayout) {
+            // Desktop: the connect controls sit centred in a left pane with a status line under the
+            // button, the server list fills the right pane (capped so rows don't stretch on 4K).
             Row(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
                 LazyColumn(
-                    state = scrollState,
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    locationItems()
-                }
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
+                        .weight(0.85f)
+                        .fillMaxHeight()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically)
                 ) {
                     connectItems()
+                    item(key = "connection-status") {
+                        Text(
+                            text = when {
+                                state.isVpnConnected -> s.notifConnected
+                                state.isVpnLoading -> s.notifConnecting
+                                else -> s.widgetDisconnected
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (state.isVpnConnected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier.weight(1.15f).fillMaxHeight(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    LazyColumn(
+                        state = scrollState,
+                        modifier = Modifier
+                            .widthIn(max = 760.dp)
+                            .fillMaxHeight()
+                            .padding(start = 8.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        locationItems()
+                    }
                 }
             }
         } else {
@@ -667,6 +696,7 @@ fun HomeScreen(
                 onFreeServersClick = {
                     isAddSheetOpen = false
                     viewModel.loadFreeServers(
+                        parallelism = pingParallelism,
                         onError = { message ->
                             scope.launch {
                                 snackbarHostState.showSnackbar(message)
@@ -679,7 +709,8 @@ fun HomeScreen(
 
         if (state.isFreeServersLoading) {
             AlertDialog(
-                onDismissRequest = { viewModel.cancelFreeServersLoad() },
+                onDismissRequest = {},
+                properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = false),
                 confirmButton = {},
                 dismissButton = {
                     TextButton(onClick = { viewModel.cancelFreeServersLoad() }) {

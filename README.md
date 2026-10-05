@@ -8,9 +8,18 @@
 
 <br>
 
-[![Последний релиз](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-[![Загрузки](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043&label=%D0%B7%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8)](https://github.com/yanisplugg/olcvpn-client/releases)
-[![Звёзды](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
+[![Последний релиз](https://img.shields.io/github/v/release/yanisplugg/yptun?style=for-the-badge&color=4c8eff&label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C)](https://github.com/yanisplugg/yptun/releases/latest)
+[![Загрузки](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=%D0%B7%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8)](https://github.com/yanisplugg/yptun/releases)
+[![Звёзды](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
+
+💎 **Поддержать проект** — TON или USDT (сеть TON):
+
+```
+UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
+```
+
+🇷🇺 **Поддержать из России** — через DonationAlerts:<br>
+[![DonationAlerts](https://img.shields.io/badge/DonationAlerts-%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-F57D07?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://www.donationalerts.com/r/yanisplugg)
 
 ![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
@@ -39,17 +48,17 @@
 
 ---
 
-## Что нового в 3.5.0
+## Что нового в 3.6.0
 
 | | |
 |---|---|
-| **WDTT Plus вместо WDTT** | Клиент и сервер на Android и ПК: режим «Сеть РТ» (TURN/TLS и TCP, UDP — резерв), резерв через Cloudflare WARP, резервные VK-хеши, свои ID и ключи VK, ручной адрес TURN. ⚠️ Старый сервер WDTT с новым клиентом не работает — переустановите его кнопкой «Автоустановка» в настройках локации. Локаций с freeturn это не касается. |
-| **Новый движок OpenFlux** | TCP-туннель до своей выходной ноды через Яндекс Документы или звонок в MAX — на случай, когда заблокировано всё остальное. Нода ставится на VPS в одно касание, DNS идёт через сам туннель, а «Прокси поверх OpenFlux» добавляет сквозное шифрование. Движок экспериментальный и небыстрый. |
-| **Сканер QR переписан** | Распознавание zxing-cpp читает размытые, наклонённые, плотные и инвертированные коды; фокус по тапу, зум щипком, фонарик, автоприближение на флагманах с большим сенсором. Принимает и QR, которые рисует само приложение (`yptun://`, `hysteria2://`, `naive+https://`, `tt://`, `happ://`). |
-| **VK-TURN** | Второй прокси поверх AmneziaWG может идти через Xray (xhttp и сырой конфиг), MTU выхода ограничен 1200, freeturn подключается быстрее. Выход через AmneziaWG без второго прокси больше не теряет DNS. |
-| **Маршрутизация из JSON-подписок** | Полный конфиг с правилами теперь получает каждый сервер подписки, а не только xhttp. Российские сайты, которые подписка ведёт через `dns.hosts`, снова открываются напрямую в режиме «только IPv4». |
-| **Подписки не теряют серверы** | Когда серверов в подписке становится больше, последний больше не пропадает, а выбранный не перескакивает на соседний. Спасибо @Zamotashka (#41). |
-| **Мелкие исправления** | Чёрная половина экрана после вставки текста в редакторе локации (#40); на Windows капча VK открывается в браузере, а не окном проводника. |
+| ⚠️ **olcRTC — устаревшее ядро** | Пока работает как раньше, но больше не развивается и будет удалено в одной из следующих версий. Присмотрите замену заранее: VK-TURN, OpenFlux, MasterDNS или Xray/sing-box. |
+| **Каталог бесплатных серверов** | Android и ПК: загрузка одной кнопкой, автопроверка доступности и отсев нерабочих, прогресс проверки; на Windows и Linux — прямо из трея. Спасибо @Zamotashka (#49, #50). |
+| **Интерфейс ПК в две колонки** | Кнопка, таймер и статус слева, подписки и серверы справа; окно по умолчанию широкое. |
+| **OpenFlux 0.0.3** | Новые транспорты Mail.ru и cups.online, сжатие по умолчанию. ⚠️ Старую ноду переустановите из приложения. |
+| **Автоустановка серверов** | MasterDNS проверяет занятый порт и реальную работу сервера, открывает порт в файрволе, получил новые настройки; OpenFlux работает на нодах с ufw и сообщает о капче Яндекса. |
+| **Исправления** | AmneziaWG с `RandomTrailers = on` (#51); бесплатные серверы при включённом VPN; «обновлены» без интернета; «Мой IP» на ПК без 2ip. |
+| **Linux AppImage** | Рядом с `.deb` — AppImage для x64 и arm64, запускается на любом дистрибутиве без установки. |
 
 ---
 
@@ -76,7 +85,7 @@
 
 ## Скачать
 
-Бери последний подписанный APK со **[страницы релизов](https://github.com/yanisplugg/olcvpn-client/releases/latest)**.
+Бери последний подписанный APK со **[страницы релизов](https://github.com/yanisplugg/yptun/releases/latest)**.
 
 | Сборка | Кому |
 |--------|------|
@@ -168,7 +177,7 @@ YPtun запрашивает только то, без чего не работ�
 ```bash
 cd YPtun
 ./gradlew :androidApp:assembleRelease \
-  -Polcbox.version=3.5.0 -Polcbox.versionCode=352
+  -Polcbox.version=3.6.0 -Polcbox.versionCode=381
 ```
 
 APK появятся в `YPtun/androidApp/build/outputs/apk/release/`.
@@ -275,7 +284,7 @@ PR и issue приветствуются. Перед началом заглян
 Бесплатная подпись кода — [SignPath.io](https://about.signpath.io), сертификат — [SignPath Foundation](https://signpath.org).
 Подписываются Windows-установщик и portable, собранные в [GitHub Actions](.github/workflows/windows-desktop.yml) из этого репозитория.
 
-- Коммиттеры и ревьюеры: [участники репозитория](https://github.com/yanisplugg/olcvpn-client/graphs/contributors)
+- Коммиттеры и ревьюеры: [участники репозитория](https://github.com/yanisplugg/yptun/graphs/contributors)
 - Утверждение подписи: [владелец репозитория](https://github.com/yanisplugg)
 
 Конфиденциальность: приложение само не передаёт данные в другие сетевые системы, кроме тех, что выбрал пользователь (его серверы, подписки, выбранные им сервисы обхода), и проверки обновлений на GitHub. Подробности — в разделе [«Разрешения и зачем они нужны»](#разрешения-и-зачем-они-нужны).

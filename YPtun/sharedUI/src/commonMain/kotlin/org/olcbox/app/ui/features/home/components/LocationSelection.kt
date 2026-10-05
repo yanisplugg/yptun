@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sort
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.SyncDisabled
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -42,16 +43,26 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsBytes
+import io.ktor.http.contentType
+import io.ktor.http.isSuccess
+import org.jetbrains.compose.resources.decodeToImageBitmap
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +77,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.olcbox.app.data.model.CustomGroup
+import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
@@ -97,6 +109,8 @@ fun LazyListScope.locationSelectorContent(
     onSetSubscriptionAutoUpdate: (subscriptionUrl: String, enabled: Boolean) -> Unit = { _, _ -> },
     // Re-download a single subscription now (keyed by its URL), triggered from its overflow menu.
     onRefreshSubscription: (subscriptionUrl: String) -> Unit = {},
+    // Give a subscription (keyed by its URL) the user's own name; blank restores the panel's.
+    onRenameSubscription: (subscriptionUrl: String, name: String) -> Unit = { _, _ -> },
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -198,191 +212,126 @@ fun LazyListScope.locationSelectorContent(
         val isPinned = groupKey in pinnedGroups
         val isPingSorted = groupKey in pingSortedGroups
         val isPingDescending = groupKey in pingSortDescendingGroups
+        // Free-servers list: drawn like a folder — one green-tinted container holding header AND rows.
+        val isFree = group.firstOrNull()?.subscriptionUrl?.trim() == org.olcbox.app.ui.features.home.FREE_SERVERS_URL
+        val orderedGroup = if (isPingSorted) group.sortedWith(pingComparator(pingsState, isPingDescending)) else group
 
-        if (isCollapsed) {
-            item(key = "group-header-$groupKey") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainer
+        item(key = "group-header-$groupKey") {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = if (isFree) {
+                    androidx.compose.ui.graphics.lerp(MaterialTheme.colorScheme.surfaceContainer, androidx.compose.ui.graphics.Color(0xFF43A047), 0.22f)
+                } else MaterialTheme.colorScheme.surfaceContainer
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Tapping the title (with its chevron) collapses/expands the list.
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onToggleGroupCollapsed(groupKey) },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Tapping the title (with its chevron) collapses/expands the list.
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { onToggleGroupCollapsed(groupKey) },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.ExpandMore,
-                                    contentDescription = "Expand",
-                                    modifier = Modifier.size(22.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                SubscriptionGroupHeader(
-                                    locations = group,
-                                    pingsState = pingsState,
-                                    isPinned = isPinned,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-
-                            val isGroupRefreshing = pingsState is PingsState.Loading &&
-                                    pingsState.pendingLocationIds.any { it in groupIds }
-
-                            RefreshButton(
-                                isRefreshing = isGroupRefreshing,
-                                onClick = { onRefreshClick(groupIds) },
-                                tint = MaterialTheme.colorScheme.primary
+                            Icon(
+                                imageVector = if (isCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                                contentDescription = if (isCollapsed) "Expand" else "Collapse",
+                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-
-                            // Overflow menu: pin, sort-by-ping, auto-update, delete.
-                            val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
-                            val groupSubUrl = group.firstOrNull()?.subscriptionUrl
-                            val groupWebPageUrl = group.firstNotNullOfOrNull {
-                                it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
-                            }
-                            SubscriptionGroupMenu(
-                                isPinned = isPinned,
-                                isPingSorted = isPingSorted,
-                                isPingDescending = isPingDescending,
-                                autoUpdateEnabled = groupAutoUpdate,
-                                onTogglePin = { onToggleGroupPinned(groupKey) },
-                                onTogglePingSort = { onToggleGroupPingSort(groupKey) },
-                                onToggleAutoUpdate = {
-                                    groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
-                                },
-                                onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
-                                onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
-                                onDelete = { onDeleteSubscription(groupIds) },
-                                subscriptionPageUrl = groupWebPageUrl
-                            )
-                        }
-                    }
-                }
-            }
-        } else {
-            val orderedGroup = if (isPingSorted) {
-                group.sortedWith(pingComparator(pingsState, isPingDescending))
-            } else {
-                group
-            }
-
-            // Expanded subscription is wrapped in a single container (secondaryContainer),
-            // giving it a continuous container background holding the header and all server cards together.
-            item(key = "group-$groupKey") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainer
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable { onToggleGroupCollapsed(groupKey) },
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.ExpandLess,
-                                            contentDescription = "Collapse",
-                                            modifier = Modifier.size(22.dp),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        SubscriptionGroupHeader(
-                                            locations = group,
-                                            pingsState = pingsState,
-                                            isPinned = isPinned,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-
-                                    val isGroupRefreshing = pingsState is PingsState.Loading &&
-                                            pingsState.pendingLocationIds.any { it in groupIds }
-
-                                    RefreshButton(
-                                        isRefreshing = isGroupRefreshing,
-                                        onClick = { onRefreshClick(groupIds) },
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-
-                                    val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
-                                    val groupSubUrl = group.firstOrNull()?.subscriptionUrl
-                                    val groupWebPageUrl = group.firstNotNullOfOrNull {
-                                        it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
-                                    }
-                                    SubscriptionGroupMenu(
-                                        isPinned = isPinned,
-                                        isPingSorted = isPingSorted,
-                                        isPingDescending = isPingDescending,
-                                        autoUpdateEnabled = groupAutoUpdate,
-                                        onTogglePin = { onToggleGroupPinned(groupKey) },
-                                        onTogglePingSort = { onToggleGroupPingSort(groupKey) },
-                                        onToggleAutoUpdate = {
-                                            groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
-                                        },
-                                        onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
-                                        onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
-                                        onDelete = { onDeleteSubscription(groupIds) },
-                                        subscriptionPageUrl = groupWebPageUrl
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-                                val subLoc = group.firstOrNull { it.metadata?.subscription?.announce?.isNotBlank() == true } ?: group.firstOrNull()
-                                TrafficProgressBar(location = subLoc)
-                            }
-                        }
-
-                        LocationCardsColumn(orderedGroup, twoColumns) { location, cellModifier ->
-                            LocationSelectorRow(
-                                location = location,
-                                selectedLocationId = selectedLocationId,
+                            SubscriptionGroupHeader(
+                                locations = group,
                                 pingsState = pingsState,
-                                onLocationSelected = onLocationSelected,
-                                onLocationSettingsClick = onLocationSettingsClick,
-                                selectionMode = selectionMode,
-                                isChecked = location.storageId in selectedIds,
-                                onToggleSelect = onToggleSelect,
-                                onStartSelection = onStartSelection,
-                                twoColumns = twoColumns,
-                                modifier = cellModifier
+                                isPinned = isPinned,
+                                modifier = Modifier.weight(1f)
                             )
+                        }
+
+                        val isGroupRefreshing = pingsState is PingsState.Loading &&
+                                pingsState.pendingLocationIds.any { it in groupIds }
+
+                        RefreshButton(
+                            isRefreshing = isGroupRefreshing,
+                            onClick = { onRefreshClick(groupIds) },
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+
+                        // Overflow menu: pin, sort-by-ping, auto-update, delete.
+                        val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
+                        val groupSubUrl = group.firstOrNull()?.subscriptionUrl
+                        val groupWebPageUrl = group.firstNotNullOfOrNull {
+                            it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                        }
+                        SubscriptionGroupMenu(
+                            isPinned = isPinned,
+                            isPingSorted = isPingSorted,
+                            isPingDescending = isPingDescending,
+                            autoUpdateEnabled = groupAutoUpdate,
+                            onTogglePin = { onToggleGroupPinned(groupKey) },
+                            onTogglePingSort = { onToggleGroupPingSort(groupKey) },
+                            onToggleAutoUpdate = {
+                                groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
+                            },
+                            onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                            currentName = group.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
+                            onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
+                            onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
+                            onDelete = { onDeleteSubscription(groupIds) },
+                            subscriptionPageUrl = groupWebPageUrl
+                        )
+                    }
+
+                    if (!isCollapsed) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TrafficProgressBar(location = group.firstOrNull())
+                    }
+                    if (isFree && !isCollapsed) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            LocationCardsColumn(orderedGroup, twoColumns) { location, cellModifier ->
+                                LocationSelectorRow(
+                                    location = location,
+                                    selectedLocationId = selectedLocationId,
+                                    pingsState = pingsState,
+                                    onLocationSelected = onLocationSelected,
+                                    onLocationSettingsClick = onLocationSettingsClick,
+                                    selectionMode = selectionMode,
+                                    isChecked = location.storageId in selectedIds,
+                                    onToggleSelect = onToggleSelect,
+                                    onStartSelection = onStartSelection,
+                                    twoColumns = twoColumns,
+                                    modifier = cellModifier
+                                )
+                            }
                         }
                     }
                 }
+            }
+        }
+
+        if (!isCollapsed && !isFree) {
+            locationCards(orderedGroup, twoColumns, keyPrefix = "row") { location, cellModifier ->
+                LocationSelectorRow(
+                    location = location,
+                    selectedLocationId = selectedLocationId,
+                    pingsState = pingsState,
+                    onLocationSelected = onLocationSelected,
+                    onLocationSettingsClick = onLocationSettingsClick,
+                    selectionMode = selectionMode,
+                    isChecked = location.storageId in selectedIds,
+                    onToggleSelect = onToggleSelect,
+                    onStartSelection = onStartSelection,
+                    twoColumns = twoColumns,
+                    modifier = cellModifier
+                )
             }
         }
     }
@@ -497,6 +446,8 @@ fun LazyListScope.locationSelectorContent(
                                                     mSubUrl?.let { onSetSubscriptionAutoUpdate(it, !mAutoUpdate) }
                                                 },
                                                 onRefreshSubscription = mSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                                                currentName = mGroup.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
+                                                onRename = mSubUrl?.let { url -> { name -> onRenameSubscription(url, name) } },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) },
                                                 subscriptionPageUrl = mWebPageUrl
@@ -504,8 +455,7 @@ fun LazyListScope.locationSelectorContent(
                                         }
                                         if (!mCollapsed) {
                                             Spacer(modifier = Modifier.height(8.dp))
-                                            val mSubLoc = mGroup.firstOrNull { it.metadata?.subscription?.announce?.isNotBlank() == true } ?: mGroup.firstOrNull()
-                                            TrafficProgressBar(location = mSubLoc)
+                                            TrafficProgressBar(location = mGroup.firstOrNull())
                                             val ordered = if (mPingSorted) {
                                                 mGroup.sortedWith(pingComparator(pingsState, mPingDesc))
                                             } else {
@@ -796,71 +746,162 @@ private fun TrafficProgressBar(location: LocationItem?) {
     val subscription = location?.metadata?.subscription ?: return
     val used = subscription.used?.takeIf { it.isNotBlank() }
     val available = subscription.available?.takeIf { it.isNotBlank() }
-    val announce = subscription.announce?.trim()?.takeIf { it.isNotBlank() }
-        ?.let { org.olcbox.app.data.importer.SubscriptionDecoder.decodeIfBase64(it) }
-    if (used == null && available == null && announce == null) return
+    if (used == null && available == null) return
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        if (used != null || available != null) {
-            val usedBytes = parseTrafficBytes(used)
-            val totalBytes = parseTrafficBytes(available)
-            val fraction = if (usedBytes != null && totalBytes != null && totalBytes > 0L) {
-                (usedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
-            } else {
-                null
-            }
+    val usedBytes = parseTrafficBytes(used)
+    val totalBytes = parseTrafficBytes(available)
+    val fraction = if (usedBytes != null && totalBytes != null && totalBytes > 0L) {
+        (usedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+    } else {
+        null
+    }
 
-            val text = when {
-                used != null && available != null -> "$used / $available"
-                used != null -> used
-                else -> available!!
-            }
+    val text = when {
+        used != null && available != null -> "$used / $available"
+        used != null -> used
+        else -> available!!
+    }
 
+    // Remnawave/Happ `support-url` header: icon button right of the bar, hidden when the panel gives none.
+    val supportUrl = subscription.supportUrl?.takeIf { it.isNotBlank() }
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(24.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            // Filled portion: exact fraction when total is known, otherwise full pill.
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = if (announce != null) 8.dp else 8.dp)
-                    .height(24.dp)
+                    .fillMaxWidth(fraction ?: 1f)
+                    .fillMaxHeight()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
+                    .background(MaterialTheme.colorScheme.primary)
+                    .align(Alignment.CenterStart)
+            )
+            Text(
+                text = text,
+                color = if (fraction == null || fraction > 0.5f) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        if (supportUrl != null) {
+            IconButton(
+                onClick = { runCatching { uriHandler.openUri(supportUrl) } },
+                modifier = Modifier.size(32.dp)
             ) {
-                // Filled portion: exact fraction when total is known, otherwise full pill.
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(fraction ?: 1f)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.primary)
-                        .align(Alignment.CenterStart)
-                )
-                Text(
-                    text = text,
-                    color = if (fraction == null || fraction > 0.5f) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
+                Icon(
+                    imageVector = if (isTelegramLink(supportUrl)) TelegramIcon else Icons.Outlined.Public,
+                    contentDescription = s.subscriptionSupport,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
         }
+    }
+}
 
-        if (announce != null) {
-            Text(
-                text = announce,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                lineHeight = 18.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            )
-            Spacer(modifier = Modifier.height(6.dp))
+// Decoded icons by URL + disk stamp, so a refreshed subscription (new file) re-decodes while a plain
+// recomposition never re-reads the disk copy.
+private val subscriptionIconCache = mutableMapOf<String, androidx.compose.ui.graphics.painter.Painter?>()
+
+@Composable
+private fun SubscriptionIcon(url: String) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val stamp = org.olcbox.app.data.datasource.SubscriptionIconDisk.stamp(url)
+    val targetPx = (20 * density.density).toInt().coerceAtLeast(1)
+    val key = "$url#$stamp#$targetPx"
+    val painter by androidx.compose.runtime.produceState(subscriptionIconCache[key], key) {
+        if (!subscriptionIconCache.containsKey(key)) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                runCatching {
+                    // Disk copy (written on subscription refresh); download only if it is missing.
+                    val bytes = org.olcbox.app.data.datasource.SubscriptionIconDisk.read(url) ?: run {
+                        val client = org.olcbox.app.data.datasource.createProxyHttpClient()
+                        try {
+                            org.olcbox.app.data.datasource.downloadSubscriptionIcon(client, url)
+                        } finally {
+                            client.close()
+                        }
+                    }?.also { org.olcbox.app.data.datasource.SubscriptionIconDisk.write(url, it) }
+                    if (bytes == null || bytes.isEmpty()) return@runCatching null
+                    if (bytes.decodeToString(endIndex = minOf(bytes.size, 512)).contains("<svg")) {
+                        org.olcbox.app.data.datasource.decodeSvgPainter(bytes, density) // vector: sharp at any size
+                    } else {
+                        // Shrunk once to the on-screen size: drawing a 4000px source every frame froze the UI.
+                        androidx.compose.ui.graphics.painter.BitmapPainter(
+                            bytes.decodeToImageBitmap().downscaledTo(targetPx),
+                            filterQuality = androidx.compose.ui.graphics.FilterQuality.High
+                        )
+                    }
+                }.getOrNull()
+            }
+            subscriptionIconCache[key] = value
         }
     }
+    painter?.let {
+        androidx.compose.foundation.Image(
+            painter = it,
+            contentDescription = null,
+            modifier = Modifier
+                .padding(end = 6.dp)
+                .size(20.dp)
+                .clip(RoundedCornerShape(5.dp))
+        )
+    }
+}
+
+// Halving steps (each <= 2x, High quality) keep a huge source sharp instead of aliasing a one-shot shrink.
+private fun androidx.compose.ui.graphics.ImageBitmap.downscaledTo(targetPx: Int): androidx.compose.ui.graphics.ImageBitmap {
+    var cur = this
+    while (maxOf(cur.width, cur.height) > targetPx) {
+        val k = maxOf(0.5f, targetPx.toFloat() / maxOf(cur.width, cur.height))
+        val w = (cur.width * k).toInt().coerceAtLeast(1)
+        val h = (cur.height * k).toInt().coerceAtLeast(1)
+        val out = androidx.compose.ui.graphics.ImageBitmap(w, h)
+        androidx.compose.ui.graphics.Canvas(out).drawImageRect(
+            image = cur,
+            srcSize = androidx.compose.ui.unit.IntSize(cur.width, cur.height),
+            dstSize = androidx.compose.ui.unit.IntSize(w, h),
+            paint = androidx.compose.ui.graphics.Paint().apply {
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.High
+            }
+        )
+        cur = out
+    }
+    return cur
+}
+
+private fun isTelegramLink(url: String): Boolean {
+    val u = url.trim().lowercase()
+    val host = u.substringAfter("://", "").substringBefore('/').substringBefore('?').removePrefix("www.")
+    return u.startsWith("tg:") || host == "t.me" || host == "telegram.me"
+}
+
+// Telegram logo (Simple Icons, 24x24), drawn here because Material has no brand icons.
+private val TelegramIcon: androidx.compose.ui.graphics.vector.ImageVector by lazy {
+    androidx.compose.ui.graphics.vector.ImageVector.Builder(
+        defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f
+    ).addPath(
+        pathData = androidx.compose.ui.graphics.vector.PathParser().parsePathString(
+            "M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"
+        ).toNodes(),
+        fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Black)
+    ).build()
 }
 
 /**
@@ -897,13 +938,39 @@ private fun SubscriptionGroupMenu(
     onToggleAutoUpdate: () -> Unit,
     // Non-null only when this group is backed by a subscription URL we can re-download.
     onRefreshSubscription: (() -> Unit)? = null,
+    // Current visible name (prefills the dialog) and the rename action; null hides the menu entry.
+    currentName: String = "",
+    onRename: ((String) -> Unit)? = null,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit,
     subscriptionPageUrl: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+
+    if (renaming && onRename != null) {
+        var draft by remember { mutableStateOf(currentName) }
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            title = { Text(s.renameSubscription) },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    singleLine = true,
+                    supportingText = { Text(s.renameSubscriptionHint) }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onRename(draft); renaming = false }) { Text(s.save) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renaming = false }) { Text(s.cancel) }
+            }
+        )
+    }
 
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -926,6 +993,16 @@ private fun SubscriptionGroupMenu(
                     onClick = {
                         runCatching { uriHandler.openUri(subscriptionPageUrl) }
                         expanded = false
+                    }
+                )
+            }
+            if (onRename != null) {
+                DropdownMenuItem(
+                    text = { Text(s.renameSubscription) },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        renaming = true
                     }
                 )
             }
@@ -1217,6 +1294,14 @@ private fun SubscriptionGroupHeader(
                     tint = MaterialTheme.colorScheme.error
                 )
             }
+            // Panel-provided icon: the `profile-icon` header, else `<subscription page origin>/logo.png`
+            // (where Remnawave pages usually keep it). Drawn only when enabled AND the image loads.
+            if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionIcons.current) {
+                val sub = first?.metadata?.subscription
+                val iconSrc = sub?.iconUrl?.takeIf { it.isNotBlank() }
+                    ?: sub?.webPageUrl?.let { Regex("^https?://[^/?#]+").find(it.trim())?.value }?.plus("/logo.png")
+                iconSrc?.let { SubscriptionIcon(it) }
+            }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
@@ -1245,6 +1330,24 @@ private fun SubscriptionGroupHeader(
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     }
+                )
+            }
+        }
+
+        // The panel's own description for this subscription (Remnawave/Happ `announce` header),
+        // right under the title like Happ. Gated on the app-settings toggle (off by default) and
+        // independent of [info], so a sub that carries ONLY a description still shows it.
+        if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription.current) {
+            first?.metadata?.subscription?.announce?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
             }
         }
@@ -1302,6 +1405,18 @@ private fun SubscriptionGroupHeader(
 private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     var showDetail by remember { mutableStateOf(false) }
+    // Desktop: the popup follows the mouse pointer (hover in / out); touch: tap shows it for a few seconds.
+    // It is a NON-focusable Popup: a focusable DropdownMenu grabs the pointer, the badge loses hover,
+    // the menu closes, hover returns - visible flicker.
+    val hoverSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val hovered by hoverSource.collectIsHoveredAsState()
+    androidx.compose.runtime.LaunchedEffect(hovered) { showDetail = hovered }
+    androidx.compose.runtime.LaunchedEffect(showDetail) {
+        if (showDetail && !hovered) {
+            kotlinx.coroutines.delay(3_000)
+            showDetail = false
+        }
+    }
 
     Box {
         Icon(
@@ -1311,18 +1426,41 @@ private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
             modifier = Modifier
                 .size(20.dp)
                 .clip(CircleShape)
-                .clickable { showDetail = true }
+                .hoverable(hoverSource)
+                .clickable { showDetail = !showDetail }
         )
-        DropdownMenu(
-            expanded = showDetail,
-            onDismissRequest = { showDetail = false }
-        ) {
-            Text(
-                text = s.subscriptionExpiryFull(dateTime, daysLeft),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-            )
+        if (showDetail) {
+            val gapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.roundToPx() }
+            androidx.compose.ui.window.Popup(
+                // Fully BELOW the badge with a gap: any overlap makes the popup steal the hover -> flicker.
+                popupPositionProvider = remember(gapPx) {
+                    object : androidx.compose.ui.window.PopupPositionProvider {
+                        override fun calculatePosition(
+                            anchorBounds: androidx.compose.ui.unit.IntRect,
+                            windowSize: androidx.compose.ui.unit.IntSize,
+                            layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+                            popupContentSize: androidx.compose.ui.unit.IntSize
+                        ) = androidx.compose.ui.unit.IntOffset(
+                            anchorBounds.left.coerceAtMost(windowSize.width - popupContentSize.width).coerceAtLeast(0),
+                            anchorBounds.bottom + gapPx
+                        )
+                    }
+                },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = false)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shadowElevation = 4.dp
+                ) {
+                    Text(
+                        text = s.subscriptionExpiryFull(dateTime, daysLeft),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -1560,16 +1698,17 @@ internal fun LocationItem.folderMemberKey(): String =
         CustomGroup.locMember(storageId)
     }
 
+/** What the user sees as the subscription's name: their own rename, else the panel's. */
+private fun SubscriptionMetadata.displayName(): String? =
+    customName?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() }
+
 private fun LocationItem.subscriptionTitle(): String {
     val subscription = metadata?.subscription
 
-    val rawName = subscription?.name?.takeIf { it.isNotBlank() }
-    val decodedName = rawName?.let { org.olcbox.app.data.importer.SubscriptionDecoder.decodeIfBase64(it) } ?: rawName
-        ?: org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).subscriptionsSection
-
     return listOfNotNull(
         subscription?.icon?.takeIf { it.isNotBlank() },
-        decodedName
+        subscription?.displayName()
+            ?: org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective).subscriptionsSection
     ).joinToString(" ")
 }
 

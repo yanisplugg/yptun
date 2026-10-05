@@ -74,6 +74,9 @@ interface Strings {
     val groupSortByPing: String
     val groupAutoUpdate: String
     val refreshThisSubscription: String
+    val renameSubscription: String
+    val renameSubscriptionHint: String
+    val exitApp: String
     val visitSubscriptionPage: String
     // VPS installer SSH auth (password vs key).
     val sshAuthUseKey: String
@@ -179,6 +182,13 @@ interface Strings {
     val donate: String
     val donateSubtitle: String
     val donateAddressCopied: String
+    val supportProjectThanks: String
+    val supportCrypto: String
+    val supportDonationAlertsHint: String
+    val supportVpnSub: String
+    val supportVpnSubHint: String
+    val supportGithubStar: String
+    val supportGithubStarHint: String
 
     // Application behavior
     val autoConnectTitle: String
@@ -378,6 +388,9 @@ interface Strings {
     val securedSocksProxy: String
     val securedSocksProxySubtitle: String
     val securedSocksProxyOff: String
+    val setSystemProxyTitle: String
+    val setSystemProxyOn: String
+    val setSystemProxyOff: String
     val splitTunneling: String
     val routingBehavior: String
     val appsUsingYptun: String
@@ -507,6 +520,10 @@ interface Strings {
     val twoColumnLayoutSubtitle: String
     val showSubscriptionExpiryTitle: String
     val showSubscriptionExpirySubtitle: String
+    val showSubscriptionDescriptionTitle: String
+    val showSubscriptionDescriptionSubtitle: String
+    val showSubscriptionIconsTitle: String
+    val showSubscriptionIconsSubtitle: String
     val subscriptionUserAgentLabel: String
     val subscriptionUserAgentSubtitle: String
     val globalEngineLabel: String
@@ -641,6 +658,7 @@ interface Strings {
     // Snackbars
     fun subscriptionsUpdatedCount(n: Int): String
     val subscriptionsUpdated: String
+    val subscriptionsUpdateFailed: String
     val subscriptionDeleted: String
     val subscriptionsDeleted: String
     val configsDeleted: String
@@ -678,6 +696,7 @@ interface Strings {
     val pingResultLabel: String
     val pingResultTime: String
     val pingResultIcon: String
+    val pingResultBoth: String
 
     // QR scanner
     val scanQrTitle: String
@@ -760,6 +779,9 @@ object RuStrings : Strings {
     override val groupSortByPing = "Сортировать по пингу"
     override val groupAutoUpdate = "Автообновление"
     override val refreshThisSubscription = "Обновить подписку"
+    override val renameSubscription = "Переименовать"
+    override val renameSubscriptionHint = "Оставьте пустым, чтобы вернуть исходное название"
+    override val exitApp = "Выход"
     override val visitSubscriptionPage = "Посетить страницу подписки"
     override val sshAuthUseKey = "Вход по SSH-ключу"
     override val sshPasswordLabel = "Пароль SSH"
@@ -869,6 +891,13 @@ object RuStrings : Strings {
     override val donate = "Поддержать проект"
     override val donateSubtitle = "USDT · TON · GRAM — нажмите, чтобы скопировать адрес"
     override val donateAddressCopied = "Адрес кошелька скопирован"
+    override val supportProjectThanks = "Проект живёт на вашей поддержке — спасибо!"
+    override val supportCrypto = "Криптовалюта"
+    override val supportDonationAlertsHint = "Карты РФ, СБП · для России"
+    override val supportVpnSub = "VPN-подписка разработчика"
+    override val supportVpnSubHint = "Купить VPN у автора в поддержку проекта · Telegram @quofortpostbot"
+    override val supportGithubStar = "Поставить звезду на GitHub"
+    override val supportGithubStarHint = "Бесплатный способ поддержать проект"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
     override val liveActivityTitle = "Dynamic Island и Live Activity"
@@ -1054,6 +1083,9 @@ object RuStrings : Strings {
     override val securedSocksProxy = "Защищённый SOCKS-прокси"
     override val securedSocksProxySubtitle = "Логин и пароль на своём порту"
     override val securedSocksProxyOff = "Выключен · 127.0.0.1:8080 без авторизации"
+    override val setSystemProxyTitle = "Системный прокси (режим Proxy)"
+    override val setSystemProxyOn = "Прокси прописывается в систему — браузеры и программы подхватывают сами"
+    override val setSystemProxyOff = "Система не трогается — только программы, где прокси вписан вручную"
     override val splitTunneling = "Раздельное туннелирование"
     override val routingBehavior = "Поведение маршрутизации"
     override val appsUsingYptun = "Приложения через YPtun"
@@ -1162,6 +1194,10 @@ object RuStrings : Strings {
     override val twoColumnLayoutSubtitle = "Показывать список конфигураций на главном экране в виде сетки из двух колонок."
     override val showSubscriptionExpiryTitle = "Показывать срок подписки"
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
+    override val showSubscriptionDescriptionTitle = "Показывать описание подписки"
+    override val showSubscriptionDescriptionSubtitle = "Текст от панели (announce) под названием подписки"
+    override val showSubscriptionIconsTitle = "Показывать иконки подписок"
+    override val showSubscriptionIconsSubtitle = "Иконка от панели слева от названия подписки"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 запрашивает полный конфиг (FakeDNS, dns.hosts); YPtun — обычно только ссылки"
     override val globalEngineLabel = "Движок для VLESS (глобально)"
@@ -1294,6 +1330,7 @@ object RuStrings : Strings {
     override val vp8OptionsSubtitle = "Тонкая настройка производительности потока"
     override fun subscriptionsUpdatedCount(n: Int) = "Подписки обновлены: $n"
     override val subscriptionsUpdated = "Подписки обновлены"
+    override val subscriptionsUpdateFailed = "Не удалось обновить подписки — проверьте интернет"
     override val subscriptionDeleted = "Подписка удалена"
     override val subscriptionsDeleted = "Подписки удалены"
     override val configsDeleted = "Конфигурации удалены"
@@ -1327,6 +1364,7 @@ object RuStrings : Strings {
     override val pingResultLabel = "Результат пинга"
     override val pingResultTime = "Время"
     override val pingResultIcon = "Значок"
+    override val pingResultBoth = "Значок и значение"
     override val scanQrTitle = "Сканирование QR"
     override val readyToScan = "Готово к сканированию"
     override val subscriptionOrLocationUri = "Подписка или URI локации"
@@ -1398,6 +1436,9 @@ object EnStrings : Strings {
     override val groupSortByPing = "Sort by ping"
     override val groupAutoUpdate = "Auto-update"
     override val refreshThisSubscription = "Update subscription"
+    override val renameSubscription = "Rename"
+    override val renameSubscriptionHint = "Leave empty to restore the original name"
+    override val exitApp = "Exit"
     override val visitSubscriptionPage = "Visit subscription page"
     override val sshAuthUseKey = "Sign in with SSH key"
     override val sshPasswordLabel = "SSH password"
@@ -1507,6 +1548,13 @@ object EnStrings : Strings {
     override val donate = "Support the project"
     override val donateSubtitle = "USDT · TON · GRAM — tap to copy the address"
     override val donateAddressCopied = "Wallet address copied"
+    override val supportProjectThanks = "The project lives on your support — thank you!"
+    override val supportCrypto = "Crypto"
+    override val supportDonationAlertsHint = "Cards, SBP · for Russia"
+    override val supportVpnSub = "Developer's VPN subscription"
+    override val supportVpnSubHint = "Buy a VPN from the author to support the project · Telegram @quofortpostbot"
+    override val supportGithubStar = "Star on GitHub"
+    override val supportGithubStarHint = "A free way to support the project"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
     override val liveActivityTitle = "Dynamic Island & Live Activity"
@@ -1692,6 +1740,9 @@ object EnStrings : Strings {
     override val securedSocksProxy = "Secured SOCKS proxy"
     override val securedSocksProxySubtitle = "Username and password on a port of your choosing"
     override val securedSocksProxyOff = "Off · 127.0.0.1:8080, no authentication"
+    override val setSystemProxyTitle = "System proxy (Proxy mode)"
+    override val setSystemProxyOn = "Proxy configured in OS settings — browsers and apps pick it up"
+    override val setSystemProxyOff = "OS settings left untouched — only apps configured by hand will use it"
     override val splitTunneling = "Split Tunneling"
     override val routingBehavior = "Routing Behavior"
     override val appsUsingYptun = "Apps Using YPtun"
@@ -1800,6 +1851,10 @@ object EnStrings : Strings {
     override val twoColumnLayoutSubtitle = "Show the configuration list on the home screen as a two-column grid."
     override val showSubscriptionExpiryTitle = "Show subscription expiry"
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
+    override val showSubscriptionDescriptionTitle = "Show subscription description"
+    override val showSubscriptionDescriptionSubtitle = "The panel's announce text under the subscription name"
+    override val showSubscriptionIconsTitle = "Show subscription icons"
+    override val showSubscriptionIconsSubtitle = "The panel's icon to the left of the subscription name"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 fetches the full config (FakeDNS, dns.hosts); YPtun usually returns only links"
     override val globalEngineLabel = "VLESS engine (global)"
@@ -1932,6 +1987,7 @@ object EnStrings : Strings {
     override val vp8OptionsSubtitle = "Fine-tune stream performance"
     override fun subscriptionsUpdatedCount(n: Int) = "Subscriptions updated: $n"
     override val subscriptionsUpdated = "Subscriptions updated"
+    override val subscriptionsUpdateFailed = "Failed to update subscriptions — check your connection"
     override val subscriptionDeleted = "Subscription deleted"
     override val subscriptionsDeleted = "Subscriptions deleted"
     override val configsDeleted = "Configurations deleted"
@@ -1965,6 +2021,7 @@ object EnStrings : Strings {
     override val pingResultLabel = "Ping result"
     override val pingResultTime = "Time"
     override val pingResultIcon = "Icon"
+    override val pingResultBoth = "Icon and value"
     override val scanQrTitle = "Scan QR"
     override val readyToScan = "Ready to scan"
     override val subscriptionOrLocationUri = "Subscription or location URI"
@@ -2036,6 +2093,9 @@ object FaStrings : Strings {
     override val groupSortByPing = "مرتب‌سازی بر اساس پینگ"
     override val groupAutoUpdate = "به‌روزرسانی خودکار"
     override val refreshThisSubscription = "به‌روزرسانی اشتراک"
+    override val renameSubscription = "تغییر نام"
+    override val renameSubscriptionHint = "برای بازگرداندن نام اصلی خالی بگذارید"
+    override val exitApp = "خروج"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
     override val sshAuthUseKey = "ورود با کلید SSH"
     override val sshPasswordLabel = "رمز SSH"
@@ -2145,6 +2205,13 @@ object FaStrings : Strings {
     override val donate = "حمایت از پروژه"
     override val donateSubtitle = "USDT · TON · GRAM — برای کپی آدرس ضربه بزنید"
     override val donateAddressCopied = "آدرس کیف پول کپی شد"
+    override val supportProjectThanks = "این پروژه با حمایت شما زنده است — سپاس!"
+    override val supportCrypto = "ارز دیجیتال"
+    override val supportDonationAlertsHint = "کارت و SBP · برای روسیه"
+    override val supportVpnSub = "اشتراک VPN توسعه‌دهنده"
+    override val supportVpnSubHint = "برای حمایت از پروژه از سازنده VPN بخرید · تلگرام @quofortpostbot"
+    override val supportGithubStar = "ستاره در گیت‌هاب"
+    override val supportGithubStarHint = "راهی رایگان برای حمایت از پروژه"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
     override val liveActivityTitle = "داینامیک آیلند و فعالیت زنده"
@@ -2330,6 +2397,9 @@ object FaStrings : Strings {
     override val securedSocksProxy = "پراکسی SOCKS محافظت‌شده"
     override val securedSocksProxySubtitle = "نام کاربری و رمز عبور روی پورت دلخواه"
     override val securedSocksProxyOff = "خاموش · 127.0.0.1:8080 بدون احراز هویت"
+    override val setSystemProxyTitle = "پروکسی سیستم (حالت Proxy)"
+    override val setSystemProxyOn = "پروکسی در تنظیمات سیستم اعمال می‌شود — مرورگرها و برنامه‌ها خودکار استفاده می‌کنند"
+    override val setSystemProxyOff = "تنظیمات سیستم دست‌نخورده می‌ماند — فقط برنامه‌های تنظیم‌شده دستی استفاده می‌کنند"
     override val splitTunneling = "تونل‌سازی تفکیکی"
     override val routingBehavior = "رفتار مسیریابی"
     override val appsUsingYptun = "برنامه‌های استفاده‌کننده از YPtun"
@@ -2454,6 +2524,10 @@ object FaStrings : Strings {
     override val twoColumnLayoutSubtitle = "نمایش فهرست پیکربندی‌ها در صفحه اصلی به صورت شبکه دو ستونی."
     override val showSubscriptionExpiryTitle = "نمایش تاریخ انقضای اشتراک"
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
+    override val showSubscriptionDescriptionTitle = "نمایش توضیحات اشتراک"
+    override val showSubscriptionDescriptionSubtitle = "نمایش متن پنل (announce) زیر نام اشتراک"
+    override val showSubscriptionIconsTitle = "نمایش آیکون اشتراک‌ها"
+    override val showSubscriptionIconsSubtitle = "آیکون پنل در سمت چپ نام اشتراک"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 پیکربندی کامل (FakeDNS، dns.hosts) را می‌گیرد؛ YPtun معمولاً فقط لینک‌ها"
     override val globalEngineLabel = "موتور VLESS (سراسری)"
@@ -2570,6 +2644,7 @@ object FaStrings : Strings {
     override val vp8OptionsSubtitle = "تنظیم دقیق کارایی جریان"
     override fun subscriptionsUpdatedCount(n: Int) = "اشتراک‌ها به‌روزرسانی شد: $n"
     override val subscriptionsUpdated = "اشتراک‌ها به‌روزرسانی شد"
+    override val subscriptionsUpdateFailed = "به‌روزرسانی اشتراک‌ها ناموفق بود — اتصال اینترنت را بررسی کنید"
     override val subscriptionDeleted = "اشتراک حذف شد"
     override val subscriptionsDeleted = "اشتراک‌ها حذف شد"
     override val configsDeleted = "پیکربندی‌ها حذف شد"
@@ -2603,6 +2678,7 @@ object FaStrings : Strings {
     override val pingResultLabel = "نتیجهٔ پینگ"
     override val pingResultTime = "زمان"
     override val pingResultIcon = "نشان"
+    override val pingResultBoth = "نشان و مقدار"
     override val scanQrTitle = "پویش QR"
     override val readyToScan = "آمادهٔ پویش"
     override val subscriptionOrLocationUri = "اشتراک یا URI موقعیت"
@@ -2674,6 +2750,9 @@ object ZhStrings : Strings {
     override val groupSortByPing = "按延迟排序"
     override val groupAutoUpdate = "自动更新"
     override val refreshThisSubscription = "更新订阅"
+    override val renameSubscription = "重命名"
+    override val renameSubscriptionHint = "留空则恢复原名称"
+    override val exitApp = "退出"
     override val visitSubscriptionPage = "打开订阅页面"
     override val sshAuthUseKey = "使用 SSH 密钥登录"
     override val sshPasswordLabel = "SSH 密码"
@@ -2783,6 +2862,13 @@ object ZhStrings : Strings {
     override val donate = "支持项目"
     override val donateSubtitle = "USDT · TON · GRAM — 点按复制地址"
     override val donateAddressCopied = "钱包地址已复制"
+    override val supportProjectThanks = "项目依靠您的支持 — 谢谢！"
+    override val supportCrypto = "加密货币"
+    override val supportDonationAlertsHint = "俄罗斯银行卡、SBP · 适用于俄罗斯"
+    override val supportVpnSub = "开发者的 VPN 订阅"
+    override val supportVpnSubHint = "向作者购买 VPN 以支持项目 · Telegram @quofortpostbot"
+    override val supportGithubStar = "在 GitHub 上点个星标"
+    override val supportGithubStarHint = "免费支持项目的方式"
     override val autoConnectTitle = "启动时自动连接"
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
     override val liveActivityTitle = "灵动岛与实时活动"
@@ -2968,6 +3054,9 @@ object ZhStrings : Strings {
     override val securedSocksProxy = "受保护的 SOCKS 代理"
     override val securedSocksProxySubtitle = "在自选端口上使用用户名和密码"
     override val securedSocksProxyOff = "已关闭 · 127.0.0.1:8080，无需认证"
+    override val setSystemProxyTitle = "系统代理（Proxy 模式）"
+    override val setSystemProxyOn = "代理写入系统设置——浏览器和应用自动使用"
+    override val setSystemProxyOff = "不改动系统设置——仅在需要的应用中填写代理地址"
     override val splitTunneling = "分应用代理"
     override val routingBehavior = "分流行为"
     override val appsUsingYptun = "使用 YPtun 的应用"
@@ -3076,6 +3165,10 @@ object ZhStrings : Strings {
     override val twoColumnLayoutSubtitle = "在主屏幕上以双列网格显示配置列表。"
     override val showSubscriptionExpiryTitle = "显示订阅到期"
     override val showSubscriptionExpirySubtitle = "在刷新日期下方显示“至 dd.mm.yyyy”"
+    override val showSubscriptionDescriptionTitle = "显示订阅说明"
+    override val showSubscriptionDescriptionSubtitle = "在订阅名称下方显示面板文本（announce）"
+    override val showSubscriptionIconsTitle = "显示订阅图标"
+    override val showSubscriptionIconsSubtitle = "在订阅名称左侧显示面板图标"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"
     override val subscriptionUserAgentSubtitle = "Happ/1.0 会获取完整配置（FakeDNS、dns.hosts）；YPtun 通常只返回链接"
     override val globalEngineLabel = "VLESS 内核（全局）"
@@ -3208,6 +3301,7 @@ object ZhStrings : Strings {
     override val vp8OptionsSubtitle = "微调流性能"
     override fun subscriptionsUpdatedCount(n: Int) = "已更新订阅：$n"
     override val subscriptionsUpdated = "订阅已更新"
+    override val subscriptionsUpdateFailed = "订阅更新失败 — 请检查网络连接"
     override val subscriptionDeleted = "订阅已删除"
     override val subscriptionsDeleted = "订阅已删除"
     override val configsDeleted = "配置已删除"
@@ -3241,6 +3335,7 @@ object ZhStrings : Strings {
     override val pingResultLabel = "测试结果"
     override val pingResultTime = "时间"
     override val pingResultIcon = "图标"
+    override val pingResultBoth = "图标与数值"
     override val scanQrTitle = "扫描二维码"
     override val readyToScan = "准备扫描"
     override val subscriptionOrLocationUri = "订阅或节点 URI"

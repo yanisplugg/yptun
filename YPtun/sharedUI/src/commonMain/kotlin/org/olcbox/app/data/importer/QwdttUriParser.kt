@@ -9,6 +9,8 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.VkTurnConfig
 
 /**
  * Parses qWDTT / WDTT connection profiles and subscriptions:
@@ -231,4 +233,30 @@ object QwdttUriParser {
      */
     fun splitHashes(raw: String): List<String> =
         raw.split(',', ';', '\n', '\r', '\t', ' ').map { it.trim() }.filter { it.isNotEmpty() }
+
+    /** Re-emits the quick link for a stored WDTT VK-TURN location (round-trips parse). */
+    fun compose(name: String, vk: VkTurnConfig): String {
+        val port = vk.listenPort.takeIf { it in 1..65535 } ?: LocationConfig.DEFAULT_FREETURN_PORT
+        val params = buildList {
+            if (name.isNotBlank()) add("name" to name)
+            add("peer" to vk.wdttPeer.trim())
+            splitHashes(vk.vkLink).takeIf { it.isNotEmpty() }?.let { add("hashes" to it.joinToString(",")) }
+            if (vk.wdttWorkers > 0) add("workers" to vk.wdttWorkers.toString())
+            add("port" to port.toString())
+            add("pass" to vk.wdttPassword.trim())
+        }
+        return SCHEME_QWDTT + "config?" + params.joinToString("&") { (k, v) -> "$k=${encode(v)}" }
+    }
+
+    /** Minimal RFC 3986 percent-encoding for query values. */
+    private fun encode(value: String): String = buildString {
+        for (b in value.encodeToByteArray()) {
+            val c = b.toInt() and 0xFF
+            val ch = c.toChar()
+            if (ch in 'A'..'Z' || ch in 'a'..'z' || ch in '0'..'9' || ch in "-_.~") append(ch)
+            else {
+                append('%'); append("0123456789ABCDEF"[c shr 4]); append("0123456789ABCDEF"[c and 0x0F])
+            }
+        }
+    }
 }

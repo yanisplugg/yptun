@@ -3,7 +3,7 @@
 ## Поддерживаемые версии
 
 Исправления безопасности выходят только для **последнего релиза**. Прежде чем сообщать о проблеме,
-обнови приложение со [страницы релизов](https://github.com/yanisplugg/olcvpn-client/releases/latest).
+обнови приложение со [страницы релизов](https://github.com/yanisplugg/yptun/releases/latest).
 
 | Сборка | Поддержка |
 |--------|-----------|
@@ -26,7 +26,7 @@ APK с другим отпечатком — не наш, даже если на
 **Пожалуйста, не открывай публичный issue по уязвимостям.**
 
 Сообщи приватно через
-[**Security Advisories**](https://github.com/yanisplugg/olcvpn-client/security/advisories/new)
+[**Security Advisories**](https://github.com/yanisplugg/yptun/security/advisories/new)
 на GitHub — вкладка «Security» → «Report a vulnerability» (нужен вход в аккаунт GitHub). Укажи:
 
 - описание проблемы и её влияние,
@@ -72,6 +72,6 @@ APK с другим отпечатком — не наш, даже если на
   версии.
 - Серверная сторона, которой нет в этом репозитории: панели, чужие серверы и подписки.
 - Блокировка конкретного протокола или сервиса цензором — это не уязвимость, а обычный
-  [issue](https://github.com/yanisplugg/olcvpn-client/issues).
+  [issue](https://github.com/yanisplugg/yptun/issues).
 
 Спасибо, что помогаешь защитить пользователей. 🛡️

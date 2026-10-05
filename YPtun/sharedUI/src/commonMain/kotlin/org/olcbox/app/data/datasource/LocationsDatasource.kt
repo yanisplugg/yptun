@@ -7,6 +7,11 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLParameter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -144,6 +149,7 @@ class LocationsRepositoryImpl(
         val supportUrl: String? = null,
         /** Remnawave `profile-web-page-url` header (subscription management page). */
         val webPageUrl: String? = null,
+        val iconUrl: String? = null,
         /** Remnawave `announce` header (panel announcement; may be base64). */
         val announce: String? = null,
         /** Happ/Remnawave `providerid` header (provider tracking id). */
@@ -159,6 +165,7 @@ class LocationsRepositoryImpl(
         val fakednsJson: String? = null,
         val supportUrl: String? = null,
         val webPageUrl: String? = null,
+        val iconUrl: String? = null,
         val announce: String? = null,
         val providerId: String? = null
     )
@@ -669,6 +676,26 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun setSubscriptionCustomName(subscriptionUrl: String, name: String) {
+        val normalizedUrl = subscriptionUrl.trim()
+        if (normalizedUrl.isBlank()) return
+
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            val updated = bundle.locations.map { entry ->
+                if (entry.subscriptionUrl?.trim() != normalizedUrl) {
+                    entry
+                } else {
+                    entry.copy(
+                        metadata = entry.metadata.withSubscriptionCustomName(name)
+                    ).normalized()
+                }
+            }
+
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
     override suspend fun saveLocation(storageId: String, location: LocationConfig) {
         mutationMutex.withLock {
             val normalizedId = storageId.ifBlank { location.storageSlug() }
@@ -846,6 +873,7 @@ class LocationsRepositoryImpl(
                     userInfo = source.userInfo,
                     supportUrl = source.supportUrl,
                     webPageUrl = source.webPageUrl,
+                    iconUrl = source.iconUrl,
                     announce = source.announce,
                     providerId = source.providerId
                 )
@@ -1028,6 +1056,7 @@ class LocationsRepositoryImpl(
                     fakednsJson = downloaded.fakednsJson,
                     supportUrl = downloaded.supportUrl,
                     webPageUrl = downloaded.webPageUrl,
+                    iconUrl = downloaded.iconUrl,
                     announce = downloaded.announce,
                     providerId = downloaded.providerId
                 )
@@ -1041,6 +1070,8 @@ class LocationsRepositoryImpl(
         } else {
             AppBehaviorSettings.HAPP_USER_AGENT
         }
+
+    private val iconScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private suspend fun downloadTextFromUrl(
         url: String,
@@ -1141,6 +1172,37 @@ class LocationsRepositoryImpl(
                     }.getOrNull()?.takeIf { it.trimStart().startsWith("[") || it.trimStart().startsWith("{") }
                 }
 
+                // No `profile-icon` header: Remnawave keeps the logo in the page's branding config.
+                // Icons are cosmetic and must never slow the refresh: the logo URL is remembered per page
+                // (looked up inline only the first time, bounded), and the lookup + image download run in
+                // the background, so the next refresh already has the up-to-date answer.
+                val headerIcon = (response.headers["profile-icon"] ?: response.headers["profile-logo"])
+                    ?.let { decodeMaybeBase64Header(it) }
+                val pageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) } ?: url
+                val logoKey = "logo:$pageUrl"
+                val cachedLogo = SubscriptionIconDisk.read(logoKey)?.decodeToString()
+                val iconUrl = headerIcon ?: if (cachedLogo != null) {
+                    cachedLogo.ifEmpty { null }
+                } else {
+                    withTimeoutOrNull(4_000) { fetchPageBrandingLogo(client, pageUrl) }
+                        ?.also { SubscriptionIconDisk.write(logoKey, it.encodeToByteArray()) }
+                        ?.ifEmpty { null }
+                }
+                iconScope.launch {
+                    withTimeoutOrNull(25_000) {
+                        val iconClient = createProxyHttpClient(subscriptionProxy)
+                        try {
+                            val logo = headerIcon ?: fetchPageBrandingLogo(iconClient, pageUrl)
+                                .also { SubscriptionIconDisk.write(logoKey, it.encodeToByteArray()) }
+                                .ifEmpty { null }
+                            // Refreshed together with the subscription; the old copy stays on failure.
+                            logo?.let { u -> downloadSubscriptionIcon(iconClient, u)?.let { SubscriptionIconDisk.write(u, it) } }
+                        } finally {
+                            iconClient.close()
+                        }
+                    }
+                }
+
                 DownloadedSubscription(
                     content = content,
                     updateIntervalHours = if (url.contains("vless_universal.txt", ignoreCase = true)) 1 else response.profileUpdateIntervalHours(),
@@ -1155,6 +1217,7 @@ class LocationsRepositoryImpl(
                     // announcement via headers (the last is often base64-wrapped like profile-title).
                     supportUrl = response.headers["support-url"]?.let { decodeMaybeBase64Header(it) },
                     webPageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) },
+                    iconUrl = iconUrl,
                     announce = (response.headers["announce"] ?: response.headers["announcement"] ?: response.headers["description"] ?: response.headers["subscription-description"])?.let { decodeMaybeBase64Header(it) },
                     // Happ/Remnawave provider tracking id (lowercase `providerid`; lookup is
                     // case-insensitive). Plain string — not base64.
@@ -1167,6 +1230,39 @@ class LocationsRepositoryImpl(
             }
         }
     }
+
+    /**
+     * Remnawave subscription page: the logo is `brandingSettings.logoUrl` in `<origin>/assets/.app-config-v2.json`,
+     * served only with the session cookie the page itself sets (and only for a browser User-Agent).
+     * Best-effort: any failure → "".
+     */
+    private suspend fun fetchPageBrandingLogo(client: HttpClient, pageUrl: String): String = runCatching {
+        val origin = Regex("^https?://[^/?#]+").find(pageUrl.trim())?.value ?: return@runCatching null
+        val browserUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/130.0.0.0 Safari/537.36"
+        val page = client.get(pageUrl.trim()) {
+            headers {
+                append(HttpHeaders.UserAgent, browserUa)
+                append(HttpHeaders.Accept, "text/html")
+            }
+        }
+        val cookie = page.headers.getAll(HttpHeaders.SetCookie).orEmpty()
+            .joinToString("; ") { it.substringBefore(';') }
+        val cfg = client.get("$origin/assets/.app-config-v2.json") {
+            headers {
+                append(HttpHeaders.UserAgent, browserUa)
+                append(HttpHeaders.Accept, "*/*")
+                if (cookie.isNotEmpty()) append(HttpHeaders.Cookie, cookie)
+            }
+        }
+        if (cfg.status.value !in 200..299) return@runCatching null
+        val logo = ((Json.parseToJsonElement(cfg.bodyAsText()) as? JsonObject)
+            ?.get("brandingSettings") as? JsonObject)?.get("logoUrl")
+            .let { (it as? JsonPrimitive)?.content }
+            ?.trim()
+        // docs.rw = Remnawave's stock placeholder, not the owner's logo.
+        logo?.takeIf { it.isHttpUrl() && !it.contains("docs.rw") }
+    }.getOrNull().orEmpty() // "" = no logo (distinct from a timeout, which callers see as null)
 
     private fun String.isHttpUrl(): Boolean {
         val value = trim().lowercase()
@@ -1642,6 +1738,7 @@ class LocationsRepositoryImpl(
         userInfo: String?,
         supportUrl: String? = null,
         webPageUrl: String? = null,
+        iconUrl: String? = null,
         announce: String? = null,
         providerId: String? = null
     ): SubscriptionMetadata? {
@@ -1670,11 +1767,12 @@ class LocationsRepositoryImpl(
 
         val support = supportUrl?.trim()?.takeIf { it.isNotBlank() }
         val webPage = webPageUrl?.trim()?.takeIf { it.isNotBlank() }
+        val icon = iconUrl?.trim()?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
         val announcement = announce?.trim()?.takeIf { it.isNotBlank() }
         val provider = providerId?.trim()?.takeIf { it.isNotBlank() }
 
         if (name == null && used == null && available == null && expiresAtEpochMs == null &&
-            support == null && webPage == null && announcement == null && provider == null
+            support == null && webPage == null && icon == null && announcement == null && provider == null
         ) {
             return null
         }
@@ -1685,6 +1783,7 @@ class LocationsRepositoryImpl(
             expiresAtEpochMs = expiresAtEpochMs,
             supportUrl = support,
             webPageUrl = webPage,
+            iconUrl = icon,
             announce = announcement,
             providerId = provider
         ).normalized()
@@ -1762,6 +1861,7 @@ class LocationsRepositoryImpl(
             lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs,
             supportUrl = primary.supportUrl ?: secondary.supportUrl,
             webPageUrl = primary.webPageUrl ?: secondary.webPageUrl,
+            iconUrl = primary.iconUrl ?: secondary.iconUrl,
             announce = secondary.announce ?: primary.announce,
             providerId = primary.providerId ?: secondary.providerId
         ).normalized().takeUnless { it.isEmpty() }
@@ -2907,11 +3007,20 @@ class LocationsRepositoryImpl(
         ).normalized()
     }
 
+    /** Stores the user's own subscription name (blank clears it), keeping the rest of the metadata intact. */
+    private fun LocationMetadata?.withSubscriptionCustomName(name: String): LocationMetadata {
+        val subscription = this?.subscription ?: SubscriptionMetadata()
+        return (this ?: LocationMetadata()).copy(
+            subscription = subscription.copy(customName = name)
+        ).normalized()
+    }
+
     private fun LocationMetadata?.withSubscriptionRefreshState(
         updateIntervalHours: Int,
         lastRefreshAtEpochMs: Long?,
         lastAttemptAtEpochMs: Long? = lastRefreshAtEpochMs,
-        autoUpdateEnabled: Boolean = this?.subscription?.autoUpdateEnabled ?: true
+        autoUpdateEnabled: Boolean = this?.subscription?.autoUpdateEnabled ?: true,
+        customName: String? = this?.subscription?.customName
     ): LocationMetadata {
         val subscription = this?.subscription ?: SubscriptionMetadata()
         return (this ?: LocationMetadata()).copy(
@@ -2919,7 +3028,8 @@ class LocationsRepositoryImpl(
                 updateIntervalHours = updateIntervalHours,
                 lastRefreshAtEpochMs = lastRefreshAtEpochMs,
                 lastAttemptAtEpochMs = lastAttemptAtEpochMs,
-                autoUpdateEnabled = autoUpdateEnabled
+                autoUpdateEnabled = autoUpdateEnabled,
+                customName = customName
             )
         ).normalized()
     }

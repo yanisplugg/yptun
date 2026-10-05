@@ -146,7 +146,7 @@ data class VkTurnConfig(
     fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
         proxyCore != ProxyCore.Auto -> proxyCore
         !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
-        profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        profile?.requiresXray() == true -> ProxyCore.Xray
         globalCore != ProxyCore.Auto -> globalCore
         else -> ProxyCore.SingBox
     }
@@ -404,7 +404,7 @@ data class MasterDnsConfig(
 internal fun overTunnelProxyCore(chosen: ProxyCore, profile: ProxyProfile?, globalCore: ProxyCore): ProxyCore = when {
     chosen != ProxyCore.Auto -> chosen
     !profile?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
-    profile?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+    profile?.requiresXray() == true -> ProxyCore.Xray
     globalCore != ProxyCore.Auto -> globalCore
     else -> ProxyCore.Xray
 }
@@ -728,7 +728,7 @@ data class LocationConfig(
      * the sing-box choice.
      */
     fun requiresXray(): Boolean = listOfNotNull(proxy, proxy2).any { p ->
-        p.network == ProxyProfile.NETWORK_XHTTP
+        p.requiresXray()
     }
 
     /**
@@ -744,7 +744,7 @@ data class LocationConfig(
         // Explicit per-location override beats the global default.
         core != ProxyCore.Auto -> core
         // xhttp/splithttp can only be served by xray-core.
-        proxy?.network == ProxyProfile.NETWORK_XHTTP -> ProxyCore.Xray
+        proxy?.requiresXray() == true -> ProxyCore.Xray
         // App-wide engine preference (ranks below the per-location setting).
         globalCore != ProxyCore.Auto -> globalCore
         else -> ProxyCore.SingBox
@@ -1159,6 +1159,12 @@ data class SubscriptionMetadata(
     @SerialName("web_page_url")
     val webPageUrl: String? = null,
     /**
+     * Subscription icon: image URL the panel advertises in the `profile-icon` response header
+     * (set via Remnawave custom response headers). Shown left of the subscription name. Null when absent.
+     */
+    @SerialName("icon_url")
+    val iconUrl: String? = null,
+    /**
      * Announcement / notice the panel broadcasts (Remnawave `announce` header, may be `base64:`).
      * Shown to the user on the subscription. Null when absent.
      */
@@ -1170,7 +1176,14 @@ data class SubscriptionMetadata(
      * same behaviour as Happ. Null when the panel doesn't set it.
      */
     @SerialName("provider_id")
-    val providerId: String? = null
+    val providerId: String? = null,
+    /**
+     * Name the USER gave this subscription. Shown instead of the panel's [name] but kept apart from
+     * it: [name] feeds the group key (folders, pinning) and is overwritten by every refresh, so
+     * renaming it in place would both break grouping and be undone by the next update.
+     */
+    @SerialName("custom_name")
+    val customName: String? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -1187,8 +1200,10 @@ data class SubscriptionMetadata(
             lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 },
             supportUrl = supportUrl.cleanMetadataValue(),
             webPageUrl = webPageUrl.cleanMetadataValue(),
+            iconUrl = iconUrl.cleanMetadataValue(),
             announce = announce.cleanMetadataValue()?.let { org.olcbox.app.data.importer.SubscriptionDecoder.decodeIfBase64(it) },
-            providerId = providerId.cleanMetadataValue()
+            providerId = providerId.cleanMetadataValue(),
+            customName = customName.cleanMetadataValue()
         )
     }
 
@@ -1207,8 +1222,10 @@ data class SubscriptionMetadata(
                 autoUpdateEnabled &&
                 supportUrl.isNullOrBlank() &&
                 webPageUrl.isNullOrBlank() &&
+                iconUrl.isNullOrBlank() &&
                 announce.isNullOrBlank() &&
-                providerId.isNullOrBlank()
+                providerId.isNullOrBlank() &&
+                customName.isNullOrBlank()
     }
 
     companion object {
