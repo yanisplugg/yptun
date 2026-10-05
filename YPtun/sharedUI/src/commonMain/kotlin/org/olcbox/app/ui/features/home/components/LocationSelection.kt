@@ -54,6 +54,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import io.ktor.client.request.get
@@ -1404,6 +1406,10 @@ private fun SubscriptionGroupHeader(
 private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     var showDetail by remember { mutableStateOf(false) }
+    // Desktop: the same popup follows the mouse pointer (hover in / out); touch keeps using tap.
+    val hoverSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val hovered by hoverSource.collectIsHoveredAsState()
+    androidx.compose.runtime.LaunchedEffect(hovered) { showDetail = hovered }
 
     Box {
         Icon(
@@ -1413,6 +1419,7 @@ private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
             modifier = Modifier
                 .size(20.dp)
                 .clip(CircleShape)
+                .hoverable(hoverSource)
                 .clickable { showDetail = true }
         )
         DropdownMenu(
