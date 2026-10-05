@@ -1177,6 +1177,9 @@ class LocationsRepositoryImpl(
                         response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) } ?: url
                     )
 
+                // Refresh the cached icon together with the subscription; keep the old copy on failure.
+                iconUrl?.let { u -> downloadSubscriptionIcon(client, u)?.let { SubscriptionIconDisk.write(u, it) } }
+
                 DownloadedSubscription(
                     content = content,
                     updateIntervalHours = response.profileUpdateIntervalHours(),

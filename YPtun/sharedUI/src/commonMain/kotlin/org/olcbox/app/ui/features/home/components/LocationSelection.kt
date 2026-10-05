@@ -814,36 +814,40 @@ private fun TrafficProgressBar(location: LocationItem?) {
     }
 }
 
-// ponytail: in-memory only (re-fetched per app start); add a disk cache if icons get large/many.
+// Decoded icons by URL + disk stamp, so a refreshed subscription (new file) re-decodes while a plain
+// recomposition never re-reads the disk copy.
 private val subscriptionIconCache = mutableMapOf<String, androidx.compose.ui.graphics.painter.Painter?>()
 
 @Composable
 private fun SubscriptionIcon(url: String) {
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val painter by androidx.compose.runtime.produceState(subscriptionIconCache[url], url) {
-        if (!subscriptionIconCache.containsKey(url)) {
+    val stamp = org.olcbox.app.data.datasource.SubscriptionIconDisk.stamp(url)
+    val key = "$url#$stamp"
+    val painter by androidx.compose.runtime.produceState(subscriptionIconCache[key], key) {
+        if (!subscriptionIconCache.containsKey(key)) {
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 runCatching {
-                    val client = org.olcbox.app.data.datasource.createProxyHttpClient()
-                    val bytes = try {
-                        val response = client.get(url)
-                        // A 404/HTML page must not be mistaken for an image (it may even contain "<svg").
-                        if (!response.status.isSuccess() ||
-                            response.contentType()?.contentType != "image"
-                        ) return@runCatching null
-                        response.bodyAsBytes()
-                    } finally {
-                        client.close()
-                    }
-                    if (bytes.isEmpty() || bytes.size > 1_000_000) return@runCatching null
+                    // Disk copy (written on subscription refresh); download only if it is missing.
+                    val bytes = org.olcbox.app.data.datasource.SubscriptionIconDisk.read(url) ?: run {
+                        val client = org.olcbox.app.data.datasource.createProxyHttpClient()
+                        try {
+                            org.olcbox.app.data.datasource.downloadSubscriptionIcon(client, url)
+                        } finally {
+                            client.close()
+                        }
+                    }?.also { org.olcbox.app.data.datasource.SubscriptionIconDisk.write(url, it) }
+                    if (bytes == null || bytes.isEmpty()) return@runCatching null
                     if (bytes.decodeToString(endIndex = minOf(bytes.size, 512)).contains("<svg")) {
-                        bytes.decodeToSvgPainter(density)
+                        bytes.decodeToSvgPainter(density) // vector: sharp at any size
                     } else {
-                        androidx.compose.ui.graphics.painter.BitmapPainter(bytes.decodeToImageBitmap())
+                        androidx.compose.ui.graphics.painter.BitmapPainter(
+                            bytes.decodeToImageBitmap(),
+                            filterQuality = androidx.compose.ui.graphics.FilterQuality.High
+                        )
                     }
                 }.getOrNull()
             }
-            subscriptionIconCache[url] = value
+            subscriptionIconCache[key] = value
         }
     }
     painter?.let {
