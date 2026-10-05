@@ -298,10 +298,14 @@ class OlcboxVpnService : VpnService() {
 
             networkLossJob?.cancel()
             networkLossJob = scope.launch {
-                delay(NETWORK_LOSS_GRACE_MS)
-                if (network != currentNetwork) return@launch
-
-                val upstream = findActiveUpstreamNetwork()
+                // Another usable network is already up (Wi-Fi → mobile and back): switch NOW. The
+                // grace only absorbs a blip when nothing else is available to fall back to.
+                var upstream = findActiveUpstreamNetwork()?.takeIf { it != network }
+                if (upstream == null) {
+                    delay(NETWORK_LOSS_GRACE_MS)
+                    if (network != currentNetwork) return@launch
+                    upstream = findActiveUpstreamNetwork()
+                }
                 if (upstream != null) {
                     handleNetworkChange(upstream, "Fallback")
                     return@launch
@@ -4690,7 +4694,7 @@ class OlcboxVpnService : VpnService() {
         private const val TUN2SOCKS_STOP_WAIT_MS = 1_000L
         private const val TUNNEL_HANDOFF_DELAY_MS = 300L
         private const val NETWORK_LOSS_GRACE_MS = 2_500L
-        private const val NETWORK_STABILITY_GRACE_MS = 1_500L
+        private const val NETWORK_STABILITY_GRACE_MS = 600L
         private const val WATCHDOG_INTERVAL_MS = 15_000L
         private const val SPEED_INTERVAL_MS = 2_000L
         // Energy-saver: a much slower speed/rooms notification refresh (vs. SPEED_INTERVAL_MS). Network
