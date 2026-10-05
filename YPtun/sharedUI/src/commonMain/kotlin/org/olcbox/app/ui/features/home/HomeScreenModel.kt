@@ -594,6 +594,7 @@ class HomeScreenViewModel(
                         metadata = LocationMetadata(
                             subscription = SubscriptionMetadata(
                                 name = "Бесплатные серверы",
+                                announce = "Бесплатные серверы от сообщества могут быть нестабильны. Для быстрого личного VPN: @quofortpostbot",
                                 updateIntervalHours = 0,
                                 autoUpdateEnabled = false,
                                 lastRefreshAtEpochMs = now,

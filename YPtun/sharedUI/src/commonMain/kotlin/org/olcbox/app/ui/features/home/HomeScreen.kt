@@ -763,8 +763,11 @@ fun HomeScreen(
                     viewModel.saveSelectedFreeServers(
                         selectedServers = selected,
                         onComplete = { count ->
-                            scope.launch {
-                                snackbarHostState.showSnackbar(s.freeServersImported(count, freeServers.size))
+                            locationViewModel.loadLocations {
+                                viewModel.restartVpnIfRunning()
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(s.freeServersImported(count, freeServers.size))
+                                }
                             }
                         },
                         onError = { message ->

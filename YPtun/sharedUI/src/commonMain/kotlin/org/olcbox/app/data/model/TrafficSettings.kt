@@ -15,7 +15,7 @@ data class TrafficSettings(
     /** DNS used for direct/bootstrap lookups (e.g. resolving the proxy server domain). */
     val directDns: String = "77.88.8.8",
     /** sing-box DNS resolution strategy. One of [STRATEGIES]. */
-    val domainStrategy: String = "ipv4_only",
+    val domainStrategy: String = "prefer_ipv4",
     /** Enable connection multiplexing on the proxy outbound. */
     val muxEnabled: Boolean = false,
     /** Multiplex protocol. One of [MUX_PROTOCOLS]. */
@@ -52,7 +52,7 @@ data class TrafficSettings(
         remoteDns = remoteDns.trim().ifBlank { "8.8.8.8" },
         remoteDns2 = remoteDns2.trim(),
         directDns = directDns.trim().let { if (it.isBlank() || it == "223.5.5.5") "77.88.8.8" else it },
-        domainStrategy = domainStrategy.takeIf { it in STRATEGIES } ?: "ipv4_only",
+        domainStrategy = domainStrategy.takeIf { it in STRATEGIES } ?: "prefer_ipv4",
         muxProtocol = muxProtocol.takeIf { it in MUX_PROTOCOLS } ?: "h2mux",
         muxMaxConnections = muxMaxConnections.coerceIn(1, 64),
         fragmentPackets = fragmentPackets.trim().ifBlank { "tlshello" },
@@ -63,10 +63,7 @@ data class TrafficSettings(
 
     /** Xray DNS queryStrategy mapped from [domainStrategy]. */
     fun xrayQueryStrategy(): String = when (domainStrategy) {
-        // prefer_ipv4 is treated like ipv4_only on Xray (the user's intent on an IPv4-only ISP is "no
-        // tunnel IPv6"): resolve only A so the resolved v4 IP — not the bare domain — is what's sent to
-        // the EXIT proxy, otherwise the dual-stack server picks AAAA and 2ip shows the tunnel's IPv6.
-        "ipv4_only", "prefer_ipv4" -> "UseIPv4"
+        "ipv4_only" -> "UseIPv4"
         "ipv6_only" -> "UseIPv6"
         else -> "UseIP"
     }

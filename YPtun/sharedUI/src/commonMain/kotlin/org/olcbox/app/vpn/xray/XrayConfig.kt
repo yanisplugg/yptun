@@ -512,7 +512,7 @@ object XrayConfig {
             // This is the SAME recipe as ipv4_only (which works), so it adds no new failure mode.
             val familyBlockRule = when {
                 !forceFamilyResolve -> null
-                traffic.domainStrategy == "ipv4_only" || traffic.domainStrategy == "prefer_ipv4" -> buildJsonObject {
+                traffic.domainStrategy == "ipv4_only" -> buildJsonObject {
                     put("type", "field"); putJsonArray("ip") { add("::/0") }; put("outboundTag", "block")
                 }
                 traffic.domainStrategy == "ipv6_only" -> buildJsonObject {

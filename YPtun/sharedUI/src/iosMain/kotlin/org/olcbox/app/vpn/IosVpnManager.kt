@@ -359,7 +359,7 @@ class IosVpnManager(
                 }
             }
             status.value == VpnStatus.Connected && isActiveLocation -> {
-                tunnelPing() ?: if (isLoopbackHost(profile.server)) null else core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
+                tunnelPing()
             }
             behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
                 if (isLoopbackHost(profile.server)) null
@@ -370,11 +370,8 @@ class IosVpnManager(
             }
             else -> {
                 if (isLoopbackHost(profile.server)) null
-                else if (behavior.pingMode == AppBehaviorSettings.PING_TCP) {
-                    core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
-                } else {
+                else {
                     proxyUrlTest(profile, behavior.effectivePingUrl(), method)?.takeIf { it > 0 }
-                        ?: core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS).takeIf { it > 0 }
                 }
             }
         }

@@ -324,7 +324,7 @@ internal class IosEngineController(
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     fakeDnsEnabled = traffic.fakeDnsEnabled,
                     stripGeoSelectors = stripGeo,
-                    forceIpv4 = traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
+                    forceIpv4 = traffic.domainStrategy == "ipv4_only",
                     secondProfile = secondProfile,
                     // The extension's stdout goes nowhere, so a verbatim config that xray refuses to
                     // load used to fail with nothing in the log at all.

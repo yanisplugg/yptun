@@ -326,6 +326,11 @@ class LocationsRepositoryImpl(
             // Without this, an old import (e.g. before FakeDNS extraction existed) sticks around and
             // re-adding the subscription never picks up the new fields.
             val subUrl = resolved.source.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }
+            val existingCustomName = subUrl?.let { url ->
+                current.locations.firstNotNullOfOrNull { entry ->
+                    if (entry.subscriptionUrl?.trim() == url) entry.metadata?.subscription?.customName?.takeIf { it.isNotBlank() } else null
+                }
+            }
             val basis = if (subUrl != null) {
                 current.copy(
                     locations = current.locations.filterNot { it.subscriptionUrl?.trim() == subUrl }
@@ -333,9 +338,18 @@ class LocationsRepositoryImpl(
             } else {
                 current
             }
+            val effectiveImported = if (existingCustomName != null) {
+                imported.copy(
+                    locations = imported.locations.map { entry ->
+                        entry.copy(
+                            metadata = entry.metadata.withSubscriptionCustomName(existingCustomName)
+                        ).normalized()
+                    }
+                )
+            } else imported
             val merged = mergeImportedBundle(
                 current = basis,
-                imported = imported,
+                imported = effectiveImported,
                 replaceMatchingStorageIds = resolved.parsed.mode == ImportMode.Restore
             )
             saveBundleUnlocked(merged)
@@ -376,7 +390,10 @@ class LocationsRepositoryImpl(
         val groupedByUrl = bundle.locations
             .mapNotNull { entry -> entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }?.let { it to entry } }
             .groupBy({ it.first }, { it.second })
-            .filterKeys { url -> onlyUrls == null || url in onlyUrls }
+            .filterKeys { url ->
+                !url.contains("vless_universal.txt", ignoreCase = true) &&
+                    (onlyUrls == null || url in onlyUrls)
+            }
         if (groupedByUrl.isEmpty()) return 0
 
         val targetUrls = groupedByUrl.keys
@@ -412,6 +429,9 @@ class LocationsRepositoryImpl(
             val attemptTimestamp = nowEpochMs()
             val previousInterval = previousEntries.subscriptionUpdateIntervalHours()
             val previousAutoUpdate = previousEntries.subscriptionAutoUpdateEnabled()
+            val previousCustomName = previousEntries.firstNotNullOfOrNull {
+                it.metadata?.subscription?.customName?.takeIf { name -> name.isNotBlank() }
+            }
             val resolved = resolveParsedImport(
                 text = url,
                 fallbackSubscriptionInterval = previousInterval,
@@ -475,7 +495,8 @@ class LocationsRepositoryImpl(
                         updateIntervalHours = updateInterval,
                         lastRefreshAtEpochMs = attemptTimestamp,
                         lastAttemptAtEpochMs = attemptTimestamp,
-                        autoUpdateEnabled = previousAutoUpdate
+                        autoUpdateEnabled = previousAutoUpdate,
+                        customName = previousCustomName
                     )
                 ).normalized()
             }
@@ -511,6 +532,7 @@ class LocationsRepositoryImpl(
             val dueUrls = bundle.locations
                 .mapNotNull { entry ->
                     val url = entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    if (url.contains("vless_universal.txt", ignoreCase = true)) return@mapNotNull null
                     val metadata = entry.metadata?.subscription
                     // Respect the per-subscription auto-update switch — skip when the user turned it off.
                     if (metadata?.autoUpdateEnabled == false) return@mapNotNull null
@@ -553,6 +575,7 @@ class LocationsRepositoryImpl(
             val urlsMissingExpiry = bundle.locations
                 .mapNotNull { entry ->
                     val url = entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    if (url.contains("vless_universal.txt", ignoreCase = true)) return@mapNotNull null
                     url to (entry.metadata?.subscription?.expiresAtEpochMs != null)
                 }
                 .groupBy({ it.first }, { it.second })

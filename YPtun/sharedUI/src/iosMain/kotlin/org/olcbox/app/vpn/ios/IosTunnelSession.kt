@@ -118,7 +118,7 @@ class IosTunnelSession(
                     dropIpv6 = location.engine == EngineType.VkTurn ||
                         location.engine == EngineType.MasterDns ||
                         location.engine == EngineType.OpenFlux ||
-                        traffic.domainStrategy.let { it == "ipv4_only" || it == "prefer_ipv4" },
+                        traffic.domainStrategy == "ipv4_only",
                     slowTunnel = location.engine in SLOW_ENGINES,
                 )
             }
