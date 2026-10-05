@@ -1142,6 +1142,12 @@ data class SubscriptionMetadata(
     @SerialName("web_page_url")
     val webPageUrl: String? = null,
     /**
+     * Subscription icon: image URL the panel advertises in the `profile-icon` response header
+     * (set via Remnawave custom response headers). Shown left of the subscription name. Null when absent.
+     */
+    @SerialName("icon_url")
+    val iconUrl: String? = null,
+    /**
      * Announcement / notice the panel broadcasts (Remnawave `announce` header, may be `base64:`).
      * Shown to the user on the subscription. Null when absent.
      */
@@ -1177,6 +1183,7 @@ data class SubscriptionMetadata(
             lastAttemptAtEpochMs = lastAttemptAtEpochMs?.takeIf { it > 0 },
             supportUrl = supportUrl.cleanMetadataValue(),
             webPageUrl = webPageUrl.cleanMetadataValue(),
+            iconUrl = iconUrl.cleanMetadataValue(),
             announce = announce.cleanMetadataValue(),
             providerId = providerId.cleanMetadataValue(),
             customName = customName.cleanMetadataValue()
@@ -1198,6 +1205,7 @@ data class SubscriptionMetadata(
                 autoUpdateEnabled &&
                 supportUrl.isNullOrBlank() &&
                 webPageUrl.isNullOrBlank() &&
+                iconUrl.isNullOrBlank() &&
                 announce.isNullOrBlank() &&
                 providerId.isNullOrBlank()
     }

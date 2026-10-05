@@ -3722,6 +3722,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSubscriptionDescription = it)) }
 
         RoutingToggleRow(
+            title = s.showSubscriptionIconsTitle,
+            subtitle = s.showSubscriptionIconsSubtitle,
+            checked = settings.showSubscriptionIcons
+        ) { onChanged(settings.copy(showSubscriptionIcons = it)) }
+
+        RoutingToggleRow(
             title = s.hideEndpointWhenDescriptionTitle,
             subtitle = s.hideEndpointWhenDescriptionSubtitle,
             checked = settings.hideEndpointWhenDescription

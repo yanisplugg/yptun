@@ -56,6 +56,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsBytes
+import org.jetbrains.compose.resources.decodeToImageBitmap
+import org.jetbrains.compose.resources.decodeToSvgPainter
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -808,6 +812,45 @@ private fun TrafficProgressBar(location: LocationItem?) {
     }
 }
 
+// ponytail: in-memory only (re-fetched per app start); add a disk cache if icons get large/many.
+private val subscriptionIconCache = mutableMapOf<String, androidx.compose.ui.graphics.painter.Painter?>()
+
+@Composable
+private fun SubscriptionIcon(url: String) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val painter by androidx.compose.runtime.produceState(subscriptionIconCache[url], url) {
+        if (!subscriptionIconCache.containsKey(url)) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                runCatching {
+                    val client = org.olcbox.app.data.datasource.createProxyHttpClient()
+                    val bytes = try {
+                        client.get(url).bodyAsBytes()
+                    } finally {
+                        client.close()
+                    }
+                    if (bytes.isEmpty() || bytes.size > 1_000_000) return@runCatching null
+                    if (bytes.decodeToString(endIndex = minOf(bytes.size, 512)).contains("<svg")) {
+                        bytes.decodeToSvgPainter(density)
+                    } else {
+                        androidx.compose.ui.graphics.painter.BitmapPainter(bytes.decodeToImageBitmap())
+                    }
+                }.getOrNull()
+            }
+            subscriptionIconCache[url] = value
+        }
+    }
+    painter?.let {
+        androidx.compose.foundation.Image(
+            painter = it,
+            contentDescription = null,
+            modifier = Modifier
+                .padding(end = 6.dp)
+                .size(20.dp)
+                .clip(RoundedCornerShape(5.dp))
+        )
+    }
+}
+
 private fun isTelegramLink(url: String): Boolean {
     val u = url.trim().lowercase()
     val host = u.substringAfter("://", "").substringBefore('/').substringBefore('?').removePrefix("www.")
@@ -1215,6 +1258,10 @@ private fun SubscriptionGroupHeader(
                         .padding(end = 4.dp),
                     tint = MaterialTheme.colorScheme.error
                 )
+            }
+            // Panel-provided icon (`profile-icon` header): drawn only when enabled AND the panel sent one.
+            if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionIcons.current) {
+                first?.metadata?.subscription?.iconUrl?.takeIf { it.isNotBlank() }?.let { SubscriptionIcon(it) }
             }
             Text(
                 text = title,

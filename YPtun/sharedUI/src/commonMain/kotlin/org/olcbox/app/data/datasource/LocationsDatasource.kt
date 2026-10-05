@@ -142,6 +142,8 @@ class LocationsRepositoryImpl(
         val supportUrl: String? = null,
         /** Remnawave `profile-web-page-url` header (subscription management page). */
         val webPageUrl: String? = null,
+        /** `profile-icon` header (subscription icon image URL). */
+        val iconUrl: String? = null,
         /** Remnawave `announce` header (panel announcement; may be base64). */
         val announce: String? = null,
         /** Happ/Remnawave `providerid` header (provider tracking id). */
@@ -157,6 +159,7 @@ class LocationsRepositoryImpl(
         val fakednsJson: String? = null,
         val supportUrl: String? = null,
         val webPageUrl: String? = null,
+        val iconUrl: String? = null,
         val announce: String? = null,
         val providerId: String? = null
     )
@@ -868,6 +871,7 @@ class LocationsRepositoryImpl(
                     userInfo = source.userInfo,
                     supportUrl = source.supportUrl,
                     webPageUrl = source.webPageUrl,
+                    iconUrl = source.iconUrl,
                     announce = source.announce,
                     providerId = source.providerId
                 )
@@ -1048,6 +1052,7 @@ class LocationsRepositoryImpl(
                     fakednsJson = downloaded.fakednsJson,
                     supportUrl = downloaded.supportUrl,
                     webPageUrl = downloaded.webPageUrl,
+                    iconUrl = downloaded.iconUrl,
                     announce = downloaded.announce,
                     providerId = downloaded.providerId
                 )
@@ -1175,6 +1180,8 @@ class LocationsRepositoryImpl(
                     // announcement via headers (the last is often base64-wrapped like profile-title).
                     supportUrl = response.headers["support-url"]?.let { decodeMaybeBase64Header(it) },
                     webPageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) },
+                    iconUrl = (response.headers["profile-icon"] ?: response.headers["profile-logo"])
+                        ?.let { decodeMaybeBase64Header(it) },
                     announce = response.headers["announce"]?.let { decodeMaybeBase64Header(it) },
                     // Happ/Remnawave provider tracking id (lowercase `providerid`; lookup is
                     // case-insensitive). Plain string — not base64.
@@ -1655,6 +1662,7 @@ class LocationsRepositoryImpl(
         userInfo: String?,
         supportUrl: String? = null,
         webPageUrl: String? = null,
+        iconUrl: String? = null,
         announce: String? = null,
         providerId: String? = null
     ): SubscriptionMetadata? {
@@ -1683,11 +1691,12 @@ class LocationsRepositoryImpl(
 
         val support = supportUrl?.trim()?.takeIf { it.isNotBlank() }
         val webPage = webPageUrl?.trim()?.takeIf { it.isNotBlank() }
+        val icon = iconUrl?.trim()?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
         val announcement = announce?.trim()?.takeIf { it.isNotBlank() }
         val provider = providerId?.trim()?.takeIf { it.isNotBlank() }
 
         if (name == null && used == null && available == null && expiresAtEpochMs == null &&
-            support == null && webPage == null && announcement == null && provider == null
+            support == null && webPage == null && icon == null && announcement == null && provider == null
         ) {
             return null
         }
@@ -1698,6 +1707,7 @@ class LocationsRepositoryImpl(
             expiresAtEpochMs = expiresAtEpochMs,
             supportUrl = support,
             webPageUrl = webPage,
+            iconUrl = icon,
             announce = announcement,
             providerId = provider
         ).normalized()
@@ -1757,6 +1767,7 @@ class LocationsRepositoryImpl(
             lastAttemptAtEpochMs = primary.lastAttemptAtEpochMs ?: secondary.lastAttemptAtEpochMs,
             supportUrl = primary.supportUrl ?: secondary.supportUrl,
             webPageUrl = primary.webPageUrl ?: secondary.webPageUrl,
+            iconUrl = primary.iconUrl ?: secondary.iconUrl,
             announce = primary.announce ?: secondary.announce,
             providerId = primary.providerId ?: secondary.providerId
         ).normalized().takeUnless { it.isEmpty() }

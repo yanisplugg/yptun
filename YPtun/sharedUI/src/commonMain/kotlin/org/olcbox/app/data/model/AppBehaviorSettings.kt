@@ -156,6 +156,11 @@ data class AppBehaviorSettings(
      */
     val showSubscriptionDescription: Boolean = false,
     /**
+     * Show the subscription's icon (panel `profile-icon` header) left of its name in the location
+     * list. Nothing is drawn for a subscription without one. On by default.
+     */
+    val showSubscriptionIcons: Boolean = true,
+    /**
      * Hide the protocol + server IP (the "endpoint" line) on a location row WHEN that location has a
      * description — so a subscription's human description is shown instead of the technical endpoint.
      * Rows without a description always show the endpoint. On by default.
