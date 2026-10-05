@@ -81,11 +81,12 @@ ArchitecturesInstallIn64BitMode={#ArchIn64Bit}
 PrivilegesRequired=admin
 ; Always offer the picker, even when the OS language matches one we ship.
 ShowLanguageDialog=yes
-; Restart Manager is only a backstop: it cannot close a YPtun parked in the tray (no visible window) and
-; does nothing in silent mode, which is how the in-app updater runs this installer. StopRunningApp
-; (below) is what actually closes the app before files are replaced, so an upgrade over a running
-; YPtun needs neither a manual exit nor a reboot.
-CloseApplications=yes
+; Restart Manager is OFF on purpose: it runs BEFORE our code, sees the running YPtun (it cannot close one
+; parked in the tray, nor in silent mode - how the in-app updater runs this installer) and shows
+; "could not close applications" even when everything is about to be closed. StopRunningApp (below)
+; closes the app after the user clicks Install, so an upgrade over a running YPtun needs neither a
+; manual exit nor a reboot.
+CloseApplications=no
 RestartApplications=no
 
 [Languages]
@@ -124,7 +125,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-// Closes the YPtun that runs from THIS install dir (a portable copy elsewhere is left alone): first a
+// Closes every process that runs from THIS install dir (a portable copy elsewhere is left alone): first a
 // polite close so the app can restore the system proxy / drop its TUN, then, after 8 s, a hard stop.
 procedure StopRunningApp(AppDir: String);
 var
@@ -134,7 +135,7 @@ begin
   StringChange(AppDir, '''', '''''');
   Script :=
     '$d = ''' + AppDir + '\''; ' +
-    '$p = @(Get-Process -Name YPtun -ErrorAction SilentlyContinue | ' +
+    '$p = @(Get-Process -ErrorAction SilentlyContinue | ' +
       'Where-Object { $_.Path -and $_.Path.StartsWith($d, [StringComparison]::OrdinalIgnoreCase) }); ' +
     'if ($p.Count) { ' +
       'foreach ($x in $p) { [void]$x.CloseMainWindow() }; ' +
