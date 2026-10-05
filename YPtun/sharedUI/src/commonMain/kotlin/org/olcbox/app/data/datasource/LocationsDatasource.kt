@@ -1177,26 +1177,32 @@ class LocationsRepositoryImpl(
                 }
 
                 // No `profile-icon` header: Remnawave keeps the logo in the page's branding config.
-                // Icons are cosmetic: bounded wait here, and the image itself is fetched in the background,
-                // so an unreachable icon host can never stall or fail the subscription refresh.
-                val iconUrl = (response.headers["profile-icon"] ?: response.headers["profile-logo"])
+                // Icons are cosmetic and must never slow the refresh: the logo URL is remembered per page
+                // (looked up inline only the first time, bounded), and the lookup + image download run in
+                // the background, so the next refresh already has the up-to-date answer.
+                val headerIcon = (response.headers["profile-icon"] ?: response.headers["profile-logo"])
                     ?.let { decodeMaybeBase64Header(it) }
-                    ?: withTimeoutOrNull(6_000) {
-                        fetchPageBrandingLogo(
-                            client,
-                            response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) } ?: url
-                        )
-                    }
-                iconUrl?.let { u ->
-                    iconScope.launch {
-                        // Refreshed together with the subscription; the old copy stays on failure.
-                        withTimeoutOrNull(20_000) {
-                            val iconClient = createProxyHttpClient(subscriptionProxy)
-                            try {
-                                downloadSubscriptionIcon(iconClient, u)?.let { SubscriptionIconDisk.write(u, it) }
-                            } finally {
-                                iconClient.close()
-                            }
+                val pageUrl = response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) } ?: url
+                val logoKey = "logo:$pageUrl"
+                val cachedLogo = SubscriptionIconDisk.read(logoKey)?.decodeToString()
+                val iconUrl = headerIcon ?: if (cachedLogo != null) {
+                    cachedLogo.ifEmpty { null }
+                } else {
+                    withTimeoutOrNull(4_000) { fetchPageBrandingLogo(client, pageUrl) }
+                        ?.also { SubscriptionIconDisk.write(logoKey, it.encodeToByteArray()) }
+                        ?.ifEmpty { null }
+                }
+                iconScope.launch {
+                    withTimeoutOrNull(25_000) {
+                        val iconClient = createProxyHttpClient(subscriptionProxy)
+                        try {
+                            val logo = headerIcon ?: fetchPageBrandingLogo(iconClient, pageUrl)
+                                .also { SubscriptionIconDisk.write(logoKey, it.encodeToByteArray()) }
+                                .ifEmpty { null }
+                            // Refreshed together with the subscription; the old copy stays on failure.
+                            logo?.let { u -> downloadSubscriptionIcon(iconClient, u)?.let { SubscriptionIconDisk.write(u, it) } }
+                        } finally {
+                            iconClient.close()
                         }
                     }
                 }
@@ -1229,9 +1235,9 @@ class LocationsRepositoryImpl(
     /**
      * Remnawave subscription page: the logo is `brandingSettings.logoUrl` in `<origin>/assets/.app-config-v2.json`,
      * served only with the session cookie the page itself sets (and only for a browser User-Agent).
-     * Best-effort: any failure → null.
+     * Best-effort: any failure → "".
      */
-    private suspend fun fetchPageBrandingLogo(client: HttpClient, pageUrl: String): String? = runCatching {
+    private suspend fun fetchPageBrandingLogo(client: HttpClient, pageUrl: String): String = runCatching {
         val origin = Regex("^https?://[^/?#]+").find(pageUrl.trim())?.value ?: return@runCatching null
         val browserUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/130.0.0.0 Safari/537.36"
@@ -1257,7 +1263,7 @@ class LocationsRepositoryImpl(
             ?.trim()
         // docs.rw = Remnawave's stock placeholder, not the owner's logo.
         logo?.takeIf { it.isHttpUrl() && !it.contains("docs.rw") }
-    }.getOrNull()
+    }.getOrNull().orEmpty() // "" = no logo (distinct from a timeout, which callers see as null)
 
     private fun String.isHttpUrl(): Boolean {
         val value = trim().lowercase()
