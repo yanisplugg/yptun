@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"bytes"
 	"encoding/binary"
 	"os"
@@ -84,5 +85,19 @@ func TestWriteEntryRejectsTraversal(t *testing.T) {
 	}
 	if err := writeEntry(root, "app/ok.txt", []byte("x")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCleanPathDropsOtherJavaAndPutsRuntimeFirst(t *testing.T) {
+	javaDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(javaDir, "java.exe"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plain := t.TempDir()
+	runtimeBin := t.TempDir()
+	env := cleanPath([]string{"A=1", "Path=" + javaDir + ";" + plain}, runtimeBin)
+	want := "Path=" + runtimeBin + ";" + plain
+	if len(env) != 2 || env[0] != "A=1" || env[1] != want {
+		t.Fatalf("got %v, want path %q", env, want)
 	}
 }

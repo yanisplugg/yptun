@@ -332,12 +332,46 @@ func launchEnv(env []string) []string {
 	return env
 }
 
-// launch starts the app detached and returns immediately: the launcher must not linger as a parent
-// process (it would keep a console-less stub alive for the whole session and show up in the tree).
+// cleanPath removes PATH entries that hold another Java (java.exe / jvm.dll) and puts the app's own
+// runtimein first. The bundled JRE never needs any of them, and an old Java 8 install on PATH is the
+// classic companion of "Failed to launch JVM".
+func cleanPath(env []string, runtimeBin string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, value, _ := strings.Cut(kv, "=")
+		if !strings.EqualFold(name, "PATH") {
+			out = append(out, kv)
+			continue
+		}
+		kept := []string{runtimeBin}
+		for _, dir := range filepath.SplitList(value) {
+			if dir == "" || holdsJava(dir) {
+				continue
+			}
+			kept = append(kept, dir)
+		}
+		out = append(out, name+"="+strings.Join(kept, string(os.PathListSeparator)))
+	}
+	return out
+}
+
+func holdsJava(dir string) bool {
+	for _, f := range []string{"java.exe", "javaw.exe", "jvm.dll"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// launch starts the app and watches its first seconds (see watchStartup): the launcher leaves as
+// soon as the app shows a window, so it does not linger as a parent for the whole session, but a
+// failed start gets an explanation instead of a bare "Failed to launch JVM".
 func launch(exe string) error {
+	dir := filepath.Dir(exe)
 	attr := &os.ProcAttr{
-		Dir:   filepath.Dir(exe),
-		Env:   launchEnv(os.Environ()),
+		Dir:   dir,
+		Env:   cleanPath(launchEnv(os.Environ()), filepath.Join(dir, "runtime", "bin")),
 		Files: []*os.File{nil, nil, nil},
 		Sys:   &syscall.SysProcAttr{HideWindow: true},
 	}
@@ -345,7 +379,12 @@ func launch(exe string) error {
 	if err != nil {
 		return err
 	}
-	return proc.Release()
+	pid := proc.Pid
+	if err := proc.Release(); err != nil {
+		return err
+	}
+	watchStartup(pid, dir)
+	return nil
 }
 
 // ---------------------------------------------------------------------------------------------
