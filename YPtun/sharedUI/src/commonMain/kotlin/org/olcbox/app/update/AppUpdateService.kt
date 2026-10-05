@@ -65,7 +65,10 @@ data class AppUpdateInfo(
      * APK is signature-verified before install, so a missing/forged patch always degrades safely.
      */
     val deltaAsset: AppUpdateAsset? = null
-)
+) {
+    /** What will actually be downloaded first: the small patch when there is one, else the full file. */
+    val downloadAsset: AppUpdateAsset get() = deltaAsset ?: asset
+}
 
 class AppUpdateService(
     private val httpClient: HttpClient = createUpdateHttpClient(),

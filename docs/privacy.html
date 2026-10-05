@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - YPtun</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --surface: #f5f5f7;
+            --surface-border: #e5e5ea;
+            --text-main: #1d1d1f;
+            --text-secondary: #6e6e73;
+            --text-muted: #86868b;
+            --accent: #0071e3;
+            --accent-hover: #0077ed;
+            --nav-bg: rgba(255, 255, 255, 0.8);
+            --card-bg: #ffffff;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #000000;
+                --surface: #1c1c1e;
+                --surface-border: #2c2c2e;
+                --text-main: #f5f5f7;
+                --text-secondary: #86868b;
+                --text-muted: #6e6e73;
+                --accent: #2997ff;
+                --accent-hover: #0077ed;
+                --nav-bg: rgba(0, 0, 0, 0.8);
+                --card-bg: #1c1c1e;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        header {
+            background-color: var(--nav-bg);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            border-bottom: 1px solid var(--surface-border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--text-main);
+            text-decoration: none;
+            letter-spacing: -0.01em;
+        }
+
+        .logo span {
+            color: var(--accent);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.92rem;
+            font-weight: 400;
+            transition: color 0.15s ease;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: var(--text-main);
+        }
+
+        main {
+            max-width: 760px;
+            margin: 56px auto 96px;
+            padding: 0 24px;
+        }
+
+        .doc-header {
+            margin-bottom: 40px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--surface-border);
+        }
+
+        .doc-header h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            margin-bottom: 8px;
+        }
+
+        .doc-meta {
+            color: var(--text-secondary);
+            font-size: 0.92rem;
+        }
+
+        section {
+            margin-bottom: 36px;
+        }
+
+        h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: -0.015em;
+            margin-top: 32px;
+            margin-bottom: 12px;
+            color: var(--text-main);
+        }
+
+        p {
+            font-size: 1rem;
+            color: var(--text-main);
+            margin-bottom: 14px;
+            font-weight: 400;
+        }
+
+        ul {
+            margin: 12px 0 18px 20px;
+        }
+
+        li {
+            font-size: 1rem;
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        strong {
+            font-weight: 600;
+        }
+
+        .callout {
+            background-color: var(--surface);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin: 20px 0;
+            font-size: 0.95rem;
+        }
+
+        .callout p:last-child {
+            margin-bottom: 0;
+        }
+
+        footer {
+            border-top: 1px solid var(--surface-border);
+            padding: 40px 24px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        footer a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            margin: 0 8px;
+        }
+
+        footer a:hover {
+            color: var(--text-main);
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="nav-container">
+        <a href="index.html" class="logo">
+            YPtun
+        </a>
+        <nav class="nav-links">
+            <a href="index.html">Home</a>
+            <a href="terms.html">Terms</a>
+            <a href="privacy.html" class="active">Privacy</a>
+            <a href="support.html">Support</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+    <div class="doc-header">
+        <h1>Privacy Policy</h1>
+        <div class="doc-meta">Last Updated: October 5, 2026 &bull; Version 1.0</div>
+    </div>
+
+    <section>
+        <p>This Privacy Policy outlines how <strong>YPtun</strong> ("we", "our", or "the Application") handles user privacy and information. We operate with a strict commitment to user privacy, data minimization, and transparent client-side software architecture.</p>
+        <div class="callout">
+            <p><strong>Core Zero-Logs Commitment:</strong> YPtun does not collect, monitor, log, record, or share your browsing activity, network traffic destinations, DNS lookups, transmitted data payloads, or originating IP addresses. The Application operates strictly as a local, client-side network utility.</p>
+        </div>
+    </section>
+
+    <section>
+        <h2>1. Information We Never Collect</h2>
+        <p>In full compliance with Apple App Store Review Guidelines (specifically Guideline 5.1 on Data Collection and Guideline 5.4 on VPN Applications), YPtun adheres to the following principles:</p>
+        <ul>
+            <li><strong>No Traffic Logs:</strong> We do not inspect, log, or store data packets, websites visited, or online services accessed through the Application.</li>
+            <li><strong>No Connection Timestamps:</strong> We do not log timestamps indicating when connections are established or disconnected.</li>
+            <li><strong>No IP Address Records:</strong> We never log your originating IP address or the destination IP addresses reached through tunnels.</li>
+            <li><strong>No DNS Query Recording:</strong> We do not record or retain your DNS queries.</li>
+            <li><strong>No User Account or Identity:</strong> YPtun does not require account registration. We do not collect names, email addresses, phone numbers, or passwords.</li>
+            <li><strong>No Advertising or Behavioral Tracking:</strong> The Application contains no third-party advertising frameworks, analytics SDKs, device fingerprinting, or tracking mechanisms.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>2. Data Stored Locally on Your Device</h2>
+        <p>All data necessary for the Application to function is stored strictly within sandboxed local device storage:</p>
+        <ul>
+            <li><strong>Connection Configurations:</strong> Server addresses, port numbers, cryptographic keys, and routing rules imported by the user are stored locally in the secure iOS Keychain and sandboxed application storage (App Group container).</li>
+            <li><strong>Session Diagnostics:</strong> Latency measurements (ping) and packet transfer counters displayed in the user interface or Live Activity are computed transiently in memory during active sessions and are discarded when closed.</li>
+        </ul>
+        <p>This data is never transmitted to, stored on, or synchronized with any server owned or controlled by YPtun.</p>
+    </section>
+
+    <section>
+        <h2>3. Apple Network Extension Framework</h2>
+        <p>To establish secure network routing on iOS, YPtun utilizes Apple's official <code>NetworkExtension</code> framework (specifically <code>NEPacketTunnelProvider</code>). This system entitlement enables the Application to create a virtual network interface on the device and direct packets through user-selected protocols.</p>
+        <p>Packet processing is handled locally by the tunnel provider extension according to the user's active routing configuration.</p>
+    </section>
+
+    <section>
+        <h2>4. User-Provided Configurations & Third-Party Endpoints</h2>
+        <p>YPtun functions as an open routing client. When you import and connect to a server or subscription provided by a third-party service provider or private server, your encrypted network traffic routes through that endpoint.</p>
+        <p>The handling of traffic passing through external endpoints is governed exclusively by the privacy policies and infrastructure of those independent server operators. We advise users to connect only through verified, trustworthy network servers.</p>
+    </section>
+
+    <section>
+        <h2>5. Third-Party Data Sharing</h2>
+        <p>Because we do not collect personal data, account information, or network telemetry, we do not sell, rent, monetize, trade, or share any user information with third parties, advertisers, or government entities.</p>
+    </section>
+
+    <section>
+        <h2>6. Compliance with International Privacy Laws (GDPR & CCPA)</h2>
+        <p>Under the European General Data Protection Regulation (GDPR) and the California Consumer Privacy Act (CCPA):</p>
+        <ul>
+            <li><strong>Right of Access & Portability:</strong> Since we store no personal data on servers, any configurations you create reside solely on your device and can be exported directly through the app interface.</li>
+            <li><strong>Right to Erasure:</strong> You can completely erase all locally stored data, configurations, and keys at any time by deleting profiles within the app or uninstalling the Application.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>7. Children's Privacy</h2>
+        <p>YPtun does not knowingly collect or solicit personal data from children under the age of 13 (or under the age of 16 in certain jurisdictions). As the Application operates without user registration or data collection, it complies with the Children's Online Privacy Protection Act (COPPA).</p>
+    </section>
+
+    <section>
+        <h2>8. Updates to This Policy</h2>
+        <p>We may periodically update this Privacy Policy to reflect software changes or evolving regulatory standards. Any revisions will be published on this page with an updated "Last Updated" date.</p>
+    </section>
+
+    <section>
+        <h2>9. Contact Information</h2>
+        <p>If you have questions, feedback, or require assistance regarding this Privacy Policy, please contact us at:</p>
+        <p><strong>Email:</strong> <a href="mailto:yptunn@gmail.com" style="color: var(--accent); text-decoration: none;">yptunn@gmail.com</a></p>
+    </section>
+</main>
+
+<footer>
+    <p>&copy; 2026 YPtun. All rights reserved. &bull; <a href="index.html">Home</a> &bull; <a href="terms.html">Terms of Service</a> &bull; <a href="privacy.html">Privacy Policy</a> &bull; <a href="support.html">Support</a></p>
+</footer>
+
+</body>
+</html>

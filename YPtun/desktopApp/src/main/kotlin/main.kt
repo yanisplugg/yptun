@@ -427,7 +427,7 @@ private fun runApp(args: Array<String>) = application {
             updateProgress = 0f
             // With a delta published for this hop only a few MB are fetched and the installed jar is
             // patched in place; without one this is the full installer, as before.
-            updateMessage = s.downloadingAsset((info.deltaAsset ?: info.asset).name)
+            updateMessage = s.downloadingAsset(info.downloadAsset.name)
             val result = dependencies.updateInstaller.install(info) { progress ->
                 updateProgress = progress
             }

@@ -708,7 +708,7 @@ private fun SharedUpdateOfferCard(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = "${offer.version} · ${offer.asset.name}",
+                text = "${offer.version} · ${offer.downloadAsset.name}",
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 fontSize = 13.sp,
                 maxLines = 2,

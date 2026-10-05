@@ -1,6 +1,7 @@
 package org.olcbox.app.vpn.desktop
 
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
@@ -31,6 +32,30 @@ internal object PhysicalInterface {
         if (names.any { name -> tunNames.any { name.contains(it, ignoreCase = true) } }) return 0
         nic.index.takeIf { it > 0 } ?: 0
     }.getOrDefault(0)
+
+    /**
+     * Fingerprint of the real uplinks: up, non-tunnel, non-virtual adapters with an IPv4 address.
+     * Empty = offline. Compared between polls to notice a network switch; unlike [index] it is safe
+     * while our own TUN is up because the tunnel and virtual adapters are filtered out by name.
+     */
+    fun fingerprint(): String = runCatching {
+        NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback && !it.isVirtual }
+            .filter { nic -> !VIRTUAL_NAME.containsMatchIn("${nic.name} ${nic.displayName}") }
+            .mapNotNull { nic ->
+                val v4 = nic.inetAddresses.toList()
+                    .filter { it is Inet4Address && !it.isLinkLocalAddress && !it.isLoopbackAddress }
+                if (v4.isEmpty()) null else "${nic.name}=" + v4.joinToString(",") { it.hostAddress }
+            }
+            .sorted()
+            .joinToString("|")
+    }.getOrDefault("")
+
+    private val VIRTUAL_NAME = Regex(
+        "tun|tap|yptun|docker|veth|br-|virbr|vmnet|vmware|vbox|virtual|vethernet|hyper-v|wsl|" +
+            "tailscale|zerotier|isatap|teredo|bluetooth|pseudo",
+        RegexOption.IGNORE_CASE,
+    )
 
     private const val PROBE_HOST = "8.8.8.8"
     private const val PROBE_PORT = 53

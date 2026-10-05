@@ -76,13 +76,13 @@ fun ApplicationUpdateOfferSheet(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = info.asset.name,
+                        text = info.downloadAsset.name,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp
                     )
                     Text(
-                        text = info.asset.sizeBytes?.formatBytes() ?: s.sizeUnknown,
+                        text = info.downloadAsset.sizeBytes?.formatBytes() ?: s.sizeUnknown,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 13.sp
                     )

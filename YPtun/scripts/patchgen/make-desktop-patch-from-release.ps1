@@ -88,8 +88,26 @@ try {
   } finally { $out.Close() }
 } finally { $fs.Close() }
 
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::ExtractToDirectory($zip, $dest)
+# Two payload formats exist: a Deflate zip (up to 3.6.3) and a zstd-compressed tar (3.6.4 on). They
+# are told apart by the first bytes of the payload.
+$head = New-Object byte[] 4
+$ps = [IO.File]::OpenRead($zip)
+try { [void]$ps.Read($head, 0, 4) } finally { $ps.Close() }
+if ($head[0] -eq 0x28 -and $head[1] -eq 0xB5 -and $head[2] -eq 0x2F -and $head[3] -eq 0xFD) {
+  # zstd: decoded by the launcher's own Go code (cmd/unpack), so Go must be installed
+  $go = (Get-Command go -ErrorAction SilentlyContinue).Source
+  if (-not $go -and (Test-Path "$env:ProgramFiles\Go\bin\go.exe")) { $go = "$env:ProgramFiles\Go\bin\go.exe" }
+  if (-not $go) { throw "go.exe not found - needed to read a zstd portable payload" }
+  $launcher = Join-Path $here "..\..\desktopApp\packaging\windows\portable-launcher"
+  Push-Location $launcher
+  try {
+    & $go run ./cmd/unpack $zip $dest
+    if ($LASTEXITCODE -ne 0) { throw "unpack failed with exit code $LASTEXITCODE" }
+  } finally { Pop-Location }
+} else {
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [IO.Compression.ZipFile]::ExtractToDirectory($zip, $dest)
+}
 if (-not (Test-Path (Join-Path $dest "app\YPtun.cfg"))) { throw "$exe has no app\YPtun.cfg" }
 }
 
