@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sort
+import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.SyncDisabled
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -754,34 +755,55 @@ private fun TrafficProgressBar(location: LocationItem?) {
         else -> available!!
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp)
-            .height(24.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center
+    // Remnawave/Happ `support-url` header: icon button right of the bar, hidden when the panel gives none.
+    val supportUrl = subscription.supportUrl?.takeIf { it.isNotBlank() }
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Filled portion: exact fraction when total is known, otherwise full pill.
         Box(
             modifier = Modifier
-                .fillMaxWidth(fraction ?: 1f)
-                .fillMaxHeight()
+                .weight(1f)
+                .height(24.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.primary)
-                .align(Alignment.CenterStart)
-        )
-        Text(
-            text = text,
-            color = if (fraction == null || fraction > 0.5f) {
-                MaterialTheme.colorScheme.onPrimary
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            // Filled portion: exact fraction when total is known, otherwise full pill.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction ?: 1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+                    .align(Alignment.CenterStart)
+            )
+            Text(
+                text = text,
+                color = if (fraction == null || fraction > 0.5f) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        if (supportUrl != null) {
+            IconButton(
+                onClick = { runCatching { uriHandler.openUri(supportUrl) } },
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.SupportAgent,
+                    contentDescription = s.subscriptionSupport,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
     }
 }
 
