@@ -363,8 +363,6 @@ fun AppSettingsSheet(
                     enabled = enabled,
                     socksHost = proxySettings.host,
                     socksPort = proxySettings.port,
-                    setSystemProxy = appBehavior.setSystemProxy,
-                    onSetSystemProxyChanged = { onAppBehaviorChanged(appBehavior.copy(setSystemProxy = it)) },
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onModeSelected = onModeSelected
                 )
@@ -995,6 +993,12 @@ private fun ConnectionSettingsContent(
             }
 
             RoutingToggleRow(
+                title = s.setSystemProxyTitle,
+                subtitle = if (appBehavior.setSystemProxy) s.setSystemProxyOn else s.setSystemProxyOff,
+                checked = appBehavior.setSystemProxy
+            ) { onAppBehaviorChanged(appBehavior.copy(setSystemProxy = it)) }
+
+            RoutingToggleRow(
                 title = s.telegramProxyTitle,
                 subtitle = s.telegramProxySubtitle,
                 checked = appBehavior.telegramProxyEnabled
@@ -1119,8 +1123,6 @@ private fun ConnectionModeSettingsContent(
     enabled: Boolean,
     socksHost: String,
     socksPort: Int,
-    setSystemProxy: Boolean,
-    onSetSystemProxyChanged: (Boolean) -> Unit,
     onBack: () -> Unit,
     onModeSelected: (AndroidConnectionMode) -> Unit
 ) {
@@ -1150,18 +1152,6 @@ private fun ConnectionModeSettingsContent(
                     onClick = { onModeSelected(mode) }
                 )
             }
-        }
-
-        if (selectedMode == AndroidConnectionMode.Proxy) {
-            Spacer(Modifier.height(16.dp))
-            SettingsSwitchRow(
-                title = s.setSystemProxyTitle,
-                value = if (setSystemProxy) s.setSystemProxyOn else s.setSystemProxyOff,
-                icon = Icons.Rounded.Public,
-                checked = setSystemProxy,
-                enabled = enabled,
-                onCheckedChange = onSetSystemProxyChanged
-            )
         }
 
         Spacer(Modifier.height(16.dp))
