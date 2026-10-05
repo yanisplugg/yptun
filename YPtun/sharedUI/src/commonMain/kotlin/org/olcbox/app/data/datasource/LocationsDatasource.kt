@@ -8,11 +8,16 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLParameter
 import kotlin.concurrent.Volatile
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -1067,6 +1072,8 @@ class LocationsRepositoryImpl(
             AppBehaviorSettings.HAPP_USER_AGENT
         }
 
+    private val iconScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     private suspend fun downloadTextFromUrl(
         url: String,
         requestMode: SubscriptionRequestMode,
@@ -1170,15 +1177,29 @@ class LocationsRepositoryImpl(
                 }
 
                 // No `profile-icon` header: Remnawave keeps the logo in the page's branding config.
+                // Icons are cosmetic: bounded wait here, and the image itself is fetched in the background,
+                // so an unreachable icon host can never stall or fail the subscription refresh.
                 val iconUrl = (response.headers["profile-icon"] ?: response.headers["profile-logo"])
                     ?.let { decodeMaybeBase64Header(it) }
-                    ?: fetchPageBrandingLogo(
-                        client,
-                        response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) } ?: url
-                    )
-
-                // Refresh the cached icon together with the subscription; keep the old copy on failure.
-                iconUrl?.let { u -> downloadSubscriptionIcon(client, u)?.let { SubscriptionIconDisk.write(u, it) } }
+                    ?: withTimeoutOrNull(6_000) {
+                        fetchPageBrandingLogo(
+                            client,
+                            response.headers["profile-web-page-url"]?.let { decodeMaybeBase64Header(it) } ?: url
+                        )
+                    }
+                iconUrl?.let { u ->
+                    iconScope.launch {
+                        // Refreshed together with the subscription; the old copy stays on failure.
+                        withTimeoutOrNull(20_000) {
+                            val iconClient = createProxyHttpClient(subscriptionProxy)
+                            try {
+                                downloadSubscriptionIcon(iconClient, u)?.let { SubscriptionIconDisk.write(u, it) }
+                            } finally {
+                                iconClient.close()
+                            }
+                        }
+                    }
+                }
 
                 DownloadedSubscription(
                     content = content,
