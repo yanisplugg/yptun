@@ -1406,10 +1406,18 @@ private fun SubscriptionGroupHeader(
 private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     var showDetail by remember { mutableStateOf(false) }
-    // Desktop: the same popup follows the mouse pointer (hover in / out); touch keeps using tap.
+    // Desktop: the popup follows the mouse pointer (hover in / out); touch: tap shows it for a few seconds.
+    // It is a NON-focusable Popup: a focusable DropdownMenu grabs the pointer, the badge loses hover,
+    // the menu closes, hover returns - visible flicker.
     val hoverSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     val hovered by hoverSource.collectIsHoveredAsState()
     androidx.compose.runtime.LaunchedEffect(hovered) { showDetail = hovered }
+    androidx.compose.runtime.LaunchedEffect(showDetail) {
+        if (showDetail && !hovered) {
+            kotlinx.coroutines.delay(3_000)
+            showDetail = false
+        }
+    }
 
     Box {
         Icon(
@@ -1420,18 +1428,27 @@ private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
                 .size(20.dp)
                 .clip(CircleShape)
                 .hoverable(hoverSource)
-                .clickable { showDetail = true }
+                .clickable { showDetail = !showDetail }
         )
-        DropdownMenu(
-            expanded = showDetail,
-            onDismissRequest = { showDetail = false }
-        ) {
-            Text(
-                text = s.subscriptionExpiryFull(dateTime, daysLeft),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-            )
+        if (showDetail) {
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.BottomStart,
+                offset = androidx.compose.ui.unit.IntOffset(0, 8),
+                properties = androidx.compose.ui.window.PopupProperties(focusable = false)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shadowElevation = 4.dp
+                ) {
+                    Text(
+                        text = s.subscriptionExpiryFull(dateTime, daysLeft),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
         }
     }
 }
