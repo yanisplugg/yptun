@@ -33,7 +33,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sort
-import androidx.compose.material.icons.outlined.SupportAgent
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.SyncDisabled
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -798,13 +798,32 @@ private fun TrafficProgressBar(location: LocationItem?) {
                 modifier = Modifier.size(32.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.SupportAgent,
+                    imageVector = if (isTelegramLink(supportUrl)) TelegramIcon else Icons.Outlined.Public,
                     contentDescription = s.subscriptionSupport,
+                    modifier = Modifier.size(20.dp),
                     tint = MaterialTheme.colorScheme.primary
                 )
             }
         }
     }
+}
+
+private fun isTelegramLink(url: String): Boolean {
+    val u = url.trim().lowercase()
+    val host = u.substringAfter("://", "").substringBefore('/').substringBefore('?').removePrefix("www.")
+    return u.startsWith("tg:") || host == "t.me" || host == "telegram.me"
+}
+
+// Telegram logo (Simple Icons, 24x24), drawn here because Material has no brand icons.
+private val TelegramIcon: androidx.compose.ui.graphics.vector.ImageVector by lazy {
+    androidx.compose.ui.graphics.vector.ImageVector.Builder(
+        defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f
+    ).addPath(
+        pathData = androidx.compose.ui.graphics.vector.PathParser().parsePathString(
+            "M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"
+        ).toNodes(),
+        fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Black)
+    ).build()
 }
 
 /**
