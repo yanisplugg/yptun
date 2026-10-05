@@ -14,7 +14,7 @@ Ends when every local file is on the release with the same size.
 """
 import http.client, json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
-REPO = "yanisplugg/olcvpn-client"
+REPO = "yanisplugg/yptun"
 RID = sys.argv[1]
 DIR = sys.argv[2]
 STALL_SEC = 120

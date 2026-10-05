@@ -8,9 +8,9 @@
 
 <br>
 
-[![Последний релиз](https://img.shields.io/github/v/release/yanisplugg/olcvpn-client?style=for-the-badge&color=4c8eff&label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C)](https://github.com/yanisplugg/olcvpn-client/releases/latest)
-[![Загрузки](https://img.shields.io/github/downloads/yanisplugg/olcvpn-client/total?style=for-the-badge&color=2ea043&label=%D0%B7%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8)](https://github.com/yanisplugg/olcvpn-client/releases)
-[![Звёзды](https://img.shields.io/github/stars/yanisplugg/olcvpn-client?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/olcvpn-client/stargazers)
+[![Последний релиз](https://img.shields.io/github/v/release/yanisplugg/yptun?style=for-the-badge&color=4c8eff&label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C)](https://github.com/yanisplugg/yptun/releases/latest)
+[![Загрузки](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=%D0%B7%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8)](https://github.com/yanisplugg/yptun/releases)
+[![Звёзды](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
 
 💎 **Поддержать проект** — TON или USDT (сеть TON):<br>
 `UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-`
@@ -79,7 +79,7 @@
 
 ## Скачать
 
-Бери последний подписанный APK со **[страницы релизов](https://github.com/yanisplugg/olcvpn-client/releases/latest)**.
+Бери последний подписанный APK со **[страницы релизов](https://github.com/yanisplugg/yptun/releases/latest)**.
 
 | Сборка | Кому |
 |--------|------|
@@ -278,7 +278,7 @@ PR и issue приветствуются. Перед началом заглян
 Бесплатная подпись кода — [SignPath.io](https://about.signpath.io), сертификат — [SignPath Foundation](https://signpath.org).
 Подписываются Windows-установщик и portable, собранные в [GitHub Actions](.github/workflows/windows-desktop.yml) из этого репозитория.
 
-- Коммиттеры и ревьюеры: [участники репозитория](https://github.com/yanisplugg/olcvpn-client/graphs/contributors)
+- Коммиттеры и ревьюеры: [участники репозитория](https://github.com/yanisplugg/yptun/graphs/contributors)
 - Утверждение подписи: [владелец репозитория](https://github.com/yanisplugg)
 
 Конфиденциальность: приложение само не передаёт данные в другие сетевые системы, кроме тех, что выбрал пользователь (его серверы, подписки, выбранные им сервисы обхода), и проверки обновлений на GitHub. Подробности — в разделе [«Разрешения и зачем они нужны»](#разрешения-и-зачем-они-нужны).

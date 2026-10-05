@@ -101,10 +101,10 @@ class AppActivity : ComponentActivity() {
             .setMessage(
                 "Эта копия YPtun подписана не ключом разработчика — она могла быть изменена " +
                     "третьими лицами (реклама, слежка, вредонос). Скачайте оригинал:\n" +
-                    "github.com/yanisplugg/olcvpn-client\n\n" +
+                    "github.com/yanisplugg/yptun\n\n" +
                     "This YPtun build is NOT signed by the developer and may have been modified by a " +
                     "third party. Get the official app from:\n" +
-                    "github.com/yanisplugg/olcvpn-client"
+                    "github.com/yanisplugg/yptun"
             )
             .setCancelable(false)
             .setPositiveButton("OK") { dialog, _ ->

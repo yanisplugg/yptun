@@ -33,7 +33,7 @@ data class ReleaseMirror(
     companion object {
         val GitHub = ReleaseMirror(
             name = "GitHub",
-            repositoryUrl = "https://github.com/yanisplugg/olcvpn-client"
+            repositoryUrl = "https://github.com/yanisplugg/yptun"
         )
     }
 }

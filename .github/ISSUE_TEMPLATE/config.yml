@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 🔒 Уязвимость безопасности
-    url: https://github.com/yanisplugg/olcvpn-client/security/advisories/new
+    url: https://github.com/yanisplugg/yptun/security/advisories/new
     about: Пожалуйста, сообщай об уязвимостях приватно, а не публичным issue.
   - name: 💬 Вопросы и обсуждения
-    url: https://github.com/yanisplugg/olcvpn-client/discussions
+    url: https://github.com/yanisplugg/yptun/discussions
     about: Задавай вопросы и делись настройками с сообществом.

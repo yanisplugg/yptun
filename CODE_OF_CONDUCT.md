@@ -45,7 +45,7 @@
 
 О случаях оскорбительного, преследующего или иного неприемлемого поведения можно
 сообщить сопровождающим проекта приватно через
-[Security Advisories](https://github.com/yanisplugg/olcvpn-client/security/advisories/new)
+[Security Advisories](https://github.com/yanisplugg/yptun/security/advisories/new)
 или связавшись с владельцем репозитория. Все жалобы будут рассмотрены оперативно
 и справедливо.
 
