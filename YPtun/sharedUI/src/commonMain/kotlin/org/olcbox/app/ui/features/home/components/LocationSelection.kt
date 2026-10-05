@@ -58,6 +58,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsBytes
+import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import org.jetbrains.compose.resources.decodeToImageBitmap
 import org.jetbrains.compose.resources.decodeToSvgPainter
 import androidx.compose.runtime.key
@@ -824,7 +826,12 @@ private fun SubscriptionIcon(url: String) {
                 runCatching {
                     val client = org.olcbox.app.data.datasource.createProxyHttpClient()
                     val bytes = try {
-                        client.get(url).bodyAsBytes()
+                        val response = client.get(url)
+                        // A 404/HTML page must not be mistaken for an image (it may even contain "<svg").
+                        if (!response.status.isSuccess() ||
+                            response.contentType()?.contentType != "image"
+                        ) return@runCatching null
+                        response.bodyAsBytes()
                     } finally {
                         client.close()
                     }
@@ -1259,9 +1266,13 @@ private fun SubscriptionGroupHeader(
                     tint = MaterialTheme.colorScheme.error
                 )
             }
-            // Panel-provided icon (`profile-icon` header): drawn only when enabled AND the panel sent one.
+            // Panel-provided icon: the `profile-icon` header, else `<subscription page origin>/logo.png`
+            // (where Remnawave pages usually keep it). Drawn only when enabled AND the image loads.
             if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionIcons.current) {
-                first?.metadata?.subscription?.iconUrl?.takeIf { it.isNotBlank() }?.let { SubscriptionIcon(it) }
+                val sub = first?.metadata?.subscription
+                val iconSrc = sub?.iconUrl?.takeIf { it.isNotBlank() }
+                    ?: sub?.webPageUrl?.let { Regex("^https?://[^/?#]+").find(it.trim())?.value }?.plus("/logo.png")
+                iconSrc?.let { SubscriptionIcon(it) }
             }
             Text(
                 text = title,
