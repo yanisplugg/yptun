@@ -1431,9 +1431,22 @@ private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
                 .clickable { showDetail = !showDetail }
         )
         if (showDetail) {
+            val gapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.roundToPx() }
             androidx.compose.ui.window.Popup(
-                alignment = Alignment.BottomStart,
-                offset = androidx.compose.ui.unit.IntOffset(0, 8),
+                // Fully BELOW the badge with a gap: any overlap makes the popup steal the hover -> flicker.
+                popupPositionProvider = remember(gapPx) {
+                    object : androidx.compose.ui.window.PopupPositionProvider {
+                        override fun calculatePosition(
+                            anchorBounds: androidx.compose.ui.unit.IntRect,
+                            windowSize: androidx.compose.ui.unit.IntSize,
+                            layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+                            popupContentSize: androidx.compose.ui.unit.IntSize
+                        ) = androidx.compose.ui.unit.IntOffset(
+                            anchorBounds.left.coerceAtMost(windowSize.width - popupContentSize.width).coerceAtLeast(0),
+                            anchorBounds.bottom + gapPx
+                        )
+                    }
+                },
                 properties = androidx.compose.ui.window.PopupProperties(focusable = false)
             ) {
                 Surface(
