@@ -12,8 +12,11 @@
 [![下载量](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=%E4%B8%8B%E8%BD%BD%E9%87%8F)](https://github.com/yanisplugg/yptun/releases)
 [![星标](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
 
-💎 **支持项目** — TON 或 USDT（TON 网络）：<br>
-`UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-`
+💎 **支持项目** — TON 或 USDT（TON 网络）：
+
+```
+UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
+```
 
 🇷🇺 **俄罗斯用户支持** — 通过 DonationAlerts：<br>
 [![DonationAlerts](https://img.shields.io/badge/DonationAlerts-donate-F57D07?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://www.donationalerts.com/r/yanisplugg)

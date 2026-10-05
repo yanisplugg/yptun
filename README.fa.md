@@ -12,8 +12,11 @@
 [![دانلودها](https://img.shields.io/github/downloads/yanisplugg/yptun/total?style=for-the-badge&color=2ea043&label=downloads)](https://github.com/yanisplugg/yptun/releases)
 [![ستاره‌ها](https://img.shields.io/github/stars/yanisplugg/yptun?style=for-the-badge&color=f0b429)](https://github.com/yanisplugg/yptun/stargazers)
 
-💎 **حمایت از پروژه** — TON یا USDT (شبکه TON):<br>
-`UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-`
+💎 **حمایت از پروژه** — TON یا USDT (شبکه TON):
+
+```
+UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
+```
 
 🇷🇺 **Support from Russia** — DonationAlerts:<br>
 [![DonationAlerts](https://img.shields.io/badge/DonationAlerts-donate-F57D07?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://www.donationalerts.com/r/yanisplugg)
