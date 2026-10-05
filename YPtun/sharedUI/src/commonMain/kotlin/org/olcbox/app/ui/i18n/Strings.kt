@@ -760,6 +760,9 @@ interface Strings {
     val tlsFragmentXray: String
     val coreAuto: String
     fun advancedCoreSettings(core: String): String
+    val privacyPolicy: String
+    val termsOfService: String
+    val supportPage: String
 }
 
 object RuStrings : Strings {
@@ -1417,6 +1420,9 @@ object RuStrings : Strings {
     override val tlsFragmentXray = "Фрагментация TLS (анти-DPI, Xray)"
     override val coreAuto = "Авто"
     override fun advancedCoreSettings(core: String) = "Дополнительные настройки $core"
+    override val privacyPolicy = "Политика конфиденциальности"
+    override val termsOfService = "Условия использования"
+    override val supportPage = "Поддержка и контакты"
 }
 
 object EnStrings : Strings {
@@ -2074,6 +2080,9 @@ object EnStrings : Strings {
     override val tlsFragmentXray = "TLS fragment (anti-DPI, Xray)"
     override val coreAuto = "Auto"
     override fun advancedCoreSettings(core: String) = "Advanced $core settings"
+    override val privacyPolicy = "Privacy Policy"
+    override val termsOfService = "Terms of Service"
+    override val supportPage = "Support & Help"
 }
 
 object FaStrings : Strings {
@@ -2731,6 +2740,9 @@ object FaStrings : Strings {
     override val tlsFragmentXray = "تکه‌تکه‌سازی TLS (ضد DPI، Xray)"
     override val coreAuto = "خودکار"
     override fun advancedCoreSettings(core: String) = "تنظیمات پیشرفتهٔ $core"
+    override val privacyPolicy = "سیاست حفظ حریم خصوصی"
+    override val termsOfService = "شرایط استفاده"
+    override val supportPage = "پشتیبانی و ارتباط"
 }
 
 object ZhStrings : Strings {
@@ -3388,4 +3400,7 @@ object ZhStrings : Strings {
     override val tlsFragmentXray = "TLS 分片（反 DPI，Xray）"
     override val coreAuto = "自动"
     override fun advancedCoreSettings(core: String) = "$core 高级设置"
+    override val privacyPolicy = "隐私政策"
+    override val termsOfService = "服务条款"
+    override val supportPage = "支持与联系"
 }

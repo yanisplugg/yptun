@@ -947,6 +947,33 @@ private fun AppSettingsHubContent(
             )
         }
 
+        // --- Документы и правила / Legal ---
+        SettingsGroupCard {
+            SettingsGroupRow(
+                title = s.privacyPolicy,
+                subtitle = "yanisplugg.github.io/yptun/privacy.html",
+                icon = Icons.Outlined.Shield,
+                enabled = true,
+                onClick = { communityUriHandler.openUri(DonationInfo.PRIVACY_URL) }
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.termsOfService,
+                subtitle = "yanisplugg.github.io/yptun/terms.html",
+                icon = Icons.Outlined.ContentPaste,
+                enabled = true,
+                onClick = { communityUriHandler.openUri(DonationInfo.TERMS_URL) }
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.supportPage,
+                subtitle = "yanisplugg.github.io/yptun/support.html",
+                icon = Icons.Outlined.History,
+                enabled = true,
+                onClick = { communityUriHandler.openUri(DonationInfo.SUPPORT_URL) }
+            )
+        }
+
         Spacer(Modifier.height(4.dp))
     }
 }

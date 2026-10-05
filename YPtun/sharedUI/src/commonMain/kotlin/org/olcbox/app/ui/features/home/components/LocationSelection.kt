@@ -3,7 +3,12 @@ package org.olcbox.app.ui.features.home.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -252,6 +257,7 @@ fun LazyListScope.locationSelectorContent(
                                     locations = group,
                                     pingsState = pingsState,
                                     isPinned = isPinned,
+                                    onToggleCollapse = { onToggleGroupCollapsed(groupKey) },
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -349,6 +355,7 @@ fun LazyListScope.locationSelectorContent(
                                             locations = group,
                                             pingsState = pingsState,
                                             isPinned = isPinned,
+                                            onToggleCollapse = { onToggleGroupCollapsed(groupKey) },
                                             modifier = Modifier.weight(1f)
                                         )
                                     }
@@ -499,6 +506,7 @@ fun LazyListScope.locationSelectorContent(
                                                     locations = mGroup,
                                                     pingsState = pingsState,
                                                     isPinned = mPinned,
+                                                    onToggleCollapse = { onToggleGroupCollapsed(mKey) },
                                                     modifier = Modifier.weight(1f)
                                                 )
                                             }
@@ -1352,10 +1360,86 @@ private fun LocationGroupHeader(
 }
 
 @Composable
+private fun SubscriptionAnnounceText(
+    announce: String,
+    onToggleCollapse: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val uriHandler = LocalUriHandler.current
+    val primaryColor = MaterialTheme.colorScheme.primary
+
+    val annotatedString = remember(announce, primaryColor) {
+        buildAnnotatedString {
+            val urlRegex = Regex("""(https?://[^\s]+|t\.me/[^\s]+|@[A-Za-z0-9_]{3,32})""")
+            var lastIndex = 0
+            val matches = urlRegex.findAll(announce)
+            for (match in matches) {
+                val start = match.range.first
+                val end = match.range.last + 1
+                if (start > lastIndex) {
+                    append(announce.substring(lastIndex, start))
+                }
+                var rawLink = match.value
+                var trailingPunct = ""
+                while (rawLink.isNotEmpty() && (rawLink.endsWith(".") || rawLink.endsWith(",") ||
+                            rawLink.endsWith("!") || rawLink.endsWith("?") ||
+                            rawLink.endsWith(")") || rawLink.endsWith("\"") || rawLink.endsWith("'"))) {
+                    trailingPunct = rawLink.takeLast(1) + trailingPunct
+                    rawLink = rawLink.dropLast(1)
+                }
+                val targetUrl = when {
+                    rawLink.startsWith("http://") || rawLink.startsWith("https://") -> rawLink
+                    rawLink.startsWith("t.me/") -> "https://$rawLink"
+                    rawLink.startsWith("@") -> "https://t.me/${rawLink.removePrefix("@")}"
+                    else -> rawLink
+                }
+                pushStringAnnotation(tag = "URL", annotation = targetUrl)
+                pushStyle(
+                    SpanStyle(
+                        color = primaryColor,
+                        fontWeight = FontWeight.SemiBold,
+                        textDecoration = TextDecoration.Underline
+                    )
+                )
+                append(rawLink)
+                pop()
+                pop()
+                if (trailingPunct.isNotEmpty()) {
+                    append(trailingPunct)
+                }
+                lastIndex = end
+            }
+            if (lastIndex < announce.length) {
+                append(announce.substring(lastIndex))
+            }
+        }
+    }
+
+    ClickableText(
+        text = annotatedString,
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+            color = MaterialTheme.colorScheme.primary
+        ),
+        modifier = modifier.padding(top = 2.dp),
+        onClick = { offset ->
+            val clickedAnnotation = annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset).firstOrNull()
+            if (clickedAnnotation != null) {
+                runCatching { uriHandler.openUri(clickedAnnotation.item) }
+            } else {
+                onToggleCollapse?.invoke()
+            }
+        }
+    )
+}
+
+@Composable
 private fun SubscriptionGroupHeader(
     locations: List<LocationItem>,
     pingsState: PingsState,
     isPinned: Boolean = false,
+    onToggleCollapse: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val first = locations.firstOrNull()
@@ -1418,16 +1502,10 @@ private fun SubscriptionGroupHeader(
         // right under the title like Happ. Gated on the app-settings toggle (off by default) and
         // independent of [info], so a sub that carries ONLY a description still shows it.
         if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription.current) {
-            first?.metadata?.subscription?.announce?.takeIf { it.isNotBlank() }?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 11.sp,
-                    lineHeight = 13.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
+            first?.metadata?.subscription?.announce?.takeIf { it.isNotBlank() }?.let { announceText ->
+                SubscriptionAnnounceText(
+                    announce = announceText,
+                    onToggleCollapse = onToggleCollapse
                 )
             }
         }

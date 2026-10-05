@@ -927,10 +927,39 @@ private fun AppSettingsHubContent(
             )
         }
 
-        SupportProjectSection(
-            onCopyAddress = { hwidClipboard.setText(AnnotatedString(it)); SettingsPlatform.toast(s.donateAddressCopied) },
-            onOpenUrl = { SettingsPlatform.openUri(it) }
-        )
+        // --- Документы и правила / Legal ---
+        SettingsGroupCard {
+            SettingsGroupRow(
+                title = s.privacyPolicy,
+                subtitle = "yanisplugg.github.io/yptun/privacy.html",
+                icon = Icons.Outlined.Shield,
+                enabled = true,
+                onClick = { SettingsPlatform.openUri(DonationInfo.PRIVACY_URL) }
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.termsOfService,
+                subtitle = "yanisplugg.github.io/yptun/terms.html",
+                icon = Icons.Outlined.ContentPaste,
+                enabled = true,
+                onClick = { SettingsPlatform.openUri(DonationInfo.TERMS_URL) }
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.supportPage,
+                subtitle = "yanisplugg.github.io/yptun/support.html",
+                icon = Icons.Outlined.History,
+                enabled = true,
+                onClick = { SettingsPlatform.openUri(DonationInfo.SUPPORT_URL) }
+            )
+        }
+
+        if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
+            SupportProjectSection(
+                onCopyAddress = { hwidClipboard.setText(AnnotatedString(it)); SettingsPlatform.toast(s.donateAddressCopied) },
+                onOpenUrl = { SettingsPlatform.openUri(it) }
+            )
+        }
 
         Spacer(Modifier.height(4.dp))
     }

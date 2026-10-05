@@ -23,5 +23,10 @@ object DonationInfo {
 
     /** Developer's VPN shop bot — buying a subscription supports the project. */
     const val VPN_BOT_URL = "https://t.me/quofortpostbot"
+
+    /** Legal documentation and support hosted on GitHub Pages */
+    const val PRIVACY_URL = "https://yanisplugg.github.io/yptun/privacy.html"
+    const val TERMS_URL = "https://yanisplugg.github.io/yptun/terms.html"
+    const val SUPPORT_URL = "https://yanisplugg.github.io/yptun/support.html"
 }
 
