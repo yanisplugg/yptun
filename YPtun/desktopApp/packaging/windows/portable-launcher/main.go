@@ -30,7 +30,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
 )
 
@@ -339,6 +338,7 @@ const (
 	wsBorder    = 0x00800000
 	wsExTopmost = 0x00000008
 	wsExToolWin = 0x00000080
+	wsExLayered = 0x00080000
 
 	pbmSetRange32 = 0x0406
 	pbmSetPos     = 0x0402
@@ -371,130 +371,6 @@ func claimSingleInstance() bool {
 		return false
 	}
 	return true
-}
-
-// progressBar is driven by a channel, never by cross-thread window calls.
-//
-// A window belongs to the thread that created it, and SendMessage from any OTHER thread blocks
-// until that thread pumps its message queue. Go moves goroutines between OS threads freely, so the
-// first version — create the window here, SendMessage from the extraction loop — deadlocked on the
-// very first file and the portable just hung with no window at all. Everything Win32 now happens on
-// one locked OS thread that runs a real message pump; the extraction loop only sends numbers.
-type progressBar struct {
-	updates chan int
-	done    chan struct{}
-}
-
-func showProgress(total int) *progressBar {
-	p := &progressBar{}
-	if total <= 0 {
-		return p
-	}
-	p.updates = make(chan int, 64)
-	p.done = make(chan struct{})
-	ready := make(chan struct{})
-	go p.run(total, ready)
-	<-ready
-	return p
-}
-
-func (p *progressBar) run(total int, ready chan struct{}) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	defer close(p.done)
-
-	hwnd := createProgressWindow()
-	close(ready)
-	if hwnd != 0 {
-		sendMessageW.Call(hwnd, pbmSetRange32, 0, uintptr(total))
-	}
-	defer func() {
-		if hwnd != 0 {
-			destroyWindow.Call(hwnd)
-		}
-	}()
-
-	var msg [48]byte // MSG is 48 bytes on amd64/arm64; we never read its fields
-	for {
-		select {
-		case done, ok := <-p.updates:
-			if !ok {
-				return
-			}
-			if hwnd != 0 {
-				sendMessageW.Call(hwnd, pbmSetPos, uintptr(done), 0)
-			}
-		default:
-		}
-		// Keep the bar painting without ever blocking on the queue.
-		for {
-			got, _, _ := peekMessageW.Call(uintptr(unsafe.Pointer(&msg[0])), 0, 0, 0, pmRemove)
-			if got == 0 {
-				break
-			}
-			translateMessage.Call(uintptr(unsafe.Pointer(&msg[0])))
-			dispatchMessageW.Call(uintptr(unsafe.Pointer(&msg[0])))
-		}
-		select {
-		case done, ok := <-p.updates:
-			if !ok {
-				return
-			}
-			if hwnd != 0 {
-				sendMessageW.Call(hwnd, pbmSetPos, uintptr(done), 0)
-			}
-		case <-time.After(30 * time.Millisecond):
-		}
-	}
-}
-
-// createProgressWindow uses a predefined control class as a top-level window, so there is no window
-// class to register and no WndProc callback. Returns 0 if anything fails — unpacking then simply
-// proceeds without a bar.
-func createProgressWindow() uintptr {
-	var icc struct {
-		size, flags uint32
-	}
-	icc.size = uint32(unsafe.Sizeof(icc))
-	icc.flags = 0x20 // ICC_PROGRESS_CLASS
-	initCommonControl.Call(uintptr(unsafe.Pointer(&icc)))
-
-	class, err := syscall.UTF16PtrFromString("msctls_progress32")
-	if err != nil {
-		return 0
-	}
-	empty, _ := syscall.UTF16PtrFromString("")
-	const w, h = 360, 24
-	screenW, _, _ := getSystemMetrics.Call(smCxScreen)
-	screenH, _, _ := getSystemMetrics.Call(smCyScreen)
-	hwnd, _, _ := createWindowExW.Call(
-		wsExTopmost|wsExToolWin,
-		uintptr(unsafe.Pointer(class)),
-		uintptr(unsafe.Pointer(empty)),
-		wsPopup|wsVisible|wsBorder,
-		(screenW-w)/2, (screenH-h)/2, w, h,
-		0, 0, 0, 0,
-	)
-	return hwnd
-}
-
-func (p *progressBar) set(done int) {
-	if p.updates == nil {
-		return
-	}
-	select {
-	case p.updates <- done:
-	default: // the bar is behind; dropping a tick is better than slowing the unpack
-	}
-}
-
-func (p *progressBar) close() {
-	if p.updates == nil {
-		return
-	}
-	close(p.updates)
-	<-p.done
-	p.updates = nil
 }
 
 func fatal(message string) {
