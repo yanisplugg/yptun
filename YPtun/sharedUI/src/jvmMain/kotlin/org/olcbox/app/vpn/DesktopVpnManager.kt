@@ -1640,6 +1640,8 @@ class DesktopVpnManager private constructor(
             var netBase = org.olcbox.app.vpn.desktop.PhysicalInterface.fingerprint()
             var netDown = false
             var netPending: String? = null
+            var tick = 0
+            var probeFails = 0
             while (isActive && generationAtConnect == generation) {
                 delay(WATCHDOG_INTERVAL_MS)
                 if (generationAtConnect != generation) break
@@ -1665,7 +1667,35 @@ class DesktopVpnManager private constructor(
                         break
                     }
                 }
+                // Server down or rebooting while the core process stays alive (WireGuard, VK-TURN
+                // relay, VLESS…): the engine never exits, so nothing above notices. Every other poll,
+                // open a real connection through the tunnel and reconnect after several misses in a
+                // row. Offline is skipped — the network check above owns that case.
+                if (net.isEmpty()) { probeFails = 0; continue }
+                if (++tick % 2 == 0) {
+                    if (tunnelAlive()) {
+                        probeFails = 0
+                    } else if (++probeFails >= TUNNEL_PROBE_FAIL_LIMIT) {
+                        if (generationAtConnect != generation) break // stopped while probing
+                        addLog("Watchdog: no traffic through the tunnel — reconnecting…")
+                        beginStart(auto = true)
+                        break
+                    }
+                }
             }
+        }
+    }
+
+    /** True if a TCP connect to any public probe host succeeds THROUGH the running core's SOCKS. */
+    private suspend fun tunnelAlive(): Boolean = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        val socks = liveSocks()
+        TUNNEL_HEALTH_HOSTS.any { host ->
+            runCatching {
+                socks5ConnectRtt(
+                    socks.host, socks.port, socks.username, socks.password,
+                    host, TUNNEL_PROBE_PORT, TUNNEL_HEALTH_TIMEOUT_MS
+                )
+            }.getOrNull() != null
         }
     }
 
@@ -1744,6 +1774,9 @@ class DesktopVpnManager private constructor(
         val ZERO_SPEED = SpeedSample(0L, 0L)
         const val WATCHDOG_GRACE_MS = 8_000L
         const val WATCHDOG_INTERVAL_MS = 5_000L
+        val TUNNEL_HEALTH_HOSTS = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9")
+        const val TUNNEL_HEALTH_TIMEOUT_MS = 5_000
+        const val TUNNEL_PROBE_FAIL_LIMIT = 3
         const val AUTO_RECONNECT_BASE_MS = 2_000L
         const val AUTO_RECONNECT_MAX_MS = 30_000L
         const val OLC_READY_TIMEOUT_MS = 25_000L
