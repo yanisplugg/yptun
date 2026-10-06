@@ -7,7 +7,7 @@ import org.olcbox.app.vpn.ssh.ServerBinarySource
 import org.olcbox.app.vpn.ssh.SshTarget
 import org.olcbox.app.vpn.ssh.loadServerBinaryGz
 import org.olcbox.app.vpn.ssh.sshOneShot
-import org.olcbox.app.vpn.ssh.sshUpload
+import org.olcbox.app.vpn.ssh.sshUploadInChunks
 
 /** SSH snolc exit-node installer — same shape as the OpenFlux one: `uname -m`, gzip'd binary, one script. */
 internal class SshSnolcServerInstaller(private val binaries: ServerBinarySource) : SnolcServerInstaller {
@@ -34,7 +34,7 @@ internal class SshSnolcServerInstaller(private val binaries: ServerBinarySource)
 
                 val gz = loadServerBinaryGz(binaries, "snolc/snolc-server-linux-$arch")
                 onLog("Загрузка snolc (${gz.size / 1024} КБ, по частям)…")
-                sshUpload(target, gz, REMOTE_GZ, onLog)
+                sshUploadInChunks(target, gz, REMOTE_GZ, onLog)
                 onLog("Бинарник загружен, ставлю службу…")
 
                 val output = sshOneShot(target, buildSnolcInstallScript(options.listenPort), onLog)
