@@ -75,17 +75,16 @@ func init() {
 	mdnsmobile.SetGlobalLogCallback(func(line string) {
 		PushLog("masterdns", line)
 	})
-	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
-		// Strict memory budget for iOS NetworkExtension (15 MB Jetsam limit)
-		debug.SetMemoryLimit(10 * 1024 * 1024)
-		debug.SetGCPercent(20)
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
-				debug.FreeOSMemory()
-			}
-		}()
+	if runtime.GOOS == "ios" {
+		// The packet-tunnel extension may use about 50 MB before Jetsam kills it (15 MB was the
+		// iOS 14 limit; the app targets 15+). Same policy as sing-box's own iOS client
+		// (service/oomkiller): GC at 50%, soft limit below the budget — here 32 MB, leaving room for
+		// the Kotlin runtime and hev in the same process. The old 10 MB limit sat below what xray or
+		// sing-box need while connected, so the GC ran nonstop, and a FreeOSMemory every 5 s woke
+		// the CPU even when idle — both cost battery and throughput. Not on macOS: the desktop build
+		// wraps this same package and has no such budget.
+		debug.SetGCPercent(50)
+		debug.SetMemoryLimit(32 << 20)
 	}
 }
 
