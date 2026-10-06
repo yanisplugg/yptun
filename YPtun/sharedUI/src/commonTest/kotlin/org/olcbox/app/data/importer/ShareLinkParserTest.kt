@@ -89,4 +89,24 @@ class ShareLinkParserTest {
         val p = ProxyProfile(tag = "raw", rawOutbound = raw)
         assertTrue(p.isComplete())
     }
+
+    @Test
+    fun parsesSingleLinkSubscription() {
+        val link = "vless://2f3d4712-65e5-4159-8a33-9f3ee112b2d2@93.88.203.199:443?security=reality&type=tcp&sni=cloudflare.com&fp=chrome&pbk=wrl2-L9m7xFSwrQo-ak-H0SOGN8c8PN-fArEPWCvM0g&sid=f0a6227f53d51b41#Marz"
+        val profiles = ShareLinkParser.parseSubscription(link)
+        assertEquals(1, profiles.size)
+        assertEquals(ProxyProfile.TYPE_VLESS, profiles[0].type)
+        assertEquals("93.88.203.199", profiles[0].server)
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    @Test
+    fun parsesSingleLinkBase64Subscription() {
+        val link = "vless://2f3d4712-65e5-4159-8a33-9f3ee112b2d2@93.88.203.199:443?security=reality&type=tcp&sni=cloudflare.com&fp=chrome&pbk=wrl2-L9m7xFSwrQo-ak-H0SOGN8c8PN-fArEPWCvM0g&sid=f0a6227f53d51b41#Marz"
+        val base64 = Base64.Default.encode(link.encodeToByteArray())
+        val profiles = ShareLinkParser.parseSubscription(base64)
+        assertEquals(1, profiles.size)
+        assertEquals(ProxyProfile.TYPE_VLESS, profiles[0].type)
+        assertEquals("93.88.203.199", profiles[0].server)
+    }
 }

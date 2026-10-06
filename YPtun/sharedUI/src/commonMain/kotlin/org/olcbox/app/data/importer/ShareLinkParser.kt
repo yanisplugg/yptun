@@ -84,7 +84,7 @@ object ShareLinkParser {
             return parseSubscription(decodedBody)
         }
         return SubscriptionDecoder.toLinks(decodedBody)
-            .filterNot { it.startsWith("yptun://", ignoreCase = true) || it.equals(trimmed, ignoreCase = true) }
+            .filterNot { it.startsWith("yptun://", ignoreCase = true) }
             .mapNotNull { parse(it) }
             .filter { it.isComplete() }
     }

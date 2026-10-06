@@ -457,6 +457,7 @@ private fun ThemeColorSection(
 ) {
     var showAccentPicker by remember { mutableStateOf(false) }
     var showBackgroundPicker by remember { mutableStateOf(false) }
+    var showTextPicker by remember { mutableStateOf(false) }
     val s = LocalStrings.current
 
     Column(
@@ -521,6 +522,7 @@ private fun ThemeColorSection(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 val currentText = ThemeState.textColor
+                val isTextPreset = currentText == null || ThemeState.textPresets.contains(currentText)
                 ThemeState.textPresets.forEach { color ->
                     val selected = currentText == color
                     ColorSwatch(
@@ -528,6 +530,10 @@ private fun ThemeColorSection(
                         selected = selected
                     ) { onTextColorSelected(color) }
                 }
+                CustomColorSwatch(
+                    current = if (!isTextPreset) currentText else null,
+                    onClick = { showTextPicker = true }
+                )
             }
         }
     }
@@ -550,6 +556,17 @@ private fun ThemeColorSection(
             onConfirm = {
                 onBackgroundColorSelected(it)
                 showBackgroundPicker = false
+            }
+        )
+    }
+
+    if (showTextPicker) {
+        ColorPickerDialog(
+            initial = ThemeState.textColor ?: Color(0xFFFFFFFF),
+            onDismiss = { showTextPicker = false },
+            onConfirm = {
+                onTextColorSelected(it)
+                showTextPicker = false
             }
         )
     }
