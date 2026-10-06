@@ -200,9 +200,14 @@ class IosVpnManager(
                         setStatus(VpnStatus.Connected)
                         triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
                         return@withLock
-                    } else if (reply != null && reply.startsWith("error:")) {
+                    } else if (reply != null && reply.startsWith("error:") &&
+                        reply != "error:${IosTunnelSession.RELOAD_NEEDS_RESTART}"
+                    ) {
                         val errMsg = reply.removePrefix("error:")
                         addLog("Fast switch failed: $errMsg")
+                        // The extension closes the tunnel after a failed switch; keep this error when
+                        // the system then reports "disconnected" instead of replacing it.
+                        wasConnecting = true
                         setStatus(VpnStatus.Error(errMsg))
                         return@withLock
                     }

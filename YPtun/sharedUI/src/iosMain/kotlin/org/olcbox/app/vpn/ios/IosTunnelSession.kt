@@ -17,6 +17,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.ios.IosCoreBridge
 import platform.Foundation.NSData
 import platform.Foundation.NSFileHandle
@@ -68,6 +69,9 @@ class IosTunnelSession(
     private var watchdog: Job? = null
     private var engineType: EngineType? = null
 
+    /** The hev-socks5-tunnel YAML running now; [reload] can only swap cores that fit the same bridge. */
+    private var bridgeConfig: String? = null
+
     /**
      * Proxy mode: the HTTP port the device's proxy settings must point at, 0 in TUN mode. Swift reads
      * it after [start] reports success with an empty bridge config and applies NEProxySettings itself.
@@ -111,17 +115,7 @@ class IosTunnelSession(
                 val bypassLan = IosSharedStore.loadRouting().bypassLan
                 applyNetworkSettings(traffic.mtu, bypassLan, location)
                 log("Tunnel settings applied (mtu=${traffic.mtu}, bypassLan=$bypassLan)")
-                hevConfig(
-                    mtu = traffic.mtu,
-                    user = user,
-                    pass = pass,
-                    tcpOnlyUdp = location.engine in TCP_ONLY_ENGINES,
-                    dropIpv6 = location.engine == EngineType.VkTurn ||
-                        location.engine == EngineType.MasterDns ||
-                        location.engine == EngineType.OpenFlux ||
-                        traffic.domainStrategy == "ipv4_only",
-                    slowTunnel = location.engine in SLOW_ENGINES,
-                )
+                bridgeConfigFor(location, traffic, user, pass).also { bridgeConfig = it }
             }
             result.onSuccess {
                 startWatchdog()
@@ -155,21 +149,34 @@ class IosTunnelSession(
     fun reload(completion: (error: String?) -> Unit) {
         log("Reloading tunnel session for new location...")
         scope.launch {
+            val request = runCatching {
+                IosSharedStore.readText(REQUEST_FILE)
+                    ?.let { json.decodeFromString(IosTunnelRequest.serializer(), it) }
+            }.getOrNull()
+            val nextLocation = request?.location?.normalized()
+            // hev keeps running across a reload, so its UDP mode / IPv6 / timeouts must suit the new
+            // engine too (a TCP-only core behind a UDP-capable bridge loses all UDP, and vice versa).
+            // Otherwise leave everything as it is and let the app restart the tunnel.
+            if (nextLocation != null && nextLocation.isComplete() &&
+                bridgeConfigFor(nextLocation, IosSharedStore.loadTraffic(), "", "") != bridgeConfig
+            ) {
+                log("Switch to engine=${nextLocation.engine} needs a new bridge — full restart")
+                completion(RELOAD_NEEDS_RESTART)
+                return@launch
+            }
             val result = runCatching {
                 watchdog?.cancel()
                 engine.stopAll()
 
-                val request = IosSharedStore.readText(REQUEST_FILE)
-                    ?.let { json.decodeFromString(IosTunnelRequest.serializer(), it) }
-                    ?: error("Нет активной локации — выберите её в приложении")
-                val location = request.location.normalized()
+                val next = request ?: error("Нет активной локации — выберите её в приложении")
+                val location = next.location.normalized()
                 check(location.isComplete()) { "Локация настроена не полностью" }
                 log("Switching to ${location.displayName()} (engine=${location.engine})")
 
                 val user = ""
                 val pass = ""
                 withTimeout(28_000) {
-                    engine.start(location, SOCKS_PORT, user, pass, request.deviceId)
+                    engine.start(location, SOCKS_PORT, user, pass, next.deviceId)
                 }
                 engineType = location.engine
 
@@ -193,6 +200,10 @@ class IosTunnelSession(
                 log("Reload failed: $message")
                 IosSharedStore.writeText(ERROR_FILE, message)
                 completion(message)
+                // The old core is already gone: a tunnel left up now swallows every packet with nothing
+                // behind it. Close it, the same as a failed start or a core the watchdog finds dead.
+                engine.stopAll()
+                provider.cancelTunnelWithError(null)
             }
         }
     }
@@ -335,6 +346,19 @@ class IosTunnelSession(
         if (error != null) throw IllegalStateException("Не удалось применить настройки туннеля: $error")
     }
 
+    private fun bridgeConfigFor(location: LocationConfig, traffic: TrafficSettings, user: String, pass: String): String =
+        hevConfig(
+            mtu = traffic.mtu,
+            user = user,
+            pass = pass,
+            tcpOnlyUdp = location.engine in TCP_ONLY_ENGINES,
+            dropIpv6 = location.engine == EngineType.VkTurn ||
+                location.engine == EngineType.MasterDns ||
+                location.engine == EngineType.OpenFlux ||
+                traffic.domainStrategy == "ipv4_only",
+            slowTunnel = location.engine in SLOW_ENGINES,
+        )
+
     private fun hevConfig(
         mtu: Int,
         user: String,
@@ -434,6 +458,8 @@ class IosTunnelSession(
         const val LOG_FILE = "tunnel.log"
         /** Why the last connect failed ("" after a good one) — the app shows it as the error. */
         const val ERROR_FILE = "tunnel_error.txt"
+        /** [reload]'s answer when the new location needs a different bridge: the app restarts instead. */
+        const val RELOAD_NEEDS_RESTART = "restart-required"
         /** Monotonic counter of tunnel sessions, so the log banner says which one this is. */
         private const val SESSION_COUNT_FILE = "tunnel_sessions.txt"
         /** The log is cleared only once it passes this; see [openLogSession]. */
