@@ -213,7 +213,7 @@ fun LocationRow(
             val description = location.config?.description?.takeIf { it.isNotBlank() }
             description?.let { desc ->
                 Text(
-                    text = desc,
+                    text = rememberLinkified(desc),
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 12.sp,
                     maxLines = 2,
@@ -547,7 +547,7 @@ fun LocationGridCell(
             description?.let { desc ->
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
-                    text = desc,
+                    text = rememberLinkified(desc),
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     lineHeight = 13.sp,

@@ -1340,7 +1340,7 @@ private fun SubscriptionGroupHeader(
         if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription.current) {
             first?.metadata?.subscription?.announce?.takeIf { it.isNotBlank() }?.let {
                 Text(
-                    text = it,
+                    text = org.olcbox.app.ui.features.locations.components.rememberLinkified(it),
                     style = MaterialTheme.typography.labelSmall,
                     fontSize = 11.sp,
                     lineHeight = 13.sp,
