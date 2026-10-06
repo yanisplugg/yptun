@@ -224,6 +224,14 @@ class IosSettingsController {
     }
 
     fun setAppBehavior(value: AppBehaviorSettings) {
+        val old = _appBehavior.value
+        // Ask for the notification permission when the user switches either push on — the moment the
+        // prompt makes sense — rather than at the first expiring subscription days later.
+        if ((value.notifySubscriptionExpiry && !old.notifySubscriptionExpiry) ||
+            (value.notifyPanelAnnouncements && !old.notifyPanelAnnouncements)
+        ) {
+            platform.Foundation.NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.notify.authorize", null)
+        }
         _appBehavior.value = value
         SubscriptionUserAgentHolder.mode = value.subscriptionUserAgent
         IosSharedStore.saveAppBehavior(value)

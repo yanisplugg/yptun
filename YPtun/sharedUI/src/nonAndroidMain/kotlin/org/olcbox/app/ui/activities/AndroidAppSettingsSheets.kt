@@ -3783,6 +3783,23 @@ private fun ApplicationBehaviorContent(
             checked = settings.hideEndpointWhenDescription
         ) { onChanged(settings.copy(hideEndpointWhenDescription = it)) }
 
+        // Local notifications, as on Android: only iOS implements them among the platforms using this
+        // screen (IosVpnManager.notifyExpiringSubscriptions / notifyPanelAnnouncements); the desktop
+        // would show toggles that do nothing.
+        if (org.olcbox.app.update.UpdatePlatform.current().os == "ios") {
+            RoutingToggleRow(
+                title = s.notifySubExpiryTitle,
+                subtitle = s.notifySubExpirySubtitle,
+                checked = settings.notifySubscriptionExpiry
+            ) { onChanged(settings.copy(notifySubscriptionExpiry = it)) }
+
+            RoutingToggleRow(
+                title = s.panelAnnouncementsTitle,
+                subtitle = s.panelAnnouncementsSubtitle,
+                checked = settings.notifyPanelAnnouncements
+            ) { onChanged(settings.copy(notifyPanelAnnouncements = it)) }
+        }
+
         if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
             RoutingToggleRow(
                 title = s.twoColumnLayoutTitle,

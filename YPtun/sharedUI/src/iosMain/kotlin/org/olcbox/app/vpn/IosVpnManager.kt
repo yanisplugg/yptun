@@ -172,6 +172,54 @@ class IosVpnManager(
 
     override fun needsPermission(): Boolean = false
 
+    /**
+     * Subscription-expiry warnings on Android's rules: the user's toggle, the last
+     * [AppBehaviorSettings.SUBSCRIPTION_EXPIRY_NOTIFY_DAYS] days, once per subscription per day left.
+     * An iOS app process lives minutes, not days, so "already shown" is kept on disk instead of in
+     * memory. Swift posts the notification (LocalNotifications.swift).
+     */
+    override fun notifyExpiringSubscriptions(subscriptions: List<ExpiringSubscriptionInfo>) {
+        if (!IosSharedStore.loadAppBehavior().notifySubscriptionExpiry) return
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val dayMs = 24L * 60L * 60L * 1_000L
+        val strings = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
+        subscriptions.forEach { sub ->
+            val remainingMs = sub.expiresAtEpochMs - now
+            if (remainingMs <= 0L || remainingMs > AppBehaviorSettings.SUBSCRIPTION_EXPIRY_NOTIFY_DAYS * dayMs) return@forEach
+            val daysLeft = (remainingMs + dayMs - 1) / dayMs // ceil → 3, 2, 1
+            if (!markNotified("e|${sub.name.hashCode()}|$daysLeft")) return@forEach
+            val until = org.olcbox.app.util.IsoTime.formatLocalDateTime(sub.expiresAtEpochMs)
+            postLocalNotification(
+                id = "yptun.expiry.${sub.name.hashCode()}",
+                title = strings.subscriptionExpiringSoon,
+                body = "«${sub.name}»: ${strings.subscriptionExpiryFull(until, daysLeft)}",
+            )
+        }
+    }
+
+    /** Panel announcements (Remnawave `announce`), each text shown once — Android's rules. */
+    override fun notifyPanelAnnouncements(announcements: List<PanelAnnouncementInfo>) {
+        if (!IosSharedStore.loadAppBehavior().notifyPanelAnnouncements) return
+        announcements.forEach { ann ->
+            val hash = (ann.name + "|" + ann.announce).hashCode()
+            if (!markNotified("a|$hash")) return@forEach
+            postLocalNotification(id = "yptun.announce.$hash", title = ann.name, body = ann.announce)
+        }
+    }
+
+    /** Records [key] as shown; false when it already was. Bounded, so the file never grows for good. */
+    private fun markNotified(key: String): Boolean {
+        val shown = IosSharedStore.readText(NOTIFIED_FILE)?.lines()?.filter { it.isNotBlank() }.orEmpty()
+        if (key in shown) return false
+        IosSharedStore.writeText(NOTIFIED_FILE, (shown + key).takeLast(MAX_NOTIFIED_KEYS).joinToString("\n"))
+        return true
+    }
+
+    /** Same channel as the Live Activity signals: a named NSNotification Swift listens for. */
+    private fun postLocalNotification(id: String, title: String, body: String) {
+        NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.notify.post", listOf(id, title, body))
+    }
+
     override fun startVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
         connectJob?.cancel()
@@ -760,6 +808,8 @@ class IosVpnManager(
     }
 
     private companion object {
+        const val NOTIFIED_FILE = "notified_keys.txt"
+        const val MAX_NOTIFIED_KEYS = 200
         const val TUNNEL_BUNDLE_ID = "org.yptun.app.tunnel"
         /** Read by the WidgetKit extension (YPtunWidget/VpnWidget.swift). */
         const val WIDGET_FILE = "widget.json"

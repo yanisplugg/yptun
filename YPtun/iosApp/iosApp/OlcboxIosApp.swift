@@ -61,6 +61,7 @@ struct OlcboxIosApp: App {
     private let appSession: IosAppSession
 
     init() {
+        LocalNotifications.shared.install()
         if #available(iOS 16.2, *) {
             NotificationCenter.default.addObserver(forName: NSNotification.Name("org.yptun.vpn.connected"), object: nil, queue: .main) { _ in
                 LiveActivityManager.onConnected()
