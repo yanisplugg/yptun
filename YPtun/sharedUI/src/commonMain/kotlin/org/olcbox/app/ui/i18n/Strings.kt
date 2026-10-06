@@ -179,6 +179,7 @@ interface Strings {
     fun domainStrategyName(v: String): String
     fun hwid(v: String): String
     val community: String
+    val termsOfUse: String
     val howToConnect: String
     val donate: String
     val donateSubtitle: String
@@ -886,6 +887,7 @@ object RuStrings : Strings {
     }
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Сообщество"
+    override val termsOfUse = "Условия использования"
     override val howToConnect = "Как подключиться?"
     override val donate = "Поддержать проект"
     override val donateSubtitle = "USDT · TON · GRAM — нажмите, чтобы скопировать адрес"
@@ -1541,6 +1543,7 @@ object EnStrings : Strings {
     }
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Community"
+    override val termsOfUse = "Terms of Use"
     override val howToConnect = "How to connect?"
     override val donate = "Support the project"
     override val donateSubtitle = "USDT · TON · GRAM — tap to copy the address"
@@ -2196,6 +2199,7 @@ object FaStrings : Strings {
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun hwid(v: String) = "HWID: $v"
     override val community = "انجمن"
+    override val termsOfUse = "شرایط استفاده"
     override val howToConnect = "چگونه متصل شویم؟"
     override val donate = "حمایت از پروژه"
     override val donateSubtitle = "USDT · TON · GRAM — برای کپی آدرس ضربه بزنید"
@@ -2851,6 +2855,7 @@ object ZhStrings : Strings {
     }
     override fun hwid(v: String) = "HWID：$v"
     override val community = "社区"
+    override val termsOfUse = "使用条款"
     override val howToConnect = "如何连接？"
     override val donate = "支持项目"
     override val donateSubtitle = "USDT · TON · GRAM — 点按复制地址"

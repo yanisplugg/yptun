@@ -949,6 +949,16 @@ private fun AppSettingsHubContent(
             onOpenUrl = { it -> SettingsPlatform.openUri(it) }
         )
 
+        SettingsGroupCard {
+            SettingsGroupRow(
+                title = s.termsOfUse,
+                subtitle = "yanisplugg.github.io/yptun/terms.html",
+                icon = Icons.Outlined.Shield,
+                enabled = true,
+                onClick = { SettingsPlatform.openUri("https://yanisplugg.github.io/yptun/terms.html") }
+            )
+        }
+
         Spacer(Modifier.height(4.dp))
     }
 }
