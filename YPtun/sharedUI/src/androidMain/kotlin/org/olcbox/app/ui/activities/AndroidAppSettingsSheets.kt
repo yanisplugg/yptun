@@ -3862,6 +3862,23 @@ private fun ApplicationBehaviorContent(
             checked = settings.showSubscriptionDescription
         ) { onChanged(settings.copy(showSubscriptionDescription = it)) }
 
+        if (settings.showSubscriptionDescription) {
+            Text(
+                text = s.subscriptionDescriptionLinesTitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(3 to "3", 5 to "5", 0 to s.subscriptionDescriptionLinesUnlimited).forEach { (n, label) ->
+                    FilterChip(
+                        selected = settings.subscriptionDescriptionLines == n,
+                        onClick = { onChanged(settings.copy(subscriptionDescriptionLines = n)) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+        }
+
         RoutingToggleRow(
             title = s.showSubscriptionIconsTitle,
             subtitle = s.showSubscriptionIconsSubtitle,

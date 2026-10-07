@@ -83,6 +83,9 @@ val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
  */
 val LocalShowSubscriptionDescription = staticCompositionLocalOf { false }
 
+/** Max lines of the subscription description in the group header; 0 = unlimited. */
+val LocalSubscriptionDescriptionLines = staticCompositionLocalOf { 0 }
+
 /** Whether the subscription group header shows the panel-provided icon left of the title. On by default. */
 val LocalShowSubscriptionIcons = staticCompositionLocalOf { true }
 

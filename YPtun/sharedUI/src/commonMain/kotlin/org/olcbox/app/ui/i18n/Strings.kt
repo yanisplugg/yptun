@@ -523,6 +523,8 @@ interface Strings {
     val showSubscriptionExpirySubtitle: String
     val showSubscriptionDescriptionTitle: String
     val showSubscriptionDescriptionSubtitle: String
+    val subscriptionDescriptionLinesTitle: String
+    val subscriptionDescriptionLinesUnlimited: String
     val showSubscriptionIconsTitle: String
     val showSubscriptionIconsSubtitle: String
     val subscriptionUserAgentLabel: String
@@ -1197,6 +1199,8 @@ object RuStrings : Strings {
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
     override val showSubscriptionDescriptionTitle = "Показывать описание подписки"
     override val showSubscriptionDescriptionSubtitle = "Текст от панели (announce) под названием подписки"
+    override val subscriptionDescriptionLinesTitle = "Строк описания подписки"
+    override val subscriptionDescriptionLinesUnlimited = "Без ограничений"
     override val showSubscriptionIconsTitle = "Показывать иконки подписок"
     override val showSubscriptionIconsSubtitle = "Иконка от панели слева от названия подписки"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
@@ -1854,6 +1858,8 @@ object EnStrings : Strings {
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val showSubscriptionDescriptionTitle = "Show subscription description"
     override val showSubscriptionDescriptionSubtitle = "Show the panel's text (announce) under the subscription name"
+    override val subscriptionDescriptionLinesTitle = "Subscription description lines"
+    override val subscriptionDescriptionLinesUnlimited = "Unlimited"
     override val showSubscriptionIconsTitle = "Show subscription icons"
     override val showSubscriptionIconsSubtitle = "The panel's icon to the left of the subscription name"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
@@ -2527,6 +2533,8 @@ object FaStrings : Strings {
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
     override val showSubscriptionDescriptionTitle = "نمایش توضیحات اشتراک"
     override val showSubscriptionDescriptionSubtitle = "نمایش متن پنل (announce) زیر نام اشتراک"
+    override val subscriptionDescriptionLinesTitle = "تعداد خطوط توضیحات اشتراک"
+    override val subscriptionDescriptionLinesUnlimited = "نامحدود"
     override val showSubscriptionIconsTitle = "نمایش آیکون اشتراک‌ها"
     override val showSubscriptionIconsSubtitle = "آیکون پنل در سمت چپ نام اشتراک"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
@@ -3168,6 +3176,8 @@ object ZhStrings : Strings {
     override val showSubscriptionExpirySubtitle = "在刷新日期下方显示“至 dd.mm.yyyy”"
     override val showSubscriptionDescriptionTitle = "显示订阅说明"
     override val showSubscriptionDescriptionSubtitle = "在订阅名称下方显示面板文本（announce）"
+    override val subscriptionDescriptionLinesTitle = "订阅说明行数"
+    override val subscriptionDescriptionLinesUnlimited = "不限"
     override val showSubscriptionIconsTitle = "显示订阅图标"
     override val showSubscriptionIconsSubtitle = "在订阅名称左侧显示面板图标"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"

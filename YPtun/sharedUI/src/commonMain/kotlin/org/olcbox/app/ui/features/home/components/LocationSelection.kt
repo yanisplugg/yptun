@@ -1348,7 +1348,9 @@ private fun SubscriptionGroupHeader(
                     // The whole description, wrapped onto as many lines as it needs: it takes the width
                     // the header gives it (a long unbroken word is split by the layout), never more.
                     softWrap = true,
-                    overflow = TextOverflow.Clip,
+                    maxLines = org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines.current
+                        .let { if (it > 0) it else Int.MAX_VALUE },
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
                 )
             }

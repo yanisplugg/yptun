@@ -155,6 +155,8 @@ data class AppBehaviorSettings(
      * subscription group title in the location list, like Happ. Off by default.
      */
     val showSubscriptionDescription: Boolean = false,
+    /** How many lines of the subscription description to show: 3, 5, or 0 = unlimited (default). */
+    val subscriptionDescriptionLines: Int = 0,
     /**
      * Show the subscription's icon (panel `profile-icon` header) left of its name in the location
      * list. Nothing is drawn for a subscription without one. On by default.
