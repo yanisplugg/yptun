@@ -128,6 +128,42 @@ object XrayConfig {
         return if (isIpv4 || isIpv6) "tcp://$s" else s
     }
 
+    /**
+     * Xray's own DNS client has no `detour`: the connection it opens to a REMOTE resolver (a DoH server,
+     * a TCP resolver…) is routed like any other, so a routing profile's `direct` bucket could send it out
+     * of the tunnel — onto a network that intercepts DoH and answers with a block page ("failed to handle
+     * DOH response … segment prefix is reserved"). Returns the hosts of the user's REMOTE resolvers as
+     * (domain, ip) so the routing can pin them to the proxy, as «Удалённый DNS (через прокси)» promises.
+     * The direct resolver, `+local` servers, fakedns/localhost and private addresses are left alone.
+     */
+    internal fun remoteDnsEndpoints(traffic: TrafficSettings): Pair<List<String>, List<String>> {
+        val domains = linkedSetOf<String>()
+        val ips = linkedSetOf<String>()
+        for (raw in listOf(traffic.remoteDns, traffic.remoteDns2)) {
+            val s = proxiedDns(raw).trim()
+            if (s.isEmpty() || s == FAKEDNS_SERVER || s.equals("localhost", ignoreCase = true)) continue
+            val scheme = s.substringBefore("://", "")
+            if (scheme.contains("+local")) continue
+            val authority = s.substringAfter("://").substringBefore('/')
+            val host = if (authority.startsWith("[")) authority.substringAfter('[').substringBefore(']')
+            else if (authority.count { it == ':' } == 1) authority.substringBefore(':') else authority
+            if (host.isBlank()) continue
+            val isIp = host.contains(':') || host.all { it.isDigit() || it == '.' }
+            when {
+                !isIp -> domains += "full:${host.lowercase()}"
+                !isPrivateDnsHost(host) -> ips += host
+            }
+        }
+        return domains.toList() to ips.toList()
+    }
+
+    private fun isPrivateDnsHost(ip: String): Boolean {
+        if (ip.contains(':')) return ip == "::1" || ip.startsWith("fe80", ignoreCase = true) || ip.startsWith("fc") || ip.startsWith("fd")
+        val p = ip.split('.').mapNotNull { it.toIntOrNull() }
+        if (p.size != 4) return false
+        return p[0] == 10 || p[0] == 127 || (p[0] == 192 && p[1] == 168) || (p[0] == 172 && p[1] in 16..31) || (p[0] == 169 && p[1] == 254)
+    }
+
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
 
     /**
@@ -537,6 +573,19 @@ object XrayConfig {
                 }
                 put("outboundTag", if (directViaBase) PROXY_BASE_TAG else PROXY_TAG)
             } else null
+            // The remote resolvers' own connections ride the proxy whatever the profile says (see
+            // [remoteDnsEndpoints]); after the DNS hijack, before everything else.
+            val remoteDnsProxyRules = remoteDnsEndpoints(traffic).let { (domains, ips) ->
+                buildList {
+                    val tag = if (directViaBase) PROXY_BASE_TAG else PROXY_TAG
+                    if (domains.isNotEmpty()) add(buildJsonObject {
+                        put("type", "field"); putJsonArray("domain") { domains.forEach { add(it) } }; put("outboundTag", tag)
+                    })
+                    if (ips.isNotEmpty()) add(buildJsonObject {
+                        put("type", "field"); putJsonArray("ip") { ips.forEach { add(it) } }; put("outboundTag", tag)
+                    })
+                }
+            }
             val lanBypassRule = if (bypassLan && !directViaBase) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
@@ -557,6 +606,7 @@ object XrayConfig {
                         cascadeLoopRule?.let { add(it) }
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
                         dnsOutRules.forEach { add(it) }
+                        remoteDnsProxyRules.forEach { add(it) }
                         fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
@@ -569,6 +619,7 @@ object XrayConfig {
                     putJsonArray("rules") {
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
+                        remoteDnsProxyRules.forEach { add(it) }
                         fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)

@@ -1345,9 +1345,11 @@ private fun SubscriptionGroupHeader(
                     fontSize = 11.sp,
                     lineHeight = 13.sp,
                     color = MaterialTheme.colorScheme.primary,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
+                    // The whole description, wrapped onto as many lines as it needs: it takes the width
+                    // the header gives it (a long unbroken word is split by the layout), never more.
+                    softWrap = true,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
                 )
             }
         }

@@ -30,4 +30,37 @@ class XrayDnsFormatTest {
             servers,
         )
     }
+
+    private val profile = ProxyProfile(
+        type = ProxyProfile.TYPE_VLESS, server = "vbn.azz.su", serverPort = 443,
+        uuid = "11111111-1111-1111-1111-111111111111",
+        network = ProxyProfile.NETWORK_TCP, security = ProxyProfile.SECURITY_TLS, sni = "vbn.azz.su",
+    )
+
+    /** A DoH server is reached by Xray's own DNS client, which has no detour: pin it to the proxy by routing. */
+    @Test
+    fun remoteResolversRideTheProxyWhateverTheProfileSays() {
+        val traffic = TrafficSettings(
+            remoteDns = "https://cloudflare-dns.com/dns-query",
+            remoteDns2 = "tls://dns.quad9.net",
+            directDns = "77.88.8.8",
+        )
+        val rules = Json.parseToJsonElement(XrayConfig.build(profile = profile, listenPort = 10808, traffic = traffic))
+            .jsonObject["routing"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+        val domainRule = rules.first { it["domain"] != null }
+        assertEquals(listOf("full:cloudflare-dns.com", "full:dns.quad9.net"), domainRule["domain"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals("proxy", domainRule["outboundTag"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun endpointsSkipTheDirectResolverLocalOnesAndPrivateAddresses() {
+        val (domains, ips) = XrayConfig.remoteDnsEndpoints(
+            TrafficSettings(remoteDns = "1.1.1.1", remoteDns2 = "https+local://dns.google/dns-query", directDns = "77.88.8.8")
+        )
+        assertEquals(emptyList(), domains)
+        assertEquals(listOf("1.1.1.1"), ips)
+        val (d2, i2) = XrayConfig.remoteDnsEndpoints(TrafficSettings(remoteDns = "192.168.1.1", remoteDns2 = "dns.example.org"))
+        assertEquals(listOf("full:dns.example.org"), d2)
+        assertEquals(emptyList(), i2)
+    }
 }
