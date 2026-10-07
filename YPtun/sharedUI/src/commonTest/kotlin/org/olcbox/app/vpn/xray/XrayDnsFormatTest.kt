@@ -26,7 +26,7 @@ class XrayDnsFormatTest {
         val servers = Json.parseToJsonElement(XrayConfig.build(profile = profile, listenPort = 10808, traffic = traffic))
             .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonPrimitive.content }
         assertEquals(
-            listOf("https://dns.google/dns-query", "https://one.one.one.one/dns-query", "https://dns.quad9.net/dns-query"),
+            listOf("https://8.8.8.8/dns-query", "https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"),
             servers,
         )
     }
@@ -42,14 +42,17 @@ class XrayDnsFormatTest {
     fun remoteResolversRideTheProxyWhateverTheProfileSays() {
         val traffic = TrafficSettings(
             remoteDns = "https://cloudflare-dns.com/dns-query",
-            remoteDns2 = "tls://dns.quad9.net",
+            remoteDns2 = "https://dns.example.org/dns-query",
             directDns = "77.88.8.8",
         )
         val rules = Json.parseToJsonElement(XrayConfig.build(profile = profile, listenPort = 10808, traffic = traffic))
             .jsonObject["routing"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
         val domainRule = rules.first { it["domain"] != null }
-        assertEquals(listOf("full:cloudflare-dns.com", "full:dns.quad9.net"), domainRule["domain"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("full:dns.example.org"), domainRule["domain"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertEquals("proxy", domainRule["outboundTag"]!!.jsonPrimitive.content)
+        // Well-known DoH hostnames are rewritten to their IP, which is pinned by an ip rule instead.
+        val ipRule = rules.first { it["ip"] != null }
+        assertEquals(listOf("1.1.1.1"), ipRule["ip"]!!.jsonArray.map { it.jsonPrimitive.content })
     }
 
     @Test
@@ -62,5 +65,19 @@ class XrayDnsFormatTest {
         val (d2, i2) = XrayConfig.remoteDnsEndpoints(TrafficSettings(remoteDns = "192.168.1.1", remoteDns2 = "dns.example.org"))
         assertEquals(listOf("full:dns.example.org"), d2)
         assertEquals(emptyList(), i2)
+    }
+
+    /** A hostname DoH would be bootstrapped through the DNS being configured (4s stall); known hosts become IPs. */
+    @Test
+    fun knownDohHostnamesBecomeIps() {
+        fun servers(r1: String) = Json.parseToJsonElement(
+            XrayConfig.build(profile = profile, listenPort = 10808, traffic = TrafficSettings(remoteDns = r1, remoteDns2 = "", directDns = "77.88.8.8"))
+        ).jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonPrimitive.content }.first()
+        assertEquals("https://1.1.1.1/dns-query", servers("https://cloudflare-dns.com/dns-query"))
+        assertEquals("https://1.1.1.1/dns-query", servers("tls://cloudflare-dns.com"))
+        assertEquals("https://8.8.8.8/dns-query", servers("https://DNS.GOOGLE"))
+        // another path / host is the user's own choice
+        assertEquals("https://cloudflare-dns.com/family", servers("https://cloudflare-dns.com/family"))
+        assertEquals("https://dns.example.org/dns-query", servers("https://dns.example.org/dns-query"))
     }
 }

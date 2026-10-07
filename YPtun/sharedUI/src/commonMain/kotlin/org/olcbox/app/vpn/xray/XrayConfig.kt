@@ -99,11 +99,35 @@ object XrayConfig {
      */
     private fun xrayDns(server: String): String {
         val s = server.trim()
-        if (!s.startsWith("tls://", ignoreCase = true)) return s
+        if (!s.startsWith("tls://", ignoreCase = true)) return pinKnownDohHost(s)
         val host = s.substring(6).substringBefore("/").let {
             if (it.startsWith("[")) it.substringBefore("]") + "]" else it.substringBefore(":")
         }
-        return "https://$host/dns-query"
+        return pinKnownDohHost("https://$host/dns-query")
+    }
+
+    /** Well-known DoH hostnames → the IP whose certificate carries it as a SAN (see [DOH_IP_PROVIDERS]). */
+    private val DOH_HOST_IPS = mapOf(
+        "cloudflare-dns.com" to "1.1.1.1",
+        "one.one.one.one" to "1.1.1.1",
+        "dns.google" to "8.8.8.8",
+        "dns.quad9.net" to "9.9.9.9",
+        "dns.alidns.com" to "223.5.5.5",
+    )
+
+    /**
+     * `https://cloudflare-dns.com/dns-query` → `https://1.1.1.1/dns-query` (same for Google/Quad9/AliDNS).
+     * A hostname DoH makes Xray resolve that host first through the very DNS it is configuring; behind a
+     * proxy that lookup stalls until the 4s deadline and every uncached domain pays it. The IP form needs
+     * no bootstrap and is pinned to the proxy by [remoteDnsEndpoints]. Other hosts/paths are left as typed.
+     */
+    private fun pinKnownDohHost(s: String): String {
+        if (!s.startsWith("https://", ignoreCase = true)) return s
+        val rest = s.substring(8)
+        val host = rest.substringBefore('/').lowercase()
+        val path = rest.substringAfter('/', "")
+        val ip = DOH_HOST_IPS[host] ?: return s
+        return if (path.isEmpty() || path == "dns-query") "https://$ip/dns-query" else s
     }
 
     /**
