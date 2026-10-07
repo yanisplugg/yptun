@@ -129,6 +129,16 @@ jobs:
           & $env:CC --version
           Write-Host "os.arch = $(java -XshowSettings:properties -version 2>&1 | Select-String 'os.arch')"
 
+      # The csqtt client is prebuilt (csqtt/build-all.sh), the ARM64 one cross-compiled on x64: prove here, on a
+      # machine of that architecture, that it starts. Without arguments it exits with code 1 and a message.
+      - name: csqtt client smoke test
+        shell: pwsh
+        run: |
+          $f = "csqtt/prebuilt/csqtt-windows-${{ matrix.arch }}.exe"
+          $out = (& $f 2>&1 | Out-String)
+          Write-Host $out
+          if ($LASTEXITCODE -ne 1 -or $out.Trim().Length -eq 0) { throw "csqtt client did not start on ${{ matrix.arch }} (exit $LASTEXITCODE)" }
+
       - name: Override version
         if: inputs.version != ''
         shell: pwsh

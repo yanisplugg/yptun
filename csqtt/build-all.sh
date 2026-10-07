@@ -1,9 +1,9 @@
 #!/bin/sh
 # Builds every csqtt artifact YPtun ships, into prebuilt/ (committed, like snolc/prebuilt):
-#   csqtt-<os>-<arch>      the Rust client           (windows-amd64.exe, linux-{amd64,arm64}, android-{arm64,armv7})
+#   csqtt-<os>-<arch>      the Rust client           (windows-{amd64,arm64}.exe, linux-{amd64,arm64}, android-{arm64,armv7,x86_64})
 #   csqtthost-<os>-<arch>  the Go bridge (bridge/)   (same targets)
 #   csqtt-server-linux-<arch>.gz  the server, also copied to the app's assets/csqtt/ for the VPS installer
-# Needs: Rust >= 1.97.1 with targets {aarch64,armv7}-linux-android, {x86_64,aarch64}-unknown-linux-gnu,
+# Needs: Rust >= 1.97.1 with targets {aarch64,armv7}-linux-android, {x86_64,aarch64}-unknown-linux-gnu, x86_64-linux-android, aarch64-pc-windows-gnullvm,
 # {x86_64,aarch64}-unknown-linux-musl + armv7-unknown-linux-musleabihf (the server), cargo-ndk, cargo-zigbuild + zig (pip install ziglang), the Android NDK, Go.
 # Usage: build-all.sh [client] [server] [bridge]   (default: all three)
 set -e
@@ -20,17 +20,19 @@ if has client; then
   (cd rust-client
    cargo build --release
    cp target/release/client.exe ../prebuilt/csqtt-windows-amd64.exe
-   cargo ndk -t arm64-v8a -t armeabi-v7a -P 26 build --release
+   cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -P 26 build --release
    cp target/aarch64-linux-android/release/client ../prebuilt/csqtt-android-arm64
    cp target/armv7-linux-androideabi/release/client ../prebuilt/csqtt-android-armv7
+   cp target/x86_64-linux-android/release/client ../prebuilt/csqtt-android-x86_64
    # glibc, not musl: the client uses libc's recvmmsg/sendmmsg/msghdr the glibc way (musl's differ and don't
-   # compile). Linking against glibc 2.17 runs on any distro from CentOS 7 / Debian 8 on. x86_64 Android
-   # (emulators only) is not built, like snolc.
+   # compile). Linking against glibc 2.17 runs on any distro from CentOS 7 / Debian 8 on.
    cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.17
    cp target/x86_64-unknown-linux-gnu/release/client ../prebuilt/csqtt-linux-amd64
    cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.17
-   cp target/aarch64-unknown-linux-gnu/release/client ../prebuilt/csqtt-linux-arm64)
-   # Windows ARM64 is not built: it needs the MSVC ARM64 toolchain (cl.exe) for zstd-sys/aws-lc.
+   cp target/aarch64-unknown-linux-gnu/release/client ../prebuilt/csqtt-linux-arm64
+   # Windows ARM64 without MSVC: zig cc cross-compiles the C parts for the gnullvm target (UCRT, system DLLs only).
+   cargo zigbuild --release --target aarch64-pc-windows-gnullvm
+   cp target/aarch64-pc-windows-gnullvm/release/client.exe ../prebuilt/csqtt-windows-arm64.exe)
 fi
 
 if has server; then
@@ -53,6 +55,8 @@ if has bridge; then
    # Android runs plain static Linux executables from nativeLibraryDir; the bridge does no name lookups
    # of its own (the Rust client resolves the server), so no cgo/NDK is needed.
    b linux arm64 "" android-arm64
-   b linux arm 7 android-armv7)
+   b linux arm 7 android-armv7
+   b linux amd64 "" android-x86_64
+   b windows arm64 "" windows-arm64.exe)
 fi
 ls -la prebuilt
