@@ -916,6 +916,13 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
+                title = s.coreVersion("csqtt", org.olcbox.app.vpn.CoreVersions.CSQTT),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
                 title = s.hwid(hwid.ifBlank { "—" }),
                 icon = Icons.Rounded.Key,
                 enabled = hwid.isNotBlank(),

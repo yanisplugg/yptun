@@ -79,6 +79,7 @@ import org.olcbox.app.ui.i18n.stringsFor
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.share.YptunInboundCodec
+import org.olcbox.app.vpn.csqtt.CsqttBridge
 import org.olcbox.app.vpn.snolc.SnolcFiles
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
@@ -205,6 +206,9 @@ class OlcboxVpnService : VpnService() {
 
     /** OpenFlux client subprocess for [EngineType.OpenFlux]; null when another engine is running. */
     private var openFluxProcess: Process? = null
+
+    /** The csqtt VK-TURN core (bridge + Rust client subprocesses) while a csqtt location runs. */
+    private val csqttBridge = CsqttBridge { addLog(it) }
 
     /** True when a proxy core fronts the OpenFlux tunnel (proxy-over-OpenFlux). */
     private var openFluxProxyActive: Boolean = false
@@ -1941,14 +1945,17 @@ class OlcboxVpnService : VpnService() {
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true
         val wdttRaw = usesWdtt && vk?.wdttPlus?.rawMode == true
+        // csqtt always serves its tunnel as a local SOCKS5 (the bridge), exactly like qWDTT Raw.
+        val usesCsqtt = vk?.usesCsqtt() == true
         // WDTT exits via WireGuard (server-provided); the freeturn outbound choice is irrelevant. Its Raw
         // mode is a local SOCKS5 served by the core — the very shape of the AmneziaWG exit (awgproxy's
         // SOCKS on [awgLocalPort]), so it rides that branch: chain proxy, routing and DNS included.
-        val outboundType = if (wdttRaw) VkTurnConfig.OUTBOUND_AMNEZIAWG
+        val outboundType = if (wdttRaw || usesCsqtt) VkTurnConfig.OUTBOUND_AMNEZIAWG
             else if (usesWdtt) VkTurnConfig.OUTBOUND_WIREGUARD
             else vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD } ?: VkTurnConfig.OUTBOUND_WIREGUARD
         val outboundConfigured = when {
             usesWdtt -> vk?.wdttPeer?.isNotBlank() == true // WG config comes from the server
+            usesCsqtt -> vk?.csqttPeer?.isNotBlank() == true // the server hands the tunnel address over
             outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
             outboundType == VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
                 profile.server.isNotBlank() && profile.serverPort in 1..65535
@@ -1976,7 +1983,7 @@ class OlcboxVpnService : VpnService() {
             // across them per connection (Xray balancer over N WireGuard outbounds) so their bandwidth
             // aggregates. Only for the freeturn core with a plain WireGuard exit and no chain proxy;
             // a single server (or any other shape) keeps the exact original single-server path.
-            val freeturnServers = if (!vk.usesWdtt() &&
+            val freeturnServers = if (!vk.usesWdtt() && !usesCsqtt &&
                 outboundType == VkTurnConfig.OUTBOUND_WIREGUARD &&
                 vk.chainProxyLink.isBlank()
             ) vk.allFreeturnUris().take(1 + VKTURN_MAX_EXTRA_FREETURN) else emptyList()
@@ -1996,8 +2003,35 @@ class OlcboxVpnService : VpnService() {
 
             // Set by the WDTT branch: the server's WireGuard config, which also acts as its relay gate.
             var wdttConfigSignal: CompletableDeferred<String>? = null
+            var csqttStarted = false
 
-            if (vk.usesWdtt()) {
+            if (usesCsqtt) {
+                // csqtt core: a Rust client (libcsqtt.so) behind the Go bridge (libcsqtthost.so), which serves
+                // the tunnel as a SOCKS5 on [awgLocalPort] — the shape of the AmneziaWG exit. Awaited below,
+                // after the settings preparation, so that work overlaps the VK handshake.
+                val nativeDir = applicationInfo.nativeLibraryDir
+                val bridgeExe = java.io.File(nativeDir, "libcsqtthost.so")
+                val clientExe = java.io.File(nativeDir, "libcsqtt.so")
+                if (!bridgeExe.exists() || !clientExe.exists()) {
+                    throw IllegalStateException("csqtt: в сборке нет ядра для этой архитектуры (${bridgeExe.name}/${clientExe.name})")
+                }
+                val coreListen = "127.0.0.1:$awgLocalPort"
+                addLog(
+                    "Starting VK-TURN csqtt core (peer=${vk.csqttPeerAddr()}, " +
+                        "workers=${vk.csqttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
+                        "turn-tcp=${vk.csqtt.turnTcp}, obfs=${if (vk.csqtt.obfsVideo) "video" else "audio"}, " +
+                        "fp=${vk.csqtt.fingerprint})"
+                )
+                csqttBridge.launch(
+                    bridgeExe.absolutePath,
+                    vk.csqttCoreOptionsJson(
+                        client = clientExe.absolutePath,
+                        listen = coreListen,
+                        deviceId = deviceIdentityProvider.hwid(),
+                    ),
+                )
+                csqttStarted = true
+            } else if (vk.usesWdtt()) {
                 // WDTT core (wg-turn-client): connects purely by the wdtt-server IP[:port] and FETCHES its
                 // WireGuard config from the server (GETCONF/OnConfig) — the user enters no WG keys. We bring
                 // WireGuard up from that returned config (Endpoint overridden to the local WDTT listener).
@@ -2130,7 +2164,15 @@ class OlcboxVpnService : VpnService() {
             // report offline while the relay is still coming up (only masked on a fast same-LAN path).
             // Best-effort: if the relay does not report ready in time we proceed anyway and retry.
             val wdttSignal = wdttConfigSignal
-            if (wdttSignal != null) {
+            if (csqttStarted) {
+                val up = csqttBridge.awaitReady(VKTURN_RELAY_READY_TIMEOUT_MS)
+                    ?: throw IllegalStateException(
+                        "csqtt: нет адреса туннеля от сервера — проверь IP/порт/пароль сервера и ссылки на звонки VK" +
+                            csqttBridge.lastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+                    )
+                profile = localSocksProfile("csqtt", awgLocalPort)
+                addLog("VK-TURN csqtt up (${up.ip}, DNS ${up.dns.joinToString(",")}, MTU ${up.mtu}); SOCKS on $awgLocalPort")
+            } else if (wdttSignal != null) {
                 val wgConf = withTimeoutOrNull(VKTURN_RELAY_READY_TIMEOUT_MS) { wdttSignal.await() }
                 when {
                     wdttRaw && wgConf?.startsWith("RAWCONF:") == true -> {
@@ -2583,7 +2625,7 @@ class OlcboxVpnService : VpnService() {
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
         // VK-TURN runs either the freeturn OR the WDTT transport core (mutually exclusive per location).
-        EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning()) && proxyCoreRunning()
+        EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning() || csqttBridge.isRunning()) && proxyCoreRunning()
         // MasterDNS raises its own local SOCKS listener; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> masterDnsClient?.isRunning == true && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> openFluxProcess?.isAlive == true && (!openFluxProxyActive || proxyCoreRunning())
@@ -3317,6 +3359,7 @@ class OlcboxVpnService : VpnService() {
         OlcboxVpnState.setVkCaptchaUrl(null)
         cancelVkCaptchaNotification()
         runCatching { Wdttmobile.stop() }
+        runCatching { csqttBridge.stop() }
         runCatching { masterDnsClient?.stop() }
         masterDnsClient = null
         masterDnsProxyActive = false

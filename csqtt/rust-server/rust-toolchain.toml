@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 amurcanov
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+[toolchain]
+channel = "1.97.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-unknown-linux-musl"]

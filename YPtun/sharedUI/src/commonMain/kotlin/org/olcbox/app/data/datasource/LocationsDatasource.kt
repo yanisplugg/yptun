@@ -35,6 +35,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
+import org.olcbox.app.data.importer.CsqttUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
@@ -1315,6 +1316,8 @@ class LocationsRepositoryImpl(
 
         // qWDTT quick links (qwdtt://config?…): VK-TURN locations on the WDTT core.
         parseQwdttText(linkText, subscriptionUrl)?.let { linkBundles += it }
+        // csqtt connection links (csqtt://connect?v=2&…): VK-TURN locations on the csqtt core.
+        parseCsqttText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
@@ -1993,6 +1996,40 @@ class LocationsRepositoryImpl(
                 ).normalized()
                 val base = link.peer.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
                 val storageId = uniqueStorageId("imported_qwdtt_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
+    }
+
+    /**
+     * Parses every [CsqttUriParser.SCHEME] link into a csqtt-core [EngineType.VkTurn] location. Like
+     * qWDTT there is no proxy profile: the server hands the tunnel address over at runtime.
+     */
+    private fun parseCsqttText(
+        text: String,
+        subscriptionUrl: String? = null
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith(CsqttUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { CsqttUriParser.parse(it) }
+            .map { link ->
+                val location = LocationConfig(
+                    name = "csqtt ${link.host}",
+                    engine = EngineType.VkTurn,
+                    vkturn = VkTurnConfig(
+                        core = VkTurnConfig.CORE_CSQTT,
+                        csqttPeer = link.host,
+                        csqttPort = link.port,
+                        csqttPassword = link.password,
+                        vkLink = link.hashes,
+                    ),
+                ).normalized()
+                val base = link.host.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val storageId = uniqueStorageId("imported_csqtt_$base", usedStorageIds)
                 LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
             }
             .toList()

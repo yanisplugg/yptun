@@ -1,5 +1,6 @@
 package org.olcbox.app.data.share
 
+import org.olcbox.app.data.importer.CsqttUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
@@ -15,6 +16,7 @@ object ConfigShareService {
         if (normalized.engine == EngineType.VkTurn) {
             val vk = normalized.vkturn
             if (vk?.usesWdtt() == true) return QwdttUriParser.compose(normalized.name, vk)
+            if (vk?.usesCsqtt() == true) return CsqttUriParser.compose(vk)
             return vk?.uri.orEmpty()
         }
         // Standard/Chain run a sing-box/Xray proxy — share the matching proxy link (vless/…/awg),

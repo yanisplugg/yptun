@@ -458,7 +458,24 @@ val copySnolcHost = tasks.register<Copy>("copySnolcHost") {
     into(generatedNativeResources.map { it.dir("native") })
 }
 
+// csqtt core: the Rust client + its Go bridge (../csqtt/prebuilt, built by csqtt/build-all.sh). Copied only
+// where a build exists for the host.
+val csqttPrebuiltDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("csqtt/prebuilt")
+val csqttHostNames: List<String> = run {
+    val suffix = if (currentBuildOs.isWindows) ".exe" else ""
+    val osName = if (currentBuildOs.isWindows) "windows" else if (currentBuildOs.isMacOsX) null else "linux"
+    osName?.let { os -> listOf("csqtt", "csqtthost").map { "$it-$os-$hostDesktopArch$suffix" } }
+        ?.takeIf { names -> names.all { csqttPrebuiltDir.resolve(it).isFile } }
+        ?: emptyList()
+}
+val copyCsqttHost = tasks.register<Copy>("copyCsqttHost") {
+    enabled = csqttHostNames.isNotEmpty() // not onlyIf{}: a lambda over script state breaks the configuration cache
+    from(csqttPrebuiltDir) { include(csqttHostNames.ifEmpty { listOf("none") }) }
+    into(generatedNativeResources.map { it.dir("native") })
+}
+
 val desktopNativeAssetTasks = mutableListOf<Any>(
+    copyCsqttHost,
     copySnolcHost,
     buildOpenFluxHost,
     buildOlcRtcDarwinArm64,
@@ -477,6 +494,7 @@ val desktopNativeAssetTasks = mutableListOf<Any>(
 )
 val hostDesktopNativeAssetTasks = mutableListOf<Any>(
     copyOlcRtcDataAssets,
+    copyCsqttHost,
     copySnolcHost,
     buildOpenFluxHost
 )
@@ -791,10 +809,12 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/trusttunnel-wizard-windows-$hostDesktopArch.exe")
             add("native/openflux-windows-$hostDesktopArch.exe")
             snolcHostName?.let { add("native/$it") }
+            csqttHostNames.forEach { add("native/$it") }
         }
         currentBuildOs.isLinux -> {
             add("native/openflux-linux-$hostDesktopArch")
             snolcHostName?.let { add("native/$it") }
+            csqttHostNames.forEach { add("native/$it") }
             add("native/olcrtc-linux-$hostDesktopArch")
             add("native/libolcrtc-linux-$hostDesktopArch.so")
             add("native/hev-socks5-tunnel-linux-$hostDesktopArch")

@@ -80,6 +80,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontFamily
 import org.olcbox.app.ui.features.locations.components.SshAuthFields
+import org.olcbox.app.vpn.csqtt.CsqttInstallOptions
+import org.olcbox.app.vpn.csqtt.rememberCsqttServerInstaller
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
 import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
 import org.olcbox.app.vpn.freeturn.FreeturnExit
@@ -118,6 +120,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.data.model.CsqttOptions
 import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.ui.components.PingButton
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
@@ -189,6 +192,15 @@ fun LocationSettingsScreen(
             draft = viewModel.editingVkTurn,
             onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
             onDismiss = { showWdttInstall = false }
+        )
+    }
+
+    var showCsqttInstall by remember { mutableStateOf(false) }
+    if (showCsqttInstall) {
+        CsqttInstallDialog(
+            draft = viewModel.editingVkTurn,
+            onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
+            onDismiss = { showCsqttInstall = false }
         )
     }
 
@@ -394,6 +406,7 @@ fun LocationSettingsScreen(
                     showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateVkTurnDraft,
                     onWdttAutoInstall = { showWdttInstall = true },
+                    onCsqttAutoInstall = { showCsqttInstall = true },
                     onFreeturnAutoInstall = { showFreeturnInstall = true }
                 )
             }
@@ -1003,6 +1016,7 @@ private fun LazyListScope.vkTurnSection(
     showAutoInstall: Boolean,
     onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit,
     onWdttAutoInstall: () -> Unit,
+    onCsqttAutoInstall: () -> Unit,
     onFreeturnAutoInstall: () -> Unit
 ) {
     item {
@@ -1022,16 +1036,79 @@ private fun LazyListScope.vkTurnSection(
         ) {
             SectionTitle(
                 title = "Транспортное ядро VK-TURN",
-                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация одного WG-потока по звонкам, TURN по TCP, маскировка под аудио/видео"
+                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация одного WG-потока по звонкам, TURN по TCP, маскировка под аудио/видео; csqtt — туннель поверх TURN/RTP (Rust), только Android и ПК"
             )
             SettingsDropdown(
                 label = "Ядро",
                 selectedValue = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
-                options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT),
+                options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT, VkTurnConfig.CORE_CSQTT),
                 enabled = enabled,
                 onValueSelected = { v -> onChange { it.copy(core = v) } },
-                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "qWDTT (агрегация по звонкам)" else "freeturn (стандарт)" }
+                valueLabel = {
+                    when (it) {
+                        VkTurnConfig.CORE_WDTT -> "qWDTT (агрегация по звонкам)"
+                        VkTurnConfig.CORE_CSQTT -> "csqtt (TURN/RTP, Rust)"
+                        else -> "freeturn (стандарт)"
+                    }
+                }
             )
+            if (draft.core == VkTurnConfig.CORE_CSQTT) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    VkTurnField(
+                        value = draft.csqttPeer,
+                        onValueChange = { v -> onChange { it.copy(csqttPeer = v.trim()) } },
+                        label = "IP сервера csqtt",
+                        placeholder = "203.0.113.7",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Uri,
+                        modifier = Modifier.weight(2f)
+                    )
+                    VkTurnField(
+                        value = draft.csqttPort,
+                        onValueChange = { v -> onChange { it.copy(csqttPort = v.filter(Char::isDigit)) } },
+                        label = "Порт",
+                        placeholder = "46000",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Number,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                VkTurnField(
+                    value = draft.csqttPassword,
+                    onValueChange = { v -> onChange { it.copy(csqttPassword = v) } },
+                    label = "Пароль csqtt",
+                    placeholder = "ключ WRAP выводится из пароля",
+                    enabled = enabled
+                )
+                // Auto-install the csqtt server on a VPS (opens an SSH connect dialog); same gate as qWDTT.
+                if (showAutoInstall) {
+                    OutlinedButton(
+                        onClick = onCsqttAutoInstall,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Автоустановка на VPS")
+                    }
+                }
+                VkTurnField(
+                    value = draft.csqttWorkers,
+                    onValueChange = { v -> onChange { it.copy(csqttWorkers = v.filter(Char::isDigit)) } },
+                    label = "Воркеры csqtt (0 — по умолчанию)",
+                    placeholder = "0 — авто (27 на звонок, до 72); кратно 9, максимум 126",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number
+                )
+                CsqttAdvanced(
+                    options = draft.csqtt,
+                    enabled = enabled,
+                    onChange = { transform -> onChange { it.copy(csqtt = transform(it.csqtt)) } }
+                )
+            }
             if (draft.core == VkTurnConfig.CORE_WDTT) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1095,7 +1172,7 @@ private fun LazyListScope.vkTurnSection(
 
     // freeturn-only transport/exit section — entirely hidden for the WDTT core (it connects purely by the
     // wdtt-server IP[:port] above and fetches its WireGuard config from the server).
-    if (draft.core != VkTurnConfig.CORE_WDTT) item {
+    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT) item {
         val isWdtt = false
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -1242,7 +1319,8 @@ private fun LazyListScope.vkTurnSection(
     }
 
     // WireGuard/AmneziaWG key block — hidden for the WDTT core (keys come from the server, not the user).
-    if (draft.core != VkTurnConfig.CORE_WDTT && draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
+    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT &&
+        draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
         val isAwg = draft.outbound == VkTurnConfig.OUTBOUND_AMNEZIAWG
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -2248,6 +2326,279 @@ private fun WdttInstallDialog(
                                         rawPort = raw.takeIf { it != WdttPlusOptions.DEFAULT_RAW_PORT } ?: 0
                                     ))
                                 }
+                            }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
+    )
+}
+
+/** csqtt core knobs ([CsqttOptions]), collapsed unless something differs from the defaults. */
+@Composable
+private fun CsqttAdvanced(
+    options: CsqttOptions,
+    enabled: Boolean,
+    onChange: ((CsqttOptions) -> CsqttOptions) -> Unit
+) {
+    var expanded by remember { mutableStateOf(options != CsqttOptions()) }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        VkTurnSwitchRow("Расширенные настройки csqtt", expanded, enabled) { expanded = it }
+        if (!expanded) return@Column
+
+        VkTurnSwitchRow("Маскировка под видео (иначе — под аудио)", options.obfsVideo, enabled) { v ->
+            onChange { it.copy(obfsVideo = v) }
+        }
+        VkTurnSwitchRow("TURN по TCP/TLS (если сеть режет UDP к VK, напр. Ростелеком)", options.turnTcp, enabled) { v ->
+            onChange { it.copy(turnTcp = v) }
+        }
+        SettingsDropdown(
+            label = "Отпечаток TLS для VK",
+            selectedValue = options.fingerprint.ifBlank { CsqttOptions.DEFAULT_FINGERPRINT },
+            options = CsqttOptions.FINGERPRINTS,
+            enabled = enabled,
+            onValueSelected = { v -> onChange { it.copy(fingerprint = v) } },
+            valueLabel = { it }
+        )
+        VkTurnSwitchRow("Старый анонимный путь VK (legacy, с капчей)", options.vkAuthLegacy, enabled) { v ->
+            onChange { it.copy(vkAuthLegacy = v) }
+        }
+        VkTurnSwitchRow("Больше воркеров, чем 27 на звонок", options.redistribute, enabled) { v ->
+            onChange { it.copy(redistribute = v) }
+        }
+        VkTurnField(
+            value = options.clientIds,
+            onValueChange = { v -> onChange { it.copy(clientIds = v.filter { c -> c.isDigit() || c == ',' }) } },
+            label = "VK client id (через запятую)",
+            placeholder = "пусто — 8202606,6287487",
+            enabled = enabled,
+            keyboardType = KeyboardType.Number
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            VkTurnField(
+                value = options.turnHost,
+                onValueChange = { v -> onChange { it.copy(turnHost = v.trim()) } },
+                label = "IP TURN (вручную)",
+                placeholder = "пусто — от VK",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri,
+                modifier = Modifier.weight(2f)
+            )
+            VkTurnField(
+                value = options.turnPort,
+                onValueChange = { v -> onChange { it.copy(turnPort = v.filter(Char::isDigit)) } },
+                label = "Порт",
+                placeholder = "авто",
+                enabled = enabled,
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Text(
+            text = "Капча VK решается автоматически (Rust-решатель); ручной WebView-режим csqtt в YPtun пока не поддержан.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * One-tap csqtt server installer. Collects SSH access to the VPS and, on confirm, connects over SSH,
+ * uploads the bundled csqtt server for the VPS architecture plus the project's own deploy.sh and runs
+ * it ([rememberCsqttServerInstaller]). Progress streams live into a log area. The connection password
+ * and the ports come from the location draft and are written back on success (the password MUST match
+ * on both sides — the WRAP key derives from it); the web panel login is shown once, in the result.
+ */
+@Composable
+private fun CsqttInstallDialog(
+    draft: VkTurnDraft,
+    onApplyDraft: (((VkTurnDraft) -> VkTurnDraft)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberCsqttServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf(draft.csqttPeer) }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    var peerPortText by remember { mutableStateOf(draft.csqttPort.ifBlank { "46000" }) }
+    var webPortText by remember { mutableStateOf("46002") }
+    var csqttPass by remember { mutableStateOf(draft.csqttPassword) }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.csqtt.CsqttInstallResult>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+
+    val peerPort = peerPortText.ifBlank { "46000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 46000
+    val webPort = webPortText.ifBlank { "46002" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 46002
+    val succeeded = result?.isSuccess == true
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Автоустановка csqtt на VPS") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH и поставлю сервер csqtt его штатным установщиком (порт $peerPort/udp, " +
+                        "веб-панель $webPort/tcp). Занятый порт заменю свободным. Пароль и порт сохранятся в настройки локации.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                OutlinedTextField(
+                    value = csqttPass,
+                    onValueChange = { csqttPass = it.filterNot(Char::isWhitespace) },
+                    label = { Text("Пароль csqtt") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = peerPortText,
+                        onValueChange = { v -> peerPortText = v.filter(Char::isDigit) },
+                        label = { Text("Порт csqtt (udp)") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = webPortText,
+                        onValueChange = { v -> webPortText = v.filter(Char::isDigit) },
+                        label = { Text("Порт веб-панели") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (csqttPass.isBlank()) {
+                    Text(
+                        "Укажи «Пароль csqtt» — он должен совпадать с паролем локации.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull()?.message.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()) && csqttPass.isNotBlank(),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        // Persist the edited server params into the location draft so the client connects
+                        // with the exact port/password the server was just launched with.
+                        onApplyDraft { d ->
+                            d.copy(csqttPeer = ip.trim(), csqttPort = peerPort.toString(), csqttPassword = csqttPass)
+                        }
+                        scope.launch {
+                            val res = installer.install(
+                                CsqttInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    peerPort = peerPort,
+                                    webPort = webPort,
+                                    password = csqttPass,
+                                )
+                            ) { line -> log.add(line) }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            // The server moved to a free port: the location has to dial that one.
+                            res.getOrNull()?.peerPort?.takeIf { it != peerPort }?.let { actual ->
+                                peerPortText = actual.toString()
+                                onApplyDraft { d -> d.copy(csqttPort = actual.toString()) }
                             }
                             result = res
                             running = false

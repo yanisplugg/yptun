@@ -9,6 +9,8 @@ object CoreVersions {
     const val OPENFLUX = "0.3.0 (d245db7)"
     /** snolc/Cargo.toml. */
     const val SNOLC = "0.0.4"
+    /** csqtt/rust-client/Cargo.toml + the upstream commit it was vendored at (csqtt/UPSTREAM.txt). */
+    const val CSQTT = "2.1.9 (71712b0)"
     /** Android: sharedUI/libs/trusttunnel-client-android-*.aar. */
     const val TRUSTTUNNEL_ANDROID = "1.1.5-rc.1"
     /** Desktop: `trustTunnelVersion` in desktopApp/build.gradle.kts. */
