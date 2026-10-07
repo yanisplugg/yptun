@@ -389,6 +389,11 @@ class HomeScreenViewModel(
             }
             return
         }
+        if (rawText.trim() == FREE_SERVERS_URL) {
+            loadFreeServers(onError = onError)
+            onComplete()
+            return
+        }
         viewModelScope.launch {
             try {
                 val imported = withContext(Dispatchers.IO) {
