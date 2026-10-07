@@ -134,7 +134,7 @@ jobs:
       - name: csqtt client smoke test
         shell: pwsh
         run: |
-          $f = "csqtt/prebuilt/csqtt-windows-${{ matrix.arch }}.exe"
+          $f = "csqtt/prebuilt/csqtt-windows-${{ matrix.goarch }}.exe"
           $out = (& $f 2>&1 | Out-String)
           Write-Host $out
           if ($LASTEXITCODE -ne 1 -or $out.Trim().Length -eq 0) { throw "csqtt client did not start on ${{ matrix.arch }} (exit $LASTEXITCODE)" }
