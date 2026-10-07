@@ -3634,6 +3634,7 @@ private fun TrafficSettingsContent(
             onValueChange = { remoteDns = it },
             label = { Text(s.remoteDnsLabel) },
             placeholder = { Text("8.8.8.8") },
+            supportingText = { Text(s.dnsFormatsHint) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )

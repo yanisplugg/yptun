@@ -93,6 +93,20 @@ object XrayConfig {
     )
 
     /**
+     * Xray has no DNS-over-TLS client (only udp/tcp/https/quic), so a `tls://host[:port]` resolver
+     * the user typed is sent as DoH on the same host (`https://host/dns-query`) — every common DoT
+     * provider (Cloudflare, Google, Quad9, AdGuard…) serves DoH there too. Anything else is as typed.
+     */
+    private fun xrayDns(server: String): String {
+        val s = server.trim()
+        if (!s.startsWith("tls://", ignoreCase = true)) return s
+        val host = s.substring(6).substringBefore("/").let {
+            if (it.startsWith("[")) it.substringBefore("]") + "]" else it.substringBefore(":")
+        }
+        return "https://$host/dns-query"
+    }
+
+    /**
      * Rewrites an UPSTREAM (proxied) DNS resolver so it survives an exit that blocks plain DNS. The
      * remote resolvers ride the proxy/cascade, and a splithttp/cascade exit that drops UDP:53 *and*
      * TCP:53 to 8.8.8.8/1.1.1.1 made every lookup wait out a 4s serial timeout → "record not found" →
@@ -106,7 +120,7 @@ object XrayConfig {
      * plain UDP is fine.
      */
     private fun proxiedDns(server: String): String {
-        val s = server.trim()
+        val s = xrayDns(server)
         if (s.isEmpty() || s.contains("://") || s == FAKEDNS_SERVER) return s
         if (s in DOH_IP_PROVIDERS) return "https://$s/dns-query"
         val isIpv4 = s.all { it.isDigit() || it == '.' } && s.count { it == '.' } == 3
@@ -276,7 +290,7 @@ object XrayConfig {
                     // ERR_CONNECTION_ABORTED bug).
                     add(proxiedDns(traffic.remoteDns))
                     if (traffic.remoteDns2.isNotBlank()) add(proxiedDns(traffic.remoteDns2))
-                    add(traffic.directDns)
+                    add(xrayDns(traffic.directDns))
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())
             }
@@ -1199,9 +1213,9 @@ object XrayConfig {
             putJsonObject("dns") {
                 putJsonArray("servers") {
                     if (traffic.fakeDnsEnabled) add(FAKEDNS_SERVER)
-                    add(traffic.remoteDns)
-                    if (traffic.remoteDns2.isNotBlank()) add(traffic.remoteDns2)
-                    add(traffic.directDns)
+                    add(xrayDns(traffic.remoteDns))
+                    if (traffic.remoteDns2.isNotBlank()) add(xrayDns(traffic.remoteDns2))
+                    add(xrayDns(traffic.directDns))
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())
             }

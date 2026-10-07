@@ -211,6 +211,7 @@ interface Strings {
     val remoteDnsLabel: String
     val remoteDns2Label: String
     val directDnsLabel: String
+    val dnsFormatsHint: String
     val domainStrategy: String
     val multiplexing: String
     val useMux: String
@@ -915,6 +916,7 @@ object RuStrings : Strings {
     override val remoteDnsLabel = "Удалённый DNS (через прокси)"
     override val remoteDns2Label = "Второй удалённый DNS (необязательно)"
     override val directDnsLabel = "Прямой DNS (bootstrap)"
+    override val dnsFormatsHint = "Можно обычный IP или DoH/DoT/DoQ: https://dns.google/dns-query, tls://1.1.1.1, quic://dns.adguard-dns.com"
     override val domainStrategy = "Доменная стратегия"
     override val multiplexing = "Мультиплексирование"
     override val useMux = "Использовать Mux"
@@ -1571,6 +1573,7 @@ object EnStrings : Strings {
     override val remoteDnsLabel = "Remote DNS (via proxy)"
     override val remoteDns2Label = "Second remote DNS (optional)"
     override val directDnsLabel = "Direct DNS (bootstrap)"
+    override val dnsFormatsHint = "Plain IP, or DoH/DoT/DoQ: https://dns.google/dns-query, tls://1.1.1.1, quic://dns.adguard-dns.com"
     override val domainStrategy = "Domain strategy"
     override val multiplexing = "Multiplexing"
     override val useMux = "Use Mux"
@@ -2227,6 +2230,7 @@ object FaStrings : Strings {
     override val remoteDnsLabel = "DNS راه‌دور (از طریق پراکسی)"
     override val remoteDns2Label = "DNS راه‌دور دوم (اختیاری)"
     override val directDnsLabel = "DNS مستقیم (راه‌انداز)"
+    override val dnsFormatsHint = "IP ساده یا DoH/DoT/DoQ: https://dns.google/dns-query ، tls://1.1.1.1 ، quic://dns.adguard-dns.com"
     override val domainStrategy = "راهبرد دامنه"
     override val multiplexing = "چندتکثیری (Multiplexing)"
     override val useMux = "استفاده از Mux"
@@ -2883,6 +2887,7 @@ object ZhStrings : Strings {
     override val remoteDnsLabel = "远程 DNS（经代理）"
     override val remoteDns2Label = "第二远程 DNS（可选）"
     override val directDnsLabel = "直连 DNS（引导）"
+    override val dnsFormatsHint = "可填普通 IP 或 DoH/DoT/DoQ：https://dns.google/dns-query、tls://1.1.1.1、quic://dns.adguard-dns.com"
     override val domainStrategy = "域名策略"
     override val multiplexing = "多路复用"
     override val useMux = "启用 Mux"
