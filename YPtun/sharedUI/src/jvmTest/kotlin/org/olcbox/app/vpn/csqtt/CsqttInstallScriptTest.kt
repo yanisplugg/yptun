@@ -55,6 +55,21 @@ class CsqttInstallScriptTest {
         }
     }
 
+    /**
+     * `YPTUN_DUMP_CSQTT_SCRIPTS=<dir>` writes the exact scripts the installer sends, to run them on a
+     * throwaway Linux box (a VPS rehearsal without the app); a no-op otherwise.
+     */
+    @Test
+    fun dumpScriptsForARehearsal() {
+        val dir = System.getenv("YPTUN_DUMP_CSQTT_SCRIPTS")?.takeIf { it.isNotBlank() } ?: return
+        val out = java.io.File(dir).apply { mkdirs() }
+        out.resolve("prepare.sh").writeText(asRoot(buildPrepareScript(46000, 46002)))
+        out.resolve("deploy-cmd.sh").writeText(
+            asRoot(buildDeployCommand(options.copy(sshPort = 2222, password = "rehearsal-pass"), CsqttPorts(46000, 46002), "admin", "rehearsal-web", 2222))
+        )
+        out.resolve("verify.sh").writeText(asRoot(buildVerifyScript()))
+    }
+
     @Test
     fun readsPortsAndArchitecture() {
         assertEquals(CsqttPorts(46001, 46003), parsePorts("Порт 46000/udp занят\nCSQTT_PORTS=46001|46003\n"))
