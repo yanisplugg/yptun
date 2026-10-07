@@ -138,6 +138,8 @@ jobs:
           $out = (& $f 2>&1 | Out-String)
           Write-Host $out
           if ($LASTEXITCODE -ne 1 -or $out.Trim().Length -eq 0) { throw "csqtt client did not start on ${{ matrix.arch }} (exit $LASTEXITCODE)" }
+          # the client's own exit code 1 was expected; do not let it become the step's
+          exit 0
 
       - name: Override version
         if: inputs.version != ''
