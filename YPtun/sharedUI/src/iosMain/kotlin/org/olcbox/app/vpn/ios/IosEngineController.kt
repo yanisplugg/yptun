@@ -897,6 +897,7 @@ internal class IosEngineController(
                         socksUsername = socksUsername, socksPassword = socksPassword,
                         routing = routing, traffic = traffic, profilesState = profilesState,
                         routingProfile = routingProfile,
+                        directViaBase = true,
                     )
                 } else {
                     vkTurnSingBox(

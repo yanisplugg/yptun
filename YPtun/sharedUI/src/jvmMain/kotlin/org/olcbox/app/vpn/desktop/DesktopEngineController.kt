@@ -1266,6 +1266,7 @@ internal class DesktopEngineController(
                             tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
                             // SOCKS+HTTP so desktop proxy mode can point the Windows system proxy here.
                             mixedInbound = true,
+                            directViaBase = true,
                             logFilePath = singBoxLogPath(),
                             cacheFilePath = singBoxCachePath(),
                         )

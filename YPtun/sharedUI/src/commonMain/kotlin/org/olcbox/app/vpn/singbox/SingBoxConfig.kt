@@ -225,7 +225,7 @@ object SingBoxConfig {
             olcrtcChainPort != null -> OLCRTC_TAG
             else -> null
         }
-        val directDialsBase = directViaBase && baseExitTag != null
+        val directDialsBase = (directViaBase || wireguardBase != null) && baseExitTag != null
         // sing-box 1.14 refuses a `detour` on the `direct` outbound ("`detour` is not supported in
         // direct context"), which is how the never-bypass tunnels used to keep their `direct` bucket
         // inside the tunnel. Same effect, legal shape: point that bucket at the base tunnel BY TAG.
@@ -283,6 +283,18 @@ object SingBoxConfig {
                     }
                 }
                 putJsonArray("rules") {
+                    // Bootstrap: proxy servers dialed by domain must be resolved by the direct resolver,
+                    // never through the tunnel they are establishing (prevents DNS loopback).
+                    val bootstrapHosts = listOfNotNull(
+                        profile.server.takeIf { !isIpAddress(it) && it.isNotBlank() },
+                        secondProfile?.server?.takeIf { !isIpAddress(it) && it.isNotBlank() }
+                    ).distinct()
+                    if (bootstrapHosts.isNotEmpty()) {
+                        addJsonObject {
+                            putJsonArray("domain") { bootstrapHosts.forEach { add(it) } }
+                            put("server", "direct")
+                        }
+                    }
                     // Route BOTH A and AAAA to the fake server. Faking AAAA even under ipv4_only is
                     // deliberate: it hands the app a fake IPv6 (fc00::/18) instead of letting it learn the
                     // server's REAL IPv6, which the strict `::/0 reject` would then kill ("ERR_CONNECTION"
@@ -932,6 +944,9 @@ object SingBoxConfig {
                     rawObj.forEach { (k, v) -> if (k != "tag" && k != "detour") put(k, v) }
                     put("tag", tag)
                     if (detourTag != null) put("detour", detourTag)
+                    if (raw.indexOf("domain_resolver") < 0) {
+                        put("domain_resolver", "direct")
+                    }
                     if (tfo && !muxUnsupported && raw.indexOf("tcp_fast_open") < 0) put("tcp_fast_open", true)
                     if (!muxUnsupported && raw.indexOf("multiplex") < 0) {
                         buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
@@ -945,6 +960,9 @@ object SingBoxConfig {
             put("tag", tag)
             put("server", profile.server)
             put("server_port", profile.serverPort)
+            if (!isIpAddress(profile.server)) {
+                put("domain_resolver", "direct")
+            }
 
             when (profile.type) {
                 ProxyProfile.TYPE_VLESS -> {
@@ -1205,3 +1223,7 @@ object SingBoxConfig {
         else -> null // tcp: no transport block
     }
 }
+
+private fun isIpAddress(v: String): Boolean =
+    v.count { it == ':' } >= 2 || v.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
+

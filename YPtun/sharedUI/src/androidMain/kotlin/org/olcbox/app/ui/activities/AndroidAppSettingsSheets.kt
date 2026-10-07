@@ -48,6 +48,7 @@ import org.olcbox.app.ui.i18n.Strings
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.text.TextStyle
 import org.olcbox.app.ui.theme.ThemeState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -1716,7 +1717,7 @@ private fun ApplicationLogsSettingsContent(
         modifier = Modifier
             .fillMaxWidth()
             .fillMaxHeight(0.8f)
-            .padding(horizontal = 24.dp)
+            .padding(horizontal = 16.dp)
             .padding(top = 16.dp, bottom = 24.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1724,18 +1725,22 @@ private fun ApplicationLogsSettingsContent(
                 title = LocalStrings.current.applicationLogsTitle,
                 subtitle = if (logs.isEmpty()) LocalStrings.current.noLogEntries else LocalStrings.current.logEntriesCount(logs.size),
                 onBack = onBack,
+                titleStyle = MaterialTheme.typography.titleLarge,
+                subtitleMaxLines = 1,
                 modifier = Modifier.weight(1f)
             )
 
             TextButton(
                 enabled = logs.isNotEmpty(),
-                onClick = onSaveClick
+                onClick = onSaveClick,
+                contentPadding = PaddingValues(horizontal = 8.dp)
             ) {
                 Text(LocalStrings.current.save)
             }
             TextButton(
                 enabled = logs.isNotEmpty(),
-                onClick = onShareClick
+                onClick = onShareClick,
+                contentPadding = PaddingValues(horizontal = 8.dp)
             ) {
                 Text(LocalStrings.current.share)
             }
@@ -2251,7 +2256,9 @@ private fun SettingsDetailHeader(
     title: String,
     subtitle: String,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    titleStyle: TextStyle = MaterialTheme.typography.headlineSmall,
+    subtitleMaxLines: Int = 2
 ) {
     Row(
         modifier = modifier,
@@ -2271,12 +2278,12 @@ private fun SettingsDetailHeader(
             }
         }
 
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(12.dp))
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.headlineSmall,
+                style = titleStyle,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -2285,7 +2292,7 @@ private fun SettingsDetailHeader(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = subtitleMaxLines,
                 overflow = TextOverflow.Ellipsis
             )
         }
