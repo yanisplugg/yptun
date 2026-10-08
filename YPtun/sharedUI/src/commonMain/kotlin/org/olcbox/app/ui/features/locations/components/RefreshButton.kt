@@ -2,7 +2,9 @@ package org.olcbox.app.ui.features.locations.components
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
@@ -31,5 +33,30 @@ fun RefreshButton(
             tint = tint,
             modifier = Modifier.size(22.dp)
         )
+    }
+}
+
+/** Left of the ping button: pings the subscription's servers and connects to the best (lowest) ping. */
+@Composable
+fun AutoPickButton(
+    isRunning: Boolean,
+    onClick: () -> Unit,
+    tint: Color
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = !isRunning,
+        modifier = Modifier.size(48.dp)
+    ) {
+        if (isRunning) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = tint, strokeWidth = 2.dp)
+        } else {
+            Icon(
+                imageVector = Icons.Outlined.Bolt,
+                contentDescription = "Auto",
+                tint = tint,
+                modifier = Modifier.size(22.dp)
+            )
+        }
     }
 }
