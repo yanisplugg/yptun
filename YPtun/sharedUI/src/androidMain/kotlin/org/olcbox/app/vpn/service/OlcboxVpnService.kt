@@ -553,7 +553,7 @@ class OlcboxVpnService : VpnService() {
             } else {
                 delay(NOTIF_PING_FIRST_DELAY_MS) // let the tunnel settle before the first probe
                 while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
-                    publishNotifPing(runCatching { autoPingManager(applicationContext).tunnelPing() }.getOrNull()?.toInt())
+                    publishNotifPing(runCatching { autoPingManager(applicationContext).liveTunnelPing() }.getOrNull()?.toInt())
                     delay(notifPingIntervalMin.coerceIn(1, 999) * 60_000L)
                 }
             }
@@ -4460,6 +4460,9 @@ class OlcboxVpnService : VpnService() {
             if (ping != null && notifPingOwnLine && pingRow != 0) {
                 rv.setTextViewText(pingRow, "${ns.notifPingWord} $ping ms")
                 rv.setViewVisibility(pingRow, android.view.View.VISIBLE)
+                // A collapsed notification fits three lines; the system header already names the app,
+                // so the "YPtun" title makes room for the ping line (else the speed hides until expanded).
+                rv.setViewVisibility(resources.getIdentifier("notif_title", "id", pkg), android.view.View.GONE)
             }
             val speedRow = resources.getIdentifier("notif_speed", "id", pkg)
             if (speed != null && speedRow != 0) {
