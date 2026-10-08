@@ -1335,8 +1335,8 @@ private fun SubscriptionGroupHeader(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                // Takes only what the (unweighted, measured first) counter/badge leave: a long title
+                // wraps onto more lines instead of being cut, and the "12/30" counter stays whole.
                 modifier = Modifier.weight(1f, fill = false)
             )
             // Red "!" badge when the subscription expires within 2 days; tap reveals the exact date.
