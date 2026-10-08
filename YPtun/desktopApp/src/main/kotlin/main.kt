@@ -140,6 +140,7 @@ import org.olcbox.app.update.AppUpdateService
 import org.olcbox.app.update.installedDesktopFingerprint
 import org.olcbox.app.update.DesktopUpdateOutcome
 import org.olcbox.app.update.JvmUpdateInstaller
+import org.olcbox.app.update.UpdateStageKind
 import org.olcbox.app.update.JvmUpdateSettingsStore
 import org.olcbox.app.update.identity
 import org.olcbox.app.update.isDownloaded
@@ -428,9 +429,21 @@ private fun runApp(args: Array<String>) = application {
             // With a delta published for this hop only a few MB are fetched and the installed jar is
             // patched in place; without one this is the full installer, as before.
             updateMessage = s.downloadingAsset(info.downloadAsset.name)
-            val result = dependencies.updateInstaller.install(info) { progress ->
-                updateProgress = progress
-            }
+            val result = dependencies.updateInstaller.install(
+                info,
+                onStage = { stage ->
+                    val title = when (stage.kind) {
+                        UpdateStageKind.DownloadPatch -> s.updateStageDownloadPatch
+                        UpdateStageKind.DownloadInstaller -> s.updateStageDownloadInstaller
+                        UpdateStageKind.ApplyPatch -> s.updateStageApplyPatch
+                        UpdateStageKind.Install -> s.updateStageInstall
+                        UpdateStageKind.Restart -> s.updateStageRestart
+                    }
+                    updateMessage = s.updateStage(stage.step, stage.total, title)
+                    updateProgress = 0f
+                },
+                onProgress = { progress -> updateProgress = progress }
+            )
             updateMessage = result.fold(
                 onSuccess = { outcome ->
                     when (outcome) {
@@ -1393,6 +1406,7 @@ private fun runApp(args: Array<String>) = application {
                 updateOffer?.let { info ->
                     ApplicationUpdateOfferSheet(
                         info = info,
+                        statusText = updateMessage,
                         downloadProgress = updateProgress,
                         onLater = { postponeUpdate(info) },
                         onDownload = { downloadUpdate(info) },

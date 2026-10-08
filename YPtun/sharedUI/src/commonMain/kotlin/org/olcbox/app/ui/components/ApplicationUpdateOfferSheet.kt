@@ -33,6 +33,7 @@ import org.olcbox.app.ui.i18n.LocalStrings
 fun ApplicationUpdateOfferSheet(
     info: AppUpdateInfo,
     downloadProgress: Float?,
+    statusText: String? = null,
     onLater: () -> Unit,
     onDownload: () -> Unit,
     onManual: () -> Unit = {}
@@ -87,6 +88,13 @@ fun ApplicationUpdateOfferSheet(
                         fontSize = 13.sp
                     )
                     if (downloadProgress != null) {
+                        if (!statusText.isNullOrBlank()) {
+                            Text(
+                                text = statusText,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 13.sp
+                            )
+                        }
                         Spacer(Modifier.height(4.dp))
                         LinearProgressIndicator(
                             progress = { downloadProgress.coerceIn(0f, 1f) },

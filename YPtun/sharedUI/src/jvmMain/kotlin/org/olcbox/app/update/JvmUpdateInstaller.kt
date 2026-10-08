@@ -1,6 +1,7 @@
 package org.olcbox.app.update
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
@@ -14,6 +15,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.outputStream
+
+/** Which step of the update is running; the UI turns it into "Step N of M: ...". */
+enum class UpdateStageKind { DownloadPatch, DownloadInstaller, ApplyPatch, Install, Restart }
+
+/** [step] of [total]; progress within the step goes through the separate progress callback. */
+data class UpdateStage(val kind: UpdateStageKind, val step: Int, val total: Int)
 
 /** What [JvmUpdateInstaller.install] actually did, so the caller knows whether to restart. */
 sealed interface DesktopUpdateOutcome {
@@ -38,15 +45,16 @@ class JvmUpdateInstaller(
      */
     suspend fun install(
         info: AppUpdateInfo,
+        onStage: (UpdateStage) -> Unit = {},
         onProgress: (Float) -> Unit = {}
     ): Result<DesktopUpdateOutcome> = runCatching {
         // A portable has no installed app image to patch and no installer to run: the new single-file
         // portable .exe replaces the one the user started, then the app restarts from it.
         if (DesktopRuntimeMode.isPortable && info.asset.isPortableExe()) {
-            return@runCatching replacePortable(info.asset, onProgress)
+            return@runCatching replacePortable(info.asset, onStage, onProgress)
         }
         info.deltaAsset?.let { delta ->
-            val staged = runCatching { applyDelta(delta, onProgress) }
+            val staged = runCatching { applyDelta(delta, onStage, onProgress) }
                 // Why a ~230 MB installer is being pulled instead of a few-MB bundle used to be
                 // invisible — the failure was swallowed. yptun.log is the first place anyone looks.
                 .onFailure { appendToYptunLog("update: delta ${delta.name} not applied: ${it.message}") }
@@ -56,7 +64,7 @@ class JvmUpdateInstaller(
         if (info.deltaAsset == null) {
             appendToYptunLog("update: no delta bundle for this install — downloading ${info.asset.name} in full")
         }
-        installFull(info.asset, onProgress)
+        installFull(info.asset, onStage, onProgress)
     }
 
     /**
@@ -66,13 +74,16 @@ class JvmUpdateInstaller(
      */
     private suspend fun installFull(
         asset: AppUpdateAsset,
+        onStage: (UpdateStage) -> Unit,
         onProgress: (Float) -> Unit
     ): DesktopUpdateOutcome {
         val silent = DesktopPaths.os == DesktopOs.Windows && !asset.isPortableExe() &&
             asset.name.lowercase().let { it.endsWith(".exe") || it.endsWith(".msi") }
         if (!silent) return DesktopUpdateOutcome.InstallerOpened(openInstaller(asset, onProgress))
         return withContext(Dispatchers.IO) {
+            reportStage(UpdateStage(UpdateStageKind.DownloadInstaller, 1, 2), onStage)
             val file = download(asset, onProgress)
+            reportStage(UpdateStage(UpdateStageKind.Install, 2, 2), onStage)
             DesktopSelfUpdate.scheduleInstaller(file)
             DesktopUpdateOutcome.RestartRequired("Update ready - installing and restarting YPtun")
         }
@@ -80,9 +91,12 @@ class JvmUpdateInstaller(
 
     private suspend fun replacePortable(
         asset: AppUpdateAsset,
+        onStage: (UpdateStage) -> Unit,
         onProgress: (Float) -> Unit
     ): DesktopUpdateOutcome = withContext(Dispatchers.IO) {
+        reportStage(UpdateStage(UpdateStageKind.DownloadInstaller, 1, 2), onStage)
         val file = download(asset, onProgress)
+        reportStage(UpdateStage(UpdateStageKind.Install, 2, 2), onStage)
         val target = DesktopRuntimeMode.portableExecutable()
         if (target == null) {
             appendToYptunLog("update: portable .exe path unknown - running the downloaded ${file.fileName} instead")
@@ -113,11 +127,15 @@ class JvmUpdateInstaller(
 
     private suspend fun applyDelta(
         delta: AppUpdateAsset,
+        onStage: (UpdateStage) -> Unit,
         onProgress: (Float) -> Unit
     ): DesktopUpdateOutcome.RestartRequired? = withContext(Dispatchers.IO) {
         val rootDir = DesktopAppImage.installDir()
             ?: error("not running from an installed app image (portable or development run)")
+        reportStage(UpdateStage(UpdateStageKind.DownloadPatch, 1, 3), onStage)
         val bundle = download(delta, onProgress)
+        reportStage(UpdateStage(UpdateStageKind.ApplyPatch, 2, 3), onStage)
+        reportProgress(0f, onProgress)
         // Staged INSIDE the app directory when we may write there, so every commit is a rename on
         // the same volume. When we may NOT — a deb install under root-owned /opt/yptun, or Program
         // Files without elevation — creating that directory threw and the delta died here, before
@@ -135,7 +153,8 @@ class JvmUpdateInstaller(
                 rootDir = rootDir,
                 bundle = bundle,
                 stagingDir = stagingDir,
-                tempDir = directory.resolve("patch-tmp")
+                tempDir = directory.resolve("patch-tmp"),
+                onStep = { done, total -> reportProgressBlocking(done.toFloat() / total, onProgress) }
             )
         } catch (e: Exception) {
             runCatching { stagingDir.toFile().deleteRecursively() }
@@ -144,6 +163,8 @@ class JvmUpdateInstaller(
             bundle.deleteIfExists()
             runCatching { directory.resolve("patch-tmp").toFile().deleteRecursively() }
         }
+        reportProgress(1f, onProgress)
+        reportStage(UpdateStage(UpdateStageKind.Restart, 3, 3), onStage)
         DesktopSelfUpdate.scheduleSwap(plan)
         DesktopUpdateOutcome.RestartRequired("Update ready — restarting YPtun")
     }
@@ -193,6 +214,15 @@ class JvmUpdateInstaller(
         } ?: appendToYptunLog("update: no SHA-256 published for ${asset.name} - integrity not verified")
         reportProgress(1f, onProgress)
         target
+    }
+
+    private suspend fun reportStage(stage: UpdateStage, onStage: (UpdateStage) -> Unit) {
+        withContext(Dispatchers.Main.immediate) { onStage(stage) }
+    }
+
+    /** For the patcher's non-suspending callback (it already runs on an IO thread). */
+    private fun reportProgressBlocking(progress: Float, onProgress: (Float) -> Unit) {
+        runBlocking(Dispatchers.Main.immediate) { onProgress(progress) }
     }
 
     private suspend fun reportProgress(progress: Float, onProgress: (Float) -> Unit) {
