@@ -479,10 +479,9 @@ class HomeScreenViewModel(
                 val workingServers = mutableListOf<FreeServerItem>()
 
                 withContext(Dispatchers.IO) {
-                    // Ползунок «Потоки пинга», но не меньше [FREE_SERVERS_MIN_PARALLELISM]: при 5 потоках
-                    // по умолчанию ~330 проверок по 4 с шли до 4–5 минут. Больше в настройках — берём больше.
+                    // Тот же ползунок «Потоки пинга» из настроек, что и у обычного пинга.
                     val sem = Semaphore(
-                        maxOf(parallelism, FREE_SERVERS_MIN_PARALLELISM).coerceIn(
+                        parallelism.coerceIn(
                             org.olcbox.app.data.model.AppBehaviorSettings.MIN_PING_PARALLELISM,
                             org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM,
                         )
@@ -495,9 +494,10 @@ class HomeScreenViewModel(
                                     engine = EngineType.Standard,
                                     proxy = profile
                                 ).normalized()
-                                // Увеличиваем таймаут до 4.0с: серверы успевают ответить через TLS/VLESS
-                                // без случайных отсечек из-за миллисекундных колебаний мобильной сети
-                                val ping = withTimeoutOrNull(4000L) {
+                                // vpnManager.ping сам берёт режим из настроек (TCP / ICMP / GET / HEAD). Таймаут должен
+                                // вмещать самый долгий из них (прокси GET/HEAD — до 6 с, TCP — 2×3 с), иначе 4 с
+                                // обрезали бы такие проверки и живые серверы считались нерабочими.
+                                val ping = withTimeoutOrNull(FREE_SERVER_CHECK_TIMEOUT_MS) {
                                     try {
                                         vpnManager.ping(config)
                                     } catch (e: CancellationException) {
@@ -960,14 +960,8 @@ val FREE_SERVERS_SOURCES = listOf(
     "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to 100,
 )
 
-/**
- * Минимум параллельных проверок бесплатных серверов. Ползунок «Потоки пинга» по умолчанию 5 — его
- * хватает на подписку из десятков серверов, а здесь их ~330. 16 — столько же было зашито у прохода
- * автоподключения. Выше по умолчанию не берём (ползунок до 30 — пожалуйста): каждая проверка — свой
- * временный прокси, и на больших числах
- * растёт шанс ложного «недоступен» (см. [org.olcbox.app.data.model.AppBehaviorSettings.pingParallelism]).
- */
-const val FREE_SERVERS_MIN_PARALLELISM = 16
+/** Таймаут одной проверки бесплатного сервера: больше таймаутов любого режима пинга (прокси GET/HEAD — 6 с). */
+const val FREE_SERVER_CHECK_TIMEOUT_MS = 8_000L
 
 /**
  * Протоколы, которые берём из бесплатных списков: их разбирает [ShareLinkParser] и проверяет xray через

@@ -580,7 +580,7 @@ private fun runApp(args: Array<String>) = application {
                 icon = Icons.Outlined.Public,
             ) {
                 isWindowVisible = true
-                dependencies.homeViewModel.loadFreeServers()
+                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
             }
             Item(
                 label = if (trayRussian) "Горячая клавиша" else "Global hotkey",
@@ -667,7 +667,7 @@ private fun runApp(args: Array<String>) = application {
             add(item(if (trayRussian) "Мой IP" else "My IP") { showMyIpDialog = true })
             add(item(if (trayRussian) "Бесплатные серверы" else "Free servers") {
                 isWindowVisible = true
-                dependencies.homeViewModel.loadFreeServers()
+                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
             })
             add(item(if (trayRussian) "Горячая клавиша" else "Global hotkey") { hotkeyDialogVisible = true })
             add(item(if (trayRussian) "Настройки" else "Settings") {
@@ -756,7 +756,7 @@ private fun runApp(args: Array<String>) = application {
                         onFreeServers = {
                             trayMenuVisible = false
                             isWindowVisible = true
-                            dependencies.homeViewModel.loadFreeServers()
+                            dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
                         },
                         onHotkey = { trayMenuVisible = false; hotkeyDialogVisible = true },
                         onSettings = {
