@@ -382,8 +382,10 @@ fun LazyListScope.locationSelectorContent(
                             folder = folder,
                             memberCount = memberSubGroups.size + memberCustom.size,
                             isRefreshing = isFolderRefreshing,
+                            autoPickRunning = autoPickRunning,
                             onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
                             onRefresh = { onRefreshClick(memberIds) },
+                            onAutoPick = { onAutoPickClick(memberIds) },
                             onTogglePin = { onToggleFolderPinned(folder.id) },
                             onRename = { onRenameFolder(folder) },
                             onDelete = { onDeleteFolder(folder.id) }
@@ -554,6 +556,11 @@ fun LazyListScope.locationSelectorContent(
                 val isCustomRefreshing = pingsState is PingsState.Loading &&
                         pingsState.pendingLocationIds.any { it in customIds }
 
+                AutoPickButton(
+                    isRunning = autoPickRunning,
+                    onClick = { onAutoPickClick(customIds) },
+                    tint = MaterialTheme.colorScheme.primary
+                )
                 RefreshButton(
                     isRefreshing = isCustomRefreshing,
                     onClick = { onRefreshClick(customIds) },
@@ -1164,8 +1171,10 @@ private fun FolderGroupHeader(
     folder: CustomGroup,
     memberCount: Int,
     isRefreshing: Boolean,
+    autoPickRunning: Boolean,
     onToggleCollapsed: () -> Unit,
     onRefresh: () -> Unit,
+    onAutoPick: () -> Unit,
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
@@ -1214,6 +1223,11 @@ private fun FolderGroupHeader(
                 )
             }
 
+            AutoPickButton(
+                isRunning = autoPickRunning,
+                onClick = onAutoPick,
+                tint = MaterialTheme.colorScheme.primary
+            )
             RefreshButton(
                 isRefreshing = isRefreshing,
                 onClick = onRefresh,
