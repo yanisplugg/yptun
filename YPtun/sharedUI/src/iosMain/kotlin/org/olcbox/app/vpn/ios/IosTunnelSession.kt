@@ -434,20 +434,7 @@ class IosTunnelSession(
     }
 
     fun log(line: String) {
-        autoreleasepool {
-            val path = IosSharedStore.path(LOG_FILE)
-            if (!NSFileManager.defaultManager.fileExistsAtPath(path)) {
-                IosSharedStore.writeText(LOG_FILE, "")
-            } else if (IosSharedStore.fileSize(LOG_FILE) > MAX_LOG_BYTES) {
-                IosSharedStore.writeText(LOG_FILE, "[log rotated]\n")
-            }
-            val data: NSData = NSString.create(string = "$line\n").dataUsingEncoding(NSUTF8StringEncoding) ?: return@autoreleasepool
-            NSFileHandle.fileHandleForWritingAtPath(path)?.let { handle ->
-                handle.seekToEndOfFile()
-                handle.writeData(data)
-                handle.closeFile()
-            }
-        }
+        IosSharedStore.appendLog(line)
     }
 
     private fun credential(length: Int): String =
@@ -455,7 +442,7 @@ class IosTunnelSession(
 
     companion object {
         const val REQUEST_FILE = "tunnel_request.json"
-        const val LOG_FILE = "tunnel.log"
+        const val LOG_FILE = IosSharedStore.TUNNEL_LOG_FILE
         /** Why the last connect failed ("" after a good one) — the app shows it as the error. */
         const val ERROR_FILE = "tunnel_error.txt"
         /** [reload]'s answer when the new location needs a different bridge: the app restarts instead. */

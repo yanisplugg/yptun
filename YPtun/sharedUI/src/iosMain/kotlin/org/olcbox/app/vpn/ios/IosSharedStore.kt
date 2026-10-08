@@ -7,12 +7,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.RoutingProfilesState
+import kotlinx.cinterop.autoreleasepool
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
+import platform.Foundation.NSData
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileHandle
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSFileSize
+import platform.Foundation.NSISOLatin1StringEncoding
 import platform.Foundation.NSNumber
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSString
@@ -22,10 +25,15 @@ import platform.Foundation.closeFile
 // Category methods on NSFileHandle (NSFileHandleCreation / the seek+read category) need their own
 // import in Kotlin/Native — see the note in IosSettingsController about class properties.
 import platform.Foundation.create
+import platform.Foundation.dataUsingEncoding
+import platform.Foundation.dataWithContentsOfFile
 import platform.Foundation.fileHandleForReadingAtPath
+import platform.Foundation.fileHandleForWritingAtPath
 import platform.Foundation.readDataToEndOfFile
+import platform.Foundation.seekToEndOfFile
 import platform.Foundation.seekToFileOffset
 import platform.Foundation.stringWithContentsOfFile
+import platform.Foundation.writeData
 import platform.Foundation.writeToFile
 
 /**
@@ -36,6 +44,8 @@ import platform.Foundation.writeToFile
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 object IosSharedStore {
     const val APP_GROUP = "group.org.yptun.app"
+    const val TUNNEL_LOG_FILE = "tunnel.log"
+    private const val MAX_LOG_BYTES = 512L * 1024
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
@@ -60,8 +70,13 @@ object IosSharedStore {
         NSFileManager.defaultManager.createDirectoryAtPath(dirPath, true, null, null)
     }
 
-    fun readText(fileName: String): String? =
-        NSString.stringWithContentsOfFile(path(fileName), NSUTF8StringEncoding, null)
+    fun readText(fileName: String): String? {
+        val filePath = path(fileName)
+        if (!NSFileManager.defaultManager.fileExistsAtPath(filePath)) return null
+        val data = NSData.dataWithContentsOfFile(filePath) ?: return null
+        return NSString.create(data = data, encoding = NSUTF8StringEncoding)?.toString()
+            ?: NSString.create(data = data, encoding = NSISOLatin1StringEncoding)?.toString()
+    }
 
     fun writeText(fileName: String, text: String) {
         NSString.create(string = text).writeToFile(path(fileName), true, NSUTF8StringEncoding, null)
@@ -69,6 +84,23 @@ object IosSharedStore {
 
     fun writeTextToPath(filePath: String, text: String) {
         NSString.create(string = text).writeToFile(filePath, true, NSUTF8StringEncoding, null)
+    }
+
+    fun appendLog(line: String) {
+        autoreleasepool {
+            val logPath = path(TUNNEL_LOG_FILE)
+            if (!NSFileManager.defaultManager.fileExistsAtPath(logPath)) {
+                writeText(TUNNEL_LOG_FILE, "")
+            } else if (fileSize(TUNNEL_LOG_FILE) > MAX_LOG_BYTES) {
+                writeText(TUNNEL_LOG_FILE, "[log rotated]\n")
+            }
+            val data: NSData = NSString.create(string = "$line\n").dataUsingEncoding(NSUTF8StringEncoding) ?: return@autoreleasepool
+            NSFileHandle.fileHandleForWritingAtPath(logPath)?.let { handle ->
+                handle.seekToEndOfFile()
+                handle.writeData(data)
+                handle.closeFile()
+            }
+        }
     }
 
     /** Size in bytes, 0 when the file does not exist. */
@@ -86,20 +118,24 @@ object IosSharedStore {
      */
     fun readTextTail(fileName: String, maxBytes: Long): String? {
         val size = fileSize(fileName)
+        if (size <= 0L) return ""
         if (size <= maxBytes) return readText(fileName)
         val handle = NSFileHandle.fileHandleForReadingAtPath(path(fileName)) ?: return readText(fileName)
         try {
             for (nudge in 0..3) {
-                handle.seekToFileOffset((size - maxBytes + nudge).toULong())
+                val offset = (size - maxBytes + nudge).toULong()
+                handle.seekToFileOffset(offset)
                 val data = handle.readDataToEndOfFile()
-                val text = NSString.create(data, NSUTF8StringEncoding)?.toString() ?: continue
+                val text = NSString.create(data = data, encoding = NSUTF8StringEncoding)?.toString()
+                    ?: NSString.create(data = data, encoding = NSISOLatin1StringEncoding)?.toString()
+                    ?: continue
                 // The first line in the window is almost certainly a fragment — drop it.
                 return text.substringAfter('\n', text)
             }
         } finally {
             handle.closeFile()
         }
-        return null
+        return readText(fileName)
     }
 
     fun <T> load(fileName: String, serializer: KSerializer<T>, default: () -> T): T =

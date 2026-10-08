@@ -264,6 +264,7 @@ class IosVpnManager(
 
                 setStatus(VpnStatus.Connecting)
                 wasConnecting = true
+                addLog("Connecting to ${active.displayName()}...")
                 val result = runCatching {
                     publishRequest(active)
                     IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
@@ -341,6 +342,7 @@ class IosVpnManager(
         scope.launch {
             vpnMutex.withLock {
                 setStatus(VpnStatus.Stopping)
+                addLog("Disconnecting tunnel...")
                 val m = manager ?: loadManager(createIfMissing = false)
                 if (m != null &&
                     m.connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
@@ -693,6 +695,8 @@ class IosVpnManager(
                 val wasNotConnected = _status.value != VpnStatus.Connected
                 setStatus(VpnStatus.Connected)
                 if (wasNotConnected) {
+                    val loc = locationsRepository.getActiveLocation()?.location?.displayName() ?: "VPN"
+                    addLog("Tunnel connected to $loc")
                     triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
                     NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.vpn.connected", null)
                 }
@@ -705,6 +709,7 @@ class IosVpnManager(
                     delay(1500)
                     val ms = tunnelPing()
                     if (ms != null && ms > 0) {
+                        addLog("Tunnel ping: ${ms}ms")
                         updateWidgetPing(ms)
                     }
                 }
@@ -804,12 +809,19 @@ class IosVpnManager(
     }
 
     private fun addLog(message: String) {
+        IosSharedStore.appendLog(message)
         _logs.value = (_logs.value + message).takeLast(MAX_LOG_LINES)
     }
 
     override fun clearLogs() {
-        IosSharedStore.writeText(IosTunnelSession.LOG_FILE, "")
-        _logs.value = emptyList()
+        val clearMsg = if (_isConnected.value) {
+            val loc = locationsRepository.getActiveLocation()?.location?.displayName() ?: "VPN"
+            "[Logs cleared] Connected to $loc"
+        } else {
+            "[Logs cleared]"
+        }
+        IosSharedStore.writeText(IosTunnelSession.LOG_FILE, "$clearMsg\n")
+        _logs.value = listOf(clearMsg)
     }
 
     private companion object {

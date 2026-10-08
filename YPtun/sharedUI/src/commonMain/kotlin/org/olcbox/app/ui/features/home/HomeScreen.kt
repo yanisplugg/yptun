@@ -617,6 +617,9 @@ fun HomeScreen(
 
             LogsSheet(
                 logs = logs,
+                onClearClick = {
+                    viewModel.onClearLogs()
+                },
                 onSaveClick = {
                     onSaveLogsRequested(
                         { message ->

@@ -1723,7 +1723,10 @@ private fun ApplicationLogsSettingsContent(
             .padding(horizontal = 16.dp)
             .padding(top = 16.dp, bottom = 24.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             SettingsDetailHeader(
                 title = LocalStrings.current.applicationLogsTitle,
                 subtitle = if (logs.isEmpty()) LocalStrings.current.noLogEntries else LocalStrings.current.logEntriesCount(logs.size),
@@ -1733,26 +1736,65 @@ private fun ApplicationLogsSettingsContent(
                 modifier = Modifier.weight(1f)
             )
 
-            TextButton(
-                enabled = logs.isNotEmpty(),
-                onClick = onClearClick,
-                contentPadding = PaddingValues(horizontal = 8.dp)
+            Spacer(Modifier.width(8.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(LocalStrings.current.clearLogs)
-            }
-            TextButton(
-                enabled = logs.isNotEmpty(),
-                onClick = onSaveClick,
-                contentPadding = PaddingValues(horizontal = 8.dp)
-            ) {
-                Text(LocalStrings.current.save)
-            }
-            TextButton(
-                enabled = logs.isNotEmpty(),
-                onClick = onShareClick,
-                contentPadding = PaddingValues(horizontal = 8.dp)
-            ) {
-                Text(LocalStrings.current.share)
+                Surface(
+                    modifier = Modifier.size(38.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                ) {
+                    IconButton(
+                        enabled = logs.isNotEmpty(),
+                        onClick = onClearClick
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Delete,
+                            contentDescription = LocalStrings.current.clearLogs,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.size(38.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                ) {
+                    IconButton(
+                        enabled = logs.isNotEmpty(),
+                        onClick = onSaveClick
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Download,
+                            contentDescription = LocalStrings.current.save,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.size(38.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                ) {
+                    IconButton(
+                        enabled = logs.isNotEmpty(),
+                        onClick = onShareClick
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Share,
+                            contentDescription = LocalStrings.current.share,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
         }
 
@@ -1766,11 +1808,24 @@ private fun ApplicationLogsSettingsContent(
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            LogLines(
-                logs = logs,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(14.dp)
-            )
+            if (logs.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = LocalStrings.current.noLogEntries,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            } else {
+                LogLines(
+                    logs = logs,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(14.dp)
+                )
+            }
         }
     }
 }

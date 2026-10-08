@@ -43,6 +43,7 @@ fun LogsSheet(
     logs: List<String>,
     onSaveClick: () -> Unit,
     onShareClick: () -> Unit,
+    onClearClick: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(
@@ -66,6 +67,7 @@ fun LogsSheet(
         LogsContent(
             logs = logs,
             modifier = Modifier.fillMaxHeight(0.8f),
+            onClearClick = onClearClick,
             onSaveClick = onSaveClick,
             onShareClick = onShareClick,
             onCloseClick = { closeSheet() }
@@ -77,6 +79,7 @@ fun LogsSheet(
 fun LogsContent(
     logs: List<String>,
     modifier: Modifier = Modifier,
+    onClearClick: () -> Unit = {},
     onSaveClick: () -> Unit,
     onShareClick: () -> Unit,
     onCloseClick: () -> Unit
@@ -101,6 +104,12 @@ fun LogsContent(
             )
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    enabled = logs.isNotEmpty(),
+                    onClick = onClearClick
+                ) {
+                    Text(s.clearLogs)
+                }
                 TextButton(
                     enabled = logs.isNotEmpty(),
                     onClick = onSaveClick
