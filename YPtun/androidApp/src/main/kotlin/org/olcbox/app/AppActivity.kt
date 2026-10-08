@@ -129,6 +129,18 @@ class AppActivity : ComponentActivity() {
     /** Handles yptun:// deep links: import/{payload} and control/{start|stop|restart}. */
     private fun handleDeepLink(intent: Intent?) {
         val uri: Uri = intent?.data ?: return
+        // Tunnel share links tapped in a browser/messenger import exactly like a pasted one.
+        if (IMPORT_SCHEMES.any { uri.scheme.equals(it, ignoreCase = true) }) {
+            viewModel.onImportFullConfig(
+                uri.toString(),
+                onComplete = {
+                    locationViewModel.loadLocations { viewModel.loadCurrentConfig() }
+                    Toast.makeText(this, "Импортировано", Toast.LENGTH_SHORT).show()
+                },
+                onError = { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+            )
+            return
+        }
         if (!uri.scheme.equals("yptun", ignoreCase = true)) return
 
         when (uri.host?.lowercase()) {
@@ -160,5 +172,9 @@ class AppActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private companion object {
+        val IMPORT_SCHEMES = listOf("qwdtt", "openflux")
     }
 }

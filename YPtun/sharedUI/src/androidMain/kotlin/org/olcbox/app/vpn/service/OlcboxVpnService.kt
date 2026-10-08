@@ -4392,9 +4392,12 @@ class OlcboxVpnService : VpnService() {
                 val down = resources.getIdentifier("notif_speed_down", "id", pkg)
                 val up = resources.getIdentifier("notif_speed_up", "id", pkg)
                 rv.setTextViewText(down, speed.first)
-                rv.setTextColor(down, SPEED_DOWN_COLOR)
+                // The notification shade follows the system theme: deep colours on light, neon on dark.
+                val dark = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                    android.content.res.Configuration.UI_MODE_NIGHT_YES
+                rv.setTextColor(down, if (dark) SPEED_DOWN_COLOR_DARK else SPEED_DOWN_COLOR_LIGHT)
                 rv.setTextViewText(up, speed.second)
-                rv.setTextColor(up, SPEED_UP_COLOR)
+                rv.setTextColor(up, if (dark) SPEED_UP_COLOR_DARK else SPEED_UP_COLOR_LIGHT)
                 rv.setViewVisibility(speedRow, android.view.View.VISIBLE)
             }
             builder.setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -4796,8 +4799,10 @@ class OlcboxVpnService : VpnService() {
             ProxyProfile.TYPE_SHADOWSOCKS
         )
         private const val NOTIFICATION_CHANNEL_ID = "olcbox_vpn"
-        private const val SPEED_DOWN_COLOR = 0xFF4CAF50.toInt() // green
-        private const val SPEED_UP_COLOR = 0xFF42A5F5.toInt() // blue
+        private const val SPEED_DOWN_COLOR_DARK = 0xFF3DFF8B.toInt() // neon green on a dark shade
+        private const val SPEED_UP_COLOR_DARK = 0xFF40C4FF.toInt() // neon blue on a dark shade
+        private const val SPEED_DOWN_COLOR_LIGHT = 0xFF006B2B.toInt() // deep green on a light shade
+        private const val SPEED_UP_COLOR_LIGHT = 0xFF0047B3.toInt() // deep blue on a light shade
         private const val NOTIFICATION_ID = 100
         private const val VK_CAPTCHA_CHANNEL_ID = "olcbox_vk_captcha"
         private const val VK_CAPTCHA_NOTIFICATION_ID = 101

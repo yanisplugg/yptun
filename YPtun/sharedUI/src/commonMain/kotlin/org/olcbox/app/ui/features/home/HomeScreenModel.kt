@@ -664,6 +664,10 @@ class HomeScreenViewModel(
         val text = rawText.trim()
         val isSingleInboundLink = text.startsWith(YptunInboundCodec.PREFIX) &&
             text.indexOf(YptunInboundCodec.PREFIX, startIndex = 1) < 0
+        if (text.startsWith("openflux://", ignoreCase = true)) {
+            return "This OpenFlux link can't be imported: only a single Yandex / Mail.ru / cups.online " +
+                "transport without a session or secret is supported (or the link is damaged)."
+        }
         return if (isSingleInboundLink && YptunInboundCodec.parse(text) == null) {
             "This YPtun link is damaged — characters were lost in transit. " +
                 "Scan the QR instead, or send the link as a file."

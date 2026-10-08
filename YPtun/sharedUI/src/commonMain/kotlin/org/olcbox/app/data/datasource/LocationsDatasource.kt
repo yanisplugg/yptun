@@ -36,6 +36,7 @@ import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.CsqttUriParser
+import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
@@ -1318,6 +1319,8 @@ class LocationsRepositoryImpl(
         parseQwdttText(linkText, subscriptionUrl)?.let { linkBundles += it }
         // csqtt connection links (csqtt://connect?v=2&…): VK-TURN locations on the csqtt core.
         parseCsqttText(linkText, subscriptionUrl)?.let { linkBundles += it }
+        // OpenFlux client links (openflux://v1/…): OpenFlux-engine locations.
+        parseOpenFluxText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
@@ -2030,6 +2033,31 @@ class LocationsRepositoryImpl(
                 ).normalized()
                 val base = link.host.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
                 val storageId = uniqueStorageId("imported_csqtt_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
+    }
+
+    /** Parses every [OpenFluxUriParser.SCHEME] link into an [EngineType.OpenFlux] location. */
+    private fun parseOpenFluxText(
+        text: String,
+        subscriptionUrl: String? = null
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith(OpenFluxUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { OpenFluxUriParser.parse(it) }
+            .map { link ->
+                val location = LocationConfig(
+                    name = link.name.ifBlank { "OpenFlux ${link.config.summary()}" },
+                    engine = EngineType.OpenFlux,
+                    openFlux = link.config,
+                ).normalized()
+                val base = link.config.docUrl.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("").takeLast(40)
+                val storageId = uniqueStorageId("imported_openflux_$base", usedStorageIds)
                 LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
             }
             .toList()
