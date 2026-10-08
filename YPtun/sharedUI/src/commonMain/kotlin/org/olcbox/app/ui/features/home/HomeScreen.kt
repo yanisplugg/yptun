@@ -173,6 +173,8 @@ fun HomeScreen(
     // True while an "Auto = fastest" pass (ping → pick → connect) is in flight, so the Auto button
     // shows a spinner and ignores re-taps instead of launching a second concurrent pass.
     var autoRunning by remember { mutableStateOf(false) }
+    // The ids a per-group auto-pick is running for (null = idle, or the whole-list Auto button).
+    var autoPickTarget by remember { mutableStateOf<List<String>?>(null) }
     val pingsState = locationViewModel.pingsState
     val locations = locationViewModel.locations.toList()
     // Drop selected ids that no longer exist (e.g. after a delete) so the count stays accurate.
@@ -249,6 +251,7 @@ fun HomeScreen(
             return
         }
         autoRunning = true
+        autoPickTarget = onlyIds?.toList()
         scope.launch { snackbarHostState.showSnackbar(s.autoConnectSearching) }
         locationViewModel.refreshPings(
             targetLocationIds = candidates.map { it.storageId },
@@ -268,6 +271,7 @@ fun HomeScreen(
                 val order = reachable.ifEmpty { candidates.map { it.storageId } }
                 viewModel.autoConnectInOrder(order) { connectedName ->
                     autoRunning = false
+                    autoPickTarget = null
                     scope.launch {
                         snackbarHostState.showSnackbar(
                             if (connectedName != null) s.autoConnectConnected(connectedName)
@@ -499,7 +503,7 @@ fun HomeScreen(
                     refreshHttpPings(targetIds)
                 },
                 onAutoPickClick = { targetIds -> autoConnectFastest(targetIds) },
-                autoPickRunning = autoRunning,
+                autoPickTarget = autoPickTarget,
                 onAddSubscriptionClick = {
                     isAddSheetOpen = true
                 },

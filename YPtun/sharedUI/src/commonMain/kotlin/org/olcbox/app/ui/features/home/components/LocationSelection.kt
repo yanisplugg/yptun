@@ -97,7 +97,7 @@ fun LazyListScope.locationSelectorContent(
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
     // Ping a subscription's servers and connect to the best one (spinner while [autoPickRunning]).
     onAutoPickClick: (targetLocationIds: List<String>) -> Unit = {},
-    autoPickRunning: Boolean = false,
+    autoPickTarget: List<String>? = null,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
     hasLoaded: Boolean = true,
@@ -264,7 +264,7 @@ fun LazyListScope.locationSelectorContent(
                                 pingsState.pendingLocationIds.any { it in groupIds }
 
                         AutoPickButton(
-                            isRunning = autoPickRunning,
+                            isRunning = autoPickTarget == groupIds,
                             onClick = { onAutoPickClick(groupIds) },
                             tint = MaterialTheme.colorScheme.primary
                         )
@@ -382,7 +382,7 @@ fun LazyListScope.locationSelectorContent(
                             folder = folder,
                             memberCount = memberSubGroups.size + memberCustom.size,
                             isRefreshing = isFolderRefreshing,
-                            autoPickRunning = autoPickRunning,
+                            autoPickRunning = autoPickTarget == memberIds,
                             onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
                             onRefresh = { onRefreshClick(memberIds) },
                             onAutoPick = { onAutoPickClick(memberIds) },
@@ -437,7 +437,7 @@ fun LazyListScope.locationSelectorContent(
                                             val mRefreshing = pingsState is PingsState.Loading &&
                                                     pingsState.pendingLocationIds.any { it in mIds }
                                             AutoPickButton(
-                                                isRunning = autoPickRunning,
+                                                isRunning = autoPickTarget == mIds,
                                                 onClick = { onAutoPickClick(mIds) },
                                                 tint = MaterialTheme.colorScheme.primary
                                             )
@@ -557,7 +557,7 @@ fun LazyListScope.locationSelectorContent(
                         pingsState.pendingLocationIds.any { it in customIds }
 
                 AutoPickButton(
-                    isRunning = autoPickRunning,
+                    isRunning = autoPickTarget == customIds,
                     onClick = { onAutoPickClick(customIds) },
                     tint = MaterialTheme.colorScheme.primary
                 )
@@ -1334,7 +1334,10 @@ private fun SubscriptionGroupHeader(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
             )
             // Red "!" badge when the subscription expires within 2 days; tap reveals the exact date.
             if (info?.expiryUrgent == true && info.expiryDateTime != null) {
@@ -1352,6 +1355,8 @@ private fun SubscriptionGroupHeader(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "$alive/${locations.size}",
+                    maxLines = 1,
+                    softWrap = false,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (alive > 0) {
                         MaterialTheme.colorScheme.primary
