@@ -939,11 +939,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             readExactly(inp, addrLen + 2)
             if (httpProbe) {
                 val t0 = System.nanoTime()
-                out.write("HEAD / HTTP/1.1
-Host: $targetHost
-Connection: close
-
-".encodeToByteArray())
+                out.write("HEAD / HTTP/1.1\r\nHost: $targetHost\r\nConnection: close\r\n\r\n".encodeToByteArray())
                 out.flush()
                 if (inp.read() < 0) return null
                 return (System.nanoTime() - t0) / 1_000_000L
