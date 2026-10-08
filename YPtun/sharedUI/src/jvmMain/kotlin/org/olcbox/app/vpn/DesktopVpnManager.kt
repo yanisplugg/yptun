@@ -212,6 +212,17 @@ class DesktopVpnManager private constructor(
 
     override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
+    override suspend fun pingVerified(locationConfig: LocationConfig): Long? {
+        val ms = pingInternal(locationConfig) ?: return null
+        val behavior = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior()
+        val mode = behavior.pingMode
+        if (mode == org.olcbox.app.data.model.AppBehaviorSettings.PING_PROXY_GET ||
+            mode == org.olcbox.app.data.model.AppBehaviorSettings.PING_PROXY_HEAD
+        ) return ms
+        proxyUrlTest(locationConfig.normalized(), behavior.effectivePingUrl(), "HEAD") ?: return null
+        return ms
+    }
+
     /**
      * Desktop port of AndroidVpnManager.pingInternal: the user-selected ping method (Settings →
      * «Пинг») overrides the per-engine default probe. TCP/ICMP probe the location's own server;

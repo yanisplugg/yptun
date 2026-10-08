@@ -34,6 +34,13 @@ interface VpnManager {
     fun stopVpn()
     suspend fun ping(locationConfig: LocationConfig): Long?
     suspend fun checkConnection(locationConfig: LocationConfig): Long?
+
+    /**
+     * [ping] in the user's ping mode, but a server only counts as alive when a request actually goes
+     * THROUGH its proxy: TCP/ICMP/Auto prove just an open port, and free servers are full of hosts that
+     * accept TCP and pass nothing. Platforms without a via-proxy probe fall back to plain [ping].
+     */
+    suspend fun pingVerified(locationConfig: LocationConfig): Long? = ping(locationConfig)
     fun subscriptionFetchProxy(): SubscriptionFetchProxy? = null
 
     /**

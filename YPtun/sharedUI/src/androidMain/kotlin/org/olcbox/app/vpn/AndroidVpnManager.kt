@@ -767,6 +767,14 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
+    override suspend fun pingVerified(locationConfig: LocationConfig): Long? {
+        val ms = pingInternal(locationConfig) ?: return null
+        val mode = _appBehavior.value.pingMode
+        if (mode == AppBehaviorSettings.PING_PROXY_GET || mode == AppBehaviorSettings.PING_PROXY_HEAD) return ms
+        proxyUrlTest(locationConfig, _appBehavior.value.effectivePingUrl(), "HEAD") ?: return null
+        return ms
+    }
+
     private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
         // User-selected ping method (Settings → «Пинг») overrides the per-engine default probe.
         // TCP/ICMP probe the location's own server; the URL is used ONLY by the proxy GET/HEAD probes.
