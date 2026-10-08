@@ -4362,10 +4362,8 @@ class OlcboxVpnService : VpnService() {
         } else {
             status
         }
-        // Status-bar icon: our cat-head silhouette (system tints it monochrome).
-        // Resolved by name because this lives in androidApp's resources, not sharedUI's R.
-        val statIcon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
-            .takeIf { it != 0 } ?: android.R.drawable.ic_lock_lock
+        // Status-bar icon: the system lock, as before (the cat silhouette is not used here).
+        val statIcon = android.R.drawable.ic_lock_lock
         val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(statIcon)
             .setOngoing(true)

@@ -1,6 +1,6 @@
 # Android APK build (arm64-v8a) for testing a branch on a phone.
 #
-# Runs on push to the beta-fix branch and by hand. The APK is signed with the release keystore when
+# Runs on push to Beta and by hand. The APK is signed with the release keystore when
 # the repo has the secrets ANDROID_RELEASE_KEYSTORE_BASE64 / ANDROID_RELEASE_STORE_PASSWORD /
 # ANDROID_RELEASE_KEY_ALIAS / ANDROID_RELEASE_KEY_PASSWORD (then it installs OVER the existing app).
 # Without them it is signed with a throwaway key: it installs, but only after uninstalling the app
@@ -14,6 +14,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - Beta
       - ccr-8310fbb6-qvxabu
 
 permissions:
@@ -46,7 +47,7 @@ jobs:
           cache: false
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install SDK packages
         run: sdkmanager "platforms;android-37" "ndk;${ANDROID_NDK_VERSION}"
