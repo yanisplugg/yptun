@@ -1,24 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Custom notification content so the colored app logo sits directly next to the "YPtun" title.
-  Wrapped in DecoratedCustomViewStyle, so the system still draws the header + Stop action.
+  Custom notification content (title, server name, coloured live speed line).
+  Wrapped in DecoratedCustomViewStyle, so the system draws the header (app icon) + Stop action.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
-    android:gravity="center_vertical"
     android:paddingTop="2dp"
     android:paddingBottom="2dp">
-
-    <ImageView
-        android:id="@+id/notif_icon"
-        android:layout_width="38dp"
-        android:layout_height="38dp"
-        android:layout_marginEnd="12dp"
-        android:scaleType="fitCenter"
-        android:src="@drawable/ic_notification_logo"
-        android:contentDescription="@null" />
 
     <LinearLayout
         android:layout_width="0dp"

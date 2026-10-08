@@ -4382,7 +4382,7 @@ class OlcboxVpnService : VpnService() {
             )
             .setPriority(NotificationCompat.PRIORITY_LOW)
 
-        // Custom content so the COLORED app logo sits right next to the "YPtun" title.
+        // Custom content: title, server name and the coloured speed line (the app icon comes from the system header).
         val pkg = packageName
         val layoutId = resources.getIdentifier("notif_olcbox", "layout", pkg)
         if (layoutId != 0) {
@@ -4399,8 +4399,6 @@ class OlcboxVpnService : VpnService() {
                 rv.setTextColor(up, SPEED_UP_COLOR)
                 rv.setViewVisibility(speedRow, android.view.View.VISIBLE)
             }
-            val logo = resources.getIdentifier("ic_notification_logo", "drawable", pkg)
-            if (logo != 0) rv.setImageViewResource(resources.getIdentifier("notif_icon", "id", pkg), logo)
             builder.setStyle(NotificationCompat.DecoratedCustomViewStyle())
                 .setCustomContentView(rv)
         } else {
