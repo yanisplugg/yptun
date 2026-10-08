@@ -122,13 +122,23 @@ func MeasureDelay(configJSON, url, method string, timeoutMs int) (result int64) 
 		return -1
 	}
 	req.Header.Set("User-Agent", "olcbox-ping")
-	start := time.Now()
-	resp, err := client.Do(req)
-	if err != nil {
-		return -1
+	// The first request through a just-started instance pays one-off costs (goroutine/DNS/route warm-up,
+	// and CPU contention when many probes start at once), which made the number clearly higher than
+	// other clients show for the same server. Measure twice and report the better one; a failure of
+	// the first request means a dead server, so there is no second try for it.
+	best := int64(-1)
+	for attempt := 0; attempt < 2; attempt++ {
+		start := time.Now()
+		resp, err := client.Do(req.Clone(context.Background()))
+		if err != nil {
+			break
+		}
+		_ = resp.Body.Close()
+		if ms := time.Since(start).Milliseconds(); best < 0 || ms < best {
+			best = ms
+		}
 	}
-	_ = resp.Body.Close()
-	return time.Since(start).Milliseconds()
+	return best
 }
 
 // Start launches Xray with the given JSON config. Returns an error if already running or invalid.

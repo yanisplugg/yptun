@@ -41,5 +41,29 @@
             android:maxLines="1"
             android:ellipsize="end"
             android:textAppearance="@style/TextAppearance.Compat.Notification" />
+
+        <!-- Live speed, second line under the server name; colours are set from code. -->
+        <LinearLayout
+            android:id="@+id/notif_speed"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/notif_speed_down"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="14dp"
+                android:maxLines="1"
+                android:textAppearance="@style/TextAppearance.Compat.Notification" />
+
+            <TextView
+                android:id="@+id/notif_speed_up"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:textAppearance="@style/TextAppearance.Compat.Notification" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

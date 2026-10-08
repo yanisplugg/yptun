@@ -82,7 +82,13 @@ internal object DesktopDeltaPatch {
      * commit it. Throws when the bundle doesn't fit this installation — the caller then falls back
      * to the full installer.
      */
-    fun stage(rootDir: Path, bundle: Path, stagingDir: Path, tempDir: Path): Plan {
+    fun stage(
+        rootDir: Path,
+        bundle: Path,
+        stagingDir: Path,
+        tempDir: Path,
+        onStep: (done: Int, total: Int) -> Unit = { _, _ -> }
+    ): Plan {
         Files.createDirectories(tempDir)
         if (Files.exists(stagingDir)) stagingDir.toFile().deleteRecursively()
         Files.createDirectories(stagingDir)
@@ -102,7 +108,9 @@ internal object DesktopDeltaPatch {
 
             // Sorted so the classpath file lands last: if a move fails halfway, the installation is
             // still the old, working one (old jars are only removed afterwards).
-            for (op in manifest.ops.sortedBy { it.op == Op.DELETE || it.to.endsWith(".cfg") }) {
+            val ordered = manifest.ops.sortedBy { it.op == Op.DELETE || it.to.endsWith(".cfg") }
+            for ((index, op) in ordered.withIndex()) {
+                onStep(index, ordered.size)
                 when (op.op) {
                     Op.PATCH -> {
                         val base = rootDir.resolve(op.from).requireSafe(rootDir)

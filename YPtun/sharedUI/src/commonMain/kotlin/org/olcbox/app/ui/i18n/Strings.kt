@@ -481,6 +481,12 @@ interface Strings {
     // Update download status
     val releaseChannelLabel: String
     fun downloadingAsset(name: String): String
+    fun updateStage(step: Int, total: Int, title: String): String
+    val updateStageDownloadPatch: String
+    val updateStageDownloadInstaller: String
+    val updateStageApplyPatch: String
+    val updateStageInstall: String
+    val updateStageRestart: String
     fun downloadFailed(error: String): String
     fun installingAsset(name: String): String
     /** Short hours label, e.g. "6 ч" / "6h" / "۶ ساعت". */
@@ -1165,6 +1171,12 @@ object RuStrings : Strings {
     override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto авто · $manual вручную"
     override val releaseChannelLabel = "Релиз"
     override fun downloadingAsset(name: String) = "Загрузка $name…"
+    override fun updateStage(step: Int, total: Int, title: String) = "Этап $step из $total: $title"
+    override val updateStageDownloadPatch = "Загрузка патча"
+    override val updateStageDownloadInstaller = "Загрузка установщика"
+    override val updateStageApplyPatch = "Применение патча"
+    override val updateStageInstall = "Установка и перезапуск"
+    override val updateStageRestart = "Перезапуск"
     override fun downloadFailed(error: String) = "Ошибка загрузки: $error"
     override fun installingAsset(name: String) = "Установка $name"
     override fun hoursShort(n: Int) = "$n ч"
@@ -1824,6 +1836,12 @@ object EnStrings : Strings {
     override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto auto · $manual manual"
     override val releaseChannelLabel = "Release"
     override fun downloadingAsset(name: String) = "Downloading $name…"
+    override fun updateStage(step: Int, total: Int, title: String) = "Step $step of $total: $title"
+    override val updateStageDownloadPatch = "Downloading the patch"
+    override val updateStageDownloadInstaller = "Downloading the installer"
+    override val updateStageApplyPatch = "Applying the patch"
+    override val updateStageInstall = "Installing and restarting"
+    override val updateStageRestart = "Restarting"
     override fun downloadFailed(error: String) = "Download failed: $error"
     override fun installingAsset(name: String) = "Installing $name"
     override fun hoursShort(n: Int) = "${n}h"
@@ -2483,6 +2501,12 @@ object FaStrings : Strings {
     override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto خودکار · $manual دستی"
     override val releaseChannelLabel = "نسخه"
     override fun downloadingAsset(name: String) = "در حال دانلود $name…"
+    override fun updateStage(step: Int, total: Int, title: String) = "مرحله $step از $total: $title"
+    override val updateStageDownloadPatch = "دانلود وصله"
+    override val updateStageDownloadInstaller = "دانلود نصب‌کننده"
+    override val updateStageApplyPatch = "اعمال وصله"
+    override val updateStageInstall = "نصب و راه‌اندازی مجدد"
+    override val updateStageRestart = "راه‌اندازی مجدد"
     override fun downloadFailed(error: String) = "دانلود ناموفق بود: $error"
     override fun installingAsset(name: String) = "در حال نصب $name"
     override fun hoursShort(n: Int) = "$n ساعت"
@@ -3142,6 +3166,12 @@ object ZhStrings : Strings {
     override fun ruBypassAutoManual(auto: Int, manual: Int) = "自动 $auto · 手动 $manual"
     override val releaseChannelLabel = "发布渠道"
     override fun downloadingAsset(name: String) = "正在下载 $name……"
+    override fun updateStage(step: Int, total: Int, title: String) = "第 $step/$total 步：$title"
+    override val updateStageDownloadPatch = "下载补丁"
+    override val updateStageDownloadInstaller = "下载安装程序"
+    override val updateStageApplyPatch = "应用补丁"
+    override val updateStageInstall = "安装并重启"
+    override val updateStageRestart = "重启"
     override fun downloadFailed(error: String) = "下载失败：$error"
     override fun installingAsset(name: String) = "正在安装 $name"
     override fun hoursShort(n: Int) = "${n} 小时"

@@ -140,6 +140,7 @@ import org.olcbox.app.update.AppUpdateService
 import org.olcbox.app.update.installedDesktopFingerprint
 import org.olcbox.app.update.DesktopUpdateOutcome
 import org.olcbox.app.update.JvmUpdateInstaller
+import org.olcbox.app.update.UpdateStageKind
 import org.olcbox.app.update.JvmUpdateSettingsStore
 import org.olcbox.app.update.identity
 import org.olcbox.app.update.isDownloaded
@@ -428,9 +429,21 @@ private fun runApp(args: Array<String>) = application {
             // With a delta published for this hop only a few MB are fetched and the installed jar is
             // patched in place; without one this is the full installer, as before.
             updateMessage = s.downloadingAsset(info.downloadAsset.name)
-            val result = dependencies.updateInstaller.install(info) { progress ->
-                updateProgress = progress
-            }
+            val result = dependencies.updateInstaller.install(
+                info,
+                onStage = { stage ->
+                    val title = when (stage.kind) {
+                        UpdateStageKind.DownloadPatch -> s.updateStageDownloadPatch
+                        UpdateStageKind.DownloadInstaller -> s.updateStageDownloadInstaller
+                        UpdateStageKind.ApplyPatch -> s.updateStageApplyPatch
+                        UpdateStageKind.Install -> s.updateStageInstall
+                        UpdateStageKind.Restart -> s.updateStageRestart
+                    }
+                    updateMessage = s.updateStage(stage.step, stage.total, title)
+                    updateProgress = 0f
+                },
+                onProgress = { progress -> updateProgress = progress }
+            )
             updateMessage = result.fold(
                 onSuccess = { outcome ->
                     when (outcome) {
@@ -580,7 +593,7 @@ private fun runApp(args: Array<String>) = application {
                 icon = Icons.Outlined.Public,
             ) {
                 isWindowVisible = true
-                dependencies.homeViewModel.loadFreeServers()
+                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
             }
             Item(
                 label = if (trayRussian) "Горячая клавиша" else "Global hotkey",
@@ -667,7 +680,7 @@ private fun runApp(args: Array<String>) = application {
             add(item(if (trayRussian) "Мой IP" else "My IP") { showMyIpDialog = true })
             add(item(if (trayRussian) "Бесплатные серверы" else "Free servers") {
                 isWindowVisible = true
-                dependencies.homeViewModel.loadFreeServers()
+                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
             })
             add(item(if (trayRussian) "Горячая клавиша" else "Global hotkey") { hotkeyDialogVisible = true })
             add(item(if (trayRussian) "Настройки" else "Settings") {
@@ -756,7 +769,7 @@ private fun runApp(args: Array<String>) = application {
                         onFreeServers = {
                             trayMenuVisible = false
                             isWindowVisible = true
-                            dependencies.homeViewModel.loadFreeServers()
+                            dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
                         },
                         onHotkey = { trayMenuVisible = false; hotkeyDialogVisible = true },
                         onSettings = {
@@ -1393,6 +1406,7 @@ private fun runApp(args: Array<String>) = application {
                 updateOffer?.let { info ->
                     ApplicationUpdateOfferSheet(
                         info = info,
+                        statusText = updateMessage,
                         downloadProgress = updateProgress,
                         onLater = { postponeUpdate(info) },
                         onDownload = { downloadUpdate(info) },
