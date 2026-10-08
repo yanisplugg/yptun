@@ -29,6 +29,7 @@ import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.ProxyProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import org.olcbox.app.data.model.LocationEntry
@@ -437,46 +438,32 @@ class HomeScreenViewModel(
         _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
         freeServersJob = viewModelScope.launch {
             try {
-                val rawText = withContext(Dispatchers.IO) {
+                val sourceTexts = withContext(Dispatchers.IO) {
                     // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
                     // without withProxyAuthentication the fetch died with a SOCKS auth error.
                     val proxy = vpnManager.subscriptionFetchProxy()
                     val client = createProxyHttpClient(proxy)
                     try {
                         // Все источники сразу; недоступный не мешает остальным.
-                        FREE_SERVERS_SOURCES.map { (url, maxLines) ->
+                        FREE_SERVERS_SOURCES.map { (url, maxCount) ->
                             async {
                                 runCatching {
-                                    val text = org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
-                                    // Огромный список (десятки тысяч) не проверить за разумное время — берём случайную выборку.
-                                    if (maxLines > 0) text.lines().shuffled().take(maxLines).joinToString("\n") else text
-                                }.getOrDefault("")
+                                    org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
+                                }.getOrDefault("") to maxCount
                             }
-                        }.awaitAll().joinToString("\n")
+                        }.awaitAll()
                     } finally {
                         client.close()
                     }
                 }
 
-                if (rawText.isBlank()) {
+                if (sourceTexts.all { (text, _) -> text.isBlank() }) {
                     _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                     onError("Не удалось загрузить список серверов")
                     return@launch
                 }
 
-                val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }.distinct()
-                if (allLines.isEmpty()) {
-                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
-                    onError("В списке не найдено серверов VLESS")
-                    return@launch
-                }
-
-                val parsedItems = allLines.mapNotNull { line ->
-                    val profile = ShareLinkParser.parse(line)
-                    if (profile != null && profile.isComplete()) {
-                        line to profile
-                    } else null
-                }
+                val parsedItems = withContext(Dispatchers.Default) { pickFreeServers(sourceTexts) }
 
                 if (parsedItems.isEmpty()) {
                     _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
@@ -562,6 +549,35 @@ class HomeScreenViewModel(
                 onError(e.message ?: "Ошибка загрузки бесплатных серверов")
             }
         }
+    }
+
+    /**
+     * Turns the fetched lists into the servers to check, source by source in [FREE_SERVERS_SOURCES]
+     * order: every protocol the importer understands and xray can probe (VLESS, VMess, Trojan, Shadowsocks —
+     * VLESS alone threw away ~90% of the Freedom-V2Ray list), each server once (lists repeat the same
+     * node under different names — ~10% of ebrasha — and overlap each other), and a source's limit
+     * spent only on servers no earlier source already gave. Big lists are shuffled and parsed only
+     * until the limit is reached, not all 8k lines.
+     */
+    private fun pickFreeServers(sourceTexts: List<Pair<String, Int>>): List<Pair<String, ProxyProfile>> {
+        val seen = HashSet<ProxyProfile>()
+        val picked = mutableListOf<Pair<String, ProxyProfile>>()
+        for ((text, maxCount) in sourceTexts) {
+            val lines = text.lines()
+                .map { it.trim() }
+                .filter { line -> FREE_SERVER_SCHEMES.any { line.startsWith(it, ignoreCase = true) } }
+                .let { if (maxCount > 0) it.shuffled() else it }
+            var taken = 0
+            for (line in lines) {
+                if (maxCount > 0 && taken >= maxCount) break
+                val profile = runCatching { ShareLinkParser.parse(line) }.getOrNull()
+                    ?.takeIf { it.isComplete() } ?: continue
+                if (!seen.add(profile.dedupNormalized())) continue
+                picked += line to profile
+                taken++
+            }
+        }
+        return picked
     }
 
     fun saveSelectedFreeServers(
@@ -926,14 +942,29 @@ data class FreeServersProgress(
 )
 
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
-/** Список zieng2 небольшой (~120) и живой на ~40% — проверяем целиком; ebrasha огромный (~20k, живо ~7%) — случайная выборка. */
-const val FREE_SERVERS_PER_SOURCE = 250
 
-/** Источники бесплатных серверов (url, максимум строк; 0 = все); [FREE_SERVERS_URL] — идентификатор группы. */
+/**
+ * Источники бесплатных серверов (url, сколько уникальных серверов взять; 0 = все) в порядке
+ * приоритета; [FREE_SERVERS_URL] — ещё и идентификатор группы. Общий объём (~300) прежний: при
+ * «Потоках пинга» по умолчанию (5) и таймауте 4 с больший список проверялся бы заметно дольше.
+ *  - zieng2 — маленький (~60) список под российские белые списки, целиком;
+ *  - Freedom-V2Ray — агрегатор шести списков (~1600 серверов всех протоколов), раз в 2 часа
+ *    выкидывает хосты, не принимающие TCP. Это проверка из США, а не через прокси, поэтому
+ *    окончательно сервер всё равно проверяем сами — но мёртвых в нём заметно меньше;
+ *  - ebrasha — огромный (~7 тыс. уникальных, только VLESS) и живой процентов на 7, только выборка.
+ */
 val FREE_SERVERS_SOURCES = listOf(
     FREE_SERVERS_URL to 0,
-    "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to FREE_SERVERS_PER_SOURCE,
+    "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix.txt" to 170,
+    "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to 100,
 )
+
+/**
+ * Протоколы, которые берём из бесплатных списков: их разбирает [ShareLinkParser] и проверяет xray через
+ * прокси. Hysteria2 сюда не входит: проверка через прокси (режим пинга по умолчанию) её не умеет, и
+ * такой сервер всегда выглядел бы нерабочим.
+ */
+private val FREE_SERVER_SCHEMES = listOf("vless://", "vmess://", "trojan://", "ss://")
 
 /** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */
 data class VkTurnLinkPrompt(
