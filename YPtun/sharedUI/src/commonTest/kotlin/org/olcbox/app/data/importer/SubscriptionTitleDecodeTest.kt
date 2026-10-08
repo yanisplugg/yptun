@@ -23,5 +23,8 @@ class SubscriptionTitleDecodeTest {
         assertEquals("Моя подписка", SubscriptionDecoder.decodeIfBase64("0JzQvtGPINC/0L7QtNC/0LjRgdC60LA="))
         assertEquals("🇩🇪 Германия ⚡️", SubscriptionDecoder.decodeIfBase64("8J+HqfCfh6og0JPQtdGA0LzQsNC90LjRjyDimqHvuI8="))
         assertEquals("My VPN", SubscriptionDecoder.decodeIfBase64("TXkgVlBO"))
+        assertEquals("Nodeless", SubscriptionDecoder.decodeIfBase64("Tm9kZWxpc3M="))
+        assertEquals("GoodVpn", SubscriptionDecoder.decodeIfBase64("R29vZFZwbg=="))
+        assertEquals("GoodVpn", SubscriptionDecoder.decodeIfBase64("base64:R29vZFZwbg=="))
     }
 }

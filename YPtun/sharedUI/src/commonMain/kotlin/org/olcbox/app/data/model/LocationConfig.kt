@@ -489,6 +489,10 @@ data class OpenFluxConfig(
         else -> "Яндекс Документы"
     }
 
+    /** `openflux://config?transport=...#name` — share link format. */
+    fun toUri(name: String = ""): String =
+        org.olcbox.app.data.importer.OpenFluxUriParser.toUri(this, name)
+
     companion object {
         const val TRANSPORT_YANDEX = "yandex"
         /** Upstream's "vyandex": Yandex Docs in the new Volga editor. */
@@ -501,6 +505,9 @@ data class OpenFluxConfig(
         const val TRANSPORT_CUPS = "cupsonline"
         val TRANSPORTS = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAILRU, TRANSPORT_CUPS, TRANSPORT_MAX)
         const val DEFAULT_DNS = "1.1.1.1:53"
+
+        fun parseUri(uri: String): Pair<OpenFluxConfig, String>? =
+            org.olcbox.app.data.importer.OpenFluxUriParser.parse(uri)
     }
 }
 

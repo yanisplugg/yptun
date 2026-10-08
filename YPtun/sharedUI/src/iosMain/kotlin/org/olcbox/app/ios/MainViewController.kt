@@ -386,6 +386,8 @@ private fun IosApp(
                 pinnedCustomLocations = appBehavior.pinnedCustomLocations,
                 customLocationsPingSorted = appBehavior.customLocationsPingSorted,
                 customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
+                twoColumns = appBehavior.twoColumnLayout,
+                showAutoButton = appBehavior.showAutoButton,
                 onToggleGroupCollapsed = { key ->
                     val current = appBehavior.collapsedSubscriptionGroups
                     val updated = if (key in current) current - key else current + key

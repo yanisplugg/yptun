@@ -1637,6 +1637,18 @@ private fun LazyListScope.openFluxSection(
                 title = "OpenFlux — туннель через сервисы",
                 subtitle = "TCP-туннель до твоей выходной ноды на VPS: пакеты идут через Яндекс Документы или звонок в MAX"
             )
+            VkTurnField(
+                value = "",
+                onValueChange = { v ->
+                    OpenFluxConfig.parseUri(v)?.let { (c, _) ->
+                        onChange { c }
+                    }
+                },
+                label = "Ссылка openflux://",
+                placeholder = "openflux://config?transport=…  (вставь — поля ниже заполнятся)",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
             // All three carriers on screen at once: behind a dropdown the new-editor one went unnoticed.
             Text(
                 text = "Транспорт",

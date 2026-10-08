@@ -159,12 +159,13 @@ internal object SubscriptionDecoder {
         } else {
             trimmed
         }
+        val isPadded = payload.endsWith("=")
         val isB64Candidate = prefixed ||
-            (payload.length >= 8 && payload.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '/' || it == '=' || it == '-' || it == '_' || it.isWhitespace() })
+            (payload.length >= 4 && payload.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '/' || it == '=' || it == '-' || it == '_' || it.isWhitespace() })
         if (isB64Candidate) {
             val decoded = decodeBase64Chunk(payload)
             if (decoded != null && decoded.isNotBlank() && decoded.all { it.code >= 32 || it == '\n' || it == '\r' || it == '\t' } &&
-                (prefixed || looksLikeHumanText(decoded))
+                (prefixed || isPadded || looksLikeHumanText(decoded))
             ) {
                 return decoded.trim()
             }

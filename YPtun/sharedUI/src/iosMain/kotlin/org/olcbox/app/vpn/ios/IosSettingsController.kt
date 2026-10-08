@@ -80,7 +80,11 @@ class IosSettingsController {
         // swatches always apply (the settings screen hides that switch on this platform).
         ThemeState.dynamicEnabled = false
         ThemeState.accent = ui.accentArgb?.let { Color(it) }
-        ThemeState.textColor = ui.textArgb?.let { Color(it) }
+        val behaviorWithDefaults = _appBehavior.value.withAppliedDefaults()
+        if (behaviorWithDefaults != _appBehavior.value) {
+            _appBehavior.value = behaviorWithDefaults
+            IosSharedStore.saveAppBehavior(behaviorWithDefaults)
+        }
         if (_appBehavior.value.subscriptionUserAgent == AppBehaviorSettings.SUB_UA_HAPP) {
             val fixed = _appBehavior.value.copy(subscriptionUserAgent = AppBehaviorSettings.SUB_UA_YPTUN)
             _appBehavior.value = fixed

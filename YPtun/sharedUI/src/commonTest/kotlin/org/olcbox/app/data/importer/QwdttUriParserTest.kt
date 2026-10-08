@@ -79,6 +79,17 @@ class QwdttUriParserTest {
     }
 
     @Test
+    fun parsesWdttQueryUri() {
+        val uri = "wdtt://config?name=Finland+WDTT&peer=185.174.40.127&hashes=hash123&pass=pass321"
+        val parsed = QwdttUriParser.parseLine(uri)
+        assertNotNull(parsed)
+        assertEquals("Finland WDTT", parsed.name)
+        assertEquals("185.174.40.127", parsed.peer)
+        assertEquals("hash123", parsed.hashes)
+        assertEquals("pass321", parsed.password)
+    }
+
+    @Test
     fun parsesQwdttJsonObject() {
         val json = """
             {

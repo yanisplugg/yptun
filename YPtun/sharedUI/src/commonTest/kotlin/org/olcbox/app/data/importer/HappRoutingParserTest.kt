@@ -77,11 +77,26 @@ class HappRoutingParserTest {
     }
 
     @Test
+    fun parsesPascalCaseHappRoutingJsonWithStringBooleans() {
+        val userLink = "happ://routing/add/eyJOYW1lIjoiTm9kZWxlc3MgUlUiLCJHbG9iYWxQcm94eSI6InRydWUiLCJSb3V0ZU9yZGVyIjoiYmxvY2stcHJveHktZGlyZWN0IiwiUmVtb3RlRE5TVHlwZSI6IkRvSCIsIlJlbW90ZUROU0RvbWFpbiI6Imh0dHBzOi8vZG5zLmdvb2dsZS9kbnMtcXVlcnkiLCJSZW1vdGVETlNJUCI6IiIsIkRvbWVzdGljRE5TVHlwZSI6IkRvVSIsIkRvbWVzdGljRE5TRG9tYWluIjoiIiwiRG9tZXN0aWNETlNJUCI6Ijc3Ljg4LjguOCIsIkdlb2lwdXJsIjoiaHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL3J1bmV0ZnJlZWRvbS9ydXNzaWEtdjJyYXktcnVsZXMtZGF0L3JlbGVhc2UvZ2VvaXAuZGF0IiwiR2Vvc2l0ZXVybCI6Imh0dHBzOi8vcmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbS9ydXNzaWEtdjJyYXktcnVsZXMtZGF0L3JlbGVhc2UvZ2Vvc2l0ZS5kYXQiLCJMYXN0VXBkYXRlZCI6IiIsIkRuc0hvc3RzIjp7fSwiRGlyZWN0U2l0ZXMiOlsia2Vvc2l0ZTpydS1hdmFpbGFibGUtb25seS1pbnNpZGUiLCJnZW9zaXRlOnlhbmRleCJdLCJEaXJlY3RJcCI6WyJnZW9pcDlydSIsIjE5Mi4xNjguMC4wLzE2Il0sIlByb3h5U2l0ZXMiOltdLCJQcm94eUlwIjpbXSwiQmxvY2tTaXRlcyI6W10sIkJsb2NrSXAiOltdLCJEb21haW5TdHJhdGVneSI6IklQSWZOb25NYXRjaCIsIkZha2VETlMiOiJmYWxzZSIsIlVzZUNodW5rRmlsZXMiOiJ0cnVlIn0="
+        val p = HappRoutingParser.parse(userLink)
+        assertNotNull(p)
+        assertEquals("Nodeless RU", p.name)
+        assertTrue(p.globalProxy)
+        assertEquals(false, p.fakeDns)
+        assertEquals("block-proxy-direct", p.routeOrder)
+        assertEquals(listOf("geosite:ru-available-only-inside", "geosite:yandex"), p.directSites)
+        assertEquals(listOf("geoip:ru", "192.168.0.0/16"), p.directIp)
+        assertEquals(4, p.ruleCount())
+    }
+
+    @Test
     fun rejectsNonHappLinks() {
         assertNull(HappRoutingParser.parse("https://example.com"))
         assertNull(HappRoutingParser.parse("vless://uuid@host:443"))
         assertNull(HappRoutingParser.parse("happ://routing/add/"))
         assertEquals(false, HappRoutingParser.isHappRoutingLink("happ://something/else"))
         assertTrue(HappRoutingParser.isHappRoutingLink("happ://routing/add/abc"))
+        assertTrue(HappRoutingParser.isHappRoutingLink("happ://routing/onadd/abc"))
     }
 }

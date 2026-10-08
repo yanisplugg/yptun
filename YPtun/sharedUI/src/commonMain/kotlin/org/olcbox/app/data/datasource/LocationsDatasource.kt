@@ -34,6 +34,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
+import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
@@ -46,6 +47,7 @@ import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.FakeDnsSpec
+import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
@@ -1341,6 +1343,9 @@ class LocationsRepositoryImpl(
         // snolc share links (snolc://):
         parseSnolcText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
+        // OpenFlux share links (openflux://):
+        parseOpenFluxText(linkText, text, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
             // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
@@ -1918,16 +1923,23 @@ class LocationsRepositoryImpl(
     private fun decodeMaybeBase64Header(raw: String): String? {
         val value = raw.trim().removeSurrounding("\"")
         if (value.isEmpty()) return null
-        val payload = if (value.startsWith("base64:", ignoreCase = true)) {
+        val isExplicitB64 = value.startsWith("base64:", ignoreCase = true)
+        val payload = if (isExplicitB64) {
             value.substring(7).trim()
         } else {
             value
         }
         val urlDecoded = if ('%' in payload) runCatching { UriCodec.percentDecode(payload) }.getOrDefault(payload) else payload
+        if (isExplicitB64) {
+            val decoded = SubscriptionDecoder.decodeBase64Chunk(urlDecoded)
+            if (decoded != null && decoded.isNotBlank() && decoded.none { it.code < 32 && it != '\n' && it != '\r' && it != '\t' }) {
+                return decoded.trim()
+            }
+        }
         val b64 = SubscriptionDecoder.decodeIfBase64(urlDecoded)
         val decoded = if (b64 != urlDecoded) {
             b64
-        } else if (value.startsWith("base64:", ignoreCase = true)) {
+        } else if (isExplicitB64) {
             payload
         } else {
             repairLatin1Utf8(urlDecoded)
@@ -2170,6 +2182,51 @@ class LocationsRepositoryImpl(
         )
         val base = "${cfg.host}_${cfg.port}".storageSlug()
         val storageId = uniqueStorageId("imported_snolc_$base", usedStorageIds)
+        return LocationEntry.from(
+            storageId = storageId,
+            location = location,
+            subscriptionUrl = subscriptionUrl,
+            metadata = metadata
+        )
+    }
+
+    private fun parseOpenFluxText(
+        linkText: String,
+        rawText: String,
+        subscriptionUrl: String?,
+        subscriptionMetadata: SubscriptionMetadata?
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+        val lines = (linkText.lineSequence() + rawText.lineSequence())
+            .map { it.trim() }
+            .filter { OpenFluxUriParser.isMatch(it) }
+            .distinct()
+            .toList()
+        val entries = lines.mapNotNull { OpenFluxUriParser.parse(it) }
+            .map { (cfg, name) -> openFluxEntry(cfg, name, subscriptionUrl, usedStorageIds, locationMetadata) }
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(
+            activeLocationId = entries.first().storageId,
+            locations = entries
+        )
+    }
+
+    private fun openFluxEntry(
+        cfg: OpenFluxConfig,
+        name: String,
+        subscriptionUrl: String?,
+        usedStorageIds: MutableSet<String>,
+        metadata: LocationMetadata? = null
+    ): LocationEntry {
+        val finalName = name.ifBlank { "OpenFlux ${cfg.summary()}" }
+        val location = LocationConfig(
+            name = finalName,
+            engine = EngineType.OpenFlux,
+            openFlux = cfg
+        )
+        val base = (if (cfg.usesMax()) "max_${cfg.maxUid}" else cfg.transport).storageSlug()
+        val storageId = uniqueStorageId("imported_openflux_$base", usedStorageIds)
         return LocationEntry.from(
             storageId = storageId,
             location = location,

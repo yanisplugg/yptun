@@ -14,8 +14,17 @@ object HappRoutingParser {
     const val SCHEME = "happ://routing/add/"
 
     /**
+     * Accepted Happ routing link prefixes (both `/add/` and `/onadd/`, plus bare `/routing/`).
+     */
+    private val HAPP_SCHEMES = listOf(
+        "happ://routing/add/",
+        "happ://routing/onadd/",
+        "happ://routing/",
+    )
+
+    /**
      * Alternative `routing://` scheme prefixes (our own export format / cross-app sharing), accepted
-     * in addition to Happ's. The payload is the same base64url-json as Happ, so all three forms decode
+     * in addition to Happ's. The payload is the same base64url-json as Happ, so all forms decode
      * identically: `routing://routing/add/<b64>`, `routing://add/<b64>`, and bare `routing://<b64>`.
      */
     private val ROUTING_SCHEMES = listOf(
@@ -33,14 +42,15 @@ object HappRoutingParser {
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+        coerceInputValues = true
     }
 
     /** The matching scheme prefix for [link] (Happ or routing://), or null when none applies. */
     private fun schemePrefixOf(link: String): String? {
         val t = link.trim()
-        if (t.startsWith(SCHEME, ignoreCase = true)) return SCHEME
-        // Longest prefixes first so "routing://add/" wins over the bare "routing://".
-        return ROUTING_SCHEMES.firstOrNull { t.startsWith(it, ignoreCase = true) }
+        val allSchemes = HAPP_SCHEMES + ROUTING_SCHEMES
+        // Longest prefixes first so "happ://routing/add/" wins over "happ://routing/".
+        return allSchemes.firstOrNull { t.startsWith(it, ignoreCase = true) }
     }
 
     /** True if [link] looks like a routing link (Happ `happ://` or our `routing://` scheme). */
@@ -58,6 +68,32 @@ object HappRoutingParser {
     fun looksLikeRoutingProfile(text: String): Boolean =
         isHappRoutingLink(text) || isRoutingJson(text)
 
+    /**
+     * Normalizes a routing JSON object: lowercases all field names (Happ wire format uses PascalCase
+     * like "DirectSites", "GlobalProxy", whereas RoutingProfile serial names are lowercase), and
+     * coerces string booleans ("true"/"false") to actual boolean primitives.
+     */
+    private fun normalizeRoutingJson(root: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+        val map = mutableMapOf<String, kotlinx.serialization.json.JsonElement>()
+        for ((key, value) in root) {
+            val lower = key.lowercase()
+            val normalizedValue = when (lower) {
+                "globalproxy", "fakedns", "expert", "xraysniffing", "xrayrouteonly", "singboxsniff", "singboxresolve" -> {
+                    when (value) {
+                        is kotlinx.serialization.json.JsonPrimitive -> {
+                            val str = value.content.trim()
+                            kotlinx.serialization.json.JsonPrimitive(str.equals("true", ignoreCase = true) || str == "1")
+                        }
+                        else -> value
+                    }
+                }
+                else -> value
+            }
+            map[lower] = normalizedValue
+        }
+        return kotlinx.serialization.json.JsonObject(map)
+    }
+
     /** Returns the decoded profile, or null if the link is not a valid Happ routing link. */
     fun parse(link: String): RoutingProfile? {
         val trimmed = link.trim()
@@ -69,13 +105,18 @@ object HappRoutingParser {
             .trim()
         if (payload.isEmpty()) return null
         val jsonText = SubscriptionDecoder.decodeBase64Chunk(payload) ?: return null
-        return runCatching { json.decodeFromString<RoutingProfile>(jsonText) }.getOrNull()
+        return parseJson(jsonText)
     }
 
     /** Decodes raw Happ routing JSON, or null when it isn't valid routing JSON. */
     fun parseJson(text: String): RoutingProfile? {
-        if (!isRoutingJson(text)) return null
-        return runCatching { json.decodeFromString<RoutingProfile>(text.trim()) }.getOrNull()
+        val t = text.trim()
+        if (!t.startsWith("{")) return null
+        return runCatching {
+            val root = Json.parseToJsonElement(t) as? kotlinx.serialization.json.JsonObject ?: return null
+            val normalized = normalizeRoutingJson(root)
+            json.decodeFromJsonElement<RoutingProfile>(normalized)
+        }.getOrNull()
     }
 
     /** Parses a profile from either form (happ:// link or raw JSON). */

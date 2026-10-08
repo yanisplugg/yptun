@@ -197,9 +197,14 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     ?.let { runCatching { Json.decodeFromString(TrafficSettings.serializer(), it) }.getOrNull() }
                     ?.normalized()
                     ?: TrafficSettings()
-                _appBehavior.value = preferences[KEY_ANDROID_APP_BEHAVIOR]
+                val loadedBehavior = preferences[KEY_ANDROID_APP_BEHAVIOR]
                     ?.let { runCatching { Json.decodeFromString(AppBehaviorSettings.serializer(), it) }.getOrNull() }
                     ?: AppBehaviorSettings()
+                val behaviorWithDefaults = loadedBehavior.withAppliedDefaults()
+                _appBehavior.value = behaviorWithDefaults
+                if (behaviorWithDefaults != loadedBehavior) {
+                    setAppBehavior(behaviorWithDefaults)
+                }
                 // Mirror the subscription User-Agent choice into the process holder the fetch reads.
                 SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
                 // Restore the Telegram-over-WARP proxy if the user left it on (config is cached).

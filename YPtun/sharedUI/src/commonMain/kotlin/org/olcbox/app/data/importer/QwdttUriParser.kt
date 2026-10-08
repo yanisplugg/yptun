@@ -48,7 +48,24 @@ object QwdttUriParser {
             return parseQwdttUri(trimmed)
         }
         if (trimmed.startsWith(SCHEME_WDTT, ignoreCase = true)) {
-            return parseWdttLegacyUri(trimmed)
+            // 1. Try parsing as query URI (e.g. wdtt://config?peer=... or wdtt://?peer=...)
+            if (trimmed.contains('?') || trimmed.contains("config/")) {
+                val asQwdtt = trimmed.replaceFirst(Regex("^wdtt://", RegexOption.IGNORE_CASE), SCHEME_QWDTT)
+                parseQwdttUri(asQwdtt)?.let { return it }
+            }
+            // 2. Try legacy colon-separated URI: wdtt://<ip>:<dtls>:<wg>:<tun>:<pass>:<hash>
+            parseWdttLegacyUri(trimmed)?.let { return it }
+
+            // 3. Try base64 payload
+            val payload = trimmed.substring(SCHEME_WDTT.length).substringBefore('#').substringBefore('?').trim()
+            if (payload.isNotEmpty()) {
+                val decoded = SubscriptionDecoder.decodeBase64Chunk(payload)
+                if (decoded != null) {
+                    parseLine(decoded)?.let { return it }
+                    parseJson(decoded).firstOrNull()?.let { return it }
+                }
+            }
+            return null
         }
         return null
     }

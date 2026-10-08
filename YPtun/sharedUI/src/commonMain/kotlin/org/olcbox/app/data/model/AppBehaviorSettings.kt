@@ -129,9 +129,9 @@ data class AppBehaviorSettings(
     val lastPingResults: Map<String, Int?> = emptyMap(),
     /**
      * Show the subscription expiry date ("до дд.мм.гггг") under the last-refresh line in the
-     * subscription group header. Off by default; the urgent (≤2 days) red badge is always shown.
+     * subscription group header. On by default.
      */
-    val showSubscriptionExpiry: Boolean = false,
+    val showSubscriptionExpiry: Boolean = true,
     /**
      * Post a local notification when a subscription is about to expire (within
      * [SUBSCRIPTION_EXPIRY_NOTIFY_DAYS] days). Driven by the panel's expiry header
@@ -152,9 +152,9 @@ data class AppBehaviorSettings(
     val showSubscriptionAliveCount: Boolean = false,
     /**
      * Show the panel's own subscription description (Remnawave/Happ `announce` header) under the
-     * subscription group title in the location list, like Happ. Off by default.
+     * subscription group title in the location list, like Happ. On by default.
      */
-    val showSubscriptionDescription: Boolean = false,
+    val showSubscriptionDescription: Boolean = true,
     /** How many lines of the subscription description to show: 3, 5, or 0 = unlimited (default). */
     val subscriptionDescriptionLines: Int = 0,
     /**
@@ -168,6 +168,8 @@ data class AppBehaviorSettings(
      * Rows without a description always show the endpoint. On by default.
      */
     val hideEndpointWhenDescription: Boolean = true,
+    /** Migration flag: applied the new subscription defaults (expiry, description, icons, hide endpoint). */
+    val subDefaultsApplied: Boolean = true,
     /** User-created groups (folders) that reorganise the Home list. Empty = no folders. */
     val customGroups: List<CustomGroup> = emptyList(),
     /**
@@ -288,4 +290,18 @@ data class AppBehaviorSettings(
     /** [pingParallelism] clamped to the supported range. */
     fun effectivePingParallelism(): Int =
         pingParallelism.coerceIn(MIN_PING_PARALLELISM, MAX_PING_PARALLELISM)
+
+    /** One-time migration: ensures subscription details are on by default for users upgrading from older builds. */
+    fun withAppliedDefaults(): AppBehaviorSettings =
+        if (!subDefaultsApplied) {
+            copy(
+                subDefaultsApplied = true,
+                showSubscriptionExpiry = true,
+                showSubscriptionDescription = true,
+                showSubscriptionIcons = true,
+                hideEndpointWhenDescription = true
+            )
+        } else {
+            this
+        }
 }
