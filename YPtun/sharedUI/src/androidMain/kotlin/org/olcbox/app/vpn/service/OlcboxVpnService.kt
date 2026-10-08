@@ -3131,7 +3131,7 @@ class OlcboxVpnService : VpnService() {
                     val statusWidgets = hasStatusWidgets()
                     if (showSpeedOnHome || statusWidgets) OlcboxVpnState.setSpeed(down, up)
                     if (showSpeedInNotif) {
-                        updateNotification(base, speedLine(down, up))
+                        updateNotification(base, speedTexts(down, up))
                     } else if (showRoomsInNotif) {
                         updateNotification(base)
                     }
@@ -4347,18 +4347,18 @@ class OlcboxVpnService : VpnService() {
         )
     }
 
-    private fun updateNotification(status: String, speed: CharSequence? = null) {
+    private fun updateNotification(status: String, speed: Pair<String, String>? = null) {
         lastNotificationStatus = status
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIFICATION_ID, buildNotification(status, speed))
     }
 
-    private fun buildNotification(status: String, speed: CharSequence? = null): Notification {
+    private fun buildNotification(status: String, speed: Pair<String, String>? = null): Notification {
         val title = "YPtun"
-        // Body is the status line (the active server name when connected). When the
-        // live speed is shown, append it right next to the name.
-        val body: CharSequence = if (speed != null) {
-            android.text.SpannableStringBuilder(status).append("   ").append(speed)
+        // Body is the status line (the active server name when connected); the live speed, when shown,
+        // goes on its own second line below it (coloured text views in the custom layout).
+        val body: CharSequence = if (speed != null && resources.getIdentifier("notif_olcbox", "layout", packageName) == 0) {
+            "$status   ${speed.first}   ${speed.second}"
         } else {
             status
         }
@@ -4389,6 +4389,16 @@ class OlcboxVpnService : VpnService() {
             val rv = android.widget.RemoteViews(pkg, layoutId)
             rv.setTextViewText(resources.getIdentifier("notif_title", "id", pkg), title)
             rv.setTextViewText(resources.getIdentifier("notif_text", "id", pkg), body)
+            val speedRow = resources.getIdentifier("notif_speed", "id", pkg)
+            if (speed != null && speedRow != 0) {
+                val down = resources.getIdentifier("notif_speed_down", "id", pkg)
+                val up = resources.getIdentifier("notif_speed_up", "id", pkg)
+                rv.setTextViewText(down, speed.first)
+                rv.setTextColor(down, SPEED_DOWN_COLOR)
+                rv.setTextViewText(up, speed.second)
+                rv.setTextColor(up, SPEED_UP_COLOR)
+                rv.setViewVisibility(speedRow, android.view.View.VISIBLE)
+            }
             val logo = resources.getIdentifier("ic_notification_logo", "drawable", pkg)
             if (logo != 0) rv.setImageViewResource(resources.getIdentifier("notif_icon", "id", pkg), logo)
             builder.setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -4412,25 +4422,9 @@ class OlcboxVpnService : VpnService() {
         }
     }.getOrNull()
 
-    /** "↓ 1.2 MB/s  ↑ 300 KB/s" with a green download arrow and a blue upload arrow. */
-    private fun speedLine(downBytesPerSec: Long, upBytesPerSec: Long): CharSequence {
-        val sb = android.text.SpannableStringBuilder()
-        val downStart = sb.length
-        sb.append("↓ ")
-        sb.setSpan(
-            android.text.style.ForegroundColorSpan(0xFF2E7D32.toInt()), // green
-            downStart, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-        )
-        sb.append("${formatRate(downBytesPerSec)}   ")
-        val upStart = sb.length
-        sb.append("↑ ")
-        sb.setSpan(
-            android.text.style.ForegroundColorSpan(0xFF1565C0.toInt()), // blue
-            upStart, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-        )
-        sb.append(formatRate(upBytesPerSec))
-        return sb
-    }
+    /** ("↓ 1.2 MB/s", "↑ 300 KB/s"): the notification colours them green / blue, bright enough for dark and light shades. */
+    private fun speedTexts(downBytesPerSec: Long, upBytesPerSec: Long): Pair<String, String> =
+        "↓ ${formatRate(downBytesPerSec)}" to "↑ ${formatRate(upBytesPerSec)}"
 
     private fun formatRate(bytesPerSec: Long): String {
         val b = bytesPerSec.coerceAtLeast(0).toDouble()
@@ -4806,6 +4800,8 @@ class OlcboxVpnService : VpnService() {
             ProxyProfile.TYPE_SHADOWSOCKS
         )
         private const val NOTIFICATION_CHANNEL_ID = "olcbox_vpn"
+        private const val SPEED_DOWN_COLOR = 0xFF4CAF50.toInt() // green
+        private const val SPEED_UP_COLOR = 0xFF42A5F5.toInt() // blue
         private const val NOTIFICATION_ID = 100
         private const val VK_CAPTCHA_CHANNEL_ID = "olcbox_vk_captcha"
         private const val VK_CAPTCHA_NOTIFICATION_ID = 101
