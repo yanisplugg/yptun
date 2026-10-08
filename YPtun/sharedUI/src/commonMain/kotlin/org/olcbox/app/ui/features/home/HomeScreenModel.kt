@@ -479,9 +479,10 @@ class HomeScreenViewModel(
                 val workingServers = mutableListOf<FreeServerItem>()
 
                 withContext(Dispatchers.IO) {
-                    // Тот же ползунок «Потоки пинга» из настроек, что и у обычного пинга.
+                    // Ползунок «Потоки пинга», но не меньше [FREE_SERVERS_MIN_PARALLELISM]: при 5 потоках
+                    // по умолчанию ~330 проверок по 4 с шли до 4–5 минут. Больше в настройках — берём больше.
                     val sem = Semaphore(
-                        parallelism.coerceIn(
+                        maxOf(parallelism, FREE_SERVERS_MIN_PARALLELISM).coerceIn(
                             org.olcbox.app.data.model.AppBehaviorSettings.MIN_PING_PARALLELISM,
                             org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM,
                         )
@@ -945,8 +946,8 @@ const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/v
 
 /**
  * Источники бесплатных серверов (url, сколько уникальных серверов взять; 0 = все) в порядке
- * приоритета; [FREE_SERVERS_URL] — ещё и идентификатор группы. Общий объём (~300) прежний: при
- * «Потоках пинга» по умолчанию (5) и таймауте 4 с больший список проверялся бы заметно дольше.
+ * приоритета; [FREE_SERVERS_URL] — ещё и идентификатор группы. Общий объём (~330) прежний: каждая
+ * проверка до 4 с, и больший список заметно удлинил бы ожидание.
  *  - zieng2 — маленький (~60) список под российские белые списки, целиком;
  *  - Freedom-V2Ray — агрегатор шести списков (~1600 серверов всех протоколов), раз в 2 часа
  *    выкидывает хосты, не принимающие TCP. Это проверка из США, а не через прокси, поэтому
@@ -958,6 +959,15 @@ val FREE_SERVERS_SOURCES = listOf(
     "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix.txt" to 170,
     "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to 100,
 )
+
+/**
+ * Минимум параллельных проверок бесплатных серверов. Ползунок «Потоки пинга» по умолчанию 5 — его
+ * хватает на подписку из десятков серверов, а здесь их ~330. 16 — столько же было зашито у прохода
+ * автоподключения. Выше по умолчанию не берём (ползунок до 30 — пожалуйста): каждая проверка — свой
+ * временный прокси, и на больших числах
+ * растёт шанс ложного «недоступен» (см. [org.olcbox.app.data.model.AppBehaviorSettings.pingParallelism]).
+ */
+const val FREE_SERVERS_MIN_PARALLELISM = 16
 
 /**
  * Протоколы, которые берём из бесплатных списков: их разбирает [ShareLinkParser] и проверяет xray через
