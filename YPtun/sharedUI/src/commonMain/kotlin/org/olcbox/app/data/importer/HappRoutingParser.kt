@@ -115,7 +115,7 @@ object HappRoutingParser {
         return runCatching {
             val root = Json.parseToJsonElement(t) as? kotlinx.serialization.json.JsonObject ?: return null
             val normalized = normalizeRoutingJson(root)
-            json.decodeFromJsonElement<RoutingProfile>(normalized)
+            json.decodeFromJsonElement(RoutingProfile.serializer(), normalized)
         }.getOrNull()
     }
 
