@@ -956,10 +956,15 @@ const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/v
  *  - Freedom-V2Ray — агрегатор шести списков (~1600 серверов всех протоколов), раз в 2 часа
  *    выкидывает хосты, не принимающие TCP. Это проверка из США, а не через прокси, поэтому
  *    окончательно сервер всё равно проверяем сами — но мёртвых в нём заметно меньше;
+ *  - igareck/vpn-configs-for-russia — обновляется каждые пару часов, конфиги заранее проверяет сервер
+ *    в России (в т.ч. под белые списки мобильного интернета); берём три VLESS-файла целиком (~100 уникальных);
  *  - ebrasha — огромный (~7 тыс. уникальных, только VLESS) и живой процентов на 7, только выборка.
  */
 val FREE_SERVERS_SOURCES = listOf(
     FREE_SERVERS_URL to 0,
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt" to 0,
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt" to 0,
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-checked.txt" to 0,
     "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix.txt" to 170,
     "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to 100,
 )

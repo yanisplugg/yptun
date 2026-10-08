@@ -54,6 +54,15 @@ data class AppBehaviorSettings(
     val showSpeedOnHome: Boolean = false,
     /** Show "connected/total rooms" in the notification (olcRTC multi-room only). */
     val showRoomsInNotification: Boolean = false,
+    /**
+     * Where the ping goes in the notification: true = its own line above the speed, false = right
+     * after the server name ("Name · 45 ms").
+     */
+    val pingOwnLineInNotification: Boolean = false,
+    /** Notification ping source: true = measured through the tunnel every [notifPingIntervalMin], false = the last ping the user ran by hand. */
+    val notifPingAuto: Boolean = false,
+    /** Minutes between automatic notification pings (1..999). */
+    val notifPingIntervalMin: Int = 5,
     /** Hidden "Experimental" section unlocked by tapping the connection timer 5×. */
     val experimentalUnlocked: Boolean = false,
     /**

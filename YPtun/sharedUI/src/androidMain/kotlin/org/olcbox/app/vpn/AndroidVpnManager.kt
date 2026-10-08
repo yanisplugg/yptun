@@ -852,7 +852,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         if (ms >= 0) ms else null
     }
 
-    private suspend fun tunnelPing(): Long? = withContext(Dispatchers.IO) {
+    suspend fun tunnelPing(): Long? = withContext(Dispatchers.IO) {
         val sock = OlcboxVpnState.activeSocks ?: return@withContext null
         val host = AndroidSocksProxySettings.connectHost(sock.host)
 

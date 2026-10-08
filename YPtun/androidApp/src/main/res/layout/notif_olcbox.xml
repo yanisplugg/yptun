@@ -32,6 +32,15 @@
             android:ellipsize="end"
             android:textAppearance="@style/TextAppearance.Compat.Notification" />
 
+        <!-- Ping on its own line (setting: ping on its own line); hidden otherwise. -->
+        <TextView
+            android:id="@+id/notif_ping"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:visibility="gone"
+            android:textAppearance="@style/TextAppearance.Compat.Notification" />
+
         <!-- Live speed, second line under the server name; colours are set from code. -->
         <LinearLayout
             android:id="@+id/notif_speed"

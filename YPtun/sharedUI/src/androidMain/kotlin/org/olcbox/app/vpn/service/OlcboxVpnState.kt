@@ -41,6 +41,14 @@ object OlcboxVpnState {
         _speed.value = SpeedSample(downBytesPerSec, upBytesPerSec)
     }
 
+    /** Latest ping results of the location list (storage id -> ms, null = failed), fed by the UI; the notification shows the active one. */
+    private val _manualPings = MutableStateFlow<Map<String, Int?>>(emptyMap())
+    val manualPings = _manualPings.asStateFlow()
+
+    fun setManualPings(pings: Map<String, Int?>) {
+        _manualPings.value = pings
+    }
+
     /**
      * Manual VK captcha page for a VK-TURN (freeturn) connect, served by the freeturn client on a
      * localhost HTTP proxy. Non-null while the user has to solve it — the UI opens it in an in-app

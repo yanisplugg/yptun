@@ -129,6 +129,14 @@ fun AndroidMainScreen(
             }
         }
     }
+    // The notification's "last ping" mode reads the list's ping results through this.
+    val pingsNow = when (val ps = locationViewModel.pingsState) {
+        is org.olcbox.app.ui.features.locations.PingsState.Success -> ps.pings
+        is org.olcbox.app.ui.features.locations.PingsState.Loading -> ps.currentPings
+        is org.olcbox.app.ui.features.locations.PingsState.Error -> ps.lastPings.orEmpty()
+        else -> emptyMap()
+    }
+    LaunchedEffect(pingsNow) { org.olcbox.app.vpn.service.OlcboxVpnState.setManualPings(pingsNow) }
     var isAppSettingsOpen by remember { mutableStateOf(false) }
     var appSettingsInitialRoute by remember { mutableStateOf(AppSettingsInitialRoute.Hub) }
     var shareSheetPayload by remember { mutableStateOf<Pair<String, String>?>(null) }
