@@ -83,6 +83,13 @@ class DesktopVpnManager private constructor(
     private val _connectedSinceEpochMs = MutableStateFlow(0L)
     override val connectedSinceEpochMs: StateFlow<Long> = _connectedSinceEpochMs.asStateFlow()
 
+    override fun clearLogs() {
+        synchronized(logBuffer) {
+            logBuffer.clear()
+        }
+        _logs.value = emptyList()
+    }
+
     private val _socksProxySettings = MutableStateFlow(DesktopSocksProxySettings())
     val socksProxySettings: StateFlow<DesktopSocksProxySettings> = _socksProxySettings.asStateFlow()
 

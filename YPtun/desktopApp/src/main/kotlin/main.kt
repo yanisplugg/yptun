@@ -1201,6 +1201,9 @@ private fun runApp(args: Array<String>) = application {
                                 onError = { message -> updateMessage = message }
                             )
                         },
+                        onClearLogsClick = {
+                            dependencies.homeViewModel.onClearLogs()
+                        },
                         onUpdateIntervalSelected = { hours ->
                             scope.launch {
                                 saveUpdateSettings(updateSettings.copy(intervalHours = hours))

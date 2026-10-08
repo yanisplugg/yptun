@@ -582,6 +582,9 @@ private fun IosApp(
                             onError = platformBridge::showMessage
                         )
                     },
+                    onClearLogsClick = {
+                        dependencies.homeViewModel.onClearLogs()
+                    },
                     onUpdateIntervalSelected = {},
                     onCheckUpdatesClick = {},
                     onSubscriptionShareClick = { url ->

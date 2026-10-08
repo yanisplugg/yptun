@@ -939,7 +939,8 @@ object SingBoxConfig {
                 // Transports without sing-box smux support (wireguard, hysteria2, tuic…) must
                 // not get a multiplex block injected — it would fail config parsing.
                 val rawType = rawObj["type"]?.jsonPrimitive?.contentOrNull
-                val muxUnsupported = rawType in RAW_OUTBOUND_NO_MUX
+                val hasVision = raw.indexOf("xtls-rprx-vision", ignoreCase = true) >= 0
+                val muxUnsupported = rawType in RAW_OUTBOUND_NO_MUX || hasVision
                 return buildJsonObject {
                     rawObj.forEach { (k, v) -> if (k != "tag" && k != "detour") put(k, v) }
                     put("tag", tag)
@@ -1036,8 +1037,9 @@ object SingBoxConfig {
             }
 
             if (detourTag != null) put("detour", detourTag)
-            // hysteria2/naive/socks have no smux support: skip tcp_fast_open + multiplex.
-            if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE && profile.type != ProxyProfile.TYPE_SOCKS) {
+            // hysteria2/naive/socks have no smux support; vision flow is fundamentally incompatible with multiplex.
+            val hasVision = profile.flow.contains("vision", ignoreCase = true)
+            if (profile.type != ProxyProfile.TYPE_HYSTERIA2 && profile.type != ProxyProfile.TYPE_NAIVE && profile.type != ProxyProfile.TYPE_SOCKS && !hasVision) {
                 if (tfo) put("tcp_fast_open", true)
                 buildMultiplex(traffic, advanced)?.let { put("multiplex", it) }
             }

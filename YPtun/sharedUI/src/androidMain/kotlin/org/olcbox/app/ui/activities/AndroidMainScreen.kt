@@ -716,6 +716,9 @@ fun AndroidMainScreen(
                 }
                 viewModel.onShareLogs(showToast, showToast)
             },
+            onClearLogsClick = {
+                viewModel.onClearLogs()
+            },
             onUpdateIntervalSelected = { hours ->
                 scope.launch {
                     saveUpdateSettings(updateSettings.copy(intervalHours = hours))

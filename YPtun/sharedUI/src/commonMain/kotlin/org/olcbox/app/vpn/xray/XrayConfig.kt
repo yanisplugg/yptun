@@ -1905,7 +1905,13 @@ object XrayConfig {
             putJsonObject("proxySettings") { put("tag", detourTag) }
         }
 
-        if (traffic.muxEnabled && !isLocalSocks && !suppressMux) {
+        // XTLS-Vision and Mux (Mux.Cool) are fundamentally incompatible: Vision requires raw TLS
+        // inspection, while Mux tunnels streams inside mux.cool framing. Wrapping Vision in Mux
+        // breaks the server-side handshake and causes an infinite connection stall ("вечная загрузка").
+        // xhttp also already provides native HTTP/2 stream multiplexing (xmux).
+        val hasVision = p.flow.contains("vision", ignoreCase = true)
+        val hasNativeMux = p.network == ProxyProfile.NETWORK_XHTTP
+        if (traffic.muxEnabled && !isLocalSocks && !suppressMux && !hasVision && !hasNativeMux) {
             putJsonObject("mux") {
                 put("enabled", true)
                 put("concurrency", traffic.muxMaxConnections)

@@ -205,6 +205,7 @@ internal fun AppSettingsSheet(
     onCopyConfigClick: () -> Unit,
     onSaveLogsClick: () -> Unit,
     onShareLogsClick: () -> Unit,
+    onClearLogsClick: () -> Unit = {},
     onUpdateIntervalSelected: (Int) -> Unit,
     onCheckUpdatesClick: () -> Unit,
     onSubscriptionShareClick: (String) -> Unit,
@@ -423,7 +424,8 @@ internal fun AppSettingsSheet(
                     logs = logs,
                     onBack = { route = AppSettingsRoute.Hub },
                     onSaveClick = onSaveLogsClick,
-                    onShareClick = onShareLogsClick
+                    onShareClick = onShareLogsClick,
+                    onClearClick = onClearLogsClick
                 )
 
                 AppSettingsRoute.SubscriptionsSharing -> SubscriptionsSharingSettingsContent(
@@ -1711,7 +1713,8 @@ private fun ApplicationLogsSettingsContent(
     logs: List<String>,
     onBack: () -> Unit,
     onSaveClick: () -> Unit,
-    onShareClick: () -> Unit
+    onShareClick: () -> Unit,
+    onClearClick: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1730,6 +1733,13 @@ private fun ApplicationLogsSettingsContent(
                 modifier = Modifier.weight(1f)
             )
 
+            TextButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onClearClick,
+                contentPadding = PaddingValues(horizontal = 8.dp)
+            ) {
+                Text(LocalStrings.current.clearLogs)
+            }
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onSaveClick,

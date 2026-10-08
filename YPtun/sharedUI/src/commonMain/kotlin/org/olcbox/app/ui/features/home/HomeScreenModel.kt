@@ -319,6 +319,10 @@ class HomeScreenViewModel(
         }
     }
 
+    fun onClearLogs() {
+        vpnManager.clearLogs()
+    }
+
     fun onPasteFromClipboard(
         onComplete: () -> Unit = {},
         onError: (String) -> Unit = {}

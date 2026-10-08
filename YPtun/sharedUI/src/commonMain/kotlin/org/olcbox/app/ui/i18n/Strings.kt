@@ -166,6 +166,7 @@ interface Strings {
     val urlSchemesSubtitle: String
     val logs: String
     val logsSubtitle: String
+    val clearLogs: String
     val info: String
     fun version(v: String): String
     fun xrayVersion(v: String): String
@@ -877,6 +878,7 @@ object RuStrings : Strings {
     override val urlSchemesSubtitle = "Deep-link импорт и управление"
     override val logs = "Журнал"
     override val logsSubtitle = "Диагностика и экспорт"
+    override val clearLogs = "Очистить"
     override val info = "ИНФОРМАЦИЯ"
     override fun version(v: String) = "Версия: $v"
     override fun xrayVersion(v: String) = "Xray: $v"
@@ -1541,6 +1543,7 @@ object EnStrings : Strings {
     override val urlSchemesSubtitle = "Deep-link import and control"
     override val logs = "Logs"
     override val logsSubtitle = "Diagnostics and export"
+    override val clearLogs = "Clear"
     override val info = "INFORMATION"
     override fun version(v: String) = "Version: $v"
     override fun xrayVersion(v: String) = "Xray: $v"
@@ -2205,6 +2208,7 @@ object FaStrings : Strings {
     override val urlSchemesSubtitle = "ورود و کنترل از طریق پیوند عمیق"
     override val logs = "گزارش‌ها"
     override val logsSubtitle = "عیب‌یابی و برون‌بری"
+    override val clearLogs = "پاک کردن"
     override val info = "اطلاعات"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "ترجیح IPv4"
@@ -2869,6 +2873,7 @@ object ZhStrings : Strings {
     override val urlSchemesSubtitle = "深度链接导入与控制"
     override val logs = "日志"
     override val logsSubtitle = "诊断与导出"
+    override val clearLogs = "清空"
     override val info = "信息"
     override fun version(v: String) = "版本：$v"
     override fun xrayVersion(v: String) = "Xray：$v"

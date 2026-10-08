@@ -111,6 +111,7 @@ fun ApplicationSettingsSheet(
     onCopyConfigClick: () -> Unit,
     onSaveLogsClick: () -> Unit,
     onShareLogsClick: () -> Unit,
+    onClearLogsClick: () -> Unit = {},
     onUpdateIntervalSelected: (Int) -> Unit,
     onCheckUpdatesClick: () -> Unit,
     onDownloadUpdateClick: (AppUpdateInfo) -> Unit,
@@ -211,7 +212,8 @@ fun ApplicationSettingsSheet(
                     logs = logs,
                     onBack = { route = SharedSettingsRoute.Hub },
                     onSaveClick = onSaveLogsClick,
-                    onShareClick = onShareLogsClick
+                    onShareClick = onShareLogsClick,
+                    onClearClick = onClearLogsClick
                 )
             }
         }
@@ -634,7 +636,8 @@ private fun SharedLogsSettingsContent(
     logs: List<String>,
     onBack: () -> Unit,
     onSaveClick: () -> Unit,
-    onShareClick: () -> Unit
+    onShareClick: () -> Unit,
+    onClearClick: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -653,15 +656,21 @@ private fun SharedLogsSettingsContent(
 
             TextButton(
                 enabled = logs.isNotEmpty(),
+                onClick = onClearClick
+            ) {
+                Text(LocalStrings.current.clearLogs)
+            }
+            TextButton(
+                enabled = logs.isNotEmpty(),
                 onClick = onSaveClick
             ) {
-                Text("Save")
+                Text(LocalStrings.current.save)
             }
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onShareClick
             ) {
-                Text("Share")
+                Text(LocalStrings.current.share)
             }
         }
 

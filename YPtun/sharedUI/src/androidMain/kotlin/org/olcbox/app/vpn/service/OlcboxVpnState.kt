@@ -98,6 +98,13 @@ object OlcboxVpnState {
         pushLog(stripAnsi(line))
     }
 
+    fun clearLogs() {
+        synchronized(logBuffer) {
+            logBuffer.clear()
+        }
+        _logs.value = emptyList()
+    }
+
     /**
      * Кольцевой буфер + публикация пачками.
      *

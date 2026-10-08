@@ -22,6 +22,7 @@ interface VpnManager {
     val logs: StateFlow<List<String>>
     val status: StateFlow<VpnStatus>
     val isConnected: StateFlow<Boolean>
+    fun clearLogs() {}
 
     /**
      * Wall-clock epoch-ms when the current connection started (0 = not connected). Backed by a

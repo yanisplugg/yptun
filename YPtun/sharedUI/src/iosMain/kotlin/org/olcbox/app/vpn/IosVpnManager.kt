@@ -807,6 +807,11 @@ class IosVpnManager(
         _logs.value = (_logs.value + message).takeLast(MAX_LOG_LINES)
     }
 
+    override fun clearLogs() {
+        IosSharedStore.writeText(IosTunnelSession.LOG_FILE, "")
+        _logs.value = emptyList()
+    }
+
     private companion object {
         const val NOTIFIED_FILE = "notified_keys.txt"
         const val MAX_NOTIFIED_KEYS = 200
