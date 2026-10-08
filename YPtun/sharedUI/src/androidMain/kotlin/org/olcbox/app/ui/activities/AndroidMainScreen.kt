@@ -42,6 +42,7 @@ import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
 import org.olcbox.app.ui.OlcboxAppContent
 import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
+import org.olcbox.app.update.UpdateStageKind
 import org.olcbox.app.ui.components.VkTurnLinkPromptDialog
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationViewModel
@@ -285,9 +286,21 @@ fun AndroidMainScreen(
             updateStatusText = s.downloadingAsset(info.downloadAsset.name)
             // Prefer a binary delta (small patch applied to the installed APK) when one is published;
             // transparently falls back to a full download, and signature-verifies either way.
-            val result = updateInstaller.resolveUpdateApk(info) { progress ->
-                updateDownloadProgress = progress
-            }
+            val result = updateInstaller.resolveUpdateApk(
+                info,
+                onStage = { stage ->
+                    val title = when (stage.kind) {
+                        UpdateStageKind.DownloadPatch -> s.updateStageDownloadPatch
+                        UpdateStageKind.DownloadInstaller -> s.updateStageDownloadInstaller
+                        UpdateStageKind.ApplyPatch -> s.updateStageApplyPatch
+                        UpdateStageKind.Install -> s.updateStageInstall
+                        UpdateStageKind.Restart -> s.updateStageRestart
+                    }
+                    updateStatusText = s.updateStage(stage.step, stage.total, title)
+                    updateDownloadProgress = 0f
+                },
+                onProgress = { progress -> updateDownloadProgress = progress }
+            )
             val file = result.getOrElse { error ->
                 updateStatusText = s.downloadFailed(error.message ?: s.updateCheckFailed)
                 updateDownloadProgress = null
@@ -648,6 +661,7 @@ fun AndroidMainScreen(
         ApplicationUpdateOfferSheet(
             info = info,
             downloadProgress = updateDownloadProgress,
+            statusText = updateStatusText,
             onLater = { postponeUpdate(info) },
             onDownload = { downloadUpdate(info) },
             onManual = {
