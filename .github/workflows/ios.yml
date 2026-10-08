@@ -56,13 +56,18 @@ jobs:
 
       # gomobile/gobind at the x/mobile version pinned in cores/go.mod (bind needs the matching runtime).
       - name: Install gomobile + XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
           (cd openflux && go mod tidy)
           (cd cores && go mod tidy)
           cd cores
           go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          brew install xcodegen
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
 
       # Compose Multiplatform 1.12 references iOS 26 UIKit (UIViewLayoutRegion): the iOS 26 SDK is needed
       # to LINK (the deployment target stays 15 — newer API is weak-linked). The runner defaults to an
