@@ -1769,7 +1769,13 @@ object XrayConfig {
             ProxyProfile.SECURITY_TLS -> {
                 put("security", "tls")
                 putJsonObject("tlsSettings") {
-                    put("serverName", profile.sni.ifBlank { profile.server })
+                    // Blank SNI: take the HTTP Host (what v2rayN/Happ do), not the address — a CDN-fronted
+                    // ws/http server is picked by SNI, and the bare IP/address got every such link dropped.
+                    put("serverName", profile.sni.ifBlank {
+                        profile.host.substringBefore(',').trim().takeIf {
+                            it.isNotEmpty() && network != "tcp" && network != "grpc"
+                        } ?: profile.server
+                    })
                     put("allowInsecure", profile.allowInsecure)
                     if (profile.fingerprint.isNotBlank()) put("fingerprint", profile.fingerprint)
                     if (profile.alpn.isNotEmpty()) {

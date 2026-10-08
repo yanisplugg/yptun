@@ -86,6 +86,8 @@ object ShareLinkParser {
             fingerprint = str("fp"),
             path = pathOrService,
             host = str("host"),
+            // v2rayN-style vmess JSON: free lists mark self-signed / mismatched certs this way.
+            allowInsecure = str("allowInsecure", "skip-cert-verify", "insecure").let { it == "1" || it.equals("true", true) },
         ).withXrayParams(listOf("mode", "fm", "pcs", "vcn", "ech").associateWith { str(it) })
     }
 
