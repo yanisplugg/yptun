@@ -302,6 +302,8 @@ private fun IosApp(
                     appBehavior.showSubscriptionAliveCount,
                 org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription provides
                     appBehavior.showSubscriptionDescription,
+                org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines provides
+                    appBehavior.subscriptionDescriptionLines,
                 org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionIcons provides
                     appBehavior.showSubscriptionIcons,
                 org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides

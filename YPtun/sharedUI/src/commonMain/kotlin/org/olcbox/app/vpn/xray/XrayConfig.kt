@@ -95,6 +95,44 @@ object XrayConfig {
     )
 
     /**
+     * Xray has no DNS-over-TLS client (only udp/tcp/https/quic), so a `tls://host[:port]` resolver
+     * the user typed is sent as DoH on the same host (`https://host/dns-query`) — every common DoT
+     * provider (Cloudflare, Google, Quad9, AdGuard…) serves DoH there too. Anything else is as typed.
+     */
+    private fun xrayDns(server: String): String {
+        val s = server.trim()
+        if (!s.startsWith("tls://", ignoreCase = true)) return pinKnownDohHost(s)
+        val host = s.substring(6).substringBefore("/").let {
+            if (it.startsWith("[")) it.substringBefore("]") + "]" else it.substringBefore(":")
+        }
+        return pinKnownDohHost("https://$host/dns-query")
+    }
+
+    /** Well-known DoH hostnames → the IP whose certificate carries it as a SAN (see [DOH_IP_PROVIDERS]). */
+    private val DOH_HOST_IPS = mapOf(
+        "cloudflare-dns.com" to "1.1.1.1",
+        "one.one.one.one" to "1.1.1.1",
+        "dns.google" to "8.8.8.8",
+        "dns.quad9.net" to "9.9.9.9",
+        "dns.alidns.com" to "223.5.5.5",
+    )
+
+    /**
+     * `https://cloudflare-dns.com/dns-query` → `https://1.1.1.1/dns-query` (same for Google/Quad9/AliDNS).
+     * A hostname DoH makes Xray resolve that host first through the very DNS it is configuring; behind a
+     * proxy that lookup stalls until the 4s deadline and every uncached domain pays it. The IP form needs
+     * no bootstrap and is pinned to the proxy by [remoteDnsEndpoints]. Other hosts/paths are left as typed.
+     */
+    private fun pinKnownDohHost(s: String): String {
+        if (!s.startsWith("https://", ignoreCase = true)) return s
+        val rest = s.substring(8)
+        val host = rest.substringBefore('/').lowercase()
+        val path = rest.substringAfter('/', "")
+        val ip = DOH_HOST_IPS[host] ?: return s
+        return if (path.isEmpty() || path == "dns-query") "https://$ip/dns-query" else s
+    }
+
+    /**
      * Rewrites an UPSTREAM (proxied) DNS resolver so it survives an exit that blocks plain DNS. The
      * remote resolvers ride the proxy/cascade, and a splithttp/cascade exit that drops UDP:53 *and*
      * TCP:53 to 8.8.8.8/1.1.1.1 made every lookup wait out a 4s serial timeout → "record not found" →
@@ -108,12 +146,48 @@ object XrayConfig {
      * plain UDP is fine.
      */
     private fun proxiedDns(server: String): String {
-        val s = server.trim()
+        val s = xrayDns(server)
         if (s.isEmpty() || s.contains("://") || s == FAKEDNS_SERVER) return s
         if (s in DOH_IP_PROVIDERS) return "https://$s/dns-query"
         val isIpv4 = s.all { it.isDigit() || it == '.' } && s.count { it == '.' } == 3
         val isIpv6 = s.contains(':') && s.all { it.isDigit() || (it in 'a'..'f') || (it in 'A'..'F') || it == ':' }
         return if (isIpv4 || isIpv6) "tcp://$s" else s
+    }
+
+    /**
+     * Xray's own DNS client has no `detour`: the connection it opens to a REMOTE resolver (a DoH server,
+     * a TCP resolver…) is routed like any other, so a routing profile's `direct` bucket could send it out
+     * of the tunnel — onto a network that intercepts DoH and answers with a block page ("failed to handle
+     * DOH response … segment prefix is reserved"). Returns the hosts of the user's REMOTE resolvers as
+     * (domain, ip) so the routing can pin them to the proxy, as «Удалённый DNS (через прокси)» promises.
+     * The direct resolver, `+local` servers, fakedns/localhost and private addresses are left alone.
+     */
+    internal fun remoteDnsEndpoints(traffic: TrafficSettings): Pair<List<String>, List<String>> {
+        val domains = linkedSetOf<String>()
+        val ips = linkedSetOf<String>()
+        for (raw in listOf(traffic.remoteDns, traffic.remoteDns2)) {
+            val s = proxiedDns(raw).trim()
+            if (s.isEmpty() || s == FAKEDNS_SERVER || s.equals("localhost", ignoreCase = true)) continue
+            val scheme = s.substringBefore("://", "")
+            if (scheme.contains("+local")) continue
+            val authority = s.substringAfter("://").substringBefore('/')
+            val host = if (authority.startsWith("[")) authority.substringAfter('[').substringBefore(']')
+            else if (authority.count { it == ':' } == 1) authority.substringBefore(':') else authority
+            if (host.isBlank()) continue
+            val isIp = host.contains(':') || host.all { it.isDigit() || it == '.' }
+            when {
+                !isIp -> domains += "full:${host.lowercase()}"
+                !isPrivateDnsHost(host) -> ips += host
+            }
+        }
+        return domains.toList() to ips.toList()
+    }
+
+    private fun isPrivateDnsHost(ip: String): Boolean {
+        if (ip.contains(':')) return ip == "::1" || ip.startsWith("fe80", ignoreCase = true) || ip.startsWith("fc") || ip.startsWith("fd")
+        val p = ip.split('.').mapNotNull { it.toIntOrNull() }
+        if (p.size != 4) return false
+        return p[0] == 10 || p[0] == 127 || (p[0] == 192 && p[1] == 168) || (p[0] == 172 && p[1] in 16..31) || (p[0] == 169 && p[1] == 254)
     }
 
     // --- FakeDNS building blocks (shared by build() and prepareRaw()) ---
@@ -304,7 +378,7 @@ object XrayConfig {
                         add("tcp://8.8.8.8")
                         add("tcp://1.1.1.1")
                     }
-                    add(traffic.directDns)
+                    add(xrayDns(traffic.directDns))
                 }
                 put("queryStrategy", traffic.xrayQueryStrategy())
             }
@@ -552,6 +626,25 @@ object XrayConfig {
                 }
                 put("outboundTag", if (directViaBase) PROXY_BASE_TAG else PROXY_TAG)
             } else null
+            val remoteDnsProxyRules = remoteDnsEndpoints(traffic).let { (domains, ips) ->
+                buildList {
+                    val targetTag = if (directViaBase) PROXY_BASE_TAG else PROXY_TAG
+                    if (domains.isNotEmpty()) {
+                        add(buildJsonObject {
+                            put("type", "field")
+                            putJsonArray("domain") { domains.forEach { add(it) } }
+                            put("outboundTag", targetTag)
+                        })
+                    }
+                    if (ips.isNotEmpty()) {
+                        add(buildJsonObject {
+                            put("type", "field")
+                            putJsonArray("ip") { ips.forEach { add(it) } }
+                            put("outboundTag", targetTag)
+                        })
+                    }
+                }
+            }
             val lanBypassRule = if (routing.bypassLan && bypassLan && !directViaBase) buildJsonObject {
                 put("type", "field")
                 putJsonArray("ip") {
@@ -678,6 +771,7 @@ object XrayConfig {
                         cascadeLoopRule?.let { add(it) }
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
                         dnsOutRules.forEach { add(it) }
+                        remoteDnsProxyRules.forEach { add(it) }
                         fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
@@ -696,6 +790,7 @@ object XrayConfig {
                     putJsonArray("rules") {
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
+                        remoteDnsProxyRules.forEach { add(it) }
                         fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)

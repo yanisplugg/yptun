@@ -1424,6 +1424,9 @@ private fun SubscriptionAnnounceText(
             lineHeight = 14.sp,
             color = MaterialTheme.colorScheme.primary
         ),
+        maxLines = org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines.current
+            .let { if (it > 0) it else Int.MAX_VALUE },
+        overflow = TextOverflow.Ellipsis,
         modifier = modifier.padding(top = 2.dp),
         onClick = { offset ->
             val clickedAnnotation = annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset).firstOrNull()

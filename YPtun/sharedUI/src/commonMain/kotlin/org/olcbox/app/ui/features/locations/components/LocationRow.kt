@@ -83,6 +83,9 @@ val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
  */
 val LocalShowSubscriptionDescription = staticCompositionLocalOf { false }
 
+/** Max lines of the subscription description in the group header; 0 = unlimited. */
+val LocalSubscriptionDescriptionLines = staticCompositionLocalOf { 0 }
+
 /** Whether the subscription group header shows the panel-provided icon left of the title. On by default. */
 val LocalShowSubscriptionIcons = staticCompositionLocalOf { true }
 
@@ -213,7 +216,7 @@ fun LocationRow(
             val description = location.config?.description?.takeIf { it.isNotBlank() }
             description?.let { desc ->
                 Text(
-                    text = desc,
+                    text = rememberLinkified(desc),
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 12.sp,
                     maxLines = 2,
@@ -547,7 +550,7 @@ fun LocationGridCell(
             description?.let { desc ->
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
-                    text = desc,
+                    text = rememberLinkified(desc),
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     lineHeight = 13.sp,

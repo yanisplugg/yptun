@@ -428,6 +428,8 @@ fun AndroidMainScreen(
         org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides appBehavior.showSubscriptionAliveCount,
+        org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription provides appBehavior.showSubscriptionDescription,
+        org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines provides appBehavior.subscriptionDescriptionLines,
         org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides appBehavior.hideEndpointWhenDescription,
         org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides
             (if (appBehavior.showSpeedOnHome && isVpnConnected) liveSpeed else null)

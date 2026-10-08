@@ -178,6 +178,7 @@ interface Strings {
     fun domainStrategyName(v: String): String
     fun hwid(v: String): String
     val community: String
+    val termsOfUse: String
     val howToConnect: String
     val donate: String
     val donateSubtitle: String
@@ -211,6 +212,7 @@ interface Strings {
     val remoteDnsLabel: String
     val remoteDns2Label: String
     val directDnsLabel: String
+    val dnsFormatsHint: String
     val domainStrategy: String
     val multiplexing: String
     val useMux: String
@@ -522,6 +524,8 @@ interface Strings {
     val showSubscriptionExpirySubtitle: String
     val showSubscriptionDescriptionTitle: String
     val showSubscriptionDescriptionSubtitle: String
+    val subscriptionDescriptionLinesTitle: String
+    val subscriptionDescriptionLinesUnlimited: String
     val showSubscriptionIconsTitle: String
     val showSubscriptionIconsSubtitle: String
     val subscriptionUserAgentLabel: String
@@ -890,6 +894,7 @@ object RuStrings : Strings {
     }
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Сообщество"
+    override val termsOfUse = "Условия использования"
     override val howToConnect = "Как подключиться?"
     override val donate = "Поддержать проект"
     override val donateSubtitle = "USDT · TON · GRAM — нажмите, чтобы скопировать адрес"
@@ -919,6 +924,7 @@ object RuStrings : Strings {
     override val remoteDnsLabel = "Удалённый DNS (через прокси)"
     override val remoteDns2Label = "Второй удалённый DNS (необязательно)"
     override val directDnsLabel = "Прямой DNS (bootstrap)"
+    override val dnsFormatsHint = "Можно обычный IP или DoH/DoT/DoQ: https://dns.google/dns-query, tls://1.1.1.1, quic://dns.adguard-dns.com"
     override val domainStrategy = "Доменная стратегия"
     override val multiplexing = "Мультиплексирование"
     override val useMux = "Использовать Mux"
@@ -1199,6 +1205,8 @@ object RuStrings : Strings {
     override val showSubscriptionExpirySubtitle = "Под датой обновления выводить «до дд.мм.гггг»"
     override val showSubscriptionDescriptionTitle = "Показывать описание подписки"
     override val showSubscriptionDescriptionSubtitle = "Текст от панели (announce) под названием подписки"
+    override val subscriptionDescriptionLinesTitle = "Строк описания подписки"
+    override val subscriptionDescriptionLinesUnlimited = "Без ограничений"
     override val showSubscriptionIconsTitle = "Показывать иконки подписок"
     override val showSubscriptionIconsSubtitle = "Иконка от панели слева от названия подписки"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
@@ -1550,6 +1558,7 @@ object EnStrings : Strings {
     }
     override fun hwid(v: String) = "HWID: $v"
     override val community = "Community"
+    override val termsOfUse = "Terms of Use"
     override val howToConnect = "How to connect?"
     override val donate = "Support the project"
     override val donateSubtitle = "USDT · TON · GRAM — tap to copy the address"
@@ -1579,6 +1588,7 @@ object EnStrings : Strings {
     override val remoteDnsLabel = "Remote DNS (via proxy)"
     override val remoteDns2Label = "Second remote DNS (optional)"
     override val directDnsLabel = "Direct DNS (bootstrap)"
+    override val dnsFormatsHint = "Plain IP, or DoH/DoT/DoQ: https://dns.google/dns-query, tls://1.1.1.1, quic://dns.adguard-dns.com"
     override val domainStrategy = "Domain strategy"
     override val multiplexing = "Multiplexing"
     override val useMux = "Use Mux"
@@ -1859,6 +1869,8 @@ object EnStrings : Strings {
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val showSubscriptionDescriptionTitle = "Show subscription description"
     override val showSubscriptionDescriptionSubtitle = "The panel's announce text under the subscription name"
+    override val subscriptionDescriptionLinesTitle = "Subscription description lines"
+    override val subscriptionDescriptionLinesUnlimited = "Unlimited"
     override val showSubscriptionIconsTitle = "Show subscription icons"
     override val showSubscriptionIconsSubtitle = "The panel's icon to the left of the subscription name"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
@@ -2210,6 +2222,7 @@ object FaStrings : Strings {
     override fun olcrtcVersion(v: String) = "OLCRTC: $v"
     override fun hwid(v: String) = "HWID: $v"
     override val community = "انجمن"
+    override val termsOfUse = "شرایط استفاده"
     override val howToConnect = "چگونه متصل شویم؟"
     override val donate = "حمایت از پروژه"
     override val donateSubtitle = "USDT · TON · GRAM — برای کپی آدرس ضربه بزنید"
@@ -2239,6 +2252,7 @@ object FaStrings : Strings {
     override val remoteDnsLabel = "DNS راه‌دور (از طریق پراکسی)"
     override val remoteDns2Label = "DNS راه‌دور دوم (اختیاری)"
     override val directDnsLabel = "DNS مستقیم (راه‌انداز)"
+    override val dnsFormatsHint = "IP ساده یا DoH/DoT/DoQ: https://dns.google/dns-query ، tls://1.1.1.1 ، quic://dns.adguard-dns.com"
     override val domainStrategy = "راهبرد دامنه"
     override val multiplexing = "چندتکثیری (Multiplexing)"
     override val useMux = "استفاده از Mux"
@@ -2535,6 +2549,8 @@ object FaStrings : Strings {
     override val showSubscriptionExpirySubtitle = "نمایش «تا dd.mm.yyyy» زیر تاریخ به‌روزرسانی"
     override val showSubscriptionDescriptionTitle = "نمایش توضیحات اشتراک"
     override val showSubscriptionDescriptionSubtitle = "نمایش متن پنل (announce) زیر نام اشتراک"
+    override val subscriptionDescriptionLinesTitle = "تعداد خطوط توضیحات اشتراک"
+    override val subscriptionDescriptionLinesUnlimited = "نامحدود"
     override val showSubscriptionIconsTitle = "نمایش آیکون اشتراک‌ها"
     override val showSubscriptionIconsSubtitle = "آیکون پنل در سمت چپ نام اشتراک"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
@@ -2870,6 +2886,7 @@ object ZhStrings : Strings {
     }
     override fun hwid(v: String) = "HWID：$v"
     override val community = "社区"
+    override val termsOfUse = "使用条款"
     override val howToConnect = "如何连接？"
     override val donate = "支持项目"
     override val donateSubtitle = "USDT · TON · GRAM — 点按复制地址"
@@ -2899,6 +2916,7 @@ object ZhStrings : Strings {
     override val remoteDnsLabel = "远程 DNS（经代理）"
     override val remoteDns2Label = "第二远程 DNS（可选）"
     override val directDnsLabel = "直连 DNS（引导）"
+    override val dnsFormatsHint = "可填普通 IP 或 DoH/DoT/DoQ：https://dns.google/dns-query、tls://1.1.1.1、quic://dns.adguard-dns.com"
     override val domainStrategy = "域名策略"
     override val multiplexing = "多路复用"
     override val useMux = "启用 Mux"
@@ -3179,6 +3197,8 @@ object ZhStrings : Strings {
     override val showSubscriptionExpirySubtitle = "在刷新日期下方显示“至 dd.mm.yyyy”"
     override val showSubscriptionDescriptionTitle = "显示订阅说明"
     override val showSubscriptionDescriptionSubtitle = "在订阅名称下方显示面板文本（announce）"
+    override val subscriptionDescriptionLinesTitle = "订阅说明行数"
+    override val subscriptionDescriptionLinesUnlimited = "不限"
     override val showSubscriptionIconsTitle = "显示订阅图标"
     override val showSubscriptionIconsSubtitle = "在订阅名称左侧显示面板图标"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"
