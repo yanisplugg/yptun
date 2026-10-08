@@ -1,313 +1,139 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YPtun - Modern Network Routing Client</title>
-    <style>
-        :root {
-            --bg: #ffffff;
-            --surface: #f5f5f7;
-            --surface-border: #e5e5ea;
-            --text-main: #1d1d1f;
-            --text-secondary: #6e6e73;
-            --text-muted: #86868b;
-            --accent: #0071e3;
-            --accent-hover: #0077ed;
-            --nav-bg: rgba(255, 255, 255, 0.8);
-            --card-bg: #ffffff;
-        }
-
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #000000;
-                --surface: #1c1c1e;
-                --surface-border: #2c2c2e;
-                --text-main: #f5f5f7;
-                --text-secondary: #86868b;
-                --text-muted: #6e6e73;
-                --accent: #2997ff;
-                --accent-hover: #0077ed;
-                --nav-bg: rgba(0, 0, 0, 0.8);
-                --card-bg: #1c1c1e;
-            }
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg);
-            color: var(--text-main);
-            line-height: 1.65;
-            -webkit-font-smoothing: antialiased;
-        }
-
-        header {
-            background-color: var(--nav-bg);
-            backdrop-filter: saturate(180%) blur(20px);
-            -webkit-backdrop-filter: saturate(180%) blur(20px);
-            border-bottom: 1px solid var(--surface-border);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .nav-container {
-            max-width: 960px;
-            margin: 0 auto;
-            padding: 16px 24px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .logo {
-            font-size: 1.15rem;
-            font-weight: 600;
-            color: var(--text-main);
-            text-decoration: none;
-            letter-spacing: -0.01em;
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 24px;
-        }
-
-        .nav-links a {
-            color: var(--text-secondary);
-            text-decoration: none;
-            font-size: 0.92rem;
-            font-weight: 400;
-            transition: color 0.15s ease;
-        }
-
-        .nav-links a:hover, .nav-links a.active {
-            color: var(--text-main);
-        }
-
-        main {
-            max-width: 920px;
-            margin: 72px auto 96px;
-            padding: 0 24px;
-        }
-
-        .hero {
-            text-align: center;
-            margin-bottom: 72px;
-        }
-
-        .hero h1 {
-            font-size: 3rem;
-            font-weight: 700;
-            letter-spacing: -0.03em;
-            line-height: 1.15;
-            margin-bottom: 16px;
-        }
-
-        .hero p {
-            font-size: 1.25rem;
-            color: var(--text-secondary);
-            max-width: 640px;
-            margin: 0 auto 32px;
-            font-weight: 400;
-            line-height: 1.5;
-        }
-
-        .btn-group {
-            display: flex;
-            gap: 16px;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .btn-primary {
-            display: inline-block;
-            background-color: var(--accent);
-            color: #ffffff;
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 0.95rem;
-            padding: 11px 24px;
-            border-radius: 20px;
-            transition: background-color 0.15s ease;
-        }
-
-        .btn-primary:hover {
-            background-color: var(--accent-hover);
-        }
-
-        .btn-secondary {
-            display: inline-block;
-            background-color: var(--surface);
-            color: var(--text-main);
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 0.95rem;
-            padding: 11px 24px;
-            border-radius: 20px;
-            border: 1px solid var(--surface-border);
-            transition: background-color 0.15s ease;
-        }
-
-        .btn-secondary:hover {
-            background-color: var(--surface-border);
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-            gap: 20px;
-            margin-bottom: 72px;
-        }
-
-        .card {
-            background-color: var(--surface);
-            border-radius: 16px;
-            padding: 28px 24px;
-            border: 1px solid var(--surface-border);
-        }
-
-        .card h3 {
-            font-size: 1.15rem;
-            font-weight: 600;
-            margin-bottom: 10px;
-            letter-spacing: -0.01em;
-        }
-
-        .card p {
-            color: var(--text-secondary);
-            font-size: 0.95rem;
-            line-height: 1.55;
-        }
-
-        .callout-card {
-            background-color: var(--surface);
-            border-radius: 20px;
-            padding: 48px 36px;
-            text-align: center;
-            border: 1px solid var(--surface-border);
-        }
-
-        .callout-card h2 {
-            font-size: 1.75rem;
-            font-weight: 600;
-            letter-spacing: -0.02em;
-            margin-bottom: 12px;
-        }
-
-        .callout-card p {
-            color: var(--text-secondary);
-            font-size: 1.05rem;
-            max-width: 580px;
-            margin: 0 auto 24px;
-        }
-
-        footer {
-            border-top: 1px solid var(--surface-border);
-            padding: 40px 24px;
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 0.85rem;
-        }
-
-        footer a {
-            color: var(--text-secondary);
-            text-decoration: none;
-            margin: 0 8px;
-        }
-
-        footer a:hover {
-            color: var(--text-main);
-        }
-
-        @media (max-width: 600px) {
-            .hero h1 {
-                font-size: 2.2rem;
-            }
-            .hero p {
-                font-size: 1.05rem;
-            }
-            .btn-group {
-                flex-direction: column;
-            }
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YPtun</title>
+<style>
+:root{--bg:#fff;--fg:#14171f;--mut:#667085;--card:#f4f6fa;--acc:#2f6bff;--accfg:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1218;--fg:#e8ebf2;--mut:#98a2b3;--card:#1a1f2b}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box}
+main{width:100%;max-width:520px;text-align:center}
+h1{margin:0 0 4px}
+.mut{color:var(--mut);font-size:14px}
+.mut a{color:var(--mut);text-decoration:none;margin:0 6px}
+.mut a:hover{color:var(--acc);text-decoration:underline}
+.big{display:block;margin:24px 0 8px;padding:16px;border-radius:12px;background:var(--acc);color:var(--accfg);font-size:18px;font-weight:600;text-decoration:none}
+.big small{display:block;font-weight:400;opacity:.85;font-size:13px}
+details{margin-top:24px;text-align:left;background:var(--card);border-radius:12px;padding:8px 16px}
+summary{cursor:pointer;padding:8px 0}
+li{margin:6px 0;word-break:break-all}
+a{color:var(--acc)}
+.lang{direction:ltr;display:flex;gap:6px;justify-content:center;margin-bottom:16px}
+.lang button{border:0;border-radius:8px;padding:6px 12px;background:var(--card);color:var(--fg);font:inherit;font-size:14px;cursor:pointer}
+.lang button[aria-pressed=true]{background:var(--acc);color:var(--accfg)}
+.big small,li{direction:ltr}
+</style>
 </head>
 <body>
-
-<header>
-    <div class="nav-container">
-        <a href="index.html" class="logo">
-            YPtun
-        </a>
-        <nav class="nav-links">
-            <a href="index.html" class="active">Home</a>
-            <a href="terms.html">Terms</a>
-            <a href="privacy.html">Privacy</a>
-            <a href="support.html">Support</a>
-        </nav>
-    </div>
-</header>
-
 <main>
-    <section class="hero">
-        <h1>Private & Reliable<br>Network Routing.</h1>
-        <p>A modern, high-performance tunneling client engineered for privacy, speed, and native platform integration.</p>
-        <div class="btn-group">
-            <a href="support.html" class="btn-primary">
-                Get Support
-            </a>
-            <a href="privacy.html" class="btn-secondary">
-                Privacy Policy
-            </a>
-        </div>
-    </section>
-
-    <div class="grid">
-        <div class="card">
-            <h3>Strict Zero-Logs Policy</h3>
-            <p>We do not monitor, log, or record any browsing activity, DNS lookups, or network packets. Your traffic stays strictly private.</p>
-        </div>
-        <div class="card">
-            <h3>Native iOS Integration</h3>
-            <p>Designed with deep system integration for iOS 18 Control Center controls, Lock Screen toggles, and Live Activity status.</p>
-        </div>
-        <div class="card">
-            <h3>Modern Protocols</h3>
-            <p>Engineered with support for WireGuard, VLESS, and SOCKS5 tunnels with flexible rule-based routing capabilities.</p>
-        </div>
-        <div class="card">
-            <h3>Diagnostic Tools</h3>
-            <p>Accurate latency probing (ping) and real-time packet counters keep you informed of connection health and stability.</p>
-        </div>
-        <div class="card">
-            <h3>Local & Secure Storage</h3>
-            <p>Server profiles, keys, and credentials are encrypted strictly within the local device Keychain and sandboxed storage.</p>
-        </div>
-        <div class="card">
-            <h3>No Account Required</h3>
-            <p>No user registration, no email address, and no tracking. Launch the client and connect instantly.</p>
-        </div>
-    </div>
-
-    <div class="callout-card">
-        <h2>Your Privacy is Our Standard</h2>
-        <p>Built with data minimization at its core. If you have questions, feedback, or need technical assistance, our support team is here to help.</p>
-        <a href="mailto:yptunn@gmail.com" class="btn-primary">
-            Contact Support &bull; yptunn@gmail.com
-        </a>
-    </div>
+  <div class="lang" id="lang"></div>
+  <h1>YPtun</h1>
+  <div class="mut" id="ver">…</div>
+  <div id="main"></div>
+  <details id="all" hidden><summary id="allT"></summary><ul id="list"></ul></details>
+  <p class="mut">
+    <a id="gh" href="https://github.com/yanisplugg/yptun/releases/latest">GitHub Releases</a> &bull;
+    <a href="privacy.html">Privacy Policy</a> &bull;
+    <a href="terms.html">Terms of Service</a> &bull;
+    <a href="support.html">Support</a>
+  </p>
 </main>
+<script>
+const REPO = "yanisplugg/yptun";
+const L = {
+  ru: {name: "Русский", title: "YPtun — скачать", dl: "Скачать для", other: "Все файлы релиза", none: "Не удалось определить систему — выберите файл ниже.", err: "Не удалось загрузить релиз. Откройте GitHub Releases ниже."},
+  en: {name: "English", title: "YPtun — download", dl: "Download for", other: "All release files", none: "Could not detect your system — pick a file below.", err: "Could not load the release. Use GitHub Releases below."},
+  fa: {name: "فارسی", title: "YPtun — دانلود", dl: "دانلود برای", other: "همه فایل‌های نسخه", none: "سیستم شما شناسایی نشد — یکی از فایل‌های زیر را انتخاب کنید.", err: "بارگذاری نسخه ناموفق بود. از GitHub Releases در پایین استفاده کنید."},
+  zh: {name: "中文", title: "YPtun — 下载", dl: "下载适用于", other: "所有发布文件", none: "无法识别您的系统 — 请在下方选择文件。", err: "无法加载发布版本，请使用下方的 GitHub Releases。"}
+};
+// Язык: ?lang= → выбор пользователя (localStorage) → язык браузера (navigator.languages) → en.
+const store = {get: () => { try { return localStorage.lang; } catch (e) {} }, set: (v) => { try { localStorage.lang = v; } catch (e) {} }};
+function autoLang() {
+  for (const l of navigator.languages || [navigator.language]) {
+    const c = String(l).slice(0, 2).toLowerCase();
+    if (L[c]) return c;
+  }
+  return "en";
+}
+let lang = [new URLSearchParams(location.search).get("lang"), store.get()].find((c) => L[c]) || autoLang();
+let T = L[lang];
+let rendered = null; // null = грузится, false = ошибка; иначе последний {r, assets, d, best} — для перерисовки при смене языка
 
-<footer>
-    <p>&copy; 2026 YPtun. All rights reserved. &bull; <a href="index.html">Home</a> &bull; <a href="terms.html">Terms of Service</a> &bull; <a href="privacy.html">Privacy Policy</a> &bull; <a href="support.html">Support</a></p>
-</footer>
+// Определение ОС и архитектуры. ponytail: macOS/iOS сборок нет — покажем общий список.
+async function detect() {
+  const ua = navigator.userAgent;
+  let os = /Android/i.test(ua) ? "android" : /Windows/i.test(ua) ? "windows" : /Linux|X11/i.test(ua) ? "linux" : null;
+  let arm = /arm64|aarch64/i.test(ua);
+  try {
+    const h = await navigator.userAgentData?.getHighEntropyValues(["architecture"]);
+    if (h) arm = /arm/i.test(h.architecture);
+  } catch (e) {}
+  return {os, arm};
+}
 
+// Подбор файла по подстроке имени (в именах есть версия, поэтому точное имя не годится).
+function pick(assets, {os, arm}) {
+  const has = (re) => assets.find((a) => re.test(a.name));
+  const a = arm ? "arm64" : "(x64|amd64)";
+  if (os === "windows") return has(new RegExp(`${arm ? "arm64" : "x64"}.*installer\\.exe$`, "i")) || has(/\.exe$/i);
+  if (os === "linux") return has(new RegExp(`${a}.*\\.AppImage$`, "i")) || has(new RegExp(`${a}.*\\.deb$`, "i"));
+  if (os === "android") return has(/universal.*\.apk$/i) || has(/\.apk$/i);
+}
+
+function render() {
+  document.documentElement.lang = lang;
+  document.documentElement.dir = lang === "fa" ? "rtl" : "ltr";
+  document.title = T.title;
+  document.getElementById("lang").innerHTML = Object.keys(L)
+    .map((c) => `<button data-l="${c}" aria-pressed="${c === lang}">${L[c].name}</button>`).join("");
+  if (!rendered) { document.getElementById("main").innerHTML = rendered === false ? `<p class="mut">${T.err}</p>` : ""; return; }
+  const {r, assets, d, best} = rendered;
+  const label = {windows: "Windows", linux: "Linux", android: "Android"}[d.os];
+  document.getElementById("main").innerHTML = best
+    ? `<a class="big" href="${best.browser_download_url}">${T.dl} ${label}${d.os !== "android" ? (d.arm ? " ARM64" : " x64") : ""}<small>${best.name}</small></a>`
+    : `<p class="mut">${T.none}</p>`;
+  document.getElementById("allT").textContent = T.other;
+  document.getElementById("list").innerHTML = assets
+    .map((a) => `<li><a href="${a.browser_download_url}">${a.name}</a></li>`).join("");
+  const all = document.getElementById("all");
+  all.hidden = false;
+  all.open = !best;
+  document.getElementById("gh").href = r.html_url;
+}
+document.getElementById("lang").onclick = (e) => {
+  const c = e.target.dataset?.l;
+  if (!L[c]) return;
+  lang = c; T = L[c]; store.set(c); render();
+};
+render();
+
+(async () => {
+  try {
+    // API первым (всегда свежий); под VPN он часто режется/упирается в лимит — тогда берём latest.json
+    // с того же домена (обновляется YPtun/scripts/update-download-page.ps1 после релиза).
+    let r;
+    try {
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
+      if (!res.ok) throw new Error(res.status);
+      r = await res.json();
+    } catch (e) {
+      r = await (await fetch("latest.json", {cache: "no-cache"})).json();
+    }
+    // delta-патчи — служебные файлы автообновления, пользователю не нужны
+    const assets = r.assets.filter((a) => !/\.patch(\.gz)?$/i.test(a.name) && !/delta/i.test(a.name));
+    document.getElementById("ver").textContent = r.name || r.tag_name;
+    const d = await detect();
+    const best = pick(assets, d);
+    // ?auto — сразу начать скачивание подобранного файла (ссылка для README/чатов)
+    if (best && new URLSearchParams(location.search).has("auto")) location.href = best.browser_download_url;
+    rendered = {r, assets, d, best};
+    render();
+  } catch (e) {
+    rendered = false;
+    render();
+  }
+})();
+</script>
 </body>
 </html>

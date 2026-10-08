@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import org.olcbox.app.data.model.CsqttOptions
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
@@ -85,6 +86,15 @@ data class VkTurnDraft(
     val wdttWorkers: String = "",
     /** qWDTT advanced knobs, edited in place. */
     val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
+    /** csqtt server IP/host dialled over VK TURN. Port = [csqttPort]. Used only when core==csqtt. */
+    val csqttPeer: String = "",
+    /** csqtt server port; blank/0 → 46000. */
+    val csqttPort: String = "",
+    val csqttPassword: String = "",
+    /** csqtt worker count; blank/0 → 27 per VK hash. */
+    val csqttWorkers: String = "",
+    /** csqtt advanced knobs, edited in place. */
+    val csqtt: CsqttOptions = CsqttOptions(),
     /** Master switch for multi-server freeturn (the [extraFreeturnUris] are only used when on). */
     val freeturnMultiServer: Boolean = false,
     /**
@@ -189,6 +199,11 @@ object VkTurnComposer {
             wdttFingerprint = draft.wdttFingerprint.trim(),
             wdttWorkers = draft.wdttWorkers.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
             wdttPlus = draft.wdttPlus,
+            csqttPeer = draft.csqttPeer.trim(),
+            csqttPort = draft.csqttPort.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 0,
+            csqttPassword = draft.csqttPassword.trim(),
+            csqttWorkers = draft.csqttWorkers.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
+            csqtt = draft.csqtt,
             freeturnMultiServer = draft.freeturnMultiServer,
             extraFreeturnUris = draft.extraFreeturnUris
                 .split('\n')
@@ -311,6 +326,11 @@ object VkTurnComposer {
                 wdttFingerprint = vkturn.wdttFingerprint.ifBlank { "chrome" },
                 wdttWorkers = vkturn.wdttWorkers.takeIf { it > 0 }?.toString() ?: "",
                 wdttPlus = vkturn.wdttPlus,
+                csqttPeer = vkturn.csqttPeer,
+                csqttPort = vkturn.csqttPort.takeIf { it > 0 }?.toString() ?: "",
+                csqttPassword = vkturn.csqttPassword,
+                csqttWorkers = vkturn.csqttWorkers.takeIf { it > 0 }?.toString() ?: "",
+                csqtt = vkturn.csqtt,
                 freeturnMultiServer = vkturn.freeturnMultiServer,
                 extraFreeturnUris = vkturn.extraFreeturnUris.joinToString("\n"),
             )

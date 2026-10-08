@@ -482,6 +482,11 @@ class DesktopVpnManager private constructor(
                 if (vk.usesWdtt()) {
                     vk.wdttPeer.takeIf { it.isNotBlank() }?.let { add(it) }
                 }
+                // csqtt too: the Rust client dials its server directly.
+                if (vk.usesCsqtt()) {
+                    vk.csqttPeerAddr().substringBeforeLast(':').removePrefix("[").removeSuffix("]")
+                        .takeIf { it.isNotBlank() }?.let { add(it) }
+                }
                 // The freeturn/WDTT core keeps talking to VK's control plane for the anonymous call
                 // token it re-authenticates with; carve those out too or the relay dies mid-session.
                 addAll(VK_TURN_CONTROL_HOSTS)

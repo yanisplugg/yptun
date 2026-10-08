@@ -1340,14 +1340,18 @@ private fun SubscriptionGroupHeader(
         if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription.current) {
             first?.metadata?.subscription?.announce?.takeIf { it.isNotBlank() }?.let {
                 Text(
-                    text = it,
+                    text = org.olcbox.app.ui.features.locations.components.rememberLinkified(it),
                     style = MaterialTheme.typography.labelSmall,
                     fontSize = 11.sp,
                     lineHeight = 13.sp,
                     color = MaterialTheme.colorScheme.primary,
-                    maxLines = 3,
+                    // The whole description, wrapped onto as many lines as it needs: it takes the width
+                    // the header gives it (a long unbroken word is split by the layout), never more.
+                    softWrap = true,
+                    maxLines = org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines.current
+                        .let { if (it > 0) it else Int.MAX_VALUE },
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
                 )
             }
         }

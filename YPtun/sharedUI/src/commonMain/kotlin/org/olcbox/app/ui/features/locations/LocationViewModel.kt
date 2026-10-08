@@ -185,6 +185,11 @@ class LocationViewModel(
                 return@with wdttPeer.isNotBlank() &&
                     (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
             }
+            // csqtt, same: the server IP[:port] is the only thing to enter.
+            if (core.equals(VkTurnConfig.CORE_CSQTT, ignoreCase = true)) {
+                return@with csqttPeer.isNotBlank() &&
+                    (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
+            }
             val peerOk = peerHost.isNotBlank() &&
                 (peerPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
                 (listenPort.trim().toIntOrNull() ?: 0) in 1..65535

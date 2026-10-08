@@ -15,7 +15,6 @@ on:
     tags:
       - "v*"
     branches:
-      - pc-client-beta
       - Beta
     paths:
       - ".github/workflows/linux-deb.yml"
@@ -27,6 +26,7 @@ on:
       - "olcrtc/**"
       - "openflux/**"
       - "snolc/**"
+      - "csqtt/**"
 
 permissions:
   contents: read

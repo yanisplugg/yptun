@@ -140,6 +140,23 @@ internal object DesktopNativeAssets {
         return resolveBinary(fileName = fileName, resourceName = "native/$fileName", candidates = emptyList())
     }
 
+    /**
+     * The csqtt core: the Go bridge (SOCKS5 over the netstack) and the Rust client it runs, both from
+     * csqtt/prebuilt (copied in by desktopApp's copyCsqttHost). Returns (bridge, client).
+     */
+    fun resolveCsqttBinaries(): Pair<Path, Path> {
+        val (os, ext) = when (DesktopPaths.os) {
+            DesktopOs.Linux -> "linux" to ""
+            DesktopOs.Windows -> "windows" to ".exe"
+            else -> error("csqtt is not bundled for ${DesktopPaths.os}")
+        }
+        fun binary(kind: String): Path {
+            val fileName = "$kind-$os-${desktopArch()}$ext"
+            return resolveBinary(fileName = fileName, resourceName = "native/$fileName", candidates = emptyList())
+        }
+        return binary("csqtthost") to binary("csqtt")
+    }
+
     /** snolc client (olcvpn-client/snolc/prebuilt, copied in by desktopApp's copySnolcHost). */
     fun resolveSnolcBinary(): Path {
         val fileName = when (DesktopPaths.os) {

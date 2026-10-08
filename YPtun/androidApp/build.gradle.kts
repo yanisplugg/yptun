@@ -204,6 +204,29 @@ android.sourceSets.getByName("main").jniLibs.srcDir(snolcJniLibsDir.get().asFile
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
     .configureEach { dependsOn(copySnolcAndroid) }
 
+// --- csqtt core (../csqtt): the Rust client + its Go bridge, as lib/<abi>/libcsqtt.so and libcsqtthost.so ---
+// Prebuilt by csqtt/build-all.sh and committed (Rust + the NDK + Go are not CI requirements); both run as
+// SUBPROCESSES from nativeLibraryDir like OpenFlux and snolc. An ABI without a build ships without the core.
+val csqttPrebuiltDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("csqtt/prebuilt")
+val csqttJniLibsDir = layout.buildDirectory.dir("generated/csqtt/jniLibs")
+val copyCsqttAndroid = tasks.register<Copy>("copyCsqttAndroid") {
+    val abis = mapOf("arm64-v8a" to "android-arm64", "armeabi-v7a" to "android-armv7", "x86_64" to "android-x86_64")
+    abis.forEach { (abi, suffix) ->
+        mapOf("csqtt-$suffix" to "libcsqtt.so", "csqtthost-$suffix" to "libcsqtthost.so").forEach { (name, lib) ->
+            from(csqttPrebuiltDir) {
+                include(name)
+                rename { lib }
+                eachFile { relativePath = RelativePath(true, abi, lib) }
+            }
+        }
+    }
+    includeEmptyDirs = false
+    into(csqttJniLibsDir)
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(csqttJniLibsDir.get().asFile)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(copyCsqttAndroid) }
+
 // In AGP 9.0+ Kotlin settings for Android are configured like this:
 kotlin {
     compilerOptions {

@@ -506,6 +506,8 @@ internal class IosEngineController(
         deviceId: String,
     ) {
         val vk = config.vkturn
+        // csqtt is a Rust executable run as a subprocess — iOS cannot spawn processes.
+        check(vk?.usesCsqtt() != true) { "csqtt не поддерживается на iOS (ядро — отдельный процесс). Выбери freeturn или qWDTT." }
         // Clamp the exit's WireGuard/AmneziaWG MTU to what VK TURN + DTLS + RTP-obf can carry.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true

@@ -84,6 +84,21 @@ data class VkTurnConfig(
     /** The qWDTT core's advanced knobs (TURN over TCP, camouflage, DNS for VK). */
     @SerialName("wdtt_plus")
     val wdttPlus: WdttPlusOptions = WdttPlusOptions(),
+    /** csqtt server IP (or host) the core dials over VK TURN. Port = [csqttPort]. */
+    @SerialName("csqtt_peer")
+    val csqttPeer: String = "",
+    /** csqtt server port; 0 → [DEFAULT_CSQTT_PORT] (46000). Ignored if [csqttPeer] already carries ":port". */
+    @SerialName("csqtt_port")
+    val csqttPort: Int = 0,
+    /** csqtt connection password — the WRAP key is derived from it on both sides. */
+    @SerialName("csqtt_password")
+    val csqttPassword: String = "",
+    /** csqtt worker count; 0 → 27 per VK hash (capped at 72). The core rounds to a multiple of 9, max 126. */
+    @SerialName("csqtt_workers")
+    val csqttWorkers: Int = 0,
+    /** The csqtt core's advanced knobs (camouflage, TURN over TCP, fingerprint, VK app ids…). */
+    @SerialName("csqtt_options")
+    val csqtt: CsqttOptions = CsqttOptions(),
     /**
      * Master switch for multi-server freeturn. When off, only the primary [uri] is used (today's exact
      * single-server behaviour) even if [extraFreeturnUris] is non-empty. When on, the extra servers
@@ -131,6 +146,22 @@ data class VkTurnConfig(
         return if (host.isEmpty()) "" else "$host:${wdttPlus.rawPortOrDefault()}"
     }
 
+    /** True when the csqtt transport core is selected. */
+    fun usesCsqtt(): Boolean = core.equals(CORE_CSQTT, ignoreCase = true)
+
+    /** The csqtt server "host:port": [csqttPeer] verbatim if it already has a port, else + [csqttPort]. */
+    fun csqttPeerAddr(): String {
+        val host = csqttPeer.trim()
+        if (host.isEmpty()) return ""
+        // "[v6]:port" or "host:port" — an unbracketed IPv6 literal has several colons and no port.
+        val hasPort = if (host.startsWith("[")) host.contains("]:")
+        else host.count { it == ':' } == 1 && host.substringAfterLast(':').toIntOrNull() != null
+        if (hasPort) return host
+        val port = csqttPort.takeIf { it in 1..65535 } ?: DEFAULT_CSQTT_PORT
+        val bare = host.removePrefix("[").removeSuffix("]")
+        return if (bare.contains(':')) "[$bare]:$port" else "$bare:$port"
+    }
+
     fun isComplete(): Boolean =
         isStorable() && vkLink.isNotBlank()
 
@@ -158,9 +189,13 @@ data class VkTurnConfig(
 
         const val CORE_FREETURN = "freeturn"
         const val CORE_WDTT = "wdtt"
+        const val CORE_CSQTT = "csqtt"
 
         /** Default WDTT server port (matches the wdtt-server default). */
         const val DEFAULT_WDTT_PORT = 56000
+
+        /** Default csqtt server port (the auto-install's CSQTT_PEER_PORT). */
+        const val DEFAULT_CSQTT_PORT = 46000
     }
 
     /**
@@ -171,6 +206,7 @@ data class VkTurnConfig(
      */
     fun isStorable(): Boolean = listenPort in 1..65535 && when {
         usesWdtt() -> wdttPeer.isNotBlank()
+        usesCsqtt() -> csqttPeer.isNotBlank()
         else -> uri.startsWith("freeturn://")
     }
 
@@ -197,6 +233,71 @@ data class VkTurnConfig(
             put("go_dns", p.goDns.trim())
             put("vk_anon_path", if (p.vkAnonLegacy) "legacy" else "vkcalls")
         }.toString()
+    }
+
+    /**
+     * Options for the csqtt bridge (csqtt/bridge, `csqtthost OPTS <json>`). [client] is the path of the
+     * csqtt Rust client executable, [listen] the local SOCKS5 the bridge serves the tunnel on.
+     */
+    fun csqttCoreOptionsJson(client: String, listen: String, deviceId: String): String {
+        val o = csqtt
+        val hashes = vkLink.split('\n', '\r', '\t', ' ', ',', ';').filter { it.isNotBlank() }
+        // 27 workers per hash, capped like the csqtt app's own default maximum.
+        val workers = csqttWorkers.takeIf { it > 0 } ?: (hashes.size.coerceAtLeast(1) * 27).coerceAtMost(72)
+        return buildJsonObject {
+            put("client", client)
+            put("listen", listen)
+            put("peer", csqttPeerAddr())
+            put("vk_hashes", hashes.joinToString(","))
+            put("password", csqttPassword)
+            put("workers", workers)
+            put("device_id", deviceId)
+            put("obfs", if (o.obfsVideo) "video" else "audio")
+            put("turn_tcp", o.turnTcp)
+            put("fingerprint", o.fingerprint.ifBlank { CsqttOptions.DEFAULT_FINGERPRINT })
+            put("client_ids", o.clientIds.trim())
+            put("vk_auth_mode", if (o.vkAuthLegacy) "legacy" else "vkcalls")
+            put("captcha_mode", "auto")
+            put("turn_host", o.turnHost.trim())
+            put("turn_port", o.turnPort.trim())
+            put("redistribute", o.redistribute)
+        }.toString()
+    }
+}
+
+/**
+ * Advanced options of the csqtt VK-TURN core (github.com/amurcanov/csqtt). Defaults are the csqtt
+ * Android app's own.
+ */
+@Serializable
+data class CsqttOptions(
+    /** RTP camouflage as a video stream (csqtt's default) instead of audio. */
+    @SerialName("obfs_video")
+    val obfsVideo: Boolean = true,
+    /** TURN relay over TCP/TLS instead of UDP — for networks that throttle or cut UDP to VK. */
+    @SerialName("turn_tcp")
+    val turnTcp: Boolean = false,
+    /** TLS fingerprint the VK HTTP client impersonates: chrome / firefox / safari / edge / opera. */
+    @SerialName("fingerprint")
+    val fingerprint: String = DEFAULT_FINGERPRINT,
+    /** VK application ids used to fetch TURN credentials, comma separated. Blank = the core's own. */
+    @SerialName("client_ids")
+    val clientIds: String = "",
+    /** The older anonymous-token path (`legacy`, with captcha) instead of VK Calls. */
+    @SerialName("vk_auth_legacy")
+    val vkAuthLegacy: Boolean = false,
+    /** Allow more workers than 27 per VK hash (the hashes then share the extra load). */
+    @SerialName("redistribute")
+    val redistribute: Boolean = false,
+    /** TURN server IP / port override (blank = the ones VK hands out). */
+    @SerialName("turn_host")
+    val turnHost: String = "",
+    @SerialName("turn_port")
+    val turnPort: String = "",
+) {
+    companion object {
+        const val DEFAULT_FINGERPRINT = "firefox"
+        val FINGERPRINTS = listOf("firefox", "chrome", "safari", "edge", "opera")
     }
 }
 
@@ -743,6 +844,7 @@ data class LocationConfig(
         // WDTT connects purely by the wdtt-server IP[:port]; the WireGuard config is fetched FROM the
         // server at runtime (GETCONF/OnConfig), so no stored exit artifact is required here.
         vkturn?.usesWdtt() == true -> true
+        vkturn?.usesCsqtt() == true -> true // same: the server hands over the tunnel address (TUNCONF)
         else -> vkTurnExitPresentFreeturn()
     }
 

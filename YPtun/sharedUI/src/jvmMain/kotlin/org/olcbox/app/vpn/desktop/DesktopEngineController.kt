@@ -49,6 +49,7 @@ internal class DesktopEngineController(
     private val trustTunnel = DesktopTrustTunnel(log)
     private val openFlux = DesktopOpenFlux(log)
     private val snolc = DesktopSnolc(log)
+    private val csqtt = org.olcbox.app.vpn.csqtt.CsqttBridge(log)
 
     val isSupported: Boolean get() = YpTunCore.isAvailable
 
@@ -155,6 +156,7 @@ internal class DesktopEngineController(
         trustTunnel.stop()
         openFlux.stop()
         snolc.stop()
+        csqtt.stop()
         YpTunCore.stopAll()
         // [start] is the only other place these are reset, and the olcRTC (Stealth) path never calls
         // it — it runs the olcrtc subprocess instead. So a stale tunHandledInCore=true, left by the
@@ -171,7 +173,7 @@ internal class DesktopEngineController(
         EngineType.Stealth -> YpTunCore.rtcRunning()
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> YpTunCore.rtcRunning() && proxyCoreRunning()
-        EngineType.VkTurn -> (YpTunCore.ftRunning() || YpTunCore.wdttRunning()) && proxyCoreRunning()
+        EngineType.VkTurn -> (YpTunCore.ftRunning() || YpTunCore.wdttRunning() || csqtt.isRunning()) && proxyCoreRunning()
         // MasterDNS raises its own local forwarder; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> YpTunCore.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
         // OpenFlux is a subprocess; in TUN mode a sing-box front owns the adapter in front of it.
@@ -986,12 +988,15 @@ internal class DesktopEngineController(
         // qWDTT Raw serves its tunnel as a local SOCKS5 on the AmneziaWG exit's port, so it rides that
         // branch (chain proxy, routing, DNS) — same as OlcboxVpnService.
         val wdttRaw = usesWdtt && vk?.wdttPlus?.rawMode == true
-        val outboundType = if (wdttRaw) VkTurnConfig.OUTBOUND_AMNEZIAWG
+        // csqtt serves its tunnel as a local SOCKS5 (the bridge) — the same AmneziaWG-shaped exit.
+        val usesCsqtt = vk?.usesCsqtt() == true
+        val outboundType = if (wdttRaw || usesCsqtt) VkTurnConfig.OUTBOUND_AMNEZIAWG
             else vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD } ?: VkTurnConfig.OUTBOUND_WIREGUARD
         val outboundConfigured = when {
             // WDTT fetches its WireGuard config FROM the server (GETCONF), so the user stores no WG
             // keys and there is nothing to validate up front — see LocationViewModel's matching gate.
             usesWdtt -> true
+            usesCsqtt -> vk?.csqttPeer?.isNotBlank() == true // the server hands the tunnel address over
             outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
             outboundType == VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
                 profile.server.isNotBlank() && profile.serverPort in 1..65535
@@ -1002,7 +1007,25 @@ internal class DesktopEngineController(
         requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
 
         val listenAddr = "127.0.0.1:${vk.listenPort}"
-        if (usesWdtt) {
+        if (usesCsqtt) {
+            // csqtt core: the Rust client behind the Go bridge, which serves the tunnel as a SOCKS5 on
+            // the AmneziaWG exit's port. Awaited at the gate below, after the settings preparation.
+            val (bridgeExe, clientExe) = DesktopNativeAssets.resolveCsqttBinaries()
+            log(
+                "Starting VK-TURN csqtt core (peer=${vk.csqttPeerAddr()}, " +
+                    "workers=${vk.csqttWorkers.takeIf { it > 0 }?.toString() ?: "auto"}, " +
+                    "turn-tcp=${vk.csqtt.turnTcp}, obfs=${if (vk.csqtt.obfsVideo) "video" else "audio"}, " +
+                    "fp=${vk.csqtt.fingerprint})"
+            )
+            csqtt.launch(
+                bridgeExe.toString(),
+                vk.csqttCoreOptionsJson(
+                    client = clientExe.toString(),
+                    listen = "127.0.0.1:${awgLocalPort(listenPort)}",
+                    deviceId = deviceId,
+                ),
+            )
+        } else if (usesWdtt) {
             // WDTT core (wg-turn-client): dials the wdtt-server purely by IP[:port] over VK call links
             // and hands back the WireGuard config we build the outbound from.
             val peerAddr = vk.wdttDialAddr()
@@ -1043,7 +1066,15 @@ internal class DesktopEngineController(
         }
 
         // ---- Relay-ready gate: bring the tunnel up only behind a live TURN stream ----
-        if (usesWdtt) {
+        if (usesCsqtt) {
+            val up = csqtt.awaitReady(VKTURN_RELAY_READY_TIMEOUT_MS.toLong())
+                ?: throw IllegalStateException(
+                    "csqtt: нет адреса туннеля от сервера — проверь IP/порт/пароль сервера и ссылки на звонки VK" +
+                        csqtt.lastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+                )
+            profile = localSocksProfile("csqtt", awgLocalPort(listenPort))
+            log("VK-TURN csqtt up (${up.ip}, DNS ${up.dns.joinToString(",")}, MTU ${up.mtu}); SOCKS on ${awgLocalPort(listenPort)}")
+        } else if (usesWdtt) {
             // The config only arrives once the first worker has a VK TURN session up, so waiting on it
             // doubles as the relay-ready gate (same as the Android OnConfig path).
             val wgConf = YpTunCore.wdttWaitConfig(VKTURN_RELAY_READY_TIMEOUT_MS)

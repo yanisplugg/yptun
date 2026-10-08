@@ -63,15 +63,30 @@ OutputBaseFilename={#AppName}-{#AppVersion}-{#ArchSuffix}-installer
 SetupIconFile={#SourcePath}\..\..\appIcons\WindowsIcon.ico
 Compression=lzma2/max
 SolidCompression=yes
-WizardStyle=modern
+; "dynamic" follows the OS theme: a light or dark wizard, switching with Windows' "app mode" setting.
+; The side/corner art comes in a light and a dark variant (art/gen_art.py), each at several scales so
+; it stays sharp at 100/125/150/200 % display scaling. Image back colours are BGR ($BBGGRR).
+WizardStyle=modern dynamic
+WizardImageFile={#SourcePath}art\wizard-light-100.bmp,{#SourcePath}art\wizard-light-125.bmp,{#SourcePath}art\wizard-light-150.bmp,{#SourcePath}art\wizard-light-200.bmp
+WizardImageFileDynamicDark={#SourcePath}art\wizard-dark-100.bmp,{#SourcePath}art\wizard-dark-125.bmp,{#SourcePath}art\wizard-dark-150.bmp,{#SourcePath}art\wizard-dark-200.bmp
+WizardSmallImageFile={#SourcePath}art\small-light-100.bmp,{#SourcePath}art\small-light-125.bmp,{#SourcePath}art\small-light-150.bmp,{#SourcePath}art\small-light-200.bmp
+WizardSmallImageFileDynamicDark={#SourcePath}art\small-dark-100.bmp,{#SourcePath}art\small-dark-125.bmp,{#SourcePath}art\small-dark-150.bmp,{#SourcePath}art\small-dark-200.bmp
+WizardImageBackColor=$F2E8E3
+WizardImageBackColorDynamicDark=$14100E
+WizardSmallImageBackColor=$F2E8E3
+WizardSmallImageBackColorDynamicDark=$14100E
 ; The app bundles its own JRE and native cores, so the installer must match the machine.
 ArchitecturesAllowed={#ArchAllowed}
 ArchitecturesInstallIn64BitMode={#ArchIn64Bit}
 PrivilegesRequired=admin
 ; Always offer the picker, even when the OS language matches one we ship.
 ShowLanguageDialog=yes
-; Shut a running YPtun down before overwriting its files, so an upgrade doesn't need a reboot.
-CloseApplications=yes
+; Restart Manager is OFF on purpose: it runs BEFORE our code, sees the running YPtun (it cannot close one
+; parked in the tray, nor in silent mode - how the in-app updater runs this installer) and shows
+; "could not close applications" even when everything is about to be closed. StopRunningApp (below)
+; closes the app after the user clicks Install, so an upgrade over a running YPtun needs neither a
+; manual exit nor a reboot.
+CloseApplications=no
 RestartApplications=no
 
 [Languages]
@@ -108,3 +123,38 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// Closes every process that runs from THIS install dir (a portable copy elsewhere is left alone): first a
+// polite close so the app can restore the system proxy / drop its TUN, then, after 8 s, a hard stop.
+procedure StopRunningApp(AppDir: String);
+var
+  ResultCode: Integer;
+  Script: String;
+begin
+  StringChange(AppDir, '''', '''''');
+  Script :=
+    '$d = ''' + AppDir + '\''; ' +
+    '$p = @(Get-Process -ErrorAction SilentlyContinue | ' +
+      'Where-Object { $_.Path -and $_.Path.StartsWith($d, [StringComparison]::OrdinalIgnoreCase) }); ' +
+    'if ($p.Count) { ' +
+      'foreach ($x in $p) { [void]$x.CloseMainWindow() }; ' +
+      '$p | Wait-Process -Timeout 8 -ErrorAction SilentlyContinue; ' +
+      '$p | Where-Object { -not $_.HasExited } | Stop-Process -Force -ErrorAction SilentlyContinue; ' +
+      'Start-Sleep -Milliseconds 800 }';
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopRunningApp(ExpandConstant('{app}'));
+  Result := '';
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  StopRunningApp(ExpandConstant('{app}'));
+  Result := True;
+end;

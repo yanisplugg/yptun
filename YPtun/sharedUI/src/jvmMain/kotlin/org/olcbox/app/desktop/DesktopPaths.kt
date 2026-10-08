@@ -26,7 +26,13 @@ internal object DesktopPaths {
     val arch: String
         get() = System.getProperty("os.arch").lowercase()
 
-    fun appDataDir(): Path {
+    /**
+     * Where the app keeps its data. Normally [standardAppDataDir]; the portable build moves it to a private
+     * copy of the encrypted bundle next to its .exe (see [PortableData]).
+     */
+    fun appDataDir(): Path = PortableData.resolve(::standardAppDataDir)
+
+    private fun standardAppDataDir(): Path {
         val home = Path(System.getProperty("user.home"))
         val base = when (os) {
             DesktopOs.MacOS -> home.resolve("Library").resolve("Application Support")

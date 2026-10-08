@@ -460,6 +460,7 @@ private fun ThemeColorSection(
 ) {
     var showAccentPicker by remember { mutableStateOf(false) }
     var showBackgroundPicker by remember { mutableStateOf(false) }
+    var showTextPicker by remember { mutableStateOf(false) }
     val s = LocalStrings.current
 
     Column(
@@ -524,6 +525,7 @@ private fun ThemeColorSection(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 val currentText = ThemeState.textColor
+                val isTextPreset = ThemeState.textPresets.contains(currentText)
                 ThemeState.textPresets.forEach { color ->
                     val selected = currentText == color
                     ColorSwatch(
@@ -531,6 +533,10 @@ private fun ThemeColorSection(
                         selected = selected
                     ) { onTextColorSelected(color) }
                 }
+                CustomColorSwatch(
+                    current = if (!isTextPreset) currentText else null,
+                    onClick = { showTextPicker = true }
+                )
             }
         }
     }
@@ -542,6 +548,17 @@ private fun ThemeColorSection(
             onConfirm = {
                 onAccentColorSelected(it)
                 showAccentPicker = false
+            }
+        )
+    }
+
+    if (showTextPicker) {
+        ColorPickerDialog(
+            initial = ThemeState.textColor ?: Color.White,
+            onDismiss = { showTextPicker = false },
+            onConfirm = {
+                onTextColorSelected(it)
+                showTextPicker = false
             }
         )
     }
@@ -910,6 +927,13 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
+                title = s.coreVersion("csqtt", org.olcbox.app.vpn.CoreVersions.CSQTT),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
                 title = s.hwid(hwid.ifBlank { "—" }),
                 icon = Icons.Rounded.Key,
                 enabled = hwid.isNotBlank(),
@@ -943,6 +967,16 @@ private fun AppSettingsHubContent(
             onCopyAddress = { it -> hwidClipboard.setText(AnnotatedString(it)); Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show() },
             onOpenUrl = { it -> communityUriHandler.openUri(it) }
         )
+
+        SettingsGroupCard {
+            SettingsGroupRow(
+                title = s.termsOfUse,
+                subtitle = "yanisplugg.github.io/yptun/terms.html",
+                icon = Icons.Outlined.Shield,
+                enabled = true,
+                onClick = { communityUriHandler.openUri("https://yanisplugg.github.io/yptun/terms.html") }
+            )
+        }
 
         Spacer(Modifier.height(4.dp))
     }
@@ -3607,6 +3641,7 @@ private fun TrafficSettingsContent(
             onValueChange = { remoteDns = it },
             label = { Text(s.remoteDnsLabel) },
             placeholder = { Text("8.8.8.8") },
+            supportingText = { Text(s.dnsFormatsHint) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -3826,6 +3861,23 @@ private fun ApplicationBehaviorContent(
             subtitle = s.showSubscriptionDescriptionSubtitle,
             checked = settings.showSubscriptionDescription
         ) { onChanged(settings.copy(showSubscriptionDescription = it)) }
+
+        if (settings.showSubscriptionDescription) {
+            Text(
+                text = s.subscriptionDescriptionLinesTitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(3 to "3", 5 to "5", 0 to s.subscriptionDescriptionLinesUnlimited).forEach { (n, label) ->
+                    FilterChip(
+                        selected = settings.subscriptionDescriptionLines == n,
+                        onClick = { onChanged(settings.copy(subscriptionDescriptionLines = n)) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+        }
 
         RoutingToggleRow(
             title = s.showSubscriptionIconsTitle,
