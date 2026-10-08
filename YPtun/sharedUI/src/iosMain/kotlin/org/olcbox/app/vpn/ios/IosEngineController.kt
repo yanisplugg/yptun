@@ -360,7 +360,7 @@ internal class IosEngineController(
                     secondProfile = secondProfile,
                     bypassLan = routing.bypassLan,
                     fakeDnsSpec = config.fakeDns,
-                    logLevel = "info",
+                    logLevel = "warning",
                     logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
                 )
             }
@@ -397,7 +397,12 @@ internal class IosEngineController(
                 remoteDnsOverHttps = false,
                 forceFamilyResolve = false,
                 cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
-                logLevel = "info",
+                // Unlike every other platform, iOS points sing-box's log at a FILE in the App Group —
+                // and the app re-reads that file to show the log sheet. At the shared default ('debug')
+                // sing-box writes a line per connection event, so a single session grew the file without
+                // bound inside the extension's container while the app kept re-reading it. Warnings and
+                // errors are what a post-mortem needs anyway; the file is truncated on every connect.
+                logLevel = "warn",
                 logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
             )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
@@ -947,7 +952,8 @@ internal class IosEngineController(
         preferTcpRemoteDns = preferTcpRemoteDns,
         directViaBase = directViaBase,
         cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
-        logLevel = "info",
+        // See the note on the Standard/Chain path: this log goes to a file the app tails.
+        logLevel = "warn",
         logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
     )
 
