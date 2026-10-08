@@ -695,8 +695,7 @@ class IosVpnManager(
                 val wasNotConnected = _status.value != VpnStatus.Connected
                 setStatus(VpnStatus.Connected)
                 if (wasNotConnected) {
-                    val loc = locationsRepository.getActiveLocation()?.location?.displayName() ?: "VPN"
-                    addLog("Tunnel connected to $loc")
+                    addLog("Tunnel connected")
                     triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
                     NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.vpn.connected", null)
                 }
@@ -814,12 +813,7 @@ class IosVpnManager(
     }
 
     override fun clearLogs() {
-        val clearMsg = if (_isConnected.value) {
-            val loc = locationsRepository.getActiveLocation()?.location?.displayName() ?: "VPN"
-            "[Logs cleared] Connected to $loc"
-        } else {
-            "[Logs cleared]"
-        }
+        val clearMsg = if (_isConnected.value) "[Logs cleared] Connected" else "[Logs cleared]"
         IosSharedStore.writeText(IosTunnelSession.LOG_FILE, "$clearMsg\n")
         _logs.value = listOf(clearMsg)
     }
