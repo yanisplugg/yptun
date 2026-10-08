@@ -3839,6 +3839,44 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
 
         RoutingToggleRow(
+            title = s.notifPingTitle,
+            subtitle = s.notifPingSubtitle,
+            checked = settings.pingOwnLineInNotification
+        ) { onChanged(settings.copy(pingOwnLineInNotification = it)) }
+
+        if (settings.pingOwnLineInNotification) {
+            Text(
+                text = s.notifPingSourceTitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(false to s.notifPingSourceLast, true to s.notifPingSourceAuto).forEach { (auto, label) ->
+                    FilterChip(
+                        selected = settings.notifPingAuto == auto,
+                        onClick = { onChanged(settings.copy(notifPingAuto = auto)) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            if (settings.notifPingAuto) {
+                var minutes by remember { mutableStateOf(settings.notifPingIntervalMin.toString()) }
+                OutlinedTextField(
+                    value = minutes,
+                    onValueChange = { raw ->
+                        minutes = raw.filter { ch -> ch.isDigit() }.take(3)
+                        minutes.toIntOrNull()?.takeIf { it in 1..999 }
+                            ?.let { onChanged(settings.copy(notifPingIntervalMin = it)) }
+                    },
+                    label = { Text(s.notifPingIntervalLabel) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        RoutingToggleRow(
             title = s.speedOnHomeTitle,
             subtitle = s.speedOnHomeSubtitle,
             checked = settings.showSpeedOnHome

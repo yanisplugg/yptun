@@ -158,6 +158,14 @@ class OlcboxVpnService : VpnService() {
     /** Display name of the currently-connecting/connected location, shown in the notification. */
     @Volatile private var connectedLocationName = ""
     @Volatile private var showSpeedInNotif = false
+    // Notification ping: own line above the speed vs. after the server name; source (last manual vs
+    // automatic through the tunnel) and the automatic interval. [notifPingMs] null = nothing known.
+    @Volatile private var notifPingOwnLine = false
+    @Volatile private var notifPingAuto = false
+    @Volatile private var notifPingIntervalMin = 5
+    @Volatile private var notifPingMs: Int? = null
+    @Volatile private var lastSpeedTexts: Pair<String, String>? = null
+    private var notifPingJob: Job? = null
     // Publish live throughput to OlcboxVpnState for the optional Home-screen speed line (independent
     // of the notification speed toggle). Drives whether the 2s speed loop runs.
     @Volatile private var showSpeedOnHome = false
@@ -491,24 +499,72 @@ class OlcboxVpnService : VpnService() {
         scope.launch {
             applicationContext.vpnPrefDataStore.data
                 .map { prefs ->
-                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map Triple(false, false, false)
+                    val raw = prefs[KEY_ANDROID_APP_BEHAVIOR] ?: return@map NotifPrefs()
                     runCatching {
                         val s = Json.decodeFromString(AppBehaviorSettings.serializer(), raw)
-                        Triple(s.showSpeedInNotification, s.showRoomsInNotification, s.showSpeedOnHome)
-                    }.getOrDefault(Triple(false, false, false))
+                        NotifPrefs(
+                            s.showSpeedInNotification, s.showRoomsInNotification, s.showSpeedOnHome,
+                            s.pingOwnLineInNotification, s.notifPingAuto, s.notifPingIntervalMin
+                        )
+                    }.getOrDefault(NotifPrefs())
                 }
                 .distinctUntilChanged()
-                .collect { (speed, rooms, speedHome) ->
-                    showSpeedInNotif = speed
-                    showRoomsInNotif = rooms
-                    showSpeedOnHome = speedHome
+                .collect { p ->
+                    showSpeedInNotif = p.speed
+                    showRoomsInNotif = p.rooms
+                    showSpeedOnHome = p.speedHome
+                    notifPingOwnLine = p.pingOwnLine
+                    notifPingAuto = p.pingAuto
+                    notifPingIntervalMin = p.pingMinutes
                     if (OlcboxVpnState.status.value is VpnStatus.Connected) {
                         // Start/stop the 2s speed loop to match the new flags (it self-cancels when both
                         // are off), then repost the notification so the speed line appears/clears now.
                         startSpeedUpdater()
+                        startNotifPing()
                         updateNotification(connectedNotificationText())
                     }
                 }
+        }
+    }
+
+    private data class NotifPrefs(
+        val speed: Boolean = false,
+        val rooms: Boolean = false,
+        val speedHome: Boolean = false,
+        val pingOwnLine: Boolean = false,
+        val pingAuto: Boolean = false,
+        val pingMinutes: Int = 5,
+    )
+
+    /**
+     * Keeps [notifPingMs] current: "last ping" follows the list's result for the active location,
+     * automatic mode measures through the live tunnel every [notifPingIntervalMin] minutes.
+     */
+    private fun startNotifPing() {
+        notifPingJob?.cancel()
+        notifPingMs = null
+        notifPingJob = scope.launch {
+            if (!notifPingAuto) {
+                OlcboxVpnState.manualPings.collect { live ->
+                    val pings = live.ifEmpty { runCatching { loadAppBehavior().lastPingResults }.getOrDefault(emptyMap()) }
+                    val id = runCatching { repository.getBundle() }.getOrNull()?.activeLocationId
+                    publishNotifPing(id?.let { pings[it] })
+                }
+            } else {
+                delay(NOTIF_PING_FIRST_DELAY_MS) // let the tunnel settle before the first probe
+                while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
+                    publishNotifPing(runCatching { autoPingManager(applicationContext).liveTunnelPing() }.getOrNull()?.toInt())
+                    delay(notifPingIntervalMin.coerceIn(1, 999) * 60_000L)
+                }
+            }
+        }
+    }
+
+    private fun publishNotifPing(ms: Int?) {
+        if (ms == notifPingMs) return
+        notifPingMs = ms
+        if (OlcboxVpnState.status.value is VpnStatus.Connected) {
+            updateNotification(connectedNotificationText(), if (showSpeedInNotif) lastSpeedTexts else null)
         }
     }
 
@@ -767,6 +823,9 @@ class OlcboxVpnService : VpnService() {
         previousStartupJob?.cancel()
         watchdogJob?.cancel()
         speedJob?.cancel()
+        notifPingJob?.cancel()
+        notifPingMs = null
+        lastSpeedTexts = null
         networkLossJob?.cancel()
         recoveryJob?.cancel()
         recoveryJob = null
@@ -981,6 +1040,9 @@ class OlcboxVpnService : VpnService() {
         activeBypassLan = runCatching { loadRouting(expandAsn = false).bypassLan }.getOrDefault(true)
         loadAppBehavior().let {
             showSpeedInNotif = it.showSpeedInNotification
+            notifPingOwnLine = it.pingOwnLineInNotification
+            notifPingAuto = it.notifPingAuto
+            notifPingIntervalMin = it.notifPingIntervalMin
             showRoomsInNotif = it.showRoomsInNotification
             showSpeedOnHome = it.showSpeedOnHome
             activeEnergySaver = it.energySaver
@@ -3131,7 +3193,8 @@ class OlcboxVpnService : VpnService() {
                     val statusWidgets = hasStatusWidgets()
                     if (showSpeedOnHome || statusWidgets) OlcboxVpnState.setSpeed(down, up)
                     if (showSpeedInNotif) {
-                        updateNotification(base, speedTexts(down, up))
+                        lastSpeedTexts = speedTexts(down, up)
+                        updateNotification(base, lastSpeedTexts)
                     } else if (showRoomsInNotif) {
                         updateNotification(base)
                     }
@@ -3153,6 +3216,7 @@ class OlcboxVpnService : VpnService() {
         watchdogStalledSamples = 0
         val mode = connectionMode
         startSpeedUpdater()
+        startNotifPing()
         val watchdogInterval = if (activeEnergySaver) {
             AppBehaviorSettings.ENERGY_SAVER_WATCHDOG_INTERVAL_MS
         } else {
@@ -3243,6 +3307,9 @@ class OlcboxVpnService : VpnService() {
         startupJob?.cancel()
         watchdogJob?.cancel()
         speedJob?.cancel()
+        notifPingJob?.cancel()
+        notifPingMs = null
+        lastSpeedTexts = null
         networkLossJob?.cancel()
         recoveryJob?.cancel()
         recoveryJob = null
@@ -4357,15 +4424,15 @@ class OlcboxVpnService : VpnService() {
         val title = "YPtun"
         // Body is the status line (the active server name when connected); the live speed, when shown,
         // goes on its own second line below it (coloured text views in the custom layout).
+        val ping = notifPingMs?.takeIf { OlcboxVpnState.status.value is VpnStatus.Connected }
+        val statusLine = if (ping != null && !notifPingOwnLine) "$status · $ping ms" else status
         val body: CharSequence = if (speed != null && resources.getIdentifier("notif_olcbox", "layout", packageName) == 0) {
-            "$status   ${speed.first}   ${speed.second}"
+            "$statusLine   ${speed.first}   ${speed.second}"
         } else {
-            status
+            statusLine
         }
-        // Status-bar icon: our cat-head silhouette (system tints it monochrome).
-        // Resolved by name because this lives in androidApp's resources, not sharedUI's R.
-        val statIcon = resources.getIdentifier("ic_stat_yptun", "drawable", packageName)
-            .takeIf { it != 0 } ?: android.R.drawable.ic_lock_lock
+        // Status-bar icon: the system lock, as before (the cat silhouette is not used here).
+        val statIcon = android.R.drawable.ic_lock_lock
         val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(statIcon)
             .setOngoing(true)
@@ -4382,25 +4449,34 @@ class OlcboxVpnService : VpnService() {
             )
             .setPriority(NotificationCompat.PRIORITY_LOW)
 
-        // Custom content so the COLORED app logo sits right next to the "YPtun" title.
+        // Custom content: title, server name and the coloured speed line (the app icon comes from the system header).
         val pkg = packageName
         val layoutId = resources.getIdentifier("notif_olcbox", "layout", pkg)
         if (layoutId != 0) {
             val rv = android.widget.RemoteViews(pkg, layoutId)
             rv.setTextViewText(resources.getIdentifier("notif_title", "id", pkg), title)
             rv.setTextViewText(resources.getIdentifier("notif_text", "id", pkg), body)
+            val pingRow = resources.getIdentifier("notif_ping", "id", pkg)
+            if (ping != null && notifPingOwnLine && pingRow != 0) {
+                rv.setTextViewText(pingRow, "${ns.notifPingWord} $ping ms")
+                rv.setViewVisibility(pingRow, android.view.View.VISIBLE)
+                // A collapsed notification fits three lines; the system header already names the app,
+                // so the "YPtun" title makes room for the ping line (else the speed hides until expanded).
+                rv.setViewVisibility(resources.getIdentifier("notif_title", "id", pkg), android.view.View.GONE)
+            }
             val speedRow = resources.getIdentifier("notif_speed", "id", pkg)
             if (speed != null && speedRow != 0) {
                 val down = resources.getIdentifier("notif_speed_down", "id", pkg)
                 val up = resources.getIdentifier("notif_speed_up", "id", pkg)
                 rv.setTextViewText(down, speed.first)
-                rv.setTextColor(down, SPEED_DOWN_COLOR)
+                // The notification shade follows the system theme: deep colours on light, neon on dark.
+                val dark = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                    android.content.res.Configuration.UI_MODE_NIGHT_YES
+                rv.setTextColor(down, if (dark) SPEED_DOWN_COLOR_DARK else SPEED_DOWN_COLOR_LIGHT)
                 rv.setTextViewText(up, speed.second)
-                rv.setTextColor(up, SPEED_UP_COLOR)
+                rv.setTextColor(up, if (dark) SPEED_UP_COLOR_DARK else SPEED_UP_COLOR_LIGHT)
                 rv.setViewVisibility(speedRow, android.view.View.VISIBLE)
             }
-            val logo = resources.getIdentifier("ic_notification_logo", "drawable", pkg)
-            if (logo != 0) rv.setImageViewResource(resources.getIdentifier("notif_icon", "id", pkg), logo)
             builder.setStyle(NotificationCompat.DecoratedCustomViewStyle())
                 .setCustomContentView(rv)
         } else {
@@ -4734,6 +4810,7 @@ class OlcboxVpnService : VpnService() {
         private const val NETWORK_STABILITY_GRACE_MS = 600L
         private const val WATCHDOG_INTERVAL_MS = 15_000L
         private const val SPEED_INTERVAL_MS = 2_000L
+        private const val NOTIF_PING_FIRST_DELAY_MS = 4_000L
         // Energy-saver: a much slower speed/rooms notification refresh (vs. SPEED_INTERVAL_MS). Network
         // switches are event-driven (the NetworkCallback), so the watchdog is only a backstop for a
         // silently-dead core / stalled traffic — safe to poll far less often when saving power.
@@ -4800,8 +4877,10 @@ class OlcboxVpnService : VpnService() {
             ProxyProfile.TYPE_SHADOWSOCKS
         )
         private const val NOTIFICATION_CHANNEL_ID = "olcbox_vpn"
-        private const val SPEED_DOWN_COLOR = 0xFF4CAF50.toInt() // green
-        private const val SPEED_UP_COLOR = 0xFF42A5F5.toInt() // blue
+        private const val SPEED_DOWN_COLOR_DARK = 0xFF3DFF8B.toInt() // neon green on a dark shade
+        private const val SPEED_UP_COLOR_DARK = 0xFF40C4FF.toInt() // neon blue on a dark shade
+        private const val SPEED_DOWN_COLOR_LIGHT = 0xFF006B2B.toInt() // deep green on a light shade
+        private const val SPEED_UP_COLOR_LIGHT = 0xFF0047B3.toInt() // deep blue on a light shade
         private const val NOTIFICATION_ID = 100
         private const val VK_CAPTCHA_CHANNEL_ID = "olcbox_vk_captcha"
         private const val VK_CAPTCHA_NOTIFICATION_ID = 101

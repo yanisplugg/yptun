@@ -852,7 +852,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         if (ms >= 0) ms else null
     }
 
-    private suspend fun tunnelPing(): Long? = withContext(Dispatchers.IO) {
+    suspend fun tunnelPing(): Long? = withContext(Dispatchers.IO) {
         val sock = OlcboxVpnState.activeSocks ?: return@withContext null
         val host = AndroidSocksProxySettings.connectHost(sock.host)
 
@@ -873,10 +873,29 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         best
     }
 
+    /**
+     * True end-to-end latency through the live tunnel, for the notification: a local SOCKS5 server
+     * answers CONNECT before it dials the target (so [tunnelPing] reads ~0 ms), hence this sends a
+     * tiny HTTP request and times the first response byte. Best of two attempts; null = no answer.
+     */
+    suspend fun liveTunnelPing(): Long? = withContext(Dispatchers.IO) {
+        val sock = OlcboxVpnState.activeSocks ?: return@withContext null
+        val host = AndroidSocksProxySettings.connectHost(sock.host)
+        var best: Long? = null
+        repeat(2) {
+            val ms = runCatching {
+                socks5ConnectRtt(host, sock.port, sock.username, sock.password,
+                    TUNNEL_PROBE_HOST, 80, TUNNEL_PING_TIMEOUT_MS, httpProbe = true)
+            }.getOrNull()
+            if (ms != null && (best == null || ms < best!!)) best = ms
+        }
+        best
+    }
+
     /** Hand-rolled SOCKS5 CONNECT to an IPv4 target through proxyHost:proxyPort; returns RTT ms. */
     private fun socks5ConnectRtt(
         proxyHost: String, proxyPort: Int, username: String, password: String,
-        targetHost: String, targetPort: Int, timeoutMs: Int
+        targetHost: String, targetPort: Int, timeoutMs: Int, httpProbe: Boolean = false
     ): Long? {
         java.net.Socket().use { socket ->
             socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), timeoutMs)
@@ -918,6 +937,13 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 else -> return null
             }
             readExactly(inp, addrLen + 2)
+            if (httpProbe) {
+                val t0 = System.nanoTime()
+                out.write("HEAD / HTTP/1.1\r\nHost: $targetHost\r\nConnection: close\r\n\r\n".encodeToByteArray())
+                out.flush()
+                if (inp.read() < 0) return null
+                return (System.nanoTime() - t0) / 1_000_000L
+            }
             return (System.nanoTime() - start) / 1_000_000L
         }
     }

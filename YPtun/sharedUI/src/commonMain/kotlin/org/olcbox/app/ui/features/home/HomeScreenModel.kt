@@ -664,6 +664,10 @@ class HomeScreenViewModel(
         val text = rawText.trim()
         val isSingleInboundLink = text.startsWith(YptunInboundCodec.PREFIX) &&
             text.indexOf(YptunInboundCodec.PREFIX, startIndex = 1) < 0
+        if (text.startsWith("openflux://", ignoreCase = true)) {
+            return "This OpenFlux link can't be imported: only a single Yandex / Mail.ru / cups.online " +
+                "transport without a session or secret is supported (or the link is damaged)."
+        }
         return if (isSingleInboundLink && YptunInboundCodec.parse(text) == null) {
             "This YPtun link is damaged — characters were lost in transit. " +
                 "Scan the QR instead, or send the link as a file."
@@ -952,10 +956,15 @@ const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/v
  *  - Freedom-V2Ray — агрегатор шести списков (~1600 серверов всех протоколов), раз в 2 часа
  *    выкидывает хосты, не принимающие TCP. Это проверка из США, а не через прокси, поэтому
  *    окончательно сервер всё равно проверяем сами — но мёртвых в нём заметно меньше;
+ *  - igareck/vpn-configs-for-russia — обновляется каждые пару часов, конфиги заранее проверяет сервер
+ *    в России (в т.ч. под белые списки мобильного интернета); берём три VLESS-файла целиком (~100 уникальных);
  *  - ebrasha — огромный (~7 тыс. уникальных, только VLESS) и живой процентов на 7, только выборка.
  */
 val FREE_SERVERS_SOURCES = listOf(
     FREE_SERVERS_URL to 0,
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt" to 0,
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt" to 0,
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-checked.txt" to 0,
     "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix.txt" to 170,
     "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to 100,
 )

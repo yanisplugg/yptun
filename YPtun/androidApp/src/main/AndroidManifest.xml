@@ -87,6 +87,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="yptun" />
             </intent-filter>
+            <!-- Tunnel share links: qWDTT quick link and OpenFlux client link open the importer. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="qwdtt" />
+                <data android:scheme="openflux" />
+            </intent-filter>
             <!--
                 Long-pressing the Quick Settings tile launches the tile's
                 "preferences" activity. Without this filter the system falls

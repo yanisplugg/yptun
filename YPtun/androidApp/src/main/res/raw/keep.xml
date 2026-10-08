@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Resources the VPN service looks up by NAME (Resources.getIdentifier); the release shrinker cannot see those uses and stripped them, so the custom notification (colored logo, speed line) silently fell back to the plain one. -->
+<!-- Resources the VPN service looks up by NAME (Resources.getIdentifier); the release shrinker cannot see those uses and stripped them, so the custom notification (coloured speed line) silently fell back to the plain one. -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@layout/notif_olcbox,@drawable/ic_notification_logo,@drawable/ic_stat_yptun" />
+    tools:keep="@layout/notif_olcbox" />
