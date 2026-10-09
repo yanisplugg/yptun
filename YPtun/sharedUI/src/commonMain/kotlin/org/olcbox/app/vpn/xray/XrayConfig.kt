@@ -113,8 +113,11 @@ object XrayConfig {
         "cloudflare-dns.com" to "1.1.1.1",
         "one.one.one.one" to "1.1.1.1",
         "dns.google" to "8.8.8.8",
+        "dns.google.com" to "8.8.8.8",
         "dns.quad9.net" to "9.9.9.9",
         "dns.alidns.com" to "223.5.5.5",
+        "dns.adguard.com" to "94.140.14.14",
+        "dns.adguard-dns.com" to "94.140.14.14",
     )
 
     /**
@@ -353,13 +356,12 @@ object XrayConfig {
 
             putJsonObject("dns") {
                 val profileHosts = routingProfile?.dnsHosts ?: emptyMap()
-                if (traffic.blockRuDomains || profileHosts.isNotEmpty() || fakeBlockRegex.isNotEmpty()) {
-                    putJsonObject("hosts") {
-                        if (traffic.blockRuDomains) RuBlocklist.hostRegexps.forEach { put(it, "0.0.0.0") }
-                        // The imported config's own blackholes, back in Xray's own schema.
-                        fakeBlockRegex.forEach { put("regexp:$it", "0.0.0.0") }
-                        profileHosts.forEach { (k, v) -> put(k, v) }
-                    }
+                putJsonObject("hosts") {
+                    DOH_HOST_IPS.forEach { (k, v) -> put(k, v) }
+                    if (traffic.blockRuDomains) RuBlocklist.hostRegexps.forEach { put(it, "0.0.0.0") }
+                    // The imported config's own blackholes, back in Xray's own schema.
+                    fakeBlockRegex.forEach { put("regexp:$it", "0.0.0.0") }
+                    profileHosts.forEach { (k, v) -> put(k, v) }
                 }
                 putJsonArray("servers") {
                     // FakeDNS first so sniffed domains get a synthetic IP before the real resolvers.
@@ -586,7 +588,7 @@ object XrayConfig {
             // This is the SAME recipe as ipv4_only (which works), so it adds no new failure mode.
             val familyBlockRule = when {
                 !forceFamilyResolve -> null
-                traffic.domainStrategy == "ipv4_only" -> buildJsonObject {
+                traffic.domainStrategy == "ipv4_only" || traffic.domainStrategy == "prefer_ipv4" -> buildJsonObject {
                     put("type", "field"); putJsonArray("ip") { add("::/0") }; put("outboundTag", "block")
                 }
                 traffic.domainStrategy == "ipv6_only" -> buildJsonObject {
@@ -764,7 +766,7 @@ object XrayConfig {
                     // blocklist (item 5): the toggles run alongside the profile, not instead of it.
                     val base = XrayRouting.routingObject(routingProfile)
                     val baseStrategy = base["domainStrategy"] ?: JsonPrimitive("AsIs")
-                    val strategy = if (forceFamily) JsonPrimitive("IPIfNonMatch") else baseStrategy
+                    val strategy = if (forceFamily || traffic.remoteDns.isNotBlank()) JsonPrimitive("IPIfNonMatch") else baseStrategy
                     put("domainStrategy", strategy)
                     putJsonArray("rules") {
                         // Loopback relay → xhttp main, before anything that could drop/redirect it.
@@ -786,7 +788,7 @@ object XrayConfig {
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
                     }
                 } else {
-                    put("domainStrategy", if (forceFamily) "IPIfNonMatch" else "AsIs")
+                    put("domainStrategy", if (forceFamily || traffic.remoteDns.isNotBlank()) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }

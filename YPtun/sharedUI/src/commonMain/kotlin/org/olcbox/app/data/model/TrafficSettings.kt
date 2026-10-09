@@ -63,7 +63,7 @@ data class TrafficSettings(
 
     /** Xray DNS queryStrategy mapped from [domainStrategy]. */
     fun xrayQueryStrategy(): String = when (domainStrategy) {
-        "ipv4_only" -> "UseIPv4"
+        "ipv4_only", "prefer_ipv4" -> "UseIPv4"
         "ipv6_only" -> "UseIPv6"
         else -> "UseIP"
     }

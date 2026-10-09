@@ -364,6 +364,7 @@ internal class IosEngineController(
                     logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
                 )
             }
+            log("DNS: remote=${traffic.remoteDns}${if (traffic.remoteDns2.isNotBlank()) ", remote2=${traffic.remoteDns2}" else ""}, direct=${traffic.directDns}, strategy=${traffic.domainStrategy}")
             log("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
             if (assetPath.isNotEmpty()) {
                 log("Xray asset path set to $assetPath")
@@ -395,7 +396,7 @@ internal class IosEngineController(
                 fakeDnsSpec = if (isAwg) null else config.fakeDns,
                 preferTcpRemoteDns = true,
                 remoteDnsOverHttps = false,
-                forceFamilyResolve = false,
+                forceFamilyResolve = true,
                 cacheFilePath = IosSharedStore.path(SINGBOX_CACHE_FILE),
                 // Unlike every other platform, iOS points sing-box's log at a FILE in the App Group —
                 // and the app re-reads that file to show the log sheet. At the shared default ('debug')
@@ -405,6 +406,7 @@ internal class IosEngineController(
                 logLevel = "warn",
                 logFilePath = IosSharedStore.path(IosTunnelSession.LOG_FILE),
             )
+            log("DNS: remote=${traffic.remoteDns}${if (traffic.remoteDns2.isNotBlank()) ", remote2=${traffic.remoteDns2}" else ""}, direct=${traffic.directDns}, strategy=${traffic.domainStrategy}")
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}")
             startSingBox(json, listenPort)
         }

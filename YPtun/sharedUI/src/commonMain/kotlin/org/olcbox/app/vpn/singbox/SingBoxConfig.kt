@@ -285,9 +285,13 @@ object SingBoxConfig {
                 putJsonArray("rules") {
                     // Bootstrap: proxy servers dialed by domain must be resolved by the direct resolver,
                     // never through the tunnel they are establishing (prevents DNS loopback).
+                    val remoteHost1 = extractHost(traffic.remoteDns)
+                    val remoteHost2 = extractHost(traffic.remoteDns2)
                     val bootstrapHosts = listOfNotNull(
                         profile.server.takeIf { !isIpAddress(it) && it.isNotBlank() },
-                        secondProfile?.server?.takeIf { !isIpAddress(it) && it.isNotBlank() }
+                        secondProfile?.server?.takeIf { !isIpAddress(it) && it.isNotBlank() },
+                        remoteHost1.takeIf { !isIpAddress(it) && it.isNotBlank() },
+                        remoteHost2.takeIf { !isIpAddress(it) && it.isNotBlank() },
                     ).distinct()
                     if (bootstrapHosts.isNotEmpty()) {
                         addJsonObject {
@@ -572,9 +576,18 @@ object SingBoxConfig {
                     val blockAppDoh = fakeEnabled ||
                         effectiveStrategy == "ipv4_only" || effectiveStrategy == "ipv6_only"
                     if (blockAppDoh) {
-                        addJsonObject {
-                            putJsonArray("domain_suffix") { DOH_BLOCK_SUFFIXES.forEach { add(it) } }
-                            put("action", "reject")
+                        val configuredDnsHosts = listOf(
+                            extractHost(traffic.remoteDns),
+                            extractHost(traffic.remoteDns2)
+                        ).filter { it.isNotBlank() }
+                        val activeDohBlock = DOH_BLOCK_SUFFIXES.filterNot { suffix ->
+                            configuredDnsHosts.any { host -> host.equals(suffix, ignoreCase = true) || host.endsWith(".$suffix", ignoreCase = true) }
+                        }
+                        if (activeDohBlock.isNotEmpty()) {
+                            addJsonObject {
+                                putJsonArray("domain_suffix") { activeDohBlock.forEach { add(it) } }
+                                put("action", "reject")
+                            }
                         }
                         // NOTE: we deliberately do NOT reject the DoH resolver IPs (1.1.1.1, 8.8.8.8…) by
                         // ip_cidr here. Many users set Android "Private DNS" to one of those IPs (DoT on
@@ -644,12 +657,12 @@ object SingBoxConfig {
                     val expertStrategy = sbExpertStrategy ?: effectiveStrategy
                     // Family enforcement is opt-out for full UDP tunnels (see [forceFamilyResolve]).
                     val forceFamily = forceFamilyResolve &&
-                        (expertStrategy == "ipv4_only" || expertStrategy == "ipv6_only")
+                        (expertStrategy == "ipv4_only" || expertStrategy == "ipv6_only" || expertStrategy == "prefer_ipv4")
                     // v2rayNG-style manual rules that use IP/geoip selectors also need the sniffed
                     // domain resolved first, or `geoip:ru → direct` silently skips domain connections.
                     val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
                     if (allowLocalResolve &&
-                        (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
+                        (traffic.remoteDns.isNotBlank() || routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
                             manualRulesUseIp || embeddedUsesIpRules ||
                             (sbExpert && routingProfile!!.singboxResolve))
                     ) {
@@ -1228,4 +1241,19 @@ object SingBoxConfig {
 
 private fun isIpAddress(v: String): Boolean =
     v.count { it == ':' } >= 2 || v.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
+
+private fun extractHost(dnsAddress: String): String {
+    val raw = dnsAddress.trim()
+    if (raw.isEmpty()) return ""
+    val rest = if (raw.contains("://")) raw.substringAfter("://") else raw
+    val hostPart = rest.substringBefore("/")
+    val bracketEnd = hostPart.lastIndexOf(']')
+    val portSep = when {
+        bracketEnd >= 0 -> hostPart.indexOf(':', bracketEnd)
+        hostPart.count { it == ':' } == 1 -> hostPart.indexOf(':')
+        else -> -1
+    }
+    val host = if (portSep > 0) hostPart.substring(0, portSep) else hostPart
+    return host.removePrefix("[").removeSuffix("]").trim()
+}
 

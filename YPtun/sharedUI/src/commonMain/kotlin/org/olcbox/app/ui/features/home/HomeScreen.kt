@@ -239,9 +239,11 @@ fun HomeScreen(
     // measure that reflects whether a node actually WORKS — not just that a TCP/ICMP port answers),
     // then hand the fastest-first order to the model, which connects to the first that comes up and
     // advances on failure. App-level only; nothing about the running tunnel is touched.
-    fun autoConnectFastest() {
+    fun autoConnectFastest(onlyIds: Collection<String>? = null) {
         if (autoRunning) return
-        val candidates = locations.filter { it.config?.isComplete() == true }
+        val candidates = locations.filter {
+            it.config?.isComplete() == true && (onlyIds == null || it.storageId in onlyIds)
+        }
         if (candidates.isEmpty()) {
             scope.launch { snackbarHostState.showSnackbar(s.autoConnectNoServers) }
             return
@@ -496,6 +498,8 @@ fun HomeScreen(
                 onRefreshClick = { targetIds ->
                     refreshHttpPings(targetIds)
                 },
+                onAutoPickClick = { targetIds -> autoConnectFastest(targetIds) },
+                autoPickRunning = autoRunning,
                 onAddSubscriptionClick = {
                     isAddSheetOpen = true
                 },

@@ -167,6 +167,7 @@ class IosTunnelSession(
             val result = runCatching {
                 watchdog?.cancel()
                 engine.stopAll()
+                delay(200)
 
                 val next = request ?: error("Нет активной локации — выберите её в приложении")
                 val location = next.location.normalized()

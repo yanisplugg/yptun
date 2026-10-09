@@ -86,6 +86,7 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
+import org.olcbox.app.ui.features.locations.components.AutoPickButton
 import org.olcbox.app.ui.features.locations.components.RefreshButton
 
 /**
@@ -99,6 +100,9 @@ import org.olcbox.app.ui.features.locations.components.RefreshButton
  */
 fun LazyListScope.locationSelectorContent(
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
+    // Ping a subscription's servers and connect to the best one (spinner while [autoPickRunning]).
+    onAutoPickClick: (targetLocationIds: List<String>) -> Unit = {},
+    autoPickRunning: Boolean = false,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
     hasLoaded: Boolean = true,
@@ -265,6 +269,11 @@ fun LazyListScope.locationSelectorContent(
                             val isGroupRefreshing = pingsState is PingsState.Loading &&
                                     pingsState.pendingLocationIds.any { it in groupIds }
 
+                            AutoPickButton(
+                                isRunning = autoPickRunning,
+                                onClick = { onAutoPickClick(groupIds) },
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                             RefreshButton(
                                 isRefreshing = isGroupRefreshing,
                                 onClick = { onRefreshClick(groupIds) },
@@ -363,6 +372,11 @@ fun LazyListScope.locationSelectorContent(
                                     val isGroupRefreshing = pingsState is PingsState.Loading &&
                                             pingsState.pendingLocationIds.any { it in groupIds }
 
+                                    AutoPickButton(
+                                        isRunning = autoPickRunning,
+                                        onClick = { onAutoPickClick(groupIds) },
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
                                     RefreshButton(
                                         isRefreshing = isGroupRefreshing,
                                         onClick = { onRefreshClick(groupIds) },
@@ -457,8 +471,10 @@ fun LazyListScope.locationSelectorContent(
                             folder = folder,
                             memberCount = memberSubGroups.size + memberCustom.size,
                             isRefreshing = isFolderRefreshing,
+                            autoPickRunning = autoPickRunning,
                             onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
                             onRefresh = { onRefreshClick(memberIds) },
+                            onAutoPick = { onAutoPickClick(memberIds) },
                             onTogglePin = { onToggleFolderPinned(folder.id) },
                             onRename = { onRenameFolder(folder) },
                             onDelete = { onDeleteFolder(folder.id) }
@@ -512,6 +528,11 @@ fun LazyListScope.locationSelectorContent(
                                             }
                                             val mRefreshing = pingsState is PingsState.Loading &&
                                                     pingsState.pendingLocationIds.any { it in mIds }
+                                            AutoPickButton(
+                                                isRunning = autoPickRunning,
+                                                onClick = { onAutoPickClick(mIds) },
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
                                             RefreshButton(
                                                 isRefreshing = mRefreshing,
                                                 onClick = { onRefreshClick(mIds) },
@@ -626,6 +647,11 @@ fun LazyListScope.locationSelectorContent(
                 val isCustomRefreshing = pingsState is PingsState.Loading &&
                         pingsState.pendingLocationIds.any { it in customIds }
 
+                AutoPickButton(
+                    isRunning = autoPickRunning,
+                    onClick = { onAutoPickClick(customIds) },
+                    tint = MaterialTheme.colorScheme.primary
+                )
                 RefreshButton(
                     isRefreshing = isCustomRefreshing,
                     onClick = { onRefreshClick(customIds) },
@@ -1238,8 +1264,10 @@ private fun FolderGroupHeader(
     folder: CustomGroup,
     memberCount: Int,
     isRefreshing: Boolean,
+    autoPickRunning: Boolean = false,
     onToggleCollapsed: () -> Unit,
     onRefresh: () -> Unit,
+    onAutoPick: () -> Unit = {},
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
@@ -1288,6 +1316,11 @@ private fun FolderGroupHeader(
                 )
             }
 
+            AutoPickButton(
+                isRunning = autoPickRunning,
+                onClick = onAutoPick,
+                tint = MaterialTheme.colorScheme.primary
+            )
             RefreshButton(
                 isRefreshing = isRefreshing,
                 onClick = onRefresh,

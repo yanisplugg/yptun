@@ -256,7 +256,7 @@ class HomeScreenViewModel(
         _state.update { it.copy(connectError = null) }
     }
 
-    fun restartVpnIfRunning() {
+    fun restartVpnIfRunning(forceIfError: Boolean = true) {
         when (vpnManager.status.value) {
             VpnStatus.Connected,
             VpnStatus.Connecting,
@@ -269,7 +269,14 @@ class HomeScreenViewModel(
             VpnStatus.Disconnected,
             VpnStatus.Stopping -> Unit
             is VpnStatus.Error -> {
-                _state.update { it.copy(isVpnLoading = false) }
+                if (forceIfError) {
+                    viewModelScope.launch {
+                        _state.update { it.copy(isVpnLoading = true, connectError = null) }
+                        vpnManager.startVpn()
+                    }
+                } else {
+                    _state.update { it.copy(isVpnLoading = false) }
+                }
             }
         }
     }
