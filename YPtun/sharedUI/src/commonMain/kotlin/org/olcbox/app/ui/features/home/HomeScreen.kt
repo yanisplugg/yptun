@@ -173,6 +173,7 @@ fun HomeScreen(
     // True while an "Auto = fastest" pass (ping → pick → connect) is in flight, so the Auto button
     // shows a spinner and ignores re-taps instead of launching a second concurrent pass.
     var autoRunning by remember { mutableStateOf(false) }
+    var autoPickTargetIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val pingsState = locationViewModel.pingsState
     val locations = locationViewModel.locations.toList()
     // Drop selected ids that no longer exist (e.g. after a delete) so the count stays accurate.
@@ -190,7 +191,9 @@ fun HomeScreen(
     fun refreshSubscriptions() {
         viewModel.refreshSubscriptions { updatedCount ->
             locationViewModel.loadLocations {
-                viewModel.restartVpnIfRunning()
+                viewModel.loadCurrentConfig {
+                    viewModel.restartVpnIfRunning()
+                }
 
                 val message = if (updatedCount > 0) {
                     s.subscriptionsUpdatedCount(updatedCount)
@@ -212,7 +215,9 @@ fun HomeScreen(
         }
         viewModel.refreshSubscription(url) { updatedCount ->
             locationViewModel.loadLocations {
-                viewModel.restartVpnIfRunning()
+                viewModel.loadCurrentConfig {
+                    viewModel.restartVpnIfRunning()
+                }
                 val message = if (updatedCount > 0) {
                     s.subscriptionsUpdatedCount(updatedCount)
                 } else {
@@ -240,7 +245,7 @@ fun HomeScreen(
     // then hand the fastest-first order to the model, which connects to the first that comes up and
     // advances on failure. App-level only; nothing about the running tunnel is touched.
     fun autoConnectFastest(onlyIds: Collection<String>? = null) {
-        if (autoRunning) return
+        if (autoRunning || autoPickTargetIds.isNotEmpty()) return
         val candidates = locations.filter {
             it.config?.isComplete() == true && (onlyIds == null || it.storageId in onlyIds)
         }
@@ -248,7 +253,10 @@ fun HomeScreen(
             scope.launch { snackbarHostState.showSnackbar(s.autoConnectNoServers) }
             return
         }
-        autoRunning = true
+        if (onlyIds == null) {
+            autoRunning = true
+        }
+        autoPickTargetIds = candidates.map { it.storageId }.toSet()
         scope.launch { snackbarHostState.showSnackbar(s.autoConnectSearching) }
         locationViewModel.refreshPings(
             targetLocationIds = candidates.map { it.storageId },
@@ -268,6 +276,7 @@ fun HomeScreen(
                 val order = reachable.ifEmpty { candidates.map { it.storageId } }
                 viewModel.autoConnectInOrder(order) { connectedName ->
                     autoRunning = false
+                    autoPickTargetIds = emptySet()
                     scope.launch {
                         snackbarHostState.showSnackbar(
                             if (connectedName != null) s.autoConnectConnected(connectedName)
@@ -276,6 +285,10 @@ fun HomeScreen(
                     }
                 }
             },
+            onError = { _ ->
+                autoRunning = false
+                autoPickTargetIds = emptySet()
+            }
         )
     }
 
@@ -290,8 +303,9 @@ fun HomeScreen(
     }
 
     fun afterDeletion(message: String) {
-        viewModel.loadCurrentConfig()
-        viewModel.restartVpnIfRunning()
+        viewModel.loadCurrentConfig {
+            viewModel.restartVpnIfRunning()
+        }
         scope.launch { snackbarHostState.showSnackbar(message) }
     }
 
@@ -500,6 +514,7 @@ fun HomeScreen(
                 },
                 onAutoPickClick = { targetIds -> autoConnectFastest(targetIds) },
                 autoPickRunning = autoRunning,
+                autoPickTargetIds = autoPickTargetIds,
                 onAddSubscriptionClick = {
                     isAddSheetOpen = true
                 },
@@ -510,8 +525,9 @@ fun HomeScreen(
                 pingsState = pingsState,
                 onLocationSelected = { id ->
                     locationViewModel.selectLocation(id) {
-                        viewModel.loadCurrentConfig()
-                        viewModel.restartVpnIfRunning()
+                        viewModel.loadCurrentConfig {
+                            viewModel.restartVpnIfRunning()
+                        }
                     }
                 },
                 onLocationSettingsClick = { id ->
@@ -771,7 +787,9 @@ fun HomeScreen(
                         selectedServers = selected,
                         onComplete = { count ->
                             locationViewModel.loadLocations {
-                                viewModel.restartVpnIfRunning()
+                                viewModel.loadCurrentConfig {
+                                    viewModel.restartVpnIfRunning()
+                                }
                                 scope.launch {
                                     snackbarHostState.showSnackbar(s.freeServersImported(count, freeServers.size))
                                 }

@@ -100,9 +100,10 @@ import org.olcbox.app.ui.features.locations.components.RefreshButton
  */
 fun LazyListScope.locationSelectorContent(
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
-    // Ping a subscription's servers and connect to the best one (spinner while [autoPickRunning]).
+    // Ping a subscription's servers and connect to the best one (spinner while [autoPickRunning] or in [autoPickTargetIds]).
     onAutoPickClick: (targetLocationIds: List<String>) -> Unit = {},
     autoPickRunning: Boolean = false,
+    autoPickTargetIds: Set<String> = emptySet(),
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
     hasLoaded: Boolean = true,
@@ -269,8 +270,9 @@ fun LazyListScope.locationSelectorContent(
                             val isGroupRefreshing = pingsState is PingsState.Loading &&
                                     pingsState.pendingLocationIds.any { it in groupIds }
 
+                            val isGroupAutoPicking = groupIds.any { it in autoPickTargetIds } || (autoPickRunning && groupIds.isNotEmpty())
                             AutoPickButton(
-                                isRunning = autoPickRunning,
+                                isRunning = isGroupAutoPicking,
                                 onClick = { onAutoPickClick(groupIds) },
                                 tint = MaterialTheme.colorScheme.primary
                             )
@@ -372,8 +374,9 @@ fun LazyListScope.locationSelectorContent(
                                     val isGroupRefreshing = pingsState is PingsState.Loading &&
                                             pingsState.pendingLocationIds.any { it in groupIds }
 
+                                    val isGroupAutoPicking = groupIds.any { it in autoPickTargetIds } || (autoPickRunning && groupIds.isNotEmpty())
                                     AutoPickButton(
-                                        isRunning = autoPickRunning,
+                                        isRunning = isGroupAutoPicking,
                                         onClick = { onAutoPickClick(groupIds) },
                                         tint = MaterialTheme.colorScheme.primary
                                     )
@@ -471,7 +474,7 @@ fun LazyListScope.locationSelectorContent(
                             folder = folder,
                             memberCount = memberSubGroups.size + memberCustom.size,
                             isRefreshing = isFolderRefreshing,
-                            autoPickRunning = autoPickRunning,
+                            autoPickRunning = memberIds.any { it in autoPickTargetIds } || (autoPickRunning && memberIds.isNotEmpty()),
                             onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
                             onRefresh = { onRefreshClick(memberIds) },
                             onAutoPick = { onAutoPickClick(memberIds) },
@@ -528,8 +531,9 @@ fun LazyListScope.locationSelectorContent(
                                             }
                                             val mRefreshing = pingsState is PingsState.Loading &&
                                                     pingsState.pendingLocationIds.any { it in mIds }
+                                            val mAutoPicking = mIds.any { it in autoPickTargetIds } || (autoPickRunning && mIds.isNotEmpty())
                                             AutoPickButton(
-                                                isRunning = autoPickRunning,
+                                                isRunning = mAutoPicking,
                                                 onClick = { onAutoPickClick(mIds) },
                                                 tint = MaterialTheme.colorScheme.primary
                                             )
@@ -647,8 +651,9 @@ fun LazyListScope.locationSelectorContent(
                 val isCustomRefreshing = pingsState is PingsState.Loading &&
                         pingsState.pendingLocationIds.any { it in customIds }
 
+                val isCustomAutoPicking = customIds.any { it in autoPickTargetIds } || (autoPickRunning && customIds.isNotEmpty())
                 AutoPickButton(
-                    isRunning = autoPickRunning,
+                    isRunning = isCustomAutoPicking,
                     onClick = { onAutoPickClick(customIds) },
                     tint = MaterialTheme.colorScheme.primary
                 )

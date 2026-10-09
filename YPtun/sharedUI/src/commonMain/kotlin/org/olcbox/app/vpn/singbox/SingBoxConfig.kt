@@ -580,8 +580,20 @@ object SingBoxConfig {
                             extractHost(traffic.remoteDns),
                             extractHost(traffic.remoteDns2)
                         ).filter { it.isNotBlank() }
+                        val knownIpToHosts = mapOf(
+                            "1.1.1.1" to listOf("cloudflare-dns.com", "one.one.one.one"),
+                            "1.0.0.1" to listOf("cloudflare-dns.com", "one.one.one.one"),
+                            "8.8.8.8" to listOf("dns.google", "dns.google.com"),
+                            "8.8.4.4" to listOf("dns.google", "dns.google.com"),
+                            "9.9.9.9" to listOf("dns.quad9.net"),
+                            "94.140.14.14" to listOf("dns.adguard.com", "dns.adguard-dns.com"),
+                            "94.140.15.15" to listOf("dns.adguard.com", "dns.adguard-dns.com"),
+                        )
+                        val allConfiguredHosts = configuredDnsHosts.flatMap { h ->
+                            listOf(h) + (knownIpToHosts[h] ?: emptyList())
+                        }.toSet()
                         val activeDohBlock = DOH_BLOCK_SUFFIXES.filterNot { suffix ->
-                            configuredDnsHosts.any { host -> host.equals(suffix, ignoreCase = true) || host.endsWith(".$suffix", ignoreCase = true) }
+                            allConfiguredHosts.any { host -> host.equals(suffix, ignoreCase = true) || host.endsWith(".$suffix", ignoreCase = true) }
                         }
                         if (activeDohBlock.isNotEmpty()) {
                             addJsonObject {
@@ -882,12 +894,20 @@ object SingBoxConfig {
         val host = if (portSep > 0) hostPart.substring(0, portSep) else hostPart
         val port = if (portSep > 0) hostPart.substring(portSep + 1).toIntOrNull() else null
 
-        val type = when {
-            scheme.isNotEmpty() -> scheme
-            raw.equals("local", true) || raw.equals("localhost", true) -> "local"
-            raw.equals("fakeip", true) -> "fakeip"
-            raw.isBlank() -> "local"
-            else -> "udp"
+        val type = when (scheme) {
+            "dot", "tls" -> "tls"
+            "doq", "quic" -> "quic"
+            "doh", "https" -> "https"
+            "h3" -> "h3"
+            "tcp" -> "tcp"
+            "udp" -> "udp"
+            "" -> when {
+                raw.equals("local", true) || raw.equals("localhost", true) -> "local"
+                raw.equals("fakeip", true) -> "fakeip"
+                raw.isBlank() -> "local"
+                else -> "udp"
+            }
+            else -> scheme
         }
         addJsonObject {
             put("tag", tag)

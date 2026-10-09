@@ -101,11 +101,20 @@ object XrayConfig {
      */
     private fun xrayDns(server: String): String {
         val s = server.trim()
-        if (!s.startsWith("tls://", ignoreCase = true)) return pinKnownDohHost(s)
-        val host = s.substring(6).substringBefore("/").let {
-            if (it.startsWith("[")) it.substringBefore("]") + "]" else it.substringBefore(":")
+        if (s.isEmpty()) return s
+        val scheme = s.substringBefore("://", "").lowercase()
+        val rest = if (scheme.isEmpty()) s else s.substringAfter("://")
+        val hostPart = rest.substringBefore("/")
+        val host = if (hostPart.startsWith("[")) hostPart.substringBefore("]") + "]" else hostPart.substringBefore(":")
+        val path = rest.substringAfter("/", "")
+        return when (scheme) {
+            "dot", "tls" -> pinKnownDohHost("https://$host/dns-query")
+            "doh", "https" -> pinKnownDohHost(if (path.isEmpty() || path == "dns-query") "https://$host/dns-query" else "https://$rest")
+            "doq", "quic" -> "quic://$hostPart"
+            "tcp" -> "tcp://$hostPart"
+            "udp" -> "udp://$hostPart"
+            else -> pinKnownDohHost(s)
         }
-        return pinKnownDohHost("https://$host/dns-query")
     }
 
     /** Well-known DoH hostnames → the IP whose certificate carries it as a SAN (see [DOH_IP_PROVIDERS]). */
@@ -540,9 +549,9 @@ object XrayConfig {
                     put("tag", "block")
                     put("protocol", "blackhole")
                 }
-                // FakeDNS: DNS queries (port 53/853) are hijacked to this dns outbound so the core
-                // answers them from the fake pool / upstream instead of leaking them out.
-                if (fakeEnabled) add(dnsOutOutbound())
+                // DNS hijack: port 53/853 queries are hijacked to this dns outbound so the core
+                // answers them from the fake pool / upstream resolvers.
+                if (fakeEnabled || traffic.remoteDns.isNotBlank()) add(dnsOutOutbound())
                 // TLS fragmentation outbound (DPI evasion); proxy dials through it via dialerProxy.
                 if (traffic.fragmentEnabled && olcrtcChainPort == null) {
                     addJsonObject {
@@ -571,8 +580,8 @@ object XrayConfig {
                 put("port", 443)
                 put("outboundTag", "block")
             }
-            // FakeDNS: route DNS queries to the dns outbound so they're answered from the fake pool.
-            val dnsOutRules = if (fakeEnabled) dnsHijackRules() else emptyList()
+            // Route DNS queries to the dns outbound so they're answered from the fake pool or upstream resolvers.
+            val dnsOutRules = if (fakeEnabled || traffic.remoteDns.isNotBlank()) dnsHijackRules() else emptyList()
             // Blocked hosts resolve to 0.0.0.0 (dns.hosts above); blackhole anything aimed there.
             val blockZero = traffic.blockRuDomains || fakeBlockRegex.isNotEmpty()
             val blockZeroRule = buildJsonObject {
