@@ -192,6 +192,8 @@ object XrayConfig {
                 !isPrivateDnsHost(host) -> ips += host
             }
         }
+        if ("1.1.1.1" !in ips) ips += "1.1.1.1"
+        if ("1.0.0.1" !in ips) ips += "1.0.0.1"
         return domains.toList() to ips.toList()
     }
 

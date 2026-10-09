@@ -31,6 +31,9 @@ import platform.Foundation.dataUsingEncoding
 import platform.Foundation.fileHandleForWritingAtPath
 import platform.Foundation.seekToEndOfFile
 import platform.Foundation.writeData
+import platform.Foundation.NSURL
+import platform.NetworkExtension.NEDNSOverHTTPSSettings
+import platform.NetworkExtension.NEDNSOverTLSSettings
 import platform.NetworkExtension.NEDNSSettings
 import platform.NetworkExtension.NEIPv4Route
 import platform.NetworkExtension.NEIPv4Settings
@@ -338,9 +341,68 @@ class IosTunnelSession(
                 setIncludedRoutes(listOf(NEIPv6Route.defaultRoute()))
             }
         )
-        settings.setDNSSettings(
+        val traffic = IosSharedStore.loadTraffic()
+        val rawRemoteDns = traffic.remoteDns.trim()
+        val dnsSettings: NEDNSSettings = if (location.engine == EngineType.MasterDns) {
             NEDNSSettings(servers = listOf(MAPDNS_ADDRESS)).apply { setMatchDomains(listOf("")) }
-        )
+        } else when {
+            rawRemoteDns.startsWith("https://", ignoreCase = true) || rawRemoteDns.startsWith("doh://", ignoreCase = true) -> {
+                val dohUrl = if (rawRemoteDns.startsWith("doh://", ignoreCase = true)) {
+                    "https://" + rawRemoteDns.substring(6)
+                } else rawRemoteDns
+                val authority = dohUrl.substringAfter("://").substringBefore('/')
+                val host = if (authority.startsWith("[")) authority.substringAfter('[').substringBefore(']')
+                else if (authority.count { it == ':' } == 1) authority.substringBefore(':') else authority
+                val bootstrapIp = when {
+                    host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")) -> host
+                    host.contains("cloudflare", ignoreCase = true) || host == "one.one.one.one" -> "1.1.1.1"
+                    host.contains("google", ignoreCase = true) -> "8.8.8.8"
+                    host.contains("quad9", ignoreCase = true) -> "9.9.9.9"
+                    else -> MAPDNS_ADDRESS
+                }
+                NEDNSOverHTTPSSettings(servers = listOf(bootstrapIp)).apply {
+                    serverURL = NSURL.URLWithString(dohUrl)
+                    setMatchDomains(listOf(""))
+                }
+            }
+            rawRemoteDns.startsWith("tls://", ignoreCase = true) || rawRemoteDns.startsWith("dot://", ignoreCase = true) -> {
+                val rest = rawRemoteDns.substringAfter("://")
+                val host = rest.substringBefore('/').substringBefore(':')
+                val bootstrapIp = when {
+                    host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")) -> host
+                    host.contains("cloudflare", ignoreCase = true) || host == "one.one.one.one" -> "1.1.1.1"
+                    host.contains("google", ignoreCase = true) -> "8.8.8.8"
+                    host.contains("quad9", ignoreCase = true) -> "9.9.9.9"
+                    else -> MAPDNS_ADDRESS
+                }
+                NEDNSOverTLSSettings(servers = listOf(bootstrapIp)).apply {
+                    serverName = host
+                    setMatchDomains(listOf(""))
+                }
+            }
+            rawRemoteDns == "1.1.1.1" || rawRemoteDns == "1.0.0.1" -> {
+                NEDNSOverHTTPSSettings(servers = listOf(rawRemoteDns)).apply {
+                    serverURL = NSURL.URLWithString("https://$rawRemoteDns/dns-query")
+                    setMatchDomains(listOf(""))
+                }
+            }
+            rawRemoteDns == "8.8.8.8" || rawRemoteDns == "8.8.4.4" -> {
+                NEDNSOverHTTPSSettings(servers = listOf(rawRemoteDns)).apply {
+                    serverURL = NSURL.URLWithString("https://$rawRemoteDns/dns-query")
+                    setMatchDomains(listOf(""))
+                }
+            }
+            rawRemoteDns == "9.9.9.9" -> {
+                NEDNSOverHTTPSSettings(servers = listOf(rawRemoteDns)).apply {
+                    serverURL = NSURL.URLWithString("https://9.9.9.9/dns-query")
+                    setMatchDomains(listOf(""))
+                }
+            }
+            else -> {
+                NEDNSSettings(servers = listOf(MAPDNS_ADDRESS)).apply { setMatchDomains(listOf("")) }
+            }
+        }
+        settings.setDNSSettings(dnsSettings)
         val error = suspendCancellableCoroutine { cont ->
             provider.setTunnelNetworkSettings(settings) { err -> cont.resume(err?.localizedDescription) }
         }

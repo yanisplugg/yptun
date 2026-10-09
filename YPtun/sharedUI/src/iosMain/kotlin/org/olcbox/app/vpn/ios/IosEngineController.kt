@@ -263,7 +263,7 @@ internal class IosEngineController(
         if (activeProxyCore == ProxyCore.SingBox &&
             effectiveProfile.rawOutbound.isNullOrBlank() &&
             effectiveProfile.type in XRAY_SUPPORTED_TYPES &&
-            (profileWantsXray || traffic.blockRuDomains || traffic.fragmentEnabled)
+            (profileWantsXray || traffic.blockRuDomains || traffic.fragmentEnabled || (config.core == ProxyCore.Auto && globalCore == ProxyCore.Auto))
         ) {
             activeProxyCore = ProxyCore.Xray
             log(
@@ -271,7 +271,7 @@ internal class IosEngineController(
                     profileWantsXray -> "Switching to Xray core for routing profile (native domain:/geoip: matching)"
                     traffic.blockRuDomains -> "Switching to Xray core for RU-domain blocklist"
                     traffic.fragmentEnabled -> "Switching to Xray core for TLS fragmentation"
-                    else -> "Using Xray core for ${effectiveProfile.type}"
+                    else -> "Using default Xray core for ${effectiveProfile.type}"
                 }
             )
         }
