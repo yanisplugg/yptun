@@ -194,6 +194,9 @@ object XrayConfig {
         }
         if ("1.1.1.1" !in ips) ips += "1.1.1.1"
         if ("1.0.0.1" !in ips) ips += "1.0.0.1"
+        if ("8.8.8.8" !in ips) ips += "8.8.8.8"
+        if ("8.8.4.4" !in ips) ips += "8.8.4.4"
+        if ("9.9.9.9" !in ips) ips += "9.9.9.9"
         return domains.toList() to ips.toList()
     }
 
@@ -219,10 +222,6 @@ object XrayConfig {
         buildJsonObject {
             put("type", "field"); putJsonArray("inboundTag") { add("socks-in") }
             put("port", 53); put("outboundTag", "dns-out")
-        },
-        buildJsonObject {
-            put("type", "field"); putJsonArray("inboundTag") { add("socks-in") }
-            put("network", "tcp"); put("port", 853); put("outboundTag", "dns-out")
         },
     )
 

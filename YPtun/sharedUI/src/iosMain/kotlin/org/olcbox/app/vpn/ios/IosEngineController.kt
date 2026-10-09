@@ -261,7 +261,7 @@ internal class IosEngineController(
             activeProxyCore = ProxyCore.Xray
         }
         if (activeProxyCore == ProxyCore.SingBox &&
-            effectiveProfile.rawOutbound.isNullOrBlank() &&
+            effectiveProfile.rawSingBoxRoute == null &&
             effectiveProfile.type in XRAY_SUPPORTED_TYPES &&
             (profileWantsXray || traffic.blockRuDomains || traffic.fragmentEnabled || (config.core == ProxyCore.Auto && globalCore == ProxyCore.Auto))
         ) {

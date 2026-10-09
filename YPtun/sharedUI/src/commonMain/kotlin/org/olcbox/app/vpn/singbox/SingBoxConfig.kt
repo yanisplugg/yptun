@@ -916,12 +916,30 @@ object SingBoxConfig {
                 "local", "fakeip" -> Unit // no server address at all
                 "dhcp" -> if (host.isNotBlank() && !host.equals("auto", true)) put("interface", host)
                 else -> {
-                    put("server", host.removePrefix("[").removeSuffix("]"))
+                    val (effectiveServer, effectiveServerName) = when {
+                        type == "tls" && (host == "1.1.1.1" || host == "1.0.0.1" || host.contains("cloudflare", ignoreCase = true) || host == "one.one.one.one") ->
+                            "1.1.1.1" to "one.one.one.one"
+                        type == "tls" && (host == "8.8.8.8" || host == "8.8.4.4" || host.contains("google", ignoreCase = true)) ->
+                            "8.8.8.8" to "dns.google"
+                        type == "tls" && (host == "9.9.9.9" || host == "149.112.112.112" || host.contains("quad9", ignoreCase = true)) ->
+                            "9.9.9.9" to "dns.quad9.net"
+                        (type == "https" || type == "h3") && (host.contains("cloudflare", ignoreCase = true) || host == "one.one.one.one") ->
+                            "1.1.1.1" to null
+                        (type == "https" || type == "h3") && host.contains("google", ignoreCase = true) ->
+                            "8.8.8.8" to null
+                        (type == "https" || type == "h3") && host.contains("quad9", ignoreCase = true) ->
+                            "9.9.9.9" to null
+                        else -> host.removePrefix("[").removeSuffix("]") to null
+                    }
+                    put("server", effectiveServer)
                     if (port != null) put("server_port", port)
                     // Only DoH/DoH3 carry a URL path; the default is /dns-query, so emit it only when
                     // the user's address actually names a different one.
                     if (path != null && path != "/dns-query" && (type == "https" || type == "h3")) {
                         put("path", path)
+                    }
+                    if (type == "tls" && effectiveServerName != null) {
+                        putJsonObject("tls") { put("server_name", effectiveServerName) }
                     }
                 }
             }
