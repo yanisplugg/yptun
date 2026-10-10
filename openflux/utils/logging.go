@@ -150,6 +150,11 @@ func Packetf(format string, args ...interface{}) {
 	}
 }
 
+// DebugEnabled reports whether Debugf would print. Go evaluates a call's
+// arguments before the call, so on a hot path (once per packet) anything that
+// costs something to build - a hex dump, a hash - is guarded with this.
+func DebugEnabled() bool { return Level() >= LevelDebug }
+
 // Debugf logs an operational message (LevelDebug and up).
 func Debugf(format string, args ...interface{}) {
 	if Level() >= LevelDebug {

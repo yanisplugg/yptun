@@ -163,9 +163,12 @@ func (t *L3Exit) handleFromInternet(pkt []byte) {
 		return
 	}
 
-	// Inbound from the network: log before DNAT.
-	network.LogPacket("L3", network.DirInbound, pkt)
-
+	// The raw sockets hand over a copy of everything the host receives: its
+	// own ssh session, DNS answers, the transport's carrier connections,
+	// internet scans. Only a packet that belongs to a tunnel flow is logged
+	// (before DNAT, in the canonical format) - at -d the log is the tunnel's
+	// packets, not the node's whole inbound traffic, which over ssh feeds on
+	// itself. What was ignored shows as noct= in [L3-STATS].
 	if isFragmentedIPv4(pkt) {
 		pkt, ok = t.fromNetworkFragments.add(pkt, time.Now())
 		if !ok {
@@ -174,9 +177,16 @@ func (t *L3Exit) handleFromInternet(pkt []byte) {
 		}
 	}
 	if pkt[9] == 1 {
+		var wire []byte
+		if utils.Level() >= utils.LevelPackets {
+			wire = append([]byte(nil), pkt...)
+		}
 		if !t.translateICMP(pkt) {
 			t.dropNoConntrack.Add(1)
 			return
+		}
+		if wire != nil {
+			network.LogPacket("L3", network.DirInbound, wire)
 		}
 		if err := t.trans.Send(pkt); err != nil {
 			t.sendToClientErrs.Add(1)
@@ -196,6 +206,7 @@ func (t *L3Exit) handleFromInternet(pkt []byte) {
 			t.dropNoConntrack.Add(1)
 			return
 		}
+		network.LogPacket("L3", network.DirInbound, wire)
 		if err := t.sendClient(pkt, wire); err != nil {
 			t.sendToClientErrs.Add(1)
 			return
@@ -213,6 +224,7 @@ func (t *L3Exit) handleFromInternet(pkt []byte) {
 		return
 	}
 	t.ct.Touch(rk, isTCPClosing(pkt))
+	network.LogPacket("L3", network.DirInbound, pkt)
 	wire := append([]byte(nil), pkt...)
 	rewriteDNAT(pkt, clientIPBytes)
 	fixChecksums(pkt)

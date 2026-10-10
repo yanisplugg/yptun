@@ -49,7 +49,7 @@ func startCaptchaTransport(t *testing.T, url string) (*YandexDocsTransport, *ato
 	t.Helper()
 	tr := NewYandexDocsTransport(url, transport.DefaultConfig())
 	var notified atomic.Int32
-	tr.SetErrorNotifier(func(error, string, string, string) { notified.Add(1) })
+	tr.SetErrorNotifier(func(error, string, string, string, string) { notified.Add(1) })
 	if err := tr.Start(); err != nil {
 		t.Fatal(err)
 	}

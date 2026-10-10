@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/textproto"
+	"net/url"
 	"path"
 	"regexp"
 	"sort"
@@ -33,6 +34,12 @@ type FTP struct {
 	// "explicit" (AUTH TLS) or "implicit".
 	TLS string `json:"tls,omitempty"`
 	Dir string `json:"dir,omitempty"`
+	// Site is the site's own address (what the node must answer as), informational only: when Dir is not given,
+	// probe prefers a folder matching its domain before falling back to the usual names. Addon-domain hosting
+	// (InfinityFree and others) serves every domain but the account's primary one from <webroot>/<domain>/, not
+	// <webroot>/ itself - uploading there and asking the primary webroot answers with someone else's site, or a
+	// plain 404 from the front end, never reaching our PHP at all.
+	Site string `json:"site,omitempty"`
 }
 
 // Security levels of the FTP control connection that was got.
@@ -161,6 +168,23 @@ func isLoginRefused(err error) bool {
 // webRootNames are where hosts serve the site from, most common first.
 var webRootNames = []string{"htdocs", "public_html", "www", "httpdocs", "web", "html", "public", "wwwroot", "www.root"}
 
+// siteHost is raw's hostname, lowercased, without "www." - raw may be a bare host or a full URL, with or without a
+// scheme ("" when it does not parse to one, which just skips the addon-domain check above).
+func siteHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimPrefix(u.Hostname(), "www."))
+}
+
 // Probe is what ProbeHost learned about the account.
 type Probe struct {
 	Security   string   `json:"security"`   // SecurityTLS | SecurityTLSUnverified | SecurityNone
@@ -221,10 +245,26 @@ func probe(s *session, t FTP) (*Probe, error) {
 		sort.Strings(dirs)
 		p.Candidates = dirs
 		found := false
-		for _, n := range webRootNames {
-			if have[n] {
-				p.Dir, found = n, true
-				break
+		// An addon domain's own folder, if this account keeps one: checked before the generic names, since a
+		// present <webroot>/<domain>/ means the generic <webroot>/ belongs to a different site on the same
+		// account (InfinityFree's primary free subdomain, most often) and would silently serve the wrong thing.
+		if host := siteHost(t.Site); host != "" {
+			for _, n := range webRootNames {
+				if !have[n] {
+					continue
+				}
+				if _, err := s.c.List(join(n, host)); err == nil {
+					p.Dir, found = join(n, host), true
+					break
+				}
+			}
+		}
+		if !found {
+			for _, n := range webRootNames {
+				if have[n] {
+					p.Dir, found = n, true
+					break
+				}
 			}
 		}
 		if !found && hasIndex {

@@ -453,8 +453,10 @@ func (e *EncryptedTransport) Send(data []byte) error {
 	packet = append(packet, nonce...)
 	packet = keys.send.Seal(packet, nonce, data, header)
 
-	utils.Debugf("[CRYPTO] Send #%d dir=%d plaintext=%d ciphertext=%d nonce=%s ctx=%s",
-		e.sendOK.Load()+1, r.sendDir, len(data), len(packet), hex.EncodeToString(nonce), utils.Sha256Short([]byte(keys.context)))
+	if utils.DebugEnabled() {
+		utils.Debugf("[CRYPTO] Send #%d dir=%d plaintext=%d ciphertext=%d nonce=%s ctx=%s",
+			e.sendOK.Load()+1, r.sendDir, len(data), len(packet), hex.EncodeToString(nonce), utils.Sha256Short([]byte(keys.context)))
+	}
 	// Plaintext frames can carry control messages with cookie jars, so
 	// they are dumped only with --sensitive; ciphertext is what the
 	// carrier sees anyway.
@@ -512,8 +514,10 @@ func (e *EncryptedTransport) Receive(callback func([]byte)) {
 		}
 		nonceEnd := encryptedHeader + nonceSize
 		nonce := packet[encryptedHeader:nonceEnd]
-		utils.Debugf("[CRYPTO] Recv #%d dir=%d nonce=%s cipherLen=%d -> decrypting",
-			e.recvOK.Load()+e.recvFail.Load()+1, header[4], hex.EncodeToString(nonce), len(packet)-nonceEnd)
+		if utils.DebugEnabled() {
+			utils.Debugf("[CRYPTO] Recv #%d dir=%d nonce=%s cipherLen=%d -> decrypting",
+				e.recvOK.Load()+e.recvFail.Load()+1, header[4], hex.EncodeToString(nonce), len(packet)-nonceEnd)
+		}
 		plaintext, idx, err := r.open(nonce, packet[nonceEnd:], header)
 		if err != nil {
 			e.recvFail.Add(1)
@@ -533,8 +537,10 @@ func (e *EncryptedTransport) Receive(callback func([]byte)) {
 		}
 		r.accepted(idx)
 		e.recvOK.Add(1)
-		utils.Debugf("[CRYPTO] Recv DECRYPT OK #%d dir=%d plaintext=%d bytes nonce=%s ctx#%d",
-			e.recvOK.Load(), header[4], len(plaintext), hex.EncodeToString(nonce), idx)
+		if utils.DebugEnabled() {
+			utils.Debugf("[CRYPTO] Recv DECRYPT OK #%d dir=%d plaintext=%d bytes nonce=%s ctx#%d",
+				e.recvOK.Load(), header[4], len(plaintext), hex.EncodeToString(nonce), idx)
+		}
 		if utils.IsVerbose() && utils.Sensitive() {
 			utils.Debugf("[CRYPTO] Recv plaintext hexdump:\n%s", hex.Dump(plaintext))
 		}

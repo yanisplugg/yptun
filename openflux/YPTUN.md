@@ -1,16 +1,18 @@
 # OpenFlux in YPtun
 
-Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), tag v0.3.0 = d245db7 (2026-10-04; before that d34dc8c = 0.0.3,
+Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), tag v0.4.2 = 74cac6d (2026-10-07; before that v0.3.0 d245db7, d34dc8c = 0.0.3,
 3249724, first a8a8937 = 0.0.1), without `.idea/`, `.github/`, `ios-app/`, docker files and the iOS/Android shell scripts.
 Engine `EngineType.OpenFlux`.
 
-Re-vendor: export the new tag, `git merge-file` our 2 patched upstream files (`main.go`, `transport/oneme/max_transport.go`)
+Re-vendor: export the new tag (strip CRs from the tarball files), `git merge-file` our 2 patched upstream files (`main.go`, `transport/oneme/max_transport.go`)
 against the old base, copy the YPtun-only files (`yptun_client*.go`, this file, `build-openflux-server.ps1`) over, then
 `go build`/`go test`, the smoke below, `build-openflux-server.ps1`, and bump `CoreVersions.OPENFLUX`.
 Carriers (`OpenFluxConfig.TRANSPORTS`): yandex, vyandex (new Volga editor), mailru, cupsonline, oneme (MAX).
 Since 0.0.3 the module is `openflux`; since 0.3.0 its path is `github.com/p1neappleXpress/OpenFlux` (upstream's — our files import that).
 Flags are `--role=client|exit` + `--inbound=socks5`, the default codec is batched+zstd — an old node does NOT talk to a new
-client, reinstall it. The 3-way merge base for the next re-vendor is v0.3.0 (d245db7).
+client, reinstall it. The 3-way merge base for the next re-vendor is v0.4.2 (74cac6d). Re-vendor 0.4.2 also dropped `scripts/` and the Docker files;
+the `main.go`/`max_transport.go` patches were applied as plain `patch` hunks (they are small, see below).
+Mail.ru carriers need an exit built from this core (node-v1.2.2 equivalent): reinstall the node.
 
 Smoke (no real carrier): `--role=exit --mode=l4 --transport direct --direct-listen 127.0.0.1:P --encryption-key-file k` + client
 `--transport direct --direct-dial 127.0.0.1:P --encryption-key-file k --socks5 127.0.0.1:Q --dns 1.1.1.1` with
@@ -42,3 +44,10 @@ bound library kills the whole app.
    `tunnelResolvingDialer` deliberately does NOT, so UDP associate stays refused as before (add `DialUDP` to enable).
 4. `transport/oneme/max_transport.go` (PR #41): `MaxClient` kept as a pointer (upstream copied the struct
    by value while its goroutines ran on the original) and `Connect`/`LoginByToken` errors are returned.
+
+## Encryption in the client (issue #65)
+
+`OpenFluxConfig.secret/context/negotiate` → `--encryption-key-file <tmp file, deleted 5 s after start>`,
+`--session-context`, `--negotiate`. A key without `negotiate` = the core's Classic-compatible Session
+(exit serves both); `negotiate` = Session-only. `openflux://v1` links carry `secret`/`context`/`negotiate` and import
+for one carrier. Smoke (3 modes, `direct` transport + key file) passes on 0.4.2.

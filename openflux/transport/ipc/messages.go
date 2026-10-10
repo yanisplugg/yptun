@@ -34,7 +34,17 @@ const MaxFrameBytes = 1 << 20
 type CookiesRequestPayload struct {
 	Transport string `json:"transport"`
 	URL       string `json:"url"`
-	Reason    string `json:"reason"`
+	// HTML is a script transport's own setup/login page (see
+	// transport/script/js/template_html.html), sent instead of URL when
+	// the transport raised one; "" for every native transport.
+	HTML   string `json:"html,omitempty"`
+	Reason string `json:"reason"`
+	// Own marks a page that is the script's own - HTML, or a URL on the
+	// script's own loopback server (http://127.0.0.1:port) - rather than a
+	// real site: the app shows it as it is, gives it window.openfluxSubmit
+	// and does not collect cookies from it. The core decides this
+	// (script.IsOwnPage); an app must not guess from the URL.
+	Own bool `json:"own,omitempty"`
 	// Remote marks a check the exit node needs: it must be passed from the
 	// exit's address, and the answering offer must set Remote too.
 	Remote bool `json:"remote,omitempty"`

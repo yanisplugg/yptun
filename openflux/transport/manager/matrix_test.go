@@ -59,7 +59,7 @@ type wireEnd struct {
 	cb      func([]byte)
 	started bool
 	jar     map[string]string
-	notify  func(err error, name, url, reason string)
+	notify  func(err error, name, url, html, reason string)
 	done    chan struct{}
 }
 
@@ -121,7 +121,7 @@ func (e *wireEnd) report() {
 	n := e.notify
 	e.mu.Unlock()
 	if n != nil {
-		n(errCaptcha, e.w.name, "https://"+e.w.name+".example/check", "smartcaptcha")
+		n(errCaptcha, e.w.name, "https://"+e.w.name+".example/check", "", "smartcaptcha")
 	}
 }
 
@@ -187,7 +187,7 @@ func (e *wireEnd) Stats() transport.TransportStats {
 	return transport.TransportStats{Connected: e.IsConnected()}
 }
 
-func (e *wireEnd) SetErrorNotifier(f func(err error, name, url, reason string)) {
+func (e *wireEnd) SetErrorNotifier(f func(err error, name, url, html, reason string)) {
 	e.mu.Lock()
 	e.notify = f
 	e.mu.Unlock()
@@ -287,7 +287,7 @@ func startPair(t *testing.T, o pairOpts) *pair {
 			p.exit = m
 		} else {
 			p.client = m
-			m.SetRemoteAuthNotifier(func(name, url, reason string) {
+			m.SetRemoteAuthNotifier(func(name, url, html, reason string) {
 				p.asked <- [3]string{name, url, reason}
 			})
 		}

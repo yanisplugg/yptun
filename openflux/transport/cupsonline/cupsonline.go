@@ -29,6 +29,15 @@ import (
 // the transport at a local stand-in for cups.online.
 var baseRoomURL = "https://interview.cups.online/live-coding/"
 
+// SetBaseRoomURL aims the transport at another server and returns what puts
+// the old address back. For tests only (a fake cups.online, in this package's
+// tests and in the native-vs-JS interop tests of transport/script).
+func SetBaseRoomURL(u string) (restore func()) {
+	old := baseRoomURL
+	baseRoomURL = u
+	return func() { baseRoomURL = old }
+}
+
 const cupsUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 
 type CupsonlineConfig struct {

@@ -3,10 +3,9 @@ package oneme
 import (
 	"encoding/json"
 	"github.com/gorilla/websocket"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type MaxPacket struct {
@@ -67,11 +66,9 @@ type CallHandler struct {
 	pc                *webrtc.PeerConnection
 	dc                *webrtc.DataChannel
 	conn              *websocket.Conn
-	connMu            sync.RWMutex
 	localID           int64
 	remoteID          int64
 	seq               int64
-	seqMu             sync.Mutex
 	onConnected       func()
 	callAccepted      bool
 	acceptSent        bool
@@ -79,14 +76,6 @@ type CallHandler struct {
 	pendingCandidates []map[string]interface{}
 	dcInbound         func([]byte)
 	msgHandler        func(string)
-	lastRecvTime      time.Time
-	lastRecvMu        sync.RWMutex
-	lastPongTime      time.Time
-	lastPongMu        sync.RWMutex
 	reconnectCh       chan struct{}
-	doneCh            chan struct{}
-	calleeID          int64
-	client            *MaxClient
-	running           atomic.Bool
 	mu                sync.Mutex
 }

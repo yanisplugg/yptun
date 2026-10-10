@@ -69,3 +69,25 @@ func TestStopClosesDocumentConnection(t *testing.T) {
 		t.Fatal("writer goroutine still running after Stop")
 	}
 }
+
+// A scheduled reconnect that is already waiting makes a second one a no-op:
+// the reader's error and ApplyCookies both schedule one when cookies are
+// replaced under a live connection, and two reconnects open two sessions.
+func TestSecondReconnectWhileOneIsWaitingReturnsAtOnce(t *testing.T) {
+	tr := NewYandexDocsTransport("https://docs.example.test/d", transport.DefaultConfig())
+	if err := tr.BaseTransport.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.BaseTransport.Stop()
+	tr.reconnecting.Store(true) // one is waiting
+	done := make(chan struct{})
+	go func() { tr.scheduleReconnect(0); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("a second scheduled reconnect waited out its own backoff instead of yielding")
+	}
+	if !tr.reconnecting.Load() {
+		t.Fatal("the waiting reconnect's flag was cleared by the one that yielded")
+	}
+}

@@ -27,6 +27,43 @@ final class PhpboxUtil
         return [$out !== false ? $out : '', $code];
     }
 
+    /**
+     * One HTTP request that does NOT follow redirects, with the shared jar. Returns [body, status, location].
+     * The Yandex authorization reads the Location of each 30x itself (captcha/login forks live there).
+     */
+    public static function httpFull(string $url, string $cookieFile, string $method, ?string $body, array $headers): array
+    {
+        $ch = curl_init($url);
+        $loc = '';
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_USERAGENT      => self::UA,
+            CURLOPT_COOKIEJAR      => $cookieFile,
+            CURLOPT_COOKIEFILE     => $cookieFile,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTPHEADER     => $headers,
+            CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$loc) {
+                if (stripos($line, 'Location:') === 0) { $loc = trim(substr($line, 9)); }
+                return strlen($line);
+            },
+        ]);
+        if ($method === 'POST') {
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        }
+        $out  = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        return [$out !== false ? $out : '', $code, $loc];
+    }
+
+    /** httpFull without the body: [status, location]. */
+    public static function httpHead(string $url, string $cookieFile, string $method, ?string $body, array $headers): array
+    {
+        [, $code, $loc] = self::httpFull($url, $cookieFile, $method, $body, $headers);
+        return [$code, $loc];
+    }
+
     public static function scrape(string $re, string $html): string
     {
         return preg_match($re, $html, $m) ? $m[1] : '';
