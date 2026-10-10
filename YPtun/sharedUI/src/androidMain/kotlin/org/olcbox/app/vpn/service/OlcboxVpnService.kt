@@ -1308,10 +1308,15 @@ class OlcboxVpnService : VpnService() {
             val exe = java.io.File(applicationInfo.nativeLibraryDir, "libopenflux.so")
             if (!exe.canExecute()) throw IllegalStateException("OpenFlux core is missing from this build")
             val listen = "$socksListenHost:$openFluxPort"
+            // The core reads the key file once at start; the secret never goes through argv (app-private dir).
+            val keyFile = openFlux.secret.takeIf { it.isNotBlank() }?.let {
+                java.io.File(noBackupFilesDir, "openflux-key.txt").also { f -> f.writeText(it) }
+            }
             val cmd = buildList {
                 addAll(listOf(exe.absolutePath, "--role=client", "--inbound=socks5", "--transport", openFlux.transport, "--socks5", listen))
                 if (openFlux.usesMax()) addAll(listOf("--maxUid", openFlux.maxUid)) else addAll(listOf("--url", openFlux.docUrl))
                 if (openFlux.dnsServer.isNotBlank()) addAll(listOf("--dns", openFlux.dnsServer))
+                if (keyFile != null) addAll(openFlux.encryptionArgs(keyFile.absolutePath))
                 if (openFlux.debug) add("--debug")
                 add("--exit-on-stdin-eof")
             }
@@ -1323,6 +1328,7 @@ class OlcboxVpnService : VpnService() {
                 environment()["OPENFLUX_SOCKS_PASS"] = if (proxy != null) "" else socksPassword
             }.start()
             openFluxProcess = process
+            if (keyFile != null) kotlin.concurrent.thread(name = "openflux-key", isDaemon = true) { Thread.sleep(5_000); keyFile.delete() }
             kotlin.concurrent.thread(name = "openflux-log", isDaemon = true) {
                 runCatching { process.inputStream.bufferedReader().forEachLine { addLog("openflux: $it") } }
             }

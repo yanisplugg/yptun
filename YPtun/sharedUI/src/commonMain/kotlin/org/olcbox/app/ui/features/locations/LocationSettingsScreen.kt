@@ -1670,6 +1670,25 @@ private fun LazyListScope.openFluxSection(
                 )
             }
             VkTurnField(
+                value = config.secret,
+                onValueChange = { v -> onChange { it.copy(secret = v.trim()) } },
+                label = "Ключ шифрования (AES-256-GCM)",
+                placeholder = "секрет выходной ноды (--encryption-key-file); пусто — без шифрования",
+                enabled = enabled
+            )
+            if (config.secret.isNotBlank()) {
+                VkTurnField(
+                    value = config.context,
+                    onValueChange = { v -> onChange { it.copy(context = v.trim()) } },
+                    label = "Контекст сессии",
+                    placeholder = "пусто — из ссылки на документ, как у ноды",
+                    enabled = enabled
+                )
+                VkTurnSwitchRow("Только Session (обязательный negotiate)", config.negotiate, enabled) { v ->
+                    onChange { it.copy(negotiate = v) }
+                }
+            }
+            VkTurnField(
                 value = config.dnsServer,
                 onValueChange = { v -> onChange { it.copy(dnsServer = v.trim()) } },
                 label = "DNS через туннель",

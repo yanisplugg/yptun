@@ -26,10 +26,15 @@ internal class DesktopOpenFlux(
     ) = withContext(Dispatchers.IO) {
         stop()
         val binary = DesktopNativeAssets.resolveOpenFluxBinary()
+        // The core reads the key file once at start; the secret never goes through argv.
+        val keyFile = config.secret.takeIf { it.isNotBlank() }?.let {
+            kotlin.io.path.createTempFile("openflux-key", ".txt").also { f -> f.toFile().deleteOnExit(); f.toFile().writeText(it) }
+        }
         val cmd = buildList {
             addAll(listOf(binary.toString(), "--role=client", "--inbound=socks5", "--transport", config.transport, "--socks5", "$listenHost:$listenPort"))
             if (config.usesMax()) addAll(listOf("--maxUid", config.maxUid)) else addAll(listOf("--url", config.docUrl))
             if (config.dnsServer.isNotBlank()) addAll(listOf("--dns", config.dnsServer))
+            if (keyFile != null) addAll(config.encryptionArgs(keyFile.toString()))
             if (config.debug) add("--debug")
             add("--exit-on-stdin-eof")
         }
@@ -40,6 +45,7 @@ internal class DesktopOpenFlux(
             environment()["OPENFLUX_SOCKS_PASS"] = socksPassword
         }.start()
         process = started
+        if (keyFile != null) Thread { Thread.sleep(5_000); runCatching { java.nio.file.Files.deleteIfExists(keyFile) } }.apply { isDaemon = true; start() }
         Thread {
             runCatching {
                 started.inputStream.bufferedReader().forEachLine { line ->
