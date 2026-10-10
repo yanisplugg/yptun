@@ -19,6 +19,7 @@
 package main
 
 import (
+	"fmt"
 	"archive/tar"
 	"debug/pe"
 	"encoding/binary"
@@ -66,23 +67,56 @@ func main() {
 		return
 	}
 
-	target, err := ensureUnpacked()
-	if err != nil {
-		fatal(err.Error())
+	// The app image goes to the first place that both unpacks and starts: antivirus or folder rules
+	// on one profile folder must not make the portable unusable (issue #54).
+	var history strings.Builder
+	lastErr, lastDir, lastReason := "", "", ""
+	for _, base := range unpackBases() {
+		target, err := ensureUnpacked(base)
+		if err != nil {
+			lastErr = err.Error()
+			fmt.Fprintf(&history, "unpacking into %s failed: %v\n", base, err)
+			continue
+		}
+		reason, err := launch(filepath.Join(target, appExe))
+		if err == nil && reason == "" {
+			return
+		}
+		if err != nil {
+			reason = "could not start " + appExe + ": " + err.Error()
+		}
+		lastDir, lastReason, lastErr = target, reason, ""
+		fmt.Fprintf(&history, "starting from %s failed: %s\n", target, reason)
+		if out := startupOutput(); out != "" {
+			history.WriteString(out + "\n")
+		}
+	}
+	if lastDir == "" {
+		fatal(lastErr + "\n\n" + history.String())
 		return
 	}
-	if err := launch(filepath.Join(target, appExe)); err != nil {
-		fatal("Could not start " + appExe + ": " + err.Error())
+	reportStartFailure(lastDir, lastReason, history.String())
+}
+
+// unpackBases lists where the app image may live, in order of preference: the per-user app data
+// folder, then the temp folder, then the folder of the portable .exe itself.
+func unpackBases() []string {
+	var bases []string
+	if b := os.Getenv("LOCALAPPDATA"); b != "" {
+		bases = append(bases, b)
 	}
+	if t := os.TempDir(); t != "" {
+		bases = append(bases, t)
+	}
+	if self, err := os.Executable(); err == nil {
+		bases = append(bases, filepath.Dir(self))
+	}
+	return bases
 }
 
 // ensureUnpacked returns the directory holding a ready-to-run app image, unpacking it first if
 // this is the first launch of this version.
-func ensureUnpacked() (string, error) {
-	base := os.Getenv("LOCALAPPDATA")
-	if base == "" {
-		base = os.TempDir()
-	}
+func ensureUnpacked(base string) (string, error) {
 	root := filepath.Join(base, "YPtun", "portable")
 	target := filepath.Join(root, version+"-"+buildID)
 
@@ -367,24 +401,28 @@ func holdsJava(dir string) bool {
 // launch starts the app and watches its first seconds (see watchStartup): the launcher leaves as
 // soon as the app shows a window, so it does not linger as a parent for the whole session, but a
 // failed start gets an explanation instead of a bare "Failed to launch JVM".
-func launch(exe string) error {
+func launch(exe string) (failure string, err error) {
 	dir := filepath.Dir(exe)
+	// stdout/stderr into a file: if the JVM cannot start, its own message is the only real clue.
+	var out *os.File
+	if path := startupOutputPath(); path != "" {
+		out, _ = os.Create(path)
+	}
 	attr := &os.ProcAttr{
 		Dir:   dir,
 		Env:   cleanPath(launchEnv(os.Environ()), filepath.Join(dir, "runtime", "bin")),
-		Files: []*os.File{nil, nil, nil},
+		Files: []*os.File{nil, out, out},
 		Sys:   &syscall.SysProcAttr{HideWindow: true},
 	}
 	proc, err := os.StartProcess(exe, append([]string{exe}, os.Args[1:]...), attr)
 	if err != nil {
-		return err
+		return "", err
 	}
 	pid := proc.Pid
 	if err := proc.Release(); err != nil {
-		return err
+		return "", err
 	}
-	watchStartup(pid, dir)
-	return nil
+	return watchStartup(pid, dir), nil
 }
 
 // ---------------------------------------------------------------------------------------------

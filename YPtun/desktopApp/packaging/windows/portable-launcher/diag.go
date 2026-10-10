@@ -28,6 +28,7 @@ var (
 	openProcess            = kernel32.NewProc("OpenProcess")
 	getExitCodeProcess     = kernel32.NewProc("GetExitCodeProcess")
 	closeHandle            = kernel32.NewProc("CloseHandle")
+	terminateProcess       = kernel32.NewProc("TerminateProcess")
 	createToolhelpSnapshot = kernel32.NewProc("CreateToolhelp32Snapshot")
 	process32First         = kernel32.NewProc("Process32FirstW")
 	process32Next          = kernel32.NewProc("Process32NextW")
@@ -126,35 +127,46 @@ func exitCodeOf(handle uintptr) (uint32, bool) {
 	return code, true
 }
 
-// watchStartup returns as soon as the app has plainly started (a normal window), after a timeout, or
-// - when it failed - after the diagnostics have been shown.
-func watchStartup(pid int, appDir string) {
+// watchStartup returns "" as soon as the app has plainly started (a normal window) or after a
+// timeout, and otherwise why it failed. An error box of the app (jpackage's "Failed to launch JVM")
+// is closed by ending the app: the caller shows one explanation, or tries another folder.
+func watchStartup(pid int, appDir string) string {
 	handle, _, _ := openProcess.Call(processQueryLimitedInfo, 0, uintptr(pid))
 	if handle == 0 {
-		return
+		return ""
 	}
 	defer closeHandle.Call(handle)
 
 	deadline := time.Now().Add(watchTimeout)
-	sawDialog := false
 	for {
 		if code, exited := exitCodeOf(handle); exited {
 			if code != 0 {
-				reportStartFailure(appDir, fmt.Sprintf("the app exited with code %d (0x%X)", code, code))
+				return fmt.Sprintf("the app exited with code %d (0x%X)", code, code)
 			}
-			return
+			return ""
 		}
 		dialog, other := windowsOf(pid)
 		if dialog {
-			sawDialog = true
-		} else if other && !sawDialog {
-			return // a normal window: started fine
+			killFamily(uint32(pid))
+			time.Sleep(300 * time.Millisecond) // let the output file close
+			return "the app showed an error dialog (Failed to launch JVM)"
+		} else if other {
+			return "" // a normal window: started fine
 		}
-		// An error box stays up until the user closes it; wait for that however long it takes.
-		if !sawDialog && time.Now().After(deadline) {
-			return
+		if time.Now().After(deadline) {
+			return ""
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// killFamily ends the process and everything it started.
+func killFamily(root uint32) {
+	for pid := range family(root) {
+		if h, _, _ := openProcess.Call(0x1 /* PROCESS_TERMINATE */, 0, uintptr(pid)); h != 0 {
+			terminateProcess.Call(h, 1)
+			closeHandle.Call(h)
+		}
 	}
 }
 
@@ -204,7 +216,7 @@ func freeRAM() string {
 	return fmt.Sprintf("%d MB free of %d MB", m.availPhys>>20, m.totalPhys>>20)
 }
 
-func reportStartFailure(appDir, reason string) {
+func reportStartFailure(appDir, reason, history string) {
 	jvm := filepath.Join(appDir, "runtime", "bin", "server", "jvm.dll")
 	var b strings.Builder
 	fmt.Fprintf(&b, "YPtun %s (%s)\n", version, buildID)
@@ -217,6 +229,12 @@ func reportStartFailure(appDir, reason string) {
 		b.WriteString("jvm.dll: loads fine\n")
 	} else {
 		fmt.Fprintf(&b, "jvm.dll: failed to load, Windows error %d (%s)\n", errno, describeLoadError(errno))
+	}
+	if !isASCII(appDir) {
+		b.WriteString("App dir contains non-ASCII characters\n")
+	}
+	if history != "" {
+		b.WriteString("Attempts:\n" + history)
 	}
 	for _, name := range []string{"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS"} {
 		if v := os.Getenv(name); v != "" {
@@ -276,4 +294,43 @@ func describeLoadError(errno uintptr) string {
 	default:
 		return "see https://learn.microsoft.com/windows/win32/debug/system-error-codes"
 	}
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// startupOutputPath is where the app's stdout/stderr go (see launch): a JVM that cannot start prints
+// the real reason there, while jpackage's own launcher only shows "Failed to launch JVM".
+func startupOutputPath() string {
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		return ""
+	}
+	dir := filepath.Join(base, "YPtun")
+	if os.MkdirAll(dir, 0o755) != nil {
+		return ""
+	}
+	return filepath.Join(dir, "launch-output.txt")
+}
+
+// startupOutput returns the last ~1.5 KB of what the app printed, or "".
+func startupOutput() string {
+	path := startupOutputPath()
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if len(b) > 1500 {
+		b = b[len(b)-1500:]
+	}
+	return strings.TrimSpace(string(b))
 }
