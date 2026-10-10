@@ -58,6 +58,7 @@ func Call(ctx context.Context, method string, raw json.RawMessage, progress func
 		}
 	}
 	site := func() *Site { return &Site{URL: p.URL, Token: p.Token, Carrier: p.Carrier} }
+	p.FTP.Site = p.URL // so probe (deploy's first step too) can prefer an addon-domain folder over the account's default
 	switch method {
 	case "probe":
 		r, err := ProbeHost(ctx, p.FTP)

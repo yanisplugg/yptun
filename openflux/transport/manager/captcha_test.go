@@ -14,16 +14,16 @@ import (
 // fire a captcha signal on demand.
 type fakeNotifierTransport struct {
 	fakeTransport
-	notify atomic.Pointer[func(error, string, string, string)]
+	notify atomic.Pointer[func(error, string, string, string, string)]
 }
 
-func (f *fakeNotifierTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
+func (f *fakeNotifierTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
 	f.notify.Store(&fn)
 }
 
 func (f *fakeNotifierTransport) fireCaptcha(err error, name, url, reason string) {
 	if p := f.notify.Load(); p != nil {
-		(*p)(err, name, url, reason)
+		(*p)(err, name, url, "", reason)
 	}
 }
 
@@ -49,7 +49,7 @@ func TestManagerCaptchaNotifier(t *testing.T) {
 		url    string
 		reason string
 	}, 1)
-	m.SetCaptchaNotifier(func(name, url, reason string) {
+	m.SetCaptchaNotifier(func(name, url, html, reason string) {
 		got <- struct {
 			name   string
 			url    string

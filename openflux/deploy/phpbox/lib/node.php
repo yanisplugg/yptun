@@ -30,6 +30,92 @@ require_once __DIR__ . '/util.php';
 require_once __DIR__ . '/mux.php';
 
 /** An append-only ring log, one JSON object per line: {"t":ms,"l":level,"m":message}. */
+/**
+ * A carrier's login/captcha, when it needs a human. A carrier that cannot authorize headless (the Yandex family:
+ * a login wall or a SmartCaptcha) writes the page to solve with need(); the node's status shows it beside the
+ * generation, so a client offers a WebView (phone) or an iframe (web). The user solves it in a browser and the
+ * cookies come back to `a=cookies`, which stores them in the node's jar; the next generation authorizes as the user.
+ *
+ * The jar is a Netscape cookies.txt the carriers read with curl (CURLOPT_COOKIEFILE). Cookies are a secret.
+ */
+final class PhpboxAuth
+{
+    private static function markerFile(string $dir, string $key): string { return "$dir/$key.captcha.json"; }
+
+    /** The cookie jar a carrier authorizes with for this node (empty until the user solves a login/captcha). */
+    public static function jarFile(string $dir, string $key): string { return "$dir/$key.cookies"; }
+
+    /** A carrier records that it needs the user to solve $url (a login or SmartCaptcha) before it can connect. */
+    public static function need(string $dir, string $key, string $url): void
+    {
+        @file_put_contents(self::markerFile($dir, $key), json_encode(['url' => $url, 'at' => time()]));
+    }
+
+    /** What the status shows: the page to solve and where to send the cookies, or null when nothing is pending. */
+    public static function pending(string $dir, string $key): ?array
+    {
+        $m = json_decode((string)@file_get_contents(self::markerFile($dir, $key)), true);
+        if (!is_array($m) || empty($m['url'])) { return null; }
+        return ['url' => (string)$m['url'], 'since' => (int)($m['at'] ?? 0)];
+    }
+
+    /** True once the user has provided cookies (the jar exists and is not empty): a carrier may authorize. */
+    public static function haveCookies(string $dir, string $key): bool
+    {
+        $f = self::jarFile($dir, $key);
+        return is_file($f) && filesize($f) > 0;
+    }
+
+    /**
+     * Stores cookies the user solved in a browser. Accepts a Netscape cookies.txt, a one-line `name=value; name=value`
+     * header (what a WebView's CookieManager gives), or JSON {"cookies": "...", "domain": ".yandex.ru"}. Clears the
+     * captcha marker so the next generation retries. Returns a small JSON answer.
+     */
+    public static function takeCookies(string $dir, string $key, string $body, PhpboxLog $log): array
+    {
+        $domain = '.yandex.ru';
+        $raw = trim($body);
+        if ($raw !== '' && $raw[0] === '{') {
+            $j = json_decode($raw, true);
+            if (is_array($j)) {
+                $raw = trim((string)($j['cookies'] ?? ''));
+                if (!empty($j['domain'])) { $domain = (string)$j['domain']; }
+            }
+        }
+        if ($raw === '') { return ['ok' => false, 'error' => 'no cookies']; }
+
+        $lines = [];
+        if (strpos($raw, "\t") !== false && (strpos($raw, "# Netscape") !== false || preg_match('/\tTRUE\t|\tFALSE\t/', $raw))) {
+            $lines[] = $raw;                              // already a cookies.txt
+        } else {
+            $lines[] = "# Netscape HTTP Cookie File";
+            foreach (preg_split('/;\s*|\r?\n/', $raw) as $pair) {
+                [$n, $v] = array_pad(explode('=', trim($pair), 2), 2, null);
+                $n = trim((string)$n);
+                if ($n === '' || $v === null) { continue; }
+                // domain  includeSubdomains  path  secure  expires  name  value
+                $lines[] = implode("\t", [$domain, 'TRUE', '/', 'TRUE', (string)(time() + 30 * 86400), $n, trim($v)]);
+            }
+        }
+        if (count($lines) <= 1 && $lines[0] !== $raw) { return ['ok' => false, 'error' => 'no usable cookies']; }
+        if (@file_put_contents(self::jarFile($dir, $key), implode("\n", $lines) . "\n") === false) {
+            return ['ok' => false, 'error' => 'could not store the cookies'];
+        }
+        @unlink(self::markerFile($dir, $key));           // solved: the next generation will try the cookies
+        @touch("$dir/$key.recheck");                     // a running generation that is waiting sees this and retries
+        $log->write('info', 'the user solved the login/captcha in a browser; cookies stored, retrying');
+        return ['ok' => true];
+    }
+
+    /** Forget a node's cookies and any pending captcha (uninstall / a fresh start). */
+    public static function clear(string $dir, string $key): void
+    {
+        @unlink(self::markerFile($dir, $key));
+        @unlink(self::jarFile($dir, $key));
+        @unlink("$dir/$key.recheck");
+    }
+}
+
 final class PhpboxLog
 {
     const MAX_BYTES = 262144;
@@ -346,6 +432,11 @@ final class PhpboxNode
                     $log->write('info', 'stop requested from the page');
                 }
                 $this->json(['ok' => true, 'was_running' => (bool)$alive]);
+            case 'cookies':
+                // The user solved the carrier's login/captcha in a browser (the app's WebView, or the page's
+                // iframe) and hands the cookies here; the node stores them in its jar and clears the captcha
+                // marker, so the next generation authorizes as the user. The cookies are a secret, like the token.
+                $this->json(PhpboxAuth::takeCookies($dir, $key, (string)file_get_contents('php://input'), $log));
             case 'run':
                 $this->run($target, $key, $dir, $log);
                 exit;
@@ -694,6 +785,9 @@ final class PhpboxNode
             'chain'    => !empty($cur['chain']),
             'next_in'  => ($accepting && !empty($cur['chain'])) ? max(0, (int)$cur['spawn_at'] - (int)$cur['elapsed']) : null,
             'stopping' => $alive && is_file("$dir/$key.stop"),
+            // A carrier (Yandex family) that cannot authorize without a human puts the page to solve here, and
+            // where to send the solved cookies. A client sees it beside the generation and offers a WebView/iframe.
+            'captcha'  => PhpboxAuth::pending($dir, $key),
             'state'    => $cur,
             'age'      => isset($cur['beat']) ? time() - (int)$cur['beat'] : null,
             'now'      => time(),

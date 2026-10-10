@@ -5,27 +5,12 @@ import (
 	"fmt"
 )
 
-var vvv bool
-
-func logDebug(format string, args ...interface{}) {
-	if vvv {
-		fmt.Printf("  [DBG] "+format+"\n", args...)
-	}
-}
-
 func logInfo(format string, args ...interface{}) {
 	fmt.Printf("[INF] "+format+"\n", args...)
 }
 
 func logError(format string, args ...interface{}) {
 	fmt.Printf("[ERR] "+format+"\n", args...)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func genUUID() string {
