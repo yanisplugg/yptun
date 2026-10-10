@@ -542,8 +542,28 @@ data class OpenFluxConfig(
     val proxyLink: String = "",
     @SerialName("proxy_core")
     val proxyCore: ProxyCore = ProxyCore.Auto,
+    /**
+     * AES-256-GCM shared secret of the exit node (`--encryption-key-file`; the `secret` of an `openflux://`
+     * link). Blank = unencrypted classic tunnel. With a key and no [negotiate] the core runs the
+     * Classic-compatible mode (falls back to classic until the exit answers the handshake).
+     */
+    @SerialName("secret")
+    val secret: String = "",
+    /** Explicit KDF context (`--session-context`); blank = derived from the document URL, as on the exit. */
+    @SerialName("context")
+    val context: String = "",
+    /** Session-only (`--negotiate`): encrypted, authenticated negotiation is required, no classic fallback. */
+    @SerialName("negotiate")
+    val negotiate: Boolean = false,
 ) {
     fun usesMax(): Boolean = transport == TRANSPORT_MAX
+
+    /** Core flags for the encryption (the key itself goes through a file, [secret] never in argv). */
+    fun encryptionArgs(keyFile: String): List<String> = if (secret.isBlank()) emptyList() else buildList {
+        addAll(listOf("--encryption-key-file", keyFile))
+        if (context.isNotBlank()) addAll(listOf("--session-context", context))
+        if (negotiate) add("--negotiate")
+    }
 
     fun hasProxy(): Boolean = proxyLink.isNotBlank()
 
@@ -562,6 +582,9 @@ data class OpenFluxConfig(
         maxUid = maxUid.trim(),
         dnsServer = dnsServer.trim(),
         proxyLink = proxyLink.trim(),
+        secret = secret.trim(),
+        context = context.trim(),
+        negotiate = negotiate && secret.isNotBlank(),
     )
 
     /** One-line summary for the location list. */
