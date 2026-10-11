@@ -12,7 +12,7 @@ object CoreVersions {
     /** csqtt/rust-client/Cargo.toml + the upstream commit it was vendored at (csqtt/UPSTREAM.txt). */
     const val CSQTT = "2.1.9 (71712b0)"
     /** Android: sharedUI/libs/trusttunnel-client-android-*.aar. */
-    const val TRUSTTUNNEL_ANDROID = "1.1.5-rc.1"
+    const val TRUSTTUNNEL_ANDROID = "1.1.11"
     /** Desktop: `trustTunnelVersion` in desktopApp/build.gradle.kts. */
     const val TRUSTTUNNEL_DESKTOP = "1.1.11"
 }

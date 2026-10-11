@@ -311,9 +311,9 @@ kotlin {
             implementation(libs.zxing.cpp)
             implementation(coresAndroidAarDependency)
             // Trust Tunnel (AdGuard) client — vendored prebuilt AAR (com.adguard.trusttunnel:
-            // trusttunnel-client-android:1.1.5-rc.1) carrying libtrusttunnel_android.so (all ABIs) +
+            // trusttunnel-client-android:1.1.11) carrying libtrusttunnel_android.so (all ABIs) +
             // the VpnClient/DeepLink JNI adapter. Isolated engine; does NOT touch the Go cores AAR.
-            implementation(files("libs/trusttunnel-client-android-1.1.5-rc.1.aar"))
+            implementation(files("libs/trusttunnel-client-android-1.1.11.aar"))
         }
 
         jvmMain.dependencies {
