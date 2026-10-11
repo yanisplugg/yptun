@@ -517,6 +517,7 @@ class DesktopVpnManager private constructor(
                     when (of.transport) {
                         OpenFluxConfig.TRANSPORT_MAILRU -> addAll(listOf("cloud.mail.ru", "docs.datacloudmail.ru"))
                         OpenFluxConfig.TRANSPORT_CUPS -> add("interview.cups.online")
+                        OpenFluxConfig.TRANSPORT_TELEMOST -> add("telemost.yandex.ru")
                         else -> add("docs.yandex.ru")
                     }
                     // The new editor's relay, push channel and the Disk redirect it authorizes through.

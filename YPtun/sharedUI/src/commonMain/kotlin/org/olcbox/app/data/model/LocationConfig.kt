@@ -593,6 +593,7 @@ data class OpenFluxConfig(
         TRANSPORT_VYANDEX -> "Яндекс Документы (новый редактор)"
         TRANSPORT_MAILRU -> "Mail.ru Документы"
         TRANSPORT_CUPS -> "cups.online"
+        TRANSPORT_TELEMOST -> "Яндекс Телемост"
         else -> "Яндекс Документы"
     }
 
@@ -606,7 +607,9 @@ data class OpenFluxConfig(
         const val TRANSPORT_MAILRU = "mailru"
         /** cups.online live-coding interview room. */
         const val TRANSPORT_CUPS = "cupsonline"
-        val TRANSPORTS = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAILRU, TRANSPORT_CUPS, TRANSPORT_MAX)
+        /** Yandex Telemost conference (core 0.5.0): video relayed by the SFU, striped over several participants. */
+        const val TRANSPORT_TELEMOST = "telemost"
+        val TRANSPORTS = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAILRU, TRANSPORT_CUPS, TRANSPORT_TELEMOST, TRANSPORT_MAX)
         const val DEFAULT_DNS = "1.1.1.1:53"
     }
 }
