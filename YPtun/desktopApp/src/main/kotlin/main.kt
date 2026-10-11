@@ -1087,6 +1087,7 @@ private fun runApp(args: Array<String>) = application {
                     customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
                     twoColumns = appBehavior.twoColumnLayout,
                     showAutoButton = appBehavior.showAutoButton,
+                    showGroupAutoPick = appBehavior.showGroupAutoPick,
                     onToggleGroupCollapsed = { key ->
                         val current = appBehavior.collapsedSubscriptionGroups
                         val updated = if (key in current) current - key else current + key

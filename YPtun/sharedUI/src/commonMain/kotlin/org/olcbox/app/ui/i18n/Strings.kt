@@ -197,6 +197,8 @@ interface Strings {
     val autoConnectSubtitle: String
     val showAutoButtonTitle: String
     val showAutoButtonSubtitle: String
+    val showGroupAutoPickTitle: String
+    val showGroupAutoPickSubtitle: String
     val energySaverTitle: String
     val energySaverSubtitle: String
     val batteryOptTitle: String
@@ -919,6 +921,8 @@ object RuStrings : Strings {
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
     override val showAutoButtonTitle = "Кнопка «Авто» на главном"
     override val showAutoButtonSubtitle = "Круглая кнопка рядом с кнопкой подключения — пингует все серверы и подключает к самому быстрому"
+    override val showGroupAutoPickTitle = "Кнопка быстрого сервера у подписок и групп"
+    override val showGroupAutoPickSubtitle = "Значок у подписки, папки и «Своих серверов» — пингует их серверы и подключает к самому быстрому"
     override val energySaverTitle = "Режим энергоэффективности"
     override val energySaverSubtitle = "Меньше расход батареи: реже проверки соединения, без журнала. Может замедлить авто-восстановление; применяется при следующем подключении"
     override val batteryOptTitle = "Отключить оптимизацию батареи"
@@ -1591,6 +1595,8 @@ object EnStrings : Strings {
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
     override val showAutoButtonTitle = "\"Auto\" button on Home"
     override val showAutoButtonSubtitle = "Round button next to Connect — pings all servers and connects to the fastest"
+    override val showGroupAutoPickTitle = "Fastest-server button on subscriptions and groups"
+    override val showGroupAutoPickSubtitle = "Button on a subscription, folder or custom list — pings its servers and connects to the fastest"
     override val energySaverTitle = "Energy-saver mode"
     override val energySaverSubtitle = "Lower battery use: less frequent health checks, no journal. May slow auto-recovery; applied on next connect"
     override val batteryOptTitle = "Disable battery optimization"
@@ -2263,6 +2269,8 @@ object FaStrings : Strings {
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
     override val showAutoButtonTitle = "دکمه «خودکار» در خانه"
     override val showAutoButtonSubtitle = "دکمه گرد کنار دکمه اتصال — همه سرورها را پینگ می‌کند و به سریع‌ترین وصل می‌شود"
+    override val showGroupAutoPickTitle = "دکمه سریع‌ترین سرور در اشتراک‌ها و گروه‌ها"
+    override val showGroupAutoPickSubtitle = "دکمه کنار اشتراک، پوشه یا فهرست سفارشی — سرورهای آن را پینگ می‌کند و به سریع‌ترین وصل می‌شود"
     override val energySaverTitle = "حالت صرفه‌جویی در انرژی"
     override val energySaverSubtitle = "مصرف باتری کمتر: بررسی‌های کمتر اتصال، بدون گزارش. ممکن است بازیابی خودکار را کند کند؛ در اتصال بعدی اعمال می‌شود"
     override val batteryOptTitle = "غیرفعال‌کردن بهینه‌سازی باتری"
@@ -2935,6 +2943,8 @@ object ZhStrings : Strings {
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
     override val showAutoButtonTitle = "主屏“自动”按钮"
     override val showAutoButtonSubtitle = "连接按钮旁的圆形按钮 — ping 所有服务器并连接到最快的"
+    override val showGroupAutoPickTitle = "订阅和分组的最快服务器按钮"
+    override val showGroupAutoPickSubtitle = "订阅、文件夹或自定义列表上的按钮 — ping 其中的服务器并连接到最快的"
     override val energySaverTitle = "省电模式"
     override val energySaverSubtitle = "降低电量消耗：减少健康检查频率、不记录日志。可能减慢自动恢复；下次连接时生效"
     override val batteryOptTitle = "关闭电池优化"

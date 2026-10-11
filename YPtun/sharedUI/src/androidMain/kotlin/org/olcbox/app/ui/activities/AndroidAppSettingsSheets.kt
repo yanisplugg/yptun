@@ -3819,6 +3819,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showAutoButton = it)) }
 
         RoutingToggleRow(
+            title = s.showGroupAutoPickTitle,
+            subtitle = s.showGroupAutoPickSubtitle,
+            checked = settings.showGroupAutoPick
+        ) { onChanged(settings.copy(showGroupAutoPick = it)) }
+
+        RoutingToggleRow(
             title = s.energySaverTitle,
             subtitle = s.energySaverSubtitle,
             checked = settings.energySaver

@@ -521,6 +521,7 @@ fun AndroidMainScreen(
         customLocationsPingSortDescending = appBehavior.customLocationsPingSortDescending,
         twoColumns = appBehavior.twoColumnLayout,
         showAutoButton = appBehavior.showAutoButton,
+        showGroupAutoPick = appBehavior.showGroupAutoPick,
         onToggleCustomLocationPinned = { id ->
             val current = appBehavior.pinnedCustomLocations
             val updated = if (id in current) current - id else current + id
