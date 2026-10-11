@@ -6,7 +6,7 @@ package org.olcbox.app.vpn
  */
 object CoreVersions {
     /** openflux/YPTUN.md — upstream tag + vendored commit. */
-    const val OPENFLUX = "0.4.2 (74cac6d)"
+    const val OPENFLUX = "0.5.0 (7336e1b)"
     /** snolc/Cargo.toml. */
     const val SNOLC = "0.0.4"
     /** csqtt/rust-client/Cargo.toml + the upstream commit it was vendored at (csqtt/UPSTREAM.txt). */
@@ -14,5 +14,5 @@ object CoreVersions {
     /** Android: sharedUI/libs/trusttunnel-client-android-*.aar. */
     const val TRUSTTUNNEL_ANDROID = "1.1.5-rc.1"
     /** Desktop: `trustTunnelVersion` in desktopApp/build.gradle.kts. */
-    const val TRUSTTUNNEL_DESKTOP = "1.0.49"
+    const val TRUSTTUNNEL_DESKTOP = "1.1.11"
 }

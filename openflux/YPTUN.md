@@ -1,6 +1,6 @@
 # OpenFlux in YPtun
 
-Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), tag v0.4.2 = 74cac6d (2026-10-07; before that v0.3.0 d245db7, d34dc8c = 0.0.3,
+Vendored from github.com/p1neappleXpress/OpenFlux (GPL-3.0), tag v0.5.0 = 7336e1b (2026-10-11; before that v0.4.2 74cac6d, v0.3.0 d245db7, d34dc8c = 0.0.3,
 3249724, first a8a8937 = 0.0.1), without `.idea/`, `.github/`, `ios-app/`, docker files and the iOS/Android shell scripts.
 Engine `EngineType.OpenFlux`.
 
@@ -10,7 +10,7 @@ against the old base, copy the YPtun-only files (`yptun_client*.go`, this file, 
 Carriers (`OpenFluxConfig.TRANSPORTS`): yandex, vyandex (new Volga editor), mailru, cupsonline, oneme (MAX).
 Since 0.0.3 the module is `openflux`; since 0.3.0 its path is `github.com/p1neappleXpress/OpenFlux` (upstream's — our files import that).
 Flags are `--role=client|exit` + `--inbound=socks5`, the default codec is batched+zstd — an old node does NOT talk to a new
-client, reinstall it. The 3-way merge base for the next re-vendor is v0.4.2 (74cac6d). Re-vendor 0.4.2 also dropped `scripts/` and the Docker files;
+client, reinstall it. The 3-way merge base for the next re-vendor is v0.5.0 (7336e1b). Re-vendor 0.4.2 also dropped `scripts/` and the Docker files;
 the `main.go`/`max_transport.go` patches were applied as plain `patch` hunks (they are small, see below).
 Mail.ru carriers need an exit built from this core (node-v1.2.2 equivalent): reinstall the node.
 

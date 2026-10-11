@@ -254,7 +254,7 @@ val hostDesktopArch = desktopArchName(System.getProperty("os.arch"))
 // subprocess in SOCKS-only mode — the same shape as the olcrtc/hev-socks5-tunnel assets. The archive
 // also carries setup_wizard, which is how a tt:// deep link gets decoded without the AAR's
 // DeepLink.decode. Releases name architectures the GNU way, hence the mapping below.
-val trustTunnelVersion = "1.0.49"
+val trustTunnelVersion = "1.1.11"
 val trustTunnelArch = when (hostDesktopArch) {
     "amd64" -> "x86_64"
     "arm64" -> "aarch64"
