@@ -492,4 +492,129 @@ public interface RandomAccessObject extends DataInput, DataOutput, Closeable {
 
     }
   }
+
+  /**
+   * A {@link RandomAccessObject} over a temp file mapped in 1 GiB pieces, for the one thing that
+   * outgrows a single {@link java.nio.MappedByteBuffer}: the suffix array of a huge input (4 bytes per
+   * input byte, so more than 2 GiB once the input passes ~537 MB). Generator-side only (the patch
+   * applier never builds a suffix array). Supports exactly what the suffix sorter and the matcher do
+   * with it - int-aligned reads/writes and single bytes - and refuses everything else. Ints are
+   * 4-aligned and the piece size is a multiple of 4, so an int never straddles two pieces.
+   */
+  public static final class RandomAccessBigMmapObject implements RandomAccessObject {
+    private static final int PIECE_SHIFT = 30;
+    private static final long PIECE_SIZE = 1L << PIECE_SHIFT;
+    private static final long PIECE_MASK = PIECE_SIZE - 1;
+
+    private final File mFile;
+    private final RandomAccessFile mRandomAccessFile;
+    private final long mLength;
+    private java.nio.MappedByteBuffer[] mPieces;
+    private long mPos;
+
+    public RandomAccessBigMmapObject(final String tempFileName, final long length)
+        throws IOException {
+      mLength = length;
+      mFile = File.createTempFile(tempFileName, "temp");
+      mFile.deleteOnExit();
+      mRandomAccessFile = new RandomAccessFile(mFile, "rw");
+      mRandomAccessFile.setLength(length);
+      final FileChannel channel = mRandomAccessFile.getChannel();
+      final int count = (int) ((length + PIECE_SIZE - 1) >>> PIECE_SHIFT);
+      mPieces = new java.nio.MappedByteBuffer[count];
+      for (int i = 0; i < count; i++) {
+        final long start = (long) i << PIECE_SHIFT;
+        mPieces[i] =
+            channel.map(FileChannel.MapMode.READ_WRITE, start, Math.min(PIECE_SIZE, length - start));
+      }
+    }
+
+    @Override
+    public long length() {
+      return mLength;
+    }
+
+    @Override
+    public void seek(long pos) {
+      mPos = pos;
+    }
+
+    @Override
+    public void seekToIntAligned(long pos) {
+      mPos = pos * 4;
+    }
+
+    @Override
+    public int readInt() {
+      final int v = mPieces[(int) (mPos >>> PIECE_SHIFT)].getInt((int) (mPos & PIECE_MASK));
+      mPos += 4;
+      return v;
+    }
+
+    @Override
+    public void writeInt(int v) {
+      mPieces[(int) (mPos >>> PIECE_SHIFT)].putInt((int) (mPos & PIECE_MASK), v);
+      mPos += 4;
+    }
+
+    @Override
+    public byte readByte() {
+      final byte v = mPieces[(int) (mPos >>> PIECE_SHIFT)].get((int) (mPos & PIECE_MASK));
+      mPos++;
+      return v;
+    }
+
+    @Override
+    public int readUnsignedByte() {
+      return readByte() & 0xff;
+    }
+
+    @Override
+    public void writeByte(int v) {
+      mPieces[(int) (mPos >>> PIECE_SHIFT)].put((int) (mPos & PIECE_MASK), (byte) v);
+      mPos++;
+    }
+
+    @Override
+    public void write(int b) {
+      writeByte(b);
+    }
+
+    @Override
+    public void close() throws IOException {
+      mPieces = null;
+      mRandomAccessFile.close();
+      // Same workaround as RandomAccessMmapObject: the mappings only go away with the GC.
+      System.gc();
+      mFile.delete();
+    }
+
+    private static UnsupportedOperationException unsupported() {
+      return new UnsupportedOperationException("RandomAccessBigMmapObject only does int and byte access");
+    }
+
+    @Override public void readFully(byte[] b) { throw unsupported(); }
+    @Override public void readFully(byte[] b, int off, int len) { throw unsupported(); }
+    @Override public int skipBytes(int n) { throw unsupported(); }
+    @Override public boolean readBoolean() { throw unsupported(); }
+    @Override public short readShort() { throw unsupported(); }
+    @Override public int readUnsignedShort() { throw unsupported(); }
+    @Override public char readChar() { throw unsupported(); }
+    @Override public long readLong() { throw unsupported(); }
+    @Override public float readFloat() { throw unsupported(); }
+    @Override public double readDouble() { throw unsupported(); }
+    @Override public String readLine() { throw unsupported(); }
+    @Override public String readUTF() { throw unsupported(); }
+    @Override public void write(byte[] b) { throw unsupported(); }
+    @Override public void write(byte[] b, int off, int len) { throw unsupported(); }
+    @Override public void writeBoolean(boolean v) { throw unsupported(); }
+    @Override public void writeShort(int v) { throw unsupported(); }
+    @Override public void writeChar(int v) { throw unsupported(); }
+    @Override public void writeLong(long v) { throw unsupported(); }
+    @Override public void writeFloat(float v) { throw unsupported(); }
+    @Override public void writeDouble(double v) { throw unsupported(); }
+    @Override public void writeBytes(String s) { throw unsupported(); }
+    @Override public void writeChars(String s) { throw unsupported(); }
+    @Override public void writeUTF(String s) { throw unsupported(); }
+  }
 }
