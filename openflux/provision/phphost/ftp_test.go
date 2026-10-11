@@ -43,6 +43,25 @@ func TestProbeFindsTheWebRoot(t *testing.T) {
 	}
 }
 
+// Addon-domain hosting (InfinityFree and others): every domain but the account's primary one is served from
+// <webroot>/<domain>/, not <webroot>/ itself. Naming the site lets probe find that folder instead of silently
+// handing back the account's default site's own folder.
+func TestProbeTakesTheAddonDomainsOwnFolderWhenTheSiteIsNamed(t *testing.T) {
+	srv := newFakeFTP(t, "u", "pw", "htdocs", "htdocs/0x0.infinityfreeapp.com")
+	tg := srv.target()
+	tg.Site = "https://0x0.infinityfreeapp.com/"
+	p, err := ProbeHost(ctx(t), tg)
+	if err != nil || p.Dir != "htdocs/0x0.infinityfreeapp.com" {
+		t.Errorf("probe = %+v %v, want htdocs/0x0.infinityfreeapp.com", p, err)
+	}
+	// Named but no such folder on this account: the usual name still wins, not an error.
+	tg2 := srv.target()
+	tg2.Site = "https://someone-elses-site.example/"
+	if p2, err := ProbeHost(ctx(t), tg2); err != nil || p2.Dir != "htdocs" {
+		t.Errorf("no matching addon folder: %+v %v, want htdocs", p2, err)
+	}
+}
+
 func TestProbeErrorsAreCodes(t *testing.T) {
 	srv := newFakeFTP(t, "u", "pw", "htdocs")
 	bad := srv.target()

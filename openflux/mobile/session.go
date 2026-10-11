@@ -160,6 +160,11 @@ func buildSessionWith(specsJSON, secret string, exit bool, opt sessionOptions) (
 		}
 		if provider != nil {
 			keys[spec.Name] = spec.Type + " " + spec.URL
+			if spec.Type == "script" {
+				// What a script's setup page was given is kept like cookies; two scripts may share a URL.
+				name, _ := spec.Params["name"].(string)
+				keys[spec.Name] = "script:" + name + " " + spec.URL
+			}
 		}
 		appendLog(fmt.Sprintf("[ANDROID] Session: транспорт %s (%s), приоритет %d", spec.Name, spec.Type, spec.Priority))
 	}

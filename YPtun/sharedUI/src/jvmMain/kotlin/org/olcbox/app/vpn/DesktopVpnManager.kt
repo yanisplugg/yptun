@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.OpenFluxConfig
@@ -203,6 +205,9 @@ class DesktopVpnManager private constructor(
     override fun stopVpn() {
         autoReconnect = false
         generation++
+        // Show it NOW: the stop itself waits for [mutex], which a start in flight may hold for a while,
+        // and until then the UI would keep spinning on the old Connecting/Reconnecting state.
+        if (_status.value !is VpnStatus.Disconnected) setStatus(VpnStatus.Stopping)
         operationJob = scope.launch {
             mutex.withLock {
                 stopDesktopMode(finalStatus = true)
@@ -517,6 +522,7 @@ class DesktopVpnManager private constructor(
                     when (of.transport) {
                         OpenFluxConfig.TRANSPORT_MAILRU -> addAll(listOf("cloud.mail.ru", "docs.datacloudmail.ru"))
                         OpenFluxConfig.TRANSPORT_CUPS -> add("interview.cups.online")
+                        OpenFluxConfig.TRANSPORT_TELEMOST -> add("telemost.yandex.ru")
                         else -> add("docs.yandex.ru")
                     }
                     // The new editor's relay, push channel and the Disk redirect it authorizes through.
@@ -869,18 +875,14 @@ class DesktopVpnManager private constructor(
                     tunProcess = null
                 }
                 DesktopMode.SystemProxy -> {
-                    runCatching {
-                        proxyController.restore()
-                    }.onFailure {
-                        addLog("Proxy restore failed: ${it.message}")
-                    }
+                    runBounded("Proxy restore") { proxyController.restore() }
                     httpProxyBridge?.stop()
                     httpProxyBridge = null
                 }
             }
 
             pacServer.stop()
-            runCatching { engineController.stopAll() }
+            runBounded("Engine stop") { engineController.stopAll() }
             runCatching { org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0) }
             engineLocation = null
             stopProcess(process, privileged = (activeDesktopMode ?: DesktopMode.current()) == DesktopMode.LinuxTun)
@@ -1164,6 +1166,22 @@ class DesktopVpnManager private constructor(
         throw lastException ?: error("olcRTC binary failed to start")
     }
 
+    /**
+     * Runs a blocking teardown step off the caller with a deadline. Stopping a native core or
+     * restoring the WinINET proxy can hang (a core draining connections, a window not answering the
+     * settings broadcast); the caller holds [mutex], so one hung step used to freeze every later
+     * connect/disconnect — the UI sat in "Stopping" and server picks did nothing. The step keeps
+     * running in the background if it never returns; we just stop waiting for it.
+     */
+    private suspend fun runBounded(label: String, block: suspend () -> Unit) {
+        val step = scope.async {
+            runCatching { block() }.onFailure { addLog("$label failed: ${it.message}") }
+        }
+        if (withTimeoutOrNull(STOP_STEP_TIMEOUT_MS) { step.await() } == null) {
+            addLog("$label did not finish in ${STOP_STEP_TIMEOUT_MS / 1_000}s — continuing without it")
+        }
+    }
+
     private suspend fun stopDesktopMode(finalStatus: Boolean) {
         if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null) {
             return
@@ -1187,11 +1205,7 @@ class DesktopVpnManager private constructor(
                 tunProcess = null
             }
             DesktopMode.SystemProxy -> {
-                runCatching {
-                    proxyController.restore()
-                }.onFailure {
-                    addLog("Proxy restore failed: ${it.message}")
-                }
+                runBounded("Proxy restore") { proxyController.restore() }
                 httpProxyBridge?.stop()
                 httpProxyBridge = null
             }
@@ -1200,7 +1214,7 @@ class DesktopVpnManager private constructor(
         pacServer.stop()
 
         // Stop the in-process engines (no-op when the olcrtc subprocess path was used).
-        runCatching { engineController.stopAll() }
+        runBounded("Engine stop") { engineController.stopAll() }
         // Release the interface pin so the next session (or a ping probe) re-resolves it — the
         // adapter index changes with the network the machine is on.
         runCatching { org.olcbox.app.vpn.desktop.YpTunCore.bindOutboundInterface(0) }
@@ -1799,6 +1813,7 @@ class DesktopVpnManager private constructor(
         const val OLC_STARTUP_STABILITY_MS = 1_500L
         const val READY_POLL_INTERVAL_MS = 200L
         const val TCP_CONNECT_TIMEOUT_MS = 250L
+        const val STOP_STEP_TIMEOUT_MS = 10_000L
 
         /** The cores derive helper ports up to +6 from the SOCKS port (DesktopEngineController). */
         const val PORT_BLOCK = 8

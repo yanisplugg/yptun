@@ -43,6 +43,8 @@ data class AppBehaviorSettings(
     val autoConnectOnLaunch: Boolean = false,
     /** Show the round "Авто = fastest server" satellite button next to the connect button on Home. */
     val showAutoButton: Boolean = true,
+    /** Show the per-subscription / folder / custom-list "fastest server" button in the Home list headers. */
+    val showGroupAutoPick: Boolean = true,
     /** Ask for confirmation before deleting subscriptions / configs. */
     val confirmBeforeDelete: Boolean = true,
     /** Show live download/upload speed in the foreground notification. */

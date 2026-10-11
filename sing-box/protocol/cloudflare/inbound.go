@@ -16,6 +16,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-cloudflared"
 	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
@@ -79,25 +80,28 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	}
 
 	return &Inbound{
-		Adapter: inbound.NewAdapter(C.TypeCloudflared, tag),
-		service: service,
+		Adapter:    inbound.NewAdapter(C.TypeCloudflared, tag),
+		service:    service,
+		references: common.FilterNotDefault([]string{options.ControlDialer.Detour, options.TunnelDialer.Detour}),
 	}, nil
 }
 
 type Inbound struct {
 	inbound.Adapter
-	service *cloudflared.Service
+	service    *cloudflared.Service
+	references []string
 }
 
-func (i *Inbound) Start(stage adapter.StartStage) error {
+func (i *Inbound) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	if stage != adapter.StartStateStart {
 		return nil
 	}
-	return i.service.Start()
-}
-
-func (i *Inbound) Close() error {
-	return i.service.Close()
+	err := i.service.Start()
+	if err != nil {
+		return err
+	}
+	scope.Add(i.service.Close)
+	return nil
 }
 
 type routerDialer struct {
@@ -253,6 +257,10 @@ func (h *icmpRouterHandler) RouteICMPFlow(source netip.Addr, destination netip.A
 		h.logger.Trace("drop ICMP flow from ", source, " to ", destination, ": no direct route")
 		return nil, E.New("no direct route")
 	}
+}
+
+func (i *Inbound) References() []string {
+	return i.references
 }
 
 var (

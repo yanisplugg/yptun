@@ -111,22 +111,28 @@ class AndroidUpdateInstaller(
      */
     suspend fun resolveUpdateApk(
         info: AppUpdateInfo,
+        onStage: (UpdateStage) -> Unit = {},
         onProgress: (Float) -> Unit = {}
     ): Result<File> = runCatching {
         info.deltaAsset?.let { delta ->
-            val patched = runCatching { applyDeltaUpdate(delta, onProgress) }
+            val patched = runCatching { applyDeltaUpdate(delta, onStage, onProgress) }
                 // Why a full APK is being downloaded instead of a 1.5 MB patch used to be
                 // invisible: the failure was swallowed and the user just saw a 112 MB download.
                 .onFailure { Log.w(TAG, "delta ${delta.name} not applied: ${it.message}") }
                 .getOrNull()
-            if (patched != null) return@runCatching patched
+            if (patched != null) {
+                reportStage(UpdateStage(UpdateStageKind.Install, 3, 3), onStage)
+                return@runCatching patched
+            }
             // Any delta failure → fall through to the full download below.
         }
         if (info.deltaAsset == null) {
             Log.i(TAG, "no delta patch for this install — downloading ${info.asset.name} in full")
         }
+        reportStage(UpdateStage(UpdateStageKind.DownloadInstaller, 1, 2), onStage)
         val full = download(info.asset, onProgress).getOrThrow()
         requireOfficialApk(full)
+        reportStage(UpdateStage(UpdateStageKind.Install, 2, 2), onStage)
         full
     }
 
@@ -141,11 +147,15 @@ class AndroidUpdateInstaller(
 
     private suspend fun applyDeltaUpdate(
         delta: AppUpdateAsset,
+        onStage: (UpdateStage) -> Unit,
         onProgress: (Float) -> Unit
     ): File = withContext(Dispatchers.IO) {
         val baseApk = File(appContext.applicationInfo.sourceDir)
         require(baseApk.exists() && baseApk.length() > 0) { "installed base APK not found" }
+        reportStage(UpdateStage(UpdateStageKind.DownloadPatch, 1, 3), onStage)
         val patchGz = download(delta, onProgress).getOrThrow()
+        reportStage(UpdateStage(UpdateStageKind.ApplyPatch, 2, 3), onStage)
+        reportProgress(0f, onProgress)
         val outApk = File(File(appContext.cacheDir, "updates").apply { mkdirs() }, "yptun-delta-update.apk")
         try {
             DeltaApkPatcher.apply(appContext, baseApk, patchGz, outApk)
@@ -214,6 +224,12 @@ class AndroidUpdateInstaller(
         }
         reportProgress(1f, onProgress)
         target
+    }
+
+    private suspend fun reportStage(stage: UpdateStage, onStage: (UpdateStage) -> Unit) {
+        withContext(Dispatchers.Main.immediate) {
+            onStage(stage)
+        }
     }
 
     private suspend fun reportProgress(progress: Float, onProgress: (Float) -> Unit) {

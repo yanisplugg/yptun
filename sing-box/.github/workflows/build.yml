@@ -525,7 +525,7 @@ jobs:
           if [[ "${{ matrix.legacy_osx }}" != "true" ]]; then
             TAGS=$(cat release/DEFAULT_BUILD_TAGS)
           else
-            TAGS=$(cat release/DEFAULT_BUILD_TAGS_OTHERS)
+            TAGS=$(sed 's/,with_usbip//' release/DEFAULT_BUILD_TAGS_OTHERS)
           fi
           echo "BUILD_TAGS=${TAGS}" >> "${GITHUB_ENV}"
       - name: Set shared ldflags
@@ -1596,6 +1596,7 @@ jobs:
           make -C clients/apple build_ios_deb
           mkdir -p dist
           cp "clients/apple/build/jailbreak/SFI-${VERSION}-iphoneos-arm64.deb" dist
+          cp "clients/apple/build/jailbreak/SFI-${VERSION}-iphoneos-arm64e.deb" dist
         env:
           XCODEBUILD_CLONED_SOURCE_PACKAGES_DIR_PATH: ${{ runner.temp }}/SourcePackages
       - name: Report cache directory sizes

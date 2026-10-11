@@ -134,7 +134,7 @@ func TestExitCaptchaSolvedThroughTunnel(t *testing.T) {
 	}
 	waitUntil(t, "the exit to see the phone", exit.IsConnected)
 
-	exit.NotifyCaptcha("yandex", web.URL, "smartcaptcha")
+	exit.NotifyCaptcha("yandex", web.URL, "", "smartcaptcha")
 	waitUntil(t, "a pending exit check", func() bool {
 		return PendingCaptchaURL() == web.URL && PendingCaptchaProxy() != ""
 	})

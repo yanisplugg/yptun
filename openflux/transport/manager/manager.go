@@ -116,8 +116,8 @@ func (m *Manager) Add(name, typ string, raw transport.Transport, priority int, p
 	// channel.
 	if en, ok := raw.(transport.ErrorNotifier); ok {
 		transportName := name
-		en.SetErrorNotifier(func(_ error, _, url, reason string) {
-			m.NotifyCaptcha(transportName, url, reason)
+		en.SetErrorNotifier(func(_ error, _, url, html, reason string) {
+			m.NotifyCaptcha(transportName, url, html, reason)
 		})
 	}
 	return nil
@@ -461,7 +461,7 @@ func (m *Manager) DispatchControl(sub control.Subtype, payload []byte) {
 		cb := m.remoteAuth
 		m.mu.RUnlock()
 		if cb != nil {
-			cb(req.Transport, req.URL, req.Reason)
+			cb(req.Transport, req.URL, req.HTML, req.Reason)
 		}
 
 	default:
@@ -569,9 +569,11 @@ func (m *Manager) Stats() transport.TransportStats {
 // ---- captcha notifications ----
 
 // CaptchaNotifier is called when a transport reports that it needs fresh
-// cookies (ErrCaptchaRequired or ErrLoginRequired). Wired to the IPC server
-// by main.go.
-type CaptchaNotifier func(transportName, url, reason string)
+// cookies (ErrCaptchaRequired or ErrLoginRequired) or, for a script
+// transport, any page it wants the operator to go through (login, one-time
+// setup) - html is set instead of url when the page is the script's own
+// rather than a real site. Wired to the IPC server by main.go.
+type CaptchaNotifier func(transportName, url, html, reason string)
 
 // SetCaptchaNotifier installs the callback.
 func (m *Manager) SetCaptchaNotifier(n CaptchaNotifier) {
@@ -585,7 +587,7 @@ func (m *Manager) SetCaptchaNotifier(n CaptchaNotifier) {
 // every report. On the exit node there is usually no app, and the check
 // has to be passed from the exit's address anyway, so the report also goes
 // to the client over whichever carrier still reaches it.
-func (m *Manager) NotifyCaptcha(name, url, reason string) {
+func (m *Manager) NotifyCaptcha(name, url, html, reason string) {
 	// A transport waiting on a check carries nothing; route around it,
 	// and in particular do not send its own AuthRequired through it.
 	m.session.MarkStalled(name)
@@ -593,14 +595,14 @@ func (m *Manager) NotifyCaptcha(name, url, reason string) {
 	n := m.captchaNotifier
 	m.mu.RUnlock()
 	if n != nil {
-		n(name, url, reason)
+		n(name, url, html, reason)
 	}
 	if m.session.IsExit() {
-		m.forwardAuth(name, url, reason)
+		m.forwardAuth(name, url, html, reason)
 	}
 }
 
-func (m *Manager) forwardAuth(name, url, reason string) {
+func (m *Manager) forwardAuth(name, url, html, reason string) {
 	now := time.Now()
 	m.mu.Lock()
 	if m.authSent == nil {
@@ -613,7 +615,7 @@ func (m *Manager) forwardAuth(name, url, reason string) {
 	m.authSent[name] = now
 	m.mu.Unlock()
 
-	body, _ := (&control.AuthRequiredPayload{Transport: name, URL: url, Reason: reason, Doc: m.entryURL(name)}).Encode()
+	body, _ := (&control.AuthRequiredPayload{Transport: name, URL: url, HTML: html, Reason: reason, Doc: m.entryURL(name)}).Encode()
 	if err := m.SendControl(control.SubtypeAuthRequired, body); err != nil {
 		// No client yet: let the transport's next report try again.
 		utils.Debugf("[MANAGER] forward AuthRequired (%s): %v", name, err)

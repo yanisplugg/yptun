@@ -98,6 +98,7 @@ fun LazyListScope.locationSelectorContent(
     // Ping a subscription's servers and connect to the best one (spinner while [autoPickRunning]).
     onAutoPickClick: (targetLocationIds: List<String>) -> Unit = {},
     autoPickTarget: List<String>? = null,
+    showGroupAutoPick: Boolean = true,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
     hasLoaded: Boolean = true,
@@ -263,11 +264,13 @@ fun LazyListScope.locationSelectorContent(
                         val isGroupRefreshing = pingsState is PingsState.Loading &&
                                 pingsState.pendingLocationIds.any { it in groupIds }
 
-                        AutoPickButton(
-                            isRunning = autoPickTarget == groupIds,
-                            onClick = { onAutoPickClick(groupIds) },
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                        if (showGroupAutoPick) {
+                            AutoPickButton(
+                                isRunning = autoPickTarget == groupIds,
+                                onClick = { onAutoPickClick(groupIds) },
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                         RefreshButton(
                             isRefreshing = isGroupRefreshing,
                             onClick = { onRefreshClick(groupIds) },
@@ -386,6 +389,7 @@ fun LazyListScope.locationSelectorContent(
                             onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
                             onRefresh = { onRefreshClick(memberIds) },
                             onAutoPick = { onAutoPickClick(memberIds) },
+                            showAutoPick = showGroupAutoPick,
                             onTogglePin = { onToggleFolderPinned(folder.id) },
                             onRename = { onRenameFolder(folder) },
                             onDelete = { onDeleteFolder(folder.id) }
@@ -436,11 +440,13 @@ fun LazyListScope.locationSelectorContent(
                                             }
                                             val mRefreshing = pingsState is PingsState.Loading &&
                                                     pingsState.pendingLocationIds.any { it in mIds }
-                                            AutoPickButton(
-                                                isRunning = autoPickTarget == mIds,
-                                                onClick = { onAutoPickClick(mIds) },
-                                                tint = MaterialTheme.colorScheme.primary
-                                            )
+                                            if (showGroupAutoPick) {
+                                                AutoPickButton(
+                                                    isRunning = autoPickTarget == mIds,
+                                                    onClick = { onAutoPickClick(mIds) },
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
                                             RefreshButton(
                                                 isRefreshing = mRefreshing,
                                                 onClick = { onRefreshClick(mIds) },
@@ -556,11 +562,13 @@ fun LazyListScope.locationSelectorContent(
                 val isCustomRefreshing = pingsState is PingsState.Loading &&
                         pingsState.pendingLocationIds.any { it in customIds }
 
-                AutoPickButton(
-                    isRunning = autoPickTarget == customIds,
-                    onClick = { onAutoPickClick(customIds) },
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                if (showGroupAutoPick) {
+                    AutoPickButton(
+                        isRunning = autoPickTarget == customIds,
+                        onClick = { onAutoPickClick(customIds) },
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
                 RefreshButton(
                     isRefreshing = isCustomRefreshing,
                     onClick = { onRefreshClick(customIds) },
@@ -1175,6 +1183,7 @@ private fun FolderGroupHeader(
     onToggleCollapsed: () -> Unit,
     onRefresh: () -> Unit,
     onAutoPick: () -> Unit,
+    showAutoPick: Boolean = true,
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
@@ -1223,11 +1232,13 @@ private fun FolderGroupHeader(
                 )
             }
 
-            AutoPickButton(
-                isRunning = autoPickRunning,
-                onClick = onAutoPick,
-                tint = MaterialTheme.colorScheme.primary
-            )
+            if (showAutoPick) {
+                AutoPickButton(
+                    isRunning = autoPickRunning,
+                    onClick = onAutoPick,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
             RefreshButton(
                 isRefreshing = isRefreshing,
                 onClick = onRefresh,
@@ -1335,8 +1346,8 @@ private fun SubscriptionGroupHeader(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                // Takes only what the (unweighted, measured first) counter/badge leave: a long title
+                // wraps onto more lines instead of being cut, and the "12/30" counter stays whole.
                 modifier = Modifier.weight(1f, fill = false)
             )
             // Red "!" badge when the subscription expires within 2 days; tap reveals the exact date.

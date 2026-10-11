@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	mrand "math/rand"
-	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -20,7 +19,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/p1neappleXpress/OpenFlux/netbind"
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
@@ -117,7 +115,7 @@ type BoardsTransport struct {
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
 
-	errNotifier func(err error, transportName, url, reason string)
+	errNotifier func(err error, transportName, url, html, reason string)
 }
 
 func NewBoardsTransport(rawURL string, config transport.TransportConfig) *BoardsTransport {
@@ -135,7 +133,7 @@ func NewBoardsTransport(rawURL string, config transport.TransportConfig) *Boards
 // fetchDocInfo (its captcha path is the old showcaptchafast, which the
 // internal PoW solver handles), but the hook is wired for parity with the
 // other transports.
-func (t *BoardsTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
+func (t *BoardsTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
 	t.errNotifier = fn
 }
 
@@ -240,8 +238,9 @@ func (t *BoardsTransport) getAllowCaptcha(client *http.Client, u, hash string) e
 func (t *BoardsTransport) authorize(hash, name string) (boardsInfo, error) {
 	jar := t.jar()
 	client := &http.Client{
-		Jar:     jar,
-		Timeout: 15 * time.Second,
+		Jar:       jar,
+		Transport: carrierTransport(),
+		Timeout:   15 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -310,21 +309,6 @@ func (t *BoardsTransport) authorize(hash, name string) (boardsInfo, error) {
 		dashboard:    state["dashboard"],
 		currentSlide: state["current_slide"],
 	}, nil
-}
-
-func (t *BoardsTransport) get(client *http.Client, u, accept, referer string) error {
-	req, _ := http.NewRequest("GET", u, nil)
-	req.Header.Set("User-Agent", boardsUA)
-	req.Header.Set("Accept", accept)
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Referer", referer)
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-	return nil
 }
 
 // apiRequest builds a POST /api call: the action and its content (JSON,
@@ -521,10 +505,7 @@ func (t *BoardsTransport) connectAndServe(info boardsInfo) error {
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 15 * time.Second,
-		NetDialContext: netbind.Wrap(&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		NetDialContext:   dialIPv4First,
 	}
 	utils.Debugf("[BOARDS] dial %s", wsURL)
 	conn, resp, err := dialer.Dial(wsURL, header)
@@ -719,18 +700,9 @@ func (t *BoardsTransport) sendSubscribe(sess *boardsSession, participant string)
 
 // ---- отправка ----
 //
-// Канал — notify-position. Формат (объект, как в оригинале):
-//
-//   42N["dashboard",{
-//       "action":"notify-position",
-//       "data":{
-//           "position":{"x":"<base64_payload>","y":123.0},
-//           "vpt":{"translate":{"x":0,"y":0},"scale":1,"whyrugay":1}
-//       },
-//       "participant":"<participant_hash>"
-//   }]
-//
-// payload — base64 от tunnel-пакета, кладётся в data.position.x.
+// Канал — modify-objects. Создаём текстовый объект с payload в value.
+// Сервер broadcast'ит как server-modify-objects, который обрабатывается
+// в handleServerModifyObjects.
 
 func (t *BoardsTransport) writerLoop(sess *boardsSession) {
 	queue := sess.Queue
@@ -748,36 +720,82 @@ func (t *BoardsTransport) writerLoop(sess *boardsSession) {
 	}
 }
 
-// sendNotifyPosition — точная копия формата из Python-скрипта:
-//
-//	cmd_pos(x, y) -> send_dashboard("notify-position",
-//	    {"position": {"x": x, "y": y},
-//	     "vpt": {"translate": {"x": 0, "y": 0}, "scale": 1}})
-//
-// send_dashboard добавляет participant в envelope.
-// payload кладём в position.x как base64-строку, position.y = 123.0,
-// vpt.whyrugay = 1 (как в оригинале).
+// sendNotifyPosition отправляет modify-objects с текстовым объектом.
+// Payload передаём в _attributes_.value как base64. Сервер broadcast'ит
+// это как server-modify-objects, который peer'ы обрабатывают.
 func (t *BoardsTransport) sendNotifyPosition(sess *boardsSession, pkt []byte) error {
-	b64 := base64.StdEncoding.EncodeToString(pkt)
+	// Уникальный ID объекта и случайные координаты.
+	obj := buildModifyObjects(base64.StdEncoding.EncodeToString(pkt), randomHex(32),
+		mrand.Intn(2000), mrand.Intn(1200), *sess.creatorHash.Load(), *sess.participant.Load())
+	return sess.writeEventObj("dashboard", obj)
+}
 
-	data := map[string]interface{}{
-		"position": map[string]interface{}{
-			"x": b64,
-			"y": 123.0,
+// buildModifyObjects is the modify-objects event carrying one packet as a
+// text object whose value is the base64 payload. Pure, and exported through
+// BoardsModifyObjects so the JS port can be compared with it byte for byte.
+func buildModifyObjects(b64, objID string, x, y int, creator, participant string) map[string]interface{} {
+	return map[string]interface{}{
+		"action": "modify-objects",
+		"data": map[string]interface{}{
+			"objects": []map[string]interface{}{
+				{
+					"_attributes_": map[string]interface{}{
+						"id":          objID,
+						"value":       b64, // payload как base64
+						"style":       "text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=1;",
+						"vertex":      "1",
+						"type":        "textbox",
+						"creatorHash": creator,
+						"parent":      "DASHBOARD",
+						"index":       "1",
+					},
+					"mxGeometry": []map[string]interface{}{
+						{
+							"_attributes_": map[string]interface{}{
+								"x":      fmt.Sprintf("%d", x),
+								"y":      fmt.Sprintf("%d", y),
+								"width":  "1",
+								"height": "1",
+								"as":     "geometry",
+							},
+						},
+					},
+					"hash": objID,
+				},
+			},
+			"valueChanges": map[string]bool{
+				objID: true,
+			},
 		},
-		"vpt": map[string]interface{}{
-			"translate": map[string]interface{}{"x": 0, "y": 0},
-			"scale":     1,
-			"whyrugay":  1,
-		},
+		"participant": participant,
 	}
+}
 
+// BoardsModifyObjects is the JSON of the dashboard event buildModifyObjects
+// makes: ["dashboard", {...}], as it goes on the wire after the "42<ack>"
+// prefix.
+func BoardsModifyObjects(b64, objID string, x, y int, creator, participant string) []byte {
+	body, _ := json.Marshal([]interface{}{"dashboard", buildModifyObjects(b64, objID, x, y, creator, participant)})
+	return body
+}
+
+// dropObjects отправляет drop-objects для удаления объектов с доски.
+func (t *BoardsTransport) dropObjects(sess *boardsSession, objects []map[string]interface{}) {
+	if len(objects) == 0 {
+		return
+	}
 	obj := map[string]interface{}{
-		"action":      "notify-position",
-		"data":        data,
+		"action": "drop-objects",
+		"data": map[string]interface{}{
+			"objects": objects,
+		},
 		"participant": *sess.participant.Load(),
 	}
-	return sess.writeEventObj("dashboard", obj)
+	if err := sess.writeEventObj("dashboard", obj); err != nil {
+		utils.Debugf("[BOARDS] drop-objects: %v", err)
+	} else {
+		utils.Debugf("[BOARDS] dropped %d objects", len(objects))
+	}
 }
 
 // ---- keepalive ----
@@ -848,8 +866,6 @@ func (t *BoardsTransport) handleMessage(sess *boardsSession, raw []byte) {
 	switch envelope.Action {
 	case "participant-connected":
 		t.handleParticipantConnected(sess, envelope.Data)
-	case "notify-position":
-		t.handleNotifyPosition(sess, envelope.Data, envelope.Participant)
 	case "server-modify-objects", "modify-objects":
 		t.handleServerModifyObjects(sess, envelope.Data, envelope.Action)
 	}
@@ -880,133 +896,11 @@ func (t *BoardsTransport) handleParticipantConnected(sess *boardsSession, raw js
 	}
 }
 
-// handleNotifyPosition — основной канал приёма. Пробуем сначала объект
-// (position.x), затем массив (data[4]).
-//
-// Объект:
-//
-//	data.position.x — base64
-//
-// Массив:
-//
-//	data[2] — имя отправителя, data[4] — base64
-//
-// Своё эхо фильтруем по:
-//   - envelope.participant == наш participant (для объекта)
-//   - data[2] == наше имя (для массива)
-func (t *BoardsTransport) handleNotifyPosition(sess *boardsSession, raw json.RawMessage, envelopePart string) {
-	// Сначала пробуем объект (position.x)
-	var objForm struct {
-		Position struct {
-			X json.RawMessage `json:"x"`
-			Y json.RawMessage `json:"y"`
-		} `json:"position"`
-	}
-	if err := json.Unmarshal(raw, &objForm); err == nil {
-		var xStr string
-		if err := json.Unmarshal(objForm.Position.X, &xStr); err == nil && xStr != "" {
-			// Своё эхо по participant в envelope
-			myPart := *sess.participant.Load()
-			if envelopePart != "" && envelopePart == myPart {
-				return
-			}
-			decoded, derr := base64.StdEncoding.DecodeString(xStr)
-			if derr != nil || len(decoded) == 0 {
-				return
-			}
-			utils.Debugf("[BOARDS<-] notify-position obj from=%s pktlen=%d",
-				shortStr(envelopePart, 8), len(decoded))
-			t.RecordReceive(len(decoded))
-			t.onDataMu.RLock()
-			cb := t.onData
-			t.onDataMu.RUnlock()
-			if cb != nil {
-				cb(decoded)
-			}
-			return
-		}
-	}
-
-	// Массив (data[2]=name, data[4]=base64)
-	var arr []json.RawMessage
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return
-	}
-	if len(arr) < 5 {
-		return
-	}
-	var sender string
-	_ = json.Unmarshal(arr[2], &sender)
-	if sender == sess.Info.name {
-		return
-	}
-	var b64 string
-	if err := json.Unmarshal(arr[4], &b64); err != nil || b64 == "" {
-		return
-	}
-	decoded, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil || len(decoded) == 0 {
-		return
-	}
-	utils.Debugf("[BOARDS<-] notify-position arr from=%q pktlen=%d", sender, len(decoded))
-	t.RecordReceive(len(decoded))
-	t.onDataMu.RLock()
-	cb := t.onData
-	t.onDataMu.RUnlock()
-	if cb != nil {
-		cb(decoded)
-	}
-}
-
 func (t *BoardsTransport) handleServerModifyObjects(sess *boardsSession, raw json.RawMessage, action string) {
-	var d struct {
-		Dashboard string `json:"dashboard"`
-		Name      string `json:"name"`
-		Session   string `json:"session"`
-		Objects   []struct {
-			Attributes map[string]interface{} `json:"_attributes_"`
-		} `json:"objects"`
-	}
-	if err := json.Unmarshal(raw, &d); err != nil {
-		return
-	}
-	if len(d.Objects) == 0 {
-		return
-	}
+	payloads, toDelete := ModifyObjectsPayloads(raw, *sess.participant.Load(), sess.Info.userHash, sess.Info.name)
 
-	myPart := *sess.participant.Load()
-	myUser := sess.Info.userHash
-	myName := sess.Info.name
-
-	for _, o := range d.Objects {
-		val, _ := o.Attributes["value"].(string)
-		if val == "" {
-			continue
-		}
-		id, _ := o.Attributes["id"].(string)
-		creator, _ := o.Attributes["creatorHash"].(string)
-		typ, _ := o.Attributes["type"].(string)
-
-		if creator != "" && (creator == myPart || creator == myUser) {
-			utils.Debugf("[BOARDS] %s: own echo (creator=%s), skip",
-				action, shortStr(creator, 8))
-			continue
-		}
-		if d.Name != "" && d.Name == myName {
-			utils.Debugf("[BOARDS] %s: own echo (name=%q), skip", action, d.Name)
-			continue
-		}
-
-		decoded, err := base64.StdEncoding.DecodeString(val)
-		if err != nil || len(decoded) == 0 {
-			utils.Debugf("[BOARDS] %s: non-base64 value id=%s type=%s, skip",
-				action, shortStr(id, 8), typ)
-			continue
-		}
-
-		utils.Debugf("[BOARDS<-] %s from=%q creator=%s id=%s pktlen=%d",
-			action, d.Name, shortStr(creator, 8), shortStr(id, 8), len(decoded))
-
+	for _, decoded := range payloads {
+		utils.Debugf("[BOARDS<-] %s pktlen=%d", action, len(decoded))
 		t.RecordReceive(len(decoded))
 		t.onDataMu.RLock()
 		cb := t.onData
@@ -1015,6 +909,62 @@ func (t *BoardsTransport) handleServerModifyObjects(sess *boardsSession, raw jso
 			cb(decoded)
 		}
 	}
+
+	// Удаляем принятые объекты
+	if len(toDelete) > 0 {
+		utils.SafeGo("boards.cleanup", func() {
+			time.Sleep(100 * time.Millisecond) // Небольшая задержка перед удалением
+			t.dropObjects(sess, toDelete)
+		})
+	}
+}
+
+// ModifyObjectsPayloads reads a (server-)modify-objects event: the packets
+// carried by objects that are not our own echo (decoded, in order), and the
+// drop-objects entries that delete exactly those objects from the board.
+// Pure, and exported so the JS port can be compared with it.
+func ModifyObjectsPayloads(raw json.RawMessage, myPart, myUser, myName string) (payloads [][]byte, toDelete []map[string]interface{}) {
+	var d struct {
+		Dashboard string `json:"dashboard"`
+		Name      string `json:"name"`
+		Session   string `json:"session"`
+		Objects   []struct {
+			Attributes map[string]interface{}   `json:"_attributes_"`
+			Hash       string                   `json:"hash"`
+			Geometry   []map[string]interface{} `json:"mxGeometry"`
+		} `json:"objects"`
+	}
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return nil, nil
+	}
+	for _, o := range d.Objects {
+		val, _ := o.Attributes["value"].(string)
+		if val == "" {
+			continue
+		}
+		creator, _ := o.Attributes["creatorHash"].(string)
+
+		if creator != "" && (creator == myPart || creator == myUser) {
+			continue // own echo
+		}
+		if d.Name != "" && d.Name == myName {
+			continue // own echo
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(val)
+		if err != nil || len(decoded) == 0 {
+			continue
+		}
+		payloads = append(payloads, decoded)
+
+		// Собираем объект для удаления
+		toDelete = append(toDelete, map[string]interface{}{
+			"_attributes_": o.Attributes,
+			"mxGeometry":   o.Geometry,
+			"hash":         o.Hash,
+		})
+	}
+	return payloads, toDelete
 }
 
 func (t *BoardsTransport) handle431(sess *boardsSession, raw []byte) {

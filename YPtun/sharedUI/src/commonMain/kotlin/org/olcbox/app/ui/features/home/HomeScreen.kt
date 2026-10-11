@@ -115,6 +115,7 @@ fun HomeScreen(
     twoColumns: Boolean = false,
     // Show the round "Авто = fastest" satellite button next to the connect button (app-settings toggle).
     showAutoButton: Boolean = true,
+    showGroupAutoPick: Boolean = true,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
     onToggleGroupPingSort: (String) -> Unit = {},
@@ -504,6 +505,7 @@ fun HomeScreen(
                 },
                 onAutoPickClick = { targetIds -> autoConnectFastest(targetIds) },
                 autoPickTarget = autoPickTarget,
+                showGroupAutoPick = showGroupAutoPick,
                 onAddSubscriptionClick = {
                     isAddSheetOpen = true
                 },

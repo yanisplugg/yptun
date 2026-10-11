@@ -26,10 +26,27 @@ class OpenFluxUriParserTest {
     }
 
     @Test
-    fun sessionSecretStreamAndMultiAreRejected() {
+    fun encryptedLinkKeepsSecretContextAndNegotiate() {
+        val t = """{"type":"mailru","url":"https://cloud.mail.ru/public/x"}"""
+        val c = OpenFluxUriParser.parse(
+            link("""{"negotiate":true,"secret":"abcdefghijklmnop","context":"ctx","transports":[$t]}""")
+        )!!.config
+        assertEquals("abcdefghijklmnop", c.secret)
+        assertEquals("ctx", c.context)
+        assertEquals(true, c.negotiate)
+        assertEquals(
+            listOf("--encryption-key-file", "k", "--session-context", "ctx", "--negotiate"),
+            c.encryptionArgs("k"),
+        )
+        val classic = OpenFluxUriParser.parse(link("""{"secret":"abcdefghijklmnop","transports":[$t]}"""))!!.config
+        assertEquals(listOf("--encryption-key-file", "k"), classic.encryptionArgs("k"))
+    }
+
+    @Test
+    fun negotiateWithoutSecretStreamAndMultiAreRejected() {
         val t = """{"type":"yandex","url":"https://x"}"""
-        assertNull(OpenFluxUriParser.parse(link("""{"secret":"abcdefghijklmnop","transports":[$t]}""")))
         assertNull(OpenFluxUriParser.parse(link("""{"negotiate":true,"transports":[$t]}""")))
+        assertNull(OpenFluxUriParser.parse(link("""{"mode":"stream","secret":"abcdefghijklmnop","transports":[$t]}""")))
         assertNull(OpenFluxUriParser.parse(link("""{"transports":[$t,$t]}""")))
         assertNull(OpenFluxUriParser.parse(link("""{"transports":[{"type":"direct","dial":"1.2.3.4:5"}]}""")))
         assertNull(OpenFluxUriParser.parse("openflux://v1/!!!"))

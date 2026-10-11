@@ -6,17 +6,13 @@ package mobile
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
-	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
-	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
-	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
-	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/transport/registry"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
@@ -226,49 +222,12 @@ func classicParams(transportType, documentURL, maxToken, maxUid string) map[stri
 // exit side (exit) direct listens on "listen", or on "dial" when only that
 // is set, since a profile keeps one address per transport.
 func newRawTransport(typ, url string, params map[string]interface{}, config transport.TransportConfig, exit bool) (transport.Transport, error) {
-	str := func(key string) string {
-		v, _ := params[key].(string)
-		return v
-	}
-	if lowMemory.Load() {
-		config.MaxQueueSize = 512
-	}
-	switch typ {
-	case "", "yandex":
-		return yandex.NewYandexDocsTransport(url, config), nil
-	case "vyandex":
-		if lowMemory.Load() {
-			return yandex.NewYandexVolgaTransportWithConfig(url, config, yandex.SlimVolgaConfig()), nil
-		}
-		return yandex.NewYandexVolgaTransport(url, config), nil
-	case "boards":
-		return yandex.NewBoardsTransport(url, config), nil
-	case "mailru":
-		return mailru.NewMailruDocsTransport(url, config), nil
-	case "cupsonline":
-		return cupsonline.NewCupsonlineTransport(url, config, !exit), nil
-	case "oneme":
-		uid, _ := strconv.ParseInt(str("uid"), 10, 64)
-		return oneme.NewOneMeTransport(exit, str("token"), uid, config), nil
-	case "direct":
-		dcfg := transport.DefaultDirectConfig()
-		if exit {
-			dcfg.IsExit = true
-			if dcfg.ListenAddr = str("listen"); dcfg.ListenAddr == "" {
-				dcfg.ListenAddr = str("dial")
-			}
-			if dcfg.ListenAddr == "" {
-				return nil, fmt.Errorf("direct: не указан адрес для прослушивания (host:port)")
-			}
-			return transport.NewDirectTransport(config, dcfg), nil
-		}
-		if dcfg.DialAddr = str("dial"); dcfg.DialAddr == "" {
-			return nil, fmt.Errorf("direct: не указан адрес ноды (host:port)")
-		}
-		return transport.NewDirectTransport(config, dcfg), nil
-	default:
-		return nil, fmt.Errorf("неизвестный тип транспорта %q", typ)
-	}
+	return registry.New(typ, url, params, registry.Options{
+		Base:         config,
+		IsExit:       exit,
+		LowMemory:    lowMemory.Load(),
+		StrictDirect: true, // the app tells the user an address is missing
+	})
 }
 
 func Stop() {

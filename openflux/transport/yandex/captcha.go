@@ -41,8 +41,9 @@ func solveCaptcha(docURL string, jar http.CookieJar, userAgent string) (string, 
 	}
 
 	client := &http.Client{
-		Jar:     jar,
-		Timeout: 30 * time.Second,
+		Jar:       jar,
+		Transport: carrierTransport(),
+		Timeout:   30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

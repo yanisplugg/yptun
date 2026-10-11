@@ -1605,6 +1605,7 @@ private fun LazyListScope.openFluxSection(
                                     OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы · новый редактор"
                                     OpenFluxConfig.TRANSPORT_MAILRU -> "Mail.ru Документы"
                                     OpenFluxConfig.TRANSPORT_CUPS -> "cups.online (комната собеседования)"
+                                    OpenFluxConfig.TRANSPORT_TELEMOST -> "Яндекс Телемост (экспериментально)"
                                     else -> "Яндекс Документы · старый редактор"
                                 }
                             )
@@ -1638,6 +1639,7 @@ private fun LazyListScope.openFluxSection(
                             when (config.transport) {
                                 OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
                                 OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
+                                OpenFluxConfig.TRANSPORT_TELEMOST -> "Ссылка на конференцию Телемоста"
                                 else -> "Ссылка на Яндекс Документ"
                             }
                         )
@@ -1647,6 +1649,7 @@ private fun LazyListScope.openFluxSection(
                             when (config.transport) {
                                 OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
                                 OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
+                                OpenFluxConfig.TRANSPORT_TELEMOST -> "https://telemost.yandex.ru/j/…"
                                 else -> "https://docs.yandex.ru/…"
                             }
                         )
@@ -1657,6 +1660,8 @@ private fun LazyListScope.openFluxSection(
                                 "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
                             } else if (config.transport == OpenFluxConfig.TRANSPORT_CUPS) {
                                 "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
+                            } else if (config.transport == OpenFluxConfig.TRANSPORT_TELEMOST) {
+                                "Конференция Яндекс Телемоста: туннель идёт видео через SFU, пять линий (до ~1,5 МБ/с). Одна конференция — один клиент и одна нода; ссылку получает и нода (ей нужна версия с Телемостом — переустанови)."
                             } else if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
                                 "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
                             } else {
@@ -1668,6 +1673,25 @@ private fun LazyListScope.openFluxSection(
                     minLines = 1,
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+            VkTurnField(
+                value = config.secret,
+                onValueChange = { v -> onChange { it.copy(secret = v.trim()) } },
+                label = "Ключ шифрования (AES-256-GCM)",
+                placeholder = "секрет выходной ноды (--encryption-key-file); пусто — без шифрования",
+                enabled = enabled
+            )
+            if (config.secret.isNotBlank()) {
+                VkTurnField(
+                    value = config.context,
+                    onValueChange = { v -> onChange { it.copy(context = v.trim()) } },
+                    label = "Контекст сессии",
+                    placeholder = "пусто — из ссылки на документ, как у ноды",
+                    enabled = enabled
+                )
+                VkTurnSwitchRow("Только Session (обязательный negotiate)", config.negotiate, enabled) { v ->
+                    onChange { it.copy(negotiate = v) }
+                }
             }
             VkTurnField(
                 value = config.dnsServer,

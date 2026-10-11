@@ -16,12 +16,6 @@ import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.outputStream
 
-/** Which step of the update is running; the UI turns it into "Step N of M: ...". */
-enum class UpdateStageKind { DownloadPatch, DownloadInstaller, ApplyPatch, Install, Restart }
-
-/** [step] of [total]; progress within the step goes through the separate progress callback. */
-data class UpdateStage(val kind: UpdateStageKind, val step: Int, val total: Int)
-
 /** What [JvmUpdateInstaller.install] actually did, so the caller knows whether to restart. */
 sealed interface DesktopUpdateOutcome {
     /** The full installer was downloaded and handed to the OS; the user drives it from here. */

@@ -3701,6 +3701,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showAutoButton = it)) }
 
         RoutingToggleRow(
+            title = s.showGroupAutoPickTitle,
+            subtitle = s.showGroupAutoPickSubtitle,
+            checked = settings.showGroupAutoPick
+        ) { onChanged(settings.copy(showGroupAutoPick = it)) }
+
+        RoutingToggleRow(
             title = s.confirmDeleteTitle,
             subtitle = s.confirmDeleteSubtitle,
             checked = settings.confirmBeforeDelete
