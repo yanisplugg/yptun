@@ -61,15 +61,15 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 
 # 0. Slim material-icons-extended. The jar ships ~11000 icon classes (37 MB) and the app uses a few
 #    dozen. Icons are plain static references (androidx/compose/material/icons/<style>/<Name>Kt in a
-#    class constant pool), so every class that no jar of the app image mentions can go. Done on a
-#    staged copy: the shared app image (used by the installer too) is left untouched. If anything
-#    looks off the full jar is kept - a bigger file is better than a missing icon.
+#    class constant pool), so every class that no jar of the app image mentions can go. Done IN
+#    PLACE on the shared app image, and so is the jar re-storing below, so run this BEFORE
+#    build-installer.ps1: an installed copy and the portable must hold the same bytes, or the delta
+#    bundle (generated from the portable) is never this install's base and every update falls back to
+#    the full installer. If anything looks off the full jar is kept - a bigger file is better than a
+#    missing icon.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
-$stage = Join-Path $work "stage"
-Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "Staging app image ($Arch)..."
-Copy-Item $AppDir $stage -Recurse
+$stage = $AppDir
 $iconsJar = Get-ChildItem (Join-Path $stage "app") -Filter "material-icons-extended-*.jar" | Select-Object -First 1
 if ($iconsJar) {
     $latin1 = [Text.Encoding]::GetEncoding(28591)
@@ -122,12 +122,11 @@ Write-Host "Compressing app image ($Arch)..."
 Push-Location (Join-Path $here "portable-launcher")
 try {
     # No GOOS/GOARCH here: this tool runs on the build machine, whatever the target arch is.
-    & $go run ./cmd/pack $stage $archive
+    & $go run ./cmd/pack -inplace $stage $archive
     if ($LASTEXITCODE -ne 0) { throw "pack failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location
 }
-Remove-Item $stage -Recurse -Force
 # 2. Fingerprint of that payload. The launcher unpacks into a directory named after it, so two
 #    builds of the SAME version never collide - and that is the normal case here, because fixes are
 #    asked for without changing the version. Keyed on the version alone, a newly built portable

@@ -13,9 +13,11 @@
   -OldPortable), cuts the zip out, and hands the result to make-desktop-patch.ps1 together with the
   freshly built image.
 
-  The installed (Inno Setup) copy and the portable copy of one release are the same app image, so
-  the bundle's base - the SHA-256 of app/YPtun.cfg, written into its file name - matches installs of
-  both and the app picks the bundle by that hash.
+  The installed (Inno Setup) copy and the portable copy of one release are the same app image ONLY
+  since build-portable.ps1 started normalizing the shared image in place and CI began building the
+  portable before the installer. Releases up to 3.6.9 installed the ORIGINAL jars, while the portable
+  carried re-stored jars and slimmed icons - a bundle generated from them never matched an install, so
+  the first update away from such a release is still the full installer.
 
   Run after building the new app image, before publishing the release, once per arch. The NEW side is
   either an app-image directory (-NewImage) or the new release's own portable .exe (-NewPortable,

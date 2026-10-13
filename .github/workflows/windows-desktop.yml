@@ -183,13 +183,16 @@ jobs:
           # And the jpackage launcher, which proves the runtime image is native too.
           Assert-Arch "YPtun\desktopApp\build\compose\binaries\main\app\YPtun\YPtun.exe" "launcher"
 
-      - name: Build installer (en/ru/zh/fa)
-        shell: pwsh
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File YPtun\desktopApp\packaging\windows\build-installer.ps1 -Arch ${{ matrix.goarch }}
-
+      # Portable FIRST: it normalizes the shared app image in place (slim icons, stored jars), and the
+      # installer must pack those same bytes - otherwise the delta bundle, generated from the portable,
+      # never matches an installed copy and every Windows update falls back to the full installer.
       - name: Build portable
         shell: pwsh
         run: powershell -NoProfile -ExecutionPolicy Bypass -File YPtun\desktopApp\packaging\windows\build-portable.ps1 -Arch ${{ matrix.goarch }}
+
+      - name: Build installer (en/ru/zh/fa)
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File YPtun\desktopApp\packaging\windows\build-installer.ps1 -Arch ${{ matrix.goarch }}
 
       - name: Upload unsigned
         id: unsigned

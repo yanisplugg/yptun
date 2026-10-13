@@ -189,8 +189,8 @@ APK появятся в `YPtun/androidApp/build/outputs/apk/release/`.
 ```bash
 cd YPtun
 ./gradlew :desktopApp:createDistributable          # готовый образ приложения
+powershell -File desktopApp/packaging/windows/build-portable.ps1    # портативный .exe (СНАЧАЛА: нормализует образ на месте)
 powershell -File desktopApp/packaging/windows/build-installer.ps1   # установщик
-powershell -File desktopApp/packaging/windows/build-portable.ps1    # портативный .exe
 ```
 
 <details>
