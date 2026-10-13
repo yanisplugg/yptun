@@ -232,6 +232,11 @@ data class AppBehaviorSettings(
      * started and the system settings are never touched, so just the apps configured by hand use it.
      */
     val setSystemProxy: Boolean = true,
+    /**
+     * How many servers the «Бесплатные серверы» list may take in total: the first N by source priority
+     * (see FREE_SERVERS_SOURCES). One of [FREE_SERVERS_LIMITS]; [FREE_SERVERS_UNLIMITED] (0) = no cap.
+     */
+    val freeServersLimit: Int = DEFAULT_FREE_SERVERS_LIMIT,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"
@@ -272,6 +277,12 @@ data class AppBehaviorSettings(
 
         /** How many days before expiry the subscription-expiry notification starts firing. */
         const val SUBSCRIPTION_EXPIRY_NOTIFY_DAYS = 3
+
+        const val FREE_SERVERS_UNLIMITED = 0
+        const val DEFAULT_FREE_SERVERS_LIMIT = 500
+
+        /** Selectable free-server caps (single-choice chips in the UI). */
+        val FREE_SERVERS_LIMITS = listOf(500, 1000, FREE_SERVERS_UNLIMITED)
 
         /** Parallel ping streams: how many locations are probed at once. */
         const val DEFAULT_PING_PARALLELISM = 5

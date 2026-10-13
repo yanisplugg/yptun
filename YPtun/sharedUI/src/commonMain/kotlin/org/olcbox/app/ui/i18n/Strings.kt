@@ -706,6 +706,9 @@ interface Strings {
     val showAliveCountSubtitle: String
     val pingThreadsTitle: String
     val pingThreadsSubtitle: String
+    val freeServersLimitTitle: String
+    val freeServersLimitSubtitle: String
+    val freeServersLimitUnlimited: String
     val pingModeAuto: String
     val pingModeTcp: String
     val pingModeIcmp: String
@@ -1389,6 +1392,9 @@ object RuStrings : Strings {
     override val showAliveCountTitle = "Счётчик доступных серверов"
     override val showAliveCountSubtitle =
         "В шапке подписки показывать «живые/всего» по последнему пингу"
+    override val freeServersLimitTitle = "Лимит бесплатных серверов"
+    override val freeServersLimitSubtitle = "Сколько серверов брать в «Бесплатных серверах»: первые N по приоритету источников. Больше — дольше проверка."
+    override val freeServersLimitUnlimited = "Без лимита"
     override val pingThreadsTitle = "Потоки пинга"
     override val pingThreadsSubtitle = "Сколько локаций проверять одновременно (1–30) — и для пинга, и для кнопки Авто"
     override val pingModeAuto = "Авто"
@@ -2063,6 +2069,9 @@ object EnStrings : Strings {
     override val showAliveCountTitle = "Reachable server counter"
     override val showAliveCountSubtitle =
         "Show \"live/total\" in the subscription header from the last ping pass"
+    override val freeServersLimitTitle = "Free servers limit"
+    override val freeServersLimitSubtitle = "How many servers «Free servers» may take: the first N by source priority. More means a longer check."
+    override val freeServersLimitUnlimited = "Unlimited"
     override val pingThreadsTitle = "Ping threads"
     override val pingThreadsSubtitle = "How many locations to probe at once (1–30) — for ping and the Auto button"
     override val pingModeAuto = "Auto"
@@ -2737,6 +2746,9 @@ object FaStrings : Strings {
     override val showAliveCountTitle = "شمارندهٔ سرورهای در دسترس"
     override val showAliveCountSubtitle =
         "نمایش «فعال/کل» در سربرگ اشتراک بر اساس آخرین پینگ"
+    override val freeServersLimitTitle = "سقف سرورهای رایگان"
+    override val freeServersLimitSubtitle = "حداکثر تعداد سرورهای «سرورهای رایگان»: N سرور اول بر اساس اولویت منبع. تعداد بیشتر، بررسی طولانی‌تر."
+    override val freeServersLimitUnlimited = "نامحدود"
     override val pingThreadsTitle = "رشته‌های پینگ"
     override val pingThreadsSubtitle = "چند موقعیت هم‌زمان بررسی شوند (۱ تا ۳۰) — برای پینگ و دکمه خودکار"
     override val pingModeAuto = "خودکار"
@@ -3411,6 +3423,9 @@ object ZhStrings : Strings {
     override val showAliveCountTitle = "可达服务器计数"
     override val showAliveCountSubtitle =
         "在订阅标题中显示上次测试的“可用/总数”"
+    override val freeServersLimitTitle = "免费节点上限"
+    override val freeServersLimitSubtitle = "“免费节点”最多取多少个：按来源优先级取前 N 个。越多，检测越久。"
+    override val freeServersLimitUnlimited = "不限"
     override val pingThreadsTitle = "测试线程"
     override val pingThreadsSubtitle = "同时测试多少个节点（1–30）— 测速和自动连接共用"
     override val pingModeAuto = "自动"

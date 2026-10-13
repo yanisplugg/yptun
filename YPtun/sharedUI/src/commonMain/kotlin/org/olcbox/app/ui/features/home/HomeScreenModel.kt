@@ -432,6 +432,7 @@ class HomeScreenViewModel(
 
     fun loadFreeServers(
         parallelism: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
+        limit: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_FREE_SERVERS_LIMIT,
         onError: (String) -> Unit = {},
     ) {
         freeServersJob?.cancel()
@@ -445,11 +446,11 @@ class HomeScreenViewModel(
                     val client = createProxyHttpClient(proxy)
                     try {
                         // Все источники сразу; недоступный не мешает остальным.
-                        FREE_SERVERS_SOURCES.map { (url, maxCount) ->
+                        freeSourcesFor(org.olcbox.app.ui.i18n.LocalizationState.effective.id).map { source ->
                             async {
                                 runCatching {
-                                    org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
-                                }.getOrDefault("") to maxCount
+                                    org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(source.url).bodyAsText() }
+                                }.getOrDefault("") to source.maxCount
                             }
                         }.awaitAll()
                     } finally {
@@ -463,7 +464,7 @@ class HomeScreenViewModel(
                     return@launch
                 }
 
-                val parsedItems = withContext(Dispatchers.Default) { pickFreeServers(sourceTexts) }
+                val parsedItems = withContext(Dispatchers.Default) { pickFreeServers(sourceTexts, limit) }
 
                 if (parsedItems.isEmpty()) {
                     _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
@@ -558,19 +559,23 @@ class HomeScreenViewModel(
      * VLESS alone threw away ~90% of the Freedom-V2Ray list), each server once (lists repeat the same
      * node under different names — ~10% of ebrasha — and overlap each other), and a source's limit
      * spent only on servers no earlier source already gave. Big lists are shuffled and parsed only
-     * until the limit is reached, not all 8k lines.
+     * until the limit is reached, not all 8k lines. [limit] caps the whole result (0 = no cap): the
+     * first [limit] servers in source order, so the sources of the app's language win.
      */
-    private fun pickFreeServers(sourceTexts: List<Pair<String, Int>>): List<Pair<String, ProxyProfile>> {
+    private fun pickFreeServers(sourceTexts: List<Pair<String, Int>>, limit: Int): List<Pair<String, ProxyProfile>> {
         val seen = HashSet<ProxyProfile>()
         val picked = mutableListOf<Pair<String, ProxyProfile>>()
-        for ((text, maxCount) in sourceTexts) {
-            val lines = text.lines()
+        for ((body, maxCount) in sourceTexts) {
+            if (limit > 0 && picked.size >= limit) break
+            // Some lists (Epodonios, chengaopan) are one base64 blob, not a line per link.
+            val lines = org.olcbox.app.data.importer.SubscriptionDecoder.toLinkText(body).lines()
                 .map { it.trim() }
                 .filter { line -> FREE_SERVER_SCHEMES.any { line.startsWith(it, ignoreCase = true) } }
                 .let { if (maxCount > 0) it.shuffled() else it }
             var taken = 0
             for (line in lines) {
                 if (maxCount > 0 && taken >= maxCount) break
+                if (limit > 0 && picked.size >= limit) break
                 val profile = runCatching { ShareLinkParser.parse(line) }.getOrNull()
                     ?.takeIf { it.isComplete() } ?: continue
                 if (!seen.add(profile.dedupNormalized())) continue
@@ -949,25 +954,45 @@ data class FreeServersProgress(
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
 
 /**
- * Источники бесплатных серверов (url, сколько уникальных серверов взять; 0 = все) в порядке
- * приоритета; [FREE_SERVERS_URL] — ещё и идентификатор группы. Общий объём (~330) прежний: каждая
- * проверка до 4 с, и больший список заметно удлинил бы ожидание.
+ * Источник бесплатных серверов: [maxCount] — сколько уникальных серверов взять (0 = все, без
+ * перемешивания), [region] — для какого языка приложения он в приоритете ("" = для всех).
+ */
+class FreeSource(val url: String, val maxCount: Int = 0, val region: String = "")
+
+/**
+ * Источники бесплатных серверов в порядке приоритета; [FREE_SERVERS_URL] — ещё и идентификатор
+ * группы. Сколько всего взять, решает настройка «Лимит бесплатных серверов» (500 / 1000 / без
+ * лимита): берутся первые N по этому порядку, а источники языка приложения ([freeSourcesFor])
+ * идут вперёд. Проверка до 15 с на сервер — большие списки заметно удлиняют ожидание.
  *  - zieng2 — маленький (~60) список под российские белые списки, целиком;
- *  - Freedom-V2Ray — агрегатор шести списков (~1600 серверов всех протоколов), раз в 2 часа
- *    выкидывает хосты, не принимающие TCP. Это проверка из США, а не через прокси, поэтому
- *    окончательно сервер всё равно проверяем сами — но мёртвых в нём заметно меньше;
  *  - igareck/vpn-configs-for-russia — обновляется каждые пару часов, конфиги заранее проверяет сервер
- *    в России (в т.ч. под белые списки мобильного интернета); берём три VLESS-файла целиком (~100 уникальных);
- *  - ebrasha — огромный (~7 тыс. уникальных, только VLESS) и живой процентов на 7, только выборка.
+ *    в России (в т.ч. под белые списки мобильного интернета); три VLESS-файла целиком (~100 уникальных);
+ *  - Freedom-V2Ray — агрегатор шести списков (~1600 серверов всех протоколов), раз в 2 часа
+ *    выкидывает хосты, не принимающие TCP (проверка из США, не через прокси — сами всё равно проверяем);
+ *  - ebrasha — огромный (~7 тыс. уникальных, только VLESS) и живой процентов на 7, только выборка;
+ *  - Иран: barry-far, hamedcode, Epodonios — сборщики Telegram-каналов, по 6–8 тыс. VLESS, выборка
+ *    (Epodonios отдаёт base64 — [SubscriptionDecoder.toLinkText] разворачивает);
+ *  - Китай: peasoft/NoMoreWalls и ermaozi/get_subscribe (раздача под китайские сети), chengaopan
+ *    (base64) — по 40–250 VLESS, берём целиком. Рабочие всё равно определяет пинг на устройстве.
  */
 val FREE_SERVERS_SOURCES = listOf(
-    FREE_SERVERS_URL to 0,
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt" to 0,
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt" to 0,
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-checked.txt" to 0,
-    "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix.txt" to 170,
-    "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to 100,
+    FreeSource(FREE_SERVERS_URL, region = "ru"),
+    FreeSource("https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt", region = "ru"),
+    FreeSource("https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt", region = "ru"),
+    FreeSource("https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-checked.txt", region = "ru"),
+    FreeSource("https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix.txt", 250),
+    FreeSource("https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt", 250),
+    FreeSource("https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt", 250, "fa"),
+    FreeSource("https://raw.githubusercontent.com/hamedcode/port-based-v2ray-configs/main/sub/vless.txt", 250, "fa"),
+    FreeSource("https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Splitted-By-Protocol/vless.txt", 250, "fa"),
+    FreeSource("https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list_raw.txt", region = "zh"),
+    FreeSource("https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt", region = "zh"),
+    FreeSource("https://raw.githubusercontent.com/chengaopan/AutoMergePublicNodes/master/list.txt", region = "zh"),
 )
+
+/** [FREE_SERVERS_SOURCES] с источниками языка приложения впереди, затем общими, затем чужими; порядок внутри групп прежний. */
+fun freeSourcesFor(language: String): List<FreeSource> =
+    FREE_SERVERS_SOURCES.sortedBy { if (it.region == language) 0 else if (it.region.isEmpty()) 1 else 2 }
 
 /** Таймаут одной проверки бесплатного сервера: пинг в режиме из настроек (до 6 с) + проверка запроса через прокси (до 6 с). */
 const val FREE_SERVER_CHECK_TIMEOUT_MS = 15_000L

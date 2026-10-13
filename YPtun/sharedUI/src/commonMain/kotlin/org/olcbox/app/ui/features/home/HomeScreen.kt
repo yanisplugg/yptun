@@ -99,6 +99,8 @@ fun HomeScreen(
     confirmBeforeDelete: Boolean = true,
     /** How many locations to probe in parallel during a ping pass (the ping-speed knob). */
     pingParallelism: Int = AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
+    /** Cap on the free-servers list (AppBehaviorSettings.freeServersLimit). */
+    freeServersLimit: Int = AppBehaviorSettings.DEFAULT_FREE_SERVERS_LIMIT,
     /** A newer app release is available on GitHub → show the "update app" banner above the nav bar. */
     updateAvailable: Boolean = false,
     /** Tapping the update banner's button — opens the update offer (auto/manual). */
@@ -210,7 +212,7 @@ fun HomeScreen(
 
     fun refreshOneSubscription(url: String) {
         if (url.trim() == FREE_SERVERS_URL) {
-            viewModel.loadFreeServers(parallelism = pingParallelism, onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } })
+            viewModel.loadFreeServers(parallelism = pingParallelism, limit = freeServersLimit, onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } })
             return
         }
         viewModel.refreshSubscription(url) { updatedCount ->

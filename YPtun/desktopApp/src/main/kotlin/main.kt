@@ -593,7 +593,7 @@ private fun runApp(args: Array<String>) = application {
                 icon = Icons.Outlined.Public,
             ) {
                 isWindowVisible = true
-                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
+                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism(), dependencies.settings.appBehavior.value.freeServersLimit)
             }
             Item(
                 label = if (trayRussian) "Горячая клавиша" else "Global hotkey",
@@ -680,7 +680,7 @@ private fun runApp(args: Array<String>) = application {
             add(item(if (trayRussian) "Мой IP" else "My IP") { showMyIpDialog = true })
             add(item(if (trayRussian) "Бесплатные серверы" else "Free servers") {
                 isWindowVisible = true
-                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
+                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism(), dependencies.settings.appBehavior.value.freeServersLimit)
             })
             add(item(if (trayRussian) "Горячая клавиша" else "Global hotkey") { hotkeyDialogVisible = true })
             add(item(if (trayRussian) "Настройки" else "Settings") {
@@ -769,7 +769,7 @@ private fun runApp(args: Array<String>) = application {
                         onFreeServers = {
                             trayMenuVisible = false
                             isWindowVisible = true
-                            dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
+                            dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism(), dependencies.settings.appBehavior.value.freeServersLimit)
                         },
                         onHotkey = { trayMenuVisible = false; hotkeyDialogVisible = true },
                         onSettings = {
@@ -1078,6 +1078,7 @@ private fun runApp(args: Array<String>) = application {
                     confirmBeforeDelete = appBehavior.confirmBeforeDelete,
                     allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
                     pingParallelism = appBehavior.effectivePingParallelism(),
+                    freeServersLimit = appBehavior.freeServersLimit,
                     collapsedGroups = appBehavior.collapsedSubscriptionGroups,
                     pinnedGroups = appBehavior.pinnedSubscriptionGroups,
                     pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,

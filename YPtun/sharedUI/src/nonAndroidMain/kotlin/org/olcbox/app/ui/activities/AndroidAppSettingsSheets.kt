@@ -3948,6 +3948,22 @@ private fun PingSettingsContent(
             value = settings.effectivePingParallelism(),
             onChange = { onChanged(settings.copy(pingParallelism = it)) }
         )
+
+        SettingsSectionLabel(s.freeServersLimitTitle)
+        Text(
+            text = s.freeServersLimitSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppBehaviorSettings.FREE_SERVERS_LIMITS.forEach { limit ->
+                FilterChip(
+                    selected = settings.freeServersLimit == limit,
+                    onClick = { onChanged(settings.copy(freeServersLimit = limit)) },
+                    label = { Text(if (limit == AppBehaviorSettings.FREE_SERVERS_UNLIMITED) s.freeServersLimitUnlimited else limit.toString()) }
+                )
+            }
+        }
     }
 }
 
