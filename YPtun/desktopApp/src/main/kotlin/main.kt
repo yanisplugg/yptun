@@ -244,6 +244,9 @@ private fun PaintNativeWindowBackground(window: java.awt.Window, color: Color) {
 }
 
 fun main(args: Array<String>) {
+    // Before anything can load Skiko: apply a render API saved by an earlier blank-window recovery.
+    org.olcbox.app.desktop.DesktopRender.applySaved()
+
     // TUN mode needs administrator rights, and a process cannot acquire them while it runs — it has
     // to come back through UAC. Asking here, before the first window exists, is the difference
     // between one UAC prompt at launch and the app visibly closing and reopening the first time the
@@ -593,7 +596,7 @@ private fun runApp(args: Array<String>) = application {
                 icon = Icons.Outlined.Public,
             ) {
                 isWindowVisible = true
-                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
+                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism(), dependencies.settings.appBehavior.value.freeServersLimit)
             }
             Item(
                 label = if (trayRussian) "Горячая клавиша" else "Global hotkey",
@@ -680,7 +683,7 @@ private fun runApp(args: Array<String>) = application {
             add(item(if (trayRussian) "Мой IP" else "My IP") { showMyIpDialog = true })
             add(item(if (trayRussian) "Бесплатные серверы" else "Free servers") {
                 isWindowVisible = true
-                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
+                dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism(), dependencies.settings.appBehavior.value.freeServersLimit)
             })
             add(item(if (trayRussian) "Горячая клавиша" else "Global hotkey") { hotkeyDialogVisible = true })
             add(item(if (trayRussian) "Настройки" else "Settings") {
@@ -769,7 +772,7 @@ private fun runApp(args: Array<String>) = application {
                         onFreeServers = {
                             trayMenuVisible = false
                             isWindowVisible = true
-                            dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism())
+                            dependencies.homeViewModel.loadFreeServers(dependencies.settings.appBehavior.value.effectivePingParallelism(), dependencies.settings.appBehavior.value.freeServersLimit)
                         },
                         onHotkey = { trayMenuVisible = false; hotkeyDialogVisible = true },
                         onSettings = {
@@ -906,6 +909,14 @@ private fun runApp(args: Array<String>) = application {
         },
     ) {
         window.minimumSize = Dimension(350, 600)
+
+        // Old GPUs (Radeon HD 7950) can leave this window plain white with no error: if it stays blank,
+        // switch to software rendering and restart (see DesktopRender).
+        LaunchedEffect(Unit) {
+            org.olcbox.app.desktop.DesktopRender.watch(window) {
+                if (org.olcbox.app.desktop.DesktopRender.relaunch()) quitApplication(dependencies)
+            }
+        }
 
         DisposableEffect(Unit) {
             onDispose {
@@ -1078,6 +1089,7 @@ private fun runApp(args: Array<String>) = application {
                     confirmBeforeDelete = appBehavior.confirmBeforeDelete,
                     allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
                     pingParallelism = appBehavior.effectivePingParallelism(),
+                    freeServersLimit = appBehavior.freeServersLimit,
                     collapsedGroups = appBehavior.collapsedSubscriptionGroups,
                     pinnedGroups = appBehavior.pinnedSubscriptionGroups,
                     pingSortedGroups = appBehavior.pingSortedSubscriptionGroups,

@@ -36,6 +36,7 @@ class App : Application(), Configuration.Provider {
         // (Compose Text picks up EmojiCompat automatically once initialized).
         EmojiCompat.init(BundledEmojiCompatConfig(this))
         scheduleProviderReport()
+        org.olcbox.app.ui.activities.AppIcons.ensureLauncherEntry(this)
     }
 
     /**

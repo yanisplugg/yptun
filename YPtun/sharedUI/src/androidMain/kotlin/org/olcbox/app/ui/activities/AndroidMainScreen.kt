@@ -510,6 +510,7 @@ fun AndroidMainScreen(
         confirmBeforeDelete = appBehavior.confirmBeforeDelete,
         allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
         pingParallelism = appBehavior.effectivePingParallelism(),
+        freeServersLimit = appBehavior.freeServersLimit,
         updateAvailable = updateAvailable != null,
         onUpdateClick = { updateAvailable?.let { updateOffer = it } },
         collapsedGroups = appBehavior.collapsedSubscriptionGroups,

@@ -26,7 +26,7 @@ import org.olcbox.app.update.AppUpdateService
 import org.olcbox.app.update.InstalledApkFingerprint
 import org.olcbox.app.vpn.AndroidVpnManager
 
-class AppActivity : ComponentActivity() {
+class MainActivity : ComponentActivity() {
 
     private lateinit var vpnManager: AndroidVpnManager
     private lateinit var viewModel: HomeScreenViewModel

@@ -86,12 +86,19 @@ public final class DivSuffixSorter implements SuffixSorter {
 
   @Override
   public RandomAccessObject suffixSort(RandomAccessObject input) throws IOException, InterruptedException {
-    if (4 * (input.length() + 1) >= Integer.MAX_VALUE) {
+    // The algorithm itself works on int indices, so the input must fit an int. Its suffix array is
+    // 4 bytes per input byte and, past ~537 MB of input, no longer fits one 2 GiB buffer: that one
+    // goes to a file mapped in pieces. Everything smaller keeps the factory it always used.
+    if (input.length() > Integer.MAX_VALUE - 16) {
       throw new IllegalArgumentException("Input too large (" + input.length() + " bytes)");
     }
     int length = (int) input.length();
+    final long suffixArrayBytes = ((long) length + 1) * 4;
 
-    RandomAccessObject suffixArray = randomAccessObjectFactory.create((length + 1) * 4);
+    RandomAccessObject suffixArray =
+        (suffixArrayBytes >= Integer.MAX_VALUE || Boolean.getBoolean("patchgen.forceBigSuffixArray"))
+            ? new RandomAccessObject.RandomAccessBigMmapObject("wavsprafof", suffixArrayBytes)
+            : randomAccessObjectFactory.create((int) suffixArrayBytes);
     suffixArray.seek(0);
     suffixArray.writeInt(length);
     this.suffixArray = suffixArray;

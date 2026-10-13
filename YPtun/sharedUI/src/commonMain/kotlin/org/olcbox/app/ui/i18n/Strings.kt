@@ -706,6 +706,23 @@ interface Strings {
     val showAliveCountSubtitle: String
     val pingThreadsTitle: String
     val pingThreadsSubtitle: String
+    val appearanceTitle: String
+    val appearanceSubtitle: String
+    val appIconHint: String
+    val appIconWithCat: String
+    val appIconNoCat: String
+    val appIconNames: List<String>
+    val pingTimeoutTitle: String
+    val pingTimeoutSubtitle: String
+    val pingPrecisionTitle: String
+    val pingPrecisionSubtitle: String
+    val pingPrecisionSingle: String
+    val pingPrecisionDouble: String
+    val pingPrecisionTriple: String
+    fun secondsShort(n: Int): String
+    val freeServersLimitTitle: String
+    val freeServersLimitSubtitle: String
+    val freeServersLimitUnlimited: String
     val pingModeAuto: String
     val pingModeTcp: String
     val pingModeIcmp: String
@@ -1389,6 +1406,23 @@ object RuStrings : Strings {
     override val showAliveCountTitle = "Счётчик доступных серверов"
     override val showAliveCountSubtitle =
         "В шапке подписки показывать «живые/всего» по последнему пингу"
+    override val appearanceTitle = "Оформление"
+    override val appearanceSubtitle = "Иконка приложения"
+    override val appIconHint = "Иконка на рабочем столе сменится через пару секунд. Если лаунчер оставил старую или убрал значок — добавьте приложение на экран заново."
+    override val appIconWithCat = "С котом"
+    override val appIconNoCat = "Без кота"
+    override val appIconNames = listOf("Классика", "Океан", "Закат", "Мята", "Фиалка", "Золото", "Небо", "Неон", "Солнце", "Светлая")
+    override val pingTimeoutTitle = "Таймаут пинга"
+    override val pingTimeoutSubtitle = "Сколько ждать ответа сервера (2–15 с)"
+    override val pingPrecisionTitle = "Точность пинга"
+    override val pingPrecisionSubtitle = "Сколько раз измерять: показывается лучшее время. Если сервер не ответил с первого раза, он не перепроверяется."
+    override val pingPrecisionSingle = "Одинарный"
+    override val pingPrecisionDouble = "Двойной"
+    override val pingPrecisionTriple = "Тройной"
+    override fun secondsShort(n: Int) = "$n с"
+    override val freeServersLimitTitle = "Лимит бесплатных серверов"
+    override val freeServersLimitSubtitle = "Сколько серверов брать в «Бесплатных серверах»: первые N по приоритету источников. Больше — дольше проверка."
+    override val freeServersLimitUnlimited = "Без лимита"
     override val pingThreadsTitle = "Потоки пинга"
     override val pingThreadsSubtitle = "Сколько локаций проверять одновременно (1–30) — и для пинга, и для кнопки Авто"
     override val pingModeAuto = "Авто"
@@ -2063,6 +2097,23 @@ object EnStrings : Strings {
     override val showAliveCountTitle = "Reachable server counter"
     override val showAliveCountSubtitle =
         "Show \"live/total\" in the subscription header from the last ping pass"
+    override val appearanceTitle = "Appearance"
+    override val appearanceSubtitle = "App icon"
+    override val appIconHint = "The home-screen icon changes in a couple of seconds. If your launcher keeps the old one or drops it, add the app to the home screen again."
+    override val appIconWithCat = "With the cat"
+    override val appIconNoCat = "Without the cat"
+    override val appIconNames = listOf("Classic", "Ocean", "Sunset", "Mint", "Violet", "Gold", "Sky", "Neon", "Sun", "Light")
+    override val pingTimeoutTitle = "Ping timeout"
+    override val pingTimeoutSubtitle = "How long to wait for a server's answer (2–15 s)"
+    override val pingPrecisionTitle = "Ping precision"
+    override val pingPrecisionSubtitle = "How many times to measure: the best time is shown. A server that does not answer the first time is not re-measured."
+    override val pingPrecisionSingle = "Single"
+    override val pingPrecisionDouble = "Double"
+    override val pingPrecisionTriple = "Triple"
+    override fun secondsShort(n: Int) = "${n} s"
+    override val freeServersLimitTitle = "Free servers limit"
+    override val freeServersLimitSubtitle = "How many servers «Free servers» may take: the first N by source priority. More means a longer check."
+    override val freeServersLimitUnlimited = "Unlimited"
     override val pingThreadsTitle = "Ping threads"
     override val pingThreadsSubtitle = "How many locations to probe at once (1–30) — for ping and the Auto button"
     override val pingModeAuto = "Auto"
@@ -2737,6 +2788,23 @@ object FaStrings : Strings {
     override val showAliveCountTitle = "شمارندهٔ سرورهای در دسترس"
     override val showAliveCountSubtitle =
         "نمایش «فعال/کل» در سربرگ اشتراک بر اساس آخرین پینگ"
+    override val appearanceTitle = "ظاهر"
+    override val appearanceSubtitle = "نماد برنامه"
+    override val appIconHint = "نماد صفحهٔ اصلی چند ثانیه بعد تغییر می‌کند. اگر لانچر نماد قبلی را نگه داشت یا حذف کرد، برنامه را دوباره به صفحهٔ اصلی اضافه کنید."
+    override val appIconWithCat = "با گربه"
+    override val appIconNoCat = "بدون گربه"
+    override val appIconNames = listOf("کلاسیک", "اقیانوس", "غروب", "نعنا", "بنفش", "طلایی", "آسمان", "نئون", "خورشید", "روشن")
+    override val pingTimeoutTitle = "مهلت پینگ"
+    override val pingTimeoutSubtitle = "حداکثر زمان انتظار برای پاسخ سرور (۲ تا ۱۵ ثانیه)"
+    override val pingPrecisionTitle = "دقت پینگ"
+    override val pingPrecisionSubtitle = "تعداد دفعات اندازه‌گیری: بهترین زمان نمایش داده می‌شود. سروری که بار اول پاسخ ندهد دوباره بررسی نمی‌شود."
+    override val pingPrecisionSingle = "تکی"
+    override val pingPrecisionDouble = "دوبل"
+    override val pingPrecisionTriple = "سه‌گانه"
+    override fun secondsShort(n: Int) = "$n ثانیه"
+    override val freeServersLimitTitle = "سقف سرورهای رایگان"
+    override val freeServersLimitSubtitle = "حداکثر تعداد سرورهای «سرورهای رایگان»: N سرور اول بر اساس اولویت منبع. تعداد بیشتر، بررسی طولانی‌تر."
+    override val freeServersLimitUnlimited = "نامحدود"
     override val pingThreadsTitle = "رشته‌های پینگ"
     override val pingThreadsSubtitle = "چند موقعیت هم‌زمان بررسی شوند (۱ تا ۳۰) — برای پینگ و دکمه خودکار"
     override val pingModeAuto = "خودکار"
@@ -3411,6 +3479,23 @@ object ZhStrings : Strings {
     override val showAliveCountTitle = "可达服务器计数"
     override val showAliveCountSubtitle =
         "在订阅标题中显示上次测试的“可用/总数”"
+    override val appearanceTitle = "外观"
+    override val appearanceSubtitle = "应用图标"
+    override val appIconHint = "桌面图标会在几秒后更换。如果启动器保留了旧图标或图标消失，请重新把应用添加到桌面。"
+    override val appIconWithCat = "有猫"
+    override val appIconNoCat = "无猫"
+    override val appIconNames = listOf("经典", "海洋", "日落", "薄荷", "紫罗兰", "金色", "天空", "霓虹", "阳光", "浅色")
+    override val pingTimeoutTitle = "测试超时"
+    override val pingTimeoutSubtitle = "等待服务器响应的最长时间（2–15 秒）"
+    override val pingPrecisionTitle = "测试精度"
+    override val pingPrecisionSubtitle = "测量次数：显示其中最快的时间。首次无响应的服务器不会重复测量。"
+    override val pingPrecisionSingle = "单次"
+    override val pingPrecisionDouble = "双次"
+    override val pingPrecisionTriple = "三次"
+    override fun secondsShort(n: Int) = "${n} 秒"
+    override val freeServersLimitTitle = "免费节点上限"
+    override val freeServersLimitSubtitle = "“免费节点”最多取多少个：按来源优先级取前 N 个。越多，检测越久。"
+    override val freeServersLimitUnlimited = "不限"
     override val pingThreadsTitle = "测试线程"
     override val pingThreadsSubtitle = "同时测试多少个节点（1–30）— 测速和自动连接共用"
     override val pingModeAuto = "自动"

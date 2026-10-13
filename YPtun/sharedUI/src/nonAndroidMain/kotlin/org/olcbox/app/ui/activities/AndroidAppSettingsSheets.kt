@@ -3948,6 +3948,78 @@ private fun PingSettingsContent(
             value = settings.effectivePingParallelism(),
             onChange = { onChanged(settings.copy(pingParallelism = it)) }
         )
+
+        PingTimeoutRow(
+            seconds = settings.pingTimeoutSec.coerceIn(AppBehaviorSettings.MIN_PING_TIMEOUT_SEC, AppBehaviorSettings.MAX_PING_TIMEOUT_SEC),
+            onChange = { onChanged(settings.copy(pingTimeoutSec = it)) }
+        )
+
+        SettingsSectionLabel(s.pingPrecisionTitle)
+        Text(
+            text = s.pingPrecisionSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(1 to s.pingPrecisionSingle, 2 to s.pingPrecisionDouble, 3 to s.pingPrecisionTriple).forEach { (rounds, title) ->
+                FilterChip(
+                    selected = settings.effectivePingPrecision() == rounds,
+                    onClick = { onChanged(settings.copy(pingPrecision = rounds)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+
+        SettingsSectionLabel(s.freeServersLimitTitle)
+        Text(
+            text = s.freeServersLimitSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppBehaviorSettings.FREE_SERVERS_LIMITS.forEach { limit ->
+                FilterChip(
+                    selected = settings.freeServersLimit == limit,
+                    onClick = { onChanged(settings.copy(freeServersLimit = limit)) },
+                    label = { Text(if (limit == AppBehaviorSettings.FREE_SERVERS_UNLIMITED) s.freeServersLimitUnlimited else limit.toString()) }
+                )
+            }
+        }
+    }
+}
+
+/** Slider for the ping timeout: 2..15 s, default 7. */
+@Composable
+private fun PingTimeoutRow(seconds: Int, onChange: (Int) -> Unit) {
+    val s = LocalStrings.current
+    val min = AppBehaviorSettings.MIN_PING_TIMEOUT_SEC
+    val max = AppBehaviorSettings.MAX_PING_TIMEOUT_SEC
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = s.pingTimeoutTitle,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = s.pingTimeoutSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = s.secondsShort(seconds),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Slider(
+            value = seconds.toFloat(),
+            onValueChange = { onChange(it.toInt().coerceIn(min, max)) },
+            valueRange = min.toFloat()..max.toFloat(),
+            steps = max - min - 1
+        )
     }
 }
 

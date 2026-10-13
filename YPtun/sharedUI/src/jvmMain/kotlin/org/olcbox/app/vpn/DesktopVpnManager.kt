@@ -215,6 +215,11 @@ class DesktopVpnManager private constructor(
         }
     }
 
+    override val pingTimeoutMs: Long
+        get() = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior().effectivePingTimeoutMs().toLong()
+    override val pingRounds: Int
+        get() = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior().effectivePingPrecision()
+
     override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
     override suspend fun pingVerified(locationConfig: LocationConfig): Long? {
@@ -234,7 +239,21 @@ class DesktopVpnManager private constructor(
      * the URL is used only by the via-proxy GET/HEAD probes (throwaway xray/awg instances inside
      * yptuncore — works while disconnected, like v2rayNG/Happ).
      */
+    /**
+     * Settings «Точность пинга»: measures [pingRounds] times and keeps the lowest time. A location
+     * that does not answer the first time is reported as unreachable right away.
+     */
     private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
+        var best: Long? = null
+        repeat(pingRounds) {
+            val ms = pingOnce(locationConfig)
+            if (ms == null) return best
+            if (best == null || ms < best!!) best = ms
+        }
+        return best
+    }
+
+    private suspend fun pingOnce(locationConfig: LocationConfig): Long? {
         val config = locationConfig.normalized()
         val behavior = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior()
         val profile = config.proxy
@@ -278,7 +297,7 @@ class DesktopVpnManager private constructor(
             val elapsed = runCatching {
                 Socket().use { socket ->
                     val start = System.nanoTime()
-                    socket.connect(InetSocketAddress(host, port), TCP_PING_TIMEOUT_MS)
+                    socket.connect(InetSocketAddress(host, port), pingTimeoutMs.toInt())
                     (System.nanoTime() - start) / 1_000_000L
                 }
             }.getOrNull()
@@ -298,7 +317,7 @@ class DesktopVpnManager private constructor(
             val ms = runCatching {
                 val addr = java.net.InetAddress.getByName(host)
                 val start = System.nanoTime()
-                if (addr.isReachable(TCP_PING_TIMEOUT_MS)) (System.nanoTime() - start) / 1_000_000L else null
+                if (addr.isReachable(pingTimeoutMs.toInt())) (System.nanoTime() - start) / 1_000_000L else null
             }.getOrNull() ?: systemPing(host)
             if (ms != null && (best == null || ms < best!!)) best = ms
         }
@@ -307,15 +326,16 @@ class DesktopVpnManager private constructor(
 
     /** One `ping` invocation via the OS binary; returns the echoed time in ms or null. */
     private fun systemPing(host: String): Long? = runCatching {
+        val timeoutMs = pingTimeoutMs.toInt()
         val isWindows = System.getProperty("os.name").orEmpty().lowercase().contains("win")
         val command = if (isWindows) {
-            listOf("ping", "-n", "1", "-w", TCP_PING_TIMEOUT_MS.toString(), host)
+            listOf("ping", "-n", "1", "-w", timeoutMs.toString(), host)
         } else {
-            listOf("ping", "-c", "1", "-W", (TCP_PING_TIMEOUT_MS / 1000).coerceAtLeast(1).toString(), host)
+            listOf("ping", "-c", "1", "-W", (timeoutMs / 1000).coerceAtLeast(1).toString(), host)
         }
         val process = ProcessBuilder(command).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().use { it.readText() }
-        if (!process.waitFor(TCP_PING_TIMEOUT_MS + 2_000L, TimeUnit.MILLISECONDS)) {
+        if (!process.waitFor(timeoutMs + 2_000L, TimeUnit.MILLISECONDS)) {
             process.destroyForcibly()
             return@runCatching null
         }
@@ -344,7 +364,7 @@ class DesktopVpnManager private constructor(
             val ms = runCatching {
                 socks5ConnectRtt(
                     socks.host, socks.port, socks.username, socks.password,
-                    TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, TUNNEL_PING_TIMEOUT_MS
+                    TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, pingTimeoutMs.toInt()
                 )
             }.getOrNull()
             if (ms != null && (best == null || ms < best!!)) best = ms
@@ -426,7 +446,7 @@ class DesktopVpnManager private constructor(
                 val awgConfig = profile.awgConfig.orEmpty()
                 if (awgConfig.isBlank()) return@withContext null
                 val ms = runCatching {
-                    org.olcbox.app.vpn.desktop.YpTunCore.awgMeasureDelay(awgConfig, url, method, TUNNEL_PING_TIMEOUT_MS)
+                    org.olcbox.app.vpn.desktop.YpTunCore.awgMeasureDelay(awgConfig, url, method, pingTimeoutMs.toInt())
                 }.getOrDefault(-1L)
                 return@withContext if (ms >= 0) ms else null
             }
@@ -462,7 +482,7 @@ class DesktopVpnManager private constructor(
                 return@withContext null
             }
             val ms = runCatching {
-                org.olcbox.app.vpn.desktop.YpTunCore.xrayMeasureDelay(configJson, url, method, TUNNEL_PING_TIMEOUT_MS)
+                org.olcbox.app.vpn.desktop.YpTunCore.xrayMeasureDelay(configJson, url, method, pingTimeoutMs.toInt())
             }.getOrElse {
                 addLog("Proxy $method ping error for ${profile.server}: ${it.message}")
                 -1L
@@ -1846,8 +1866,8 @@ class DesktopVpnManager private constructor(
         const val MAX_VK_TURN_BYPASS_PREFIXES = 400
 
         // Ping probes (same values as AndroidVpnManager).
-        const val TCP_PING_ATTEMPTS = 2
-        const val TCP_PING_TIMEOUT_MS = 3_000
+        // One probe per measurement: the repeats are the «Точность пинга» setting (pingInternal).
+        const val TCP_PING_ATTEMPTS = 1
         const val TUNNEL_PROBE_HOST = "1.1.1.1"
         const val TUNNEL_PROBE_PORT = 443
         const val TUNNEL_PING_TIMEOUT_MS = 6_000

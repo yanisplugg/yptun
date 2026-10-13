@@ -213,7 +213,7 @@ object WidgetSupport {
 
     private fun controlActivityIntent(context: Context, verb: String): Intent =
         Intent(Intent.ACTION_VIEW, Uri.parse("yptun://control/$verb")).apply {
-            setClassName(context.packageName, "org.olcbox.app.AppActivity")
+            setClassName(context.packageName, "org.olcbox.app.MainActivity")
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
 

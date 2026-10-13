@@ -133,6 +133,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -309,8 +310,11 @@ internal fun AppSettingsSheet(
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
                     onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
                     experimentalUnlocked = appBehavior.experimentalUnlocked,
-                    onExperimentalClick = { route = AppSettingsRoute.Experimental }
+                    onExperimentalClick = { route = AppSettingsRoute.Experimental },
+                    onAppearanceClick = { route = AppSettingsRoute.Appearance }
                 )
+
+                AppSettingsRoute.Appearance -> AppearanceContent(onBack = { route = AppSettingsRoute.Hub })
 
                 AppSettingsRoute.Experimental -> ExperimentalContent(
                     settings = appBehavior,
@@ -710,7 +714,8 @@ private fun AppSettingsHubContent(
     onUpdatesClick: () -> Unit,
     onApplicationLogsClick: () -> Unit,
     experimentalUnlocked: Boolean = false,
-    onExperimentalClick: () -> Unit = {}
+    onExperimentalClick: () -> Unit = {},
+    onAppearanceClick: () -> Unit = {}
 ) {
     val s = LocalStrings.current
     Column(
@@ -753,6 +758,16 @@ private fun AppSettingsHubContent(
                 onAccentColorSelected = onAccentColorSelected,
                 onTextColorSelected = onTextColorSelected,
                 onBackgroundColorSelected = onBackgroundColorSelected
+            )
+        }
+
+        SettingsGroupCard {
+            SettingsGroupRow(
+                title = s.appearanceTitle,
+                subtitle = s.appearanceSubtitle,
+                icon = Icons.Outlined.Palette,
+                enabled = true,
+                onClick = onAppearanceClick
             )
         }
 
@@ -4132,6 +4147,78 @@ private fun PingSettingsContent(
             value = settings.effectivePingParallelism(),
             onChange = { onChanged(settings.copy(pingParallelism = it)) }
         )
+
+        PingTimeoutRow(
+            seconds = settings.pingTimeoutSec.coerceIn(AppBehaviorSettings.MIN_PING_TIMEOUT_SEC, AppBehaviorSettings.MAX_PING_TIMEOUT_SEC),
+            onChange = { onChanged(settings.copy(pingTimeoutSec = it)) }
+        )
+
+        SettingsSectionLabel(s.pingPrecisionTitle)
+        Text(
+            text = s.pingPrecisionSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(1 to s.pingPrecisionSingle, 2 to s.pingPrecisionDouble, 3 to s.pingPrecisionTriple).forEach { (rounds, title) ->
+                FilterChip(
+                    selected = settings.effectivePingPrecision() == rounds,
+                    onClick = { onChanged(settings.copy(pingPrecision = rounds)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+
+        SettingsSectionLabel(s.freeServersLimitTitle)
+        Text(
+            text = s.freeServersLimitSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppBehaviorSettings.FREE_SERVERS_LIMITS.forEach { limit ->
+                FilterChip(
+                    selected = settings.freeServersLimit == limit,
+                    onClick = { onChanged(settings.copy(freeServersLimit = limit)) },
+                    label = { Text(if (limit == AppBehaviorSettings.FREE_SERVERS_UNLIMITED) s.freeServersLimitUnlimited else limit.toString()) }
+                )
+            }
+        }
+    }
+}
+
+/** Slider for the ping timeout: 2..15 s, default 7. */
+@Composable
+private fun PingTimeoutRow(seconds: Int, onChange: (Int) -> Unit) {
+    val s = LocalStrings.current
+    val min = AppBehaviorSettings.MIN_PING_TIMEOUT_SEC
+    val max = AppBehaviorSettings.MAX_PING_TIMEOUT_SEC
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = s.pingTimeoutTitle,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = s.pingTimeoutSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = s.secondsShort(seconds),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Slider(
+            value = seconds.toFloat(),
+            onValueChange = { onChange(it.toInt().coerceIn(min, max)) },
+            valueRange = min.toFloat()..max.toFloat(),
+            steps = max - min - 1
+        )
     }
 }
 
@@ -4176,6 +4263,99 @@ private fun PingParallelismRow(value: Int, onChange: (Int) -> Unit) {
             contentPadding = PaddingValues(0.dp),
             modifier = Modifier.size(40.dp)
         ) { Text("+", style = MaterialTheme.typography.titleLarge) }
+    }
+}
+
+/** «Оформление»: the launcher-icon picker (see [AppIcons]: one enabled `activity-alias` per icon). */
+@Composable
+private fun AppearanceContent(onBack: () -> Unit) {
+    val s = LocalStrings.current
+    val context = LocalContext.current
+    var selected by remember { mutableStateOf(AppIcons.current(context)) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = s.appearanceTitle,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Text(
+            text = s.appIconHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        listOf(true to s.appIconWithCat, false to s.appIconNoCat).forEach { (cat, label) ->
+            SettingsSectionLabel(label)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                maxItemsInEachRow = 3
+            ) {
+                AppIcons.options.forEachIndexed { index, option ->
+                    if (option.cat != cat) return@forEachIndexed
+                    AppIconTile(
+                        option = option,
+                        name = s.appIconNames.getOrElse(index) { option.alias },
+                        selected = index == selected,
+                        onClick = {
+                            runCatching { AppIcons.select(context, index) }.onSuccess { selected = index }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppIconTile(option: AppIconOption, name: String, selected: Boolean, onClick: () -> Unit) {
+    val context = LocalContext.current
+    fun layer(res: String?): ImageBitmap? = res?.let {
+        runCatching {
+            val id = context.resources.getIdentifier(it, "mipmap", context.packageName)
+            android.graphics.BitmapFactory.decodeResource(context.resources, id)?.asImageBitmap()
+        }.getOrNull()
+    }
+    val bg = remember(option.bg) { layer(option.bg) }
+    val fg = remember(option.fg) { layer(option.fg) }
+    val shape = RoundedCornerShape(18.dp)
+    val ring = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+    Column(
+        modifier = Modifier.width(88.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(shape)
+                .background(androidx.compose.ui.graphics.Color.Black)
+                .border(if (selected) 3.dp else 1.dp, ring, shape)
+        ) {
+            // The launcher shows the middle two thirds of an adaptive layer (the rest is the mask margin), so zoom in 1.5x.
+            val zoom = Modifier.fillMaxSize().graphicsLayer { scaleX = 1.5f; scaleY = 1.5f }
+            bg?.let { Image(it, null, zoom, contentScale = ContentScale.Crop) }
+            fg?.let { Image(it, null, zoom, contentScale = ContentScale.Crop) }
+        }
+        Text(
+            text = name,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 
@@ -4425,6 +4605,7 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)
     object Experimental : AppSettingsRoute(1)
+    object Appearance : AppSettingsRoute(1)
     data class AppList(val list: AndroidSplitTunnelList) : AppSettingsRoute(2)
 }
 
