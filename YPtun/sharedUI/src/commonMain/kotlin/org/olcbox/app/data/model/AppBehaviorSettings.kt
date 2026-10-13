@@ -279,7 +279,7 @@ data class AppBehaviorSettings(
         const val SUBSCRIPTION_EXPIRY_NOTIFY_DAYS = 3
 
         const val FREE_SERVERS_UNLIMITED = 0
-        const val DEFAULT_FREE_SERVERS_LIMIT = 500
+        const val DEFAULT_FREE_SERVERS_LIMIT = FREE_SERVERS_UNLIMITED
 
         /** Selectable free-server caps (single-choice chips in the UI). */
         val FREE_SERVERS_LIMITS = listOf(500, 1000, FREE_SERVERS_UNLIMITED)
