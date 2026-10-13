@@ -67,6 +67,7 @@ class HomeScreenViewModel(
     init {
         loadCurrentConfig()
         startSubscriptionAutoRefresh()
+        migrateFreeServersToXray()
 
         viewModelScope.launch {
             locationsRepository.changes
@@ -421,6 +422,27 @@ class HomeScreenViewModel(
         }
     }
 
+    /**
+     * Free servers are checked through xray-core (see pingVerified), but with the core on «Авто» they connect
+     * through sing-box, and plenty of public configs only work in xray — they showed a good ping and then
+     * Chrome got ERR_CONNECTION_CLOSED. Servers added before this fix get the same core they were checked with.
+     * Only «Авто» is touched: a core the user picked by hand stays.
+     */
+    private fun migrateFreeServersToXray() {
+        viewModelScope.launch {
+            runCatching {
+                val bundle = locationsRepository.getBundle()
+                val fixed = bundle.locations.map {
+                    val unset = it.core == null || it.core == org.olcbox.app.data.model.ProxyCore.Auto
+                    if (unset && it.subscriptionUrl?.trim() == FREE_SERVERS_URL) {
+                        it.copy(core = org.olcbox.app.data.model.ProxyCore.Xray)
+                    } else it
+                }
+                if (fixed != bundle.locations) locationsRepository.saveBundle(bundle.copy(locations = fixed))
+            }
+        }
+    }
+
     private var freeServersJob: Job? = null
 
     /**
@@ -620,7 +642,9 @@ class HomeScreenViewModel(
                     val location = LocationConfig(
                         name = item.displayName,
                         engine = EngineType.Standard,
-                        proxy = profile
+                        proxy = profile,
+                        // The same core that verified the server (pingVerified runs xray), not the sing-box default.
+                        core = org.olcbox.app.data.model.ProxyCore.Xray
                     ).normalized()
                     val base = "${profile.server}_${profile.serverPort}"
                         .lowercase()
