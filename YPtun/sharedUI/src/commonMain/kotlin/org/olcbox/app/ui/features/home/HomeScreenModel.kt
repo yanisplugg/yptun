@@ -423,7 +423,21 @@ class HomeScreenViewModel(
 
     private var freeServersJob: Job? = null
 
+    /**
+     * Number of the current free-servers run. A cancelled run does not stop at once — its checks sit in
+     * blocking native calls for up to the ping timeout — and when it finally unwinds, its cleanup used to
+     * switch the loading flag off for the run the user had started in the meantime, so a search started
+     * right after «Отмена» seemed to do nothing. Every state write of a run is tagged with its number and
+     * dropped when it is no longer the current one.
+     */
+    private var freeServersRun = 0
+
+    private fun updateFreeServers(run: Int, transform: (HomeScreenState) -> HomeScreenState) {
+        _state.update { if (run == freeServersRun) transform(it) else it }
+    }
+
     fun cancelFreeServersLoad() {
+        freeServersRun++
         freeServersJob?.cancel()
         freeServersJob = null
         _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
@@ -439,6 +453,7 @@ class HomeScreenViewModel(
         onError: (String) -> Unit = {},
     ) {
         freeServersJob?.cancel()
+        val run = ++freeServersRun
         _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
         freeServersJob = viewModelScope.launch {
             try {
@@ -462,7 +477,7 @@ class HomeScreenViewModel(
                 }
 
                 if (sourceTexts.all { (text, _) -> text.isBlank() }) {
-                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                    updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                     onError("Не удалось загрузить список серверов")
                     return@launch
                 }
@@ -470,13 +485,13 @@ class HomeScreenViewModel(
                 val parsedItems = withContext(Dispatchers.Default) { pickFreeServers(sourceTexts, limit) }
 
                 if (parsedItems.isEmpty()) {
-                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                    updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                     onError("Не удалось распознать конфигурации серверов")
                     return@launch
                 }
 
                 val total = parsedItems.size
-                _state.update { it.copy(freeServersProgress = FreeServersProgress(checked = 0, total = total, found = 0)) }
+                updateFreeServers(run) { it.copy(freeServersProgress = FreeServersProgress(checked = 0, total = total, found = 0)) }
 
                 val mutex = Mutex()
                 var checkedCount = 0
@@ -525,7 +540,7 @@ class HomeScreenViewModel(
                                     if (item != null) workingServers.add(item)
                                     checkedCount to workingServers.size
                                 }
-                                _state.update {
+                                updateFreeServers(run) {
                                     it.copy(
                                         freeServersProgress = FreeServersProgress(
                                             checked = curChecked,
@@ -540,17 +555,17 @@ class HomeScreenViewModel(
                 }
 
                 val sortedWorking = workingServers.sortedBy { it.pingMs }
-                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
 
                 if (sortedWorking.isEmpty()) {
                     onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
                 } else {
-                    _state.update { it.copy(availableFreeServers = sortedWorking) }
+                    updateFreeServers(run) { it.copy(availableFreeServers = sortedWorking) }
                 }
             } catch (e: CancellationException) {
-                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
             } catch (e: Exception) {
-                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
                 onError(e.message ?: "Ошибка загрузки бесплатных серверов")
             }
         }
