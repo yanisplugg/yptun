@@ -57,7 +57,7 @@ class VpnShortcutActivity : Activity() {
         when (turnOn) {
             true -> if (!VpnServiceControl.isActive() && !VpnServiceControl.start(this)) {
                 startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse("yptun://control/start"), this, AppActivity::class.java)
+                    Intent(Intent.ACTION_VIEW, Uri.parse("yptun://control/start"), this, MainActivity::class.java)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }

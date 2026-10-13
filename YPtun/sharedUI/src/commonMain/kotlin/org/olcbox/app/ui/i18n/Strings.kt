@@ -706,6 +706,12 @@ interface Strings {
     val showAliveCountSubtitle: String
     val pingThreadsTitle: String
     val pingThreadsSubtitle: String
+    val appearanceTitle: String
+    val appearanceSubtitle: String
+    val appIconHint: String
+    val appIconWithCat: String
+    val appIconNoCat: String
+    val appIconNames: List<String>
     val freeServersLimitTitle: String
     val freeServersLimitSubtitle: String
     val freeServersLimitUnlimited: String
@@ -1392,6 +1398,12 @@ object RuStrings : Strings {
     override val showAliveCountTitle = "Счётчик доступных серверов"
     override val showAliveCountSubtitle =
         "В шапке подписки показывать «живые/всего» по последнему пингу"
+    override val appearanceTitle = "Оформление"
+    override val appearanceSubtitle = "Иконка приложения"
+    override val appIconHint = "Иконка на рабочем столе сменится через пару секунд. Если лаунчер оставил старую или убрал значок — добавьте приложение на экран заново."
+    override val appIconWithCat = "С котом"
+    override val appIconNoCat = "Без кота"
+    override val appIconNames = listOf("Классика", "Неон", "Закат", "Мордочка", "Пиксель", "Космонавт", "Щит", "Черепаха", "Надпись", "Тоннель")
     override val freeServersLimitTitle = "Лимит бесплатных серверов"
     override val freeServersLimitSubtitle = "Сколько серверов брать в «Бесплатных серверах»: первые N по приоритету источников. Больше — дольше проверка."
     override val freeServersLimitUnlimited = "Без лимита"
@@ -2069,6 +2081,12 @@ object EnStrings : Strings {
     override val showAliveCountTitle = "Reachable server counter"
     override val showAliveCountSubtitle =
         "Show \"live/total\" in the subscription header from the last ping pass"
+    override val appearanceTitle = "Appearance"
+    override val appearanceSubtitle = "App icon"
+    override val appIconHint = "The home-screen icon changes in a couple of seconds. If your launcher keeps the old one or drops it, add the app to the home screen again."
+    override val appIconWithCat = "With the cat"
+    override val appIconNoCat = "Without the cat"
+    override val appIconNames = listOf("Classic", "Neon", "Sunset", "Kawaii", "Pixel", "Astronaut", "Shield", "Turtle", "Wordmark", "Tunnel")
     override val freeServersLimitTitle = "Free servers limit"
     override val freeServersLimitSubtitle = "How many servers «Free servers» may take: the first N by source priority. More means a longer check."
     override val freeServersLimitUnlimited = "Unlimited"
@@ -2746,6 +2764,12 @@ object FaStrings : Strings {
     override val showAliveCountTitle = "شمارندهٔ سرورهای در دسترس"
     override val showAliveCountSubtitle =
         "نمایش «فعال/کل» در سربرگ اشتراک بر اساس آخرین پینگ"
+    override val appearanceTitle = "ظاهر"
+    override val appearanceSubtitle = "نماد برنامه"
+    override val appIconHint = "نماد صفحهٔ اصلی چند ثانیه بعد تغییر می‌کند. اگر لانچر نماد قبلی را نگه داشت یا حذف کرد، برنامه را دوباره به صفحهٔ اصلی اضافه کنید."
+    override val appIconWithCat = "با گربه"
+    override val appIconNoCat = "بدون گربه"
+    override val appIconNames = listOf("کلاسیک", "نئون", "غروب", "بامزه", "پیکسلی", "فضانورد", "سپر", "لاک‌پشت", "نوشتار", "تونل")
     override val freeServersLimitTitle = "سقف سرورهای رایگان"
     override val freeServersLimitSubtitle = "حداکثر تعداد سرورهای «سرورهای رایگان»: N سرور اول بر اساس اولویت منبع. تعداد بیشتر، بررسی طولانی‌تر."
     override val freeServersLimitUnlimited = "نامحدود"
@@ -3423,6 +3447,12 @@ object ZhStrings : Strings {
     override val showAliveCountTitle = "可达服务器计数"
     override val showAliveCountSubtitle =
         "在订阅标题中显示上次测试的“可用/总数”"
+    override val appearanceTitle = "外观"
+    override val appearanceSubtitle = "应用图标"
+    override val appIconHint = "桌面图标会在几秒后更换。如果启动器保留了旧图标或图标消失，请重新把应用添加到桌面。"
+    override val appIconWithCat = "有猫"
+    override val appIconNoCat = "无猫"
+    override val appIconNames = listOf("经典", "霓虹", "日落", "萌脸", "像素", "宇航员", "盾牌", "乌龟", "文字", "隧道")
     override val freeServersLimitTitle = "免费节点上限"
     override val freeServersLimitSubtitle = "“免费节点”最多取多少个：按来源优先级取前 N 个。越多，检测越久。"
     override val freeServersLimitUnlimited = "不限"

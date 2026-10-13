@@ -73,7 +73,7 @@ class QuickSettingsTileService : TileService() {
     // ──────────────────────────────────────────────────────────────────────
 
     private fun openMainApp() {
-        val intent = Intent(applicationContext, AppActivity::class.java).apply {
+        val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

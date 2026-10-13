@@ -99,7 +99,7 @@ class OlcboxQsTileService : TileService() {
     }
 
     private fun openMainApp() {
-        val intent = Intent(applicationContext, AppActivity::class.java).apply {
+        val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         // startActivityAndCollapse collapses the shade and launches the activity.
