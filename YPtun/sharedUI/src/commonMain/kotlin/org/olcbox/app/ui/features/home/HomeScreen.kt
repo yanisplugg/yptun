@@ -709,6 +709,7 @@ fun HomeScreen(
                     isAddSheetOpen = false
                     viewModel.loadFreeServers(
                         parallelism = pingParallelism,
+                        limit = freeServersLimit,
                         onError = { message ->
                             scope.launch {
                                 snackbarHostState.showSnackbar(message)
