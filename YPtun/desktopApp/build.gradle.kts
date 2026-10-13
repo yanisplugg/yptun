@@ -936,6 +936,12 @@ compose.desktop {
             // C1 only: the window shows up ~25% sooner (about 3.7 s -> 2.8 s measured). The heavy
             // lifting (xray / sing-box / tunnels) is native Go, so the JVM never needs C2's peak speed.
             "-XX:TieredStopAtLevel=1",
+            // issue #54: on a PC where Java Access Bridge was ever switched on (jabswitch, some screen
+            // readers write ~/.accessibility.properties with assistive_technologies=...AccessBridge) AWT
+            // tries to load that class at the first Swing call. Our trimmed runtime has no jdk.accessibility
+            // module, so the app died with "AWTError: Assistive Technology not found" before any window.
+            // A non-null (empty) property wins over those files, so nothing is looked up at all.
+            "-Djavax.accessibility.assistive_technologies=",
         )
 
         buildTypes.release.proguard {
