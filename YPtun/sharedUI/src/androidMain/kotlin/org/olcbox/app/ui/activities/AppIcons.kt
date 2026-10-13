@@ -13,8 +13,8 @@ import android.content.pm.PackageManager
  */
 internal class AppIconOption(val alias: String, val bg: String?, val fg: String, val cat: Boolean)
 
-internal object AppIcons {
-    val options = listOf(
+object AppIcons {
+    internal val options = listOf(
         AppIconOption("AppActivity", null, "ic_launcher_foreground", cat = true),
         AppIconOption("IconOcean", "ic_icon_ocean_bg", "ic_icon_ocean_fg", cat = true),
         AppIconOption("IconSunset", "ic_icon_sunset_bg", "ic_icon_sunset_fg", cat = true),
@@ -31,6 +31,25 @@ internal object AppIcons {
 
     private fun component(context: Context, option: AppIconOption) =
         ComponentName(context.packageName, NAMESPACE + option.alias)
+
+    /**
+     * Safety net, called on every process start: if NO alias is enabled the app has no launcher entry at
+     * all (the home-screen icon opens «App info»). That happens when an alias that was switched on is
+     * removed or renamed by an update and the default one is still stored as disabled; re-enable the default.
+     */
+    fun ensureLauncherEntry(context: Context) {
+        runCatching {
+            val pm = context.packageManager
+            val anyEnabled = options.withIndex().any { (index, option) ->
+                when (pm.getComponentEnabledSetting(component(context, option))) {
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
+                    PackageManager.COMPONENT_ENABLED_STATE_DEFAULT -> index == 0
+                    else -> false
+                }
+            }
+            if (!anyEnabled) select(context, 0)
+        }
+    }
 
     /** Index in [options] of the enabled alias (the default one while nothing was ever switched). */
     fun current(context: Context): Int {
