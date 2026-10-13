@@ -119,6 +119,7 @@ import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.data.model.WarpMode
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.model.CsqttOptions
 import org.olcbox.app.data.model.WdttPlusOptions
@@ -394,6 +395,64 @@ fun LocationSettingsScreen(
                                 enabled = !isSaving,
                                 onChange = viewModel::onProxy2LinkChanged
                             )
+                        }
+                    }
+                }
+
+                // Cloudflare WARP chaining for VLESS: toggle + side selector (client vs server)
+                item {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        VkTurnSwitchRow(
+                            label = LocalStrings.current.enableWarp,
+                            checked = config.warpEnabled,
+                            enabled = !isSaving,
+                            onCheckedChange = viewModel::onWarpEnabledChanged
+                        )
+                        if (config.warpEnabled) {
+                            val modes = listOf(WarpMode.Client, WarpMode.Server)
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = LocalStrings.current.warpModeSection,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    modes.forEachIndexed { index, mode ->
+                                        SegmentedButton(
+                                            shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+                                            selected = config.warpMode == mode,
+                                            onClick = { viewModel.onWarpModeChanged(mode) },
+                                            enabled = !isSaving,
+                                            label = {
+                                                Text(
+                                                    text = if (mode == WarpMode.Client) {
+                                                        LocalStrings.current.warpModeClient
+                                                    } else {
+                                                        LocalStrings.current.warpModeServer
+                                                    },
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = if (config.warpMode == WarpMode.Client) {
+                                        LocalStrings.current.warpModeClientSubtitle
+                                    } else {
+                                        LocalStrings.current.warpModeServerSubtitle
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }

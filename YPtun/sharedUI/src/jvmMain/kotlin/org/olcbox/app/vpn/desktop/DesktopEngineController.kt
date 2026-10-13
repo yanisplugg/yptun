@@ -15,6 +15,10 @@ import org.olcbox.app.desktop.DesktopUriLauncher
 import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.xray.XrayConfig
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.vpn.warp.WarpHelper
+import org.olcbox.app.vpn.telegram.WarpConfigGenerator
+import org.olcbox.app.vpn.telegram.TelegramProxyStore
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.net.InetSocketAddress
@@ -324,7 +328,7 @@ internal class DesktopEngineController(
         //
         // Foolproofing (ported from Android): drop a 2nd proxy that points at the SAME node as the
         // main — a proxy into itself cannot work, and a bad import/subscription can produce one.
-        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
+        val configuredSecondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
             if (profile.isComplete() && profile.isSameNodeAs(second)) {
                 log("2nd (cascade) proxy is the same node as the main — a cascade into itself is impossible; ignoring it (exit via the main)")
                 null
@@ -332,6 +336,35 @@ internal class DesktopEngineController(
                 warnIfCascadeHopsShareAnAddress(profile, second)
                 second
             }
+        }
+
+        var warpProfile: ProxyProfile? = null
+        if (config.warpEnabled) {
+            var warpIni = TelegramProxyStore.loadConfig()
+            if (!warpIni.isNullOrBlank() && !warpIni.contains("PrivateKey", ignoreCase = true)) {
+                warpIni = null
+            }
+            if (warpIni.isNullOrBlank()) {
+                log("WARP enabled: generating Cloudflare WARP config…")
+                warpIni = runCatching { WarpConfigGenerator.generate(log) }.getOrNull()
+                if (warpIni != null) {
+                    runCatching { TelegramProxyStore.saveConfig(warpIni) }
+                }
+            }
+            if (warpIni != null) {
+                warpProfile = WarpHelper.parseWarpIniToProxyProfile(warpIni, tag = "WARP")
+                if (warpProfile != null) {
+                    log("WARP connected: mode=${if (config.warpMode == WarpMode.Client) "client (WARP → VLESS)" else "server (VLESS → WARP)"}")
+                }
+            } else {
+                log("WARNING: failed to obtain WARP config, proceeding without WARP")
+            }
+        }
+
+        val wireguardBase = if (config.warpEnabled && config.warpMode == WarpMode.Client) warpProfile else null
+        val secondProfile = when {
+            config.warpEnabled && config.warpMode == WarpMode.Server && warpProfile != null -> warpProfile
+            else -> configuredSecondProfile
         }
 
         requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
@@ -508,6 +541,8 @@ internal class DesktopEngineController(
                             )
                         } ?: t
                     },
+                    wireguardBase = wireguardBase,
+                    chainViaDialerProxy = wireguardBase != null,
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     secondProfile = secondProfile,
                     // The "Обход LAN" toggle. Android passes it; desktop did not, so on the Xray core
@@ -548,6 +583,7 @@ internal class DesktopEngineController(
                 olcrtcChainPort = if (chained) chainPort else null,
                 olcrtcChainUser = if (chained) socksUsername else "",
                 olcrtcChainPass = if (chained) socksPassword else "",
+                wireguardBase = wireguardBase,
                 autoDetectInterface = true,
                 routing = routing,
                 matchAppsByProcess = true,

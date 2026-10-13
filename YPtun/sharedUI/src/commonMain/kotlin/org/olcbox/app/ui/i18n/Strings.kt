@@ -656,6 +656,12 @@ interface Strings {
     val additionalProxySubtitle: String
     val enableAdditionalProxy: String
     val secondProxySameAsMain: String
+    val enableWarp: String
+    val warpModeSection: String
+    val warpModeClient: String
+    val warpModeServer: String
+    val warpModeClientSubtitle: String
+    val warpModeServerSubtitle: String
     val freeturnTransportSection: String
     val freeturnTransportSubtitle: String
     val wireguardSubtitle: String
@@ -1361,6 +1367,12 @@ object RuStrings : Strings {
     override val enableAdditionalProxy = "Дополнительный прокси (каскад)"
     override val secondProxySameAsMain =
         "Это тот же сервер, что и основной прокси — каскад сам в себя не имеет смысла"
+    override val enableWarp = "Включить WARP"
+    override val warpModeSection = "Сторона подключения WARP"
+    override val warpModeClient = "На клиенте"
+    override val warpModeServer = "На сервере"
+    override val warpModeClientSubtitle = "Сначала WARP → затем VLESS"
+    override val warpModeServerSubtitle = "Сначала VLESS → на выходе WARP"
     override val freeturnTransportSection = "Транспорт Freeturn"
     override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
     override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
@@ -2052,6 +2064,12 @@ object EnStrings : Strings {
     override val enableAdditionalProxy = "Additional proxy (cascade)"
     override val secondProxySameAsMain =
         "This is the same server as the main proxy — a cascade into itself makes no sense"
+    override val enableWarp = "Enable WARP"
+    override val warpModeSection = "WARP connection side"
+    override val warpModeClient = "Client side"
+    override val warpModeServer = "Server side"
+    override val warpModeClientSubtitle = "First WARP → then VLESS"
+    override val warpModeServerSubtitle = "First VLESS → egress via WARP"
     override val freeturnTransportSection = "Freeturn transport"
     override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
     override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
@@ -2743,6 +2761,12 @@ object FaStrings : Strings {
     override val enableAdditionalProxy = "پراکسی اضافی (آبشاری)"
     override val secondProxySameAsMain =
         "این همان سرور پراکسی اصلی است — آبشار به خودش بی‌معناست"
+    override val enableWarp = "فعال‌سازی WARP"
+    override val warpModeSection = "سمت اتصال WARP"
+    override val warpModeClient = "در سمت کلاینت"
+    override val warpModeServer = "در سمت سرور"
+    override val warpModeClientSubtitle = "ابتدا WARP ← سپس VLESS"
+    override val warpModeServerSubtitle = "ابتدا VLESS ← خروج از طریق WARP"
     override val freeturnTransportSection = "حامل Freeturn"
     override val freeturnTransportSubtitle = "نقطهٔ پایانی بازپخش VK TURN و مبهم‌سازی"
     override val wireguardSubtitle = "تونل sing-box از طریق شنودگر محلی freeturn شماره‌گیری می‌کند"
@@ -3434,6 +3458,12 @@ object ZhStrings : Strings {
     override val enableAdditionalProxy = "附加代理（级联）"
     override val secondProxySameAsMain =
         "这与主代理是同一台服务器——级联到自身没有意义"
+    override val enableWarp = "启用 WARP"
+    override val warpModeSection = "WARP 连接端"
+    override val warpModeClient = "客户端"
+    override val warpModeServer = "服务端"
+    override val warpModeClientSubtitle = "先连接 WARP → 再连接 VLESS"
+    override val warpModeServerSubtitle = "先连接 VLESS → 通过 WARP 出口"
     override val freeturnTransportSection = "Freeturn 传输"
     override val freeturnTransportSubtitle = "VK TURN 中继端点与混淆"
     override val wireguardSubtitle = "sing-box 经本地 freeturn 监听器拨号的隧道"

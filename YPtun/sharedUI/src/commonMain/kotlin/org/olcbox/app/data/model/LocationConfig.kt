@@ -17,6 +17,27 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
 /**
+ * Positioning of the Cloudflare WARP tunnel when chained with a VLESS proxy:
+ * - [Client]: Client -> WARP -> VLESS -> Internet (WARP runs on client side before reaching VLESS)
+ * - [Server]: Client -> VLESS -> WARP -> Internet (WARP runs at the exit after VLESS)
+ */
+@Serializable
+enum class WarpMode {
+    @SerialName("client")
+    Client,
+
+    @SerialName("server")
+    Server;
+
+    companion object {
+        fun fromValue(value: String?): WarpMode = when (value?.trim()?.lowercase()) {
+            "server", "egress", "exit" -> Server
+            else -> Client
+        }
+    }
+}
+
+/**
  * VK-TURN (freeturn) transport parameters for [EngineType.VkTurn]. [uri] is the
  * full freeturn:// share link issued by the panel (carries transport/obf params,
  * the WG config is extracted out of it into ProxyProfile.rawOutbound); [vkLink]
@@ -728,6 +749,19 @@ data class LocationConfig(
     @SerialName("proxy2")
     val proxy2: ProxyProfile? = null,
     /**
+     * Cloudflare WARP chaining toggle for VLESS (Standard / Chain) connections.
+     * When true, WARP is inserted either on the client side (before VLESS) or on the server side (after VLESS).
+     */
+    @SerialName("warp_enabled")
+    val warpEnabled: Boolean = false,
+    /**
+     * Where WARP is positioned:
+     * - [WarpMode.Client]: Client -> WARP -> VLESS -> Internet
+     * - [WarpMode.Server]: Client -> VLESS -> WARP -> Internet
+     */
+    @SerialName("warp_mode")
+    val warpMode: WarpMode = WarpMode.Client,
+    /**
      * Deprecated/vestigial. Previously gated whether [proxy] was applied (off = direct). The main proxy
      * is now ALWAYS applied; the editor toggle controls [proxy2] instead. Kept only for back-compat
      * parsing of older saved locations.
@@ -821,6 +855,8 @@ data class LocationConfig(
             engine = engine,
             proxy = proxy,
             proxy2 = proxy2,
+            warpEnabled = warpEnabled,
+            warpMode = warpMode,
             core = core,
             vkturn = vkturn,
             masterDns = masterDns?.normalized(),
@@ -1402,6 +1438,10 @@ data class LocationEntry(
     /** Optional second proxy chained on top of [proxy] (cascade). See [LocationConfig.proxy2]. */
     @SerialName("proxy2")
     val proxy2: ProxyProfile? = null,
+    @SerialName("warp_enabled")
+    val warpEnabled: Boolean = false,
+    @SerialName("warp_mode")
+    val warpMode: WarpMode = WarpMode.Client,
     /** Vestigial; the main proxy is always applied now. Kept for back-compat parsing. */
     @SerialName("proxy_enabled")
     val proxyEnabled: Boolean = true,
@@ -1493,6 +1533,8 @@ data class LocationEntry(
                 engine = engine ?: EngineType.Stealth,
                 proxy = proxy,
                 proxy2 = proxy2,
+                warpEnabled = warpEnabled,
+                warpMode = warpMode,
                 proxyEnabled = proxyEnabled,
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
@@ -1526,6 +1568,8 @@ data class LocationEntry(
             engine = config.engine,
             proxy = config.proxy,
             proxy2 = config.proxy2,
+            warpEnabled = config.warpEnabled,
+            warpMode = config.warpMode,
             proxyEnabled = config.proxyEnabled,
             core = config.core,
             vkturn = config.vkturn,
@@ -1567,6 +1611,8 @@ data class LocationEntry(
                 engine = config.engine,
                 proxy = config.proxy,
                 proxy2 = config.proxy2,
+                warpEnabled = config.warpEnabled,
+                warpMode = config.warpMode,
                 proxyEnabled = config.proxyEnabled,
                 core = config.core,
                 vkturn = config.vkturn,

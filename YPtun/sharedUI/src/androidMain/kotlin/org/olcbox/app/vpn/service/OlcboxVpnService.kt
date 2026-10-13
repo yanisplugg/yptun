@@ -117,6 +117,9 @@ import org.olcbox.app.vpn.geo.AsnResolver
 import org.olcbox.app.vpn.geo.GeoAssetManager
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.vpn.warp.WarpHelper
+import org.olcbox.app.vpn.telegram.WarpConfigGenerator
 import org.olcbox.app.data.model.VkTurnConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
@@ -1671,12 +1674,42 @@ class OlcboxVpnService : VpnService() {
         // through the main (→ olcRTC for Chain). Null = single hop (main is the exit).
         // Foolproofing/defense-in-depth: drop a 2nd proxy that points at the SAME node as the main
         // (a proxy-into-itself can't work) — covers a bad import/subscription, not just manual entry.
-        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
+        val configuredSecondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
             val main = config.proxy
             if (main != null && main.isComplete() && main.isSameNodeAs(second)) {
                 addLog("ВНИМАНИЕ: 2-й (каскадный) прокси совпадает с основным — каскад сам в себя невозможен, игнорирую (выход через основной)")
                 null
             } else second
+        }
+
+        var warpProfile: ProxyProfile? = null
+        if (config.warpEnabled) {
+            val ds = LocationsDataSourceImpl(applicationContext)
+            var warpIni = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
+            if (!warpIni.isNullOrBlank() && !warpIni.contains("PrivateKey", ignoreCase = true)) {
+                warpIni = null
+            }
+            if (warpIni.isNullOrBlank()) {
+                addLog("WARP включен: генерирую конфиг Cloudflare WARP…")
+                warpIni = runCatching { WarpConfigGenerator.generate() }.getOrNull()
+                if (warpIni != null) {
+                    runCatching { ds.saveTelegramWarpConfig(warpIni) }
+                }
+            }
+            if (warpIni != null) {
+                warpProfile = WarpHelper.parseWarpIniToProxyProfile(warpIni, tag = "WARP")
+                if (warpProfile != null) {
+                    addLog("WARP подключен: режим ${if (config.warpMode == WarpMode.Client) "на клиенте (WARP → VLESS)" else "на сервере (VLESS → WARP)"}")
+                }
+            } else {
+                addLog("ВНИМАНИЕ: не удалось получить конфиг WARP, продолжаю без WARP")
+            }
+        }
+
+        val wireguardBase = if (config.warpEnabled && config.warpMode == WarpMode.Client) warpProfile else null
+        val secondProfile = when {
+            config.warpEnabled && config.warpMode == WarpMode.Server && warpProfile != null -> warpProfile
+            else -> configuredSecondProfile
         }
         return try {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
@@ -1891,6 +1924,8 @@ class OlcboxVpnService : VpnService() {
                                 )
                             } ?: t
                         },
+                        wireguardBase = wireguardBase,
+                        chainViaDialerProxy = wireguardBase != null,
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                         secondProfile = secondProfile,
                         bypassLan = loadRouting(expandAsn = false).bypassLan,
@@ -1922,6 +1957,7 @@ class OlcboxVpnService : VpnService() {
                     olcrtcChainPort = if (chained) chainPort else null,
                     olcrtcChainUser = if (chained) socksUsername else "",
                     olcrtcChainPass = if (chained) socksPassword else "",
+                    wireguardBase = wireguardBase,
                     autoDetectInterface = true,
                     routing = loadRouting(),
                     traffic = loadTrafficSettings(),

@@ -418,29 +418,37 @@ object XrayConfig {
             }
             val directDialsBase = directViaBase && baseExitTag != null
             val second = secondProfile?.takeIf { it.isComplete() }
+            val secondIsWireguard = second?.type == "wireguard"
             putJsonArray("outbounds") {
                 if (second != null) {
-                    // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG, emitted FIRST so it is
-                    // Xray's default outbound), which dials THROUGH the main (PROXY_BASE_TAG); the main
-                    // dials through olcRTC/WG. Keeping the second as PROXY_TAG means the default route and
-                    // routing rules transparently use the real exit.
-                    add(
-                        buildProxyOutbound(
-                            second,
-                            chained = false,
-                            traffic = traffic,
-                            // xhttp main can't sub-dial → the exit dials through the SOCKS loopback
-                            // (which routes to the main). Otherwise it dials directly through the main.
-                            detourTagOverride = if (cascadeLoopActive) CASCADE_LOOP_OUT_TAG else PROXY_BASE_TAG,
-                            tag = PROXY_TAG,
-                            // Force dialerProxy over the loopback so the exit's OWN transport is preserved.
-                            chainViaDialerProxy = cascadeLoopActive,
-                            // Over the clean loopback tunnel, KEEP the exit's XTLS Vision flow — the 2nd
-                            // server requires it (a vless-reality-vision tcp 2nd proxy reset with it dropped
-                            // while an xhttp 2nd, which has no Vision flow, worked).
-                            preserveFlow = cascadeLoopActive,
+                    if (secondIsWireguard) {
+                        // WARP (WireGuard) as SECOND proxy (Server mode): traffic exits via WireGuard outbound (tag PROXY_TAG)
+                        // which dials through the main proxy (PROXY_BASE_TAG via sockopt.dialerProxy).
+                        val wgExit = buildWireguardBaseOutbound(second, tag = PROXY_TAG, detourTag = PROXY_BASE_TAG)
+                        if (wgExit != null) add(wgExit)
+                    } else {
+                        // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG, emitted FIRST so it is
+                        // Xray's default outbound), which dials THROUGH the main (PROXY_BASE_TAG); the main
+                        // dials through olcRTC/WG. Keeping the second as PROXY_TAG means the default route and
+                        // routing rules transparently use the real exit.
+                        add(
+                            buildProxyOutbound(
+                                second,
+                                chained = false,
+                                traffic = traffic,
+                                // xhttp main can't sub-dial → the exit dials through the SOCKS loopback
+                                // (which routes to the main). Otherwise it dials directly through the main.
+                                detourTagOverride = if (cascadeLoopActive) CASCADE_LOOP_OUT_TAG else PROXY_BASE_TAG,
+                                tag = PROXY_TAG,
+                                // Force dialerProxy over the loopback so the exit's OWN transport is preserved.
+                                chainViaDialerProxy = cascadeLoopActive,
+                                // Over the clean loopback tunnel, KEEP the exit's XTLS Vision flow — the 2nd
+                                // server requires it (a vless-reality-vision tcp 2nd proxy reset with it dropped
+                                // while an xhttp 2nd, which has no Vision flow, worked).
+                                preserveFlow = cascadeLoopActive,
+                            )
                         )
-                    )
+                    }
                     add(
                         buildProxyOutbound(
                             profile,
@@ -1437,7 +1445,11 @@ object XrayConfig {
             }
         }
 
-    private fun buildWireguardBaseOutbound(profile: ProxyProfile, tag: String = WG_BASE_TAG): JsonObject? {
+    private fun buildWireguardBaseOutbound(
+        profile: ProxyProfile,
+        tag: String = WG_BASE_TAG,
+        detourTag: String? = null,
+    ): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
         val o = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
         val secret = o["private_key"]?.jsonPrimitive?.contentOrNull ?: return null
@@ -1453,6 +1465,11 @@ object XrayConfig {
         return buildJsonObject {
             put("tag", tag)
             put("protocol", "wireguard")
+            if (detourTag != null) {
+                putJsonObject("streamSettings") {
+                    putJsonObject("sockopt") { put("dialerProxy", detourTag) }
+                }
+            }
             putJsonObject("settings") {
                 put("secretKey", secret)
                 putJsonArray("address") { addresses.forEach { add(it) } }

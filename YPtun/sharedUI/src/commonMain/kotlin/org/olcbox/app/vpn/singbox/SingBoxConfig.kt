@@ -379,37 +379,56 @@ object SingBoxConfig {
                 buildWireguardEndpoint(it, WG_BASE_TAG, autoDetectInterface)
             }
             val mainIsWireguard = profile.type == "wireguard"
-            val wgExitEndpoint =
-                if (mainIsWireguard) buildWireguardEndpoint(profile, PROXY_TAG, autoDetectInterface) else null
+            val second = secondProfile?.takeIf { it.isComplete() }
+            val secondIsWireguard = second?.type == "wireguard"
+            val wgExitEndpoint = when {
+                secondIsWireguard -> buildWireguardEndpoint(second, PROXY_TAG, autoDetectInterface, detour = PROXY_BASE_TAG)
+                mainIsWireguard -> buildWireguardEndpoint(profile, PROXY_TAG, autoDetectInterface)
+                else -> null
+            }
 
             putJsonArray("outbounds") {
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
                 val baseDetour = if (wgBaseEndpoint != null) WG_BASE_TAG else null
-                val second = secondProfile?.takeIf { it.isComplete() }
                 if (second != null) {
-                    // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG), which dials THROUGH the
-                    // main (PROXY_BASE_TAG); the main dials through olcRTC/WG. Keeping the second as
-                    // PROXY_TAG means routing / DNS / route.final (all → PROXY_TAG) transparently use the
-                    // real exit, so nothing else needs to know about the extra hop.
-                    add(
-                        buildProxyOutbound(
-                            profile,
-                            chained = olcrtcChainPort != null,
-                            traffic = traffic,
-                            detourTagOverride = baseDetour,
-                            tag = PROXY_BASE_TAG
+                    if (secondIsWireguard) {
+                        // WARP (WireGuard) as SECOND proxy (Server mode): traffic exits via the WireGuard endpoint
+                        // (tag PROXY_TAG, added to endpoints below with detour = PROXY_BASE_TAG). The main proxy
+                        // (tag PROXY_BASE_TAG) dials through olcRTC/WG base or direct.
+                        add(
+                            buildProxyOutbound(
+                                profile,
+                                chained = olcrtcChainPort != null,
+                                traffic = traffic,
+                                detourTagOverride = baseDetour,
+                                tag = PROXY_BASE_TAG
+                            )
                         )
-                    )
-                    add(
-                        buildProxyOutbound(
-                            second,
-                            chained = false,
-                            traffic = traffic,
-                            detourTagOverride = PROXY_BASE_TAG,
-                            advanced = advanced,
-                            tag = PROXY_TAG
+                    } else {
+                        // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG), which dials THROUGH the
+                        // main (PROXY_BASE_TAG); the main dials through olcRTC/WG. Keeping the second as
+                        // PROXY_TAG means routing / DNS / route.final (all → PROXY_TAG) transparently use the
+                        // real exit, so nothing else needs to know about the extra hop.
+                        add(
+                            buildProxyOutbound(
+                                profile,
+                                chained = olcrtcChainPort != null,
+                                traffic = traffic,
+                                detourTagOverride = baseDetour,
+                                tag = PROXY_BASE_TAG
+                            )
                         )
-                    )
+                        add(
+                            buildProxyOutbound(
+                                second,
+                                chained = false,
+                                traffic = traffic,
+                                detourTagOverride = PROXY_BASE_TAG,
+                                advanced = advanced,
+                                tag = PROXY_TAG
+                            )
+                        )
+                    }
                 } else if (!mainIsWireguard) {
                     // Single hop: the main proxy IS the exit (tag PROXY_TAG), dialing through olcRTC/WG.
                     add(
@@ -1064,6 +1083,7 @@ object SingBoxConfig {
         profile: ProxyProfile,
         tag: String,
         autoDetectInterface: Boolean = false,
+        detour: String? = null,
     ): JsonObject? {
         val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
         val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
@@ -1077,6 +1097,7 @@ object SingBoxConfig {
         return buildJsonObject {
             put("type", "wireguard")
             put("tag", tag)
+            if (detour != null) put("detour", detour)
             // Userspace gVisor stack (the process is already bound to the upstream network).
             put("system", false)
             // VK-TURN / WDTT put the WireGuard peer on 127.0.0.1 (the local relay listener). With
