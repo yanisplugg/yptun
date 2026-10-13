@@ -763,6 +763,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         context.startService(intent)
     }
 
+    override val pingTimeoutMs: Long get() = _appBehavior.value.effectivePingTimeoutMs().toLong()
+    override val pingRounds: Int get() = _appBehavior.value.effectivePingPrecision()
+
     override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
@@ -775,7 +778,22 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         return ms
     }
 
+    /**
+     * Settings «Точность пинга»: measures [pingRounds] times and keeps the lowest time. A location
+     * that does not answer the first time is reported as unreachable right away (re-measuring a dead
+     * server would only multiply the timeout).
+     */
     private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
+        var best: Long? = null
+        repeat(pingRounds) {
+            val ms = pingOnce(locationConfig)
+            if (ms == null) return best
+            if (best == null || ms < best!!) best = ms
+        }
+        return best
+    }
+
+    private suspend fun pingOnce(locationConfig: LocationConfig): Long? {
         // User-selected ping method (Settings → «Пинг») overrides the per-engine default probe.
         // TCP/ICMP probe the location's own server; the URL is used ONLY by the proxy GET/HEAD probes.
         val behavior = _appBehavior.value
@@ -861,7 +879,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         repeat(TCP_PING_ATTEMPTS) {
             val r = runCatching {
                 socks5ConnectRtt(host, sock.port, sock.username, sock.password,
-                    TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, TUNNEL_PING_TIMEOUT_MS)
+                    TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, pingTimeoutMs.toInt())
             }
             val ms = r.getOrNull()
             if (ms != null && (best == null || ms < best!!)) best = ms
@@ -966,7 +984,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             val elapsed = runCatching {
                 java.net.Socket().use { socket ->
                     val start = System.nanoTime()
-                    socket.connect(java.net.InetSocketAddress(host, port), TCP_PING_TIMEOUT_MS)
+                    socket.connect(java.net.InetSocketAddress(host, port), pingTimeoutMs.toInt())
                     (System.nanoTime() - start) / 1_000_000L
                 }
             }.getOrNull()
@@ -985,7 +1003,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             val ms = runCatching {
                 val addr = java.net.InetAddress.getByName(host)
                 val start = System.nanoTime()
-                if (addr.isReachable(TCP_PING_TIMEOUT_MS)) (System.nanoTime() - start) / 1_000_000L else null
+                if (addr.isReachable(pingTimeoutMs.toInt())) (System.nanoTime() - start) / 1_000_000L else null
             }.getOrNull()
             if (ms != null && (best == null || ms < best!!)) best = ms
         }
@@ -1014,7 +1032,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     return@withContext null
                 }
                 val ms = runCatching {
-                    awg.Awg.measureDelay(awgConfig, url, method, TUNNEL_PING_TIMEOUT_MS.toLong())
+                    awg.Awg.measureDelay(awgConfig, url, method, pingTimeoutMs)
                 }.getOrElse {
                     OlcboxVpnState.addLog("Proxy $method ping (AmneziaWG) error: ${it.message}")
                     -1L
@@ -1062,7 +1080,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 return@withContext null
             }
             val ms = runCatching {
-                xraybridge.Xraybridge.measureDelay(configJson, url, method, TUNNEL_PING_TIMEOUT_MS.toLong())
+                xraybridge.Xraybridge.measureDelay(configJson, url, method, pingTimeoutMs)
             }.getOrElse {
                 OlcboxVpnState.addLog("Proxy $method ping error for ${profile.server}: ${it.message}")
                 -1L
@@ -1220,8 +1238,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         const val PROXY_USERNAME_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
         const val PROXY_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
-        const val TCP_PING_ATTEMPTS = 2
-        const val TCP_PING_TIMEOUT_MS = 3_000
+        // One probe per measurement: the repeats are the «Точность пинга» setting (pingInternal).
+        const val TCP_PING_ATTEMPTS = 1
         // End-to-end tunnel latency probe target. 1.1.1.1:443 (HTTPS) accepts TCP universally and
         // fast; port 53 can be filtered on some paths.
         const val TUNNEL_PROBE_HOST = "1.1.1.1"

@@ -340,6 +340,7 @@ class LocationViewModel(
     fun refreshPings(
         targetLocationIds: List<String>? = null,
         parallelism: Int = LOCATION_PING_PARALLELISM,
+        budgetMs: Long = LOCATION_PING_TIMEOUT_MS,
         performPing: suspend (LocationConfig) -> Long?,
         onComplete: (onlineCount: Int, totalCount: Int) -> Unit = { _, _ -> },
         onError: (String) -> Unit = {}
@@ -388,7 +389,7 @@ class LocationViewModel(
                 try {
                     val ping = try {
                         semaphore.withPermit {
-                            checkLocationPing(location, performPing)?.toInt()
+                            checkLocationPing(location, budgetMs, performPing)?.toInt()
                         }
                     } catch (e: CancellationException) {
                         throw e
@@ -509,11 +510,12 @@ class LocationViewModel(
 
     private suspend fun checkLocationPing(
         location: LocationItem,
+        budgetMs: Long,
         performPing: suspend (LocationConfig) -> Long?
     ): Long? {
         val config = location.config?.takeIf { it.isComplete() } ?: return null
 
-        return withTimeoutOrNull(LOCATION_PING_TIMEOUT_MS) {
+        return withTimeoutOrNull(budgetMs) {
             repeat(LOCATION_PING_ATTEMPTS) { attempt ->
                 val result = try {
                     performPing(config)

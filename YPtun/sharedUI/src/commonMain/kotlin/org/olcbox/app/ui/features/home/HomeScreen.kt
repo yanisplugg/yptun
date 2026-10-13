@@ -234,6 +234,7 @@ fun HomeScreen(
         locationViewModel.refreshPings(
             targetLocationIds = targetLocationIds,
             parallelism = pingParallelism,
+            budgetMs = viewModel.pingBudgetMs,
             performPing = { config ->
                 viewModel.performPingFor(config)
             },
@@ -261,6 +262,7 @@ fun HomeScreen(
             // One shared knob: the auto pass uses the same "ping parallelism" slider from settings
             // as the manual ping button, so users control both speeds in one place.
             parallelism = pingParallelism,
+            budgetMs = viewModel.pingBudgetMs,
             performPing = { config -> viewModel.performPingFor(config) },
             onComplete = { _, _ ->
                 val pings = (locationViewModel.pingsState as? org.olcbox.app.ui.features.locations.PingsState.Success)

@@ -790,7 +790,7 @@ class OlcboxVpnService : VpnService() {
                     async {
                         val ms = gate.withPermit {
                             runCatching {
-                                withTimeoutOrNull(AUTO_CONNECT_PING_TIMEOUT_MS) { manager.ping(config) }
+                                withTimeoutOrNull(maxOf(AUTO_CONNECT_PING_TIMEOUT_MS, manager.pingBudgetMs)) { manager.ping(config) }
                             }.getOrNull()
                         }
                         id to ms

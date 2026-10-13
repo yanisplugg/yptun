@@ -150,6 +150,9 @@ class HomeScreenViewModel(
         return vpnManager.ping(config)
     }
 
+    /** Budget for one location's whole ping (see [VpnManager.pingBudgetMs]). */
+    val pingBudgetMs: Long get() = vpnManager.pingBudgetMs
+
     suspend fun checkConnectionFor(config: LocationConfig): Long? {
         return vpnManager.checkConnection(config)
     }
@@ -498,7 +501,7 @@ class HomeScreenViewModel(
                                 // pingVerified берёт режим пинга из настроек (TCP / ICMP / GET / HEAD) и в режимах без прокси
                                 // ещё пропускает запрос через сервер: открытый порт у бесплатных ничего не значит, коннект
                                 // потом не шёл. Таймаут вмещает обе проверки, иначе живые серверы обрезались бы.
-                                val ping = withTimeoutOrNull(FREE_SERVER_CHECK_TIMEOUT_MS) {
+                                val ping = withTimeoutOrNull(vpnManager.pingVerifiedBudgetMs) {
                                     try {
                                         vpnManager.pingVerified(config)
                                     } catch (e: CancellationException) {
@@ -994,8 +997,6 @@ val FREE_SERVERS_SOURCES = listOf(
 fun freeSourcesFor(language: String): List<FreeSource> =
     FREE_SERVERS_SOURCES.sortedBy { if (it.region == language) 0 else if (it.region.isEmpty()) 1 else 2 }
 
-/** Таймаут одной проверки бесплатного сервера: пинг в режиме из настроек (до 6 с) + проверка запроса через прокси (до 6 с). */
-const val FREE_SERVER_CHECK_TIMEOUT_MS = 15_000L
 
 /**
  * Протоколы, которые берём из бесплатных списков: их разбирает [ShareLinkParser] и проверяет xray через

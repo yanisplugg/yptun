@@ -712,6 +712,14 @@ interface Strings {
     val appIconWithCat: String
     val appIconNoCat: String
     val appIconNames: List<String>
+    val pingTimeoutTitle: String
+    val pingTimeoutSubtitle: String
+    val pingPrecisionTitle: String
+    val pingPrecisionSubtitle: String
+    val pingPrecisionSingle: String
+    val pingPrecisionDouble: String
+    val pingPrecisionTriple: String
+    fun secondsShort(n: Int): String
     val freeServersLimitTitle: String
     val freeServersLimitSubtitle: String
     val freeServersLimitUnlimited: String
@@ -1404,6 +1412,14 @@ object RuStrings : Strings {
     override val appIconWithCat = "С котом"
     override val appIconNoCat = "Без кота"
     override val appIconNames = listOf("Классика", "Океан", "Закат", "Мята", "Фиалка", "Золото", "Небо", "Неон", "Солнце", "Светлая")
+    override val pingTimeoutTitle = "Таймаут пинга"
+    override val pingTimeoutSubtitle = "Сколько ждать ответа сервера (2–15 с)"
+    override val pingPrecisionTitle = "Точность пинга"
+    override val pingPrecisionSubtitle = "Сколько раз измерять: показывается лучшее время. Если сервер не ответил с первого раза, он не перепроверяется."
+    override val pingPrecisionSingle = "Одинарный"
+    override val pingPrecisionDouble = "Двойной"
+    override val pingPrecisionTriple = "Тройной"
+    override fun secondsShort(n: Int) = "$n с"
     override val freeServersLimitTitle = "Лимит бесплатных серверов"
     override val freeServersLimitSubtitle = "Сколько серверов брать в «Бесплатных серверах»: первые N по приоритету источников. Больше — дольше проверка."
     override val freeServersLimitUnlimited = "Без лимита"
@@ -2087,6 +2103,14 @@ object EnStrings : Strings {
     override val appIconWithCat = "With the cat"
     override val appIconNoCat = "Without the cat"
     override val appIconNames = listOf("Classic", "Ocean", "Sunset", "Mint", "Violet", "Gold", "Sky", "Neon", "Sun", "Light")
+    override val pingTimeoutTitle = "Ping timeout"
+    override val pingTimeoutSubtitle = "How long to wait for a server's answer (2–15 s)"
+    override val pingPrecisionTitle = "Ping precision"
+    override val pingPrecisionSubtitle = "How many times to measure: the best time is shown. A server that does not answer the first time is not re-measured."
+    override val pingPrecisionSingle = "Single"
+    override val pingPrecisionDouble = "Double"
+    override val pingPrecisionTriple = "Triple"
+    override fun secondsShort(n: Int) = "${n} s"
     override val freeServersLimitTitle = "Free servers limit"
     override val freeServersLimitSubtitle = "How many servers «Free servers» may take: the first N by source priority. More means a longer check."
     override val freeServersLimitUnlimited = "Unlimited"
@@ -2770,6 +2794,14 @@ object FaStrings : Strings {
     override val appIconWithCat = "با گربه"
     override val appIconNoCat = "بدون گربه"
     override val appIconNames = listOf("کلاسیک", "اقیانوس", "غروب", "نعنا", "بنفش", "طلایی", "آسمان", "نئون", "خورشید", "روشن")
+    override val pingTimeoutTitle = "مهلت پینگ"
+    override val pingTimeoutSubtitle = "حداکثر زمان انتظار برای پاسخ سرور (۲ تا ۱۵ ثانیه)"
+    override val pingPrecisionTitle = "دقت پینگ"
+    override val pingPrecisionSubtitle = "تعداد دفعات اندازه‌گیری: بهترین زمان نمایش داده می‌شود. سروری که بار اول پاسخ ندهد دوباره بررسی نمی‌شود."
+    override val pingPrecisionSingle = "تکی"
+    override val pingPrecisionDouble = "دوبل"
+    override val pingPrecisionTriple = "سه‌گانه"
+    override fun secondsShort(n: Int) = "$n ثانیه"
     override val freeServersLimitTitle = "سقف سرورهای رایگان"
     override val freeServersLimitSubtitle = "حداکثر تعداد سرورهای «سرورهای رایگان»: N سرور اول بر اساس اولویت منبع. تعداد بیشتر، بررسی طولانی‌تر."
     override val freeServersLimitUnlimited = "نامحدود"
@@ -3453,6 +3485,14 @@ object ZhStrings : Strings {
     override val appIconWithCat = "有猫"
     override val appIconNoCat = "无猫"
     override val appIconNames = listOf("经典", "海洋", "日落", "薄荷", "紫罗兰", "金色", "天空", "霓虹", "阳光", "浅色")
+    override val pingTimeoutTitle = "测试超时"
+    override val pingTimeoutSubtitle = "等待服务器响应的最长时间（2–15 秒）"
+    override val pingPrecisionTitle = "测试精度"
+    override val pingPrecisionSubtitle = "测量次数：显示其中最快的时间。首次无响应的服务器不会重复测量。"
+    override val pingPrecisionSingle = "单次"
+    override val pingPrecisionDouble = "双次"
+    override val pingPrecisionTriple = "三次"
+    override fun secondsShort(n: Int) = "${n} 秒"
     override val freeServersLimitTitle = "免费节点上限"
     override val freeServersLimitSubtitle = "“免费节点”最多取多少个：按来源优先级取前 N 个。越多，检测越久。"
     override val freeServersLimitUnlimited = "不限"
