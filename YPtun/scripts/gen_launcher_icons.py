@@ -4,7 +4,8 @@ Usage: python -I gen_launcher_icons.py <res dir> [icon id ...]
 
   * Cat icons: the SAME artwork as the default icon (mipmap-xxxhdpi/ic_launcher_foreground.png: the kitten
     sitting on the "yptun" wordmark), re-coloured with a 4-stop gradient map over its luminance.
-  * Wordmark icons: "yptun" in Century Gothic Bold on a colour background (no cat).
+  * Wordmark icons: "yptun" on a colour background (no cat), each in its own display font from scripts/fonts
+    (Google Fonts, SIL OFL: Pacifico, Audiowide, Righteous, Abril Fatface).
 
 Per icon: ic_icon_<id>_bg.png / ic_icon_<id>_fg.png (432 px adaptive layers), ic_launcher_<id>.png (192 px
 legacy rounded square) and mipmap-anydpi-v26/ic_launcher_<id>.xml. Keep the ids in sync with AppIcons.kt
@@ -25,7 +26,7 @@ N = 432
 SS = 3
 W = N * SS
 SOURCE = os.path.join(RES, 'mipmap-xxxhdpi', 'ic_launcher_foreground.png')
-FONT = 'C:/Windows/Fonts/GOTHICB.TTF'
+FONTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts')
 
 
 def hexc(h, a=255):
@@ -66,13 +67,14 @@ def gradient(c1, c2):
     return Image.fromarray((c1 + (c2 - c1) * t).astype(np.uint8), 'RGBA')
 
 
-def wordmark(bg, text_color, shadow=None, glow=None, accent=None):
+def wordmark(bg, font_file, text_color, shadow=None, glow=None, accent=None):
+    path = os.path.join(FONTS, font_file)
     f_size = 150 * SS
-    font = ImageFont.truetype(FONT, f_size)
+    font = ImageFont.truetype(path, f_size)
     probe = ImageDraw.Draw(Image.new('RGBA', (W, W)))
     while probe.textlength('yptun', font=font) > 262 * SS:
         f_size -= 4 * SS
-        font = ImageFont.truetype(FONT, f_size)
+        font = ImageFont.truetype(path, f_size)
     box = probe.textbbox((0, 0), 'yptun', font=font)
     tx = (W - (box[2] - box[0])) // 2 - box[0]
     ty = (W - (box[3] - box[1])) // 2 - box[1]
@@ -95,10 +97,10 @@ def wordmark(bg, text_color, shadow=None, glow=None, accent=None):
 
 
 WORD_ICONS = {
-    'wsky': lambda: wordmark(gradient('#4aa8ff', '#1b3fae'), hexc('#ffffff'), shadow=(0, 20, 80, 140)),
-    'wneon': lambda: wordmark(gradient('#070716', '#2a0b4a'), hexc('#eaffff'), glow=hexc('#27f0ff'), accent=hexc('#ff3df2', 200)),
-    'wsun': lambda: wordmark(gradient('#ffd23f', '#ff6a13'), hexc('#2b1200'), shadow=(120, 40, 0, 90)),
-    'wlight': lambda: wordmark(gradient('#fbfcff', '#d9deec'), hexc('#14233f'), shadow=(40, 60, 120, 60)),
+    'wsky': lambda: wordmark(gradient('#4aa8ff', '#1b3fae'), 'Pacifico-Regular.ttf', hexc('#ffffff'), shadow=(0, 20, 80, 150)),
+    'wneon': lambda: wordmark(gradient('#070716', '#2a0b4a'), 'Audiowide-Regular.ttf', hexc('#eaffff'), glow=hexc('#27f0ff'), accent=hexc('#ff3df2', 200)),
+    'wsun': lambda: wordmark(gradient('#ffd23f', '#ff6a13'), 'Righteous-Regular.ttf', hexc('#2b1200'), shadow=(120, 40, 0, 90)),
+    'wlight': lambda: wordmark(gradient('#fbfcff', '#d9deec'), 'AbrilFatface-Regular.ttf', hexc('#14233f'), shadow=(40, 60, 120, 60)),
 }
 
 ICONS = {**{n: (lambda n=n: cat_icon(n)) for n in CAT_PALETTES}, **WORD_ICONS}
