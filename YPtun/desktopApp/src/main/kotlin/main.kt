@@ -244,6 +244,9 @@ private fun PaintNativeWindowBackground(window: java.awt.Window, color: Color) {
 }
 
 fun main(args: Array<String>) {
+    // Before anything can load Skiko: apply a render API saved by an earlier blank-window recovery.
+    org.olcbox.app.desktop.DesktopRender.applySaved()
+
     // TUN mode needs administrator rights, and a process cannot acquire them while it runs — it has
     // to come back through UAC. Asking here, before the first window exists, is the difference
     // between one UAC prompt at launch and the app visibly closing and reopening the first time the
@@ -906,6 +909,14 @@ private fun runApp(args: Array<String>) = application {
         },
     ) {
         window.minimumSize = Dimension(350, 600)
+
+        // Old GPUs (Radeon HD 7950) can leave this window plain white with no error: if it stays blank,
+        // switch to software rendering and restart (see DesktopRender).
+        LaunchedEffect(Unit) {
+            org.olcbox.app.desktop.DesktopRender.watch(window) {
+                if (org.olcbox.app.desktop.DesktopRender.relaunch()) quitApplication(dependencies)
+            }
+        }
 
         DisposableEffect(Unit) {
             onDispose {
