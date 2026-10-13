@@ -126,10 +126,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".IconNeon"
+            android:name=".IconOcean"
             android:targetActivity=".MainActivity"
-            android:icon="@mipmap/ic_launcher_neon"
-            android:roundIcon="@mipmap/ic_launcher_neon"
+            android:icon="@mipmap/ic_launcher_ocean"
+            android:roundIcon="@mipmap/ic_launcher_ocean"
             android:enabled="false"
             android:exported="true">
             <intent-filter>
@@ -158,10 +158,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".IconKawaii"
+            android:name=".IconMint"
             android:targetActivity=".MainActivity"
-            android:icon="@mipmap/ic_launcher_kawaii"
-            android:roundIcon="@mipmap/ic_launcher_kawaii"
+            android:icon="@mipmap/ic_launcher_mint"
+            android:roundIcon="@mipmap/ic_launcher_mint"
             android:enabled="false"
             android:exported="true">
             <intent-filter>
@@ -174,10 +174,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".IconPixel"
+            android:name=".IconViolet"
             android:targetActivity=".MainActivity"
-            android:icon="@mipmap/ic_launcher_pixel"
-            android:roundIcon="@mipmap/ic_launcher_pixel"
+            android:icon="@mipmap/ic_launcher_violet"
+            android:roundIcon="@mipmap/ic_launcher_violet"
             android:enabled="false"
             android:exported="true">
             <intent-filter>
@@ -190,10 +190,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".IconSpace"
+            android:name=".IconGold"
             android:targetActivity=".MainActivity"
-            android:icon="@mipmap/ic_launcher_space"
-            android:roundIcon="@mipmap/ic_launcher_space"
+            android:icon="@mipmap/ic_launcher_gold"
+            android:roundIcon="@mipmap/ic_launcher_gold"
             android:enabled="false"
             android:exported="true">
             <intent-filter>
@@ -206,10 +206,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".IconShield"
+            android:name=".IconWsky"
             android:targetActivity=".MainActivity"
-            android:icon="@mipmap/ic_launcher_shield"
-            android:roundIcon="@mipmap/ic_launcher_shield"
+            android:icon="@mipmap/ic_launcher_wsky"
+            android:roundIcon="@mipmap/ic_launcher_wsky"
             android:enabled="false"
             android:exported="true">
             <intent-filter>
@@ -222,10 +222,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".IconTurtle"
+            android:name=".IconWneon"
             android:targetActivity=".MainActivity"
-            android:icon="@mipmap/ic_launcher_turtle"
-            android:roundIcon="@mipmap/ic_launcher_turtle"
+            android:icon="@mipmap/ic_launcher_wneon"
+            android:roundIcon="@mipmap/ic_launcher_wneon"
             android:enabled="false"
             android:exported="true">
             <intent-filter>
@@ -238,10 +238,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".IconWord"
+            android:name=".IconWsun"
             android:targetActivity=".MainActivity"
-            android:icon="@mipmap/ic_launcher_word"
-            android:roundIcon="@mipmap/ic_launcher_word"
+            android:icon="@mipmap/ic_launcher_wsun"
+            android:roundIcon="@mipmap/ic_launcher_wsun"
             android:enabled="false"
             android:exported="true">
             <intent-filter>
@@ -254,10 +254,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".IconTunnel"
+            android:name=".IconWlight"
             android:targetActivity=".MainActivity"
-            android:icon="@mipmap/ic_launcher_tunnel"
-            android:roundIcon="@mipmap/ic_launcher_tunnel"
+            android:icon="@mipmap/ic_launcher_wlight"
+            android:roundIcon="@mipmap/ic_launcher_wlight"
             android:enabled="false"
             android:exported="true">
             <intent-filter>

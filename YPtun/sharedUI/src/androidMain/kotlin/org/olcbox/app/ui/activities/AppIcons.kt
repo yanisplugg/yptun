@@ -16,15 +16,15 @@ internal class AppIconOption(val alias: String, val bg: String?, val fg: String,
 internal object AppIcons {
     val options = listOf(
         AppIconOption("AppActivity", null, "ic_launcher_foreground", cat = true),
-        AppIconOption("IconNeon", "ic_icon_neon_bg", "ic_icon_neon_fg", cat = true),
+        AppIconOption("IconOcean", "ic_icon_ocean_bg", "ic_icon_ocean_fg", cat = true),
         AppIconOption("IconSunset", "ic_icon_sunset_bg", "ic_icon_sunset_fg", cat = true),
-        AppIconOption("IconKawaii", "ic_icon_kawaii_bg", "ic_icon_kawaii_fg", cat = true),
-        AppIconOption("IconPixel", "ic_icon_pixel_bg", "ic_icon_pixel_fg", cat = true),
-        AppIconOption("IconSpace", "ic_icon_space_bg", "ic_icon_space_fg", cat = true),
-        AppIconOption("IconShield", "ic_icon_shield_bg", "ic_icon_shield_fg", cat = false),
-        AppIconOption("IconTurtle", "ic_icon_turtle_bg", "ic_icon_turtle_fg", cat = false),
-        AppIconOption("IconWord", "ic_icon_word_bg", "ic_icon_word_fg", cat = false),
-        AppIconOption("IconTunnel", "ic_icon_tunnel_bg", "ic_icon_tunnel_fg", cat = false),
+        AppIconOption("IconMint", "ic_icon_mint_bg", "ic_icon_mint_fg", cat = true),
+        AppIconOption("IconViolet", "ic_icon_violet_bg", "ic_icon_violet_fg", cat = true),
+        AppIconOption("IconGold", "ic_icon_gold_bg", "ic_icon_gold_fg", cat = true),
+        AppIconOption("IconWsky", "ic_icon_wsky_bg", "ic_icon_wsky_fg", cat = false),
+        AppIconOption("IconWneon", "ic_icon_wneon_bg", "ic_icon_wneon_fg", cat = false),
+        AppIconOption("IconWsun", "ic_icon_wsun_bg", "ic_icon_wsun_fg", cat = false),
+        AppIconOption("IconWlight", "ic_icon_wlight_bg", "ic_icon_wlight_fg", cat = false),
     )
 
     private const val NAMESPACE = "org.olcbox.app."

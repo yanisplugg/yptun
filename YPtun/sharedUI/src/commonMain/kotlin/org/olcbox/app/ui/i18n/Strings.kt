@@ -1403,7 +1403,7 @@ object RuStrings : Strings {
     override val appIconHint = "Иконка на рабочем столе сменится через пару секунд. Если лаунчер оставил старую или убрал значок — добавьте приложение на экран заново."
     override val appIconWithCat = "С котом"
     override val appIconNoCat = "Без кота"
-    override val appIconNames = listOf("Классика", "Неон", "Закат", "Мордочка", "Пиксель", "Космонавт", "Щит", "Черепаха", "Надпись", "Тоннель")
+    override val appIconNames = listOf("Классика", "Океан", "Закат", "Мята", "Фиалка", "Золото", "Небо", "Неон", "Солнце", "Светлая")
     override val freeServersLimitTitle = "Лимит бесплатных серверов"
     override val freeServersLimitSubtitle = "Сколько серверов брать в «Бесплатных серверах»: первые N по приоритету источников. Больше — дольше проверка."
     override val freeServersLimitUnlimited = "Без лимита"
@@ -2086,7 +2086,7 @@ object EnStrings : Strings {
     override val appIconHint = "The home-screen icon changes in a couple of seconds. If your launcher keeps the old one or drops it, add the app to the home screen again."
     override val appIconWithCat = "With the cat"
     override val appIconNoCat = "Without the cat"
-    override val appIconNames = listOf("Classic", "Neon", "Sunset", "Kawaii", "Pixel", "Astronaut", "Shield", "Turtle", "Wordmark", "Tunnel")
+    override val appIconNames = listOf("Classic", "Ocean", "Sunset", "Mint", "Violet", "Gold", "Sky", "Neon", "Sun", "Light")
     override val freeServersLimitTitle = "Free servers limit"
     override val freeServersLimitSubtitle = "How many servers «Free servers» may take: the first N by source priority. More means a longer check."
     override val freeServersLimitUnlimited = "Unlimited"
@@ -2769,7 +2769,7 @@ object FaStrings : Strings {
     override val appIconHint = "نماد صفحهٔ اصلی چند ثانیه بعد تغییر می‌کند. اگر لانچر نماد قبلی را نگه داشت یا حذف کرد، برنامه را دوباره به صفحهٔ اصلی اضافه کنید."
     override val appIconWithCat = "با گربه"
     override val appIconNoCat = "بدون گربه"
-    override val appIconNames = listOf("کلاسیک", "نئون", "غروب", "بامزه", "پیکسلی", "فضانورد", "سپر", "لاک‌پشت", "نوشتار", "تونل")
+    override val appIconNames = listOf("کلاسیک", "اقیانوس", "غروب", "نعنا", "بنفش", "طلایی", "آسمان", "نئون", "خورشید", "روشن")
     override val freeServersLimitTitle = "سقف سرورهای رایگان"
     override val freeServersLimitSubtitle = "حداکثر تعداد سرورهای «سرورهای رایگان»: N سرور اول بر اساس اولویت منبع. تعداد بیشتر، بررسی طولانی‌تر."
     override val freeServersLimitUnlimited = "نامحدود"
@@ -3452,7 +3452,7 @@ object ZhStrings : Strings {
     override val appIconHint = "桌面图标会在几秒后更换。如果启动器保留了旧图标或图标消失，请重新把应用添加到桌面。"
     override val appIconWithCat = "有猫"
     override val appIconNoCat = "无猫"
-    override val appIconNames = listOf("经典", "霓虹", "日落", "萌脸", "像素", "宇航员", "盾牌", "乌龟", "文字", "隧道")
+    override val appIconNames = listOf("经典", "海洋", "日落", "薄荷", "紫罗兰", "金色", "天空", "霓虹", "阳光", "浅色")
     override val freeServersLimitTitle = "免费节点上限"
     override val freeServersLimitSubtitle = "“免费节点”最多取多少个：按来源优先级取前 N 个。越多，检测越久。"
     override val freeServersLimitUnlimited = "不限"
