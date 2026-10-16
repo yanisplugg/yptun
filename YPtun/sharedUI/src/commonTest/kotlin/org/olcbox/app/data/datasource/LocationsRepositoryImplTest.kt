@@ -1175,6 +1175,24 @@ class LocationsRepositoryImplTest {
         assertTrue(!repo.changeSubscriptionUrl("https://nowhere.test/sub", "https://new.test/sub"))
     }
 
+    // #72: a location can be pinned (a pinned free server survives the next free-servers search).
+    @Test
+    fun locationPinSurvivesAndClears() = runTest {
+        val link = "vless://11111111-2222-3333-4444-555555555555@a.test:443?type=tcp&security=tls#A"
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(link) }), StaticIdentityProvider("hwid-test"))
+        repo.importText("https://one.test/sub")
+        val id = source.stored!!.locations.single().storageId
+
+        repo.setLocationPinned(id, true)
+        assertTrue(source.stored!!.locations.single().metadata?.pinned == true)
+        repo.setLocationPinned(id, false)
+        assertTrue(source.stored!!.locations.single().metadata?.pinned != true)
+        // An unknown id changes nothing.
+        repo.setLocationPinned("nope", true)
+        assertTrue(source.stored!!.locations.none { it.metadata?.pinned == true })
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),

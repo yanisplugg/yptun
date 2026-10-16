@@ -119,6 +119,8 @@ fun LazyListScope.locationSelectorContent(
     onRenameSubscription: (subscriptionUrl: String, name: String) -> Unit = { _, _ -> },
     // (old URL, new URL, the group's key before the change) — see [SubscriptionGroupMenu].
     onChangeSubscriptionUrl: (oldUrl: String, newUrl: String, groupKey: String) -> Unit = { _, _, _ -> },
+    // Pin / unpin one server of the free-servers list (a pinned one survives the next search).
+    onToggleFreeServerPinned: (storageId: String, pinned: Boolean) -> Unit = { _, _ -> },
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -222,7 +224,9 @@ fun LazyListScope.locationSelectorContent(
         val isPingDescending = groupKey in pingSortDescendingGroups
         // Free-servers list: drawn like a folder — one green-tinted container holding header AND rows.
         val isFree = group.firstOrNull()?.subscriptionUrl?.trim() == org.olcbox.app.ui.features.home.FREE_SERVERS_URL
-        val orderedGroup = if (isPingSorted) group.sortedWith(pingComparator(pingsState, isPingDescending)) else group
+        val orderedGroup = (if (isPingSorted) group.sortedWith(pingComparator(pingsState, isPingDescending)) else group)
+            // Free servers: the pinned ones stay on top (stable sort keeps the rest in their order).
+            .let { list -> if (isFree) list.sortedByDescending { it.metadata?.pinned == true } else list }
 
         item(key = "group-header-$groupKey") {
             Surface(
@@ -314,12 +318,15 @@ fun LazyListScope.locationSelectorContent(
                     if (isFree && !isCollapsed) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             LocationCardsColumn(orderedGroup, twoColumns) { location, cellModifier ->
+                                val serverPinned = location.metadata?.pinned == true
                                 LocationSelectorRow(
                                     location = location,
                                     selectedLocationId = selectedLocationId,
                                     pingsState = pingsState,
                                     onLocationSelected = onLocationSelected,
                                     onLocationSettingsClick = onLocationSettingsClick,
+                                    isPinned = serverPinned,
+                                    onTogglePinned = { onToggleFreeServerPinned(location.storageId, !serverPinned) },
                                     selectionMode = selectionMode,
                                     isChecked = location.storageId in selectedIds,
                                     onToggleSelect = onToggleSelect,

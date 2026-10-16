@@ -54,6 +54,8 @@ interface LocationsRepository {
     suspend fun setSubscriptionAutoUpdate(subscriptionUrl: String, enabled: Boolean)
     /** Sets the user's own name for a subscription; blank restores the panel's name. */
     suspend fun setSubscriptionCustomName(subscriptionUrl: String, name: String)
+    /** Pins / unpins one location (by storage id); a pinned free server is kept when the free servers are replaced. */
+    suspend fun setLocationPinned(storageId: String, pinned: Boolean)
     /**
      * Points a subscription (all its servers) at another URL — a moved panel, a re-issued link, a typo. Servers,
      * names and settings stay as they are; the next refresh downloads from the new URL. False (nothing changed)

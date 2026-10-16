@@ -458,6 +458,29 @@ class HomeScreenViewModel(
         _state.update { if (run == freeServersRun) transform(it) else it }
     }
 
+    /** The working servers the current run has found so far (replaced, never mutated, so a stop can read it at once). */
+    @kotlin.concurrent.Volatile
+    private var freeServersFound: List<FreeServerItem> = emptyList()
+
+    /**
+     * Ends the search NOW but keeps what it found: the servers checked so far go to the picker sheet instead of
+     * being thrown away (a full pass over a long list takes hours). [onNothingFound] when nothing worked yet.
+     */
+    fun stopFreeServersSearch(onNothingFound: () -> Unit = {}) {
+        val found = freeServersFound.sortedBy { it.pingMs }
+        freeServersRun++
+        freeServersJob?.cancel()
+        freeServersJob = null
+        _state.update {
+            it.copy(
+                isFreeServersLoading = false,
+                freeServersProgress = null,
+                availableFreeServers = found.takeIf { list -> list.isNotEmpty() },
+            )
+        }
+        if (found.isEmpty()) onNothingFound()
+    }
+
     fun cancelFreeServersLoad() {
         freeServersRun++
         freeServersJob?.cancel()
@@ -476,6 +499,7 @@ class HomeScreenViewModel(
     ) {
         freeServersJob?.cancel()
         val run = ++freeServersRun
+        freeServersFound = emptyList()
         _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
         freeServersJob = viewModelScope.launch {
             try {
@@ -559,7 +583,10 @@ class HomeScreenViewModel(
 
                                 val (curChecked, curFound) = mutex.withLock {
                                     checkedCount++
-                                    if (item != null) workingServers.add(item)
+                                    if (item != null) {
+                                        workingServers.add(item)
+                                        if (run == freeServersRun) freeServersFound = workingServers.toList()
+                                    }
                                     checkedCount to workingServers.size
                                 }
                                 updateFreeServers(run) {
@@ -668,19 +695,21 @@ class HomeScreenViewModel(
                 }
 
                 val currentBundle = locationsRepository.getBundle()
-                // Убираем ТОЛЬКО старые бесплатные серверы, никогда не затрагивая остальные локации пользователя
+                // Убираем ТОЛЬКО старые бесплатные серверы, никогда не затрагивая остальные локации пользователя.
+                // Закреплённые остаются, а такой же сервер из нового поиска не дублируется.
+                val oldFree = currentBundle.locations.filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
+                val keptPinned = oldFree.filter { it.metadata?.pinned == true }
+                val pinnedProfiles = keptPinned.mapNotNull { it.proxy?.dedupNormalized() }.toSet()
+                val freshEntries = newEntries.filterNot { it.proxy?.dedupNormalized() in pinnedProfiles }
                 val nonFreeLocations = currentBundle.locations.filterNot {
                     it.subscriptionUrl?.trim() == FREE_SERVERS_URL
                 }
-                val updatedLocations = nonFreeLocations + newEntries
+                val updatedLocations = nonFreeLocations + keptPinned + freshEntries
 
-                val oldFreeIds = currentBundle.locations
-                    .filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
-                    .map { it.storageId }
-                    .toSet()
+                val droppedFreeIds = (oldFree - keptPinned.toSet()).map { it.storageId }.toSet()
 
-                val updatedActiveId = if (currentBundle.activeLocationId in oldFreeIds) {
-                    newEntries.firstOrNull()?.storageId ?: currentBundle.activeLocationId
+                val updatedActiveId = if (currentBundle.activeLocationId in droppedFreeIds) {
+                    freshEntries.firstOrNull()?.storageId ?: keptPinned.firstOrNull()?.storageId ?: currentBundle.activeLocationId
                 } else {
                     currentBundle.activeLocationId
                 }
@@ -693,7 +722,7 @@ class HomeScreenViewModel(
                 )
 
                 loadCurrentConfigNow()
-                onComplete(newEntries.size)
+                onComplete(freshEntries.size)
             } catch (e: Exception) {
                 onError(e.message ?: "Ошибка сохранения серверов")
             }

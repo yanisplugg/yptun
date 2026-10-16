@@ -1036,6 +1036,14 @@ class LocationViewModel(
         }
     }
 
+    /** Pins / unpins a location, then reloads the list. */
+    fun setLocationPinned(storageId: String, pinned: Boolean) {
+        viewModelScope.launch {
+            locationsRepository.setLocationPinned(storageId, pinned)
+            loadLocations()
+        }
+    }
+
     /** Re-points a subscription (by URL) at [newUrl], then reloads the list. [onResult] gets false when refused. */
     fun changeSubscriptionUrl(oldUrl: String, newUrl: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {

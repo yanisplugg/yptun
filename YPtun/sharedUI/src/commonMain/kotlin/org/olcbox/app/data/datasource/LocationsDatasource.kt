@@ -713,6 +713,18 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun setLocationPinned(storageId: String, pinned: Boolean) {
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            if (bundle.locations.none { it.storageId == storageId }) return@withLock
+            val updated = bundle.locations.map { entry ->
+                if (entry.storageId != storageId) entry
+                else entry.copy(metadata = (entry.metadata ?: LocationMetadata()).copy(pinned = pinned)).normalized()
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
     override suspend fun changeSubscriptionUrl(oldUrl: String, newUrl: String): Boolean {
         val old = oldUrl.trim()
         val new = newUrl.trim()

@@ -536,6 +536,7 @@ fun HomeScreen(
                     requestDelete(PendingDelete.Subscription(ids))
                 },
                 onRenameSubscription = { url, name -> locationViewModel.renameSubscription(url, name) },
+                onToggleFreeServerPinned = { id, pinned -> locationViewModel.setLocationPinned(id, pinned) },
                 onChangeSubscriptionUrl = { oldUrl, newUrl, oldKey ->
                     locationViewModel.changeSubscriptionUrl(oldUrl, newUrl) { changed ->
                         if (changed) {
@@ -740,7 +741,16 @@ fun HomeScreen(
             AlertDialog(
                 onDismissRequest = {},
                 properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = false),
-                confirmButton = {},
+                // Stop the search but keep what it has found so far (a pass over a long list takes hours).
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.stopFreeServersSearch {
+                            scope.launch { snackbarHostState.showSnackbar(s.freeServersNothingYet) }
+                        }
+                    }) {
+                        Text(s.freeServersStopKeep)
+                    }
+                },
                 dismissButton = {
                     TextButton(onClick = { viewModel.cancelFreeServersLoad() }) {
                         Text(s.cancel)

@@ -384,6 +384,8 @@ interface Strings {
     fun addSelectedServers(count: Int): String
     fun freeServersImported(working: Int, total: Int): String
     fun freeServersProgressText(checked: Int, total: Int, found: Int): String
+    val freeServersStopKeep: String
+    val freeServersNothingYet: String
     val updateSubscriptionsAction: String
     val updateSubscriptionsSubtitle: String
     val createCustomLocation: String
@@ -1143,6 +1145,8 @@ object RuStrings : Strings {
     override fun addSelectedServers(count: Int) = "Добавить выбранные ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Добавлено рабочих серверов: $working из $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Проверено: $checked из $total (найдено: $found)"
+    override val freeServersStopKeep = "Остановить и показать найденные"
+    override val freeServersNothingYet = "Пока не найдено ни одного работающего сервера"
     override val updateSubscriptionsAction = "Обновить подписки"
     override val updateSubscriptionsSubtitle = "Обновить локации импортированных подписок"
     override val createCustomLocation = "Создать собственную локацию"
@@ -1862,6 +1866,8 @@ object EnStrings : Strings {
     override fun addSelectedServers(count: Int) = "Add selected ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Added working servers: $working of $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Tested: $checked of $total (working: $found)"
+    override val freeServersStopKeep = "Stop and show what was found"
+    override val freeServersNothingYet = "No working server found yet"
     override val updateSubscriptionsAction = "Update subscriptions"
     override val updateSubscriptionsSubtitle = "Refresh imported subscription locations"
     override val createCustomLocation = "Create custom location"
@@ -2581,6 +2587,8 @@ object FaStrings : Strings {
     override fun addSelectedServers(count: Int) = "افزودن موارد انتخاب‌شده ($count)"
     override fun freeServersImported(working: Int, total: Int) = "سرورهای فعال افزوده شد: $working از $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "بررسی شد: $checked از $total (فعال: $found)"
+    override val freeServersStopKeep = "توقف و نمایش موارد یافت‌شده"
+    override val freeServersNothingYet = "هنوز سرور فعالی پیدا نشده است"
     override val updateSubscriptionsAction = "به‌روزرسانی اشتراک‌ها"
     override val updateSubscriptionsSubtitle = "بازآوری موقعیت‌های اشتراک‌های واردشده"
     override val createCustomLocation = "ساخت موقعیت سفارشی"
@@ -3300,6 +3308,8 @@ object ZhStrings : Strings {
     override fun addSelectedServers(count: Int) = "添加所选节点 ($count)"
     override fun freeServersImported(working: Int, total: Int) = "已添加可用节点：$working / $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "已测试：$checked / $total（可用：$found）"
+    override val freeServersStopKeep = "停止并显示已找到的"
+    override val freeServersNothingYet = "尚未找到可用服务器"
     override val updateSubscriptionsAction = "更新订阅"
     override val updateSubscriptionsSubtitle = "刷新已导入的订阅节点"
     override val createCustomLocation = "创建自定义节点"
