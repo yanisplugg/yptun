@@ -26,16 +26,6 @@ data class CustomGroup(
     }
 }
 
-/**
- * Process-wide holder for the chosen subscription User-Agent mode. The subscription fetch (deep in the
- * locations repository, with no access to the settings store) reads this; the platform settings layer
- * keeps it in sync with [AppBehaviorSettings.subscriptionUserAgent] on load and on every change.
- */
-object SubscriptionUserAgentHolder {
-    @kotlin.concurrent.Volatile
-    var mode: String = AppBehaviorSettings.SUB_UA_YPTUN
-}
-
 /** General application behavior toggles (the "Настройки приложения" screen). */
 @Serializable
 data class AppBehaviorSettings(
@@ -188,14 +178,16 @@ data class AppBehaviorSettings(
      */
     val twoColumnLayout: Boolean = false,
     /**
-     * Which User-Agent the app sends for the MAIN subscription fetch (names / title / links). Panels do
-     * UA content-negotiation: [SUB_UA_YPTUN] (the app's own UA) usually yields clean base64 links with
-     * proper server names; [SUB_UA_HAPP] ("Happ/1.0") yields the rich per-server Xray JSON but often
-     * with junk remarks. Independently of this, FakeDNS is ALWAYS enriched from a Happ-UA fetch (the
-     * only variant that carries the server's fakeip pool + dns.hosts). Default [SUB_UA_YPTUN] = clean
-     * names + FakeDNS from Happ. One of [SUBSCRIPTION_UA_MODES].
+     * Which User-Agent the app presents to subscription panels (Settings -> Privacy). Panels do UA
+     * content-negotiation, so the choice also decides what they answer with. One of [SUBSCRIPTION_UA_MODES]:
+     *  - [SUB_UA_BOTH] (default): "YPtun/x" for the main fetch (clean names and links), plus a second
+     *    "Happ/1.0" request for the server's FakeDNS config and as the fallback when a panel refuses YPtun;
+     *  - [SUB_UA_HAPP]: only "Happ/1.0" (the rich Xray JSON);
+     *  - [SUB_UA_YPTUN_ONLY]: only "YPtun/x" — no request ever presents as Happ, so no FakeDNS from the panel;
+     *  - [SUB_UA_V2RAYTUN]: only "v2raytun/<platform>".
+     * The legacy stored value [SUB_UA_YPTUN] meant [SUB_UA_BOTH]. Read it through [effectiveSubscriptionUa].
      */
-    val subscriptionUserAgent: String = SUB_UA_YPTUN,
+    val subscriptionUserAgent: String = SUB_UA_BOTH,
     /**
      * App-wide default engine for VLESS-like proxy transports (Standard/Chain exit, VK-TURN
      * exit/chain). Applied ONLY when the per-location core is [ProxyCore.Auto]; an explicit
@@ -218,6 +210,14 @@ data class AppBehaviorSettings(
      * On by default — providers that use it expect it; off sends nothing at all. Settings → Privacy.
      */
     val providerReportEnabled: Boolean = true,
+    /**
+     * Send the device descriptors to subscription panels and the provider report: `x-hwid`, `x-app-id`,
+     * `x-device-os`, `x-ver-os`, `x-device-model`. On by default (panels with a device limit need them);
+     * off sends none of them — such a panel may then refuse the subscription. Settings -> Privacy.
+     */
+    val sendDeviceInfoToSubscriptions: Boolean = true,
+    /** A HWID of the user's choosing for subscription requests; blank = this device's real HWID. */
+    val customHwid: String = "",
     /**
      * Telegram-over-WARP background proxy: when on, a lightweight foreground service raises an
      * AmneziaWG (Cloudflare WARP) tunnel and exposes a local SOCKS5 the user points Telegram at. Runs
@@ -251,15 +251,27 @@ data class AppBehaviorSettings(
      */
     val pingPrecision: Int = DEFAULT_PING_PRECISION,
 ) {
+    /** [subscriptionUserAgent] as one of [SUBSCRIPTION_UA_MODES]: the legacy "yptun" and anything unknown mean [SUB_UA_BOTH]. */
+    fun effectiveSubscriptionUa(): String =
+        if (subscriptionUserAgent in SUBSCRIPTION_UA_MODES) subscriptionUserAgent else SUB_UA_BOTH
+
     companion object {
+        const val SUB_UA_BOTH = "both"
         const val SUB_UA_HAPP = "happ"
+        const val SUB_UA_YPTUN_ONLY = "yptun_only"
+        const val SUB_UA_V2RAYTUN = "v2raytun"
+
+        /** The value the old two-way selector stored for "YPtun": it behaved as [SUB_UA_BOTH]. */
         const val SUB_UA_YPTUN = "yptun"
 
         /** The literal UA string sent for [SUB_UA_HAPP]. */
         const val HAPP_USER_AGENT = "Happ/1.0"
 
-        /** Selectable subscription User-Agent modes (single-choice in the UI). */
-        val SUBSCRIPTION_UA_MODES = listOf(SUB_UA_HAPP, SUB_UA_YPTUN)
+        /** Prefix of the [SUB_UA_V2RAYTUN] UA; the platform ("android", "windows"...) follows. */
+        const val V2RAYTUN_UA_PREFIX = "v2raytun/"
+
+        /** Selectable subscription User-Agent modes (single-choice in the UI), default first. */
+        val SUBSCRIPTION_UA_MODES = listOf(SUB_UA_BOTH, SUB_UA_HAPP, SUB_UA_YPTUN_ONLY, SUB_UA_V2RAYTUN)
 
         const val PING_AUTO = "auto"
         const val PING_TCP = "tcp"

@@ -173,12 +173,11 @@ class AppUpdateService(
     }
 
     private suspend fun getBody(client: HttpClient, endpoint: String): String {
-        val hwid = deviceIdentityProvider.hwid()
+        // No HWID here: this goes to api.github.com, which has no use for it (Settings -> Privacy).
         val response = client.get(endpoint) {
             headers {
                 append(HttpHeaders.Accept, "application/vnd.github+json")
                 append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
-                append("x-hwid", hwid)
             }
         }
         if (response.status.value !in 200..299) {

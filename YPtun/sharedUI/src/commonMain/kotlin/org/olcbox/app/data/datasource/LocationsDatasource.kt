@@ -45,7 +45,6 @@ import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.model.AppBehaviorSettings
-import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyCore
@@ -102,8 +101,11 @@ interface LocationsDataSource {
     suspend fun loadProviderReportState(): String? = null
     suspend fun saveProviderReportState(value: String) = Unit
 
-    /** The user's Settings → Privacy choice for the provider report (the report is on until switched off). */
-    suspend fun providerReportEnabled(): Boolean = true
+    /**
+     * The persisted app-behavior settings, read fresh by the subscription code so a background worker (no UI,
+     * no shared state) sees the same Privacy choices as the screen. Null = defaults (platform without a store).
+     */
+    suspend fun appBehavior(): AppBehaviorSettings? = null
 
     /**
      * A platform-stable device id (e.g. Android ANDROID_ID) used to seed the HWID so it
@@ -581,7 +583,8 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun reportProviderUsage() {
-        if (!runCatching { dataSource.providerReportEnabled() }.getOrDefault(true)) return
+        val privacy = privacySettings()
+        if (!privacy.providerReportEnabled) return
         val ids = runCatching {
             getBundle().locations
                 .mapNotNull { it.metadata?.subscription?.providerId?.trim()?.takeIf { id -> id.isNotBlank() } }
@@ -594,8 +597,9 @@ class LocationsRepositoryImpl(
         // id across restarts and shared with the background worker.
         val state = loadProviderReportDays().toMutableMap()
         // Identity + device descriptors, exactly like the subscription fetch sends to the panel.
-        val hwid = runCatching { deviceIdentityProvider.hwid() }.getOrNull().orEmpty()
-        val appId = runCatching { deviceIdentityProvider.appId() }.getOrNull().orEmpty()
+        val sendDevice = privacy.sendDeviceInfoToSubscriptions
+        val hwid = if (sendDevice) runCatching { subscriptionHwid(privacy) }.getOrNull().orEmpty() else ""
+        val appId = if (sendDevice) runCatching { deviceIdentityProvider.appId() }.getOrNull().orEmpty() else ""
         val appVersion = CurrentAppInfo.value.version
 
         var changed = false
@@ -604,12 +608,14 @@ class LocationsRepositoryImpl(
             val ok = runCatching {
                 val response = httpClient.get(PROVIDER_CHECK_URL + id.encodeURLParameter()) {
                     headers {
-                        append(HttpHeaders.UserAgent, subscriptionUserAgent())
+                        append(HttpHeaders.UserAgent, subscriptionUserAgent(privacy))
                         if (hwid.isNotBlank()) append("x-hwid", hwid)
                         if (appId.isNotBlank()) append(HEADER_APP_ID, appId)
-                        append("x-device-os", DeviceInfo.os)
-                        append("x-ver-os", DeviceInfo.osVersion)
-                        append("x-device-model", DeviceInfo.model)
+                        if (sendDevice) {
+                            append("x-device-os", DeviceInfo.os)
+                            append("x-ver-os", DeviceInfo.osVersion)
+                            append("x-device-model", DeviceInfo.model)
+                        }
                         append("x-app-version", appVersion)
                     }
                 }
@@ -839,7 +845,9 @@ class LocationsRepositoryImpl(
 
         // Panels answer an unknown UA ("YPtun/x") with a stub / 4xx ("client not supported"), so as the last
         // resort re-fetch pretending to be a full Happ client (Happ UA + HWID/device headers).
-        if (parsed == null && input.isHttpUrl() && subscriptionUserAgent() != AppBehaviorSettings.HAPP_USER_AGENT) {
+        if (parsed == null && input.isHttpUrl() &&
+            privacySettings().effectiveSubscriptionUa() == AppBehaviorSettings.SUB_UA_BOTH
+        ) {
             val happSource = resolveImportSource(
                 text = input,
                 requestMode = SubscriptionRequestMode.Identity,
@@ -1072,12 +1080,20 @@ class LocationsRepositoryImpl(
             }
     }
 
-    /** Resolves the user's subscription User-Agent choice ([SubscriptionUserAgentHolder]) to a string. */
-    private fun subscriptionUserAgent(): String =
-        if (SubscriptionUserAgentHolder.mode == AppBehaviorSettings.SUB_UA_YPTUN) {
-            CurrentAppInfo.userAgent
-        } else {
-            AppBehaviorSettings.HAPP_USER_AGENT
+    /** The persisted Settings -> Privacy choices (defaults when the platform keeps none). */
+    private suspend fun privacySettings(): AppBehaviorSettings =
+        runCatching { dataSource.appBehavior() }.getOrNull() ?: AppBehaviorSettings()
+
+    /** The HWID the subscription requests carry: the user's own when set, else this device's. */
+    private suspend fun subscriptionHwid(settings: AppBehaviorSettings): String =
+        settings.customHwid.trim().ifBlank { deviceIdentityProvider.hwid() }
+
+    /** Resolves the user's subscription User-Agent choice to the string the main requests send. */
+    private fun subscriptionUserAgent(settings: AppBehaviorSettings): String =
+        when (settings.effectiveSubscriptionUa()) {
+            AppBehaviorSettings.SUB_UA_HAPP -> AppBehaviorSettings.HAPP_USER_AGENT
+            AppBehaviorSettings.SUB_UA_V2RAYTUN -> AppBehaviorSettings.V2RAYTUN_UA_PREFIX + DeviceInfo.os.lowercase()
+            else -> CurrentAppInfo.userAgent // both, yptun_only
         }
 
     private val iconScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -1088,13 +1104,17 @@ class LocationsRepositoryImpl(
         subscriptionProxy: SubscriptionFetchProxy?,
         forceHapp: Boolean = false
     ): DownloadedSubscription? {
-        val userAgent = if (forceHapp) AppBehaviorSettings.HAPP_USER_AGENT else subscriptionUserAgent()
-        val hwid = if (requestMode == SubscriptionRequestMode.Identity) {
-            deviceIdentityProvider.hwid()
+        val privacy = privacySettings()
+        val userAgent = if (forceHapp) AppBehaviorSettings.HAPP_USER_AGENT else subscriptionUserAgent(privacy)
+        // Identity headers (HWID + device descriptors) only when the request mode wants them AND the user
+        // has not switched them off in Settings -> Privacy.
+        val identity = requestMode == SubscriptionRequestMode.Identity && privacy.sendDeviceInfoToSubscriptions
+        val hwid = if (identity) {
+            subscriptionHwid(privacy)
         } else {
             null
         }
-        val appId = if (requestMode == SubscriptionRequestMode.Identity) {
+        val appId = if (identity) {
             runCatching { deviceIdentityProvider.appId() }.getOrNull()
         } else {
             null
@@ -1123,7 +1143,7 @@ class LocationsRepositoryImpl(
                             // that JSON (parseRawXray), and it's the only way to receive the server's
                             // FakeDNS config — so always present as Happ, the de-facto "full config" UA.
                             append(HttpHeaders.UserAgent, userAgent)
-                            if (requestMode == SubscriptionRequestMode.Identity) {
+                            if (identity) {
                                 append("x-hwid", hwid.orEmpty())
                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                 // Remnawave HWID device-limit descriptors.
@@ -1152,7 +1172,7 @@ class LocationsRepositoryImpl(
                         headers {
                             append(HttpHeaders.Accept, "application/json")
                             append(HttpHeaders.UserAgent, userAgent)
-                            if (requestMode == SubscriptionRequestMode.Identity) {
+                            if (identity) {
                                 append("x-hwid", hwid.orEmpty())
                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                             }
@@ -1168,13 +1188,16 @@ class LocationsRepositoryImpl(
                 // already is Happ. Best-effort: any failure just means no FakeDNS.
                 val fakednsJson = if (userAgent == AppBehaviorSettings.HAPP_USER_AGENT) {
                     content
+                } else if (privacy.effectiveSubscriptionUa() != AppBehaviorSettings.SUB_UA_BOTH) {
+                    // YPtun-only / v2rayTun: nothing is ever requested as Happ.
+                    null
                 } else {
                     runCatching {
                         val happResponse = client.get(url) {
                             headers {
                                 append(HttpHeaders.Accept, "application/json, text/plain, */*")
                                 append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
-                                if (requestMode == SubscriptionRequestMode.Identity) {
+                                if (identity) {
                                     append("x-hwid", hwid.orEmpty())
                                     if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                 }

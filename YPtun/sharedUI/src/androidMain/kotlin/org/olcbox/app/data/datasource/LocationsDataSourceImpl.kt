@@ -168,11 +168,11 @@ class LocationsDataSourceImpl(
         return context.vpnPrefDataStore.data.first()[KEY_PROVIDER_REPORT_STATE]?.ifBlank { null }
     }
 
-    override suspend fun providerReportEnabled(): Boolean {
-        val raw = context.vpnPrefDataStore.data.first()[KEY_ANDROID_APP_BEHAVIOR] ?: return true
+    override suspend fun appBehavior(): org.olcbox.app.data.model.AppBehaviorSettings? {
+        val raw = context.vpnPrefDataStore.data.first()[KEY_ANDROID_APP_BEHAVIOR] ?: return null
         return runCatching {
-            Json.decodeFromString(org.olcbox.app.data.model.AppBehaviorSettings.serializer(), raw).providerReportEnabled
-        }.getOrDefault(true)
+            Json.decodeFromString(org.olcbox.app.data.model.AppBehaviorSettings.serializer(), raw)
+        }.getOrNull()
     }
 
     override suspend fun saveProviderReportState(value: String) {

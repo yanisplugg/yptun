@@ -56,8 +56,8 @@ class JvmLocationsDataSourceImpl(
 
     override suspend fun loadLegacyLocations(): List<Pair<String, String>> = emptyList()
 
-    override suspend fun providerReportEnabled(): Boolean = withContext(Dispatchers.IO) {
-        org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior().providerReportEnabled
+    override suspend fun appBehavior(): org.olcbox.app.data.model.AppBehaviorSettings? = withContext(Dispatchers.IO) {
+        org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior()
     }
 
     override suspend fun loadLegacyActiveLocationId(): String? = null

@@ -3991,11 +3991,6 @@ private fun ApplicationBehaviorContent(
             checked = settings.allowVpsAutoInstall
         ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
 
-        // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
-        // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
-        // The selector code is preserved (unused) in [SubscriptionUserAgentSelector] below and can be
-        // dropped back into this screen if it ever needs to be exposed again.
-
         // App-wide engine for VLESS-like transports. Applies only when a server's own core is "Auto";
         // an explicit per-server choice overrides it (xhttp/raw-Xray always force Xray regardless).
         SettingsSectionLabel(s.globalEngineLabel)
@@ -4035,40 +4030,6 @@ private fun ApplicationBehaviorContent(
                     label = { Text(title) }
                 )
             }
-        }
-    }
-}
-
-/**
- * Subscription User-Agent selector. PRESERVED but intentionally NOT shown anywhere (no UI). The fetch
- * defaults to YPtun + automatic FakeDNS enrichment from a Happ-UA request, which is right for everyone;
- * this lets the choice be re-exposed later (drop a call into AppBehaviorSettingsContent) without
- * rewriting it. Suppress the "unused" lint since keeping it is deliberate.
- */
-@Suppress("unused")
-@Composable
-private fun SubscriptionUserAgentSelector(
-    settings: AppBehaviorSettings,
-    onChanged: (AppBehaviorSettings) -> Unit
-) {
-    val s = LocalStrings.current
-    SettingsSectionLabel(s.subscriptionUserAgentLabel)
-    Text(
-        text = s.subscriptionUserAgentSubtitle,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val uaOptions = listOf(
-            AppBehaviorSettings.SUB_UA_HAPP to "Happ/1.0",
-            AppBehaviorSettings.SUB_UA_YPTUN to "YPtun",
-        )
-        uaOptions.forEach { (mode, title) ->
-            FilterChip(
-                selected = settings.subscriptionUserAgent == mode,
-                onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
-                label = { Text(title) }
-            )
         }
     }
 }
@@ -4377,6 +4338,7 @@ private fun AppIconTile(option: AppIconOption, name: String, selected: Boolean, 
 }
 
 /** Settings -> Privacy: what the app sends out on its own, and the switches for it. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun PrivacyContent(
     settings: AppBehaviorSettings,
@@ -4412,6 +4374,42 @@ private fun PrivacyContent(
             text = s.providerReportDetails,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        SettingsSectionLabel(s.subscriptionUserAgentLabel)
+        Text(
+            text = s.subscriptionUserAgentSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val uaOptions = listOf(
+                AppBehaviorSettings.SUB_UA_BOTH to s.uaModeBoth,
+                AppBehaviorSettings.SUB_UA_HAPP to s.uaModeHapp,
+                AppBehaviorSettings.SUB_UA_YPTUN_ONLY to s.uaModeYptun,
+                AppBehaviorSettings.SUB_UA_V2RAYTUN to s.uaModeV2raytun,
+            )
+            uaOptions.forEach { (mode, title) ->
+                FilterChip(
+                    selected = settings.effectiveSubscriptionUa() == mode,
+                    onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+
+        RoutingToggleRow(
+            title = s.sendDeviceInfoTitle,
+            subtitle = s.sendDeviceInfoSubtitle,
+            checked = settings.sendDeviceInfoToSubscriptions
+        ) { onChanged(settings.copy(sendDeviceInfoToSubscriptions = it)) }
+        OutlinedTextField(
+            value = settings.customHwid,
+            onValueChange = { onChanged(settings.copy(customHwid = it.trim().take(128))) },
+            label = { Text(s.customHwidLabel) },
+            supportingText = { Text(s.customHwidHint) },
+            enabled = settings.sendDeviceInfoToSubscriptions,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }

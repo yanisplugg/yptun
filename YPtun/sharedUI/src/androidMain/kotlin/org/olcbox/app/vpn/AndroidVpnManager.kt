@@ -25,7 +25,6 @@ import kotlinx.serialization.json.Json
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.AppBehaviorSettings
-import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.ui.i18n.AppLanguage
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.data.model.RoutingProfile
@@ -197,8 +196,6 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 _appBehavior.value = preferences[KEY_ANDROID_APP_BEHAVIOR]
                     ?.let { runCatching { Json.decodeFromString(AppBehaviorSettings.serializer(), it) }.getOrNull() }
                     ?: AppBehaviorSettings()
-                // Mirror the subscription User-Agent choice into the process holder the fetch reads.
-                SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
                 // Restore the Telegram-over-WARP proxy if the user left it on (config is cached).
                 restoreTelegramProxyIfEnabled()
                 val lang = AppLanguage.fromId(preferences[KEY_ANDROID_LANGUAGE])
@@ -496,7 +493,6 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     fun setAppBehavior(settings: AppBehaviorSettings) {
         val previous = _appBehavior.value
         _appBehavior.value = settings
-        SubscriptionUserAgentHolder.mode = settings.subscriptionUserAgent
         scope.launch {
             appContext.vpnPrefDataStore.edit { preferences ->
                 preferences[KEY_ANDROID_APP_BEHAVIOR] =

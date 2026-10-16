@@ -549,6 +549,14 @@ interface Strings {
     val showSubscriptionIconsSubtitle: String
     val subscriptionUserAgentLabel: String
     val subscriptionUserAgentSubtitle: String
+    val uaModeBoth: String
+    val uaModeHapp: String
+    val uaModeYptun: String
+    val uaModeV2raytun: String
+    val sendDeviceInfoTitle: String
+    val sendDeviceInfoSubtitle: String
+    val customHwidLabel: String
+    val customHwidHint: String
     val globalEngineLabel: String
     val globalEngineSubtitle: String
     val globalEngineAuto: String
@@ -1272,7 +1280,15 @@ object RuStrings : Strings {
     override val showSubscriptionIconsTitle = "Показывать иконки подписок"
     override val showSubscriptionIconsSubtitle = "Иконка от панели слева от названия подписки"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
-    override val subscriptionUserAgentSubtitle = "Happ/1.0 запрашивает полный конфиг (FakeDNS, dns.hosts); YPtun — обычно только ссылки"
+    override val subscriptionUserAgentSubtitle = "Что приложение называет себе в запросах к панели подписки. По умолчанию — два запроса: основной как YPtun (чистые имена и ссылки) и второй как Happ/1.0 (FakeDNS-конфиг сервера, а также запасной вариант, если панель отказала YPtun). «Happ» — один запрос как Happ/1.0. «YPtun» — один запрос как YPtun, под Happ приложение не представляется вовсе (FakeDNS от панели не придёт). «v2rayTun» — один запрос как v2raytun/<платформа>."
+    override val uaModeBoth = "Happ + YPtun (по умолчанию)"
+    override val uaModeHapp = "Happ"
+    override val uaModeYptun = "YPtun"
+    override val uaModeV2raytun = "v2rayTun"
+    override val sendDeviceInfoTitle = "Отправлять данные устройства подпискам"
+    override val sendDeviceInfoSubtitle = "HWID, ID приложения, ОС и модель устройства — панели нужны они для лимита устройств"
+    override val customHwidLabel = "Свой HWID"
+    override val customHwidHint = "Пусто — настоящий HWID этого устройства. Подставляется в запросы подписок и отчёта провайдеру; на работу VPN не влияет. Если выключить отправку данных, подписка с лимитом устройств может не выдаться."
     override val globalEngineLabel = "Движок для VLESS (глобально)"
     override val globalEngineSubtitle = "Ядро для VLESS и похожих транспортов, когда в настройках сервера выбрано «Авто». Настройка сервера важнее этой. xhttp всегда использует Xray."
     override val globalEngineAuto = "Авто"
@@ -1979,7 +1995,15 @@ object EnStrings : Strings {
     override val showSubscriptionIconsTitle = "Show subscription icons"
     override val showSubscriptionIconsSubtitle = "The panel's icon to the left of the subscription name"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
-    override val subscriptionUserAgentSubtitle = "Happ/1.0 fetches the full config (FakeDNS, dns.hosts); YPtun usually returns only links"
+    override val subscriptionUserAgentSubtitle = "What the app calls itself in requests to the subscription panel. By default there are two requests: the main one as YPtun (clean names and links) and a second as Happ/1.0 (the server's FakeDNS config, and the fallback when a panel refuses YPtun). “Happ” is one request as Happ/1.0. “YPtun” is one request as YPtun, the app never presents as Happ (no FakeDNS from the panel). “v2rayTun” is one request as v2raytun/<platform>."
+    override val uaModeBoth = "Happ + YPtun (default)"
+    override val uaModeHapp = "Happ"
+    override val uaModeYptun = "YPtun"
+    override val uaModeV2raytun = "v2rayTun"
+    override val sendDeviceInfoTitle = "Send device data to subscriptions"
+    override val sendDeviceInfoSubtitle = "HWID, app ID, OS and device model: panels need them for their device limit"
+    override val customHwidLabel = "Custom HWID"
+    override val customHwidHint = "Empty: this device's real HWID. Used in subscription requests and the provider report; it does not affect the VPN. With device data switched off, a subscription with a device limit may be refused."
     override val globalEngineLabel = "VLESS engine (global)"
     override val globalEngineSubtitle = "Core for VLESS-like transports when a server's setting is \"Auto\". The per-server choice overrides this. xhttp always uses Xray."
     override val globalEngineAuto = "Auto"
@@ -2702,7 +2726,15 @@ object FaStrings : Strings {
     override val showSubscriptionIconsTitle = "نمایش آیکون اشتراک‌ها"
     override val showSubscriptionIconsSubtitle = "آیکون پنل در سمت چپ نام اشتراک"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
-    override val subscriptionUserAgentSubtitle = "Happ/1.0 پیکربندی کامل (FakeDNS، dns.hosts) را می‌گیرد؛ YPtun معمولاً فقط لینک‌ها"
+    override val subscriptionUserAgentSubtitle = "برنامه در درخواست به پنل اشتراک خود را چه بنامد. به‌طور پیش‌فرض دو درخواست است: اصلی با نام YPtun (نام‌ها و لینک‌های تمیز) و دومی با نام Happ/1.0 (پیکربندی FakeDNS سرور و راه جایگزین وقتی پنل YPtun را رد کند). «Happ» یک درخواست با Happ/1.0 است. «YPtun» یک درخواست با YPtun است و برنامه هرگز خود را Happ معرفی نمی‌کند (FakeDNS از پنل نمی‌آید). «v2rayTun» یک درخواست با v2raytun/<پلتفرم> است."
+    override val uaModeBoth = "Happ + YPtun (پیش‌فرض)"
+    override val uaModeHapp = "Happ"
+    override val uaModeYptun = "YPtun"
+    override val uaModeV2raytun = "v2rayTun"
+    override val sendDeviceInfoTitle = "ارسال اطلاعات دستگاه به اشتراک‌ها"
+    override val sendDeviceInfoSubtitle = "HWID، شناسه برنامه، سیستم‌عامل و مدل دستگاه: پنل‌ها برای محدودیت دستگاه به آن‌ها نیاز دارند"
+    override val customHwidLabel = "HWID دلخواه"
+    override val customHwidHint = "خالی: HWID واقعی همین دستگاه. در درخواست‌های اشتراک و گزارش ارائه‌دهنده استفاده می‌شود و روی VPN اثری ندارد. اگر ارسال اطلاعات خاموش باشد، اشتراک دارای محدودیت دستگاه ممکن است رد شود."
     override val globalEngineLabel = "موتور VLESS (سراسری)"
     override val globalEngineSubtitle = "هسته برای ترنسپورت‌های مشابه VLESS وقتی تنظیم سرور روی «خودکار» است. تنظیم هر سرور بر این اولویت دارد. xhttp همیشه از Xray استفاده می‌کند."
     override val globalEngineAuto = "خودکار"
@@ -3393,7 +3425,15 @@ object ZhStrings : Strings {
     override val showSubscriptionIconsTitle = "显示订阅图标"
     override val showSubscriptionIconsSubtitle = "在订阅名称左侧显示面板图标"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"
-    override val subscriptionUserAgentSubtitle = "Happ/1.0 会获取完整配置（FakeDNS、dns.hosts）；YPtun 通常只返回链接"
+    override val subscriptionUserAgentSubtitle = "应用向订阅面板请求时自称什么。默认发两次请求：主请求以 YPtun 身份（名称和链接更干净），第二次以 Happ/1.0 身份（获取服务器的 FakeDNS 配置，并在面板拒绝 YPtun 时作为备用）。“Happ”只发一次请求，身份为 Happ/1.0。“YPtun”只发一次请求，应用完全不冒充 Happ（面板不会提供 FakeDNS）。“v2rayTun”只发一次请求，身份为 v2raytun/<平台>。"
+    override val uaModeBoth = "Happ + YPtun（默认）"
+    override val uaModeHapp = "Happ"
+    override val uaModeYptun = "YPtun"
+    override val uaModeV2raytun = "v2rayTun"
+    override val sendDeviceInfoTitle = "向订阅发送设备数据"
+    override val sendDeviceInfoSubtitle = "HWID、应用 ID、系统和设备型号：面板需要它们来限制设备数量"
+    override val customHwidLabel = "自定义 HWID"
+    override val customHwidHint = "留空：使用本设备的真实 HWID。用于订阅请求和提供商报告，不影响 VPN。关闭设备数据发送后，带设备数量限制的订阅可能被拒绝。"
     override val globalEngineLabel = "VLESS 内核（全局）"
     override val globalEngineSubtitle = "当服务器设置为“自动”时，VLESS 类传输使用的内核。每服务器的选择会覆盖此项。xhttp 始终使用 Xray。"
     override val globalEngineAuto = "自动"
