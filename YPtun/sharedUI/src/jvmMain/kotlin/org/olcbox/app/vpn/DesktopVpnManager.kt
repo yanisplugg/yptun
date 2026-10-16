@@ -219,6 +219,8 @@ class DesktopVpnManager private constructor(
         get() = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior().effectivePingTimeoutMs().toLong()
     override val pingRounds: Int
         get() = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior().effectivePingPrecision()
+    override val freeServersFromPages: Boolean
+        get() = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior().freeServersFromPages
 
     override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 

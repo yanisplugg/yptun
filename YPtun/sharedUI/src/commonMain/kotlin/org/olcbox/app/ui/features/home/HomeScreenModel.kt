@@ -620,7 +620,13 @@ class HomeScreenViewModel(
                         val client = createProxyHttpClient(proxy)
                         try {
                             // Все источники сразу; недоступный не мешает остальным.
-                            freeSourcesFor(org.olcbox.app.ui.i18n.LocalizationState.effective.id).map { source ->
+                            // One shuffled slice of the Pages file as big as the limit asks (0 = all of it).
+                            val sources = if (vpnManager.freeServersFromPages) {
+                                listOf(FreeSource(FREE_SERVERS_PAGES_URL, maxCount = limit))
+                            } else {
+                                freeSourcesFor(org.olcbox.app.ui.i18n.LocalizationState.effective.id)
+                            }
+                            sources.map { source ->
                                 async {
                                     runCatching {
                                         org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(source.url).bodyAsText() }
@@ -1182,6 +1188,12 @@ data class FreeServersProgress(
 const val FREE_AUTO_UPDATE_HOURS = 6
 
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+
+/**
+ * Hidden GitHub Page with one file of vless links (≤ 20000), rebuilt hourly by a workflow. Used instead of
+ * [FREE_SERVERS_SOURCES] when the «Пинг» setting is on; [FREE_SERVERS_URL] stays the group id either way.
+ */
+const val FREE_SERVERS_PAGES_URL = "https://yanisplugg.github.io/ws-cache-9e41/v.txt"
 
 /**
  * Источник бесплатных серверов: [maxCount] — сколько уникальных серверов взять (0 = все, без

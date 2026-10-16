@@ -4006,6 +4006,12 @@ private fun PingSettingsContent(
                 )
             }
         }
+
+        RoutingToggleRow(
+            title = s.freeServersPagesTitle,
+            subtitle = s.freeServersPagesSubtitle,
+            checked = settings.freeServersFromPages
+        ) { onChanged(settings.copy(freeServersFromPages = it)) }
     }
 }
 

@@ -255,6 +255,11 @@ data class AppBehaviorSettings(
      * subscription header. Off by default: the ping button then just starts a pass.
      */
     val showPingControls: Boolean = false,
+    /**
+     * Where the «Бесплатные серверы» list comes from: false = the built-in sources (default), true = the
+     * single hourly-refreshed file on a hidden GitHub Page (up to 20000 vless links harvested from GitHub).
+     */
+    val freeServersFromPages: Boolean = false,
 ) {
     /**
      * A subscription's group key (`name|url`, also its folder member key) changed because its URL did: carry the

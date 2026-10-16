@@ -761,6 +761,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     override val pingTimeoutMs: Long get() = _appBehavior.value.effectivePingTimeoutMs().toLong()
     override val pingRounds: Int get() = _appBehavior.value.effectivePingPrecision()
+    override val freeServersFromPages: Boolean get() = _appBehavior.value.freeServersFromPages
 
     override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
