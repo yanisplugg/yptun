@@ -29,6 +29,17 @@ var stripeOptions = transport.StripeOptions{
 	PieceBytes: stripePieceBytes,
 	DeadAfter:  3 * time.Second,
 	NoDups:     true,
+	InitRTO:    2 * time.Second,
+	MinRTO:     1500 * time.Millisecond,
+	MaxRTO:     8 * time.Second,
+	NoPacing:   true,
+	// CoDel must sit above the room relay RTT (0.4-1 s) or it drops
+	// pieces the relay is still delivering.
+	CodelTarget:   1500 * time.Millisecond,
+	CodelInterval: 6 * time.Second,
+	AckInterval:   100 * time.Millisecond,
+	HoleDeadline:  10 * time.Second,
+	LaneWindow:    true,
 }
 
 // startStripe makes every room a lane and starts the stripe. The rooms' own

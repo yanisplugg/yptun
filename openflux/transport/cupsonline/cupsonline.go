@@ -80,6 +80,10 @@ type CupsonlineConfig struct {
 	// the pace is set by SendWindow (ack feedback), so this only keeps two
 	// messages from leaving the same instant.
 	SendInterval time.Duration
+	// StreamResyncAfter gives up a packet whose rest has not come for this
+	// long: a message of the sender's batch was lost, and the stream would
+	// stay out of sync. 0 waits forever.
+	StreamResyncAfter time.Duration
 
 	// SendWindow is how many cursor RPCs a striped lane keeps in flight
 	// before it waits for a reply. cups.online relays a room only so fast
@@ -108,6 +112,8 @@ type CupsonlineConfig struct {
 	RoomCreatePause time.Duration
 
 	StatsInterval time.Duration
+	// Network the rooms' sockets dial through (TransportConfig.Network).
+	Network string
 }
 
 func DefaultCupsonlineConfig() CupsonlineConfig {
@@ -138,11 +144,11 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// takes well over 2000 in one message, so this headroom is safe.
 		MaxCursors:   1100,
 		BatchTimeout: 2 * time.Millisecond,
-		// A small floor only; SendWindow is the throttle now. (The old 12 ms
-		// fixed cadence ignored how fast the room actually relayed and lost
-		// ~71% of what it sent — see SendWindow.)
 		SendInterval: 12 * time.Millisecond,
 		SendWindow:   3,
+		// The old (unstriped) wire: a batch arrives as a burst of messages
+		// SendInterval apart, well under a second even for the largest packet.
+		StreamResyncAfter: 2 * time.Second,
 
 		// В очереди кадры кодека (до ~8 KB), а не IP-пакеты: очередь длиннее
 		// — это уже не буфер, а секунды задержки.
@@ -157,7 +163,7 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// помещается и режется на сообщения при отправке.
 		MaxPayloadBytes: 65535,
 
-		NumRooms:        4,
+		NumRooms:        8,
 		RoomCreatePause: 500 * time.Millisecond,
 
 		StatsInterval: 5 * time.Second,
@@ -598,6 +604,8 @@ type cupsWS struct {
 	// Touched only by the read goroutine, and reset on every reconnect - a
 	// packet split across a drop is lost, like on any link.
 	recvBufs map[string][]byte
+	// recvSince is when each member's pending part of a packet began.
+	recvSince map[string]time.Time
 
 	sendQueue chan []byte
 
@@ -775,9 +783,9 @@ func (w *cupsWS) connectAndServe() error {
 		header.Add("Cookie", c.Name+"="+c.Value)
 	}
 
-	dial := netbind.DialContext
+	dial := netbind.DialContextFor(w.config.Network)
 	if w.framed {
-		dial = dialLane
+		dial = dialLane(dial)
 	}
 	dialer := websocket.Dialer{
 		NetDialContext:   dial,
@@ -806,6 +814,7 @@ func (w *cupsWS) connectAndServe() error {
 	conn.SetReadLimit(int64(w.config.MaxMessageBytes))
 	// Fresh socket, fresh stream: drop any half-assembled packet from before.
 	w.recvBufs = nil
+	w.recvSince = nil
 	// The replies to RPCs sent on the old socket will never come; start the
 	// in-flight count and its ids clean so the puller isn't stuck at the
 	// window forever.
@@ -830,6 +839,10 @@ func (w *cupsWS) connectAndServe() error {
 	}
 	w.connected.Store(true)
 	w.markAlive()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
 	utils.Debugf("[CUPS] WS ready: %s", a.roomUUID)
 
 	kaStop := make(chan struct{})
@@ -951,6 +964,9 @@ func (w *cupsWS) sendBatch(batch [][]byte) error {
 	return nil
 }
 
+// cupsNow is the receive clock; tests move it.
+var cupsNow = time.Now
+
 // pullLoop is sendLoop for a stripe lane. Right before each message may leave
 // (SendInterval after the last one) it takes from the stripe as many pieces
 // as fit in one message, so what the room cannot carry yet waits in the
@@ -1065,15 +1081,18 @@ func (w *cupsWS) pullLoop(src func(max int) [][]byte) {
 // stays in the stripe's queue where CoDel manages it.
 const laneSendBuffer = 64 << 10
 
-func dialLane(ctx context.Context, network, addr string) (net.Conn, error) {
-	c, err := netbind.DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
+// dialLane is dial with laneSendBuffer on the socket.
+func dialLane(dial func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetWriteBuffer(laneSendBuffer)
+		}
+		return c, nil
 	}
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetWriteBuffer(laneSendBuffer)
-	}
-	return c, nil
 }
 
 // lanePollIdle is how long an idle stripe lane sleeps before it asks the
@@ -1287,6 +1306,21 @@ func (w *cupsWS) handleReply(raw []byte) {
 	// across messages completes once the rest of it arrives.
 	if w.recvBufs == nil {
 		w.recvBufs = make(map[string][]byte)
+		w.recvSince = make(map[string]time.Time)
+	}
+	now := cupsNow()
+	// A packet whose rest never came (a message of the sender's batch was
+	// lost) would hold the stream out of sync until some length happened to
+	// line it up again, and everything the sender sent meanwhile was lost.
+	// A batch comes as a burst of messages a pacing interval apart, so a part
+	// still waiting after StreamResyncAfter is given up and this message
+	// starts the stream afresh: the first message of every batch begins at a
+	// packet boundary.
+	pending := len(w.recvBufs[sender]) > 0
+	if pending && w.config.StreamResyncAfter > 0 && now.Sub(w.recvSince[sender]) > w.config.StreamResyncAfter {
+		utils.Debugf("[CUPS] recv %s: %d bytes of a packet never completed, starting the stream afresh", w.roomUUID, len(w.recvBufs[sender]))
+		delete(w.recvBufs, sender)
+		pending = false
 	}
 	buf := append(w.recvBufs[sender], chunk...)
 	adv, count, total := 0, 0, 0
@@ -1315,12 +1349,18 @@ func (w *cupsWS) handleReply(raw []byte) {
 	switch {
 	case len(rest) == 0:
 		delete(w.recvBufs, sender)
+		delete(w.recvSince, sender)
 	case len(rest) > w.config.MaxPayloadBytes+w.config.MaxMessageData:
 		// A stream that never yields a packet must not grow without bound.
 		utils.Debugf("[CUPS] recv stream out of sync (%s), resetting", w.roomUUID)
 		delete(w.recvBufs, sender)
+		delete(w.recvSince, sender)
 	default:
 		w.recvBufs[sender] = rest
+		// A new part of a packet starts its clock; the rest of the same one keeps it.
+		if !pending || count > 0 {
+			w.recvSince[sender] = now
+		}
 	}
 	if count > 0 {
 		w.stats.packetsRecv.Add(uint64(count))
@@ -1395,6 +1435,10 @@ type CupsonlineTransport struct {
 	statsStart time.Time
 }
 
+// IsClient reports whether the transport joins an exit's rooms rather than
+// creating its own.
+func (t *CupsonlineTransport) IsClient() bool { return t.isClient }
+
 func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClient bool) *CupsonlineTransport {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &CupsonlineTransport{
@@ -1406,9 +1450,10 @@ func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClie
 		statsStart:    time.Now(),
 	}
 
+	t.config.Network = cfg.Network
 	t.baseURL = baseRoomURL
 	// Measuring knobs: CUPS_SEND_MS (SendInterval), CUPS_MSG_BYTES
-	// (MaxMessageData, at most 8192: the stripe's pieces are cut for it).
+	// (MaxMessageData, at most 12288: the stripe's pieces are cut for it).
 	if ms := envInt("CUPS_SEND_MS"); ms > 0 {
 		t.config.SendInterval = time.Duration(ms) * time.Millisecond
 	}
@@ -1729,6 +1774,8 @@ func (t *CupsonlineTransport) statsLoop() {
 	defer tick.Stop()
 
 	lastSent := make([]uint64, len(t.wss))
+
+	lastMsgs := make([]uint64, len(t.wss))
 	lastRecv := make([]uint64, len(t.wss))
 	lastBytesSent := make([]uint64, len(t.wss))
 	lastBytesRecv := make([]uint64, len(t.wss))
@@ -1761,8 +1808,16 @@ func (t *CupsonlineTransport) statsLoop() {
 				totalBytesSent += bs
 				totalBytesRecv += br
 
-				utils.Debugf("[CH-%02d %s] tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  drop=%d  reconn=%d  conn=%v",
+				msgs := ws.stats.batchesSent.Load()
+				dM := msgs - lastMsgs[i]
+				lastMsgs[i] = msgs
+				avgMsg := 0.0
+				if dM > 0 {
+					avgMsg = float64(dBS) / float64(dM)
+				}
+				utils.Debugf("[CH-%02d %s] msgs=%.1f/s avg=%.0fB inflight=%d  tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  drop=%d  reconn=%d  conn=%v",
 					i, shortRoom(ws.roomUUID),
+					float64(dM)/t.config.StatsInterval.Seconds(), avgMsg, ws.inflight.Load(),
 					dS/uint64(t.config.StatsInterval.Seconds()),
 					float64(dBS)/t.config.StatsInterval.Seconds()/1024,
 					dR/uint64(t.config.StatsInterval.Seconds()),
@@ -1870,3 +1925,14 @@ func (t *CupsonlineTransport) ApplyCookies(values map[string]string) error {
 	}
 	return nil
 }
+
+// SetNumRooms sets how many rooms (avito: room pairs) an exit with no --url
+// creates, before Start. A group of carriers gives each lane one.
+func (t *CupsonlineTransport) SetNumRooms(n int) {
+	if n > 0 {
+		t.config.NumRooms = n
+	}
+}
+
+// StripeOptions are the settings for a stripe over this carrier's rooms.
+func StripeOptions() transport.StripeOptions { return stripeOptions }

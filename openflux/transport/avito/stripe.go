@@ -28,6 +28,12 @@ var stripeOptions = transport.StripeOptions{
 	PieceBytes: stripePieceBytes,
 	DeadAfter:  5 * time.Second,
 	NoDups:     true,
+	// An op takes ~0.4-1.5 s to be acked and the ack of the stripe comes back
+	// on another room; with the default 500 ms to 2 s timeout nearly every
+	// piece was sent twice (16 pairs: 898 resends for 901 pieces).
+	InitRTO: 3 * time.Second,
+	MinRTO:  2 * time.Second,
+	MaxRTO:  10 * time.Second,
 }
 
 // lanePollIdle is how long an idle lane sleeps before it asks the stripe

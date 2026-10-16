@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,6 +59,15 @@ type AvitoConfig struct {
 	StatsInterval time.Duration
 }
 
+// envKB reads a positive integer knob (the name is historic: chunk sizes
+// are in KB); def when unset or invalid.
+func envKB(name string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(name)); err == nil && n > 0 {
+		return n
+	}
+	return def
+}
+
 func DefaultAvitoConfig() AvitoConfig {
 	return AvitoConfig{
 		WSHandshakeTimeout:  15 * time.Second,
@@ -68,14 +78,14 @@ func DefaultAvitoConfig() AvitoConfig {
 		ReconnectMultiplier: 1.3,
 		HTTPTimeout:         30 * time.Second,
 
-		ChunkBytes:    256 * 1024,
+		ChunkBytes:    envKB("AVITO_CHUNK_KB", 256) * 1024,
 		SendQueueSize: 256,
 
 		ReadBufferSize:  256 << 10,
 		WriteBufferSize: 256 << 10,
 		MaxMessageBytes: 8 << 20,
 
-		NumRooms:        4,
+		NumRooms:        envKB("AVITO_ROOMS", 8), // room PAIRS = stripe lanes
 		RoomCreatePause: 300 * time.Millisecond,
 
 		StatsInterval: 5 * time.Second,
@@ -332,7 +342,7 @@ func (w *avitoWS) connectAndServe() error {
 	// loops belong to this socket: done ends them with it, and the send loop
 	// is waited for, so a loop from a dead socket never takes the next one's
 	// acks or writes into it with a stale version.
-	c := &avitoConn{done: make(chan struct{}), ack: make(chan map[string]interface{}, 1)}
+	c := &avitoConn{done: make(chan struct{}), ack: make(chan map[string]interface{}, 64)}
 	readDone := make(chan error, 1)
 	go func() {
 		readDone <- w.readLoop(conn, c)
@@ -940,3 +950,14 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 		return false
 	}
 }
+
+// SetNumRooms sets how many rooms (avito: room pairs) an exit with no --url
+// creates, before Start. A group of carriers gives each lane one.
+func (t *AvitoTransport) SetNumRooms(n int) {
+	if n > 0 {
+		t.config.NumRooms = n
+	}
+}
+
+// StripeOptions are the settings for a stripe over this carrier's rooms.
+func StripeOptions() transport.StripeOptions { return stripeOptions }
