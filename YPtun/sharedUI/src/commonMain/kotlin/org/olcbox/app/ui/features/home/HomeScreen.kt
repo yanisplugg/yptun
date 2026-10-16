@@ -1,6 +1,13 @@
 package org.olcbox.app.ui.features.home
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -766,7 +773,7 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                            PingDot()
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(s.freeServersLoading, style = MaterialTheme.typography.bodyMedium)
                                 Text(
@@ -949,6 +956,27 @@ private sealed interface PendingDelete {
     data object AllConfigs : PendingDelete
     data object Unreachable : PendingDelete
     data object Duplicates : PendingDelete
+}
+
+/** Sonar-style "ping": a steady dot with a ring that swells and fades, instead of a spinner. */
+@Composable
+private fun PingDot(modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.primary
+    val t = rememberInfiniteTransition(label = "ping")
+    val ring by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart), label = "ring")
+    val pulse by t.animateFloat(0.75f, 1f, infiniteRepeatable(tween(700, easing = LinearEasing), RepeatMode.Reverse), label = "pulse")
+    Box(modifier.size(36.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(36.dp)
+                .graphicsLayer { scaleX = 0.3f + 0.7f * ring; scaleY = 0.3f + 0.7f * ring; alpha = 1f - ring }
+                .background(color.copy(alpha = 0.5f), CircleShape)
+        )
+        Box(
+            Modifier.size(14.dp)
+                .graphicsLayer { scaleX = pulse; scaleY = pulse }
+                .background(color, CircleShape)
+        )
+    }
 }
 
 @Composable
