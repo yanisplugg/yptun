@@ -52,13 +52,15 @@ object WarpHelper {
      * The INI as the awgproxy engine should run it (measured live against Cloudflare):
      *  - `Reserved` is always dropped: awgproxy stamps those bytes AFTER the handshake MAC, so Cloudflare
      *    discards every handshake of an officially-registered account (never connects). Free WARP needs none.
-     *  - AmneziaWG keeps the Jc/S/H knobs but loses the I1..I5 init packets: with I1 the handshake needed
-     *    ~60 s and then flapped; Jc-only handshakes in <1 s and held 70/70 requests.
+     *  - AmneziaWG keeps every obfuscation knob INCLUDING the I1..I5 init packets. Do not drop them: on a DPI
+     *    network (mobile/home RU operators) the handshake completes and then ALL data is cut after ~10 s —
+     *    seen live on the phone ("nothing opens", rx frozen, handshake retries unanswered). A clean PC
+     *    network measured I1 slower (~60 s to first data) than Jc-only, but that network has no DPI to beat.
      *  - the endpoint is pinned to WARP's anycast IP: a domain is resolved at start-up by Go's resolver,
      *    which on Android has no resolv.conf (and, with the VPN already up, would loop into our own tunnel).
      */
     fun engineIni(ini: String, awg: Boolean): String {
-        val base = if (awg) dropKeys(ini, setOf("reserved", "i1", "i2", "i3", "i4", "i5")) else plainWireGuard(ini)
+        val base = if (awg) dropKeys(ini, setOf("reserved")) else plainWireGuard(ini)
         val (host, port) = endpointOf(ini)
         return withEndpoint(base, "${pinnedHost(host)}:$port")
     }

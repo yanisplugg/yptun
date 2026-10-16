@@ -52,7 +52,7 @@ class WarpHelperTest {
     }
 
     @Test
-    fun engineIniDropsReservedPinsEndpointAndOnlyAwgKeepsJunk() {
+    fun engineIniDropsReservedPinsEndpointAndOnlyAwgKeepsObfuscation() {
         val ini = """
             [Interface]
             PrivateKey = a=
@@ -65,8 +65,9 @@ class WarpHelperTest {
             Endpoint = engage.cloudflareclient.com:2408
         """.trimIndent()
         val awg = WarpHelper.engineIni(ini, awg = true)
-        assertEquals(false, awg.contains("Reserved") || awg.contains("I1"))
-        assertEquals(true, awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:2408"))
+        assertEquals(false, awg.contains("Reserved"))
+        // I1 is the DPI-evasion init packet: losing it makes DPI networks cut all data after the handshake.
+        assertEquals(true, awg.contains("I1 = <b 0xce>") && awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:2408"))
         val wg = WarpHelper.engineIni(ini, awg = false)
         assertEquals(false, wg.contains("Jc") || wg.contains("S1") || wg.contains("Reserved"))
         assertEquals("1.2.3.4", WarpHelper.pinnedHost("1.2.3.4"))
