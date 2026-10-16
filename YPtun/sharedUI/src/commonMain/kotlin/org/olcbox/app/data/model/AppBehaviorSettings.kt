@@ -349,7 +349,7 @@ data class AppBehaviorSettings(
         const val DEFAULT_FREE_SERVERS_LIMIT = FREE_SERVERS_UNLIMITED
 
         /** Selectable free-server caps (single-choice chips in the UI). */
-        val FREE_SERVERS_LIMITS = listOf(500, 1000, FREE_SERVERS_UNLIMITED)
+        val FREE_SERVERS_LIMITS = listOf(500, 1000, 2500, 5000, FREE_SERVERS_UNLIMITED)
 
         /** Parallel ping streams: how many locations are probed at once. */
         const val DEFAULT_PING_PARALLELISM = 5
