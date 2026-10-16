@@ -3925,6 +3925,12 @@ private fun PingSettingsContent(
             checked = settings.showSubscriptionAliveCount
         ) { onChanged(settings.copy(showSubscriptionAliveCount = it)) }
 
+        RoutingToggleRow(
+            title = s.showPingControlsTitle,
+            subtitle = s.showPingControlsSubtitle,
+            checked = settings.showPingControls
+        ) { onChanged(settings.copy(showPingControls = it)) }
+
         PingParallelismRow(
             value = settings.effectivePingParallelism(),
             onChange = { onChanged(settings.copy(pingParallelism = it)) }

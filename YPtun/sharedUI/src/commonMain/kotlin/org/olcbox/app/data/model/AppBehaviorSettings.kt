@@ -250,6 +250,11 @@ data class AppBehaviorSettings(
      * (lowest) time is shown. A location that does not answer the first time is not measured again.
      */
     val pingPrecision: Int = DEFAULT_PING_PRECISION,
+    /**
+     * Pause / stop buttons for a running ping pass and the "Tested N of M" progress line under the
+     * subscription header. Off by default: the ping button then just starts a pass.
+     */
+    val showPingControls: Boolean = false,
 ) {
     /**
      * A subscription's group key (`name|url`, also its folder member key) changed because its URL did: carry the

@@ -984,6 +984,7 @@ private fun parseTrafficBytes(raw: String?): Long? {
  */
 @Composable
 private fun GroupPingProgress(groupIds: List<String>, pingsState: PingsState) {
+    if (!org.olcbox.app.ui.features.locations.components.LocalShowPingControls.current) return
     val loading = pingsState as? PingsState.Loading ?: return
     val pending = groupIds.count { it in loading.pendingLocationIds }
     if (pending == 0 || groupIds.isEmpty()) return

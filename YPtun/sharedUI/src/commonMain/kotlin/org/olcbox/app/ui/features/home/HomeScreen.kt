@@ -202,8 +202,9 @@ fun HomeScreen(
     val pingsState = locationViewModel.pingsState
     // Pause / resume / drop of the running ping pass: the group's ping button turns into these while it runs.
     val pingPaused = (pingsState as? org.olcbox.app.ui.features.locations.PingsState.Loading)?.paused == true
-    val pingControls = remember(pingPaused) {
-        org.olcbox.app.ui.features.locations.components.PingControls(
+    val showPingControls = org.olcbox.app.ui.features.locations.components.LocalShowPingControls.current
+    val pingControls = remember(pingPaused, showPingControls) {
+        if (!showPingControls) null else org.olcbox.app.ui.features.locations.components.PingControls(
             paused = pingPaused,
             onPause = { locationViewModel.pausePings() },
             onResume = { locationViewModel.resumePings() },

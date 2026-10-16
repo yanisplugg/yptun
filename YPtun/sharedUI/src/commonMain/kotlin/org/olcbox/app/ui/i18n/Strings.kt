@@ -750,6 +750,8 @@ interface Strings {
     val savePingResultsSubtitle: String
     val showAliveCountTitle: String
     val showAliveCountSubtitle: String
+    val showPingControlsTitle: String
+    val showPingControlsSubtitle: String
     val pingThreadsTitle: String
     val pingThreadsSubtitle: String
     val appearanceTitle: String
@@ -1491,6 +1493,9 @@ object RuStrings : Strings {
     override val showAliveCountTitle = "Счётчик доступных серверов"
     override val showAliveCountSubtitle =
         "В шапке подписки показывать «живые/всего» по последнему пингу"
+    override val showPingControlsTitle = "Пауза пинга и его процесс"
+    override val showPingControlsSubtitle =
+        "Кнопки паузы/остановки при пинге и строка «Проверено N из M» под подпиской"
     override val appearanceTitle = "Оформление"
     override val appearanceSubtitle = "Иконка приложения"
     override val appIconHint = "Иконка на рабочем столе сменится через пару секунд. Если лаунчер оставил старую или убрал значок — добавьте приложение на экран заново."
@@ -2221,6 +2226,9 @@ object EnStrings : Strings {
     override val showAliveCountTitle = "Reachable server counter"
     override val showAliveCountSubtitle =
         "Show \"live/total\" in the subscription header from the last ping pass"
+    override val showPingControlsTitle = "Ping pause and progress"
+    override val showPingControlsSubtitle =
+        "Show pause/stop buttons while pinging and the \"Tested N of M\" line under the subscription"
     override val appearanceTitle = "Appearance"
     override val appearanceSubtitle = "App icon"
     override val appIconHint = "The home-screen icon changes in a couple of seconds. If your launcher keeps the old one or drops it, add the app to the home screen again."
@@ -2951,6 +2959,9 @@ object FaStrings : Strings {
     override val showAliveCountTitle = "شمارندهٔ سرورهای در دسترس"
     override val showAliveCountSubtitle =
         "نمایش «فعال/کل» در سربرگ اشتراک بر اساس آخرین پینگ"
+    override val showPingControlsTitle = "مکث پینگ و پیشرفت آن"
+    override val showPingControlsSubtitle =
+        "نمایش دکمه‌های مکث/توقف هنگام پینگ و نوار پیشرفت زیر اشتراک"
     override val appearanceTitle = "ظاهر"
     override val appearanceSubtitle = "نماد برنامه"
     override val appIconHint = "نماد صفحهٔ اصلی چند ثانیه بعد تغییر می‌کند. اگر لانچر نماد قبلی را نگه داشت یا حذف کرد، برنامه را دوباره به صفحهٔ اصلی اضافه کنید."
@@ -3681,6 +3692,9 @@ object ZhStrings : Strings {
     override val showAliveCountTitle = "可达服务器计数"
     override val showAliveCountSubtitle =
         "在订阅标题中显示上次测试的“可用/总数”"
+    override val showPingControlsTitle = "测试暂停与进度"
+    override val showPingControlsSubtitle =
+        "测试时显示暂停/停止按钮，并在订阅下方显示“已测试 N / M”"
     override val appearanceTitle = "外观"
     override val appearanceSubtitle = "应用图标"
     override val appIconHint = "桌面图标会在几秒后更换。如果启动器保留了旧图标或图标消失，请重新把应用添加到桌面。"
