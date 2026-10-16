@@ -1076,6 +1076,32 @@ class LocationsRepositoryImplTest {
         assertTrue("bittorrent" in raw && "198.18.0.0/15" in raw, raw)
     }
 
+    // Settings -> Privacy: the daily ProviderID report goes out only while its switch is on.
+    @Test
+    fun providerReportIsSentOnlyWhileThePrivacySwitchIsOn() = runTest {
+        val link = "vless://11111111-2222-3333-4444-555555555555@a.test:443?type=tcp&security=tls#A"
+        var checks = 0
+        val engine = MockEngine { request ->
+            if (request.url.host == "check.happ-proxy.com") {
+                checks++
+                respond("ok")
+            } else {
+                respond(link, headers = headersOf("providerid", "prov-1"))
+            }
+        }
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(engine), StaticIdentityProvider("hwid-test"))
+        repo.importText("https://example.test/sub")
+
+        source.providerReportOn = false
+        repo.reportProviderUsage()
+        assertEquals(0, checks)
+
+        source.providerReportOn = true
+        repo.reportProviderUsage()
+        assertEquals(1, checks)
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),
@@ -1091,6 +1117,9 @@ class LocationsRepositoryImplTest {
         override suspend fun loadLegacyLocations(): List<Pair<String, String>> = legacy
 
         override suspend fun loadLegacyActiveLocationId(): String? = legacyActive
+
+        var providerReportOn = true
+        override suspend fun providerReportEnabled(): Boolean = providerReportOn
     }
 
     private class StaticIdentityProvider(

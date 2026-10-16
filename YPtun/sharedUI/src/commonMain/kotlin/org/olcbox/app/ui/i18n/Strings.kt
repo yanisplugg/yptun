@@ -510,6 +510,11 @@ interface Strings {
     // Experimental section
     val experimental: String
     val experimentalSubtitle: String
+    val privacy: String
+    val privacySubtitle: String
+    val providerReportTitle: String
+    val providerReportSubtitle: String
+    val providerReportDetails: String
     val experimentalUnlocked: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
@@ -1229,6 +1234,11 @@ object RuStrings : Strings {
     override val subscriptionSupport = "Поддержка"
     override val experimental = "Экспериментальные"
     override val experimentalSubtitle = "Cookies Telemost и прочее"
+    override val privacy = "Конфиденциальность"
+    override val privacySubtitle = "Что приложение отправляет наружу"
+    override val providerReportTitle = "Отчёт провайдеру подписки (ProviderID)"
+    override val providerReportSubtitle = "Раз в сутки сообщать провайдеру, что подписка используется"
+    override val providerReportDetails = "Если провайдер добавил к подписке заголовок providerid (так делают панели Remnawave и Happ), приложение раз в сутки отправляет запрос на check.happ-proxy.com/provider. В нём уходят: ID провайдера, идентификатор устройства (HWID), ID приложения, ОС и её версия, модель устройства и версия приложения. Подписки работают и без этого отчёта. Выключено — этот запрос не отправляется вообще. Обновляя подписку, приложение по-прежнему передаёт панели данные об устройстве: они нужны ей для лимита устройств."
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
@@ -1931,6 +1941,11 @@ object EnStrings : Strings {
     override val subscriptionSupport = "Support"
     override val experimental = "Experimental"
     override val experimentalSubtitle = "Telemost cookies and more"
+    override val privacy = "Privacy"
+    override val privacySubtitle = "What the app sends out"
+    override val providerReportTitle = "Report to the subscription provider (ProviderID)"
+    override val providerReportSubtitle = "Tell the provider once a day that the subscription is in use"
+    override val providerReportDetails = "If a provider adds a providerid header to a subscription (Remnawave and Happ panels do), the app sends a request to check.happ-proxy.com/provider once a day. It carries: the provider ID, the device identifier (HWID), the app ID, the OS and its version, the device model and the app version. Subscriptions work without this report. When off, that request is never sent. Refreshing a subscription still passes device details to the panel: it needs them for its device limit."
     override val experimentalUnlocked = "Experimental settings unlocked"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
@@ -2649,6 +2664,11 @@ object FaStrings : Strings {
     override val rootDenied = "دسترسی روت رد شد"
     override val experimental = "آزمایشی"
     override val experimentalSubtitle = "کوکی‌های Telemost و موارد دیگر"
+    override val privacy = "حریم خصوصی"
+    override val privacySubtitle = "برنامه چه چیزی ارسال می‌کند"
+    override val providerReportTitle = "گزارش به ارائه‌دهنده اشتراک (ProviderID)"
+    override val providerReportSubtitle = "روزی یک بار به ارائه‌دهنده اطلاع بده که اشتراک در حال استفاده است"
+    override val providerReportDetails = "اگر ارائه‌دهنده به اشتراک هدر providerid اضافه کند (پنل‌های Remnawave و Happ این کار را می‌کنند)، برنامه روزی یک بار درخواستی به check.happ-proxy.com/provider می‌فرستد. این درخواست شامل شناسه ارائه‌دهنده، شناسه دستگاه (HWID)، شناسه برنامه، سیستم‌عامل و نسخه آن، مدل دستگاه و نسخه برنامه است. اشتراک‌ها بدون این گزارش هم کار می‌کنند. وقتی خاموش باشد این درخواست اصلاً ارسال نمی‌شود. هنگام به‌روزرسانی اشتراک، مشخصات دستگاه همچنان به پنل داده می‌شود، چون پنل برای محدودیت تعداد دستگاه به آن نیاز دارد."
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
@@ -3335,6 +3355,11 @@ object ZhStrings : Strings {
     override val subscriptionSupport = "支持"
     override val experimental = "实验性"
     override val experimentalSubtitle = "Telemost cookies 等"
+    override val privacy = "隐私"
+    override val privacySubtitle = "应用向外发送的内容"
+    override val providerReportTitle = "向订阅提供商报告（ProviderID）"
+    override val providerReportSubtitle = "每天告知提供商该订阅正在使用"
+    override val providerReportDetails = "如果提供商在订阅中添加了 providerid 响应头（Remnawave 和 Happ 面板会这样做），应用每天会向 check.happ-proxy.com/provider 发送一次请求，其中包含：提供商 ID、设备标识（HWID）、应用 ID、系统及其版本、设备型号和应用版本。没有此报告订阅也能正常使用。关闭后根本不会发送该请求。刷新订阅时，应用仍会向面板提供设备信息，面板需要这些信息来限制设备数量。"
     override val experimentalUnlocked = "已解锁实验性设置"
     override val notifSpeed = "通知栏显示速度"
     override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"

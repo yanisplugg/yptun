@@ -90,6 +90,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -309,12 +310,19 @@ internal fun AppSettingsSheet(
                     onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
                     onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
+                    onPrivacyClick = { route = AppSettingsRoute.Privacy },
                     experimentalUnlocked = appBehavior.experimentalUnlocked,
                     onExperimentalClick = { route = AppSettingsRoute.Experimental },
                     onAppearanceClick = { route = AppSettingsRoute.Appearance }
                 )
 
                 AppSettingsRoute.Appearance -> AppearanceContent(onBack = { route = AppSettingsRoute.Hub })
+
+                AppSettingsRoute.Privacy -> PrivacyContent(
+                    settings = appBehavior,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onChanged = onAppBehaviorChanged
+                )
 
                 AppSettingsRoute.Experimental -> ExperimentalContent(
                     settings = appBehavior,
@@ -713,6 +721,7 @@ private fun AppSettingsHubContent(
     onSubscriptionsSharingClick: () -> Unit,
     onUpdatesClick: () -> Unit,
     onApplicationLogsClick: () -> Unit,
+    onPrivacyClick: () -> Unit = {},
     experimentalUnlocked: Boolean = false,
     onExperimentalClick: () -> Unit = {},
     onAppearanceClick: () -> Unit = {}
@@ -847,6 +856,14 @@ private fun AppSettingsHubContent(
                 icon = Icons.Outlined.History,
                 enabled = true,
                 onClick = onApplicationLogsClick
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.privacy,
+                subtitle = s.privacySubtitle,
+                icon = Icons.Outlined.Lock,
+                enabled = true,
+                onClick = onPrivacyClick
             )
             if (experimentalUnlocked) {
                 SettingsGroupDivider()
@@ -4359,6 +4376,46 @@ private fun AppIconTile(option: AppIconOption, name: String, selected: Boolean, 
     }
 }
 
+/** Settings -> Privacy: what the app sends out on its own, and the switches for it. */
+@Composable
+private fun PrivacyContent(
+    settings: AppBehaviorSettings,
+    onBack: () -> Unit,
+    onChanged: (AppBehaviorSettings) -> Unit
+) {
+    val s = LocalStrings.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = s.privacy,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        RoutingToggleRow(
+            title = s.providerReportTitle,
+            subtitle = s.providerReportSubtitle,
+            checked = settings.providerReportEnabled
+        ) { onChanged(settings.copy(providerReportEnabled = it)) }
+        Text(
+            text = s.providerReportDetails,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
 /** Hidden Experimental section (unlocked by tapping the connection timer 5×). */
 @Composable
 private fun ExperimentalContent(
@@ -4604,6 +4661,7 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object UrlSchemes : AppSettingsRoute(1)
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)
+    object Privacy : AppSettingsRoute(1)
     object Experimental : AppSettingsRoute(1)
     object Appearance : AppSettingsRoute(1)
     data class AppList(val list: AndroidSplitTunnelList) : AppSettingsRoute(2)

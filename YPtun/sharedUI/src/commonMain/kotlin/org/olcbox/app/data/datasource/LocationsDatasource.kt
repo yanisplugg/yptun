@@ -102,6 +102,9 @@ interface LocationsDataSource {
     suspend fun loadProviderReportState(): String? = null
     suspend fun saveProviderReportState(value: String) = Unit
 
+    /** The user's Settings → Privacy choice for the provider report (the report is on until switched off). */
+    suspend fun providerReportEnabled(): Boolean = true
+
     /**
      * A platform-stable device id (e.g. Android ANDROID_ID) used to seed the HWID so it
      * survives reinstalls / data-clears. Null when the platform offers no stable id.
@@ -578,6 +581,7 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun reportProviderUsage() {
+        if (!runCatching { dataSource.providerReportEnabled() }.getOrDefault(true)) return
         val ids = runCatching {
             getBundle().locations
                 .mapNotNull { it.metadata?.subscription?.providerId?.trim()?.takeIf { id -> id.isNotBlank() } }

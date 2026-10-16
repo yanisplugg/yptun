@@ -13,6 +13,7 @@ import org.olcbox.app.data.LOCATIONS_BUNDLE_FILE_NAME
 import org.olcbox.app.data.LOCATIONS_VIEW_INDEX_FILE_NAME
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationViewIndex
+import org.olcbox.app.vpn.data.KEY_ANDROID_APP_BEHAVIOR
 import org.olcbox.app.vpn.data.KEY_IS_VPN_CONFIG_READY
 import org.olcbox.app.vpn.data.KEY_VPN_CONFIG_PATH
 import org.olcbox.app.vpn.data.vpnPrefDataStore
@@ -165,6 +166,13 @@ class LocationsDataSourceImpl(
 
     override suspend fun loadProviderReportState(): String? {
         return context.vpnPrefDataStore.data.first()[KEY_PROVIDER_REPORT_STATE]?.ifBlank { null }
+    }
+
+    override suspend fun providerReportEnabled(): Boolean {
+        val raw = context.vpnPrefDataStore.data.first()[KEY_ANDROID_APP_BEHAVIOR] ?: return true
+        return runCatching {
+            Json.decodeFromString(org.olcbox.app.data.model.AppBehaviorSettings.serializer(), raw).providerReportEnabled
+        }.getOrDefault(true)
     }
 
     override suspend fun saveProviderReportState(value: String) {

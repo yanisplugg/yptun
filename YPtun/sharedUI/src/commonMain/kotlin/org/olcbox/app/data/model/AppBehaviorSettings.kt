@@ -213,6 +213,12 @@ data class AppBehaviorSettings(
      */
     val energySaver: Boolean = false,
     /**
+     * Daily report to the provider of a subscription that carries a Happ/Remnawave `providerid` header
+     * (GET check.happ-proxy.com/provider?id=<id> with HWID, app id, OS, device model and app version).
+     * On by default — providers that use it expect it; off sends nothing at all. Settings → Privacy.
+     */
+    val providerReportEnabled: Boolean = true,
+    /**
      * Telegram-over-WARP background proxy: when on, a lightweight foreground service raises an
      * AmneziaWG (Cloudflare WARP) tunnel and exposes a local SOCKS5 the user points Telegram at. Runs
      * independently of the main VPN. First enable requires internet (to generate + cache the WARP
