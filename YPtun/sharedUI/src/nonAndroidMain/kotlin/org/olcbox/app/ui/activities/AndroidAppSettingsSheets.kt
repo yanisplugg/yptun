@@ -236,6 +236,9 @@ fun AppSettingsSheet(
         }
     }
 
+    // Outside AnimatedContent: the Hub is disposed while a section is open, and its scroll position must outlive that.
+    val hubScroll = androidx.compose.foundation.rememberScrollState()
+
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
         sheetState = sheetState,
@@ -273,6 +276,7 @@ fun AppSettingsSheet(
         ) { currentRoute ->
             when (currentRoute) {
                 AppSettingsRoute.Hub -> AppSettingsHubContent(
+                    scrollState = hubScroll,
                     selectedMode = selectedMode,
                     dynamicThemeEnabled = dynamicThemeEnabled,
                     lightThemeEnabled = lightThemeEnabled,
@@ -707,13 +711,14 @@ private fun AppSettingsHubContent(
     onApplicationLogsClick: () -> Unit,
     onPrivacyClick: () -> Unit = {},
     experimentalUnlocked: Boolean = false,
-    onExperimentalClick: () -> Unit = {}
+    onExperimentalClick: () -> Unit = {},
+    scrollState: androidx.compose.foundation.ScrollState
 ) {
     val s = LocalStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
