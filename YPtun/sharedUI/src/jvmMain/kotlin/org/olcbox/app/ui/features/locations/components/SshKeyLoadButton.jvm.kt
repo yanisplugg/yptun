@@ -20,12 +20,12 @@ import java.awt.Frame
  * used to render nothing here, so a key could only be pasted.
  */
 @Composable
-actual fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit) {
+actual fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit, label: String?) {
     val s = LocalStrings.current
     OutlinedButton(
         enabled = enabled,
         onClick = {
-            val dialog = FileDialog(null as Frame?, s.sshKeyLoadFromFile, FileDialog.LOAD)
+            val dialog = FileDialog(null as Frame?, label ?: s.sshKeyLoadFromFile, FileDialog.LOAD)
             dialog.isVisible = true
             val file = dialog.files.firstOrNull() ?: return@OutlinedButton
             val text = runCatching { file.readText() }.getOrNull()
@@ -34,6 +34,6 @@ actual fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit) {
     ) {
         Icon(Icons.Outlined.FileOpen, contentDescription = null)
         Spacer(Modifier.width(6.dp))
-        Text(s.sshKeyLoadFromFile)
+        Text(label ?: s.sshKeyLoadFromFile)
     }
 }

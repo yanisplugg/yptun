@@ -230,7 +230,7 @@ interface Strings {
     val awgTuningTitle: String
     val awgTuningHint: String
     val wgProtocolTitle: String
-    val wgConfigField: String
+    val wgLoadFile: String
     val wgConfigHint: String
     val wgMissingPrefix: String
     val wgConnectionTitle: String
@@ -1032,7 +1032,7 @@ object RuStrings : Strings {
     override val awgTuningTitle = "AmneziaWG: тонкая настройка"
     override val awgTuningHint = "Значения должны совпадать с сервером. Пустое поле — параметр не задан. Каждое изменение применяется при сохранении локации"
     override val wgProtocolTitle = "Протокол"
-    override val wgConfigField = "Конфигурация (wg-quick)"
+    override val wgLoadFile = "Загрузить файл конфигурации AWG/WG"
     override val wgConfigHint = "Вставьте конфиг целиком или правьте текст. AmneziaWG отличается от WireGuard параметрами обфускации"
     override val wgMissingPrefix = "Не хватает: "
     override val wgConnectionTitle = "Параметры подключения (ключи, адреса, пир)"
@@ -1785,7 +1785,7 @@ object EnStrings : Strings {
     override val awgTuningTitle = "AmneziaWG: fine-tuning"
     override val awgTuningHint = "Values must match the server. An empty field means the parameter is not set. Changes apply when the location is saved"
     override val wgProtocolTitle = "Protocol"
-    override val wgConfigField = "Configuration (wg-quick)"
+    override val wgLoadFile = "Load AWG/WG configuration file"
     override val wgConfigHint = "Paste the whole config or edit the text. AmneziaWG differs from WireGuard by its obfuscation parameters"
     override val wgMissingPrefix = "Missing: "
     override val wgConnectionTitle = "Connection (keys, addresses, peer)"
@@ -2538,7 +2538,7 @@ object FaStrings : Strings {
     override val awgTuningTitle = "AmneziaWG: تنظیم دقیق"
     override val awgTuningHint = "مقادیر باید با سرور یکی باشند. فیلد خالی یعنی پارامتر تنظیم نشده. تغییرات هنگام ذخیرهٔ موقعیت اعمال می‌شوند"
     override val wgProtocolTitle = "پروتکل"
-    override val wgConfigField = "پیکربندی (wg-quick)"
+    override val wgLoadFile = "بارگذاری فایل پیکربندی AWG/WG"
     override val wgConfigHint = "کل پیکربندی را جای‌گذاری یا متن را ویرایش کنید. AmneziaWG با پارامترهای مبهم‌سازی از WireGuard متفاوت است"
     override val wgMissingPrefix = "کم است: "
     override val wgConnectionTitle = "اتصال (کلیدها، آدرس‌ها، همتا)"
@@ -3291,7 +3291,7 @@ object ZhStrings : Strings {
     override val awgTuningTitle = "AmneziaWG：精细调整"
     override val awgTuningHint = "数值必须与服务器一致。留空表示不设置该参数。更改在保存位置时生效"
     override val wgProtocolTitle = "协议"
-    override val wgConfigField = "配置 (wg-quick)"
+    override val wgLoadFile = "加载 AWG/WG 配置文件"
     override val wgConfigHint = "粘贴完整配置或直接编辑文本。AmneziaWG 与 WireGuard 的区别在于混淆参数"
     override val wgMissingPrefix = "缺少："
     override val wgConnectionTitle = "连接（密钥、地址、对端）"

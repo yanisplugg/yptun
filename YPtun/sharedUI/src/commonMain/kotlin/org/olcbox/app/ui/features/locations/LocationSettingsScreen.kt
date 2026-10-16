@@ -80,6 +80,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontFamily
 import org.olcbox.app.ui.features.locations.components.SshAuthFields
+import org.olcbox.app.ui.features.locations.components.SshKeyLoadButton
 import org.olcbox.app.vpn.csqtt.CsqttInstallOptions
 import org.olcbox.app.vpn.csqtt.rememberCsqttServerInstaller
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
@@ -358,6 +359,7 @@ fun LocationSettingsScreen(
                         allowEditing = allowConfigEditing,
                         enabled = !isSaving,
                         onProtocol = viewModel::onWireguardProtocolChanged,
+                        onIni = viewModel::onWireguardIniChanged,
                         onKnob = viewModel::onAwgKnobChanged
                     )
                 }
@@ -919,7 +921,7 @@ private fun EngineSelector(
 }
 
 private const val WIREGUARD_ENGINE_LABEL = "AmneziaWG/WG"
-private const val WIREGUARD_NEEDS_EDITING = "Чтобы ввести ключи и параметры, включите в настройках «Разрешить редактирование конфигураций»"
+private const val WIREGUARD_NEEDS_EDITING = "Загрузите файл конфигурации или включите в настройках «Разрешить редактирование конфигураций», чтобы ввести ключи и параметры вручную"
 private const val WIREGUARD_ENGINE_SUBTITLE = "Туннель WireGuard или AmneziaWG: свой wg-quick конфиг, ключи и все параметры"
 
 private class EngineCellSpec(val label: String, val selected: Boolean, val onClick: () -> Unit)
@@ -935,6 +937,7 @@ private fun WireguardEngineSection(
     allowEditing: Boolean,
     enabled: Boolean,
     onProtocol: (Boolean) -> Unit,
+    onIni: (String) -> Unit,
     onKnob: (AwgIniEditor.Knob, String) -> Unit
 ) {
     val s = LocalStrings.current
@@ -946,6 +949,7 @@ private fun WireguardEngineSection(
             FilterChip(selected = !isAwg, onClick = { onProtocol(false) }, enabled = enabled, label = { Text("WireGuard") })
         }
         if (!allowEditing) {
+            SshKeyLoadButton(enabled = enabled, onKeyLoaded = onIni, label = s.wgLoadFile)
             // The parameters are fields, and fields are what "allow editing configurations" turns on.
             Text(
                 if (missing.isEmpty()) s.wgConfigHint else WIREGUARD_NEEDS_EDITING,
