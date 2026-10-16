@@ -330,8 +330,10 @@ fun LocationSettingsScreen(
             item {
                 EngineSelector(
                     selected = config.engine,
+                    wireguard = viewModel.isWireguardEngine,
                     enabled = !isSaving,
-                    onSelected = viewModel::onEngineChanged
+                    onSelected = viewModel::onEngineChanged,
+                    onWireguard = viewModel::onWireguardEngineSelected
                 )
             }
 
@@ -348,8 +350,20 @@ fun LocationSettingsScreen(
                 }
             }
 
-            if (allowConfigEditing && config.proxy?.type == ProxyProfile.TYPE_AMNEZIAWG &&
-                (config.engine == EngineType.Standard || config.engine == EngineType.Chain)
+            if (viewModel.isWireguardEngine) {
+                item {
+                    WireguardEngineSection(
+                        ini = config.proxy?.awgConfig.orEmpty(),
+                        missing = viewModel.wireguardMissing,
+                        allowEditing = allowConfigEditing,
+                        enabled = !isSaving,
+                        onProtocol = viewModel::onWireguardProtocolChanged,
+                        onIni = viewModel::onWireguardIniChanged,
+                        onKnob = viewModel::onAwgKnobChanged
+                    )
+                }
+            } else if (allowConfigEditing && config.proxy?.type == ProxyProfile.TYPE_AMNEZIAWG &&
+                config.engine == EngineType.Chain
             ) {
                 item {
                     AwgTuningSection(
@@ -364,7 +378,8 @@ fun LocationSettingsScreen(
                 // Main proxy (основной аутбаунд) is the always-on primary outbound, but its editor field
                 // is hidden by request — it comes from the imported/subscription config (config.proxy)
                 // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
-                item {
+                // AmneziaWG/WG always runs on sing-box through awgproxy: no core to choose.
+                if (!viewModel.isWireguardEngine) item {
                     CoreSelector(
                         selected = config.core,
                         enabled = !isSaving,
@@ -374,7 +389,7 @@ fun LocationSettingsScreen(
                     )
                 }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
-                if (config.core != ProxyCore.Auto) {
+                if (!viewModel.isWireguardEngine && config.core != ProxyCore.Auto) {
                     item {
                         AdvancedCoreSection(
                             core = config.core,
@@ -833,8 +848,10 @@ private fun SectionTitle(
 @Composable
 private fun EngineSelector(
     selected: EngineType,
+    wireguard: Boolean,
     enabled: Boolean,
-    onSelected: (EngineType) -> Unit
+    onSelected: (EngineType) -> Unit,
+    onWireguard: () -> Unit
 ) {
     // OpenFlux has no iOS engine. The build platform, not UIDevice.systemName — that one reads
     // "iPadOS" on an iPad, which a check for "iOS" would miss.
@@ -854,7 +871,10 @@ private fun EngineSelector(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        SectionTitle(title = LocalStrings.current.engineSection, subtitle = engineSubtitle(selected))
+        SectionTitle(
+            title = LocalStrings.current.engineSection,
+            subtitle = if (wireguard) WIREGUARD_ENGINE_SUBTITLE else engineSubtitle(selected)
+        )
 
         // ONE cohesive block: a single rounded outline drawn ONCE around all engines, with thin
         // inner dividers between the cells. Two equal-width cells per row; the row height tracks the
@@ -867,20 +887,25 @@ private fun EngineSelector(
                 .clip(shape)
                 .border(BorderStroke(1.dp, outline), shape)
         ) {
-            options.chunked(2).forEachIndexed { rowIndex, rowOptions ->
+            // AmneziaWG/WG sits right after Standard: it IS a Standard location (see LocationViewModel.isWireguardEngine).
+            val cells = options.flatMap { engine ->
+                val cell = EngineCellSpec(engineLabel(engine), selected == engine && !(engine == EngineType.Standard && wireguard)) { onSelected(engine) }
+                if (engine == EngineType.Standard) listOf(cell, EngineCellSpec(WIREGUARD_ENGINE_LABEL, wireguard, onWireguard)) else listOf(cell)
+            }
+            cells.chunked(2).forEachIndexed { rowIndex, rowOptions ->
                 if (rowIndex > 0) HorizontalDivider(color = outline)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(IntrinsicSize.Min)
                 ) {
-                    rowOptions.forEachIndexed { colIndex, engine ->
+                    rowOptions.forEachIndexed { colIndex, cell ->
                         if (colIndex > 0) VerticalDivider(color = outline)
                         EngineCell(
-                            label = engineLabel(engine),
-                            selected = selected == engine,
+                            label = cell.label,
+                            selected = cell.selected,
                             enabled = enabled,
-                            onClick = { onSelected(engine) },
+                            onClick = cell.onClick,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -894,7 +919,80 @@ private fun EngineSelector(
     }
 }
 
-/** A single segment of the 2×2 engine block: fills its half, highlights (filled + check) when selected. */
+private const val WIREGUARD_ENGINE_LABEL = "AmneziaWG/WG"
+private const val WIREGUARD_ENGINE_SUBTITLE = "Туннель WireGuard или AmneziaWG: свой wg-quick конфиг, ключи и все параметры"
+
+private class EngineCellSpec(val label: String, val selected: Boolean, val onClick: () -> Unit)
+
+/**
+ * The AmneziaWG/WG engine page: the protocol (AmneziaWG has obfuscation parameters, WireGuard none), the whole
+ * wg-quick config as text (paste or edit), and - with the "allow editing configurations" setting - every parameter
+ * as its own field, keys included. The text and the fields edit the same INI, so they always agree.
+ */
+@Composable
+private fun WireguardEngineSection(
+    ini: String,
+    missing: List<String>,
+    allowEditing: Boolean,
+    enabled: Boolean,
+    onProtocol: (Boolean) -> Unit,
+    onIni: (String) -> Unit,
+    onKnob: (AwgIniEditor.Knob, String) -> Unit
+) {
+    val s = LocalStrings.current
+    val isAwg = AwgIniEditor.isAwg(ini)
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(s.wgProtocolTitle, style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = isAwg, onClick = { onProtocol(true) }, enabled = enabled, label = { Text("AmneziaWG") })
+            FilterChip(selected = !isAwg, onClick = { onProtocol(false) }, enabled = enabled, label = { Text("WireGuard") })
+        }
+        OutlinedTextField(
+            value = ini,
+            onValueChange = onIni,
+            label = { Text(s.wgConfigField) },
+            enabled = enabled,
+            minLines = 6,
+            maxLines = 14,
+            isError = missing.isNotEmpty(),
+            supportingText = {
+                Text(if (missing.isEmpty()) s.wgConfigHint else s.wgMissingPrefix + missing.joinToString(", "))
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (allowEditing) {
+            Text(s.wgConnectionTitle, style = MaterialTheme.typography.titleSmall)
+            AwgIniEditor.CONNECTION.forEach { knob ->
+                VkTurnField(
+                    value = AwgIniEditor.get(ini, knob.key, knob.section),
+                    onValueChange = { onKnob(knob, it) },
+                    label = knob.key,
+                    placeholder = knob.hint,
+                    enabled = enabled
+                )
+            }
+            if (isAwg) {
+                AwgTuningSection(ini = ini, enabled = enabled, onChange = onKnob)
+            } else {
+                // Plain WireGuard has no obfuscation, only the tunnel itself.
+                listOf("MTU", "PersistentKeepalive", "DNS")
+                    .mapNotNull { key -> AwgIniEditor.KNOBS.firstOrNull { it.key == key } }
+                    .forEach { knob ->
+                        VkTurnField(
+                            value = AwgIniEditor.get(ini, knob.key, knob.section),
+                            onValueChange = { onKnob(knob, it) },
+                            label = knob.key,
+                            placeholder = knob.hint,
+                            enabled = enabled,
+                            keyboardType = if (knob.kind == AwgIniEditor.Kind.Number) KeyboardType.Number else KeyboardType.Text
+                        )
+                    }
+            }
+        }
+    }
+}
+
+/** A single segment of the 2x2 engine block: fills its half, highlights (filled + check) when selected. */
 @Composable
 private fun EngineCell(
     label: String,

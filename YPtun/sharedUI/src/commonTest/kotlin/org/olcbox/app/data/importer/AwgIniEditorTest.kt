@@ -3,6 +3,8 @@ package org.olcbox.app.data.importer
 import org.olcbox.app.data.importer.AwgIniEditor.Section
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class AwgIniEditorTest {
 
@@ -64,6 +66,35 @@ class AwgIniEditorTest {
         assertEquals("25", AwgIniEditor.get(out, "PersistentKeepalive", Section.Peer))
         val multi = AwgIniEditor.set(ini, "I1", "<b 0x01>\n<r 8>")
         assertEquals("<b 0x01><r 8>", AwgIniEditor.get(multi, "I1"))
+    }
+
+    @Test
+    fun protocolIsAwgOnlyWhenAnObfuscationParameterIsSet() {
+        assertTrue(AwgIniEditor.isAwg(ini))
+        val plain = AwgIniEditor.toWireGuard(ini)
+        assertFalse(AwgIniEditor.isAwg(plain))
+        assertEquals("0.0.0.0/0", AwgIniEditor.get(plain, "AllowedIPs", Section.Peer))
+        assertEquals("AAA=", AwgIniEditor.get(plain, "PrivateKey"))
+        // Back to AmneziaWG: the seed parameters appear again.
+        assertTrue(AwgIniEditor.isAwg(AwgIniEditor.toAmneziaWg(plain)))
+        assertEquals(listOf("Jc" to "4", "S1" to "0"), AwgIniEditor.obfuscation(ini).take(2))
+    }
+
+    @Test
+    fun templateNeedsKeysAndEndpointBeforeItIsUsable() {
+        assertEquals(listOf("PrivateKey", "PublicKey", "Endpoint"), AwgIniEditor.missing(AwgIniEditor.skeleton(awg = false)))
+        assertFalse(AwgIniEditor.isAwg(AwgIniEditor.skeleton(awg = false)))
+        assertTrue(AwgIniEditor.isAwg(AwgIniEditor.skeleton(awg = true)))
+        assertEquals(emptyList(), AwgIniEditor.missing(ini.replace("Address = 10.0.0.2/32", "Address = 10.0.0.2/32").let {
+            AwgIniEditor.set(it, "PublicKey", "BBB=", Section.Peer)
+        }))
+    }
+
+    @Test
+    fun endpointSplitsHostAndPort() {
+        assertEquals("1.2.3.4" to 51820, AwgIniEditor.endpoint(ini))
+        assertEquals("2001:db8::1" to 443, AwgIniEditor.endpoint("[Peer]\nEndpoint = [2001:db8::1]:443"))
+        assertEquals("" to 0, AwgIniEditor.endpoint("[Interface]\nPrivateKey = A="))
     }
 
     @Test

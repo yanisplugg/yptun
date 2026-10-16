@@ -231,7 +231,7 @@ class LocationViewModel(
             EngineType.Stealth -> olcrtcFieldsValid
             // The main proxy is always the primary outbound, so it must be valid. The optional second
             // (cascade) proxy is either parsed-and-complete or null, so it never blocks saving.
-            EngineType.Standard -> editingConfig.proxy?.isComplete() == true
+            EngineType.Standard -> editingConfig.proxy?.isComplete() == true && wireguardConfigUsable
             EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
             EngineType.VkTurn -> vkTurnFieldsValid
             EngineType.MasterDns -> masterDnsFieldsValid
@@ -620,6 +620,9 @@ class LocationViewModel(
         editingProxy2Link = ""
         isSaving = false
         providerDrafts.clear()
+        wgStashedProxy = null
+        wgStashedLink = ""
+        awgBackup = emptyList()
 
         if (id == null) {
             editingId = null
@@ -826,6 +829,14 @@ class LocationViewModel(
     }
 
     fun onEngineChanged(engine: EngineType) {
+        if (isWireguardEngine) {
+            // Leaving AmneziaWG/WG: hand back the proxy it replaced (nothing for a location that was always WG).
+            editingConfig = editingConfig.copy(proxy = wgStashedProxy)
+            editingProxyLink = wgStashedLink
+            wgStashedProxy = null
+            wgStashedLink = ""
+            proxyError = null
+        }
         val previous = editingConfig.engine
         editingConfig = editingConfig.copy(engine = engine)
         // Clear olcRTC field errors when they are no longer required.
@@ -883,14 +894,77 @@ class LocationViewModel(
     }
 
     /**
+     * The «AmneziaWG/WG» engine is a Standard location whose main proxy is a wg-quick INI that the awgproxy engine
+     * runs — with obfuscation parameters it is AmneziaWG, without them plain WireGuard. Same connect path as before.
+     */
+    val isWireguardEngine: Boolean
+        get() = editingConfig.engine == EngineType.Standard && editingConfig.proxy?.type == ProxyProfile.TYPE_AMNEZIAWG
+
+    /** True when the INI has every parameter the engine refuses to start without (an empty template does not). */
+    private val wireguardConfigUsable: Boolean
+        get() = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_AMNEZIAWG }
+            ?.let { AwgIniEditor.missing(it.awgConfig).isEmpty() } ?: true
+
+    /** What the INI still lacks, for the editor's hint. */
+    val wireguardMissing: List<String>
+        get() = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_AMNEZIAWG }
+            ?.let { AwgIniEditor.missing(it.awgConfig) }.orEmpty()
+
+    // What the engine pushed aside when it was picked, and the obfuscation removed by switching to plain WireGuard.
+    private var wgStashedProxy: ProxyProfile? = null
+    private var wgStashedLink: String = ""
+    private var awgBackup: List<Pair<String, String>> = emptyList()
+
+    /** Picks the AmneziaWG/WG engine: an empty AmneziaWG template to fill in or paste over. */
+    fun onWireguardEngineSelected() {
+        if (isWireguardEngine) return
+        onEngineChanged(EngineType.Standard)
+        wgStashedProxy = editingConfig.proxy
+        wgStashedLink = editingProxyLink
+        editingProxyLink = ""
+        proxyError = null
+        applyWireguardIni(AwgIniEditor.skeleton(awg = true))
+    }
+
+    /** AmneziaWG (obfuscation parameters) or plain WireGuard (none); the removed parameters come back on the way back. */
+    fun onWireguardProtocolChanged(awg: Boolean) {
+        val proxy = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_AMNEZIAWG } ?: return
+        val ini = proxy.awgConfig
+        if (awg == AwgIniEditor.isAwg(ini)) return
+        if (awg) {
+            val restored = awgBackup.fold(ini) { acc, (key, value) -> AwgIniEditor.set(acc, key, value) }
+            applyWireguardIni(AwgIniEditor.toAmneziaWg(restored))
+        } else {
+            awgBackup = AwgIniEditor.obfuscation(ini)
+            applyWireguardIni(AwgIniEditor.toWireGuard(ini))
+        }
+    }
+
+    /** The whole INI typed or pasted into the text field. */
+    fun onWireguardIniChanged(text: String) {
+        applyWireguardIni(text.replace("\r\n", "\n").replace('\r', '\n'))
+    }
+
+    /** Stores [ini] as the main proxy, keeping its tag; server/port follow the Endpoint for the list and de-duplication. */
+    private fun applyWireguardIni(ini: String) {
+        val previous = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_AMNEZIAWG }
+        val (host, port) = AwgIniEditor.endpoint(ini)
+        val profile = (previous ?: ProxyProfile(tag = "AmneziaWG", type = ProxyProfile.TYPE_AMNEZIAWG)).copy(
+            server = host.ifBlank { "amneziawg" },
+            serverPort = port,
+            awgConfig = ini,
+        )
+        editingConfig = editingConfig.copy(proxy = profile)
+    }
+
+    /**
      * Fine-tuning editor (Settings → «Разрешить редактирование конфигураций»): sets one parameter in the
      * AmneziaWG INI of the main proxy; a blank value removes it. Everything else in the INI stays as it was.
      */
     fun onAwgKnobChanged(knob: AwgIniEditor.Knob, value: String) {
         val proxy = editingConfig.proxy ?: return
         if (proxy.type != ProxyProfile.TYPE_AMNEZIAWG) return
-        val ini = AwgIniEditor.set(proxy.awgConfig, knob.key, AwgIniEditor.filter(value, knob.kind), knob.section)
-        editingConfig = editingConfig.copy(proxy = proxy.copy(awgConfig = ini))
+        applyWireguardIni(AwgIniEditor.set(proxy.awgConfig, knob.key, AwgIniEditor.filter(value, knob.kind), knob.section))
     }
 
     /** Parses a pasted link for the optional SECOND (cascade) proxy into [editingConfig].proxy2. */

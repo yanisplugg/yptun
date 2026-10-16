@@ -33,6 +33,70 @@ object AwgIniEditor {
         Knob("PersistentKeepalive", "25", section = Section.Peer),
     )
 
+    /**
+     * The connection itself — keys, addresses, endpoint — in the order the editor shows them. Shown only with
+     * «Разрешить редактирование конфигураций» (the plain editor takes the whole INI text instead).
+     */
+    val CONNECTION: List<Knob> = listOf(
+        Knob("PrivateKey", "", Kind.Text),
+        Knob("Address", "10.0.0.2/32, fd00::2/128", Kind.Text),
+        Knob("PublicKey", "", Kind.Text, Section.Peer),
+        Knob("PresharedKey", "", Kind.Text, Section.Peer),
+        Knob("Endpoint", "host:51820", Kind.Text, Section.Peer),
+        Knob("AllowedIPs", "0.0.0.0/0, ::/0", Kind.Text, Section.Peer),
+    )
+
+    /** Keys that make a wg-quick INI AmneziaWG rather than plain WireGuard (lower case). */
+    val OBFUSCATION_KEYS: Set<String> = setOf(
+        "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4",
+        "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3", "itime",
+    )
+
+    /** What a freshly chosen AmneziaWG starts from: the values that behave as plain WireGuard plus junk packets. */
+    private val AWG_SEED = listOf(
+        "Jc" to "4", "Jmin" to "40", "Jmax" to "70", "S1" to "0", "S2" to "0",
+        "H1" to "1", "H2" to "2", "H3" to "3", "H4" to "4",
+    )
+
+    /** True when [ini] sets any obfuscation parameter (AmneziaWG); false for plain WireGuard. */
+    fun isAwg(ini: String): Boolean = OBFUSCATION_KEYS.any { get(ini, it).isNotBlank() }
+
+    /** The obfuscation parameters [ini] sets, as (key, value) — what switching to plain WireGuard takes away. */
+    fun obfuscation(ini: String): List<Pair<String, String>> =
+        KNOBS.filter { it.key.lowercase() in OBFUSCATION_KEYS }
+            .mapNotNull { knob -> get(ini, knob.key).takeIf { it.isNotBlank() }?.let { knob.key to it } }
+
+    /** [ini] as plain WireGuard: every obfuscation parameter removed. */
+    fun toWireGuard(ini: String): String =
+        OBFUSCATION_KEYS.fold(ini) { acc, key -> set(acc, key, "") }
+
+    /** [ini] as AmneziaWG: the seed parameters added where it sets none. */
+    fun toAmneziaWg(ini: String): String =
+        if (isAwg(ini)) ini else AWG_SEED.fold(ini) { acc, (key, value) -> set(acc, key, value) }
+
+    /** An empty config to fill in: the section layout and the usual defaults, no keys yet. */
+    fun skeleton(awg: Boolean): String {
+        val base = "[Interface]\nPrivateKey = \nAddress = 10.0.0.2/32\nDNS = 1.1.1.1\nMTU = 1280\n\n" +
+            "[Peer]\nPublicKey = \nEndpoint = \nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25"
+        return if (awg) toAmneziaWg(base) else base
+    }
+
+    /** The required parameters [ini] still lacks (what the engine refuses to start without); empty when usable. */
+    fun missing(ini: String): List<String> = buildList {
+        if (get(ini, "PrivateKey").isBlank()) add("PrivateKey")
+        if (get(ini, "Address").isBlank()) add("Address")
+        if (get(ini, "PublicKey", Section.Peer).isBlank()) add("PublicKey")
+        if (get(ini, "Endpoint", Section.Peer).isBlank()) add("Endpoint")
+    }
+
+    /** `host` and `port` of the peer Endpoint (port 0 when absent or unreadable), for display and de-duplication. */
+    fun endpoint(ini: String): Pair<String, Int> {
+        val value = get(ini, "Endpoint", Section.Peer)
+        val colon = value.lastIndexOf(':')
+        if (colon <= 0) return value.removeSurrounding("[", "]") to 0
+        return value.substring(0, colon).removeSurrounding("[", "]") to (value.substring(colon + 1).toIntOrNull() ?: 0)
+    }
+
     /** What [raw] may contain for a field of [kind] (other characters are dropped as the user types). */
     fun filter(raw: String, kind: Kind): String = when (kind) {
         Kind.Number -> raw.filter(Char::isDigit)
