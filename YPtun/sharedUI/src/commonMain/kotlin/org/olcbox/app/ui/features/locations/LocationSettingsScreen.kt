@@ -3834,7 +3834,7 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.VkTurn -> "VK-TURN"
     EngineType.MasterDns -> "MasterDNS"
     EngineType.OpenFlux -> "OpenFlux"
-    EngineType.Snolc -> "snolc"
+    EngineType.Snolc -> "Snolc"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {

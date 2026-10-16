@@ -957,7 +957,7 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
-                title = s.coreVersion("snolc", org.olcbox.app.vpn.CoreVersions.SNOLC),
+                title = s.coreVersion("Snolc", org.olcbox.app.vpn.CoreVersions.SNOLC),
                 icon = Icons.Outlined.Tune,
                 enabled = true,
                 showChevron = false

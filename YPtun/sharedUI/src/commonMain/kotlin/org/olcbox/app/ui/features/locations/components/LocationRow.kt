@@ -403,7 +403,7 @@ private fun locationSubtitle(location: LocationItem): String {
 
         EngineType.OpenFlux -> listOfNotNull("OpenFlux", config.openFlux?.summary())
 
-        EngineType.Snolc -> listOfNotNull("snolc", config.snolc?.summary())
+        EngineType.Snolc -> listOfNotNull("Snolc", config.snolc?.summary())
 
         else -> listOf(
             config?.providerName()
