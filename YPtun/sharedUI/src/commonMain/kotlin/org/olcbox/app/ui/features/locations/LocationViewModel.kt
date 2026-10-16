@@ -1122,6 +1122,15 @@ class LocationViewModel(
         }
     }
 
+    /** Writes [link] as the cascade of EVERY server of a subscription (blank removes it), then reloads. [onResult] gets false when refused. */
+    fun setSubscriptionCascade(subscriptionUrl: String, link: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = locationsRepository.setSubscriptionCascade(subscriptionUrl, link)
+            if (ok) loadLocations()
+            onResult(ok)
+        }
+    }
+
     /** Deletes several locations at once (e.g. all configs of one subscription) in a single rewrite. */
     fun deleteLocations(ids: List<String>, onComplete: () -> Unit = {}) {
         viewModelScope.launch {

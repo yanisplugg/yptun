@@ -87,6 +87,14 @@ interface Strings {
     val subscriptionLinkHint: String
     val subscriptionLinkReadOnlyHint: String
     val subscriptionLinkRejected: String
+    val subscriptionCascadeTitle: String
+    val subscriptionCascadeHint: String
+    val subscriptionCascadeApply: String
+    val subscriptionCascadeRemove: String
+    val subscriptionCascadeRejected: String
+    val subscriptionCopyJson: String
+    val subscriptionJsonCopied: String
+    val subscriptionJsonEmpty: String
     val exitApp: String
     val visitSubscriptionPage: String
     // VPS installer SSH auth (password vs key).
@@ -870,6 +878,14 @@ object RuStrings : Strings {
     override val subscriptionLinkHint = "Новая ссылка (http/https). Серверы, названия и настройки сохранятся, подписка сразу обновится по ней."
     override val subscriptionLinkReadOnlyHint = "Ссылку этой подписки нельзя изменить"
     override val subscriptionLinkRejected = "Ссылка не принята: нужен адрес http/https, не совпадающий с адресом другой подписки"
+    override val subscriptionCascadeTitle = "Каскад для всей подписки"
+    override val subscriptionCascadeHint = "Ссылка прокси (vless://, vmess://, trojan://, ss://). Впишется вторым прокси во все серверы подписки и сохранится при обновлении. Пусто — убрать"
+    override val subscriptionCascadeApply = "Применить ко всем"
+    override val subscriptionCascadeRemove = "Убрать каскад"
+    override val subscriptionCascadeRejected = "Каскад не принят: нужна рабочая ссылка прокси (vless://, vmess://, trojan://, ss://)"
+    override val subscriptionCopyJson = "Скопировать JSON подписки"
+    override val subscriptionJsonCopied = "JSON скопирован ✓"
+    override val subscriptionJsonEmpty = "Нечего копировать: серверы подписки нельзя выразить в JSON"
     override val exitApp = "Выход"
     override val visitSubscriptionPage = "Посетить страницу подписки"
     override val sshAuthUseKey = "Вход по SSH-ключу"
@@ -1605,6 +1621,14 @@ object EnStrings : Strings {
     override val subscriptionLinkHint = "New link (http/https). Servers, names and settings are kept and the subscription refreshes from it right away."
     override val subscriptionLinkReadOnlyHint = "This subscription's link cannot be changed"
     override val subscriptionLinkRejected = "Link rejected: it must be an http/https address that no other subscription uses"
+    override val subscriptionCascadeTitle = "Cascade for the whole subscription"
+    override val subscriptionCascadeHint = "Proxy link (vless://, vmess://, trojan://, ss://). It becomes the second proxy of every server in the subscription and survives refreshes. Empty — remove"
+    override val subscriptionCascadeApply = "Apply to all"
+    override val subscriptionCascadeRemove = "Remove cascade"
+    override val subscriptionCascadeRejected = "Cascade rejected: a working proxy link is needed (vless://, vmess://, trojan://, ss://)"
+    override val subscriptionCopyJson = "Copy subscription JSON"
+    override val subscriptionJsonCopied = "JSON copied ✓"
+    override val subscriptionJsonEmpty = "Nothing to copy: the subscription servers cannot be expressed as JSON"
     override val exitApp = "Quit"
     override val visitSubscriptionPage = "Visit subscription page"
     override val sshAuthUseKey = "Sign in with SSH key"
@@ -2340,6 +2364,14 @@ object FaStrings : Strings {
     override val subscriptionLinkHint = "لینک جدید (http/https). سرورها، نام‌ها و تنظیمات حفظ می‌شوند و اشتراک بلافاصله از آن به‌روز می‌شود."
     override val subscriptionLinkReadOnlyHint = "لینک این اشتراک قابل تغییر نیست"
     override val subscriptionLinkRejected = "لینک پذیرفته نشد: باید آدرس http/https باشد و اشتراک دیگری از آن استفاده نکند"
+    override val subscriptionCascadeTitle = "کاسکید برای کل اشتراک"
+    override val subscriptionCascadeHint = "لینک پروکسی (vless://‎، vmess://‎، trojan://‎، ss://‎). به‌عنوان پروکسی دوم در همه سرورهای اشتراک نوشته می‌شود و پس از به‌روزرسانی می‌ماند. خالی — حذف"
+    override val subscriptionCascadeApply = "اعمال روی همه"
+    override val subscriptionCascadeRemove = "حذف کاسکید"
+    override val subscriptionCascadeRejected = "کاسکید پذیرفته نشد: لینک پروکسی معتبر لازم است"
+    override val subscriptionCopyJson = "کپی JSON اشتراک"
+    override val subscriptionJsonCopied = "JSON کپی شد ✓"
+    override val subscriptionJsonEmpty = "چیزی برای کپی نیست: سرورهای اشتراک را نمی‌توان به JSON تبدیل کرد"
     override val exitApp = "خروج"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
     override val sshAuthUseKey = "ورود با کلید SSH"
@@ -3075,6 +3107,14 @@ object ZhStrings : Strings {
     override val subscriptionLinkHint = "新链接（http/https）。服务器、名称和设置会保留，订阅会立即从新链接刷新。"
     override val subscriptionLinkReadOnlyHint = "无法修改此订阅的链接"
     override val subscriptionLinkRejected = "链接被拒绝：必须是 http/https 地址，且不能与其他订阅相同"
+    override val subscriptionCascadeTitle = "整个订阅的级联"
+    override val subscriptionCascadeHint = "代理链接（vless://、vmess://、trojan://、ss://）。将作为第二代理写入订阅的所有服务器，刷新后保留。留空 — 移除"
+    override val subscriptionCascadeApply = "应用到全部"
+    override val subscriptionCascadeRemove = "移除级联"
+    override val subscriptionCascadeRejected = "级联被拒绝：需要可用的代理链接"
+    override val subscriptionCopyJson = "复制订阅 JSON"
+    override val subscriptionJsonCopied = "JSON 已复制 ✓"
+    override val subscriptionJsonEmpty = "无可复制内容：订阅服务器无法表示为 JSON"
     override val exitApp = "退出"
     override val visitSubscriptionPage = "打开订阅页面"
     override val sshAuthUseKey = "使用 SSH 密钥登录"

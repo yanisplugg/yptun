@@ -7,6 +7,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import org.olcbox.app.ui.features.home.subscriptionJson
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -121,6 +124,8 @@ fun LazyListScope.locationSelectorContent(
     onRenameSubscription: (subscriptionUrl: String, name: String) -> Unit = { _, _ -> },
     // (old URL, new URL, the group's key before the change) — see [SubscriptionGroupMenu].
     onChangeSubscriptionUrl: (oldUrl: String, newUrl: String, groupKey: String) -> Unit = { _, _, _ -> },
+    // Writes one proxy link as the cascade of every server of the subscription (blank removes it).
+    onSetSubscriptionCascade: (url: String, link: String) -> Unit = { _, _ -> },
     // Pin / unpin one server of the free-servers list (a pinned one survives the next search).
     onToggleFreeServerPinned: (storageId: String, pinned: Boolean) -> Unit = { _, _ -> },
     // Servers a stopped free search has not checked yet; > 0 adds "continue the search" to that group's menu.
@@ -312,6 +317,9 @@ fun LazyListScope.locationSelectorContent(
                             onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
                             subscriptionUrl = groupSubUrl?.takeIf { !isFree },
                             onChangeUrl = groupSubUrl?.takeIf { !isFree }?.let { url -> { newUrl -> onChangeSubscriptionUrl(url, newUrl, groupKey) } },
+                            cascadeLink = group.firstNotNullOfOrNull { it.metadata?.subscription?.cascadeLink },
+                            onSetCascade = groupSubUrl?.takeIf { !isFree }?.let { url -> { link -> onSetSubscriptionCascade(url, link) } },
+                            onCopyJson = { subscriptionJson(group) },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) },
                             subscriptionPageUrl = groupWebPageUrl
@@ -492,6 +500,9 @@ fun LazyListScope.locationSelectorContent(
                                                 onRename = mSubUrl?.let { url -> { name -> onRenameSubscription(url, name) } },
                                                 subscriptionUrl = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL },
                                                 onChangeUrl = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL }?.let { url -> { newUrl -> onChangeSubscriptionUrl(url, newUrl, mKey) } },
+                                                cascadeLink = mGroup.firstNotNullOfOrNull { it.metadata?.subscription?.cascadeLink },
+                                                onSetCascade = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL }?.let { url -> { link -> onSetSubscriptionCascade(url, link) } },
+                                                onCopyJson = { subscriptionJson(mGroup) },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) },
                                                 subscriptionPageUrl = mWebPageUrl
@@ -1031,6 +1042,11 @@ private fun SubscriptionGroupMenu(
     // The subscription's link, shown (and copyable) in the menu; [onChangeUrl] non-null makes it editable.
     subscriptionUrl: String? = null,
     onChangeUrl: ((String) -> Unit)? = null,
+    // Cascade for the whole subscription: the saved link and the action that writes it into every server.
+    cascadeLink: String? = null,
+    onSetCascade: ((String) -> Unit)? = null,
+    // The subscription's servers as one JSON array (null when none can be expressed as JSON).
+    onCopyJson: (() -> String?)? = null,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit,
     subscriptionPageUrl: String? = null
@@ -1068,18 +1084,54 @@ private fun SubscriptionGroupMenu(
         val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
         val trimmed = draft.trim()
         val valid = trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)
+        var cascadeDraft by remember(cascadeLink) { mutableStateOf(cascadeLink.orEmpty()) }
+        var jsonCopied by remember { mutableStateOf<Boolean?>(null) }
+        val cascadeTrimmed = cascadeDraft.trim()
         AlertDialog(
             onDismissRequest = { showingUrl = false },
             title = { Text(s.subscriptionLink) },
             text = {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    readOnly = onChangeUrl == null,
-                    isError = onChangeUrl != null && !valid,
-                    minLines = 2,
-                    supportingText = { Text(if (onChangeUrl != null) s.subscriptionLinkHint else s.subscriptionLinkReadOnlyHint) }
-                )
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        readOnly = onChangeUrl == null,
+                        isError = onChangeUrl != null && !valid,
+                        minLines = 2,
+                        supportingText = { Text(if (onChangeUrl != null) s.subscriptionLinkHint else s.subscriptionLinkReadOnlyHint) }
+                    )
+                    if (onSetCascade != null) {
+                        OutlinedTextField(
+                            value = cascadeDraft,
+                            onValueChange = { cascadeDraft = it },
+                            label = { Text(s.subscriptionCascadeTitle) },
+                            minLines = 2,
+                            supportingText = { Text(s.subscriptionCascadeHint) }
+                        )
+                        TextButton(
+                            enabled = cascadeTrimmed != cascadeLink.orEmpty().trim(),
+                            onClick = { onSetCascade(cascadeTrimmed); showingUrl = false }
+                        ) { Text(if (cascadeTrimmed.isEmpty()) s.subscriptionCascadeRemove else s.subscriptionCascadeApply) }
+                    }
+                    if (onCopyJson != null) {
+                        TextButton(onClick = {
+                            val json = onCopyJson()
+                            if (json != null) clipboard.setText(androidx.compose.ui.text.AnnotatedString(json))
+                            jsonCopied = json != null
+                        }) {
+                            Text(
+                                when (jsonCopied) {
+                                    true -> s.subscriptionJsonCopied
+                                    false -> s.subscriptionJsonEmpty
+                                    null -> s.subscriptionCopyJson
+                                }
+                            )
+                        }
+                    }
+                }
             },
             confirmButton = {
                 if (onChangeUrl != null) {

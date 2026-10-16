@@ -599,6 +599,12 @@ fun HomeScreen(
                         }
                     }
                 },
+                onSetSubscriptionCascade = { url, link ->
+                    locationViewModel.setSubscriptionCascade(url, link) { ok ->
+                        if (ok) viewModel.restartVpnIfRunning()
+                        else scope.launch { snackbarHostState.showSnackbar(s.subscriptionCascadeRejected) }
+                    }
+                },
                 onSetSubscriptionAutoUpdate = { url, enabled ->
                     locationViewModel.setSubscriptionAutoUpdate(url, enabled)
                 },

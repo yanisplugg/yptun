@@ -1455,7 +1455,14 @@ data class SubscriptionMetadata(
      * renaming it in place would both break grouping and be undone by the next update.
      */
     @SerialName("custom_name")
-    val customName: String? = null
+    val customName: String? = null,
+    /**
+     * Share link of a cascade (second proxy) the USER set for the whole subscription. It is written into
+     * [LocationConfig.proxy2] of every server, and re-applied after each refresh — a refresh rebuilds the
+     * servers from the panel, which knows nothing about it.
+     */
+    @SerialName("cascade_link")
+    val cascadeLink: String? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -1475,7 +1482,8 @@ data class SubscriptionMetadata(
             iconUrl = iconUrl.cleanMetadataValue(),
             announce = announce.cleanMetadataValue(),
             providerId = providerId.cleanMetadataValue(),
-            customName = customName.cleanMetadataValue()
+            customName = customName.cleanMetadataValue(),
+            cascadeLink = cascadeLink.cleanMetadataValue()
         )
     }
 
@@ -1496,7 +1504,8 @@ data class SubscriptionMetadata(
                 webPageUrl.isNullOrBlank() &&
                 iconUrl.isNullOrBlank() &&
                 announce.isNullOrBlank() &&
-                providerId.isNullOrBlank()
+                providerId.isNullOrBlank() &&
+                cascadeLink.isNullOrBlank()
     }
 
     companion object {

@@ -423,6 +423,9 @@ class LocationsRepositoryImpl(
             val previousInterval = previousEntries.subscriptionUpdateIntervalHours()
             val previousAutoUpdate = previousEntries.subscriptionAutoUpdateEnabled()
             val previousCustomName = previousEntries.firstNotNullOfOrNull { it.metadata?.subscription?.customName }
+            // The cascade the user set for the whole subscription: the panel knows nothing about it.
+            val previousCascadeLink = previousEntries.firstNotNullOfOrNull { it.metadata?.subscription?.cascadeLink }
+            val previousCascade = previousCascadeLink?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
             val resolved = resolveParsedImport(
                 text = url,
                 fallbackSubscriptionInterval = previousInterval,
@@ -487,9 +490,10 @@ class LocationsRepositoryImpl(
                         lastRefreshAtEpochMs = attemptTimestamp,
                         lastAttemptAtEpochMs = attemptTimestamp,
                         autoUpdateEnabled = previousAutoUpdate,
-                        customName = previousCustomName
+                        customName = previousCustomName,
+                        cascadeLink = previousCascadeLink
                     )
-                ).normalized()
+                ).let { if (previousCascade != null) it.withCascade(previousCascade) else it }.normalized()
             }
 
             // Only reset the selection when the selected server actually vanished from this
@@ -711,6 +715,40 @@ class LocationsRepositoryImpl(
 
             saveBundleUnlocked(bundle.copy(locations = updated))
         }
+    }
+
+    override suspend fun setSubscriptionCascade(subscriptionUrl: String, link: String): Boolean {
+        val url = subscriptionUrl.trim()
+        if (url.isBlank()) return false
+        val trimmed = link.trim()
+        val cascade = if (trimmed.isEmpty()) null else {
+            ShareLinkParser.parse(trimmed)?.takeIf { it.isComplete() } ?: return false
+        }
+
+        return mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            val group = bundle.locations.filter { it.subscriptionUrl?.trim() == url }
+            if (group.isEmpty()) return@withLock false
+            // Clearing only undoes a cascade set here: proxy2 entered by hand on single servers stays.
+            if (cascade == null && group.none { !it.metadata?.subscription?.cascadeLink.isNullOrBlank() }) {
+                return@withLock true
+            }
+            val updated = bundle.locations.map { entry ->
+                if (entry.subscriptionUrl?.trim() != url) entry
+                else entry.withCascade(cascade)
+                    .copy(metadata = entry.metadata.withSubscriptionCascadeLink(trimmed.ifEmpty { null }))
+                    .normalized()
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+            true
+        }
+    }
+
+    /** [cascade] as the second proxy of this server; only Standard/Chain servers with a main proxy take one, and never their own node. */
+    private fun LocationEntry.withCascade(cascade: ProxyProfile?): LocationEntry {
+        val main = proxy ?: return this
+        if (location.engine != EngineType.Standard && location.engine != EngineType.Chain) return this
+        return copy(proxy2 = cascade?.takeUnless { main.isSameNodeAs(it) })
     }
 
     override suspend fun setLocationPinned(storageId: String, pinned: Boolean) {
@@ -3003,7 +3041,8 @@ class LocationsRepositoryImpl(
         lastRefreshAtEpochMs: Long?,
         lastAttemptAtEpochMs: Long? = lastRefreshAtEpochMs,
         autoUpdateEnabled: Boolean = this?.subscription?.autoUpdateEnabled ?: true,
-        customName: String? = this?.subscription?.customName
+        customName: String? = this?.subscription?.customName,
+        cascadeLink: String? = this?.subscription?.cascadeLink
     ): LocationMetadata {
         val subscription = this?.subscription ?: SubscriptionMetadata()
         return (this ?: LocationMetadata()).copy(
@@ -3012,8 +3051,17 @@ class LocationsRepositoryImpl(
                 lastRefreshAtEpochMs = lastRefreshAtEpochMs,
                 lastAttemptAtEpochMs = lastAttemptAtEpochMs,
                 autoUpdateEnabled = autoUpdateEnabled,
-                customName = customName
+                customName = customName,
+                cascadeLink = cascadeLink
             )
+        ).normalized()
+    }
+
+    /** Stores the subscription-wide cascade link (null clears it), keeping the rest of the metadata intact. */
+    private fun LocationMetadata?.withSubscriptionCascadeLink(link: String?): LocationMetadata {
+        val subscription = this?.subscription ?: SubscriptionMetadata()
+        return (this ?: LocationMetadata()).copy(
+            subscription = subscription.copy(cascadeLink = link)
         ).normalized()
     }
 

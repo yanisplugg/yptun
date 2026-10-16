@@ -54,6 +54,12 @@ interface LocationsRepository {
     suspend fun setSubscriptionAutoUpdate(subscriptionUrl: String, enabled: Boolean)
     /** Sets the user's own name for a subscription; blank restores the panel's name. */
     suspend fun setSubscriptionCustomName(subscriptionUrl: String, name: String)
+    /**
+     * Sets (or, with a blank [link], removes) a cascade — a second proxy — for EVERY server of a subscription and
+     * remembers it, so each later refresh puts it back. False (nothing changed) when [link] is not a usable proxy link
+     * or the subscription does not exist.
+     */
+    suspend fun setSubscriptionCascade(subscriptionUrl: String, link: String): Boolean
     /** Pins / unpins one location (by storage id); a pinned free server is kept when the free servers are replaced. */
     suspend fun setLocationPinned(storageId: String, pinned: Boolean)
     /**
