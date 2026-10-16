@@ -243,6 +243,7 @@ fun AndroidMainScreen(
         scope.launch {
             val previousSettings = updateSettings
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            if (!manual && previousSettings.autoCheckDisabled) return@launch
             if (!manual && updateCheckedThisLaunch && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
             updateStatusText = s.checkingChannel(s.releaseChannelLabel.lowercase())

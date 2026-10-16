@@ -389,6 +389,7 @@ private fun runApp(args: Array<String>) = application {
             // dropped (and persisted away below).
             val previousSettings = updateSettings.copy(lastDownloadedUpdateVersion = null)
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            if (!manual && previousSettings.autoCheckDisabled) return@launch
             if (!manual && updateCheckedThisLaunch && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
             val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)

@@ -1779,7 +1779,7 @@ private fun ApplicationLogsSettingsContent(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun UpdatesSettingsContent(
     settings: AppUpdateSettings,
@@ -1807,7 +1807,10 @@ private fun UpdatesSettingsContent(
 
         SettingsSectionLabel(LocalStrings.current.checkInterval)
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             AppUpdateSettings.INTERVAL_PRESETS.forEach { hours ->
                 FilterChip(
                     selected = settings.intervalHours == hours,
