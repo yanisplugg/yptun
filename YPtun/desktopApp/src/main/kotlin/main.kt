@@ -1107,6 +1107,9 @@ private fun runApp(args: Array<String>) = application {
                             appBehavior.copy(collapsedSubscriptionGroups = updated)
                         )
                     },
+                    onSubscriptionKeyChanged = { oldKey, newKey ->
+                        dependencies.settings.setAppBehavior(appBehavior.withSubscriptionKeyRenamed(oldKey, newKey))
+                    },
                     onToggleGroupPinned = { key ->
                         val current = appBehavior.pinnedSubscriptionGroups
                         val updated = if (key in current) current - key else current + key

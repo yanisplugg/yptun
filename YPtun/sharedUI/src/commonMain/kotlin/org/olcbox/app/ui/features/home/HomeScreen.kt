@@ -120,6 +120,8 @@ fun HomeScreen(
     showGroupAutoPick: Boolean = true,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
+    // A subscription's group key changed with its URL: (old key, new key) — pins/folders follow it.
+    onSubscriptionKeyChanged: (oldKey: String, newKey: String) -> Unit = { _, _ -> },
     onToggleGroupPingSort: (String) -> Unit = {},
     onToggleCustomLocationPinned: (String) -> Unit = {},
     onToggleCustomLocationsPingSort: () -> Unit = {},
@@ -534,6 +536,18 @@ fun HomeScreen(
                     requestDelete(PendingDelete.Subscription(ids))
                 },
                 onRenameSubscription = { url, name -> locationViewModel.renameSubscription(url, name) },
+                onChangeSubscriptionUrl = { oldUrl, newUrl, oldKey ->
+                    locationViewModel.changeSubscriptionUrl(oldUrl, newUrl) { changed ->
+                        if (changed) {
+                            // The group key is `name|url`: it ends with the URL, so only that tail moves.
+                            val newKey = oldKey.removeSuffix(oldUrl.trim()) + newUrl.trim()
+                            onSubscriptionKeyChanged(oldKey, newKey)
+                            refreshOneSubscription(newUrl.trim())
+                        } else {
+                            scope.launch { snackbarHostState.showSnackbar(s.subscriptionLinkRejected) }
+                        }
+                    }
+                },
                 onSetSubscriptionAutoUpdate = { url, enabled ->
                     locationViewModel.setSubscriptionAutoUpdate(url, enabled)
                 },

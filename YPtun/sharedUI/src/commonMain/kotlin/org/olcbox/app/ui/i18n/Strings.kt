@@ -76,6 +76,10 @@ interface Strings {
     val refreshThisSubscription: String
     val renameSubscription: String
     val renameSubscriptionHint: String
+    val subscriptionLink: String
+    val subscriptionLinkHint: String
+    val subscriptionLinkReadOnlyHint: String
+    val subscriptionLinkRejected: String
     val exitApp: String
     val visitSubscriptionPage: String
     // VPS installer SSH auth (password vs key).
@@ -840,6 +844,10 @@ object RuStrings : Strings {
     override val refreshThisSubscription = "Обновить подписку"
     override val renameSubscription = "Переименовать"
     override val renameSubscriptionHint = "Пустое название вернёт исходное"
+    override val subscriptionLink = "Ссылка подписки"
+    override val subscriptionLinkHint = "Новая ссылка (http/https). Серверы, названия и настройки сохранятся, подписка сразу обновится по ней."
+    override val subscriptionLinkReadOnlyHint = "Ссылку этой подписки нельзя изменить"
+    override val subscriptionLinkRejected = "Ссылка не принята: нужен адрес http/https, не совпадающий с адресом другой подписки"
     override val exitApp = "Выход"
     override val visitSubscriptionPage = "Посетить страницу подписки"
     override val sshAuthUseKey = "Вход по SSH-ключу"
@@ -1555,6 +1563,10 @@ object EnStrings : Strings {
     override val refreshThisSubscription = "Update subscription"
     override val renameSubscription = "Rename"
     override val renameSubscriptionHint = "An empty name restores the original"
+    override val subscriptionLink = "Subscription link"
+    override val subscriptionLinkHint = "New link (http/https). Servers, names and settings are kept and the subscription refreshes from it right away."
+    override val subscriptionLinkReadOnlyHint = "This subscription's link cannot be changed"
+    override val subscriptionLinkRejected = "Link rejected: it must be an http/https address that no other subscription uses"
     override val exitApp = "Quit"
     override val visitSubscriptionPage = "Visit subscription page"
     override val sshAuthUseKey = "Sign in with SSH key"
@@ -2270,6 +2282,10 @@ object FaStrings : Strings {
     override val refreshThisSubscription = "به‌روزرسانی اشتراک"
     override val renameSubscription = "تغییر نام"
     override val renameSubscriptionHint = "نام خالی، نام اصلی را بازمی‌گرداند"
+    override val subscriptionLink = "لینک اشتراک"
+    override val subscriptionLinkHint = "لینک جدید (http/https). سرورها، نام‌ها و تنظیمات حفظ می‌شوند و اشتراک بلافاصله از آن به‌روز می‌شود."
+    override val subscriptionLinkReadOnlyHint = "لینک این اشتراک قابل تغییر نیست"
+    override val subscriptionLinkRejected = "لینک پذیرفته نشد: باید آدرس http/https باشد و اشتراک دیگری از آن استفاده نکند"
     override val exitApp = "خروج"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
     override val sshAuthUseKey = "ورود با کلید SSH"
@@ -2985,6 +3001,10 @@ object ZhStrings : Strings {
     override val refreshThisSubscription = "更新订阅"
     override val renameSubscription = "重命名"
     override val renameSubscriptionHint = "留空则恢复原名称"
+    override val subscriptionLink = "订阅链接"
+    override val subscriptionLinkHint = "新链接（http/https）。服务器、名称和设置会保留，订阅会立即从新链接刷新。"
+    override val subscriptionLinkReadOnlyHint = "无法修改此订阅的链接"
+    override val subscriptionLinkRejected = "链接被拒绝：必须是 http/https 地址，且不能与其他订阅相同"
     override val exitApp = "退出"
     override val visitSubscriptionPage = "打开订阅页面"
     override val sshAuthUseKey = "使用 SSH 密钥登录"

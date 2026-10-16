@@ -1036,6 +1036,15 @@ class LocationViewModel(
         }
     }
 
+    /** Re-points a subscription (by URL) at [newUrl], then reloads the list. [onResult] gets false when refused. */
+    fun changeSubscriptionUrl(oldUrl: String, newUrl: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val changed = locationsRepository.changeSubscriptionUrl(oldUrl, newUrl)
+            if (changed) loadLocations()
+            onResult(changed)
+        }
+    }
+
     /** Deletes several locations at once (e.g. all configs of one subscription) in a single rewrite. */
     fun deleteLocations(ids: List<String>, onComplete: () -> Unit = {}) {
         viewModelScope.launch {

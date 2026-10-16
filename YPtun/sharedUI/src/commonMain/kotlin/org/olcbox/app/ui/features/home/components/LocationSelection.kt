@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -116,6 +117,8 @@ fun LazyListScope.locationSelectorContent(
     onRefreshSubscription: (subscriptionUrl: String) -> Unit = {},
     // Give a subscription (keyed by its URL) the user's own name; blank restores the panel's.
     onRenameSubscription: (subscriptionUrl: String, name: String) -> Unit = { _, _ -> },
+    // (old URL, new URL, the group's key before the change) — see [SubscriptionGroupMenu].
+    onChangeSubscriptionUrl: (oldUrl: String, newUrl: String, groupKey: String) -> Unit = { _, _, _ -> },
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -296,6 +299,8 @@ fun LazyListScope.locationSelectorContent(
                             onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
                             currentName = group.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
                             onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
+                            subscriptionUrl = groupSubUrl?.takeIf { !isFree },
+                            onChangeUrl = groupSubUrl?.takeIf { !isFree }?.let { url -> { newUrl -> onChangeSubscriptionUrl(url, newUrl, groupKey) } },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) },
                             subscriptionPageUrl = groupWebPageUrl
@@ -470,6 +475,8 @@ fun LazyListScope.locationSelectorContent(
                                                 onRefreshSubscription = mSubUrl?.let { url -> { onRefreshSubscription(url) } },
                                                 currentName = mGroup.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
                                                 onRename = mSubUrl?.let { url -> { name -> onRenameSubscription(url, name) } },
+                                                subscriptionUrl = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL },
+                                                onChangeUrl = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL }?.let { url -> { newUrl -> onChangeSubscriptionUrl(url, newUrl, mKey) } },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) },
                                                 subscriptionPageUrl = mWebPageUrl
@@ -970,12 +977,16 @@ private fun SubscriptionGroupMenu(
     // Current visible name (prefills the dialog) and the rename action; null hides the menu entry.
     currentName: String = "",
     onRename: ((String) -> Unit)? = null,
+    // The subscription's link, shown (and copyable) in the menu; [onChangeUrl] non-null makes it editable.
+    subscriptionUrl: String? = null,
+    onChangeUrl: ((String) -> Unit)? = null,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit,
     subscriptionPageUrl: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var showingUrl by remember { mutableStateOf(false) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
@@ -1001,6 +1012,43 @@ private fun SubscriptionGroupMenu(
         )
     }
 
+    if (showingUrl && subscriptionUrl != null) {
+        var draft by remember(subscriptionUrl) { mutableStateOf(subscriptionUrl) }
+        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+        val trimmed = draft.trim()
+        val valid = trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)
+        AlertDialog(
+            onDismissRequest = { showingUrl = false },
+            title = { Text(s.subscriptionLink) },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    readOnly = onChangeUrl == null,
+                    isError = onChangeUrl != null && !valid,
+                    minLines = 2,
+                    supportingText = { Text(if (onChangeUrl != null) s.subscriptionLinkHint else s.subscriptionLinkReadOnlyHint) }
+                )
+            },
+            confirmButton = {
+                if (onChangeUrl != null) {
+                    TextButton(
+                        enabled = valid && trimmed != subscriptionUrl.trim(),
+                        onClick = { onChangeUrl(trimmed); showingUrl = false }
+                    ) { Text(s.save) }
+                } else {
+                    TextButton(onClick = { showingUrl = false }) { Text(s.cancel) }
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(subscriptionUrl)) }) { Text(s.copy) }
+                    if (onChangeUrl != null) TextButton(onClick = { showingUrl = false }) { Text(s.cancel) }
+                }
+            }
+        )
+    }
+
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(
@@ -1014,6 +1062,16 @@ private fun SubscriptionGroupMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            if (subscriptionUrl != null) {
+                DropdownMenuItem(
+                    text = { Text(s.subscriptionLink) },
+                    leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        showingUrl = true
+                    }
+                )
+            }
             // Remnawave `profile-web-page-url` — the panel's subscription/management page.
             if (!subscriptionPageUrl.isNullOrBlank()) {
                 DropdownMenuItem(

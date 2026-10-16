@@ -1153,6 +1153,28 @@ class LocationsRepositoryImplTest {
         assertTrue(none.isNotEmpty() && none.all { it.second == null }, none.toString())
     }
 
+    // #71: a subscription can be re-pointed at another URL without losing its servers.
+    @Test
+    fun subscriptionUrlCanBeChanged() = runTest {
+        val link = "vless://11111111-2222-3333-4444-555555555555@a.test:443?type=tcp&security=tls#A"
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(link) }), StaticIdentityProvider("hwid-test"))
+        repo.importText("https://one.test/sub")
+        repo.importText("https://two.test/sub")
+        val before = source.stored!!.locations.map { it.storageId }.toSet()
+
+        assertTrue(repo.changeSubscriptionUrl("https://one.test/sub", "https://moved.test/sub"))
+        val urls = source.stored!!.locations.mapNotNull { it.subscriptionUrl }.toSet()
+        assertTrue("https://moved.test/sub" in urls && "https://one.test/sub" !in urls && "https://two.test/sub" in urls, urls.toString())
+        assertEquals(before, source.stored!!.locations.map { it.storageId }.toSet())
+
+        // Refused: not http(s), unchanged, already another subscription's, or unknown.
+        assertTrue(!repo.changeSubscriptionUrl("https://moved.test/sub", "ftp://x.test/sub"))
+        assertTrue(!repo.changeSubscriptionUrl("https://moved.test/sub", "https://moved.test/sub"))
+        assertTrue(!repo.changeSubscriptionUrl("https://moved.test/sub", "https://two.test/sub"))
+        assertTrue(!repo.changeSubscriptionUrl("https://nowhere.test/sub", "https://new.test/sub"))
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),

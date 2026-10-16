@@ -251,6 +251,26 @@ data class AppBehaviorSettings(
      */
     val pingPrecision: Int = DEFAULT_PING_PRECISION,
 ) {
+    /**
+     * A subscription's group key (`name|url`, also its folder member key) changed because its URL did: carry the
+     * pin, collapse, ping-sort and folder choices over to [newKey] instead of dropping them.
+     */
+    fun withSubscriptionKeyRenamed(oldKey: String, newKey: String): AppBehaviorSettings {
+        if (oldKey == newKey) return this
+        fun Set<String>.moved() = if (oldKey in this) this - oldKey + newKey else this
+        val oldMember = CustomGroup.subMember(oldKey)
+        val newMember = CustomGroup.subMember(newKey)
+        return copy(
+            collapsedSubscriptionGroups = collapsedSubscriptionGroups.moved(),
+            pinnedSubscriptionGroups = pinnedSubscriptionGroups.map { if (it == oldKey) newKey else it },
+            pingSortedSubscriptionGroups = pingSortedSubscriptionGroups.moved(),
+            pingSortDescendingSubscriptionGroups = pingSortDescendingSubscriptionGroups.moved(),
+            customGroups = customGroups.map { g ->
+                if (oldMember in g.members) g.copy(members = g.members.map { if (it == oldMember) newMember else it }) else g
+            },
+        )
+    }
+
     /** [subscriptionUserAgent] as one of [SUBSCRIPTION_UA_MODES]: the legacy "yptun" and anything unknown mean [SUB_UA_BOTH]. */
     fun effectiveSubscriptionUa(): String =
         if (subscriptionUserAgent in SUBSCRIPTION_UA_MODES) subscriptionUserAgent else SUB_UA_BOTH

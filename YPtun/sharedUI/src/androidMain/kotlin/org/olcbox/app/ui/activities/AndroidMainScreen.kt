@@ -549,6 +549,9 @@ fun AndroidMainScreen(
             val updated = if (key in current) current - key else current + key
             vpnManager.setAppBehavior(appBehavior.copy(collapsedSubscriptionGroups = updated))
         },
+        onSubscriptionKeyChanged = { oldKey, newKey ->
+            vpnManager.setAppBehavior(appBehavior.withSubscriptionKeyRenamed(oldKey, newKey))
+        },
         onToggleGroupPinned = { key ->
             val current = appBehavior.pinnedSubscriptionGroups
             val updated = if (key in current) current - key else current + key

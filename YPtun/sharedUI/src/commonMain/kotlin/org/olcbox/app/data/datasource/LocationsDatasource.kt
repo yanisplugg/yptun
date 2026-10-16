@@ -713,6 +713,24 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun changeSubscriptionUrl(oldUrl: String, newUrl: String): Boolean {
+        val old = oldUrl.trim()
+        val new = newUrl.trim()
+        if (old.isBlank() || new == old || !new.isHttpUrl() || new.any { it.isWhitespace() }) return false
+
+        return mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            if (bundle.locations.none { it.subscriptionUrl?.trim() == old }) return@withLock false
+            // One URL, one subscription: pointing two at the same URL would merge their server lists.
+            if (bundle.locations.any { it.subscriptionUrl?.trim() == new }) return@withLock false
+            val updated = bundle.locations.map { entry ->
+                if (entry.subscriptionUrl?.trim() == old) entry.copy(subscriptionUrl = new).normalized() else entry
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+            true
+        }
+    }
+
     override suspend fun saveLocation(storageId: String, location: LocationConfig) {
         mutationMutex.withLock {
             val normalizedId = storageId.ifBlank { location.storageSlug() }
