@@ -119,7 +119,9 @@ import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
+import org.olcbox.app.data.importer.AwgIniEditor
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing
 import org.olcbox.app.data.model.WarpMode
 import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
@@ -178,6 +180,8 @@ fun LocationSettingsScreen(
 ) {
     val s = LocalStrings.current
     val config = viewModel.editingConfig
+    // Settings → «Разрешить редактирование конфигураций»: every AmneziaWG parameter becomes a field.
+    val allowConfigEditing = LocalAllowConfigEditing.current
     val name = viewModel.editingName
     val isSaving = viewModel.isSaving
     val normalizedTransport = LocationConfig.normalizeTransport(
@@ -340,6 +344,18 @@ fun LocationSettingsScreen(
                         profiles = homeViewModel.routingProfileChoices(),
                         enabled = !isSaving,
                         onSelected = viewModel::onRoutingProfileChanged
+                    )
+                }
+            }
+
+            if (allowConfigEditing && config.proxy?.type == ProxyProfile.TYPE_AMNEZIAWG &&
+                (config.engine == EngineType.Standard || config.engine == EngineType.Chain)
+            ) {
+                item {
+                    AwgTuningSection(
+                        ini = config.proxy?.awgConfig.orEmpty(),
+                        enabled = !isSaving,
+                        onChange = viewModel::onAwgKnobChanged
                     )
                 }
             }
@@ -3457,6 +3473,53 @@ private fun VkTurnField(
         ),
         modifier = modifier.fillMaxWidth()
     )
+}
+
+/**
+ * Every tunable parameter of an AmneziaWG configuration as a field (Jc/Jmin/Jmax, S1..S4, H1..H4 as value OR range,
+ * the I1..I5 / J1..J3 packets, Itime, MTU, keepalive, DNS). Each edit rewrites only its own line of the INI.
+ */
+@Composable
+private fun AwgTuningSection(
+    ini: String,
+    enabled: Boolean,
+    onChange: (AwgIniEditor.Knob, String) -> Unit
+) {
+    val s = LocalStrings.current
+    val byKey = AwgIniEditor.KNOBS.associateBy { it.key }
+    val numberRows = listOf(
+        listOf("Jc", "Jmin", "Jmax"),
+        listOf("S1", "S2", "S3", "S4"),
+        listOf("H1", "H2", "H3", "H4"),
+        listOf("Itime", "MTU", "PersistentKeepalive"),
+    )
+    val rowKeys = numberRows.flatten().toSet()
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(s.awgTuningTitle, style = MaterialTheme.typography.titleSmall)
+        Text(
+            s.awgTuningHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        @Composable
+        fun field(knob: AwgIniEditor.Knob, modifier: Modifier) {
+            VkTurnField(
+                value = AwgIniEditor.get(ini, knob.key, knob.section),
+                onValueChange = { onChange(knob, it) },
+                label = knob.key,
+                placeholder = knob.hint,
+                enabled = enabled,
+                keyboardType = if (knob.kind == AwgIniEditor.Kind.Number) KeyboardType.Number else KeyboardType.Text,
+                modifier = modifier
+            )
+        }
+        numberRows.forEach { keys ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                keys.mapNotNull { byKey[it] }.forEach { field(it, Modifier.weight(1f)) }
+            }
+        }
+        AwgIniEditor.KNOBS.filter { it.key !in rowKeys }.forEach { field(it, Modifier.fillMaxWidth()) }
+    }
 }
 
 @Composable

@@ -260,6 +260,11 @@ data class AppBehaviorSettings(
      * single hourly-refreshed file on a hidden GitHub Page (up to 20000 vless links harvested from GitHub).
      */
     val freeServersFromPages: Boolean = false,
+    /**
+     * Fine-tuning of configurations: the location editor shows every AmneziaWG parameter (Jc, Jmin, Jmax,
+     * S1..S4, H1..H4, I1..I5, ...) as fields. Off by default — a wrong value silently breaks the tunnel.
+     */
+    val allowConfigEditing: Boolean = false,
 ) {
     /**
      * A subscription's group key (`name|url`, also its folder member key) changed because its URL did: carry the

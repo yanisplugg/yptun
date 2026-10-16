@@ -25,6 +25,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.olcbox.app.data.importer.AwgIniEditor
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.importer.VkTurnDraft
@@ -879,6 +880,17 @@ class LocationViewModel(
             editingConfig = editingConfig.copy(proxy = null)
             proxyError = "Unrecognized proxy link or sing-box config"
         }
+    }
+
+    /**
+     * Fine-tuning editor (Settings → «Разрешить редактирование конфигураций»): sets one parameter in the
+     * AmneziaWG INI of the main proxy; a blank value removes it. Everything else in the INI stays as it was.
+     */
+    fun onAwgKnobChanged(knob: AwgIniEditor.Knob, value: String) {
+        val proxy = editingConfig.proxy ?: return
+        if (proxy.type != ProxyProfile.TYPE_AMNEZIAWG) return
+        val ini = AwgIniEditor.set(proxy.awgConfig, knob.key, AwgIniEditor.filter(value, knob.kind), knob.section)
+        editingConfig = editingConfig.copy(proxy = proxy.copy(awgConfig = ini))
     }
 
     /** Parses a pasted link for the optional SECOND (cascade) proxy into [editingConfig].proxy2. */

@@ -3771,6 +3771,12 @@ private fun ApplicationBehaviorContent(
             checked = settings.confirmBeforeDelete
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
+        RoutingToggleRow(
+            title = s.allowConfigEditingTitle,
+            subtitle = s.allowConfigEditingSubtitle,
+            checked = settings.allowConfigEditing
+        ) { onChanged(settings.copy(allowConfigEditing = it)) }
+
         // NOTE: no "speed in the notification" row here — the desktop build has no notifications,
         // so the toggle had nothing to drive. AppBehaviorSettings.showSpeedInNotification stays in
         // the model for Android, which does show it.

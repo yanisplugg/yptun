@@ -3879,6 +3879,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
         RoutingToggleRow(
+            title = s.allowConfigEditingTitle,
+            subtitle = s.allowConfigEditingSubtitle,
+            checked = settings.allowConfigEditing
+        ) { onChanged(settings.copy(allowConfigEditing = it)) }
+
+        RoutingToggleRow(
             title = s.notifSpeed,
             subtitle = s.notifSpeedSubtitle,
             checked = settings.showSpeedInNotification

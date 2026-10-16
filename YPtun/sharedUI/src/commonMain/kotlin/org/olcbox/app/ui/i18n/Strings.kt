@@ -225,6 +225,10 @@ interface Strings {
     val batteryOptDone: String
     val confirmDeleteTitle: String
     val confirmDeleteSubtitle: String
+    val allowConfigEditingTitle: String
+    val allowConfigEditingSubtitle: String
+    val awgTuningTitle: String
+    val awgTuningHint: String
     val language: String
 
     // Traffic settings
@@ -1018,6 +1022,10 @@ object RuStrings : Strings {
     override val batteryOptDone = "Оптимизация батареи уже отключена ✓"
     override val confirmDeleteTitle = "Подтверждение удаления"
     override val confirmDeleteSubtitle = "Запрашивать подтверждение перед удалением подписок и конфигураций"
+    override val allowConfigEditingTitle = "Разрешить редактирование конфигураций"
+    override val allowConfigEditingSubtitle = "В редакторе локации появятся все параметры конфигурации для тонкой настройки (AmneziaWG: Jc, Jmin, Jmax, S1–S4, H1–H4, I1–I5 и другие). Неверное значение ломает туннель"
+    override val awgTuningTitle = "AmneziaWG: тонкая настройка"
+    override val awgTuningHint = "Значения должны совпадать с сервером. Пустое поле — параметр не задан. Каждое изменение применяется при сохранении локации"
     override val language = "Язык"
     override val dns = "DNS"
     override val remoteDnsLabel = "Удалённый DNS (через прокси)"
@@ -1762,6 +1770,10 @@ object EnStrings : Strings {
     override val batteryOptDone = "Battery optimization already disabled ✓"
     override val confirmDeleteTitle = "Delete confirmation"
     override val confirmDeleteSubtitle = "Ask before deleting subscriptions and configs"
+    override val allowConfigEditingTitle = "Allow editing configurations"
+    override val allowConfigEditingSubtitle = "The location editor shows every configuration parameter for fine-tuning (AmneziaWG: Jc, Jmin, Jmax, S1–S4, H1–H4, I1–I5 and more). A wrong value breaks the tunnel"
+    override val awgTuningTitle = "AmneziaWG: fine-tuning"
+    override val awgTuningHint = "Values must match the server. An empty field means the parameter is not set. Changes apply when the location is saved"
     override val language = "Language"
     override val dns = "DNS"
     override val remoteDnsLabel = "Remote DNS (via proxy)"
@@ -2506,6 +2518,10 @@ object FaStrings : Strings {
     override val batteryOptDone = "بهینه‌سازی باتری قبلاً غیرفعال شده ✓"
     override val confirmDeleteTitle = "تأیید حذف"
     override val confirmDeleteSubtitle = "پیش از حذف اشتراک‌ها و پیکربندی‌ها پرسیده شود"
+    override val allowConfigEditingTitle = "اجازهٔ ویرایش پیکربندی‌ها"
+    override val allowConfigEditingSubtitle = "ویرایشگر موقعیت همهٔ پارامترهای پیکربندی را برای تنظیم دقیق نشان می‌دهد (AmneziaWG: ‏Jc، Jmin، Jmax، S1–S4، H1–H4، I1–I5 و بیشتر). مقدار نادرست تونل را خراب می‌کند"
+    override val awgTuningTitle = "AmneziaWG: تنظیم دقیق"
+    override val awgTuningHint = "مقادیر باید با سرور یکی باشند. فیلد خالی یعنی پارامتر تنظیم نشده. تغییرات هنگام ذخیرهٔ موقعیت اعمال می‌شوند"
     override val language = "زبان"
     override val dns = "DNS"
     override val remoteDnsLabel = "DNS راه‌دور (از طریق پراکسی)"
@@ -3250,6 +3266,10 @@ object ZhStrings : Strings {
     override val batteryOptDone = "电池优化已关闭 ✓"
     override val confirmDeleteTitle = "删除确认"
     override val confirmDeleteSubtitle = "删除订阅和配置前先询问"
+    override val allowConfigEditingTitle = "允许编辑配置"
+    override val allowConfigEditingSubtitle = "位置编辑器会显示配置的全部参数用于精细调整（AmneziaWG：Jc、Jmin、Jmax、S1–S4、H1–H4、I1–I5 等）。错误的值会使隧道失效"
+    override val awgTuningTitle = "AmneziaWG：精细调整"
+    override val awgTuningHint = "数值必须与服务器一致。留空表示不设置该参数。更改在保存位置时生效"
     override val language = "语言"
     override val dns = "DNS"
     override val remoteDnsLabel = "远程 DNS（经代理）"

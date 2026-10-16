@@ -989,6 +989,8 @@ private fun runApp(args: Array<String>) = application {
                     appBehavior.showSubscriptionAliveCount,
                 org.olcbox.app.ui.features.locations.components.LocalShowPingControls provides
                     appBehavior.showPingControls,
+                org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing provides
+                    appBehavior.allowConfigEditing,
                 org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription provides
                     appBehavior.showSubscriptionDescription,
                 org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines provides
