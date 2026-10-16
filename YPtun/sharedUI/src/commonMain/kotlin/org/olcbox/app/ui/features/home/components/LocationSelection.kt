@@ -123,6 +123,9 @@ fun LazyListScope.locationSelectorContent(
     onChangeSubscriptionUrl: (oldUrl: String, newUrl: String, groupKey: String) -> Unit = { _, _, _ -> },
     // Pin / unpin one server of the free-servers list (a pinned one survives the next search).
     onToggleFreeServerPinned: (storageId: String, pinned: Boolean) -> Unit = { _, _ -> },
+    // Servers a stopped free search has not checked yet; > 0 adds "continue the search" to that group's menu.
+    freeSearchRemaining: Int = 0,
+    onContinueFreeSearch: () -> Unit = {},
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -303,6 +306,8 @@ fun LazyListScope.locationSelectorContent(
                                 groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
                             },
                             onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                            onContinueSearch = if (isFree && freeSearchRemaining > 0) onContinueFreeSearch else null,
+                            continueSearchLabel = org.olcbox.app.ui.i18n.LocalStrings.current.freeServersContinueLeft(freeSearchRemaining),
                             currentName = group.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
                             onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
                             subscriptionUrl = groupSubUrl?.takeIf { !isFree },
@@ -313,6 +318,7 @@ fun LazyListScope.locationSelectorContent(
                         )
                     }
 
+                    GroupPingProgress(groupIds = groupIds, pingsState = pingsState)
                     if (!isCollapsed) {
                         Spacer(modifier = Modifier.height(8.dp))
                         TrafficProgressBar(location = group.firstOrNull())
@@ -972,6 +978,38 @@ private fun parseTrafficBytes(raw: String?): Long? {
     return (number * multiplier).toLong()
 }
 
+/**
+ * While a ping pass runs over this group: "Tested: 12 of 40 · available: 3 · ~40 s left" and a progress line,
+ * or "paused". Nothing is drawn when the group is not being pinged.
+ */
+@Composable
+private fun GroupPingProgress(groupIds: List<String>, pingsState: PingsState) {
+    val loading = pingsState as? PingsState.Loading ?: return
+    val pending = groupIds.count { it in loading.pendingLocationIds }
+    if (pending == 0 || groupIds.isEmpty()) return
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val total = groupIds.size
+    val done = total - pending
+    val alive = groupIds.count { loading.currentPings[it] != null }
+    val tail = when {
+        loading.paused -> s.pingPausedLabel
+        loading.etaSeconds != null -> s.etaLeft(loading.etaSeconds)
+        else -> null
+    }
+    Column(modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp)) {
+        Text(
+            text = s.pingProgress(done, total, alive) + (tail?.let { " · $it" } ?: ""),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(4.dp))
+        androidx.compose.material3.LinearProgressIndicator(
+            progress = { (done.toFloat() / total).coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(3.dp)
+        )
+    }
+}
+
 @Composable
 private fun SubscriptionGroupMenu(
     isPinned: Boolean,
@@ -983,6 +1021,9 @@ private fun SubscriptionGroupMenu(
     onToggleAutoUpdate: () -> Unit,
     // Non-null only when this group is backed by a subscription URL we can re-download.
     onRefreshSubscription: (() -> Unit)? = null,
+    // Free servers only: carry on a stopped search over the servers it has not checked yet.
+    onContinueSearch: (() -> Unit)? = null,
+    continueSearchLabel: String = "",
     // Current visible name (prefills the dialog) and the rename action; null hides the menu entry.
     currentName: String = "",
     onRename: ((String) -> Unit)? = null,
@@ -1118,6 +1159,16 @@ private fun SubscriptionGroupMenu(
                     onClick = {
                         expanded = false
                         renaming = true
+                    }
+                )
+            }
+            if (onContinueSearch != null) {
+                DropdownMenuItem(
+                    text = { Text(continueSearchLabel) },
+                    leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
+                    onClick = {
+                        onContinueSearch()
+                        expanded = false
                     }
                 )
             }

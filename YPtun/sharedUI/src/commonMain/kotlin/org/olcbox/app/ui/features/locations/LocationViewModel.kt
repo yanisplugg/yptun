@@ -13,7 +13,9 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -66,8 +68,13 @@ sealed class PingsState {
         val lastPings: Map<String, Int?>? = null,
         val currentPings: Map<String, Int?> = emptyMap(),
         val pendingLocationIds: Set<String> = emptySet(),
+        /** Servers of the whole pass that are done / the pass's size (all groups pinged at once together). */
         val completed: Int = 0,
-        val total: Int = 0
+        val total: Int = 0,
+        /** The pass is paused: servers in flight finish, no new one starts until [LocationViewModel.resumePings]. */
+        val paused: Boolean = false,
+        /** Estimated seconds to the end of the pass; null while paused or before there are enough samples. */
+        val etaSeconds: Int? = null
     ) : PingsState()
 
     data class Success(
@@ -108,6 +115,15 @@ class LocationViewModel(
     var onPingsCompleted: ((Map<String, Int?>) -> Unit)? = null
 
     private val activePingJobs = mutableMapOf<String, Job>()
+
+    // Pause / progress of the running ping pass (every group pinged together is one pass).
+    private val pingPaused = MutableStateFlow(false)
+    private var passTotal = 0
+    private var passDone = 0
+    private var passStartMs = 0L
+    private var pausedAccumMs = 0L
+    private var pausedSinceMs = 0L
+    private fun nowMs() = kotlin.time.Clock.System.now().toEpochMilliseconds()
     // Source-of-truth ping map during a refresh pass. Each completion updates this in place (O(1))
     // instead of copying the whole map; the UI state is then refreshed on a throttled cadence (see
     // [schedulePingEmit]) so 300+ completions no longer trigger 300 full-list recompositions + 300
@@ -384,6 +400,14 @@ class LocationViewModel(
         var completedForThisRequest = 0
         var onlineForThisRequest = 0
         val totalForThisRequest = pingableLocations.size
+        if (activePingJobs.isEmpty()) {
+            passTotal = 0
+            passDone = 0
+            passStartMs = nowMs()
+            pausedAccumMs = 0L
+            pausedSinceMs = 0L
+        }
+        passTotal += totalForThisRequest
         val jobsToStart = mutableListOf<Job>()
 
         pingableLocations.forEach { location ->
@@ -391,6 +415,8 @@ class LocationViewModel(
                 try {
                     val ping = try {
                         semaphore.withPermit {
+                            // Paused: wait here, holding no ping — the ones already in flight finish on their own.
+                            pingPaused.first { !it }
                             checkLocationPing(location, budgetMs, performPing)?.toInt()
                         }
                     } catch (e: CancellationException) {
@@ -408,6 +434,7 @@ class LocationViewModel(
                     }
 
                     completedForThisRequest++
+                    passDone++
 
                     if (completedForThisRequest == totalForThisRequest) {
                         // Final result of this pass: emit immediately (and cancel any pending throttle).
@@ -464,16 +491,58 @@ class LocationViewModel(
         val pendingIds = activePingJobs.keys.toSet()
 
         pingsState = if (pendingIds.isEmpty()) {
+            pingPaused.value = false
+            pausedSinceMs = 0L
             PingsState.Success(pings)
         } else {
             PingsState.Loading(
                 lastPings = pings,
                 currentPings = pings,
                 pendingLocationIds = pendingIds,
-                completed = 0,
-                total = pendingIds.size
+                completed = passDone.coerceAtMost(passTotal),
+                total = passTotal.coerceAtLeast(pendingIds.size),
+                paused = pingPaused.value,
+                etaSeconds = pingEtaSeconds()
             )
         }
+    }
+
+    /** Seconds to the end of the pass at the pace so far (time spent paused does not count); null if unknown. */
+    private fun pingEtaSeconds(): Int? {
+        if (pingPaused.value || passDone < PING_ETA_MIN_SAMPLES) return null
+        val activeMs = nowMs() - passStartMs - pausedAccumMs
+        if (activeMs <= 0L) return null
+        val remaining = (passTotal - passDone).coerceAtLeast(0)
+        return (activeMs.toDouble() / passDone * remaining / 1000.0).toInt()
+    }
+
+    /** Holds the running ping pass: pings in flight finish, no new one starts until [resumePings]. */
+    fun pausePings() {
+        if (activePingJobs.isEmpty() || pingPaused.value) return
+        pausedSinceMs = nowMs()
+        pingPaused.value = true
+        emitPingState()
+    }
+
+    fun resumePings() {
+        if (!pingPaused.value) return
+        pausedAccumMs += nowMs() - pausedSinceMs
+        pausedSinceMs = 0L
+        pingPaused.value = false
+        emitPingState()
+    }
+
+    /**
+     * Drops every ping that has not finished (results already in stay). The jobs leave the map at once, so a
+     * new pass started right after (the "restart" button) is not skipped as "already running".
+     */
+    fun cancelPings() {
+        pingPaused.value = false
+        pausedSinceMs = 0L
+        val jobs = activePingJobs.values.toList()
+        activePingJobs.clear()
+        jobs.forEach { it.cancel() }
+        emitPingState()
     }
 
     /**
@@ -1148,6 +1217,8 @@ class LocationViewModel(
         const val LOCATION_PING_RETRY_DELAY_MS = 150L
         const val LOCATION_PING_PARALLELISM = 5
         const val PING_EMIT_THROTTLE_MS = 150L
+        /** Completed pings needed before the pass shows an estimated time to the end. */
+        const val PING_ETA_MIN_SAMPLES = 5
     }
 
     private data class ProviderDraft(

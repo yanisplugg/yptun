@@ -389,8 +389,8 @@ private fun runApp(args: Array<String>) = application {
             // dropped (and persisted away below).
             val previousSettings = updateSettings.copy(lastDownloadedUpdateVersion = null)
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
-            if (!manual && previousSettings.autoCheckDisabled) return@launch
-            if (!manual && updateCheckedThisLaunch && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
+            // Automatic checks only when the interval has passed (never at all for «Никогда»): a launch alone is no reason.
+            if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
             val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
             updateMessage = s.checkingChannel(s.releaseChannelLabel.lowercase())

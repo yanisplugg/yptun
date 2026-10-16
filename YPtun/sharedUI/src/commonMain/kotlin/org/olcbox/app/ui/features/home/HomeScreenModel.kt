@@ -462,24 +462,68 @@ class HomeScreenViewModel(
     @kotlin.concurrent.Volatile
     private var freeServersFound: List<FreeServerItem> = emptyList()
 
+    // The list the last search drew up, and which of its servers are checked: what lets a stopped search carry on.
+    @kotlin.concurrent.Volatile
+    private var freeParsed: List<Pair<String, ProxyProfile>> = emptyList()
+    private val freeCheckedIdx = HashSet<Int>()
+
+    // Pause of the search: servers in flight finish, no new one starts. The pace is measured without the pause.
+    private val freeGate = MutableStateFlow(false)
+    private var freeRunStartMs = 0L
+    private var freePausedAccumMs = 0L
+    private var freePausedSinceMs = 0L
+    private var freeRunChecks = 0
+    private fun nowMs() = kotlin.time.Clock.System.now().toEpochMilliseconds()
+
+    /** Seconds to the end of the search at the pace so far; null while paused or with too few samples. */
+    private fun freeEta(total: Int, checked: Int): Int? {
+        if (freeGate.value || freeRunChecks < 5) return null
+        val activeMs = nowMs() - freeRunStartMs - freePausedAccumMs
+        if (activeMs <= 0L) return null
+        return (activeMs.toDouble() / freeRunChecks * (total - checked).coerceAtLeast(0) / 1000.0).toInt()
+    }
+
+    /** Servers of the last search that are not checked yet (what «Продолжить поиск» has to go through). */
+    private fun freeRemaining(): Int = (freeParsed.size - freeCheckedIdx.size).coerceAtLeast(0)
+
     /**
      * Ends the search NOW but keeps what it found: the servers checked so far go to the picker sheet instead of
-     * being thrown away (a full pass over a long list takes hours). [onNothingFound] when nothing worked yet.
+     * being thrown away (a full pass over a long list takes hours). The unchecked rest stays in the model so the
+     * search can be continued. [onNothingFound] when nothing worked yet.
      */
     fun stopFreeServersSearch(onNothingFound: () -> Unit = {}) {
         val found = freeServersFound.sortedBy { it.pingMs }
         freeServersRun++
         freeServersJob?.cancel()
         freeServersJob = null
+        freeGate.value = false
         _state.update {
             it.copy(
                 isFreeServersLoading = false,
                 freeServersBackground = false,
+                freeServersPaused = false,
                 freeServersProgress = null,
+                freeServersResumable = freeRemaining(),
                 availableFreeServers = found.takeIf { list -> list.isNotEmpty() },
             )
         }
         if (found.isEmpty()) onNothingFound()
+    }
+
+    /** Holds the free-servers search: servers in flight finish, no new one starts until [resumeFreeServersPaused]. */
+    fun pauseFreeServersSearch() {
+        if (freeServersJob?.isActive != true || freeGate.value) return
+        freePausedSinceMs = nowMs()
+        freeGate.value = true
+        _state.update { it.copy(freeServersPaused = true) }
+    }
+
+    fun resumeFreeServersPaused() {
+        if (!freeGate.value) return
+        freePausedAccumMs += nowMs() - freePausedSinceMs
+        freePausedSinceMs = 0L
+        freeGate.value = false
+        _state.update { it.copy(freeServersPaused = false) }
     }
 
     private var freeAutoAttemptMs = 0L
@@ -488,11 +532,12 @@ class HomeScreenViewModel(
      * Auto-update of the free servers (the switch in the group's menu): a silent search every few hours whose
      * result replaces the unpinned servers without the picker. The Home screen calls it periodically; it does
      * nothing unless the switch is on, the group exists and the interval has passed — and never while a search
-     * runs, the picker is open, or the tunnel runs over a free server that the save would replace.
+     * runs, the picker is open, a stopped search waits to be continued, or the tunnel runs over a free server
+     * that the save would replace.
      */
     fun autoUpdateFreeServersIfDue(parallelism: Int, limit: Int) {
         val st = _state.value
-        if (freeServersJob?.isActive == true || st.availableFreeServers != null) return
+        if (freeServersJob?.isActive == true || st.availableFreeServers != null || st.freeServersResumable > 0) return
         val sel = st.selectedLocation
         if (st.isVpnConnected && sel?.subscriptionUrl?.trim() == FREE_SERVERS_URL && sel.metadata?.pinned != true) return
         viewModelScope.launch {
@@ -505,7 +550,7 @@ class HomeScreenViewModel(
                 freeAutoAttemptMs,
                 subs.maxOf { maxOf(it.lastRefreshAtEpochMs ?: 0L, it.lastAttemptAtEpochMs ?: 0L) }
             )
-            val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            val now = nowMs()
             if (now - last < hours * 3_600_000L) return@launch
             if (freeServersJob?.isActive == true || _state.value.availableFreeServers != null) return@launch
             freeAutoAttemptMs = now
@@ -513,11 +558,24 @@ class HomeScreenViewModel(
         }
     }
 
+    /** Throws the search away for good: found servers and the unchecked rest. */
     fun cancelFreeServersLoad() {
         freeServersRun++
         freeServersJob?.cancel()
         freeServersJob = null
-        _state.update { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
+        freeGate.value = false
+        freeParsed = emptyList()
+        freeCheckedIdx.clear()
+        freeServersFound = emptyList()
+        _state.update {
+            it.copy(
+                isFreeServersLoading = false,
+                freeServersBackground = false,
+                freeServersPaused = false,
+                freeServersProgress = null,
+                freeServersResumable = 0
+            )
+        }
     }
 
     fun dismissFreeServersSheet() {
@@ -530,52 +588,76 @@ class HomeScreenViewModel(
         onError: (String) -> Unit = {},
         // Auto-update: no dialog, and the result is saved straight away instead of opening the picker.
         background: Boolean = false,
+        // Carry on a stopped search over the servers it has not checked yet: no new download, what it found stays.
+        resume: Boolean = false,
     ) {
+        if (resume && freeRemaining() == 0) return
         freeServersJob?.cancel()
         val run = ++freeServersRun
-        freeServersFound = emptyList()
-        _state.update { it.copy(isFreeServersLoading = !background, freeServersBackground = background, availableFreeServers = null, freeServersProgress = null) }
+        freeGate.value = false
+        freeRunStartMs = nowMs()
+        freePausedAccumMs = 0L
+        freePausedSinceMs = 0L
+        freeRunChecks = 0
+        if (!resume) freeServersFound = emptyList()
+        _state.update {
+            it.copy(
+                isFreeServersLoading = !background,
+                freeServersBackground = background,
+                freeServersPaused = false,
+                freeServersResumable = 0,
+                availableFreeServers = null,
+                freeServersProgress = null
+            )
+        }
         freeServersJob = viewModelScope.launch {
             try {
-                val sourceTexts = withContext(Dispatchers.IO) {
-                    // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
-                    // without withProxyAuthentication the fetch died with a SOCKS auth error.
-                    val proxy = vpnManager.subscriptionFetchProxy()
-                    val client = createProxyHttpClient(proxy)
-                    try {
-                        // Все источники сразу; недоступный не мешает остальным.
-                        freeSourcesFor(org.olcbox.app.ui.i18n.LocalizationState.effective.id).map { source ->
-                            async {
-                                runCatching {
-                                    org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(source.url).bodyAsText() }
-                                }.getOrDefault("") to source.maxCount
-                            }
-                        }.awaitAll()
-                    } finally {
-                        client.close()
+                if (!resume) {
+                    val sourceTexts = withContext(Dispatchers.IO) {
+                        // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
+                        // without withProxyAuthentication the fetch died with a SOCKS auth error.
+                        val proxy = vpnManager.subscriptionFetchProxy()
+                        val client = createProxyHttpClient(proxy)
+                        try {
+                            // Все источники сразу; недоступный не мешает остальным.
+                            freeSourcesFor(org.olcbox.app.ui.i18n.LocalizationState.effective.id).map { source ->
+                                async {
+                                    runCatching {
+                                        org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(source.url).bodyAsText() }
+                                    }.getOrDefault("") to source.maxCount
+                                }
+                            }.awaitAll()
+                        } finally {
+                            client.close()
+                        }
                     }
+
+                    if (sourceTexts.all { (text, _) -> text.isBlank() }) {
+                        updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
+                        onError("Не удалось загрузить список серверов")
+                        return@launch
+                    }
+
+                    val picked = withContext(Dispatchers.Default) { pickFreeServers(sourceTexts, limit) }
+                    if (picked.isEmpty()) {
+                        updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
+                        onError("Не удалось распознать конфигурации серверов")
+                        return@launch
+                    }
+                    freeParsed = picked
+                    freeCheckedIdx.clear()
                 }
 
-                if (sourceTexts.all { (text, _) -> text.isBlank() }) {
-                    updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
-                    onError("Не удалось загрузить список серверов")
-                    return@launch
-                }
-
-                val parsedItems = withContext(Dispatchers.Default) { pickFreeServers(sourceTexts, limit) }
-
-                if (parsedItems.isEmpty()) {
-                    updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
-                    onError("Не удалось распознать конфигурации серверов")
-                    return@launch
-                }
-
+                val parsedItems = freeParsed
                 val total = parsedItems.size
-                updateFreeServers(run) { it.copy(freeServersProgress = FreeServersProgress(checked = 0, total = total, found = 0)) }
-
                 val mutex = Mutex()
-                var checkedCount = 0
-                val workingServers = mutableListOf<FreeServerItem>()
+                var checkedCount = freeCheckedIdx.size
+                // Empty for a fresh search, the earlier finds when the search is continued.
+                val workingServers = freeServersFound.toMutableList()
+                updateFreeServers(run) {
+                    it.copy(freeServersProgress = FreeServersProgress(checked = checkedCount, total = total, found = workingServers.size))
+                }
+                val todo = parsedItems.withIndex().filter { it.index !in freeCheckedIdx }
 
                 withContext(Dispatchers.IO) {
                     // Тот же ползунок «Потоки пинга» из настроек, что и у обычного пинга.
@@ -585,9 +667,12 @@ class HomeScreenViewModel(
                             org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM,
                         )
                     )
-                    parsedItems.mapIndexed { index, (line, profile) ->
+                    todo.map { (index, entry) ->
+                        val (line, profile) = entry
                         async {
                             sem.withPermit {
+                                // Paused: wait here; servers already being pinged finish on their own.
+                                freeGate.first { !it }
                                 val config = LocationConfig(
                                     name = profile.displayName(),
                                     engine = EngineType.Standard,
@@ -615,30 +700,35 @@ class HomeScreenViewModel(
                                     )
                                 } else null
 
-                                val (curChecked, curFound) = mutex.withLock {
+                                val snapshot = mutex.withLock {
                                     checkedCount++
+                                    // A superseded run must not mark servers of a list it no longer owns.
+                                    if (run == freeServersRun) {
+                                        freeCheckedIdx.add(index)
+                                        freeRunChecks++
+                                    }
                                     if (item != null) {
                                         workingServers.add(item)
                                         if (run == freeServersRun) freeServersFound = workingServers.toList()
                                     }
-                                    checkedCount to workingServers.size
+                                    FreeServersProgress(checkedCount, total, workingServers.size, freeEta(total, checkedCount))
                                 }
-                                updateFreeServers(run) {
-                                    it.copy(
-                                        freeServersProgress = FreeServersProgress(
-                                            checked = curChecked,
-                                            total = total,
-                                            found = curFound
-                                        )
-                                    )
-                                }
+                                updateFreeServers(run) { it.copy(freeServersProgress = snapshot) }
                             }
                         }
                     }.awaitAll()
                 }
 
                 val sortedWorking = workingServers.sortedBy { it.pingMs }
-                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
+                updateFreeServers(run) {
+                    it.copy(
+                        isFreeServersLoading = false,
+                        freeServersBackground = false,
+                        freeServersPaused = false,
+                        freeServersProgress = null,
+                        freeServersResumable = 0
+                    )
+                }
 
                 if (sortedWorking.isEmpty()) {
                     onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
@@ -1072,6 +1162,10 @@ data class HomeScreenState(
     val isFreeServersLoading: Boolean = false,
     /** A silent auto-update search of the free servers runs (no dialog; the strip near the toolbar shows it). */
     val freeServersBackground: Boolean = false,
+    /** The free-servers search is held (servers in flight finish, no new one starts). */
+    val freeServersPaused: Boolean = false,
+    /** Servers a stopped search has not checked yet; > 0 offers «Продолжить поиск». */
+    val freeServersResumable: Int = 0,
     val freeServersProgress: FreeServersProgress? = null,
     val availableFreeServers: List<FreeServerItem>? = null
 )
@@ -1079,7 +1173,9 @@ data class HomeScreenState(
 data class FreeServersProgress(
     val checked: Int = 0,
     val total: Int = 0,
-    val found: Int = 0
+    val found: Int = 0,
+    /** Estimated seconds to the end of the search; null while paused or before there are enough samples. */
+    val etaSeconds: Int? = null
 )
 
 /** How often the free servers auto-update when the group's switch is on. */

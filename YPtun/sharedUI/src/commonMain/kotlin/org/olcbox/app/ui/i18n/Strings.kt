@@ -6,6 +6,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /** Russian plural picker: (one, few, many) by the standard ru pluralization rules. */
+/** "40 s", "8 min", "1 h 5 min" from [sec], with the language's unit words. */
+internal fun etaText(sec: Int, s: String, m: String, h: String): String = when {
+    sec < 90 -> "${sec.coerceAtLeast(1)} $s"
+    sec < 90 * 60 -> "${(sec + 30) / 60} $m"
+    else -> "${sec / 3600} $h ${(sec % 3600) / 60} $m"
+}
+
 internal fun ruPlural(n: Int, one: String, few: String, many: String): String {
     val mod100 = n % 100
     val mod10 = n % 10
@@ -388,6 +395,14 @@ interface Strings {
     fun freeServersImported(working: Int, total: Int): String
     fun freeServersProgressText(checked: Int, total: Int, found: Int): String
     val freeServersStopKeep: String
+    val pingPause: String
+    val pingResume: String
+    val pingRestart: String
+    val pingPausedLabel: String
+    fun pingProgress(done: Int, total: Int, alive: Int): String
+    fun etaLeft(sec: Int): String
+    val freeServersContinue: String
+    fun freeServersContinueLeft(n: Int): String
     val freeServersNothingYet: String
     val updateSubscriptionsAction: String
     val updateSubscriptionsSubtitle: String
@@ -1150,6 +1165,14 @@ object RuStrings : Strings {
     override fun freeServersImported(working: Int, total: Int) = "Добавлено рабочих серверов: $working из $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Проверено: $checked из $total (найдено: $found)"
     override val freeServersStopKeep = "Остановить и показать найденные"
+    override val pingPause = "Пауза"
+    override val pingResume = "Продолжить"
+    override val pingRestart = "Заново"
+    override val pingPausedLabel = "на паузе"
+    override fun pingProgress(done: Int, total: Int, alive: Int) = "Проверено: $done из $total · доступно: $alive"
+    override fun etaLeft(sec: Int) = "осталось ~" + etaText(sec, "с", "мин", "ч")
+    override val freeServersContinue = "Продолжить поиск"
+    override fun freeServersContinueLeft(n: Int) = "Продолжить поиск · осталось $n"
     override val freeServersNothingYet = "Пока не найдено ни одного работающего сервера"
     override val updateSubscriptionsAction = "Обновить подписки"
     override val updateSubscriptionsSubtitle = "Обновить локации импортированных подписок"
@@ -1872,6 +1895,14 @@ object EnStrings : Strings {
     override fun freeServersImported(working: Int, total: Int) = "Added working servers: $working of $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Tested: $checked of $total (working: $found)"
     override val freeServersStopKeep = "Stop and show what was found"
+    override val pingPause = "Pause"
+    override val pingResume = "Resume"
+    override val pingRestart = "Restart"
+    override val pingPausedLabel = "paused"
+    override fun pingProgress(done: Int, total: Int, alive: Int) = "Tested: $done of $total · available: $alive"
+    override fun etaLeft(sec: Int) = "~" + etaText(sec, "s", "min", "h") + " left"
+    override val freeServersContinue = "Continue search"
+    override fun freeServersContinueLeft(n: Int) = "Continue search · $n left"
     override val freeServersNothingYet = "No working server found yet"
     override val updateSubscriptionsAction = "Update subscriptions"
     override val updateSubscriptionsSubtitle = "Refresh imported subscription locations"
@@ -2594,6 +2625,14 @@ object FaStrings : Strings {
     override fun freeServersImported(working: Int, total: Int) = "سرورهای فعال افزوده شد: $working از $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "بررسی شد: $checked از $total (فعال: $found)"
     override val freeServersStopKeep = "توقف و نمایش موارد یافت‌شده"
+    override val pingPause = "مکث"
+    override val pingResume = "ادامه"
+    override val pingRestart = "از نو"
+    override val pingPausedLabel = "متوقف"
+    override fun pingProgress(done: Int, total: Int, alive: Int) = "بررسی شد: $done از $total · در دسترس: $alive"
+    override fun etaLeft(sec: Int) = "حدود " + etaText(sec, "ثانیه", "دقیقه", "ساعت") + " مانده"
+    override val freeServersContinue = "ادامه جستجو"
+    override fun freeServersContinueLeft(n: Int) = "ادامه جستجو · $n مانده"
     override val freeServersNothingYet = "هنوز سرور فعالی پیدا نشده است"
     override val updateSubscriptionsAction = "به‌روزرسانی اشتراک‌ها"
     override val updateSubscriptionsSubtitle = "بازآوری موقعیت‌های اشتراک‌های واردشده"
@@ -3316,6 +3355,14 @@ object ZhStrings : Strings {
     override fun freeServersImported(working: Int, total: Int) = "已添加可用节点：$working / $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "已测试：$checked / $total（可用：$found）"
     override val freeServersStopKeep = "停止并显示已找到的"
+    override val pingPause = "暂停"
+    override val pingResume = "继续"
+    override val pingRestart = "重新开始"
+    override val pingPausedLabel = "已暂停"
+    override fun pingProgress(done: Int, total: Int, alive: Int) = "已测试：$done / $total · 可用：$alive"
+    override fun etaLeft(sec: Int) = "剩余约 " + etaText(sec, "秒", "分钟", "小时")
+    override val freeServersContinue = "继续搜索"
+    override fun freeServersContinueLeft(n: Int) = "继续搜索 · 剩余 $n"
     override val freeServersNothingYet = "尚未找到可用服务器"
     override val updateSubscriptionsAction = "更新订阅"
     override val updateSubscriptionsSubtitle = "刷新已导入的订阅节点"

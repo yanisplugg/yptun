@@ -64,6 +64,9 @@ data class FreeServerItem(
 fun FreeServersSheet(
     servers: List<FreeServerItem>,
     onDismiss: () -> Unit,
+    // Servers the stopped search has not checked yet; > 0 shows «Продолжить поиск» under the add button.
+    remaining: Int = 0,
+    onContinue: () -> Unit = {},
     // The second argument: ids of the servers that get server-side WARP.
     onAddSelected: (List<FreeServerItem>, Set<String>) -> Unit
 ) {
@@ -218,6 +221,16 @@ fun FreeServersSheet(
                     text = s.addSelectedServers(selectedIds.size),
                     fontWeight = FontWeight.SemiBold
                 )
+            }
+            if (remaining > 0) {
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = onContinue,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(s.freeServersContinueLeft(remaining), fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
