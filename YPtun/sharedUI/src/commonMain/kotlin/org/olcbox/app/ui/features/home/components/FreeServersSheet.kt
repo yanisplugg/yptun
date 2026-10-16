@@ -81,7 +81,7 @@ fun FreeServersSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp)
+                .padding(bottom = 16.dp)
         ) {
             Text(
                 text = s.freeServers,
@@ -94,7 +94,7 @@ fun FreeServersSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(6.dp))
 
             // Disclaimer banner
             Surface(
@@ -104,26 +104,26 @@ fun FreeServersSheet(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Info,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp).padding(top = 1.dp)
+                        modifier = Modifier.size(16.dp).padding(top = 1.dp)
                     )
                     Text(
-                        text = s.freeServersSourceNotice + "\n\n" + s.freeServersDisclaimer,
-                        style = MaterialTheme.typography.bodySmall,
+                        text = s.freeServersSourceNotice + " " + s.freeServersDisclaimer,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 16.sp
+                        lineHeight = 14.sp
                     )
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
 
             // Server-side WARP for every free server at once; a row's cloud turns it off (or on) for that server.
             Row(
@@ -135,15 +135,15 @@ fun FreeServersSheet(
                     imageVector = Icons.Outlined.Cloud,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(20.dp)
                 )
                 Column(Modifier.weight(1f)) {
                     Text(s.freeServersWarpAll, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                     Text(
                         s.freeServersWarpAllHint,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 16.sp
+                        lineHeight = 14.sp
                     )
                 }
                 Switch(
@@ -152,7 +152,7 @@ fun FreeServersSheet(
                 )
             }
 
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(2.dp))
 
             // Select all / Deselect all bar
             Row(
@@ -181,14 +181,13 @@ fun FreeServersSheet(
                 )
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
 
-            // Server list
+            // Server list: takes everything the notices above leave free.
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f, fill = false)
-                    .heightIn(max = 380.dp),
+                    .weight(1f, fill = false),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 items(servers, key = { it.id }) { item ->
@@ -207,7 +206,7 @@ fun FreeServersSheet(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(10.dp))
 
             Button(
                 onClick = { onAddSelected(servers.filter { it.id in selectedIds }, warpIds) },
