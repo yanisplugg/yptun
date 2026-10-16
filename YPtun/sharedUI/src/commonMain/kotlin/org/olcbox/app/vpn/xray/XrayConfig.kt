@@ -46,6 +46,7 @@ object XrayConfig {
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
     private const val WARP_RELAY_IN_TAG = "warp-relay-in"
+    private const val WARP_OUT_TAG = "warp-out"
 
     // FakeDNS synthetic-IP pool (matches the v2rayNG/Happ default).
     private const val FAKEDNS_SERVER = "fakedns"
@@ -743,6 +744,13 @@ object XrayConfig {
         // here — AmneziaWG/WireGuard/Hysteria2 aren't Xray exit outbounds and are ignored (logged by the
         // caller). Null = single hop.
         secondProfile: ProxyProfile? = null,
+        // Cloudflare WARP over this verbatim config, through awgproxy's local SOCKS:
+        //  client side — [warpChainPort]: every proxy outbound of the config dials its server through it;
+        //  server side — [warpExitPort] + [warpRelay]: that SOCKS becomes the exit, and its WireGuard UDP rides
+        //  the config's main proxy through the relay inbound (see [WarpRelay]).
+        warpChainPort: Int? = null,
+        warpExitPort: Int? = null,
+        warpRelay: WarpRelay? = null,
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
@@ -822,7 +830,12 @@ object XrayConfig {
         val mainIsXhttp = mainNetwork == "xhttp" || mainNetwork == "splithttp"
         // Internal loopback SOCKS port: one above the app's listen port (127.0.0.1 only, not exposed).
         val cascadeLoopPort = listenPort + 1
-        val cascadeOutbound = if (cascadeSecond != null && mainProxyTag != null) {
+        val warpClientActive = warpChainPort != null && mainProxyTag != null
+        val warpServerActive = !warpClientActive && warpExitPort != null && warpRelay != null && mainProxyTag != null
+        val cascadeOutbound = if (warpServerActive) {
+            // WARP exit: bare SOCKS to the local awgproxy (loopback, so no detour), first outbound = default exit.
+            olcrtcSocksOutbound(CASCADE_EXIT_TAG, warpExitPort!!, "", "")
+        } else if (cascadeSecond != null && mainProxyTag != null) {
             if (mainIsXhttp) {
                 buildProxyOutbound(
                     cascadeSecond,
@@ -847,7 +860,7 @@ object XrayConfig {
                 )
             }
         } else null
-        val cascadeLoopActive = cascadeOutbound != null && mainProxyTag != null && mainIsXhttp
+        val cascadeLoopActive = !warpServerActive && cascadeOutbound != null && mainProxyTag != null && mainIsXhttp
         // The local SOCKS outbound the exit dials through (→ the loopback inbound below).
         val cascadeLoopOutbound = if (cascadeLoopActive) buildJsonObject {
             put("tag", CASCADE_LOOP_OUT_TAG)
@@ -952,6 +965,20 @@ object XrayConfig {
                 putJsonArray("rules") { add(loopRule); existingRules.forEach { add(it) } }
             }
         } else routingAfterCascade
+        val routingFinal = if (warpServerActive) {
+            // WARP relay → the config's real main proxy. Written AFTER the main→exit rewrite above, so it is not
+            // itself redirected into the exit (that would loop the WireGuard packets into their own tunnel).
+            val relayRule = buildJsonObject {
+                put("type", "field")
+                putJsonArray("inboundTag") { add(WARP_RELAY_IN_TAG) }
+                put("outboundTag", mainProxyTag)
+            }
+            val existingRules = (routingToWrite?.get("rules") as? JsonArray)?.toList() ?: emptyList()
+            buildJsonObject {
+                routingToWrite?.forEach { (k, v) -> if (k != "rules") put(k, v) }
+                putJsonArray("rules") { add(relayRule); existingRules.forEach { add(it) } }
+            }
+        } else routingToWrite
 
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
@@ -967,6 +994,17 @@ object XrayConfig {
                 add(socksInbound)
                 // Loopback SOCKS relay (only present for the xhttp-main cascade), 127.0.0.1 only.
                 cascadeLoopInbound?.let { add(it) }
+                if (warpServerActive) addJsonObject {
+                    put("tag", WARP_RELAY_IN_TAG)
+                    put("listen", "127.0.0.1")
+                    put("port", warpRelay!!.listenPort)
+                    put("protocol", "dokodemo-door")
+                    putJsonObject("settings") {
+                        put("address", warpRelay.targetHost)
+                        put("port", warpRelay.targetPort)
+                        put("network", "udp")
+                    }
+                }
                 nonSocks.forEach { add(it) }
             }
             putJsonArray("outbounds") {
@@ -974,7 +1012,10 @@ object XrayConfig {
                 cascadeOutbound?.let { add(it) }
                 // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
                 cascadeLoopOutbound?.let { add(it) }
-                userOutbounds.forEach { ob ->
+                // Client-side WARP: the SOCKS the proxy outbounds dial through.
+                if (warpClientActive) add(olcrtcSocksOutbound(WARP_OUT_TAG, warpChainPort!!, "", ""))
+                userOutbounds.forEach { rawOb ->
+                    val ob = if (warpClientActive) withDialerProxy(rawOb, WARP_OUT_TAG) else rawOb
                     val lifted = liftXhttpExtraHostPath(ob)
                     // Cascade base: pack the loopback's per-flow connections onto few main H2 tunnels
                     // (only the xhttp main, only when it has no xmux of its own — honor the user's).
@@ -1001,7 +1042,7 @@ object XrayConfig {
                 // FakeDNS dns outbound for the hijacked queries.
                 if (injectFake && "dns-out" !in userOutboundTags) add(dnsOutOutbound())
             }
-            if (routingToWrite != null) put("routing", routingToWrite)
+            if (routingFinal != null) put("routing", routingFinal)
         }
         return json.encodeToString(newRoot)
     }
@@ -1462,6 +1503,23 @@ object XrayConfig {
      * chain detour ([OLCRTC_TAG]) and, when the proxy is disabled, as the default exit ([PROXY_TAG])
      * so Chain traffic keeps riding the stealth tunnel instead of leaking out directly.
      */
+    /**
+     * [ob] with `streamSettings.sockopt.dialerProxy = [tag]` so its server is dialled through that outbound at SOCKET
+     * level (XTLS Vision keeps working over it). Only the protocol outbounds; one that already has a dialerProxy or
+     * a proxySettings chain is left alone.
+     */
+    private fun withDialerProxy(ob: JsonObject, tag: String): JsonObject {
+        if (ob["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() !in
+            setOf("vless", "vmess", "trojan", "shadowsocks")
+        ) return ob
+        if (ob["proxySettings"] != null) return ob
+        val stream = ob["streamSettings"] as? JsonObject ?: JsonObject(emptyMap())
+        val sockopt = stream["sockopt"] as? JsonObject ?: JsonObject(emptyMap())
+        if (sockopt["dialerProxy"] != null) return ob
+        val newStream = JsonObject(stream + ("sockopt" to JsonObject(sockopt + ("dialerProxy" to JsonPrimitive(tag)))))
+        return JsonObject(ob + ("streamSettings" to newStream))
+    }
+
     private fun olcrtcSocksOutbound(tag: String, port: Int, user: String, pass: String): JsonObject =
         buildJsonObject {
             put("tag", tag)

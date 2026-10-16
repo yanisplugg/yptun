@@ -366,6 +366,9 @@ internal class DesktopEngineController(
         }
 
         val wireguardBase = if (config.warpEnabled && config.warpMode == WarpMode.Client) warpProfile else null
+        if (config.warpEnabled && !profile.rawXrayConfig.isNullOrBlank()) {
+            log("WARNING: WARP is not applied to a JSON subscription on desktop yet (Android only) — the config runs without it")
+        }
         val secondProfile = when {
             config.warpEnabled && config.warpMode == WarpMode.Server && warpProfile != null -> warpProfile
             else -> configuredSecondProfile

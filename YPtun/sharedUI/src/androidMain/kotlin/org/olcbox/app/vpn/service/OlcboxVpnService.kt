@@ -1698,10 +1698,11 @@ class OlcboxVpnService : VpnService() {
             val serverSide = config.warpMode == WarpMode.Server
             val awg = config.warpProtocol == WarpProtocol.Awg
             addLog("WARP: включён — ${if (serverSide) "на сервере (VLESS → WARP)" else "на клиенте (WARP → VLESS)"}, протокол ${if (awg) "AmneziaWG" else "WireGuard"}")
+            // A JSON subscription (verbatim Xray config) gets WARP too: prepareRaw puts it in the config.
+            val isRawXray = !profile.rawXrayConfig.isNullOrBlank()
             val skipReason = when {
-                !profile.rawXrayConfig.isNullOrBlank() -> "кастомный Xray-конфиг (JSON-подписка) идёт как есть, без вставки WARP"
                 chained -> "режим olcRTC-цепочки уже занимает базовый туннель"
-                profile.type !in setOf(
+                !isRawXray && profile.type !in setOf(
                     ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS, ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
                 ) -> "WARP поддержан для VLESS/VMess/Trojan/Shadowsocks, а тут ${profile.type}"
                 else -> null
@@ -1874,6 +1875,8 @@ class OlcboxVpnService : VpnService() {
                 ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
             )
             when {
+                // WARP on the server side rides in as the "second proxy" (awgproxy's SOCKS) — not a cascade.
+                warpRelay != null -> addLog("WARP: выход через awgproxy поверх ${if (effectiveProfile.rawXrayConfig.isNullOrBlank()) "основного прокси" else "кастомного Xray-конфига"}")
                 secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() && !secondChainableOnRaw ->
                     addLog("ВНИМАНИЕ: 2-й прокси типа '${secondProfile.type}' (например AmneziaWG/WireGuard/Hysteria2) — это клиентский ТУННЕЛЬ, а не выходной Xray-outbound, поэтому НЕ может быть каскадом поверх кастомного Xray-конфига и игнорируется. Для каскада поверх xhttp используйте vless/vmess/trojan/ss.")
                 secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() ->
@@ -1930,6 +1933,10 @@ class OlcboxVpnService : VpnService() {
                         // Chain a standard second proxy over the verbatim config (xhttp main + vless/etc.
                         // second). Non-chainable seconds (AmneziaWG…) are ignored by prepareRaw.
                         secondProfile = secondProfile,
+                        // WARP over the JSON config (client: its proxies dial through awgproxy; server: awgproxy is the exit).
+                        warpChainPort = warpChainPort,
+                        warpExitPort = if (warpRelay != null) awgLocalPort else null,
+                        warpRelay = warpRelay,
                     )
                 } else {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
