@@ -1382,6 +1382,17 @@ private fun runApp(args: Array<String>) = application {
                                 dependencies.homeViewModel.restartVpnIfRunning()
                             }
                         },
+                        onUnsecuredPortSaved = { port ->
+                            val newSettings = socksProxySettings.copy(customPort = port).normalized()
+                            dependencies.vpnManager.updateSocksProxySettings(newSettings)
+                            scope.launch {
+                                dependencies.socksProxySettingsStore.save(newSettings)
+                            }
+                            desktopNotice = "SOCKS port saved"
+                            if (homeState.isVpnConnected) {
+                                dependencies.homeViewModel.restartVpnIfRunning()
+                            }
+                        },
                         onProxyPasswordRegenerated = {
                             val newSettings = socksProxySettings.copy(
                                 password = generateDesktopProxyPassword()

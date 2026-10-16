@@ -201,6 +201,7 @@ fun AppSettingsSheet(
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
     onSecuredProxyChanged: (Boolean) -> Unit,
+    onUnsecuredPortSaved: (Int) -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
     onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
@@ -382,7 +383,8 @@ fun AppSettingsSheet(
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onProxySettingsSaved = onProxySettingsSaved,
                     onProxyPasswordRegenerated = onProxyPasswordRegenerated,
-                    onSecuredProxyChanged = onSecuredProxyChanged
+                    onSecuredProxyChanged = onSecuredProxyChanged,
+                    onUnsecuredPortSaved = onUnsecuredPortSaved
                 )
 
                 AppSettingsRoute.SplitTunneling -> SplitTunnelingSettingsContent(
@@ -1242,7 +1244,8 @@ private fun SocksProxySettingsContent(
     onBack: () -> Unit,
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
-    onSecuredProxyChanged: (Boolean) -> Unit
+    onSecuredProxyChanged: (Boolean) -> Unit,
+    onUnsecuredPortSaved: (Int) -> Unit
 ) {
     var editedHost by remember(proxySettings.host) { mutableStateOf(proxySettings.host) }
     var editedPort by remember(proxySettings.port) { mutableStateOf(proxySettings.port.toString()) }
@@ -1294,7 +1297,38 @@ private fun SocksProxySettingsContent(
             onCheckedChange = onSecuredProxyChanged
         )
 
-        if (!proxySettings.secured) return@Column
+        if (!proxySettings.secured) {
+            // No credentials, but the listener port is still the user's to pick.
+            Spacer(Modifier.height(20.dp))
+            val s = LocalStrings.current
+            val canSavePort = portValid && portChanged && enabled
+            SocksProxyTextField(
+                value = editedPort,
+                onValueChange = { value -> editedPort = value.filter { it.isDigit() }.take(MAX_PROXY_PORT_LENGTH) },
+                label = s.port,
+                placeholder = proxySettings.port.toString(),
+                enabled = enabled,
+                isError = editedPort.isBlank() || !portValid,
+                leadingIcon = Icons.Rounded.Public,
+                supportingText = when {
+                    editedPort.isBlank() -> s.portRequired
+                    !portValid -> "Use ${AndroidSocksProxySettings.MIN_PORT}-${AndroidSocksProxySettings.MAX_PORT}"
+                    portChanged && isConnectionActive -> s.savingRestarts
+                    portChanged -> s.unsavedChange
+                    else -> null
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(enabled = canSavePort, onClick = { parsedPort?.let(onUnsecuredPortSaved) }) {
+                    Icon(Icons.Rounded.Check, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(s.save)
+                }
+            }
+            return@Column
+        }
 
         Spacer(Modifier.height(20.dp))
 
