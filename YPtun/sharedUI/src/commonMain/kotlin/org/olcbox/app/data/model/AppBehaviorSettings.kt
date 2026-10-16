@@ -213,10 +213,10 @@ data class AppBehaviorSettings(
     /**
      * Send the device descriptors to subscription panels and the provider report: `x-hwid`, `x-app-id`,
      * `x-device-os`, `x-ver-os`, `x-device-model`. On by default (panels with a device limit need them);
-     * off sends none of them — such a panel may then refuse the subscription. Settings -> Privacy.
+     * off sends none of them (no HWID at all) — such a panel may then refuse the subscription. Settings -> Privacy.
      */
     val sendDeviceInfoToSubscriptions: Boolean = true,
-    /** A HWID of the user's choosing for subscription requests; blank = this device's real HWID. */
+    /** Unused. Build 421 wrote it; kept only so settings saved by that build still load (unknown keys are rejected). */
     val customHwid: String = "",
     /**
      * Telegram-over-WARP background proxy: when on, a lightweight foreground service raises an

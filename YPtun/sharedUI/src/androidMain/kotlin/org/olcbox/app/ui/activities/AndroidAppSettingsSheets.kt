@@ -4402,15 +4402,6 @@ private fun PrivacyContent(
             subtitle = s.sendDeviceInfoSubtitle,
             checked = settings.sendDeviceInfoToSubscriptions
         ) { onChanged(settings.copy(sendDeviceInfoToSubscriptions = it)) }
-        OutlinedTextField(
-            value = settings.customHwid,
-            onValueChange = { onChanged(settings.copy(customHwid = it.trim().take(128))) },
-            label = { Text(s.customHwidLabel) },
-            supportingText = { Text(s.customHwidHint) },
-            enabled = settings.sendDeviceInfoToSubscriptions,
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 

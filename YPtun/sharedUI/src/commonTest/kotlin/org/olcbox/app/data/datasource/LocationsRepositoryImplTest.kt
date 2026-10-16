@@ -1142,13 +1142,11 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
-    fun hwidCanBeReplacedOrWithheld() = runTest {
+    fun hwidIsSentOrWithheld() = runTest {
         val real = subscriptionRequests(org.olcbox.app.data.model.AppBehaviorSettings()).mapNotNull { it.second }
         assertTrue(real.isNotEmpty() && real.all { it == "real-hwid" }, real.toString())
-        val custom = subscriptionRequests(org.olcbox.app.data.model.AppBehaviorSettings(customHwid = "my-hwid")).mapNotNull { it.second }
-        assertTrue(custom.isNotEmpty() && custom.all { it == "my-hwid" }, custom.toString())
         val none = subscriptionRequests(
-            org.olcbox.app.data.model.AppBehaviorSettings(customHwid = "my-hwid", sendDeviceInfoToSubscriptions = false)
+            org.olcbox.app.data.model.AppBehaviorSettings(sendDeviceInfoToSubscriptions = false)
         )
         assertTrue(none.isNotEmpty() && none.all { it.second == null }, none.toString())
     }

@@ -598,7 +598,7 @@ class LocationsRepositoryImpl(
         val state = loadProviderReportDays().toMutableMap()
         // Identity + device descriptors, exactly like the subscription fetch sends to the panel.
         val sendDevice = privacy.sendDeviceInfoToSubscriptions
-        val hwid = if (sendDevice) runCatching { subscriptionHwid(privacy) }.getOrNull().orEmpty() else ""
+        val hwid = if (sendDevice) runCatching { deviceIdentityProvider.hwid() }.getOrNull().orEmpty() else ""
         val appId = if (sendDevice) runCatching { deviceIdentityProvider.appId() }.getOrNull().orEmpty() else ""
         val appVersion = CurrentAppInfo.value.version
 
@@ -1114,10 +1114,6 @@ class LocationsRepositoryImpl(
     private suspend fun privacySettings(): AppBehaviorSettings =
         runCatching { dataSource.appBehavior() }.getOrNull() ?: AppBehaviorSettings()
 
-    /** The HWID the subscription requests carry: the user's own when set, else this device's. */
-    private suspend fun subscriptionHwid(settings: AppBehaviorSettings): String =
-        settings.customHwid.trim().ifBlank { deviceIdentityProvider.hwid() }
-
     /** Resolves the user's subscription User-Agent choice to the string the main requests send. */
     private fun subscriptionUserAgent(settings: AppBehaviorSettings): String =
         when (settings.effectiveSubscriptionUa()) {
@@ -1140,7 +1136,7 @@ class LocationsRepositoryImpl(
         // has not switched them off in Settings -> Privacy.
         val identity = requestMode == SubscriptionRequestMode.Identity && privacy.sendDeviceInfoToSubscriptions
         val hwid = if (identity) {
-            subscriptionHwid(privacy)
+            deviceIdentityProvider.hwid()
         } else {
             null
         }

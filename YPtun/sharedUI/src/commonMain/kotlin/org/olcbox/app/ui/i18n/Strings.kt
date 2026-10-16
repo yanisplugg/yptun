@@ -561,8 +561,6 @@ interface Strings {
     val uaModeV2raytun: String
     val sendDeviceInfoTitle: String
     val sendDeviceInfoSubtitle: String
-    val customHwidLabel: String
-    val customHwidHint: String
     val globalEngineLabel: String
     val globalEngineSubtitle: String
     val globalEngineAuto: String
@@ -1298,9 +1296,7 @@ object RuStrings : Strings {
     override val uaModeYptun = "YPtun"
     override val uaModeV2raytun = "v2rayTun"
     override val sendDeviceInfoTitle = "Отправлять данные устройства подпискам"
-    override val sendDeviceInfoSubtitle = "HWID, ID приложения, ОС и модель устройства — панели нужны они для лимита устройств"
-    override val customHwidLabel = "Свой HWID"
-    override val customHwidHint = "Пусто — настоящий HWID этого устройства. Подставляется в запросы подписок и отчёта провайдеру; на работу VPN не влияет. Если выключить отправку данных, подписка с лимитом устройств может не выдаться."
+    override val sendDeviceInfoSubtitle = "HWID, ID приложения, ОС и модель устройства. Выключено — ничего из этого не отправляется, но подписка с лимитом устройств может не выдаться"
     override val globalEngineLabel = "Движок для VLESS (глобально)"
     override val globalEngineSubtitle = "Ядро для VLESS и похожих транспортов, когда в настройках сервера выбрано «Авто». Настройка сервера важнее этой. xhttp всегда использует Xray."
     override val globalEngineAuto = "Авто"
@@ -2019,9 +2015,7 @@ object EnStrings : Strings {
     override val uaModeYptun = "YPtun"
     override val uaModeV2raytun = "v2rayTun"
     override val sendDeviceInfoTitle = "Send device data to subscriptions"
-    override val sendDeviceInfoSubtitle = "HWID, app ID, OS and device model: panels need them for their device limit"
-    override val customHwidLabel = "Custom HWID"
-    override val customHwidHint = "Empty: this device's real HWID. Used in subscription requests and the provider report; it does not affect the VPN. With device data switched off, a subscription with a device limit may be refused."
+    override val sendDeviceInfoSubtitle = "HWID, app ID, OS and device model. Off: none of it is sent, but a subscription with a device limit may be refused"
     override val globalEngineLabel = "VLESS engine (global)"
     override val globalEngineSubtitle = "Core for VLESS-like transports when a server's setting is \"Auto\". The per-server choice overrides this. xhttp always uses Xray."
     override val globalEngineAuto = "Auto"
@@ -2757,8 +2751,6 @@ object FaStrings : Strings {
     override val uaModeV2raytun = "v2rayTun"
     override val sendDeviceInfoTitle = "ارسال اطلاعات دستگاه به اشتراک‌ها"
     override val sendDeviceInfoSubtitle = "HWID، شناسه برنامه، سیستم‌عامل و مدل دستگاه: پنل‌ها برای محدودیت دستگاه به آن‌ها نیاز دارند"
-    override val customHwidLabel = "HWID دلخواه"
-    override val customHwidHint = "خالی: HWID واقعی همین دستگاه. در درخواست‌های اشتراک و گزارش ارائه‌دهنده استفاده می‌شود و روی VPN اثری ندارد. اگر ارسال اطلاعات خاموش باشد، اشتراک دارای محدودیت دستگاه ممکن است رد شود."
     override val globalEngineLabel = "موتور VLESS (سراسری)"
     override val globalEngineSubtitle = "هسته برای ترنسپورت‌های مشابه VLESS وقتی تنظیم سرور روی «خودکار» است. تنظیم هر سرور بر این اولویت دارد. xhttp همیشه از Xray استفاده می‌کند."
     override val globalEngineAuto = "خودکار"
@@ -3462,8 +3454,6 @@ object ZhStrings : Strings {
     override val uaModeV2raytun = "v2rayTun"
     override val sendDeviceInfoTitle = "向订阅发送设备数据"
     override val sendDeviceInfoSubtitle = "HWID、应用 ID、系统和设备型号：面板需要它们来限制设备数量"
-    override val customHwidLabel = "自定义 HWID"
-    override val customHwidHint = "留空：使用本设备的真实 HWID。用于订阅请求和提供商报告，不影响 VPN。关闭设备数据发送后，带设备数量限制的订阅可能被拒绝。"
     override val globalEngineLabel = "VLESS 内核（全局）"
     override val globalEngineSubtitle = "当服务器设置为“自动”时，VLESS 类传输使用的内核。每服务器的选择会覆盖此项。xhttp 始终使用 Xray。"
     override val globalEngineAuto = "自动"
