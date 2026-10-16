@@ -949,13 +949,18 @@ private fun WireguardEngineSection(
             FilterChip(selected = !isAwg, onClick = { onProtocol(false) }, enabled = enabled, label = { Text("WireGuard") })
         }
         if (!allowEditing) {
-            SshKeyLoadButton(enabled = enabled, onKeyLoaded = onIni, label = s.wgLoadFile)
-            // The parameters are fields, and fields are what "allow editing configurations" turns on.
-            Text(
-                if (missing.isEmpty()) s.wgConfigHint else WIREGUARD_NEEDS_EDITING,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (missing.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
-            )
+            val loaded = missing.isEmpty()
+            if (loaded) {
+                Text(
+                    "✓ ${s.wgLoaded}: ${if (isAwg) "AmneziaWG" else "WireGuard"} · ${AwgIniEditor.get(ini, "Endpoint", AwgIniEditor.Section.Peer)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                // The parameters are fields, and fields are what "allow editing configurations" turns on.
+                Text(WIREGUARD_NEEDS_EDITING, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            SshKeyLoadButton(enabled = enabled, onKeyLoaded = onIni, label = if (loaded) s.wgReplaceFile else s.wgLoadFile)
         } else if (missing.isNotEmpty()) {
             Text(
                 s.wgMissingPrefix + missing.joinToString(", "),
