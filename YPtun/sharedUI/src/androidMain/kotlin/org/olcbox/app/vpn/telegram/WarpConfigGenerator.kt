@@ -46,6 +46,9 @@ object WarpConfigGenerator {
 
     /** Direct Cloudflare registration (fallback only — blocked in some regions). */
     private const val REG_URL = "https://api.cloudflareclient.com/v0a2158/reg"
+
+    /** Pass-through of the same API on our Cloudflare Worker, tried when the direct one is blocked or times out. */
+    private const val REG_MIRROR_URL = "https://cache-mirror-7q.cdn-edge-7q.workers.dev/cf/v0a2158/reg"
     private const val CF_CLIENT_VERSION = "a-6.3-2158"
     private const val CF_USER_AGENT = "okhttp/3.12.1"
 
@@ -178,9 +181,9 @@ object WarpConfigGenerator {
         val client = HttpClient(OkHttp) {
             expectSuccess = false
             install(HttpTimeout) {
-                connectTimeoutMillis = 15_000
-                requestTimeoutMillis = 20_000
-                socketTimeoutMillis = 20_000
+                connectTimeoutMillis = 8_000
+                requestTimeoutMillis = 12_000
+                socketTimeoutMillis = 12_000
             }
         }
         val body: JsonObject = buildJsonObject {
@@ -193,19 +196,28 @@ object WarpConfigGenerator {
             put("locale", "en_US")
         }
 
+        val requestBody = json.encodeToString(JsonObject.serializer(), body)
         val responseText = try {
-            val response = client.post(REG_URL) {
-                contentType(ContentType.Application.Json)
-                headers {
-                    append(HttpHeaders.UserAgent, CF_USER_AGENT)
-                    append("CF-Client-Version", CF_CLIENT_VERSION)
-                }
-                setBody(json.encodeToString(JsonObject.serializer(), body))
+            var text: String? = null
+            var error: Throwable? = null
+            for (url in listOf(REG_URL, REG_MIRROR_URL)) {
+                text = runCatching {
+                    val response = client.post(url) {
+                        contentType(ContentType.Application.Json)
+                        headers {
+                            append(HttpHeaders.UserAgent, CF_USER_AGENT)
+                            append("CF-Client-Version", CF_CLIENT_VERSION)
+                        }
+                        setBody(requestBody)
+                    }
+                    if (response.status.value !in 200..299) {
+                        throw IllegalStateException("Cloudflare WARP registration failed (HTTP ${response.status.value})")
+                    }
+                    response.bodyAsText()
+                }.onFailure { error = it }.getOrNull()
+                if (text != null) break
             }
-            if (response.status.value !in 200..299) {
-                throw IllegalStateException("Cloudflare WARP registration failed (HTTP ${response.status.value})")
-            }
-            response.bodyAsText()
+            text ?: throw error!!
         } finally {
             client.close()
         }
