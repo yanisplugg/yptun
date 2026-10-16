@@ -18,6 +18,7 @@ import org.olcbox.app.vpn.xray.XrayConfig
 import org.olcbox.app.data.model.WarpMode
 import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.vpn.warp.WarpHelper
+import org.olcbox.app.vpn.warp.WarpRelay
 import org.olcbox.app.vpn.telegram.WarpConfigGenerator
 import org.olcbox.app.vpn.telegram.TelegramProxyStore
 import kotlinx.serialization.json.buildJsonObject
@@ -339,42 +340,62 @@ internal class DesktopEngineController(
             }
         }
 
-        var warpProfile: ProxyProfile? = null
+        // ---- Cloudflare WARP (WireGuard or AmneziaWG) on the client or the server side ----
+        // Both protocols run in the awgproxy engine (plain WG = the INI without obfuscation), like on Android:
+        //  Client side: awgproxy SOCKS on awgLocalPort; the main proxy dials through it.
+        //  Server side: awgproxy SOCKS is the exit; its UDP rides the main proxy through a core relay (warpRelay).
+        var warpAwgIni: String? = null
+        var warpChainPort: Int? = null
+        var warpRelay: WarpRelay? = null
+        var secondProfile = configuredSecondProfile
         if (config.warpEnabled) {
-            log("WARP: enabled — ${if (config.warpMode == WarpMode.Client) "client side (WARP → VLESS)" else "server side (VLESS → WARP)"}, protocol WireGuard" +
-                if (config.warpProtocol == WarpProtocol.Awg) " (AmneziaWG is Android-only for now, using plain WireGuard)" else "")
-            var warpIni = TelegramProxyStore.loadConfig()
-            if (!warpIni.isNullOrBlank() && !warpIni.contains("PrivateKey", ignoreCase = true)) {
-                warpIni = null
+            val serverSide = config.warpMode == WarpMode.Server
+            val awg = config.warpProtocol == WarpProtocol.Awg
+            log("WARP: enabled - ${if (serverSide) "server side (VLESS -> WARP)" else "client side (WARP -> VLESS)"}, protocol ${if (awg) "AmneziaWG" else "WireGuard"}")
+            val isRawXray = !profile.rawXrayConfig.isNullOrBlank()
+            val skipReason = when {
+                chained -> "olcRTC chain mode already owns the base tunnel"
+                !isRawXray && profile.type !in setOf(
+                    ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS, ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
+                ) -> "WARP supports VLESS/VMess/Trojan/Shadowsocks, this is ${profile.type}"
+                else -> null
             }
-            if (warpIni.isNullOrBlank()) {
-                log("WARP enabled: generating Cloudflare WARP config…")
-                warpIni = runCatching { WarpConfigGenerator.generate(log, officialFirst = true) }
-                    .onFailure { log("WARP: generation failed: ${it.message}") }.getOrNull()
-                if (warpIni != null) {
-                    runCatching { TelegramProxyStore.saveConfig(warpIni) }
-                }
-            }
-            if (warpIni != null) {
-                warpProfile = WarpHelper.parseWarpIniToProxyProfile(warpIni, tag = "WARP")
-                if (warpProfile != null) {
-                    log("WARP connected: mode=${if (config.warpMode == WarpMode.Client) "client (WARP → VLESS)" else "server (VLESS → WARP)"}")
-                }
+            if (skipReason != null) {
+                log("WARNING: WARP skipped: $skipReason")
             } else {
-                log("WARNING: failed to obtain WARP config, proceeding without WARP")
+                var ini = TelegramProxyStore.loadConfig()
+                if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
+                if (ini.isNullOrBlank()) {
+                    log("WARP: generating Cloudflare WARP config...")
+                    ini = runCatching { WarpConfigGenerator.generate(log, officialFirst = !awg) }
+                        .onFailure { log("WARP: generation failed: ${it.message}") }.getOrNull()
+                    if (ini != null) runCatching { TelegramProxyStore.saveConfig(ini) }
+                }
+                if (ini == null) {
+                    log("WARNING: failed to obtain a WARP config, proceeding WITHOUT WARP")
+                } else {
+                    val engineIni = WarpHelper.engineIni(ini, awg)
+                    if (serverSide) {
+                        // An IP, never a domain: the core would resolve a domain through its own DNS, which is
+                        // routed through this very tunnel.
+                        val (rawHost, port) = WarpHelper.endpointOf(ini)
+                        val relay = WarpRelay(listenPort = listenPort + 3, targetHost = WarpHelper.pinnedHost(rawHost), targetPort = port)
+                        warpRelay = relay
+                        warpAwgIni = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
+                        secondProfile = localSocksProfile("WARP", awgLocalPort(listenPort))
+                    } else {
+                        warpAwgIni = engineIni
+                        warpChainPort = awgLocalPort(listenPort)
+                    }
+                }
             }
-        }
-
-        val wireguardBase = if (config.warpEnabled && config.warpMode == WarpMode.Client) warpProfile else null
-        if (config.warpEnabled && !profile.rawXrayConfig.isNullOrBlank()) {
-            log("WARNING: WARP is not applied to a JSON subscription on desktop yet (Android only) — the config runs without it")
-        }
-        val secondProfile = when {
-            config.warpEnabled && config.warpMode == WarpMode.Server && warpProfile != null -> warpProfile
-            else -> configuredSecondProfile
         }
 
         requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
+
+        // WARP over AmneziaWG/WireGuard on the CLIENT side: raise awgproxy first - the main proxy dials through its
+        // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
+        if (warpAwgIni != null && warpRelay == null) startWarpAwg(warpAwgIni, listenPort)
 
         if (chained) {
             applyTelemostCookies(config)
@@ -526,6 +547,10 @@ internal class DesktopEngineController(
                     // Cascade over a verbatim config: desktop LOGGED it but never passed it, so the 2nd
                     // proxy was silently dropped for every raw config.
                     secondProfile = secondProfile,
+                    // WARP over the JSON config (client: its proxies dial through awgproxy; server: awgproxy is the exit).
+                    warpChainPort = warpChainPort,
+                    warpExitPort = if (warpRelay != null) awgLocalPort(listenPort) else null,
+                    warpRelay = warpRelay,
                 )
             } else {
                 assetPath = ensureGeoAssetPath(routingProfile)
@@ -535,7 +560,7 @@ internal class DesktopEngineController(
                     listenHost = xrayHost,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
-                    olcrtcChainPort = if (chained) chainPort else null,
+                    olcrtcChainPort = if (chained) chainPort else warpChainPort,
                     olcrtcChainUser = if (chained) socksUsername else "",
                     olcrtcChainPass = if (chained) socksPassword else "",
                     traffic = traffic.let { t ->
@@ -548,9 +573,9 @@ internal class DesktopEngineController(
                             )
                         } ?: t
                     },
-                    wireguardBase = wireguardBase,
-                    chainViaDialerProxy = wireguardBase != null,
-                    keepFlowOnChain = wireguardBase != null,
+                    chainViaDialerProxy = warpChainPort != null,
+                    keepFlowOnChain = warpChainPort != null,
+                    warpRelay = warpRelay,
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     secondProfile = secondProfile,
                     // The "Обход LAN" toggle. Android passes it; desktop did not, so on the Xray core
@@ -588,10 +613,10 @@ internal class DesktopEngineController(
                 listenHost = listenHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                olcrtcChainPort = if (chained) chainPort else null,
+                olcrtcChainPort = if (chained) chainPort else warpChainPort,
                 olcrtcChainUser = if (chained) socksUsername else "",
                 olcrtcChainPass = if (chained) socksPassword else "",
-                wireguardBase = wireguardBase,
+                warpRelay = warpRelay,
                 autoDetectInterface = true,
                 routing = routing,
                 matchAppsByProcess = true,
@@ -637,6 +662,14 @@ internal class DesktopEngineController(
             throw IllegalStateException("Proxy SOCKS port $listenPort did not open")
         }
         log("Proxy core ready on $listenHost:$listenPort")
+        // WARP over AmneziaWG/WireGuard on the SERVER side: the core (and its UDP relay) is up - now start awgproxy.
+        if (warpRelay != null && warpAwgIni != null) startWarpAwg(warpAwgIni, listenPort)
+    }
+
+    /** Raises awgproxy for the WARP INI on [awgLocalPort] (the same engine as a standalone AmneziaWG). */
+    private suspend fun startWarpAwg(ini: String, socksPort: Int) {
+        log("WARP: starting the WireGuard/AmneziaWG engine on 127.0.0.1:${awgLocalPort(socksPort)}")
+        prepareAmneziaWgProxy(ProxyProfile(tag = "WARP", type = ProxyProfile.TYPE_AMNEZIAWG, awgConfig = ini), socksPort)
     }
 
     // ---------------------------------------------------------------------------------------

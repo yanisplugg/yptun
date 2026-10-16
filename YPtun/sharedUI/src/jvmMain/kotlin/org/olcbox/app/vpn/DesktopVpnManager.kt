@@ -508,6 +508,11 @@ class DesktopVpnManager private constructor(
                 }
                 awgEndpointHost(profile)?.let { add(it) }
             }
+            // WARP on the client side: awgproxy dials Cloudflare from this process (no VpnService.protect on a PC),
+            // so that endpoint must stay outside the TUN or the tunnel would carry its own handshake.
+            if (config.warpEnabled && config.warpMode == org.olcbox.app.data.model.WarpMode.Client) {
+                add(org.olcbox.app.vpn.warp.WarpHelper.pinnedHost("engage.cloudflareclient.com"))
+            }
             // NOTE: config.proxy2 (the cascade exit) deliberately gets NO bypass route. Nothing on this
             // machine ever dials it — it is reached by the MAIN proxy, from the exit server — so a host
             // route only pins its address outside the tunnel, which is the opposite of what a cascade

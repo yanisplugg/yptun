@@ -177,3 +177,21 @@ func TestWarpSmokeAwgVariants(t *testing.T) {
 		t.Logf("[%s] first data after %.1fs; over 70s ok=%d fail=%d", c.name, first.Seconds(), ok, fail)
 	}
 }
+
+// Keeps a live WARP SOCKS up for WARP_SERVE seconds on 127.0.0.1:18900 so a real xray/sing-box chain can be run
+// against it by hand (the engine INI shape is the one the apps use: plain WG, endpoint pinned to the anycast IP).
+func TestWarpServe(t *testing.T) {
+	secs := os.Getenv("WARP_SERVE")
+	if secs == "" {
+		t.Skip("set WARP_SERVE=<seconds>")
+	}
+	priv, peer, v4, v6, _ := warpRegister(t)
+	ini := fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = %s/32, %s/128\nDNS = 1.1.1.1\nMTU = 1280\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 162.159.192.1:2408\nPersistentKeepalive = 25\n", priv, v4, v6, peer)
+	if err := Start(ini, "127.0.0.1:18900"); err != nil {
+		t.Fatal(err)
+	}
+	defer Stop()
+	var n int
+	fmt.Sscan(secs, &n)
+	time.Sleep(time.Duration(n) * time.Second)
+}
