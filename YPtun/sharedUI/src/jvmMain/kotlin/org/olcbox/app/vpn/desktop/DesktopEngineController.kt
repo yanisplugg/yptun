@@ -16,6 +16,7 @@ import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.xray.XrayConfig
 import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.vpn.warp.WarpHelper
 import org.olcbox.app.vpn.telegram.WarpConfigGenerator
 import org.olcbox.app.vpn.telegram.TelegramProxyStore
@@ -340,13 +341,16 @@ internal class DesktopEngineController(
 
         var warpProfile: ProxyProfile? = null
         if (config.warpEnabled) {
+            log("WARP: enabled — ${if (config.warpMode == WarpMode.Client) "client side (WARP → VLESS)" else "server side (VLESS → WARP)"}, protocol WireGuard" +
+                if (config.warpProtocol == WarpProtocol.Awg) " (AmneziaWG is Android-only for now, using plain WireGuard)" else "")
             var warpIni = TelegramProxyStore.loadConfig()
             if (!warpIni.isNullOrBlank() && !warpIni.contains("PrivateKey", ignoreCase = true)) {
                 warpIni = null
             }
             if (warpIni.isNullOrBlank()) {
                 log("WARP enabled: generating Cloudflare WARP config…")
-                warpIni = runCatching { WarpConfigGenerator.generate(log) }.getOrNull()
+                warpIni = runCatching { WarpConfigGenerator.generate(log, officialFirst = true) }
+                    .onFailure { log("WARP: generation failed: ${it.message}") }.getOrNull()
                 if (warpIni != null) {
                     runCatching { TelegramProxyStore.saveConfig(warpIni) }
                 }
@@ -543,6 +547,7 @@ internal class DesktopEngineController(
                     },
                     wireguardBase = wireguardBase,
                     chainViaDialerProxy = wireguardBase != null,
+                    keepFlowOnChain = wireguardBase != null,
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     secondProfile = secondProfile,
                     // The "Обход LAN" toggle. Android passes it; desktop did not, so on the Xray core

@@ -1,12 +1,18 @@
 package yandex
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/utils"
@@ -24,7 +30,8 @@ import (
 // NewTelemostGroup creates n lanes joined to the same conference. The group
 // is also a transport.LaneSource, so the stripe can grow it later.
 func NewTelemostGroup(cookies, conferenceURL string, n int, isExitNode bool, config transport.TransportConfig) *TelemostGroup {
-	g := &TelemostGroup{cookies: cookies, url: conferenceURL, isExit: isExitNode, config: config}
+	g := &TelemostGroup{cookies: cookies, url: conferenceURL, isExit: isExitNode, config: config,
+		id: uuid.New().String()[:8], start: time.Now().UnixMilli()}
 	for i := 0; i < n; i++ {
 		g.newLane()
 	}
@@ -49,6 +56,125 @@ type TelemostGroup struct {
 	grow    func()
 	growing atomic.Bool
 	silent  map[string]time.Time // peers a lane watched and got nothing from
+
+	id    string // this run of the group, in every lane's tag
+	start int64  // when it started (unix ms), to tell the newest run
+}
+
+// laneTag names a lane in its participant description: role, the group (one
+// run of a node's stripe), when that run started and the lane's index. The
+// SFU keeps listing a participant that vanished without a word for minutes,
+// so after a reconnect or a restart the room is full of lanes that carry
+// nothing; a node watches only the newest group of the other role and never
+// wastes a lane, or seconds of probing, on them.
+//
+// The SFU passes a participant's name through untouched but drops the
+// description (every peer sees "description":""), so the tag rides in the
+// name: after the name everyone sees (participantName) come characters that
+// take no space, two bits each (laneTag.hidden). String is the readable form
+// for logs.
+type laneTag struct {
+	role  string // "exit" or "client"
+	group string // 8 hex digits
+	start int64
+	index int
+}
+
+func (l laneTag) String() string {
+	return fmt.Sprintf("%c%s-%s-%d", l.role[0], l.group, strconv.FormatInt(l.start, 36), l.index)
+}
+
+// tagMarks write a hidden lane tag: zero width space, zero width non-joiner,
+// zero width joiner and word joiner - nothing a name shows.
+var tagMarks = [4]rune{'\u200b', '\u200c', '\u200d', '\u2060'}
+
+// hidden is the tag as name characters that take no space: a two-mark
+// header, then 11 bytes - role and index, group, start (unix ms, 48 bits) -
+// four marks a byte.
+func (l laneTag) hidden() string {
+	g, _ := strconv.ParseUint(l.group, 16, 32)
+	var b [11]byte
+	b[0] = byte(l.index & 0x7f)
+	if l.role == "exit" {
+		b[0] |= 0x80
+	}
+	binary.BigEndian.PutUint32(b[1:5], uint32(g))
+	st := uint64(l.start)
+	for i := 0; i < 6; i++ {
+		b[5+i] = byte(st >> (8 * (5 - i)))
+	}
+	var sb strings.Builder
+	sb.WriteRune(tagMarks[3])
+	sb.WriteRune(tagMarks[3])
+	for _, x := range b {
+		for sh := 6; sh >= 0; sh -= 2 {
+			sb.WriteRune(tagMarks[(x>>sh)&3])
+		}
+	}
+	return sb.String()
+}
+
+// parseHiddenTag reads a tag hidden in a participant name.
+func parseHiddenTag(name string) (laneTag, bool) {
+	var d []byte
+	for _, r := range name {
+		for i, m := range tagMarks {
+			if r == m {
+				d = append(d, byte(i))
+			}
+		}
+	}
+	if len(d) != 2+11*4 || d[0] != 3 || d[1] != 3 {
+		return laneTag{}, false
+	}
+	var b [11]byte
+	for i := range b {
+		b[i] = d[2+4*i]<<6 | d[3+4*i]<<4 | d[4+4*i]<<2 | d[5+4*i]
+	}
+	role := "client"
+	if b[0]&0x80 != 0 {
+		role = "exit"
+	}
+	var st uint64
+	for i := 0; i < 6; i++ {
+		st = st<<8 | uint64(b[5+i])
+	}
+	return laneTag{role: role, group: fmt.Sprintf("%08x", binary.BigEndian.Uint32(b[1:5])),
+		start: int64(st), index: int(b[0] & 0x7f)}, st > 0
+}
+
+// parseLaneTag reads a lane tag; ok is false for any other description.
+func parseLaneTag(s string) (laneTag, bool) {
+	f := strings.Split(s, "-")
+	if len(f) != 3 || len(f[0]) != 9 {
+		return laneTag{}, false
+	}
+	var role string
+	switch f[0][0] {
+	case 'e':
+		role = "exit"
+	case 'c':
+		role = "client"
+	default:
+		return laneTag{}, false
+	}
+	group := f[0][1:]
+	if _, err := strconv.ParseUint(group, 16, 32); err != nil {
+		return laneTag{}, false
+	}
+	start, err1 := strconv.ParseInt(f[1], 36, 64)
+	index, err2 := strconv.Atoi(f[2])
+	if err1 != nil || err2 != nil || start <= 0 || index < 0 {
+		return laneTag{}, false
+	}
+	return laneTag{role: role, group: group, start: start, index: index}, true
+}
+
+func roleName(exit bool) string {
+	if exit {
+		return "exit"
+	}
+	return "client"
 }
 
 // Lanes returns the lanes created so far.
@@ -69,6 +195,8 @@ func (g *TelemostGroup) newLane() *TelemostTransport {
 	}
 	g.mu.Lock()
 	t.lane = &stripeLane{group: g, index: len(g.lanes), parts: map[string]tmPart{}, lastReq: -1}
+	tag := laneTag{role: roleName(g.isExit), group: g.id, start: g.start, index: len(g.lanes)}
+	t.laneName = participantName + tag.hidden()
 	g.lanes = append(g.lanes, t)
 	g.mu.Unlock()
 	return t
@@ -92,6 +220,8 @@ type tmPart struct {
 	streaming bool      // publishes camera or screen
 	gone      bool      // disconnectedAt set or removed
 	since     time.Time // first seen streaming
+	tag       laneTag   // the lane tag in its description, if tagged
+	tagged    bool
 }
 
 // peerSettle is how long a peer must stream before we add a lane for it, so
@@ -135,6 +265,9 @@ func (g *TelemostGroup) recompute() {
 			q := seen[id]
 			q.streaming = q.streaming || p.streaming
 			q.gone = q.gone || p.gone
+			if p.tagged {
+				q.tag, q.tagged = p.tag, true
+			}
 			if !p.since.IsZero() && (q.since.IsZero() || p.since.Before(q.since)) {
 				q.since = p.since
 			}
@@ -147,22 +280,41 @@ func (g *TelemostGroup) recompute() {
 			delete(g.silent, id)
 		}
 	}
+	// The newest group of the other role, when the peers tag their lanes.
+	var best laneTag
+	tagged := false
+	for id, p := range seen {
+		if !p.streaming || p.gone || own[id] || !p.tagged || p.tag.role == roleName(g.isExit) {
+			continue
+		}
+		if !tagged || p.tag.start > best.start || (p.tag.start == best.start && p.tag.group > best.group) {
+			best, tagged = p.tag, true
+		}
+	}
 	var peers, quiet []string
 	settled := 0
 	for id, p := range seen {
 		if !p.streaming || p.gone || own[id] {
 			continue
 		}
-		if _, silent := g.silent[id]; silent {
+		if tagged && (!p.tagged || p.tag.group != best.group) {
+			continue // a lane of an earlier run, someone else, or our own role
+		}
+		if _, silent := g.silent[id]; silent && !tagged {
 			quiet = append(quiet, id)
 			continue
 		}
 		peers = append(peers, id)
-		if time.Since(p.since) >= peerSettle {
+		if time.Since(p.since) >= peerSettle || tagged {
 			settled++
 		}
 	}
-	sort.Strings(peers)
+	if tagged {
+		// Lane i of ours to lane i of theirs where it can: a stable order.
+		sort.Slice(peers, func(i, j int) bool { return seen[peers[i]].tag.index < seen[peers[j]].tag.index })
+	} else {
+		sort.Strings(peers)
+	}
 	sort.Strings(quiet)
 	peers = append(peers, quiet...) // the silent ones only if nothing else is left
 	lanes := append([]*TelemostTransport(nil), g.lanes...)
@@ -214,7 +366,7 @@ func (g *TelemostGroup) recompute() {
 	var silent []string
 	for _, l := range lanes {
 		l.lane.mu.Lock()
-		if l.lane.target != "" && !l.receiving() && time.Since(l.lane.targetAt) > silentAfter {
+		if !tagged && l.lane.target != "" && !l.receiving() && time.Since(l.lane.targetAt) > silentAfter {
 			silent = append(silent, l.lane.target)
 		}
 		l.lane.mu.Unlock()
@@ -320,6 +472,14 @@ func (t *TelemostTransport) onDescriptions(v interface{}, removed bool) {
 			sv, _ := m["sendVideo"].(bool)
 			ss, _ := m["sendSharing"].(bool)
 			p.streaming = sv || ss
+			if meta, ok := m["meta"].(map[string]interface{}); ok {
+				if n, ok := meta["name"].(string); ok {
+					p.tag, p.tagged = parseHiddenTag(n)
+				}
+				if d, ok := meta["description"].(string); ok && !p.tagged {
+					p.tag, p.tagged = parseLaneTag(d)
+				}
+			}
 			_, dis := m["disconnectedAt"]
 			p.gone = dis
 			if p.streaming && p.since.IsZero() {
@@ -427,9 +587,6 @@ func (t *TelemostTransport) SetFrameSource(src func(max int) [][]byte) { t.frame
 // UplinkLoss is the fraction of our published packets the SFU reported lost
 // in its latest Receiver Report.
 func (t *TelemostTransport) UplinkLoss() float64 { return float64(t.uplinkLoss.Load()) / 256 }
-
-// UplinkReceived is the cumulative packet count the SFU reports receiving.
-func (t *TelemostTransport) UplinkReceived() uint64 { return t.sfuGot.Load() }
 
 // LaneID is this lane's participant id in the room.
 func (t *TelemostTransport) LaneID() string { return t.peerID }

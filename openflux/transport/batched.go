@@ -59,12 +59,20 @@ func envInt(name string, def int) int {
 	return def
 }
 
-func NewBatchedTransport(inner Transport) *BatchedTransport {
+// NewBatchedTransport wraps inner with the coalescing layer. An optional
+// batchBytesHint (the first variadic value, when > 0) raises the default batch
+// size for a carrier whose per-connection limit is on message COUNT, not bytes
+// — see BatchSizeHinter. OPENFLUX_BATCH_BYTES still overrides it.
+func NewBatchedTransport(inner Transport, batchBytesHint ...int) *BatchedTransport {
+	defBatchBytes := defaultMaxBatchBytes
+	if len(batchBytesHint) > 0 && batchBytesHint[0] > 0 {
+		defBatchBytes = batchBytesHint[0]
+	}
 	b := &BatchedTransport{
 		Transport:     inner,
 		queue:         make(chan []byte, batchQueueDepth),
 		lingerMs:      envInt("OPENFLUX_BATCH_LINGER_MS", defaultLingerMs),
-		maxBatchBytes: min(envInt("OPENFLUX_BATCH_BYTES", defaultMaxBatchBytes), maxFrameBytes-65537),
+		maxBatchBytes: min(envInt("OPENFLUX_BATCH_BYTES", defBatchBytes), maxFrameBytes-65537),
 		maxBatchCount: min(envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount), maxFrameRecords-1),
 		stopCh:        make(chan struct{}),
 	}

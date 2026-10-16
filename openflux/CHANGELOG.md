@@ -5,6 +5,120 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-14
+
+### Changed
+
+- **Mail.ru is much faster.** The Mail.ru docs server cuts an anonymous editor after about a dozen
+  chat messages no matter how big they are, so the tunnel now coalesces far more into each message
+  before that cut — end-to-end throughput rises from tens of KB/s to roughly 800 KB/s per burst.
+  Only the Mail.ru carrier changes its default batch size; every other transport is byte-for-byte
+  unchanged, and `OPENFLUX_BATCH_BYTES` still overrides it.
+
+## [0.7.2] - 2026-10-13
+
+### Fixed
+
+- **A cups.online or Avito exit node could not be started on the phone**: the app asked for a document link
+  ("Ссылка на документ не указана"), but an exit of these two given no room list is the one that creates its
+  rooms. It starts now, and the link it shares carries the rooms it created (for Avito the list was left out).
+- **An Avito socket that dropped could crash the whole process** (the exit node, or the app): its reader went on
+  using the connection after it had been cleared, or read the next connection next to that one's own reader.
+  Each reader now keeps to its own socket and is waited for.
+
+## [0.7.1] - 2026-10-13
+
+0.7.0 was cut from a branch that did not carry 0.6.0 and 0.6.1, so it lost the Mail.ru chat-channel fix
+(Mail.ru answered "access deny" 4004 again) and the node's `.flux` auto-updater. 0.7.1 is 0.6.1 plus
+everything in 0.7.0, plus the fixes below.
+
+### Added
+
+- **avito (code.avito.ru) carrier**, and `avito` in share links.
+- **cups.online and avito run as stripes.** Each cups room (each avito room pair) is one lane of a reliable
+  striped link (sequence numbers, reorder, retransmission), so a message the server loses no longer breaks
+  the tunnel's byte stream, and speed adds up across rooms. A fresh exit prints a new room list format
+  (`{"v":2,...}`); an old bare list keeps the old wire, so running nodes and older apps keep working, but
+  an older app cannot use a new list. `CUPS_STRIPE=0` / `AVITO_STRIPE=0` make an exit print the old list.
+  `CUPS_ROOMS` sets how many rooms a fresh cups exit creates (default 4).
+
+### Fixed
+
+- **cups.online crawled at 25-90 KB/s.** The transport fired a message every 12 ms with no feedback; the
+  server relays a room only at ~130-200 KB/s and silently drops the rest from the relay (the send is still
+  acknowledged), so about 70% of what was sent never arrived and the retransmissions stalled the tunnel.
+  A lane now keeps at most 3 messages unanswered and sends the next one when the server answers, so it
+  follows each room's real rate; messages carry 12 KB instead of 8 KB. Through the tunnel, 4 rooms: 20 MB
+  at 424 KB/s (was 90 KB/s), retransmissions 2% instead of more than the data itself. `CUPS_WINDOW`
+  tunes the window (0 turns it off).
+- **avito sent one packet per round trip** (the chunk size never applied); an operation now carries up to
+  256 KB of framed packets, and its send/read loops stop with their socket instead of outliving a reconnect.
+- **A striped cups lane corrupted frames**: it kept slices of a receive buffer the socket reused.
+
+## [0.6.1] - 2026-10-13
+
+### Fixed
+
+- **The Mail.ru carrier dropped every connection with "access deny" (code 4004).** The current Mail.ru editor
+  server (R7/OnlyOffice 2026.2.1.2268) validates cursor and `saveChanges` writes against the live document
+  model and closes the socket on any synthetic one, so the transport's old trick of stuffing tunnel bytes into
+  the cursor field stopped working entirely. The data path now rides the document's **chat channel**
+  (`type:"message"`), which the server relays verbatim to the other participant without validating it against
+  the document: tunnelled bytes are tagged and base64-encoded there, the server's echo of our own chat and a
+  human's chat are skipped on receive, and the old cursor keep-alive and `saveChanges` "editor activity" are
+  gone (the Socket.IO ping/pong keeps the socket up). Both the native transport and its scripted (`.flux`)
+  port carry data this way now.
+- **The scripted Mail.ru carrier could not connect at all (HTTP 409 on the WebSocket upgrade).** `ws.open`
+  now offers permessage-deflate when a script asks for it (`{compress: true}`) — Mail.ru's nginx rejects the
+  upgrade without it — and sends `Accept-Language`, the same two fixes the native transport already carried.
+
+## [0.6.0] - 2026-10-12
+
+### Added
+
+- **A node can keep its scripted (`.flux`) transports current and self-heal, with no restart.** The new
+  `--script-auto-update` flag turns on a headless updater — the counterpart of the app's updater for a CLI or
+  exit node that has no GUI. It checks each `.flux` carrier's author feed on the usual schedule and installs
+  an update when the core vouches for it (first-party key, same wire); and when a carrier keeps failing to
+  connect it walks a recovery ladder: check for a newer package now, then roll back to the previous one, then
+  fall back to the native transport of the same service. An applied or rolled-back package is **hot-swapped**
+  into the live session, so only that one carrier blinks while it reconnects — the handshake, the other
+  carriers and the packet flow stay up. `--script-update-channel` selects `stable` or `nightly`. Off by
+  default, so node behaviour is unchanged unless asked for.
+
+## [0.5.1] - 2026-10-11
+
+### Fixed
+
+- **A Telemost exit crashed with "negative shift amount"** when a client vanished mid-transfer: a piece
+  resent 255 times wrapped its retry counter to zero and the timeout's shift went negative. The counter now
+  saturates, and the sender drops a piece nobody acked for the hole deadline plus 3 s, so a gone receiver no
+  longer keeps the lanes resending.
+- **Downloads through an L4 exit sat at about 1.5 MB/s on many servers.** The exit asked for 16 MB socket
+  buffers on every outgoing connection; Linux cuts that to `net.core.rmem_max` (416 KB on a stock kernel) and
+  turns buffer autotuning off, so the exit fetched from the internet at 1.4 MB/s where the same socket left
+  alone does 42 MB/s. The buffers are left to the kernel.
+- **Script transports with `--transport=script` lost what their setup page was given** (a token, a pairing)
+  at every start: the cookie store was never opened for them. Each script now gets its own jar,
+  `./cookies-script-<name>.json` by default, under the same key the Session path uses.
+- **Telemost lanes paired by guesswork.** The SFU drops a participant's description, so the lane tags never
+  reached the other end; the tags now ride in the participant name as characters that take no space, and a
+  node pairs with the newest run of the other end at once, ghosts of earlier runs aside.
+- **Mail.ru Docs still answered 409 on some clients** after the User-Agent fix (reported on iOS, #164):
+  the WebSocket upgrade and the API call now also send `Accept-Language`, the way a browser does.
+
+### Changed
+
+- **Telemost starts with three lanes and adds more under load** (up to six; `stripes` and `stripes_max`
+  in a profile, `TELEMOST_STRIPES_MAX` in the environment). A lane is added only after 15 s of full
+  saturation: a new pair of lanes joining stops the SFU forwarding every lane for 10-15 s.
+- **Telemost lanes join as "Гость"** - no program name in the participant list or the RTCP CNAME.
+- **Steadier speed on striped carriers.** Each lane's rate follows what the SFU lets through (lanes of one
+  conference differ: 6% and 64% lost at one rate), the shared send queue lets TCP ride out the carrier's
+  swings (CoDel 150 ms / 600 ms instead of 30/250), and a lane that stops delivering keeps its stream warm
+  with copies instead of falling silent into the SFU's ramp. Between two phones on Wi-Fi, three lanes: 4.4-5
+  MB/s steady after the first seconds, against 1.2-1.7 MB/s on average before.
+
 ## [0.5.0] - 2026-10-11
 
 ### Added

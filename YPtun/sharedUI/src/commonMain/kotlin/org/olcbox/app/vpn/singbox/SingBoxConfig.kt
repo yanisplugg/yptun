@@ -22,6 +22,7 @@ import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.vpn.warp.WarpRelay
 
 /**
  * Builds a sing-box (1.11+) JSON configuration from a [ProxyProfile].
@@ -39,6 +40,7 @@ object SingBoxConfig {
     private const val PROXY_BASE_TAG = "proxy-base"
     private const val OLCRTC_TAG = "olcrtc-out"
     private const val WG_BASE_TAG = "wireguard-base"
+    private const val WARP_RELAY_IN_TAG = "warp-relay-in"
     private const val SOCKS_IN_TAG = "socks-in"
     private const val TUN_IN_TAG = "tun-in"
     private const val TPROXY_IN_TAG = "tproxy-in"
@@ -137,6 +139,10 @@ object SingBoxConfig {
         // turn dials through olcRTC/WG. So: client → [olcRTC/WG] → main → second → internet. Null = the
         // main proxy is the single exit (PROXY_TAG), exactly as before.
         secondProfile: ProxyProfile? = null,
+        // AmneziaWG-on-the-server WARP: [secondProfile] is then the local awgproxy SOCKS (the exit, NO
+        // detour), and this loopback UDP listener forwards AWG's wire packets to the WARP endpoint THROUGH
+        // the main proxy — so the AWG tunnel rides inside the main hop. See [WarpRelay].
+        warpRelay: WarpRelay? = null,
         // Per-location FakeDNS translated from an imported Xray config (fakeip pool + dns.hosts
         // blackholes). When non-null, FakeDNS is enabled on sing-box natively with these ranges and the
         // blackhole domains become `domain_regex → reject` route rules — so FakeDNS works on sing-box
@@ -306,6 +312,15 @@ object SingBoxConfig {
             }
 
             putJsonArray("inbounds") {
+                if (warpRelay != null) addJsonObject {
+                    put("type", "direct")
+                    put("tag", WARP_RELAY_IN_TAG)
+                    put("listen", "127.0.0.1")
+                    put("listen_port", warpRelay.listenPort)
+                    put("network", "udp")
+                    put("override_address", warpRelay.targetHost)
+                    put("override_port", warpRelay.targetPort)
+                }
                 if (tunMode) {
                     // sing-box-owned TUN: creates the adapter (wintun) and installs the default
                     // routes itself; auto_detect_interface keeps its own upstream off the tunnel.
@@ -391,7 +406,20 @@ object SingBoxConfig {
                 // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
                 val baseDetour = if (wgBaseEndpoint != null) WG_BASE_TAG else null
                 if (second != null) {
-                    if (secondIsWireguard) {
+                    if (warpRelay != null) {
+                        // AWG WARP exit (Server mode): the exit is awgproxy's local SOCKS (tag PROXY_TAG, no
+                        // detour — it is loopback); its UDP rides the main (tag PROXY_BASE_TAG) via the relay.
+                        add(
+                            buildProxyOutbound(
+                                profile,
+                                chained = olcrtcChainPort != null,
+                                traffic = traffic,
+                                detourTagOverride = baseDetour,
+                                tag = PROXY_BASE_TAG
+                            )
+                        )
+                        add(buildProxyOutbound(second, chained = false, traffic = traffic, tag = PROXY_TAG))
+                    } else if (secondIsWireguard) {
                         // WARP (WireGuard) as SECOND proxy (Server mode): traffic exits via the WireGuard endpoint
                         // (tag PROXY_TAG, added to endpoints below with detour = PROXY_BASE_TAG). The main proxy
                         // (tag PROXY_BASE_TAG) dials through olcRTC/WG base or direct.
@@ -513,6 +541,11 @@ object SingBoxConfig {
                 putJsonObject("default_domain_resolver") { put("server", "direct") }
 
                 putJsonArray("rules") {
+                    // AWG WARP relay → the main proxy, before sniff/routing can touch it.
+                    if (warpRelay != null) addJsonObject {
+                        putJsonArray("inbound") { add(WARP_RELAY_IN_TAG) }
+                        put("outbound", PROXY_BASE_TAG)
+                    }
                     // Expert per-core overrides (sing-box): explicit sniff/resolve/strategy control.
                     val sbExpert = routingProfile?.expertEnabled == true
                     val sbExpertStrategy = routingProfile

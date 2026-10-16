@@ -662,6 +662,11 @@ interface Strings {
     val warpModeServer: String
     val warpModeClientSubtitle: String
     val warpModeServerSubtitle: String
+    val warpProtocolSection: String
+    val warpProtocolWg: String
+    val warpProtocolAwg: String
+    val warpProtocolWgSubtitle: String
+    val warpProtocolAwgSubtitle: String
     val freeturnTransportSection: String
     val freeturnTransportSubtitle: String
     val wireguardSubtitle: String
@@ -1373,6 +1378,11 @@ object RuStrings : Strings {
     override val warpModeServer = "На сервере"
     override val warpModeClientSubtitle = "Сначала WARP → затем VLESS"
     override val warpModeServerSubtitle = "Сначала VLESS → на выходе WARP"
+    override val warpProtocolSection = "Протокол WARP"
+    override val warpProtocolWg = "WireGuard"
+    override val warpProtocolAwg = "AmneziaWG"
+    override val warpProtocolWgSubtitle = "Обычный WireGuard (официальная регистрация Cloudflare). Режется DPI у части провайдеров"
+    override val warpProtocolAwgSubtitle = "AmneziaWG с обфускацией — проходит там, где WireGuard блокируют"
     override val freeturnTransportSection = "Транспорт Freeturn"
     override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
     override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
@@ -2070,6 +2080,11 @@ object EnStrings : Strings {
     override val warpModeServer = "Server side"
     override val warpModeClientSubtitle = "First WARP → then VLESS"
     override val warpModeServerSubtitle = "First VLESS → egress via WARP"
+    override val warpProtocolSection = "WARP protocol"
+    override val warpProtocolWg = "WireGuard"
+    override val warpProtocolAwg = "AmneziaWG"
+    override val warpProtocolWgSubtitle = "Plain WireGuard (official Cloudflare registration). Some ISPs' DPI blocks it"
+    override val warpProtocolAwgSubtitle = "AmneziaWG with obfuscation — works where WireGuard is blocked"
     override val freeturnTransportSection = "Freeturn transport"
     override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
     override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
@@ -2767,6 +2782,11 @@ object FaStrings : Strings {
     override val warpModeServer = "در سمت سرور"
     override val warpModeClientSubtitle = "ابتدا WARP ← سپس VLESS"
     override val warpModeServerSubtitle = "ابتدا VLESS ← خروج از طریق WARP"
+    override val warpProtocolSection = "پروتکل WARP"
+    override val warpProtocolWg = "WireGuard"
+    override val warpProtocolAwg = "AmneziaWG"
+    override val warpProtocolWgSubtitle = "WireGuard ساده (ثبت رسمی Cloudflare). ممکن است DPI آن را مسدود کند"
+    override val warpProtocolAwgSubtitle = "AmneziaWG با مبهم‌سازی — در جاهایی که WireGuard مسدود است کار می‌کند"
     override val freeturnTransportSection = "حامل Freeturn"
     override val freeturnTransportSubtitle = "نقطهٔ پایانی بازپخش VK TURN و مبهم‌سازی"
     override val wireguardSubtitle = "تونل sing-box از طریق شنودگر محلی freeturn شماره‌گیری می‌کند"
@@ -3464,6 +3484,11 @@ object ZhStrings : Strings {
     override val warpModeServer = "服务端"
     override val warpModeClientSubtitle = "先连接 WARP → 再连接 VLESS"
     override val warpModeServerSubtitle = "先连接 VLESS → 通过 WARP 出口"
+    override val warpProtocolSection = "WARP 协议"
+    override val warpProtocolWg = "WireGuard"
+    override val warpProtocolAwg = "AmneziaWG"
+    override val warpProtocolWgSubtitle = "普通 WireGuard（Cloudflare 官方注册），部分运营商 DPI 会拦截"
+    override val warpProtocolAwgSubtitle = "带混淆的 AmneziaWG，WireGuard 被封锁时仍可用"
     override val freeturnTransportSection = "Freeturn 传输"
     override val freeturnTransportSubtitle = "VK TURN 中继端点与混淆"
     override val wireguardSubtitle = "sing-box 经本地 freeturn 监听器拨号的隧道"

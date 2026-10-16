@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/avito"
 	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
@@ -36,6 +37,8 @@ type Options struct {
 	// YandexCookiesFile is the CLI's --yandex-cookies-file: a cookies.txt every
 	// vyandex transport starts with.
 	YandexCookiesFile string
+	// AvitoCookies is the raw cookie string for code.avito.ru.
+	AvitoCookies string
 	// StrictDirect makes a direct transport without an address an error (the
 	// apps tell the user); without it the CLI's behavior stays: the transport
 	// fails when it starts.
@@ -46,7 +49,7 @@ type Options struct {
 // existed; moving every user-facing word out of the core is a separate step.
 
 // Types are the transport types New accepts, in the order the apps list them.
-var Types = []string{"yandex", "vyandex", "boards", "mailru", "cupsonline", "telemost", "oneme", "direct", "script"}
+var Types = []string{"yandex", "vyandex", "boards", "mailru", "cupsonline", "avito", "telemost", "oneme", "direct", "script"}
 
 // New builds the raw carrier of the given type. params carries what a type
 // needs beyond its url: "token"/"uid" (and "exit") for oneme, "dial"/"listen"
@@ -82,7 +85,11 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 	case "mailru":
 		return mailru.NewMailruDocsTransport(url, base), nil
 	case "cupsonline":
+		// Stripes over its rooms itself when the room list says so (see
+		// transport.PackRooms); an old list keeps the old wire.
 		return cupsonline.NewCupsonlineTransport(url, base, !o.IsExit), nil
+	case "avito":
+		return avito.NewAvitoTransport(url, base, o.AvitoCookies, !o.IsExit), nil
 	case "oneme":
 		uid, _ := strconv.ParseInt(str("uid"), 10, 64)
 		return oneme.NewOneMeTransport(roleParam(params, "exit", o.IsExit), str("token"), uid, base), nil
@@ -101,9 +108,9 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 // so the carrier always runs as a striped group of lanes (participants of the
 // same conference). params:
 //
-//	"stripes"     a fixed lane count (default telemostLanes), or "auto": start
-//	              at 3 and add lanes while they stay saturated
-//	"stripes_max" upper bound for auto (default 11)
+//	"stripes"     "auto" (the default): start at telemostLanes and add lanes
+//	              while they stay saturated; or a fixed lane count
+//	"stripes_max" upper bound for auto (default telemostMaxLanes)
 //	"cookies"     Yandex cookie header, only needed to create a conference
 //
 // Both ends of a tunnel stripe, so the two must be this build or later.
@@ -119,31 +126,36 @@ func newTelemost(url string, params map[string]interface{}, o Options) transport
 		}
 		return ""
 	}
-	n, auto := telemostLanes, false
+	n, auto := telemostLanes, true
 	st := str("stripes")
 	if e := os.Getenv("TELEMOST_STRIPES"); e != "" { // debugging override
 		st = e
 	}
-	switch {
-	case st == "auto":
-		n, auto = 3, true
-	case st != "":
-		if v, err := strconv.Atoi(st); err == nil && v >= 1 {
-			n = v
-		}
+	if v, err := strconv.Atoi(st); err == nil && v >= 1 {
+		n, auto = v, false
 	}
 	maxLanes, _ := strconv.Atoi(str("stripes_max"))
+	if e, err := strconv.Atoi(os.Getenv("TELEMOST_STRIPES_MAX")); err == nil {
+		maxLanes = e
+	}
+	if maxLanes < 1 {
+		maxLanes = telemostMaxLanes
+	}
 	if maxLanes < n {
-		maxLanes = 11
+		maxLanes = n
 	}
 	g := yandex.NewTelemostGroup(str("cookies"), url, n, o.IsExit, o.Base)
 	return transport.NewStripedTransportAuto(g.Lanes(), g, maxLanes, auto)
 }
 
-// telemostLanes is the lane count of a Telemost carrier unless its profile
-// says otherwise: five streams, about five times what one carries. Both ends
-// run the same count, so the two sides of a tunnel pair lane for lane.
-const telemostLanes = 5
+// A Telemost carrier starts with telemostLanes lanes and adds one whenever
+// they stay saturated, up to telemostMaxLanes; one stream carries up to about
+// 2 MB/s. Whichever side adds a lane, the other mirrors it, so the two sides
+// of a tunnel pair lane for lane.
+const (
+	telemostLanes    = 3
+	telemostMaxLanes = 6
+)
 
 // roleParam reads a role flag a profile may carry as a bool or as "true".
 func roleParam(params map[string]interface{}, key string, def bool) bool {

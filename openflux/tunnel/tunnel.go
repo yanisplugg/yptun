@@ -281,8 +281,12 @@ func (t *TCPTunnel) handleExitTCP(r *tcp.ForwarderRequest) {
 		}
 		if tc, ok := remote.(*net.TCPConn); ok {
 			_ = tc.SetNoDelay(true)
-			_ = tc.SetReadBuffer(16 * 1024 * 1024)
-			_ = tc.SetWriteBuffer(16 * 1024 * 1024)
+			// No SO_RCVBUF / SO_SNDBUF: setting one turns the kernel's
+			// buffer autotuning off for the socket and is cut to
+			// net.core.[rw]mem_max - 208 KB on a stock Linux. A Telemost exit
+			// that asked for 16 MB got 416 KB and fetched from the internet
+			// at 1.4 MB/s over a 50 ms path (42 MB/s left alone), which capped
+			// every download through it.
 		}
 		utils.Debugf("[EXIT] %s connected", dest)
 

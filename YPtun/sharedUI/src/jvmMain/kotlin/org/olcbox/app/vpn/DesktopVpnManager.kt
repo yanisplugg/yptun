@@ -538,16 +538,26 @@ class DesktopVpnManager private constructor(
                 if (of.usesMax()) {
                     addAll(OPENFLUX_MAX_HOSTS)
                 } else {
-                    runCatching { java.net.URI(of.docUrl).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    when (of.transport) {
-                        OpenFluxConfig.TRANSPORT_MAILRU -> addAll(listOf("cloud.mail.ru", "docs.datacloudmail.ru"))
-                        OpenFluxConfig.TRANSPORT_CUPS -> add("interview.cups.online")
-                        OpenFluxConfig.TRANSPORT_TELEMOST -> add("telemost.yandex.ru")
-                        else -> add("docs.yandex.ru")
+                    val urls = if (of.isSession()) of.carriers.map { it.url } else listOf(of.docUrl)
+                    urls.forEach { u ->
+                        runCatching { java.net.URI(u).host }.getOrNull()?.takeIf { it.isNotBlank() }?.let { add(it) }
                     }
-                    // The new editor's relay, push channel and the Disk redirect it authorizes through.
-                    if (of.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
-                        addAll(listOf("volga.yandex.ru", "push.yandex.ru", "disk.yandex.ru"))
+                    // Every carrier in play (a session may mix several), not just the single one.
+                    val types = if (of.isSession()) of.carriers.map { it.type } else listOf(of.transport)
+                    if (OpenFluxConfig.TRANSPORT_DIRECT in types) {
+                        of.carriers.firstOrNull { it.type == OpenFluxConfig.TRANSPORT_DIRECT }
+                            ?.dial?.substringBeforeLast(':')?.trim('[', ']')?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    }
+                    types.filter { it != OpenFluxConfig.TRANSPORT_DIRECT }.forEach { type ->
+                        when (type) {
+                            OpenFluxConfig.TRANSPORT_MAILRU -> addAll(listOf("cloud.mail.ru", "docs.datacloudmail.ru"))
+                            OpenFluxConfig.TRANSPORT_CUPS -> add("interview.cups.online")
+                            OpenFluxConfig.TRANSPORT_AVITO -> add("code.avito.ru")
+                            OpenFluxConfig.TRANSPORT_TELEMOST -> add("telemost.yandex.ru")
+                            // The new editor's relay, push channel and the Disk redirect it authorizes through.
+                            OpenFluxConfig.TRANSPORT_VYANDEX -> addAll(listOf("docs.yandex.ru", "volga.yandex.ru", "push.yandex.ru", "disk.yandex.ru"))
+                            else -> add("docs.yandex.ru")
+                        }
                     }
                 }
             }

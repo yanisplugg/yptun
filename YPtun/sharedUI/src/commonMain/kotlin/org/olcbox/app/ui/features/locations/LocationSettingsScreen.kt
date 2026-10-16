@@ -111,6 +111,7 @@ import androidx.compose.ui.unit.dp
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.MasterDnsConfig
+import org.olcbox.app.data.model.OpenFluxCarrier
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.data.model.EngineType
@@ -120,6 +121,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.model.CsqttOptions
 import org.olcbox.app.data.model.WdttPlusOptions
@@ -448,6 +450,42 @@ fun LocationSettingsScreen(
                                         LocalStrings.current.warpModeClientSubtitle
                                     } else {
                                         LocalStrings.current.warpModeServerSubtitle
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = LocalStrings.current.warpProtocolSection,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                val protocols = listOf(WarpProtocol.Wg, WarpProtocol.Awg)
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    protocols.forEachIndexed { index, protocol ->
+                                        SegmentedButton(
+                                            shape = SegmentedButtonDefaults.itemShape(index = index, count = protocols.size),
+                                            selected = config.warpProtocol == protocol,
+                                            onClick = { viewModel.onWarpProtocolChanged(protocol) },
+                                            enabled = !isSaving,
+                                            label = {
+                                                Text(
+                                                    text = if (protocol == WarpProtocol.Wg) {
+                                                        LocalStrings.current.warpProtocolWg
+                                                    } else {
+                                                        LocalStrings.current.warpProtocolAwg
+                                                    },
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = if (config.warpProtocol == WarpProtocol.Wg) {
+                                        LocalStrings.current.warpProtocolWgSubtitle
+                                    } else {
+                                        LocalStrings.current.warpProtocolAwgSubtitle
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1641,96 +1679,118 @@ private fun LazyListScope.openFluxSection(
                 title = "OpenFlux — туннель через сервисы",
                 subtitle = "TCP-туннель до твоей выходной ноды на VPS: пакеты идут через Яндекс Документы или звонок в MAX"
             )
-            // All three carriers on screen at once: behind a dropdown the new-editor one went unnoticed.
-            Text(
-                text = "Транспорт",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OpenFluxConfig.TRANSPORTS.forEach { transport ->
-                    FilterChip(
-                        selected = config.transport == transport,
-                        onClick = { onChange { it.copy(transport = transport) } },
+            VkTurnSwitchRow("Мультитранспорт: несколько каналов, при сбое — запасной", config.isSession(), enabled) { v ->
+                onChange { it.withSession(v) }
+            }
+            if (config.isSession()) {
+                OpenFluxCarriersEditor(config, enabled, onChange)
+            } else {
+                // All three carriers on screen at once: behind a dropdown the new-editor one went unnoticed.
+                Text(
+                    text = "Транспорт",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OpenFluxConfig.TRANSPORTS.forEach { transport ->
+                        FilterChip(
+                            selected = config.transport == transport,
+                            onClick = { onChange { it.copy(transport = transport) } },
+                            enabled = enabled,
+                            label = {
+                                Text(
+                                    when (transport) {
+                                        OpenFluxConfig.TRANSPORT_MAX -> "MAX (звонок)"
+                                        OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы · новый редактор"
+                                        OpenFluxConfig.TRANSPORT_MAILRU -> "Mail.ru Документы"
+                                        OpenFluxConfig.TRANSPORT_CUPS -> "cups.online (комната собеседования)"
+                                        OpenFluxConfig.TRANSPORT_AVITO -> "Avito Code (комнаты)"
+                                        OpenFluxConfig.TRANSPORT_TELEMOST -> "Яндекс Телемост (экспериментально)"
+                                        else -> "Яндекс Документы · старый редактор"
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+                if (config.usesMax()) {
+                    VkTurnField(
+                        value = config.maxToken,
+                        onValueChange = { v -> onChange { it.copy(maxToken = v.trim()) } },
+                        label = "Твой токен MAX (веб)",
+                        placeholder = "токен аккаунта, с которого звонит клиент",
+                        enabled = enabled
+                    )
+                    VkTurnField(
+                        value = config.maxUid,
+                        onValueChange = { v -> onChange { it.copy(maxUid = v.filter(Char::isDigit)) } },
+                        label = "ID аккаунта выходной ноды в MAX",
+                        placeholder = "кому звонить; у ноды свой токен",
                         enabled = enabled,
+                        isError = config.maxUid.isNotBlank() && config.maxUid.toLongOrNull() == null,
+                        keyboardType = KeyboardType.Number
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = config.docUrl,
+                        onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
                         label = {
                             Text(
-                                when (transport) {
-                                    OpenFluxConfig.TRANSPORT_MAX -> "MAX (звонок)"
-                                    OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы · новый редактор"
-                                    OpenFluxConfig.TRANSPORT_MAILRU -> "Mail.ru Документы"
-                                    OpenFluxConfig.TRANSPORT_CUPS -> "cups.online (комната собеседования)"
-                                    OpenFluxConfig.TRANSPORT_TELEMOST -> "Яндекс Телемост (экспериментально)"
-                                    else -> "Яндекс Документы · старый редактор"
+                                when (config.transport) {
+                                    OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
+                                    OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
+                                    OpenFluxConfig.TRANSPORT_AVITO -> "Список комнат Avito Code"
+                                    OpenFluxConfig.TRANSPORT_TELEMOST -> "Ссылка на конференцию Телемоста"
+                                    else -> "Ссылка на Яндекс Документ"
                                 }
                             )
-                        }
+                        },
+                        placeholder = {
+                            Text(
+                                when (config.transport) {
+                                    OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
+                                    OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
+                                    OpenFluxConfig.TRANSPORT_AVITO -> "строка, которую напечатала выходная нода"
+                                    OpenFluxConfig.TRANSPORT_TELEMOST -> "https://telemost.yandex.ru/j/…"
+                                    else -> "https://docs.yandex.ru/…"
+                                }
+                            )
+                        },
+                        supportingText = {
+                            Text(
+                                if (config.transport == OpenFluxConfig.TRANSPORT_MAILRU) {
+                                    "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
+                                } else if (config.transport == OpenFluxConfig.TRANSPORT_CUPS) {
+                                    "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
+                                } else if (config.transport == OpenFluxConfig.TRANSPORT_AVITO) {
+                                    "Выходная нода сама создаёт комнаты на code.avito.ru и печатает их список — вставь его сюда. Нужны cookie аккаунта (поле ниже) на клиенте и на ноде; скорость складывается по комнатам."
+                                } else if (config.transport == OpenFluxConfig.TRANSPORT_TELEMOST) {
+                                    "Конференция Яндекс Телемоста: туннель идёт видео через SFU, пять линий (до ~1,5 МБ/с). Одна конференция — один клиент и одна нода; ссылку получает и нода (ей нужна версия с Телемостом — переустанови)."
+                                } else if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
+                                    "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
+                                } else {
+                                    "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
+                                }
+                            )
+                        },
+                        enabled = enabled,
+                        minLines = 1,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
-            if (config.usesMax()) {
+            if (config.usesCarrier(OpenFluxConfig.TRANSPORT_AVITO)) {
                 VkTurnField(
-                    value = config.maxToken,
-                    onValueChange = { v -> onChange { it.copy(maxToken = v.trim()) } },
-                    label = "Твой токен MAX (веб)",
-                    placeholder = "токен аккаунта, с которого звонит клиент",
-                    enabled = enabled
-                )
-                VkTurnField(
-                    value = config.maxUid,
-                    onValueChange = { v -> onChange { it.copy(maxUid = v.filter(Char::isDigit)) } },
-                    label = "ID аккаунта выходной ноды в MAX",
-                    placeholder = "кому звонить; у ноды свой токен",
+                    value = config.avitoCookies,
+                    onValueChange = { v -> onChange { it.copy(avitoCookies = v.trim()) } },
+                    label = "Cookie аккаунта Avito (code.avito.ru)",
+                    placeholder = "name=value; name2=value2 — из браузера, где ты вошёл на code.avito.ru",
                     enabled = enabled,
-                    isError = config.maxUid.isNotBlank() && config.maxUid.toLongOrNull() == null,
-                    keyboardType = KeyboardType.Number
-                )
-            } else {
-                OutlinedTextField(
-                    value = config.docUrl,
-                    onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
-                    label = {
-                        Text(
-                            when (config.transport) {
-                                OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
-                                OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
-                                OpenFluxConfig.TRANSPORT_TELEMOST -> "Ссылка на конференцию Телемоста"
-                                else -> "Ссылка на Яндекс Документ"
-                            }
-                        )
-                    },
-                    placeholder = {
-                        Text(
-                            when (config.transport) {
-                                OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
-                                OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
-                                OpenFluxConfig.TRANSPORT_TELEMOST -> "https://telemost.yandex.ru/j/…"
-                                else -> "https://docs.yandex.ru/…"
-                            }
-                        )
-                    },
-                    supportingText = {
-                        Text(
-                            if (config.transport == OpenFluxConfig.TRANSPORT_MAILRU) {
-                                "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
-                            } else if (config.transport == OpenFluxConfig.TRANSPORT_CUPS) {
-                                "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
-                            } else if (config.transport == OpenFluxConfig.TRANSPORT_TELEMOST) {
-                                "Конференция Яндекс Телемоста: туннель идёт видео через SFU, пять линий (до ~1,5 МБ/с). Одна конференция — один клиент и одна нода; ссылку получает и нода (ей нужна версия с Телемостом — переустанови)."
-                            } else if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
-                                "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
-                            } else {
-                                "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
-                            }
-                        )
-                    },
-                    enabled = enabled,
-                    minLines = 1,
-                    modifier = Modifier.fillMaxWidth()
+                    isError = config.avitoCookies.isBlank()
                 )
             }
             VkTurnField(
@@ -1770,7 +1830,7 @@ private fun LazyListScope.openFluxSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (showAutoInstall) {
+            if (showAutoInstall && !config.isSession() && config.transport != OpenFluxConfig.TRANSPORT_AVITO) {
                 OutlinedButton(
                     onClick = onAutoInstall,
                     enabled = enabled,
@@ -1794,6 +1854,117 @@ private fun LazyListScope.openFluxSection(
         onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
         onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
     )
+}
+
+/**
+ * The members of a multi-transport session: type, coordinate (link / room list, or host:port for direct) and
+ * priority. The highest priority that reaches the exit carries the traffic; the rest are the fallback.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun OpenFluxCarriersEditor(
+    config: OpenFluxConfig,
+    enabled: Boolean,
+    onChange: ((OpenFluxConfig) -> OpenFluxConfig) -> Unit,
+) {
+    fun update(index: Int, transform: (OpenFluxCarrier) -> OpenFluxCarrier) =
+        onChange { c -> c.copy(carriers = c.carriers.mapIndexed { i, m -> if (i == index) transform(m) else m }) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        config.carriers.forEachIndexed { index, carrier ->
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Канал ${index + 1}: ${OpenFluxConfig.carrierLabel(carrier.type)}",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = { onChange { c -> c.copy(carriers = c.carriers.filterIndexed { i, _ -> i != index }) } },
+                        enabled = enabled
+                    ) {
+                        Icon(Icons.Outlined.Delete, contentDescription = "Убрать канал")
+                    }
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OpenFluxConfig.SESSION_CARRIERS.forEach { type ->
+                        FilterChip(
+                            selected = carrier.type == type,
+                            // A type is used once: the core names a carrier after its type.
+                            enabled = enabled && (carrier.type == type || config.carriers.none { it.type == type }),
+                            onClick = { update(index) { it.copy(type = type) } },
+                            label = { Text(OpenFluxConfig.carrierLabel(type)) }
+                        )
+                    }
+                }
+                if (carrier.type == OpenFluxConfig.TRANSPORT_DIRECT) {
+                    VkTurnField(
+                        value = carrier.dial,
+                        onValueChange = { v -> update(index) { it.copy(dial = v.trim()) } },
+                        label = "Адрес прямого порта ноды",
+                        placeholder = "203.0.113.5:8445 — порт должен быть открыт на VPS",
+                        enabled = enabled,
+                        isError = carrier.dial.isNotBlank() && !carrier.isComplete(),
+                        keyboardType = KeyboardType.Uri
+                    )
+                } else {
+                    VkTurnField(
+                        value = carrier.url,
+                        onValueChange = { v -> update(index) { it.copy(url = v.trim()) } },
+                        label = "Ссылка на документ / комнату",
+                        placeholder = "та же, что у выходной ноды (или список комнат Avito / cups)",
+                        enabled = enabled,
+                        isError = carrier.url.isNotBlank() && !carrier.isComplete(),
+                        keyboardType = KeyboardType.Uri
+                    )
+                }
+                VkTurnField(
+                    value = carrier.priority.toString(),
+                    onValueChange = { v ->
+                        update(index) { it.copy(priority = v.filter(Char::isDigit).take(4).toIntOrNull() ?: OpenFluxConfig.DEFAULT_PRIORITY) }
+                    },
+                    label = "Приоритет",
+                    placeholder = "больше — раньше; равные делят трафик",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number
+                )
+            }
+        }
+        val free = OpenFluxConfig.SESSION_CARRIERS.firstOrNull { t -> config.carriers.none { it.type == t } }
+        OutlinedButton(
+            onClick = {
+                if (free != null) {
+                    onChange { c -> c.copy(carriers = c.carriers + OpenFluxCarrier(type = free, priority = (c.carriers.minOfOrNull { it.priority } ?: 100) - 10)) }
+                }
+            },
+            enabled = enabled && free != null,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Добавить канал")
+        }
+        Text(
+            "Все каналы стартуют сразу, трафик идёт по самому приоритетному из тех, что достучались до ноды. " +
+                "Нужен ключ шифрования (ниже), а выходная нода должна быть поднята с теми же каналами " +
+                "(--transports) — проще всего импортировать её ссылку openflux://. Автоустановка из приложения " +
+                "ставит ноду с одним каналом.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (config.secret.isBlank()) {
+            Text(
+                "Без ключа шифрования мультитранспорт не запустится.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
 }
 
 private fun LazyListScope.snolcSection(

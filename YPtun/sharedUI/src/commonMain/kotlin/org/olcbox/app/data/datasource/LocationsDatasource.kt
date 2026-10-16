@@ -36,6 +36,7 @@ import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.CsqttUriParser
+import org.olcbox.app.data.importer.MasterDnsUriParser
 import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
@@ -54,6 +55,7 @@ import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
@@ -1321,6 +1323,10 @@ class LocationsRepositoryImpl(
         parseCsqttText(linkText, subscriptionUrl)?.let { linkBundles += it }
         // OpenFlux client links (openflux://v1/…): OpenFlux-engine locations.
         parseOpenFluxText(linkText, subscriptionUrl)?.let { linkBundles += it }
+        // MasterDNS links (masterdns://v1?…) and snolc nodes (snolc://host:port?key=…): the panel's
+        // personal subscription carries both, so a mixed list must not lose them.
+        parseMasterDnsText(linkText, subscriptionUrl)?.let { linkBundles += it }
+        parseSnolcText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
@@ -2065,6 +2071,51 @@ class LocationsRepositoryImpl(
         return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
 
+    /** Parses every [MasterDnsUriParser.SCHEME] link into an [EngineType.MasterDns] location. */
+    private fun parseMasterDnsText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith(MasterDnsUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { MasterDnsUriParser.parse(it) }
+            .map { link ->
+                val domain = link.config.domainList().first()
+                val location = LocationConfig(
+                    name = link.name.ifBlank { "MasterDNS $domain" },
+                    engine = EngineType.MasterDns,
+                    masterDns = link.config,
+                ).normalized()
+                val base = domain.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val storageId = uniqueStorageId("imported_masterdns_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
+    }
+
+    /** Parses every `snolc://host:port?key=<hex>#name` link into an [EngineType.Snolc] location. */
+    private fun parseSnolcText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("snolc://", ignoreCase = true) }
+            .mapNotNull { SnolcConfig.parseUri(it) }
+            .map { (config, name) ->
+                val location = LocationConfig(
+                    name = name.ifBlank { config.summary() },
+                    engine = EngineType.Snolc,
+                    snolc = config,
+                ).normalized()
+                val base = "${config.host}_${config.port}".lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val storageId = uniqueStorageId("imported_snolc_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
+    }
+
     /** Parses a whole AmneziaWG wg-quick .conf into a [EngineType.Standard] location. */
     private fun parseAmneziaWgText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
         val trimmed = text.trim()
@@ -2787,7 +2838,10 @@ class LocationsRepositoryImpl(
             // match by endpoint in the fallback pass below.
             normalized.vkturn?.let { "${it.outbound}@${it.uri.substringBefore('$').ifBlank { it.outboundProxyLink }}" }.orEmpty(),
             normalized.masterDns?.let { "${it.domains}@${it.resolvers}" }.orEmpty(),
-            normalized.openFlux?.let { "${it.transport}@${if (it.usesMax()) it.maxUid else it.docUrl}" }.orEmpty(),
+            normalized.openFlux?.let {
+                if (it.isSession()) "session@" + it.carriers.joinToString(",") { c -> "${c.type}=${c.url}${c.dial}" }
+                else "${it.transport}@${if (it.usesMax()) it.maxUid else it.docUrl}"
+            }.orEmpty(),
             normalized.snolc?.let { "snolc@${it.host}:${it.port}" }.orEmpty(),
         ).joinToString("|")
     }

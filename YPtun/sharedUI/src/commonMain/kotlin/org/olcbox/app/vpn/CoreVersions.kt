@@ -6,7 +6,7 @@ package org.olcbox.app.vpn
  */
 object CoreVersions {
     /** openflux/YPTUN.md — upstream tag + vendored commit. */
-    const val OPENFLUX = "0.5.0 (7336e1b)"
+    const val OPENFLUX = "0.7.3 (f12e981)"
     /** snolc/Cargo.toml. */
     const val SNOLC = "0.0.4"
     /** csqtt/rust-client/Cargo.toml + the upstream commit it was vendored at (csqtt/UPSTREAM.txt). */

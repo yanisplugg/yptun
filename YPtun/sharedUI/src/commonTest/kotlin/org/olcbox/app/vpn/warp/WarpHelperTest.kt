@@ -39,15 +39,36 @@ class WarpHelperTest {
         assertNotNull(profile)
         assertEquals("WARP", profile.tag)
         assertEquals("wireguard", profile.type)
-        assertEquals("engage.cloudflareclient.com", profile.server)
+        assertEquals("162.159.192.1", profile.server)
         assertEquals(2408, profile.serverPort)
 
         val raw = profile.rawOutbound
         assertNotNull(raw)
         val json = Json.parseToJsonElement(raw).jsonObject
         assertEquals("wireguard", json["type"]?.jsonPrimitive?.content)
-        assertEquals("engage.cloudflareclient.com", json["server"]?.jsonPrimitive?.content)
+        assertEquals("162.159.192.1", json["server"]?.jsonPrimitive?.content)
         assertEquals("aaaaaa=", json["private_key"]?.jsonPrimitive?.content)
         assertEquals("bbbbbb=", json["peer_public_key"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun engineIniDropsReservedPinsEndpointAndOnlyAwgKeepsJunk() {
+        val ini = """
+            [Interface]
+            PrivateKey = a=
+            Reserved = 1, 2, 3
+            Jc = 4
+            S1 = 0
+            I1 = <b 0xce>
+            [Peer]
+            PublicKey = b=
+            Endpoint = engage.cloudflareclient.com:2408
+        """.trimIndent()
+        val awg = WarpHelper.engineIni(ini, awg = true)
+        assertEquals(false, awg.contains("Reserved") || awg.contains("I1"))
+        assertEquals(true, awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:2408"))
+        val wg = WarpHelper.engineIni(ini, awg = false)
+        assertEquals(false, wg.contains("Jc") || wg.contains("S1") || wg.contains("Reserved"))
+        assertEquals("1.2.3.4", WarpHelper.pinnedHost("1.2.3.4"))
     }
 }

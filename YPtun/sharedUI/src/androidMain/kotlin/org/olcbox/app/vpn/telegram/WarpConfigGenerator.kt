@@ -116,7 +116,13 @@ object WarpConfigGenerator {
      * blocked Cloudflare API), then falls back to direct registration. Requires internet (first-time
      * only — the caller caches the result). Throws only if BOTH paths fail.
      */
-    suspend fun generate(): String {
+    suspend fun generate(officialFirst: Boolean = false): String {
+        // Plain-WireGuard WARP (the "official way"): register straight with Cloudflare first; if that API
+        // is blocked here, fall through to the server-side generators below.
+        if (officialFirst) {
+            runCatching { return generateViaCloudflare() }
+                .onFailure { Log.w(TAG, "Official Cloudflare registration failed: ${it.message}") }
+        }
         generateViaService()?.let { return it }
         Log.w(TAG, "All WARP generators failed — falling back to direct Cloudflare registration")
         return generateViaCloudflare()

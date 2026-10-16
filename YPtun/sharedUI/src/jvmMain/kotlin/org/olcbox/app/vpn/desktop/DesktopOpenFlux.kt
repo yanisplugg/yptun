@@ -31,8 +31,8 @@ internal class DesktopOpenFlux(
             kotlin.io.path.createTempFile("openflux-key", ".txt").also { f -> f.toFile().deleteOnExit(); f.toFile().writeText(it) }
         }
         val cmd = buildList {
-            addAll(listOf(binary.toString(), "--role=client", "--inbound=socks5", "--transport", config.transport, "--socks5", "$listenHost:$listenPort"))
-            if (config.usesMax()) addAll(listOf("--maxUid", config.maxUid)) else addAll(listOf("--url", config.docUrl))
+            addAll(listOf(binary.toString(), "--role=client", "--inbound=socks5", "--socks5", "$listenHost:$listenPort"))
+            addAll(config.carrierArgs())
             if (config.dnsServer.isNotBlank()) addAll(listOf("--dns", config.dnsServer))
             if (keyFile != null) addAll(config.encryptionArgs(keyFile.toString()))
             if (config.debug) add("--debug")
@@ -41,6 +41,7 @@ internal class DesktopOpenFlux(
         log("Starting OpenFlux (${config.summary()}) on $listenHost:$listenPort, dns=${config.dnsServer.ifBlank { "system" }}")
         val started = ProcessBuilder(cmd).redirectErrorStream(true).apply {
             environment()["OPENFLUX_MAX_TOKEN"] = config.maxToken
+            environment()["OPENFLUX_AVITO_COOKIES"] = config.avitoCookies
             environment()["OPENFLUX_SOCKS_USER"] = socksUsername
             environment()["OPENFLUX_SOCKS_PASS"] = socksPassword
         }.start()
