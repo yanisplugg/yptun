@@ -381,6 +381,9 @@ interface Strings {
     val selectAll: String
     val deselectAll: String
     val freeServersDisclaimer: String
+    val freeServersSourceNotice: String
+    val freeServersWarpAll: String
+    val freeServersWarpAllHint: String
     fun addSelectedServers(count: Int): String
     fun freeServersImported(working: Int, total: Int): String
     fun freeServersProgressText(checked: Int, total: Int, found: Int): String
@@ -1140,6 +1143,9 @@ object RuStrings : Strings {
     override val selectAll = "Выбрать все"
     override val deselectAll = "Снять все"
     override val freeServersDisclaimer = "Публичные серверы быстро устаревают. Рекомендуется периодически очищать старые и добавлять новые."
+    override val freeServersSourceNotice = "Эти серверы собираются из открытых списков на GitHub и не имеют никакого отношения к разработчикам YPtun. Мы их не создаём, не контролируем и не отвечаем за их работу и безопасность — пользуйтесь на свой риск."
+    override val freeServersWarpAll = "WARP на сервере для всех"
+    override val freeServersWarpAllHint = "Включает Cloudflare WARP (WireGuard) на стороне сервера для всех найденных серверов. Облачком у конкретного сервера его можно выключить."
     override fun addSelectedServers(count: Int) = "Добавить выбранные ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Добавлено рабочих серверов: $working из $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Проверено: $checked из $total (найдено: $found)"
@@ -1859,6 +1865,9 @@ object EnStrings : Strings {
     override val selectAll = "Select all"
     override val deselectAll = "Deselect all"
     override val freeServersDisclaimer = "Public servers expire quickly. It is recommended to periodically clean old ones and add fresh servers."
+    override val freeServersSourceNotice = "These servers are collected from public lists on GitHub and have nothing to do with the YPtun developers. We do not create or control them and are not responsible for their operation or safety — use at your own risk."
+    override val freeServersWarpAll = "Server-side WARP for all"
+    override val freeServersWarpAllHint = "Turns on Cloudflare WARP (WireGuard) on the server side for every found server. Use the cloud on a row to switch it off for that server."
     override fun addSelectedServers(count: Int) = "Add selected ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Added working servers: $working of $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Tested: $checked of $total (working: $found)"
@@ -2578,6 +2587,9 @@ object FaStrings : Strings {
     override val selectAll = "انتخاب همه"
     override val deselectAll = "لغو انتخاب همه"
     override val freeServersDisclaimer = "سرورهای عمومی سریعاً منقضی می‌شوند. توصیه می‌شود سرورهای قدیمی را پاک کرده و سرورهای جدید اضافه کنید."
+    override val freeServersSourceNotice = "این سرورها از فهرست‌های عمومی در GitHub جمع‌آوری شده‌اند و هیچ ارتباطی با توسعه‌دهندگان YPtun ندارند. ما آن‌ها را نمی‌سازیم، کنترل نمی‌کنیم و مسئول عملکرد یا امنیت آن‌ها نیستیم — با مسئولیت خودتان استفاده کنید."
+    override val freeServersWarpAll = "WARP سمت سرور برای همه"
+    override val freeServersWarpAllHint = "Cloudflare WARP (WireGuard) را در سمت سرور برای همه سرورهای یافت‌شده روشن می‌کند. با ابر کنار هر سرور می‌توانید آن را برای همان سرور خاموش کنید."
     override fun addSelectedServers(count: Int) = "افزودن موارد انتخاب‌شده ($count)"
     override fun freeServersImported(working: Int, total: Int) = "سرورهای فعال افزوده شد: $working از $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "بررسی شد: $checked از $total (فعال: $found)"
@@ -3297,6 +3309,9 @@ object ZhStrings : Strings {
     override val selectAll = "全选"
     override val deselectAll = "取消全选"
     override val freeServersDisclaimer = "公共免费节点时效性较短，建议定期清理旧节点并重新添加。"
+    override val freeServersSourceNotice = "这些节点来自 GitHub 上的公开列表，与 YPtun 开发者没有任何关系。我们不创建、不控制它们，也不对其运行和安全负责——请自行承担风险使用。"
+    override val freeServersWarpAll = "为所有节点启用服务端 WARP"
+    override val freeServersWarpAllHint = "为所有找到的节点在服务端启用 Cloudflare WARP（WireGuard）。可通过节点右侧的云图标单独关闭。"
     override fun addSelectedServers(count: Int) = "添加所选节点 ($count)"
     override fun freeServersImported(working: Int, total: Int) = "已添加可用节点：$working / $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "已测试：$checked / $total（可用：$found）"

@@ -655,6 +655,7 @@ class HomeScreenViewModel(
 
     fun saveSelectedFreeServers(
         selectedServers: List<FreeServerItem>,
+        warpIds: Set<String> = emptySet(),
         onComplete: (Int) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
@@ -671,7 +672,11 @@ class HomeScreenViewModel(
                         engine = EngineType.Standard,
                         proxy = profile,
                         // The same core that verified the server (pingVerified runs xray), not the sing-box default.
-                        core = org.olcbox.app.data.model.ProxyCore.Xray
+                        core = org.olcbox.app.data.model.ProxyCore.Xray,
+                        // Cloud in the picker: WARP at the exit of this server, plain WireGuard by default.
+                        warpEnabled = item.id in warpIds,
+                        warpMode = org.olcbox.app.data.model.WarpMode.Server,
+                        warpProtocol = org.olcbox.app.data.model.WarpProtocol.Wg
                     ).normalized()
                     val base = "${profile.server}_${profile.serverPort}"
                         .lowercase()

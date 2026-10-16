@@ -781,6 +781,11 @@ fun HomeScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                Text(
+                                    s.freeServersSourceNotice,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                         state.freeServersProgress?.let { prog ->
@@ -805,9 +810,10 @@ fun HomeScreen(
             FreeServersSheet(
                 servers = freeServers,
                 onDismiss = { viewModel.dismissFreeServersSheet() },
-                onAddSelected = { selected ->
+                onAddSelected = { selected, warpIds ->
                     viewModel.saveSelectedFreeServers(
                         selectedServers = selected,
+                        warpIds = warpIds,
                         onComplete = { count ->
                             scope.launch {
                                 snackbarHostState.showSnackbar(s.freeServersImported(count, freeServers.size))

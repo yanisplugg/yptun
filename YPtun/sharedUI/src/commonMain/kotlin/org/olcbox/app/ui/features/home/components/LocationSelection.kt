@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -1066,11 +1067,28 @@ private fun SubscriptionGroupMenu(
             )
         }
 
+        val menuScroll = androidx.compose.foundation.rememberScrollState()
+        val thumbColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            // Nine entries do not fit a phone screen: cap the height; the menu scrolls inside it.
-            modifier = Modifier.heightIn(max = 340.dp)
+            scrollState = menuScroll,
+            // Nine entries do not fit a phone screen: cap the height; the menu scrolls inside it, with a
+            // visible scrollbar so it is clear that there is more.
+            modifier = Modifier.heightIn(max = 340.dp).drawWithContent {
+                drawContent()
+                if (menuScroll.maxValue > 0) {
+                    val track = size.height
+                    val thumb = (track * track / (track + menuScroll.maxValue)).coerceAtLeast(24.dp.toPx())
+                    val top = (track - thumb) * menuScroll.value / menuScroll.maxValue
+                    drawRoundRect(
+                        color = thumbColor,
+                        topLeft = androidx.compose.ui.geometry.Offset(size.width - 6.dp.toPx(), top),
+                        size = androidx.compose.ui.geometry.Size(4.dp.toPx(), thumb),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                    )
+                }
+            }
         ) {
             if (subscriptionUrl != null) {
                 DropdownMenuItem(
