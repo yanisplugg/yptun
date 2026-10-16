@@ -3574,7 +3574,7 @@ private fun VkTurnField(
 
 /**
  * Every tunable parameter of an AmneziaWG configuration as a field (Jc/Jmin/Jmax, S1..S4, H1..H4 as value OR range,
- * the I1..I5 / J1..J3 packets, Itime, MTU, keepalive, DNS). Each edit rewrites only its own line of the INI.
+ * the I1..I5 / J1..J3 packets, Itime, MTU, keepalive, DNS, RandomTrailers/DisableCookies switches). Each edit rewrites only its own line of the INI.
  */
 @Composable
 private fun AwgTuningSection(
@@ -3600,6 +3600,15 @@ private fun AwgTuningSection(
         )
         @Composable
         fun field(knob: AwgIniEditor.Knob, modifier: Modifier) {
+            if (knob.kind == AwgIniEditor.Kind.Switch) {
+                VkTurnSwitchRow(
+                    label = knob.key,
+                    checked = AwgIniEditor.get(ini, knob.key, knob.section).lowercase() in setOf("on", "true", "1", "yes"),
+                    enabled = enabled,
+                    onCheckedChange = { onChange(knob, if (it) "on" else "") }
+                )
+                return
+            }
             VkTurnField(
                 value = AwgIniEditor.get(ini, knob.key, knob.section),
                 onValueChange = { onChange(knob, it) },

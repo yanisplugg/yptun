@@ -103,4 +103,13 @@ class AwgIniEditorTest {
         assertEquals("1-2", AwgIniEditor.filter("1a-2", AwgIniEditor.Kind.Range))
         assertEquals("<b 0x1>", AwgIniEditor.filter("<b 0x1>\n", AwgIniEditor.Kind.Text))
     }
+
+    @Test
+    fun switchesAreWrittenOnAndGoWithTheObfuscation() {
+        val on = AwgIniEditor.set(ini, "RandomTrailers", "on")
+        assertEquals("on", AwgIniEditor.get(on, "RandomTrailers"))
+        assertTrue(AwgIniEditor.isAwg(on))
+        assertEquals("", AwgIniEditor.get(AwgIniEditor.set(on, "RandomTrailers", ""), "RandomTrailers"))
+        assertEquals("", AwgIniEditor.get(AwgIniEditor.toWireGuard(AwgIniEditor.set(on, "DisableCookies", "on")), "DisableCookies"))
+    }
 }

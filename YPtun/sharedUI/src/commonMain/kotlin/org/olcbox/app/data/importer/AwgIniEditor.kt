@@ -19,6 +19,8 @@ object AwgIniEditor {
         Range,
         /** Free text on one line (CPS packets `<b 0x…><r 20>`, DNS, ...). */
         Text,
+        /** On/off: written as `on`, the line removed when off (AmneziaWG 2.0 RandomTrailers, DisableCookies). */
+        Switch,
     }
 
     /** What the editor offers, in the order it shows them. All of them are understood by the awgproxy engine. */
@@ -31,6 +33,7 @@ object AwgIniEditor {
         Knob("J1", "", Kind.Text), Knob("J2", "", Kind.Text), Knob("J3", "", Kind.Text), Knob("Itime", "120"),
         Knob("MTU", "1280"), Knob("DNS", "1.1.1.1", Kind.Text),
         Knob("PersistentKeepalive", "25", section = Section.Peer),
+        Knob("RandomTrailers", "", Kind.Switch), Knob("DisableCookies", "", Kind.Switch),
     )
 
     /**
@@ -49,7 +52,7 @@ object AwgIniEditor {
     /** Keys that make a wg-quick INI AmneziaWG rather than plain WireGuard (lower case). */
     val OBFUSCATION_KEYS: Set<String> = setOf(
         "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4",
-        "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3", "itime",
+        "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3", "itime", "randomtrailers", "disablecookies",
     )
 
     /** What a freshly chosen AmneziaWG starts from: the values that behave as plain WireGuard plus junk packets. */
@@ -102,6 +105,7 @@ object AwgIniEditor {
         Kind.Number -> raw.filter(Char::isDigit)
         Kind.Range -> raw.filter { it.isDigit() || it == '-' }
         Kind.Text -> raw.replace("\r", "").replace("\n", "")
+        Kind.Switch -> raw
     }
 
     /** The current value of [key] in [section], or "" when the INI does not set it. */
