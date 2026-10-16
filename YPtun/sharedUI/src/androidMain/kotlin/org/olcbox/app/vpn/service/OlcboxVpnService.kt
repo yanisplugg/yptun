@@ -2305,10 +2305,7 @@ class OlcboxVpnService : VpnService() {
             val wdttSignal = wdttConfigSignal
             if (csqttStarted) {
                 val up = csqttBridge.awaitReady(VKTURN_RELAY_READY_TIMEOUT_MS)
-                    ?: throw IllegalStateException(
-                        "csqtt: нет адреса туннеля от сервера — проверь IP/порт/пароль сервера и ссылки на звонки VK" +
-                            csqttBridge.lastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
-                    )
+                    ?: throw IllegalStateException(CsqttBridge.noTunnelMessage(csqttBridge.lastError()))
                 profile = localSocksProfile("csqtt", awgLocalPort)
                 addLog("VK-TURN csqtt up (${up.ip}, DNS ${up.dns.joinToString(",")}, MTU ${up.mtu}); SOCKS on $awgLocalPort")
             } else if (wdttSignal != null) {

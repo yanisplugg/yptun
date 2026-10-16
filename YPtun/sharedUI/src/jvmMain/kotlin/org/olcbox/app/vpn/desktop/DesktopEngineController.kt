@@ -1109,10 +1109,7 @@ internal class DesktopEngineController(
         // ---- Relay-ready gate: bring the tunnel up only behind a live TURN stream ----
         if (usesCsqtt) {
             val up = csqtt.awaitReady(VKTURN_RELAY_READY_TIMEOUT_MS.toLong())
-                ?: throw IllegalStateException(
-                    "csqtt: нет адреса туннеля от сервера — проверь IP/порт/пароль сервера и ссылки на звонки VK" +
-                        csqtt.lastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
-                )
+                ?: throw IllegalStateException(org.olcbox.app.vpn.csqtt.CsqttBridge.noTunnelMessage(csqtt.lastError()))
             profile = localSocksProfile("csqtt", awgLocalPort(listenPort))
             log("VK-TURN csqtt up (${up.ip}, DNS ${up.dns.joinToString(",")}, MTU ${up.mtu}); SOCKS on ${awgLocalPort(listenPort)}")
         } else if (usesWdtt) {
