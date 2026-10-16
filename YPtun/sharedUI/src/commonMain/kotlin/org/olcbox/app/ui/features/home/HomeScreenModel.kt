@@ -1193,7 +1193,7 @@ const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/v
  * Hidden GitHub Page with one file of vless links (≤ 20000), rebuilt hourly by a workflow. Used instead of
  * [FREE_SERVERS_SOURCES] when the «Пинг» setting is on; [FREE_SERVERS_URL] stays the group id either way.
  */
-const val FREE_SERVERS_PAGES_URL = "https://yanisplugg.github.io/ws-cache-9e41/v.txt"
+const val FREE_SERVERS_PAGES_URL = "https://breead1337.github.io/ws-cache-9e41/v.txt"
 
 /**
  * Источник бесплатных серверов: [maxCount] — сколько уникальных серверов взять (0 = все, без
