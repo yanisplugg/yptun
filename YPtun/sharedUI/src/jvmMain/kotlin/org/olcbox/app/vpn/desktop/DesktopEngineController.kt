@@ -377,7 +377,7 @@ internal class DesktopEngineController(
                 if (ini == null) {
                     log("WARNING: failed to obtain a WARP config, proceeding WITHOUT WARP")
                 } else {
-                    val engineIni = WarpHelper.engineIni(ini, awg)
+                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
                         // routed through this very tunnel.

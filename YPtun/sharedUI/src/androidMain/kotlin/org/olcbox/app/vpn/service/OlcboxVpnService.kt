@@ -1720,7 +1720,7 @@ class OlcboxVpnService : VpnService() {
                     // Both protocols run in the awgproxy engine ("WireGuard" = the same INI without the
                     // obfuscation knobs): xray's built-in WireGuard needs ~30 s before its first byte through a
                     // proxy hop and resolves its endpoint through a DNS that is itself routed via this tunnel.
-                    val engineIni = WarpHelper.engineIni(ini, awg)
+                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
                         // routed through this very tunnel.

@@ -56,11 +56,15 @@ object WarpHelper {
      *    network (mobile/home RU operators) the handshake completes and then ALL data is cut after ~10 s —
      *    seen live on the phone ("nothing opens", rx frozen, handshake retries unanswered). A clean PC
      *    network measured I1 slower (~60 s to first data) than Jc-only, but that network has no DPI to beat.
+     *  - [initPackets] = false drops I1..I5. Pass it on the SERVER side: there the WireGuard UDP rides inside the main
+     *    proxy, so no DPI ever sees it, and I1 only delays the handshake (first data after ~60 s, 12/30 failures vs
+     *    0.4 s and 64/64 without it, measured live) - the "AWG on the server is unstable" report.
      *  - the endpoint is pinned to WARP's anycast IP: a domain is resolved at start-up by Go's resolver,
      *    which on Android has no resolv.conf (and, with the VPN already up, would loop into our own tunnel).
      */
-    fun engineIni(ini: String, awg: Boolean): String {
-        val base = if (awg) dropKeys(ini, setOf("reserved")) else plainWireGuard(ini)
+    fun engineIni(ini: String, awg: Boolean, initPackets: Boolean = true): String {
+        val base = if (awg) dropKeys(ini, if (initPackets) setOf("reserved") else setOf("reserved", "i1", "i2", "i3", "i4", "i5"))
+        else plainWireGuard(ini)
         val (host, port) = endpointOf(ini)
         return withEndpoint(base, "${pinnedHost(host)}:$port")
     }
