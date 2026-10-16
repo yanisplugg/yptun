@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -1067,7 +1068,9 @@ private fun SubscriptionGroupMenu(
 
         DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            // Nine entries do not fit a phone screen: cap the height; the menu scrolls inside it.
+            modifier = Modifier.heightIn(max = 340.dp)
         ) {
             if (subscriptionUrl != null) {
                 DropdownMenuItem(
