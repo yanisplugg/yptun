@@ -358,7 +358,6 @@ fun LocationSettingsScreen(
                         allowEditing = allowConfigEditing,
                         enabled = !isSaving,
                         onProtocol = viewModel::onWireguardProtocolChanged,
-                        onIni = viewModel::onWireguardIniChanged,
                         onKnob = viewModel::onAwgKnobChanged
                     )
                 }
@@ -920,14 +919,14 @@ private fun EngineSelector(
 }
 
 private const val WIREGUARD_ENGINE_LABEL = "AmneziaWG/WG"
+private const val WIREGUARD_NEEDS_EDITING = "Чтобы ввести ключи и параметры, включите в настройках «Разрешить редактирование конфигураций»"
 private const val WIREGUARD_ENGINE_SUBTITLE = "Туннель WireGuard или AmneziaWG: свой wg-quick конфиг, ключи и все параметры"
 
 private class EngineCellSpec(val label: String, val selected: Boolean, val onClick: () -> Unit)
 
 /**
- * The AmneziaWG/WG engine page: the protocol (AmneziaWG has obfuscation parameters, WireGuard none), the whole
- * wg-quick config as text (paste or edit), and - with the "allow editing configurations" setting - every parameter
- * as its own field, keys included. The text and the fields edit the same INI, so they always agree.
+ * The AmneziaWG/WG engine page: the protocol (AmneziaWG has obfuscation parameters, WireGuard none) and, with the
+ * "allow editing configurations" setting, every parameter of the wg-quick config as its own field, keys included.
  */
 @Composable
 private fun WireguardEngineSection(
@@ -936,7 +935,6 @@ private fun WireguardEngineSection(
     allowEditing: Boolean,
     enabled: Boolean,
     onProtocol: (Boolean) -> Unit,
-    onIni: (String) -> Unit,
     onKnob: (AwgIniEditor.Knob, String) -> Unit
 ) {
     val s = LocalStrings.current
@@ -947,19 +945,20 @@ private fun WireguardEngineSection(
             FilterChip(selected = isAwg, onClick = { onProtocol(true) }, enabled = enabled, label = { Text("AmneziaWG") })
             FilterChip(selected = !isAwg, onClick = { onProtocol(false) }, enabled = enabled, label = { Text("WireGuard") })
         }
-        OutlinedTextField(
-            value = ini,
-            onValueChange = onIni,
-            label = { Text(s.wgConfigField) },
-            enabled = enabled,
-            minLines = 6,
-            maxLines = 14,
-            isError = missing.isNotEmpty(),
-            supportingText = {
-                Text(if (missing.isEmpty()) s.wgConfigHint else s.wgMissingPrefix + missing.joinToString(", "))
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
+        if (!allowEditing) {
+            // The parameters are fields, and fields are what "allow editing configurations" turns on.
+            Text(
+                if (missing.isEmpty()) s.wgConfigHint else WIREGUARD_NEEDS_EDITING,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (missing.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+            )
+        } else if (missing.isNotEmpty()) {
+            Text(
+                s.wgMissingPrefix + missing.joinToString(", "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
         if (allowEditing) {
             Text(s.wgConnectionTitle, style = MaterialTheme.typography.titleSmall)
             AwgIniEditor.CONNECTION.forEach { knob ->
