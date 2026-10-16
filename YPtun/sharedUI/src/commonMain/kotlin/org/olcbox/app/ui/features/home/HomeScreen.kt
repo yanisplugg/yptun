@@ -834,6 +834,10 @@ fun HomeScreen(
                         }) {
                             Text(if (state.freeServersPaused) s.pingResume else s.pingPause)
                         }
+                        // Closes the dialog; the strip under the toolbar keeps the progress and the result is saved silently.
+                        TextButton(onClick = { viewModel.sendFreeServersToBackground() }) {
+                            Text(s.freeServersToBackground)
+                        }
                         TextButton(onClick = { viewModel.cancelFreeServersLoad() }) {
                             Text(s.cancel)
                         }

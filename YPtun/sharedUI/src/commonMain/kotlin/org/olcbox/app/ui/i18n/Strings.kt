@@ -403,6 +403,7 @@ interface Strings {
     fun freeServersImported(working: Int, total: Int): String
     fun freeServersProgressText(checked: Int, total: Int, found: Int): String
     val freeServersStopKeep: String
+    val freeServersToBackground: String
     val pingPause: String
     val pingResume: String
     val pingRestart: String
@@ -1531,6 +1532,7 @@ object RuStrings : Strings {
     override val freeServersLimitTitle = "Лимит бесплатных серверов"
     override val freeServersLimitSubtitle = "Сколько серверов брать в «Бесплатных серверах»: первые N по приоритету источников. Больше — дольше проверка."
     override val freeServersLimitUnlimited = "Без лимита"
+    override val freeServersToBackground = "В фон"
     override val freeServersPagesTitle = "Источник: GitHub Page"
     override val freeServersPagesSubtitle = "Бесплатные серверы брать из единого списка (до 20 000 vless-ссылок со всего GitHub, обновляется раз в час). Выкл — прежние источники"
     override val pingThreadsTitle = "Потоки пинга"
@@ -2274,6 +2276,7 @@ object EnStrings : Strings {
     override val freeServersLimitTitle = "Free servers limit"
     override val freeServersLimitSubtitle = "How many servers «Free servers» may take: the first N by source priority. More means a longer check."
     override val freeServersLimitUnlimited = "Unlimited"
+    override val freeServersToBackground = "Background"
     override val freeServersPagesTitle = "Source: GitHub Page"
     override val freeServersPagesSubtitle = "Take free servers from one combined list (up to 20,000 vless links harvested from GitHub, refreshed hourly). Off — the built-in sources"
     override val pingThreadsTitle = "Ping threads"
@@ -3017,6 +3020,7 @@ object FaStrings : Strings {
     override val freeServersLimitTitle = "سقف سرورهای رایگان"
     override val freeServersLimitSubtitle = "حداکثر تعداد سرورهای «سرورهای رایگان»: N سرور اول بر اساس اولویت منبع. تعداد بیشتر، بررسی طولانی‌تر."
     override val freeServersLimitUnlimited = "نامحدود"
+    override val freeServersToBackground = "پس‌زمینه"
     override val freeServersPagesTitle = "منبع: GitHub Page"
     override val freeServersPagesSubtitle = "سرورهای رایگان از یک فهرست واحد گرفته شوند (تا ۲۰٬۰۰۰ لینک vless از سراسر GitHub، هر ساعت به‌روز می‌شود). خاموش — منابع قبلی"
     override val pingThreadsTitle = "رشته‌های پینگ"
@@ -3760,6 +3764,7 @@ object ZhStrings : Strings {
     override val freeServersLimitTitle = "免费节点上限"
     override val freeServersLimitSubtitle = "“免费节点”最多取多少个：按来源优先级取前 N 个。越多，检测越久。"
     override val freeServersLimitUnlimited = "不限"
+    override val freeServersToBackground = "转后台"
     override val freeServersPagesTitle = "来源：GitHub Page"
     override val freeServersPagesSubtitle = "免费节点取自统一列表（从 GitHub 汇总最多 20000 条 vless 链接，每小时更新）。关闭 — 使用内置来源"
     override val pingThreadsTitle = "测试线程"

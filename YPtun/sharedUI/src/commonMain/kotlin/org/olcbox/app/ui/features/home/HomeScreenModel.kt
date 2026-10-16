@@ -526,6 +526,21 @@ class HomeScreenViewModel(
         _state.update { it.copy(freeServersPaused = false) }
     }
 
+    // True while the running search is the silent one (auto-update, or a manual search sent to the background):
+    // its result is saved straight away instead of opening the picker. Read at the END of the run.
+    @kotlin.concurrent.Volatile
+    private var freeRunInBackground = false
+
+    /**
+     * Sends the running manual search to the background: the dialog closes, the strip under the toolbar shows the
+     * progress (same as the auto-update), and the found servers are saved without the picker when it ends.
+     */
+    fun sendFreeServersToBackground() {
+        if (freeServersJob?.isActive != true) return
+        freeRunInBackground = true
+        _state.update { it.copy(isFreeServersLoading = false, freeServersBackground = true) }
+    }
+
     private var freeAutoAttemptMs = 0L
 
     /**
@@ -599,6 +614,7 @@ class HomeScreenViewModel(
         freePausedAccumMs = 0L
         freePausedSinceMs = 0L
         freeRunChecks = 0
+        freeRunInBackground = background
         if (!resume) freeServersFound = emptyList()
         _state.update {
             it.copy(
@@ -738,7 +754,7 @@ class HomeScreenViewModel(
 
                 if (sortedWorking.isEmpty()) {
                     onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
-                } else if (background) {
+                } else if (freeRunInBackground) {
                     if (run == freeServersRun) {
                         // The cloud (server-side WARP) choice made when the list was first saved carries over.
                         val hadWarp = runCatching {
