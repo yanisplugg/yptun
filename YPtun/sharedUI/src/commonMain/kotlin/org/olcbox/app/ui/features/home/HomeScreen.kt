@@ -65,6 +65,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -177,6 +178,49 @@ fun HomeScreen(
     val state by viewModel.state.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // The list must not fall back to the top by itself. A background change of the data (the free servers are
+    // replaced by the auto-update, a refresh) can leave the list short for an instant, and LazyColumn then resets
+    // its position to 0 for good. When that happens with no finger on the list, bring the position back as soon
+    // as the items are there again.
+    LaunchedEffect(scrollState) {
+        var stable: Pair<Int, Int>? = null   // where the user last left the list (index > 0)
+        var touched = false                  // the user scrolled since [stable] was taken
+        var lost: Pair<Int, Int>? = null     // position to bring back after an unexpected fall to the top
+        snapshotFlow {
+            listOf(
+                scrollState.firstVisibleItemIndex,
+                scrollState.firstVisibleItemScrollOffset,
+                if (scrollState.isScrollInProgress) 1 else 0,
+                scrollState.layoutInfo.totalItemsCount
+            )
+        }.collect { (index, offset, scrolling, total) ->
+            if (scrolling == 1) {
+                touched = true
+                lost = null
+                return@collect
+            }
+            val back = lost
+            if (back != null) {
+                if (total > back.first) {
+                    lost = null
+                    scrollState.scrollToItem(back.first, back.second)
+                }
+                return@collect
+            }
+            val before = stable
+            if (index == 0 && offset == 0 && before != null && !touched) {
+                lost = before
+                if (total > before.first) {
+                    lost = null
+                    scrollState.scrollToItem(before.first, before.second)
+                }
+            } else {
+                stable = if (index > 0) index to offset else null
+                touched = false
+            }
+        }
+    }
 
     // Free servers auto-update (the group menu's switch): checked every few minutes while the app lives.
     LaunchedEffect(pingParallelism, freeServersLimit) {
