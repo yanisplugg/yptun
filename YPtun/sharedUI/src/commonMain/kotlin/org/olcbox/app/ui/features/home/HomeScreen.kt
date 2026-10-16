@@ -175,6 +175,15 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // Free servers auto-update (the group menu's switch): checked every few minutes while the app lives.
+    LaunchedEffect(pingParallelism, freeServersLimit) {
+        delay(60_000L)
+        while (true) {
+            viewModel.autoUpdateFreeServersIfDue(pingParallelism, freeServersLimit)
+            delay(10 * 60_000L)
+        }
+    }
+
     LaunchedEffect(state.connectError) {
         val error = state.connectError
         if (!error.isNullOrBlank()) {
@@ -343,6 +352,7 @@ fun HomeScreen(
             SnackbarHost(snackbarHostState)
         },
         topBar = {
+          Column {
             HomeScreenAppBar(
                 onHistoryClick = { isLogsSheetOpen = true },
                 showAppSettingsButton = showAppSettingsButton,
@@ -357,6 +367,14 @@ fun HomeScreen(
                 onDeleteAllConfigs = { requestDelete(PendingDelete.AllConfigs) },
                 onExitClick = onExitClick
             )
+            // Free servers auto-update: the search runs silently, this strip shows its progress.
+            androidx.compose.animation.AnimatedVisibility(visible = state.freeServersBackground) {
+                FreeServersAutoStrip(
+                    progress = state.freeServersProgress,
+                    onCancel = { viewModel.cancelFreeServersLoad() }
+                )
+            }
+          }
         },
         bottomBar = {
             Column {
@@ -626,7 +644,8 @@ fun HomeScreen(
                         modifier = Modifier
                             .widthIn(max = 760.dp)
                             .fillMaxHeight()
-                            .padding(start = 8.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
+                            .padding(start = 8.dp, end = 24.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         locationItems()
@@ -638,8 +657,10 @@ fun HomeScreen(
                 state = scrollState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(innerPadding),
+                // contentPadding, not modifier padding: the latter clipped the list 8dp short of the bars,
+                // leaving a dead strip where cards were cut off.
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -966,22 +987,56 @@ private sealed interface PendingDelete {
 
 /** Sonar-style "ping": a steady dot with a ring that swells and fades, instead of a spinner. */
 @Composable
-private fun PingDot(modifier: Modifier = Modifier) {
+private fun PingDot(modifier: Modifier = Modifier, size: androidx.compose.ui.unit.Dp = 36.dp) {
     val color = MaterialTheme.colorScheme.primary
     val t = rememberInfiniteTransition(label = "ping")
     val ring by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart), label = "ring")
     val pulse by t.animateFloat(0.75f, 1f, infiniteRepeatable(tween(700, easing = LinearEasing), RepeatMode.Reverse), label = "pulse")
-    Box(modifier.size(36.dp), contentAlignment = Alignment.Center) {
+    Box(modifier.size(size), contentAlignment = Alignment.Center) {
         Box(
-            Modifier.size(36.dp)
+            Modifier.size(size)
                 .graphicsLayer { scaleX = 0.3f + 0.7f * ring; scaleY = 0.3f + 0.7f * ring; alpha = 1f - ring }
                 .background(color.copy(alpha = 0.5f), CircleShape)
         )
         Box(
-            Modifier.size(14.dp)
+            Modifier.size(size * 0.39f)
                 .graphicsLayer { scaleX = pulse; scaleY = pulse }
                 .background(color, CircleShape)
         )
+    }
+}
+
+/** Thin strip under the toolbar while the free servers auto-update: a ping dot, the tally, a progress line, a stop. */
+@Composable
+private fun FreeServersAutoStrip(progress: FreeServersProgress?, onCancel: () -> Unit) {
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                PingDot(size = 18.dp)
+                Text(
+                    text = s.freeServers + (progress?.let { " · " + s.freeServersProgressText(it.checked, it.total, it.found) } ?: ""),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onCancel, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Outlined.Close, contentDescription = s.cancel, modifier = Modifier.size(18.dp))
+                }
+            }
+            if (progress != null && progress.total > 0) {
+                LinearProgressIndicator(
+                    progress = { (progress.checked.toFloat() / progress.total.toFloat()).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(2.dp)
+                )
+            }
+        }
     }
 }
 

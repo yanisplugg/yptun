@@ -474,6 +474,7 @@ class HomeScreenViewModel(
         _state.update {
             it.copy(
                 isFreeServersLoading = false,
+                freeServersBackground = false,
                 freeServersProgress = null,
                 availableFreeServers = found.takeIf { list -> list.isNotEmpty() },
             )
@@ -481,11 +482,42 @@ class HomeScreenViewModel(
         if (found.isEmpty()) onNothingFound()
     }
 
+    private var freeAutoAttemptMs = 0L
+
+    /**
+     * Auto-update of the free servers (the switch in the group's menu): a silent search every few hours whose
+     * result replaces the unpinned servers without the picker. The Home screen calls it periodically; it does
+     * nothing unless the switch is on, the group exists and the interval has passed — and never while a search
+     * runs, the picker is open, or the tunnel runs over a free server that the save would replace.
+     */
+    fun autoUpdateFreeServersIfDue(parallelism: Int, limit: Int) {
+        val st = _state.value
+        if (freeServersJob?.isActive == true || st.availableFreeServers != null) return
+        val sel = st.selectedLocation
+        if (st.isVpnConnected && sel?.subscriptionUrl?.trim() == FREE_SERVERS_URL && sel.metadata?.pinned != true) return
+        viewModelScope.launch {
+            val subs = runCatching {
+                locationsRepository.getBundle().locations.filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
+            }.getOrNull().orEmpty().mapNotNull { it.metadata?.subscription }
+            if (subs.isEmpty() || subs.any { !it.autoUpdateEnabled }) return@launch
+            val hours = subs.firstNotNullOfOrNull { it.updateIntervalHours?.takeIf { h -> h > 0 } } ?: FREE_AUTO_UPDATE_HOURS
+            val last = maxOf(
+                freeAutoAttemptMs,
+                subs.maxOf { maxOf(it.lastRefreshAtEpochMs ?: 0L, it.lastAttemptAtEpochMs ?: 0L) }
+            )
+            val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            if (now - last < hours * 3_600_000L) return@launch
+            if (freeServersJob?.isActive == true || _state.value.availableFreeServers != null) return@launch
+            freeAutoAttemptMs = now
+            loadFreeServers(parallelism = parallelism, limit = limit, background = true)
+        }
+    }
+
     fun cancelFreeServersLoad() {
         freeServersRun++
         freeServersJob?.cancel()
         freeServersJob = null
-        _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+        _state.update { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
     }
 
     fun dismissFreeServersSheet() {
@@ -496,11 +528,13 @@ class HomeScreenViewModel(
         parallelism: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
         limit: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_FREE_SERVERS_LIMIT,
         onError: (String) -> Unit = {},
+        // Auto-update: no dialog, and the result is saved straight away instead of opening the picker.
+        background: Boolean = false,
     ) {
         freeServersJob?.cancel()
         val run = ++freeServersRun
         freeServersFound = emptyList()
-        _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
+        _state.update { it.copy(isFreeServersLoading = !background, freeServersBackground = background, availableFreeServers = null, freeServersProgress = null) }
         freeServersJob = viewModelScope.launch {
             try {
                 val sourceTexts = withContext(Dispatchers.IO) {
@@ -523,7 +557,7 @@ class HomeScreenViewModel(
                 }
 
                 if (sourceTexts.all { (text, _) -> text.isBlank() }) {
-                    updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                    updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
                     onError("Не удалось загрузить список серверов")
                     return@launch
                 }
@@ -531,7 +565,7 @@ class HomeScreenViewModel(
                 val parsedItems = withContext(Dispatchers.Default) { pickFreeServers(sourceTexts, limit) }
 
                 if (parsedItems.isEmpty()) {
-                    updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                    updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
                     onError("Не удалось распознать конфигурации серверов")
                     return@launch
                 }
@@ -604,17 +638,30 @@ class HomeScreenViewModel(
                 }
 
                 val sortedWorking = workingServers.sortedBy { it.pingMs }
-                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
 
                 if (sortedWorking.isEmpty()) {
                     onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
+                } else if (background) {
+                    if (run == freeServersRun) {
+                        // The cloud (server-side WARP) choice made when the list was first saved carries over.
+                        val hadWarp = runCatching {
+                            locationsRepository.getBundle().locations.any {
+                                it.subscriptionUrl?.trim() == FREE_SERVERS_URL && it.metadata?.pinned != true && it.warpEnabled
+                            }
+                        }.getOrDefault(false)
+                        saveSelectedFreeServers(
+                            selectedServers = sortedWorking,
+                            warpIds = if (hadWarp) sortedWorking.map { it.id }.toSet() else emptySet()
+                        )
+                    }
                 } else {
                     updateFreeServers(run) { it.copy(availableFreeServers = sortedWorking) }
                 }
             } catch (e: CancellationException) {
-                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
             } catch (e: Exception) {
-                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
                 onError(e.message ?: "Ошибка загрузки бесплатных серверов")
             }
         }
@@ -665,6 +712,9 @@ class HomeScreenViewModel(
         viewModelScope.launch {
             try {
                 val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+                val previousSub = locationsRepository.getBundle().locations
+                    .filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
+                    .firstNotNullOfOrNull { it.metadata?.subscription }
                 val newEntries = selectedServers.mapIndexed { index, item ->
                     val profile = item.profile
                     val location = LocationConfig(
@@ -690,8 +740,8 @@ class HomeScreenViewModel(
                         metadata = LocationMetadata(
                             subscription = SubscriptionMetadata(
                                 name = "Бесплатные серверы",
-                                updateIntervalHours = 0,
-                                autoUpdateEnabled = false,
+                                updateIntervalHours = previousSub?.updateIntervalHours ?: 0,
+                                autoUpdateEnabled = previousSub?.autoUpdateEnabled ?: false,
                                 lastRefreshAtEpochMs = now,
                                 lastAttemptAtEpochMs = now
                             )
@@ -1017,6 +1067,8 @@ data class HomeScreenState(
     /** Set after importing a VK-TURN link that still needs a per-client VK Calls link. */
     val vkTurnLinkPrompt: VkTurnLinkPrompt? = null,
     val isFreeServersLoading: Boolean = false,
+    /** A silent auto-update search of the free servers runs (no dialog; the strip near the toolbar shows it). */
+    val freeServersBackground: Boolean = false,
     val freeServersProgress: FreeServersProgress? = null,
     val availableFreeServers: List<FreeServerItem>? = null
 )
@@ -1026,6 +1078,9 @@ data class FreeServersProgress(
     val total: Int = 0,
     val found: Int = 0
 )
+
+/** How often the free servers auto-update when the group's switch is on. */
+const val FREE_AUTO_UPDATE_HOURS = 6
 
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
 
