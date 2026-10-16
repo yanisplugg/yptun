@@ -1012,8 +1012,6 @@ object XrayConfig {
                 cascadeOutbound?.let { add(it) }
                 // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
                 cascadeLoopOutbound?.let { add(it) }
-                // Client-side WARP: the SOCKS the proxy outbounds dial through.
-                if (warpClientActive) add(olcrtcSocksOutbound(WARP_OUT_TAG, warpChainPort!!, "", ""))
                 userOutbounds.forEach { rawOb ->
                     val ob = if (warpClientActive) withDialerProxy(rawOb, WARP_OUT_TAG) else rawOb
                     val lifted = liftXhttpExtraHostPath(ob)
@@ -1024,6 +1022,10 @@ object XrayConfig {
                     ) withXhttpHighConcurrency(lifted) else lifted
                     add(if (forceIpv4) forceIpv4Freedom(tuned) else tuned)
                 }
+                // Client-side WARP: the SOCKS the proxy outbounds dial through. LAST on purpose: Xray sends traffic no
+                // rule matches to the FIRST outbound, and that must stay the config's own (the proxy), never the WARP
+                // SOCKS — as the first entry it made unmatched traffic exit through WARP, skipping the VLESS server.
+                if (warpClientActive) add(olcrtcSocksOutbound(WARP_OUT_TAG, warpChainPort!!, "", ""))
                 // The profile rules reference direct/block tags — make sure they exist.
                 if (mergedRouting != null && "direct" !in userOutboundTags) {
                     addJsonObject {

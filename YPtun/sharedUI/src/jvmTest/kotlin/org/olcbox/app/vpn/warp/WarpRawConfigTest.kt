@@ -52,6 +52,10 @@ class WarpRawConfigTest {
         assertEquals("255", stream["sockopt"]!!.jsonObject["mark"]!!.jsonPrimitive.content, "the config's own sockopt is kept")
         assertTrue(proxy.toString().contains("xtls-rprx-vision"), "the Vision flow survives")
         assertEquals("socks", o.outbound("warp-out")["protocol"]!!.jsonPrimitive.content)
+        // The default exit (the first outbound) stays the config's own proxy; the WARP SOCKS is never it.
+        val tags = o["outbounds"]!!.jsonArray.map { it.jsonObject["tag"]!!.jsonPrimitive.content }
+        assertEquals("proxy", tags.first())
+        assertEquals("warp-out", tags.last())
         assertTrue("dialerProxy" !in (o.outbound("direct")["streamSettings"]?.toString() ?: ""), "direct is not chained")
     }
 

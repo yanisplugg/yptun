@@ -352,6 +352,9 @@ internal class DesktopEngineController(
             val serverSide = config.warpMode == WarpMode.Server
             val awg = config.warpProtocol == WarpProtocol.Awg
             log("WARP: enabled - ${if (serverSide) "server side (VLESS -> WARP)" else "client side (WARP -> VLESS)"}, protocol ${if (awg) "AmneziaWG" else "WireGuard"}")
+            if (!serverSide && !awg) {
+                log("WARP: plain WireGuard on the client side goes to Cloudflare directly over UDP and many ISPs block it - if the handshake never completes, choose AmneziaWG")
+            }
             val isRawXray = !profile.rawXrayConfig.isNullOrBlank()
             val skipReason = when {
                 chained -> "olcRTC chain mode already owns the base tunnel"

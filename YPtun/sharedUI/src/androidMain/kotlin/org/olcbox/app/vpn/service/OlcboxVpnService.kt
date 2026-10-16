@@ -1698,6 +1698,9 @@ class OlcboxVpnService : VpnService() {
             val serverSide = config.warpMode == WarpMode.Server
             val awg = config.warpProtocol == WarpProtocol.Awg
             addLog("WARP: включён — ${if (serverSide) "на сервере (VLESS → WARP)" else "на клиенте (WARP → VLESS)"}, протокол ${if (awg) "AmneziaWG" else "WireGuard"}")
+            if (!serverSide && !awg) {
+                addLog("WARP: WireGuard без обфускации в режиме клиента идёт к Cloudflare напрямую по UDP — многие провайдеры его режут; если рукопожатие не проходит («handshake никогда»), выбери AmneziaWG")
+            }
             // A JSON subscription (verbatim Xray config) gets WARP too: prepareRaw puts it in the config.
             val isRawXray = !profile.rawXrayConfig.isNullOrBlank()
             val skipReason = when {
